@@ -172,7 +172,7 @@ impl Drawing {
         self.range_card(painter, rect, view);
     }
 
-    /// Readout card beside a trend line, ray, extended line, trend angle or info line,
+    /// Readout card beside a trend line, ray, extended line, trend angle, info line or arrow,
     /// which writes it in its text settings; the midpoint and price labels are independent of
     /// selection and readout visibility. Its screen midpoint remains on the line on logarithmic
     /// scales. Readouts keep clear of the end markers drawn at their anchors.
@@ -1526,6 +1526,7 @@ mod tests {
             DrawingToolType::Ray,
             DrawingToolType::InfoLine,
             DrawingToolType::TrendAngle,
+            DrawingToolType::Arrow,
         ];
         for ((reverse, pip, time_axis, want), tool) in cases
             .into_iter()

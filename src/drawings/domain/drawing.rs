@@ -295,8 +295,8 @@ pub struct Drawing {
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
-    /// info line or trend angle, the text placement of a horizontal line or ray or a vertical
-    /// line, and the reach of a vertical line. Other tools ignore these settings.
+    /// info line, trend angle or arrow, the text placement of a horizontal line or ray or a
+    /// vertical line, and the reach of a vertical line. Other tools ignore these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
     /// Readouts, card, box border and vertical reach of a date range or date and price range.

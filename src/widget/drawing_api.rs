@@ -113,11 +113,12 @@ impl Chart {
             .map_err(DrawingError::Invalid)
     }
 
-    /// Replaces a trend line's, ray's, extended line's, info line's or trend angle's readouts,
-    /// midpoint, price labels and text placement as one undoable edit. A horizontal line or ray
-    /// and a regression trend draw only the text placement, and a vertical line the text
-    /// placement, the text's orientation and the reach across panes. Unknown, locked and other
-    /// drawing types, and the drawing's own measurements, leave drawings and history untouched.
+    /// Replaces a trend line's, ray's, extended line's, info line's, trend angle's or arrow's
+    /// readouts, midpoint, price labels and text placement as one undoable edit. A horizontal
+    /// line or ray and a regression trend draw only the text placement, and a vertical line the
+    /// text placement, the text's orientation and the reach across panes. Unknown, locked and
+    /// other drawing types, and the drawing's own measurements, leave drawings and history
+    /// untouched.
     pub fn set_line_measurements(
         &mut self,
         id: usize,
@@ -142,7 +143,7 @@ impl Chart {
             ))
         {
             return Err(DrawingError::Invalid(
-                "Drawing is not a trend line, ray, extended line, info line, trend angle, horizontal line, horizontal ray, vertical line or regression trend",
+                "Drawing is not a trend line, ray, extended line, info line, trend angle, arrow, horizontal line, horizontal ray, vertical line or regression trend",
             ));
         }
         if drawing.line_measurements == measurements {
@@ -964,6 +965,24 @@ mod tests {
             .remove("line_measurements");
         let old: StoredDrawing = serde_json::from_value(old).unwrap();
         assert_eq!(old.drawing.line_measurements, Default::default());
+        // An arrow saved before its statistics were offered keeps its readouts off and every
+        // style setting unchanged when it is restored and saved again.
+        let old: StoredDrawing = serde_json::from_str(
+            r#"{"id":"7","points":[{"ts_ms":7200000,"price":100.0},{"ts_ms":28800000,"price":200.0}],"drawing":{"label":null,"pane":null,"selectable":true,"saveable":true,"listed":true,"user_edit_enabled":true,"group":null,"folder":[],"custom_tool":null,"custom_settings":null,"tool_type":"Arrow","screen_anchor":null,"color":[41,98,255,255],"stroke_width":2.0,"text":"Saved arrow","post":null,"line_style":"Solid","fill_color":null,"locked":false,"visible":true,"font_size":14.0,"font_weight":"Normal","italic":false,"text_color":null,"background":true,"border":true,"border_color":null,"text_wrap":false,"text_wrap_width":200.0,"text_follows_zoom":false,"text_zoom_spacing":null,"note_text_style":null,"extend_left":false,"extend_right":false,"arrow_start_style":"None","arrow_end_style":"Arrow","timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"price_axis_label":true,"time_axis_label":true,"line_measurements":{"persistent":false,"price_change":false,"percent_change":false,"pip_change":false,"bar_count":false,"elapsed_time":false,"length":false,"inclination":false,"midpoint":false,"price_labels":false,"position":"Right","text_horizontal_align":"Center","text_vertical_align":"Bottom","text_orientation":"Vertical","across_panes":false},"range_settings":{"price_change":true,"percent_change":true,"pip_change":true,"bar_count":true,"elapsed_time":true,"volume":true,"text_color":null,"font_size":12.0,"background":true,"background_color":null,"border":true,"border_color":null,"border_width":null,"border_style":null,"extend_top":false,"extend_bottom":false},"position_size":null,"position_sizing":{"point_value":1.0,"lot_size":1.0,"quantity_step":0.0,"leverage":1.0},"position_readout":{"persistent":false,"condensed":false,"account_currency":null,"conversion_rate":null,"quantity_decimals":null},"position_target_color":null,"position_stop_color":null,"position_style":{"line_color":null,"line_width":1.0,"text_color":null,"font_size":12.0,"label_background":true,"label_color":null,"fill":true,"border":false,"border_color":[102,123,139,255]},"marker":{"show_text":true,"glyph":"🙂","show_glyph":false,"glyph_color":null},"fib_config":null,"volume_profile":null,"regression_trend":null,"vwap":null,"gann":null,"ghost_feed":null,"channel_midline":false,"anchor_price_style":null,"middle_line":{"color":null,"width":1.0,"line_style":"Dashed"},"theme_shade":true,"image":null,"glyph_angle":0.0,"closed":false,"pitchfork":null,"elliott_degree":"Minor","elliott_show_wave":true,"bars_pattern":null,"projection":null,"z_order":0},"created_at":1795162944672,"modified_at":1795162944672,"notes":null}"#,
+        )
+        .unwrap();
+        let arrow = stored_to_drawing(&old, |ms| ms as f32 / 3_600_000.0, 7);
+        assert_eq!(arrow.tool_type, T::Arrow);
+        assert_eq!(arrow.line_measurements, Default::default());
+        assert_eq!(
+            arrow.chart_points,
+            [ChartPoint::new(2.0, 100.0), ChartPoint::new(8.0, 200.0)]
+        );
+        let saved = drawing_to_stored(&arrow, |bar| bar as i64 * 3_600_000);
+        assert_eq!(
+            serde_json::to_value(&saved.drawing).unwrap(),
+            serde_json::to_value(&old.drawing).unwrap()
+        );
         // A horizontal line saved before these settings keeps its text above the line.
         let mut old = serde_json::to_value(&stored).unwrap();
         old["drawing"]["tool_type"] = serde_json::to_value(T::HorizontalLine).unwrap();
@@ -1015,7 +1034,7 @@ mod tests {
             Err(DrawingError::UnknownDrawing(999))
         );
         chart.drawings_mut().drawings[0].locked = false;
-        chart.drawings_mut().drawings[0].tool_type = T::Arrow;
+        chart.drawings_mut().drawings[0].tool_type = T::Rect;
         assert!(matches!(
             chart.set_line_measurements(1, measurements),
             Err(DrawingError::Invalid(_))
@@ -1026,6 +1045,7 @@ mod tests {
             T::Ray,
             T::InfoLine,
             T::TrendAngle,
+            T::Arrow,
             T::HorizontalLine,
             T::HorizontalRay,
             T::VerticalLine,
