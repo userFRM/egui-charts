@@ -607,6 +607,12 @@ mod tests {
             "the source keeps its panes"
         );
         assert_eq!(charts[0].indicators().count(), 2, "and its studies");
+        charts[1]
+            .indicator_mut(rsi)
+            .unwrap()
+            .set_input("period", InputValue::Length(4))
+            .unwrap();
+        assert_eq!(charts[1].indicator_inputs(rsi), Some("4 close"));
 
         // An edit on another chart after the copy goes back with it, and its redo returns it.
         charts[2].user_action(|chart| chart.add_indicator(Box::new(SMA::new(9))));

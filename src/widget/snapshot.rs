@@ -1895,6 +1895,12 @@ mod tests {
         assert_eq!(restored.indicator_inputs(*rsi), Some("9"));
         restored.set_indicator_inputs(*sma, "");
         assert_eq!(restored.indicator_inputs(*sma), Some("7 close"));
+        restored
+            .indicator_mut(*rsi)
+            .unwrap()
+            .set_input("period", crate::studies::InputValue::Length(4))
+            .unwrap();
+        assert_eq!(restored.indicator_inputs(*rsi), Some("4"));
 
         // An absent interval clears an existing interval, and malformed geometry is atomic.
         let mut snapshot = layout.charts[0].clone();

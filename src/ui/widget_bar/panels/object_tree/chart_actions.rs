@@ -657,7 +657,6 @@ mod tests {
         assert_eq!(chart.drawings().drawings.len(), 3);
         // A copied study keeps its inputs.
         let study = chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
-        chart.set_indicator_inputs(study, "2 close");
         let before: Vec<_> = chart.indicators().map(|(id, _)| id).collect();
         apply(
             &mut tree,
@@ -670,6 +669,12 @@ mod tests {
             .find(|id| !before.contains(id))
             .unwrap();
         assert_eq!(chart.indicator_inputs(copy), Some("2 close"));
+        chart
+            .indicator_mut(copy)
+            .unwrap()
+            .set_input("period", crate::studies::InputValue::Length(4))
+            .unwrap();
+        assert_eq!(chart.indicator_inputs(copy), Some("4 close"));
     }
 
     /// A new subfolder made inside a fully selected folder takes that folder's subfolders whole.
