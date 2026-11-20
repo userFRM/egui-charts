@@ -586,18 +586,17 @@ impl Indicator for CandlestickPatterns {
 
     // A side holds values only while the pattern type marks it and one of its patterns is on.
     fn alert_outputs(&self) -> Vec<(usize, String)> {
-        [Bullish, Bearish, Neutral]
+        self.line_names()
             .into_iter()
-            .zip(self.line_names())
             .enumerate()
-            .filter(|(_, (side, _))| {
-                self.pattern_type.marks(*side)
+            .filter(|(line, _)| {
+                let side = [Bullish, Bearish, Neutral][self.combined_line(*line)];
+                self.pattern_type.marks(side)
                     && PATTERNS
                         .iter()
                         .zip(self.patterns)
-                        .any(|(pattern, on)| on && pattern.side == *side)
+                        .any(|(pattern, on)| on && pattern.side == side)
             })
-            .map(|(output, (_, name))| (output, name))
             .collect()
     }
 
