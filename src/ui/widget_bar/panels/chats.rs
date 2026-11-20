@@ -26,6 +26,9 @@ const KEPT: usize = 5_000;
 /// Messages kept at most of one room; past it the room loses its oldest.
 const ROOM_KEPT: usize = 1_000;
 
+/// Messages asked for in one page of a room's older messages.
+const PAGE: usize = 50;
+
 /// Inbox key of the answers to [`Chats::send`]; streams and other requests use keys from 1.
 const SENT: u64 = 0;
 
@@ -54,6 +57,28 @@ impl Default for Composer {
     }
 }
 
+/// Where paging back through a room's older messages stands; a room without one asks for the
+/// page before its oldest message once its top shows.
+#[derive(Debug)]
+enum Paging {
+    /// The request under this inbox key waits for its answer.
+    Loading(u64),
+    /// The host has nothing older.
+    Ended,
+    /// The last request failed; Retry asks again.
+    Failed(FeedError),
+}
+
+/// Whether `a` and `b` are one message of a room: the same host identifier, or equal contents
+/// when either has none.
+fn same(a: &ChatMessage, b: &ChatMessage) -> bool {
+    a.room == b.room
+        && match (&a.id, &b.id) {
+            (Some(x), Some(y)) => x == y,
+            _ => a.author == b.author && a.time == b.time && a.text == b.text,
+        }
+}
+
 /// Whether the host lets the user create a room of `kind`.
 fn allowed(kind: NewChatRoomKind, capabilities: &ChatCapabilities) -> bool {
     match kind {
@@ -65,9 +90,12 @@ fn allowed(kind: NewChatRoomKind, capabilities: &ChatCapabilities) -> bool {
 /// Chat rooms pushed by the host's [`Chats`] service.
 ///
 /// The user picks a room, reads its messages and posts; a posted message appears once the host
-/// pushes it. It keeps the newest 1,000 messages of each room and 5,000 in all; past that the
-/// room holding the most loses its oldest. Where the service's
-/// [`capabilities`](Chats::capabilities) allow, the header offers to start a direct message or
+/// pushes it. Messages show in time order, a message the room holds already is not added again,
+/// and the panel keeps the newest 1,000 messages of each room and 5,000 in all; past that the
+/// room holding the most loses its oldest, sparing a room receiving a history page. Where the
+/// service offers [`history`](Chats::history), reaching the top of a room asks for its older
+/// messages a page at a time and keeps the view on the message that led the list. Where the
+/// service's [`capabilities`](Chats::capabilities) allow, the header offers to start a direct message or
 /// create a private or group room, choosing the recipients from the service's
 /// [`find_users`](Chats::find_users), and to add or remove the members of a room whose members
 /// the service pushes. Each action shows while it is pending and its failure, and attaching
@@ -85,6 +113,11 @@ pub struct ChatsPanel {
     room: usize,
     /// Each room's messages, oldest first.
     messages: HashMap<String, VecDeque<ChatMessage>>,
+    /// Paging back through each room's older messages, by room.
+    paging: HashMap<String, Paging>,
+    /// The first message of the shown room last frame and its top below the top of the list, to
+    /// keep the view on it when older messages join above.
+    first: Option<(ChatMessage, f32)>,
     members: HashMap<String, Vec<ChatUser>>,
     draft: FilterWidget,
     error: Option<FeedError>,
@@ -109,6 +142,7 @@ impl std::fmt::Debug for ChatsPanel {
             .field("rooms", &self.rooms)
             .field("room", &self.room)
             .field("messages", &self.messages)
+            .field("paging", &self.paging)
             .field("members", &self.members)
             .field("draft", &self.draft)
             .field("error", &self.error)
@@ -157,6 +191,8 @@ impl ChatsPanel {
     fn watch(&mut self) {
         self.rooms.clear();
         self.messages.clear();
+        self.paging.clear();
+        self.first = None;
         self.members.clear();
         self.generation = self.next_key();
         let (listener, events) = Listener::new(&self.inbox, self.generation);
@@ -174,17 +210,20 @@ impl ChatsPanel {
 
     /// Bounds the messages after `room` grew: `room` keeps its newest [`ROOM_KEPT`], then while
     /// the rooms hold more than [`KEPT`] the room holding the most loses its oldest, the first
-    /// listed among equals.
-    fn bound(&mut self, room: &str) {
+    /// listed among equals, sparing `room` when it grew by a page. A room that loses messages
+    /// has older ones again, so a history that ended may be asked again.
+    fn bound(&mut self, room: &str, spare: bool) {
         if let Some(log) = self.messages.get_mut(room)
             && log.len() > ROOM_KEPT
         {
             log.drain(..log.len() - ROOM_KEPT);
+            self.reopen(room);
         }
         while self.messages.values().map(VecDeque::len).sum::<usize>() > KEPT {
             let Some(largest) = self
                 .rooms
                 .iter()
+                .filter(|name| !(spare && name.as_str() == room))
                 .filter_map(|name| self.messages.get(name).map(|log| (name, log.len())))
                 .min_by_key(|(_, len)| std::cmp::Reverse(*len))
                 .map(|(name, _)| name.clone())
@@ -194,7 +233,68 @@ impl ChatsPanel {
             if let Some(log) = self.messages.get_mut(&largest) {
                 log.pop_front();
             }
+            self.reopen(&largest);
         }
+    }
+
+    /// Lets a room whose history ended ask again after it lost messages.
+    fn reopen(&mut self, room: &str) {
+        if matches!(self.paging.get(room), Some(Paging::Ended)) {
+            self.paging.remove(room);
+        }
+    }
+
+    /// The room whose page of older messages is on its way under `key`.
+    fn loading(&self, key: u64) -> Option<String> {
+        self.paging.iter().find_map(|(room, paging)| {
+            matches!(paging, Paging::Loading(at) if *at == key).then(|| room.clone())
+        })
+    }
+
+    /// Asks the service for the page before the oldest message of `room`, or for its newest when
+    /// it holds none, unless a request is on its way or failed, its history ended, the room holds
+    /// [`ROOM_KEPT`] messages, or its oldest message has no identifier.
+    fn ask(&mut self, room: &str) {
+        let log = self.messages.get(room);
+        let held = log.map_or(0, VecDeque::len);
+        let oldest = log.and_then(VecDeque::front);
+        if self.paging.contains_key(room)
+            || held >= ROOM_KEPT
+            || oldest.is_some_and(|message| message.id.is_none())
+        {
+            return;
+        }
+        let Some(service) = self.service.clone() else {
+            return;
+        };
+        let before = oldest.and_then(|message| message.id.clone());
+        let key = self.next_key();
+        self.paging.insert(room.to_owned(), Paging::Loading(key));
+        let limit = PAGE.min(ROOM_KEPT - held) as u32;
+        service.history(room.to_owned(), before, limit, self.inbox.reply(key));
+    }
+
+    /// Joins the messages of `room` in `page` that it does not hold, in time order, and ends
+    /// paging for the room when none is new.
+    fn merge(&mut self, room: String, page: Vec<ChatMessage>) {
+        let log = self.messages.entry(room.clone()).or_default();
+        let mut added = false;
+        // Newest first, each before the held messages of its time, so a page keeps its order and
+        // goes before the message it was asked before.
+        for message in page.into_iter().rev() {
+            if message.room != room || log.iter().any(|held| same(held, &message)) {
+                continue;
+            }
+            let at = log.partition_point(|held| held.time < message.time);
+            log.insert(at, message);
+            added = true;
+        }
+        if added {
+            self.paging.remove(&room);
+        } else {
+            self.paging.insert(room.clone(), Paging::Ended);
+        }
+        self.bound(&room, true);
     }
 
     /// Receive the service's pushes and answers, and watch again after a lagged stream.
@@ -244,6 +344,16 @@ impl ChatsPanel {
                 continue;
             }
             if key != self.generation {
+                if let Some(room) = self.loading(key)
+                    && let Ok(result) = answer.downcast::<Result<Vec<ChatMessage>, FeedError>>()
+                {
+                    match *result {
+                        Ok(page) => self.merge(room, page),
+                        Err(error) => {
+                            self.paging.insert(room, Paging::Failed(error));
+                        }
+                    }
+                }
                 continue;
             }
             match answer.downcast::<ChatEvent>().map(|event| *event) {
@@ -252,8 +362,14 @@ impl ChatsPanel {
                     self.add_room(&message.room);
                     let room = message.room.clone();
                     let log = self.messages.entry(room.clone()).or_default();
-                    log.push_back(message);
-                    self.bound(&room);
+                    // A history page may answer before the stream pushes the same message.
+                    let duplicate =
+                        message.id.is_some() && log.iter().any(|held| same(held, &message));
+                    if !duplicate {
+                        let at = log.partition_point(|held| held.time <= message.time);
+                        log.insert(at, message);
+                        self.bound(&room, false);
+                    }
                 }
                 Ok(ChatEvent::Members { room, members }) => {
                     self.add_room(&room);
@@ -262,6 +378,8 @@ impl ChatsPanel {
                 Ok(ChatEvent::Clear) => {
                     self.rooms.clear();
                     self.messages.clear();
+                    self.paging.clear();
+                    self.first = None;
                     self.members.clear();
                 }
                 Err(_) => {}
@@ -399,11 +517,69 @@ impl ChatsPanel {
                     });
                 });
             });
-        egui::ScrollArea::vertical()
+        // The message that led the list last frame, when another one leads it now.
+        let moved = self.first.take().filter(|(was, _)| {
+            self.messages
+                .get(&room)
+                .and_then(VecDeque::front)
+                .is_some_and(|front| !same(was, front))
+        });
+        let mut first = None;
+        let mut kept = false;
+        let mut retry = false;
+        let output = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .stick_to_bottom(true)
             .show(ui, |ui| {
-                for message in self.messages.get(&room).into_iter().flatten() {
+                let top = ui.cursor().top();
+                if capabilities.history {
+                    match self.paging.get(&room) {
+                        Some(Paging::Loading(_)) => {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(l10n::text(ui.ctx(), "Loading older messages"));
+                            });
+                        }
+                        Some(Paging::Ended) => {
+                            ui.label(
+                                RichText::new(l10n::text(ui.ctx(), "No older messages"))
+                                    .size(theme.text.small)
+                                    .color(theme.ui.text_secondary),
+                            );
+                        }
+                        Some(Paging::Failed(error)) => {
+                            translated_status_message(
+                                ui,
+                                MessageKind::Error,
+                                l10n::format_text(
+                                    ui.ctx(),
+                                    "Older messages not loaded: {error}",
+                                    &[("error", error.to_string().as_str())],
+                                ),
+                            );
+                            retry = Button::new("Retry").small().show(ui).clicked();
+                        }
+                        None => {}
+                    }
+                }
+                for (index, message) in self.messages.get(&room).into_iter().flatten().enumerate() {
+                    let y = ui.cursor().top() - top;
+                    if index == 0 {
+                        first = Some((message.clone(), y));
+                    } else if !kept
+                        && let Some((was, was_y)) = &moved
+                        && same(was, message)
+                    {
+                        // Older messages joined above the message that led the list: keep it
+                        // where it was, and lay the frame out again so the jump never shows.
+                        ui.scroll_with_delta_animation(
+                            egui::vec2(0.0, was_y - y),
+                            egui::style::ScrollAnimation::none(),
+                        );
+                        ui.ctx()
+                            .request_discard("Older chat messages joined above the list");
+                        kept = true;
+                    }
                     ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::hover()), |ui| {
                         let hovered = ui.response().hovered();
                         egui::Frame::new()
@@ -436,6 +612,14 @@ impl ChatsPanel {
                     ui.add_space(theme.spacing.sm);
                 }
             });
+        self.first = first;
+        if retry {
+            self.paging.remove(&room);
+            self.ask(&room);
+        }
+        if capabilities.history && !kept && output.state.clamped_offset().y <= 0.0 {
+            self.ask(&room);
+        }
         if send && let Some(service) = &self.service {
             let text = std::mem::take(self.draft.query_mut());
             service.send(room, text.trim().to_owned(), self.inbox.reply(SENT));
@@ -628,11 +812,17 @@ mod tests {
     use egui::{Role, Vec2};
     use egui_kittest::{Harness, kittest::Queryable};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// A call of [`Chats::history`]: the room, the message asked before, the limit and the reply.
+    type Asked = (String, Option<String>, u32, Reply<Vec<ChatMessage>>);
 
     #[derive(Default)]
     struct Host {
         created: Mutex<Vec<(NewChatRoom, Reply<String>)>>,
         events: Mutex<Option<Events<ChatEvent>>>,
+        history: AtomicBool,
+        asked: Mutex<Vec<Asked>>,
     }
 
     impl Chats for Host {
@@ -647,10 +837,21 @@ mod tests {
                 direct_messages: true,
                 create_rooms: true,
                 manage_members: false,
+                history: self.history.load(Ordering::Relaxed),
             }
         }
         fn create_room(&self, room: NewChatRoom, reply: Reply<String>) {
             self.created.lock().unwrap().push((room, reply));
+        }
+        fn history(
+            &self,
+            room: String,
+            before: Option<String>,
+            limit: u32,
+            reply: Reply<Vec<ChatMessage>>,
+        ) {
+            let call = (room, before, limit, reply);
+            self.asked.lock().unwrap().push(call);
         }
     }
 
@@ -787,5 +988,113 @@ mod tests {
                 (998, "r4 2"),
             ]
         );
+    }
+
+    /// Guards paging a room's older messages: without the capability nothing is asked and no
+    /// paging row shows; at the top one request asks for the page before the oldest message; the
+    /// answer joins in time order without the messages the room holds or another room's, and the
+    /// view stays on the message that led the list, so the next page waits for the next scroll;
+    /// the stream pushing a message the page brought adds nothing; a failure offers Retry; an
+    /// empty answer shows the end and stops paging.
+    #[test]
+    fn reaching_the_top_pages_older_messages_once_and_merges_them_in_order() {
+        let host = Arc::new(Host::default());
+        let mut panel = ChatsPanel::new();
+        panel.set_service(host.clone());
+        let message = |room: &str, author: &str, minute: i64, text: &str| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(minute);
+            ChatMessage::new(room, author, time, text).with_id(text)
+        };
+        let events = host.events.lock().unwrap().clone().unwrap();
+        for i in 0..20 {
+            let pushed = message("desk", "Ann", i, &format!("m{i}"));
+            events.push(ChatEvent::Message(pushed));
+        }
+        let ctx = egui::Context::default();
+        panel.poll(&ctx);
+        let mut h = Harness::builder()
+            .with_size(Vec2::new(320.0, 400.0))
+            .with_context_setup(|ctx| {
+                crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                egui_extras::install_image_loaders(ctx);
+            })
+            .build_ui_state(|ui, panel: &mut ChatsPanel| panel.show(ui), panel);
+        // Steps, not runs: a request started on the way shows a spinner, which repaints.
+        let to_top = |h: &mut Harness<'_, ChatsPanel>| {
+            for _ in 0..20 {
+                h.get_by_role_and_label(Role::Button, "desk").scroll_up();
+                h.run_steps(2);
+            }
+        };
+        let take = || {
+            let mut asked = host.asked.lock().unwrap();
+            assert_eq!(asked.len(), 1);
+            asked.pop().unwrap()
+        };
+
+        h.run();
+        to_top(&mut h);
+        assert!(host.asked.lock().unwrap().is_empty());
+        assert!(h.query_by_label("Loading older messages").is_none());
+        assert!(h.query_by_label("No older messages").is_none());
+
+        host.history.store(true, Ordering::Relaxed);
+        h.run_steps(3);
+        h.get_by_label("Loading older messages");
+        h.run_steps(3);
+        let (room, before, limit, reply) = take();
+        assert_eq!(
+            (room.as_str(), before.as_deref(), limit),
+            ("desk", Some("m0"), 50)
+        );
+
+        reply.send(Ok(vec![
+            message("desk", "Bo", -2, "p2"),
+            message("desk", "Bo", -1, "p1"),
+            ChatMessage::new("desk", "Ann", chrono::DateTime::UNIX_EPOCH, "m0"),
+            message("desk", "Bo", -1, "p1"),
+            message("other", "Bo", -3, "x"),
+        ]));
+        h.state_mut().poll(&ctx);
+        h.run();
+        let texts: Vec<_> = h.state().messages["desk"]
+            .iter()
+            .map(|message| message.text.clone())
+            .collect();
+        let expected: Vec<_> = ["p2".to_owned(), "p1".to_owned()]
+            .into_iter()
+            .chain((0..20).map(|i| format!("m{i}")))
+            .collect();
+        assert_eq!(texts, expected);
+        assert_eq!(h.state().rooms, ["desk"]);
+        assert!(host.asked.lock().unwrap().is_empty());
+
+        // The stream pushing a message the page brought adds nothing, even with a newer time,
+        // and a late message joins in time order.
+        events.push(ChatEvent::Message(message("desk", "Bo", -1, "p1")));
+        events.push(ChatEvent::Message(message("desk", "Bo", 30, "p1")));
+        events.push(ChatEvent::Message(message("desk", "Cy", 5, "late")));
+        h.state_mut().poll(&ctx);
+        let log = &h.state().messages["desk"];
+        assert_eq!((log.len(), log[8].text.as_str()), (23, "late"));
+
+        to_top(&mut h);
+        let (_, before, limit, reply) = take();
+        assert_eq!((before.as_deref(), limit), (Some("p2"), 50));
+        reply.send(Err(FeedError::Other("offline".into())));
+        h.state_mut().poll(&ctx);
+        h.run();
+        h.get_by_label("Older messages not loaded: offline");
+        assert!(host.asked.lock().unwrap().is_empty());
+        h.get_by_role_and_label(Role::Button, "Retry").click();
+        h.run_steps(3);
+        let (_, before, _, reply) = take();
+        assert_eq!(before.as_deref(), Some("p2"));
+        reply.send(Ok(Vec::new()));
+        h.state_mut().poll(&ctx);
+        h.run();
+        h.get_by_label("No older messages");
+        to_top(&mut h);
+        assert!(host.asked.lock().unwrap().is_empty());
     }
 }
