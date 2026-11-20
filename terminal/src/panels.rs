@@ -1168,6 +1168,20 @@ mod tests {
         let alerts = terminal.toasts.toasts();
         assert_eq!(alerts.len(), 1);
         assert_eq!(alerts[0].message, "Large trade: 4 at 171.00");
+
+        // Reload drains the old subscription before reanchoring the interval. That last
+        // execution still arrived live, even though a subsequent page can now cover it.
+        terminal.toasts.toasts_mut().clear();
+        let live = tick("12:00:02", 5.0);
+        sink.set_server_time(live.ts);
+        sink.push_tick(live);
+        terminal
+            .chart_mut()
+            .set_timeframe(egui_charts::model::Timeframe::Min5);
+        assert_eq!(painted_times(&mut terminal, &["12:00:02"]), ["12:00:02"]);
+        let alerts = terminal.toasts.toasts();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].message, "Large trade: 5 at 171.00");
     }
 
     #[derive(Default)]

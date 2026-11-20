@@ -289,10 +289,7 @@ impl Trades {
     pub(crate) fn progress(&self, live_cursor: &mut usize) -> (u64, usize) {
         let added = self.live_count.wrapping_sub(*live_cursor);
         *live_cursor = self.live_count;
-        (
-            self.page_revision,
-            self.trades.len().saturating_sub(added).max(self.paged),
-        )
+        (self.page_revision, self.trades.len().saturating_sub(added))
     }
 
     /// Identifies the held trades: it differs after any trade was added or evicted.
