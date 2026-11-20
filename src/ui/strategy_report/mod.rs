@@ -17,7 +17,7 @@ mod tests;
 use crate::localization as l10n;
 use crate::model::{
     Bar, OrderSide, StrategyAnalysis, StrategyComparison, StrategyPerformance, StrategyReport,
-    Timeframe,
+    SummaryUnit, Timeframe, run_figures, trade_figures,
 };
 use crate::theme::ThemeExt;
 use crate::ui_kit::{
@@ -101,9 +101,9 @@ struct ReportData {
     performance: StrategyPerformance,
     comparison: StrategyComparison,
     range: Option<Range<DateTime<Utc>>>,
+    /// Figures of the range, or of the whole run without one.
     shown: StrategyPerformance,
-    buy_and_hold_return: Option<f64>,
-    buy_and_hold_equity: Vec<(DateTime<Utc>, f64)>,
+    shown_comparison: StrategyComparison,
     analysis: StrategyAnalysis,
     equity: Vec<(DateTime<Utc>, f64)>,
     drawdown: Vec<(DateTime<Utc>, f64)>,
@@ -122,9 +122,14 @@ impl ReportData {
             .cloned()
             .collect();
         self.shown = run.performance();
-        let comparison = run.comparison(&bars);
-        self.buy_and_hold_return = comparison.buy_and_hold_return;
-        self.buy_and_hold_equity = comparison.buy_and_hold_equity;
+        self.shown_comparison = run.comparison(&bars);
+        if range.is_some() {
+            // A trade entered before the range holds bars from its entry, as in the whole run.
+            let whole = run.comparison(&self.bars);
+            self.shown_comparison.all = whole.all;
+            self.shown_comparison.long = whole.long;
+            self.shown_comparison.short = whole.short;
+        }
         self.analysis = run.analysis(&bars);
         self.equity = run.equity_curve();
         let mut peak = self.equity.first().map_or(0.0, |p| p.1);
@@ -205,8 +210,7 @@ impl StrategyReportPanel {
                 bars: bars.to_vec(),
                 shown: performance.clone(),
                 performance,
-                buy_and_hold_return: comparison.buy_and_hold_return,
-                buy_and_hold_equity: Vec::new(),
+                shown_comparison: StrategyComparison::default(),
                 comparison,
                 range: None,
                 analysis,
@@ -465,7 +469,6 @@ fn property(ui: &mut Ui, label: &str, value: &str) {
 }
 
 fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
-    let p = &data.shown;
     let report = &data.report;
     let theme = ui.active_theme();
     let range_label = data.range.as_ref().map_or_else(
@@ -491,52 +494,61 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
             .small()
             .color(theme.ui.text_muted),
     );
-    let metrics = [
-        ("Net profit", money(Some(p.net_profit), report)),
-        ("Net return", percent(p.net_profit_fraction)),
-        ("Gross profit", money(Some(p.gross_profit), report)),
-        ("Gross loss", money(Some(p.gross_loss), report)),
-        ("Profit factor", number(p.profit_factor)),
-        ("Win rate", percent(p.win_rate)),
-        ("Average trade", money(p.average_trade, report)),
-        ("Fees", money(Some(p.total_fees), report)),
-        ("Maximum drawdown", money(p.max_drawdown, report)),
-        ("Maximum drawdown %", percent(p.max_drawdown_fraction)),
-        ("Sharpe ratio", number(p.sharpe_ratio)),
-        ("Sortino ratio", number(p.sortino_ratio)),
-        ("Buy-and-hold return", percent(data.buy_and_hold_return)),
-        (
-            "Largest winning trade",
-            money(p.largest_winning_trade, report),
-        ),
-        (
-            "Largest losing trade",
-            money(p.largest_losing_trade, report),
-        ),
-        ("Consecutive wins", p.max_consecutive_wins.to_string()),
-        ("Consecutive losses", p.max_consecutive_losses.to_string()),
-        (
-            "Closed / open trades",
-            format!("{} / {}", p.closed_trades, p.open_trades),
-        ),
-    ];
+    let cell = |value: Option<f64>, unit: SummaryUnit| match unit {
+        SummaryUnit::Money => money(value, report),
+        SummaryUnit::Percent => percent(value),
+        SummaryUnit::Ratio | SummaryUnit::Bars => number(value),
+        SummaryUnit::Count | SummaryUnit::Quantity => value
+            .filter(|v| v.is_finite())
+            .map_or_else(|| "N/A".into(), |v| v.to_string()),
+    };
     let pairs = if ui.available_width() >= 760.0 { 2 } else { 1 };
-    egui::Grid::new("performance")
-        .striped(true)
-        .spacing([theme.spacing.xxl, theme.spacing.sm])
+    egui::ScrollArea::horizontal()
+        .id_salt("summary_sides")
         .show(ui, |ui| {
-            for (i, (label, value)) in metrics.iter().enumerate() {
-                ui.label(RichText::new(l10n::text(ui.ctx(), label)).color(theme.ui.text_secondary));
-                ui.label(RichText::new(value).strong());
-                if (i + 1) % pairs == 0 {
+            egui::Grid::new("performance_by_side")
+                .striped(true)
+                .spacing([theme.spacing.xxl, theme.spacing.sm])
+                .show(ui, |ui| {
+                    ui.label("");
+                    for side in ["All", "Long", "Short"] {
+                        ui.label(RichText::new(l10n::text(ui.ctx(), side)).strong());
+                    }
                     ui.end_row();
-                }
-            }
+                    for (label, unit, values) in trade_figures(&data.shown, &data.shown_comparison)
+                    {
+                        ui.label(
+                            RichText::new(l10n::text(ui.ctx(), label))
+                                .color(theme.ui.text_secondary),
+                        );
+                        for value in values {
+                            ui.label(RichText::new(cell(value, unit)).strong());
+                        }
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(theme.spacing.md);
+            let metrics = run_figures(&data.shown, &data.shown_comparison);
+            egui::Grid::new("performance")
+                .striped(true)
+                .spacing([theme.spacing.xxl, theme.spacing.sm])
+                .show(ui, |ui| {
+                    for (i, &(label, unit, value)) in metrics.iter().enumerate() {
+                        ui.label(
+                            RichText::new(l10n::text(ui.ctx(), label))
+                                .color(theme.ui.text_secondary),
+                        );
+                        ui.label(RichText::new(cell(value, unit)).strong());
+                        if (i + 1) % pairs == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
         });
     ui.label(
         RichText::new(l10n::text(
             ui.ctx(),
-            "N/A means unavailable. Ratios require at least 13 weeks of equity.",
+            "N/A means unavailable. Ratios and compound growth require at least 13 weeks of equity; holding times and buy-and-hold figures require the source bars.",
         ))
         .color(theme.ui.text_muted)
         .size(theme.text.small),
@@ -544,7 +556,7 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
     ui.add_space(theme.spacing.md);
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(l10n::text(ui.ctx(), "Equity")).strong());
-        if !data.buy_and_hold_equity.is_empty() {
+        if !data.shown_comparison.buy_and_hold_equity.is_empty() {
             ui.checkbox(compare, l10n::text(ui.ctx(), "Compare buy-and-hold"));
             if *compare {
                 ui.colored_label(theme.ui.warning, l10n::text(ui.ctx(), "Buy-and-hold"));
@@ -558,7 +570,7 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
         ui,
         &data.equity,
         if *compare {
-            &data.buy_and_hold_equity
+            &data.shown_comparison.buy_and_hold_equity
         } else {
             &[]
         },

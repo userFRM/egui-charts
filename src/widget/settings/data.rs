@@ -80,6 +80,8 @@ pub struct StatusLineOptions {
     pub show_market_status: bool,
     /// Display current bid and ask controls.
     pub show_quote_boxes: bool,
+    /// Show Buy and Sell as a movable panel over the price pane instead of in the legend.
+    pub quote_panel: bool,
     /// Display study names.
     pub show_indicator_titles: bool,
     /// Display host-supplied study inputs.
@@ -108,6 +110,7 @@ impl Default for StatusLineOptions {
             title_as_description: true,
             show_market_status: true,
             show_quote_boxes: true,
+            quote_panel: false,
             show_indicator_titles: true,
             show_indicator_inputs: true,
             show_indicator_values: true,
@@ -503,6 +506,9 @@ pub struct TradingSettings {
     /// Buy and Sell place a market order of the order quantity at once instead of opening the
     /// order ticket.
     pub instant_orders: bool,
+    /// Show only side, order type, prices and quantity above the send button, with the order's
+    /// exits listed one per line. The ticket's More menu switches it.
+    pub compact_ticket: bool,
     /// Show current Bid and Ask tags supplied by the quote source.
     pub bid_ask_labels: bool,
     /// Ask the host to play [`execution_sound`](Self::execution_sound) for every fill, through
@@ -547,6 +553,7 @@ impl Default for TradingSettings {
     fn default() -> Self {
         Self {
             instant_orders: false,
+            compact_ticket: false,
             bid_ask_labels: false,
             play_execution_sound: false,
             execution_sound: String::new(),

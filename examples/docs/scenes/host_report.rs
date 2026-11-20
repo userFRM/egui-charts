@@ -61,20 +61,22 @@ impl HostReport {
         let p = self.report.performance();
         egui::Grid::new("host-report-metrics").show(ui, |ui| {
             for (label, value) in [
-                ("Net profit (USD)", format!("{:.2}", p.net_profit)),
+                ("Net profit (USD)", format!("{:.2}", p.all.net_profit)),
                 (
                     "Gross profit / loss (USD)",
-                    format!("{:.2} / {:.2}", p.gross_profit, p.gross_loss),
+                    format!("{:.2} / {:.2}", p.all.gross_profit, p.all.gross_loss),
                 ),
-                ("Closed trades", p.closed_trades.to_string()),
+                ("Closed trades", p.all.closed_trades.to_string()),
                 (
                     "Win rate",
-                    p.win_rate
+                    p.all
+                        .win_rate
                         .map_or_else(|| "N/A".into(), |v| format!("{:.0}%", v * 100.0)),
                 ),
                 (
                     "Profit factor",
-                    p.profit_factor
+                    p.all
+                        .profit_factor
                         .map_or_else(|| "N/A".into(), |v| format!("{v:.2}")),
                 ),
                 (
@@ -104,9 +106,9 @@ mod tests {
     fn host_delivery_matches_the_hand_calculated_fills_and_curve() {
         let report = host_result(2.0);
         let p = report.performance();
-        assert_eq!(p.net_profit, 26.0);
-        assert_eq!((p.gross_profit, p.gross_loss), (48.0, 22.0));
-        assert_eq!(p.win_rate, Some(0.5));
+        assert_eq!(p.all.net_profit, 26.0);
+        assert_eq!((p.all.gross_profit, p.all.gross_loss), (48.0, 22.0));
+        assert_eq!(p.all.win_rate, Some(0.5));
         assert_eq!(p.max_drawdown, Some(22.0));
         assert_eq!(p.sharpe_ratio, None);
     }

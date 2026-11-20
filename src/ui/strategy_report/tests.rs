@@ -3,6 +3,20 @@ use crate::model::{StrategyExit, StrategyTrade};
 use egui::{Role, Vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
+/// The text of every label, in layout order.
+fn labels<State>(h: &Harness<'_, State>) -> Vec<String> {
+    h.query_all_by_role(Role::Label)
+        .filter_map(|n| n.value())
+        .collect()
+}
+
+/// The `cells` labels after the label `name`: the values of a summary row.
+fn row<State>(h: &Harness<'_, State>, name: &str, cells: usize) -> Vec<String> {
+    let labels = labels(h);
+    let i = labels.iter().position(|l| l == name).expect(name);
+    labels[i + 1..=i + cells].to_vec()
+}
+
 #[test]
 fn report_replacement_selection_export_and_clear() {
     let start = DateTime::UNIX_EPOCH + chrono::TimeDelta::milliseconds(250);
@@ -175,13 +189,20 @@ fn range_limits_summary_charts_and_trades() {
         t.exit = Some(StrategyExit::new(exit, 100.0, profit));
         report.trades.push(t);
     }
+    // Daily bars at a constant price: each trade holds 10 of them.
+    let bars: Vec<_> = (0..92)
+        .map(|d| {
+            let time = day(1, 1) + chrono::TimeDelta::days(d);
+            Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0)
+        })
+        .collect();
     for (theme, width) in [crate::theme::Theme::light(), crate::theme::Theme::dark()]
         .into_iter()
         .flat_map(|theme| [320.0, 1440.0].map(|width| (theme.clone(), width)))
     {
         let accent = theme.ui.accent;
         let mut panel = StrategyReportPanel::default();
-        panel.set_report(Some(report.clone()), &[]);
+        panel.set_report(Some(report.clone()), &bars);
         let mut h = Harness::builder()
             .with_size(Vec2::new(width, 900.0))
             .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
@@ -200,8 +221,8 @@ fn range_limits_summary_charts_and_trades() {
                 (panel, Vec::new()),
             );
         h.run();
-        h.get_by_label("-10.00%");
-        h.get_by_label("25.00%");
+        assert_eq!(row(&h, "Net return", 3), ["-10.00%", "-10.00%", "0.00%"]);
+        assert_eq!(row(&h, "Maximum drawdown %", 1), ["25.00%"]);
         assert_eq!(
             h.get_by_role_and_label(Role::TextInput, "From (UTC)")
                 .value()
@@ -220,7 +241,12 @@ fn range_limits_summary_charts_and_trades() {
         h.get_by_role_and_label(Role::TextInput, "From (UTC)")
             .type_text("2024-02-15");
         h.run();
-        h.get_by_label("-33.33%");
+        assert_eq!(row(&h, "Net return", 3), ["-33.33%", "-33.33%", "0.00%"]);
+        // The trade entered before the range counts its bars from entry, as in the whole run.
+        assert_eq!(
+            row(&h, "Average bars in trades", 3),
+            ["10.00", "10.00", "N/A"]
+        );
         assert!(h.query_by_label("-10.00%").is_none());
         assert!(h.query_by_label("25.00%").is_none());
         let points = h
@@ -255,7 +281,7 @@ fn range_limits_summary_charts_and_trades() {
             .type_text("2024-04-02");
         h.run();
         h.get_by_label("Enter dates as YYYY-MM-DD, the start not after the end");
-        h.get_by_label("-33.33%");
+        assert_eq!(row(&h, "Net return", 3), ["-33.33%", "-33.33%", "0.00%"]);
         for label in ["Export trades CSV", "Export summary CSV"] {
             h.get_by_role_and_label(Role::Button, label).click();
             h.run();
@@ -263,16 +289,18 @@ fn range_limits_summary_charts_and_trades() {
         assert_eq!(
             &h.state().1[1..],
             &[
-                StrategyReportAction::ExportCsv(report.trades_csv()),
+                StrategyReportAction::ExportCsv(
+                    report.trades_csv_with_excursions(&report.comparison(&bars))
+                ),
                 StrategyReportAction::ExportSummaryCsv {
                     filename: "Range-SAMPLE-summary.csv".into(),
-                    content: report.summary_csv(&report.performance(), &report.comparison(&[])),
+                    content: report.summary_csv(&report.performance(), &report.comparison(&bars)),
                 },
             ]
         );
         h.get_by_role_and_label(Role::Button, "Whole run").click();
         h.run();
-        h.get_by_label("-10.00%");
+        assert_eq!(row(&h, "Net return", 3), ["-10.00%", "-10.00%", "0.00%"]);
         assert_eq!(
             h.get_by_role_and_label(Role::TextInput, "From (UTC)")
                 .value()
@@ -372,4 +400,50 @@ fn distribution_zero_edge_stays_centred_for_extreme_finite_returns() {
         }
         assert!(zero.is_finite() && (zero - (left + right) / 2.0).abs() < 1.0);
     }
+}
+
+#[test]
+fn summary_shows_trade_figures_for_all_long_and_short() {
+    let start = DateTime::UNIX_EPOCH;
+    let mut report = StrategyReport::new("Sides", "SIDES", Timeframe::Hour1, 1000.0);
+    for (side, profit) in [(OrderSide::Buy, 50.25), (OrderSide::Sell, -30.5)] {
+        let mut trade = StrategyTrade::new(side, 1.0, start, 100.0);
+        trade.exit = Some(StrategyExit::new(
+            start + chrono::TimeDelta::hours(1),
+            100.0,
+            profit,
+        ));
+        report.trades.push(trade);
+    }
+    let mut panel = StrategyReportPanel::default();
+    panel.set_report(Some(report), &[]);
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(1440.0, 1200.0))
+        .with_context_setup(|ctx| crate::theme::apply_to_egui(ctx, &crate::theme::Theme::light()))
+        .build_ui_state(
+            |ui, (panel, actions): &mut (StrategyReportPanel, Vec<StrategyReportAction>)| {
+                let action = panel.show(ui);
+                if action != StrategyReportAction::None {
+                    actions.push(action);
+                }
+            },
+            (panel, Vec::new()),
+        );
+    h.run();
+    let labels = labels(&h);
+    let header = labels.iter().position(|l| l == "All").unwrap();
+    assert_eq!(&labels[header..header + 3], ["All", "Long", "Short"]);
+    assert_eq!(row(&h, "Net profit", 3), ["19.75", "50.25", "-30.50"]);
+    assert_eq!(
+        row(&h, "Average losing trade", 3),
+        ["30.50", "N/A", "30.50"]
+    );
+    h.get_by_role_and_label(Role::Button, "Export summary CSV")
+        .click();
+    h.run();
+    let Some(StrategyReportAction::ExportSummaryCsv { content, .. }) = h.state().1.last() else {
+        panic!("summary export action");
+    };
+    assert!(content.contains("summary,Net profit,50.25,money,,long\n"));
+    assert!(content.contains("summary,Net profit,-30.5,money,,short\n"));
 }

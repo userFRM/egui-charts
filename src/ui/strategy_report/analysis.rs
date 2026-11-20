@@ -39,7 +39,7 @@ pub(super) fn distribution(ui: &mut Ui, data: &ReportData) {
     egui::ScrollArea::both()
         .id_salt("distribution")
         .show(ui, |ui| {
-            if data.shown.closed_trades == 0 {
+            if data.shown.all.closed_trades == 0 {
                 EmptyState::new("No closed trades").show(ui);
                 return;
             }
@@ -166,7 +166,7 @@ pub(super) fn times(ui: &mut Ui, data: &ReportData) {
     egui::ScrollArea::both()
         .id_salt("trade_times")
         .show(ui, |ui| {
-            if data.shown.closed_trades == 0 {
+            if data.shown.all.closed_trades == 0 {
                 EmptyState::new("No closed trades").show(ui);
                 return;
             }

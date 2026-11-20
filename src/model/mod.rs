@@ -128,9 +128,12 @@ pub use session::{
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
 pub use strategy::{
-    StrategyAnalysis, StrategyComparison, StrategyExcursion, StrategyExit, StrategyPerformance,
-    StrategyPeriod, StrategyReport, StrategyResultBin, StrategyTrade, StrategyTradeGroup,
+    StrategyAnalysis, StrategyComparison, StrategyExcursion, StrategyExit, StrategyHolding,
+    StrategyPerformance, StrategyPeriod, StrategyReport, StrategyResultBin, StrategyTrade,
+    StrategyTradeGroup, StrategyTradeStats,
 };
+#[cfg(feature = "ui")]
+pub(crate) use strategy::{SummaryUnit, run_figures, trade_figures};
 pub use study::{InputValue, StudySource};
 pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};
 pub use timeframe::{Timeframe, TimeframeUnit};

@@ -162,6 +162,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(VolProfileVisible::new(l(0))),
         Box::new(VolProfileFixed::new(l(0))),
         Box::new(VolProfileSession::new(l(0))),
+        Box::new(VolProfileSessionHd::default()),
         Box::new(VolProfilePeriodic::new(l(0))),
         Box::new(VolProfileAnchored::new(l(0))),
         Box::new(VolProfileAutoAnchored::new(l(0))),
@@ -195,6 +196,15 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(OrderFlowStudy::execution_delta(false)),
         Box::new(OrderFlowStudy::execution_delta(true)),
         Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsTradedThrough {
+            seconds: l(0),
+        })),
+        Box::new(OrderFlowStudy::new(OrderFlowKind::BookBalance {
+            near_levels: l(0),
+            far_levels: l(1),
+            near_distance: x(0.0),
+            far_distance: x(0.0),
+        })),
+        Box::new(OrderFlowStudy::new(OrderFlowKind::PriceRange {
             seconds: l(0),
         })),
         Box::new(NetVolume::new()),
@@ -270,6 +280,8 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(TechnicalRatings::new()),
         Box::new(TechnicalRatings::new().with_basis(RatingBasis::Oscillators)),
         Box::new(Reversal::new(l(0))),
+        Box::new(BookerReversal::new(l(0), l(1), l(2), l(3))),
+        Box::new(ZivGhostPivots::new()),
         Box::new(ElliottWave::new(l(0), l(1), l(2))),
         Box::new(RisingWedge::new(l(0), l(1), l(2), l(3), l(4), l(5))),
         Box::new(FallingWedge::new(l(0), l(1), l(2), l(3), l(4), l(5))),
