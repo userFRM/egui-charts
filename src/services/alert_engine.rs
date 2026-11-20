@@ -1,6 +1,6 @@
 //! An alert service that evaluates alerts on the bars the host feeds it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
@@ -67,8 +67,10 @@ use crate::model::{
 /// skipped updates use that bar's current geometry. Within a bar they use the previous evaluation.
 ///
 /// *Frequency.* [`Once`](AlertFrequency::Once) fires on the first evaluation that holds and the
-/// alert becomes [`Triggered`](AlertStatus::Triggered); a watchlist alert fires once per member
-/// and stays active. [`EveryTime`](AlertFrequency::EveryTime) fires on every evaluation that
+/// alert becomes [`Triggered`](AlertStatus::Triggered); a watchlist alert fires once per member,
+/// records it in [`member_triggered_at`](Alert::member_triggered_at), and becomes `Triggered` when
+/// every member of its list has fired, also when [`set_watchlist`](Self::set_watchlist) leaves
+/// only members that fired. [`EveryTime`](AlertFrequency::EveryTime) fires on every evaluation that
 /// holds, [`OncePerBar`](AlertFrequency::OncePerBar) at most once per bar open time, and
 /// [`OncePerBarClose`](AlertFrequency::OncePerBarClose) evaluates each completed bar once.
 /// [`OncePerMinute`](AlertFrequency::OncePerMinute) fires at most once per minute of the update
@@ -89,7 +91,9 @@ use crate::model::{
 /// *Expiry.* Every `update` and [`tick`](Self::tick) first marks active alerts whose expiry has
 /// passed as [`Expired`](AlertStatus::Expired), so an alert never fires at or after its expiry
 /// and expires without data. Disabled, triggered and expired alerts are not evaluated, and
-/// saving or removing an alert discards its evaluation state, so a resumed alert starts afresh.
+/// saving or removing an alert discards its evaluation state, so a resumed alert starts afresh,
+/// and a watchlist alert's member record is cleared unless the save changes only its display or
+/// delivery.
 ///
 /// ```
 /// use chrono::{DateTime, Utc};
@@ -272,26 +276,45 @@ impl AlertEngine {
         symbols
             .into_iter()
             .filter(|symbol| {
-                !state
-                    .runs
-                    .get(&(id.clone(), symbol.clone()))
-                    .is_some_and(|run| run.done)
+                !member_done(alert, symbol)
+                    && !state
+                        .runs
+                        .get(&(id.clone(), symbol.clone()))
+                        .is_some_and(|run| run.done)
             })
             .collect()
     }
 
     /// Sets the members of the watchlist `id`, as the host's watchlist holds them. A member that
-    /// leaves loses its evaluation state, so it starts afresh if it returns.
+    /// leaves loses its evaluation state, so it starts afresh if it returns, except that a member
+    /// a once alert fired for stays done.
     pub fn set_watchlist(&self, id: &str, symbols: Vec<String>) {
         let mut state = self.lock();
-        let State { alerts, runs, .. } = &mut *state;
+        let State {
+            alerts,
+            runs,
+            watchlists,
+            events,
+            ..
+        } = &mut *state;
         runs.retain(|(alert, symbol), _| {
             symbols.contains(symbol)
                 || !alerts
                     .iter()
                     .any(|a| a.id.as_ref() == Some(alert) && a.watchlist.as_deref() == Some(id))
         });
-        state.watchlists.insert(id.to_owned(), symbols);
+        watchlists.insert(id.to_owned(), symbols);
+        for alert in alerts.iter_mut().filter(|alert| {
+            alert.status == AlertStatus::Active
+                && alert.frequency == AlertFrequency::Once
+                && alert.watchlist.as_deref() == Some(id)
+                && finished(alert, watchlists)
+        }) {
+            alert.status = AlertStatus::Triggered;
+            if let Some(events) = events {
+                events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+            }
+        }
     }
 
     /// Updates active conditions of `symbol` on `timeframe` against the newest of `bars`, oldest
@@ -396,7 +419,13 @@ impl AlertEngine {
             let intervals = alert.timeframes();
             let mut matched = false;
             let mut ready = true;
-            let run = runs.entry((id.clone(), symbol.to_owned())).or_default();
+            let done = member_done(alert, symbol);
+            let run = runs
+                .entry((id.clone(), symbol.to_owned()))
+                .or_insert_with(|| Run {
+                    done,
+                    ..Run::default()
+                });
             for (clock, bars) in inputs {
                 let Some(timeframe) = clock.timeframe().filter(|tf| intervals.contains(tf)) else {
                     continue;
@@ -440,6 +469,7 @@ impl AlertEngine {
             } else {
                 alert.last_triggered_at =
                     Some(alert.last_triggered_at.map_or(now, |old| old.max(now)));
+                record_member(alert, symbol, now);
             }
             // An entered position keeps watching for its exit.
             let open = matches!(
@@ -449,15 +479,19 @@ impl AlertEngine {
                     ..
                 }
             );
-            if alert.frequency == AlertFrequency::Once && !open {
+            let once = alert.frequency == AlertFrequency::Once;
+            if once && !open {
                 run.done = true;
-                if alert.watchlist.is_none() {
+                if alert.watchlist.is_none() || finished(alert, watchlists) {
                     alert.status = AlertStatus::Triggered;
                 }
             }
             run.fired = Some(occurrence(alert.frequency, &bar, now));
+            // A once alert on a list reports each member it fired for.
             if let Some(events) = events
-                && (alert.status != AlertStatus::Active || position)
+                && (alert.status != AlertStatus::Active
+                    || position
+                    || (once && alert.watchlist.is_some()))
             {
                 events.push(AlertEvent::Upsert(Box::new(alert.clone())));
             }
@@ -712,7 +746,13 @@ impl AlertEngine {
                     events.push(AlertEvent::Upsert(Box::new(alert.clone())));
                 }
             }
-            let seen = runs.entry((id.clone(), symbol.to_owned())).or_default();
+            let done = member_done(alert, symbol);
+            let seen = runs
+                .entry((id.clone(), symbol.to_owned()))
+                .or_insert_with(|| Run {
+                    done,
+                    ..Run::default()
+                });
             for occurrence in occurrences(&alert.condition, seen) {
                 if seen.done {
                     continue;
@@ -745,9 +785,10 @@ impl AlertEngine {
                 }
                 alert.last_triggered_at =
                     Some(alert.last_triggered_at.map_or(time, |old| old.max(time)));
+                record_member(alert, symbol, time);
                 if alert.frequency == AlertFrequency::Once {
                     seen.done = true;
-                    if alert.watchlist.is_none() {
+                    if alert.watchlist.is_none() || finished(alert, watchlists) {
                         alert.status = AlertStatus::Triggered;
                     }
                     if let Some(events) = events {
@@ -798,6 +839,7 @@ impl State {
         if alert.id.is_none() {
             alert.created_at = Some(Utc::now());
             alert.last_triggered_at = None;
+            alert.member_triggered_at.clear();
             loop {
                 self.next_id += 1;
                 let id = AlertId(self.next_id.to_string());
@@ -811,6 +853,12 @@ impl State {
         if let Some(old) = existing {
             alert.created_at = old.created_at;
             alert.last_triggered_at = old.last_triggered_at;
+            // A save that changes what the alert watches or its status starts its members afresh.
+            alert.member_triggered_at = if old.same_monitoring(&alert) {
+                old.member_triggered_at.clone()
+            } else {
+                BTreeMap::new()
+            };
         }
         let same_monitoring = existing.is_some_and(|old| {
             old.same_monitoring(&alert)
@@ -1227,6 +1275,40 @@ fn reads_previous(condition: &AlertCondition) -> bool {
             AlertChannelComparison::Entering | AlertChannelComparison::Exiting
         ),
         _ => false,
+    }
+}
+
+/// Whether `alert`, a once alert on a watchlist, fired for `symbol` before, as its saved member
+/// record holds.
+fn member_done(alert: &Alert, symbol: &str) -> bool {
+    alert.frequency == AlertFrequency::Once
+        && alert.watchlist.is_some()
+        && alert.member_triggered_at.contains_key(symbol)
+}
+
+/// Whether every member of the watchlist of `alert` has fired. A list the host has not set, or an
+/// empty one, is never finished.
+fn finished(alert: &Alert, watchlists: &HashMap<String, Vec<String>>) -> bool {
+    alert
+        .watchlist
+        .as_ref()
+        .and_then(|list| watchlists.get(list))
+        .is_some_and(|members| {
+            !members.is_empty()
+                && members
+                    .iter()
+                    .all(|member| alert.member_triggered_at.contains_key(member))
+        })
+}
+
+/// Records `time` as the latest firing of the watchlist member `symbol`.
+fn record_member(alert: &mut Alert, symbol: &str, time: DateTime<Utc>) {
+    if alert.watchlist.is_some() {
+        let at = alert
+            .member_triggered_at
+            .entry(symbol.to_owned())
+            .or_insert(time);
+        *at = (*at).max(time);
     }
 }
 
@@ -2486,30 +2568,78 @@ mod tests {
             if symbol == "SYM" && *t == time(1_001) && *p == 101.0)
         );
 
-        // A watchlist alert fires once for each member and stays active.
-        let mut list = alert(AlertCondition::Above(100.0), AlertFrequency::Once);
-        list.symbol = String::new();
-        list.watchlist = Some("tech".into());
-        let host = Host::new(vec![list]);
-        host.engine
-            .set_watchlist("tech", vec!["SYM".into(), "OTHER".into()]);
-        host.events();
-        for symbol in ["SYM", "SYM", "OTHER", "NOT_A_MEMBER"] {
-            host.engine
-                .update(symbol, None, Timeframe::Min1, &bars, time(1_000), |_, _| {
-                    None
-                });
+        for host_events in [false, true] {
+            // A watchlist alert fires once for each member and ends when every member has fired.
+            let condition = if host_events {
+                AlertCondition::CustomEvents("Turns".into())
+            } else {
+                AlertCondition::Above(100.0)
+            };
+            let mut list = alert(condition, AlertFrequency::Once);
+            list.symbol = String::new();
+            list.watchlist = Some("tech".into());
+            let members = || vec!["SYM".to_owned(), "OTHER".to_owned()];
+            let fired_on = |host: &Host, symbols: &[&str]| -> Vec<String> {
+                for symbol in symbols {
+                    if host_events {
+                        host.engine.custom_events(
+                            "Turns",
+                            symbol,
+                            None,
+                            Timeframe::Min1,
+                            &[crate::model::CustomAlertEvent::new(1, time(1_000), "Turn")],
+                            time(1_000),
+                        );
+                    } else {
+                        host.engine.update(
+                            symbol,
+                            None,
+                            Timeframe::Min1,
+                            &bars,
+                            time(1_000),
+                            |_, _| None,
+                        );
+                    }
+                }
+                host.events()
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        AlertEvent::TriggeredForSymbol { symbol, .. } => Some(symbol),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            let host = Host::new(vec![list]);
+            host.engine.set_watchlist("tech", members());
+            host.events();
+            assert_eq!(fired_on(&host, &["SYM", "SYM"]), ["SYM"]);
+            let partial = host.engine.alerts().remove(0);
+            assert_eq!(partial.status, AlertStatus::Active);
+            assert_eq!(
+                partial.member_triggered_at.keys().collect::<Vec<_>>(),
+                ["SYM"]
+            );
+            // A member that leaves and returns keeps its saved completion.
+            host.engine.set_watchlist("tech", vec!["OTHER".into()]);
+            host.engine.set_watchlist("tech", members());
+            assert!(fired_on(&host, &["SYM"]).is_empty());
+            assert_eq!(fired_on(&host, &["OTHER", "NOT_A_MEMBER"]), ["OTHER"]);
+            let ended = host.engine.alerts().remove(0);
+            assert_eq!(ended.status, AlertStatus::Triggered);
+            // A restored copy fires only for the members that had not fired, none once it ended.
+            for (saved, expected) in [(partial.clone(), vec!["OTHER"]), (ended, vec![])] {
+                let host = Host::new(vec![saved]);
+                host.engine.set_watchlist("tech", members());
+                host.events();
+                assert_eq!(fired_on(&host, &["SYM", "OTHER"]), expected);
+            }
+            // A list left with only members that fired ends the alert; an empty list does not.
+            let host = Host::new(vec![partial]);
+            host.engine.set_watchlist("tech", Vec::new());
+            assert_eq!(host.engine.alerts()[0].status, AlertStatus::Active);
+            host.engine.set_watchlist("tech", vec!["SYM".into()]);
+            assert_eq!(host.engine.alerts()[0].status, AlertStatus::Triggered);
         }
-        let symbols: Vec<_> = host
-            .events()
-            .into_iter()
-            .filter_map(|event| match event {
-                AlertEvent::TriggeredForSymbol { symbol, .. } => Some(symbol),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(symbols, ["SYM", "OTHER"]);
-        assert_eq!(host.engine.alerts()[0].status, AlertStatus::Active);
 
         // Invalid alerts are refused.
         assert!(matches!(
