@@ -9,6 +9,9 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Color32, Context, Key, Rect, RichText, ScrollArea, Sense, TextEdit, Vec2};
 
+/// How many run commands the palette remembers.
+const RECENT_LIMIT: usize = 5;
+
 /// Command palette widget for quick command access
 #[derive(Debug)]
 pub struct CommandPalette {
@@ -16,8 +19,11 @@ pub struct CommandPalette {
     commands: Vec<Command>,
     /// Current search query
     search_query: String,
-    /// Currently selected index in the filtered results
-    selected_index: usize,
+    /// Highlighted row of `filtered`; `None` until the user types a matching query
+    /// or presses an arrow key.
+    selected_index: Option<usize>,
+    /// Ids of the commands run from the palette, most recent first, at most [`RECENT_LIMIT`].
+    recent: Vec<String>,
     /// Cached filtered results (command index, match)
     filtered: Vec<(usize, FuzzyMatch)>,
     /// The query `filtered` was built for; a different query puts the highlight back on row 0.
@@ -32,7 +38,8 @@ impl CommandPalette {
         Self {
             commands,
             search_query: String::new(),
-            selected_index: 0,
+            selected_index: None,
+            recent: Vec::new(),
             filtered: Vec::new(),
             filtered_query: String::new(),
             focus_search: true,
@@ -55,10 +62,39 @@ impl CommandPalette {
         &self.search_query
     }
 
+    /// The ids of the commands last run from the palette, most recent first, at most five.
+    /// While the query is empty the palette lists those still registered under a Recent heading.
+    pub fn recent(&self) -> &[String] {
+        &self.recent
+    }
+
+    /// Restores ids read from [`Self::recent`], most recent first. A repeated id keeps its first
+    /// place and ids past the fifth are left out. An id with no registered command stays in the
+    /// list but is not shown until a command with that id is added.
+    pub fn set_recent(&mut self, ids: impl IntoIterator<Item = impl Into<String>>) {
+        self.recent.clear();
+        for id in ids {
+            let id = id.into();
+            if self.recent.len() == RECENT_LIMIT {
+                break;
+            }
+            if !self.recent.contains(&id) {
+                self.recent.push(id);
+            }
+        }
+    }
+
+    /// Puts `id` first among the recent entries.
+    fn record_recent(&mut self, id: &str) {
+        self.recent.retain(|recent| recent != id);
+        self.recent.insert(0, id.to_owned());
+        self.recent.truncate(RECENT_LIMIT);
+    }
+
     /// Clear the search query and reset selection
     pub fn clear(&mut self) {
         self.search_query.clear();
-        self.selected_index = 0;
+        self.selected_index = None;
         self.filtered.clear();
         self.filtered_query.clear();
         self.focus_search = true;
@@ -68,8 +104,20 @@ impl CommandPalette {
     fn update_filter(&mut self) {
         self.filtered.clear();
 
-        // An empty query lists nothing, so no command is highlighted before the user types.
-        if !self.search_query.is_empty() {
+        // An empty query lists the recent commands still registered, in their order.
+        if self.search_query.is_empty() {
+            for id in &self.recent {
+                if let Some(idx) = self.commands.iter().position(|cmd| &cmd.id == id) {
+                    self.filtered.push((
+                        idx,
+                        FuzzyMatch {
+                            score: 0,
+                            matched_indices: Vec::new(),
+                        },
+                    ));
+                }
+            }
+        } else {
             for (idx, cmd) in self.commands.iter().enumerate() {
                 // The row paints the translated text, but the English text matches too.
                 let mut labels = vec![cmd.label.clone()];
@@ -100,9 +148,14 @@ impl CommandPalette {
             self.filtered.sort_by_key(|m| std::cmp::Reverse(m.1.score));
         }
 
-        // Arrow keys move within the list they were pressed in; a new query starts at the best match.
-        if self.filtered_query != self.search_query || self.selected_index >= self.filtered.len() {
-            self.selected_index = 0;
+        // A new query highlights its best match; an empty query waits for an arrow key.
+        if self.filtered_query != self.search_query
+            || self
+                .selected_index
+                .is_some_and(|row| row >= self.filtered.len())
+        {
+            self.selected_index =
+                (!self.search_query.is_empty() && !self.filtered.is_empty()).then_some(0);
             self.filtered_query.clone_from(&self.search_query);
         }
     }
@@ -111,8 +164,8 @@ impl CommandPalette {
     /// it was on while that command is still listed.
     fn edit_commands(&mut self, change: impl FnOnce(&mut Vec<Command>)) {
         let highlighted = self
-            .filtered
-            .get(self.selected_index)
+            .selected_index
+            .and_then(|row| self.filtered.get(row))
             .map(|&(i, _)| self.commands[i].id.clone());
         change(&mut self.commands);
         self.update_filter();
@@ -121,15 +174,17 @@ impl CommandPalette {
                 .iter()
                 .position(|&(i, _)| self.commands[i].id == id)
         }) {
-            self.selected_index = row;
+            self.selected_index = Some(row);
         }
     }
 
     /// Show the command palette modal
     ///
-    /// The list stays empty, under an instruction to type, until the query matches commands; the
-    /// best match is then highlighted. Returns the ID of the executed command if any. Keyboard
-    /// activation consumes its key so the host can open another dialog in the same frame.
+    /// With an empty query it lists the commands run most recently under a Recent heading,
+    /// without a highlight until an arrow key moves onto them, or an instruction to type when
+    /// there are none; a query lists its matches with the best one highlighted. Returns the ID
+    /// of the executed command if any. Keyboard activation consumes its key so the host can
+    /// open another dialog in the same frame.
     pub fn show(&mut self, ctx: &Context, open: &mut bool) -> Option<String> {
         if !*open {
             return None;
@@ -159,22 +214,27 @@ impl CommandPalette {
         }
 
         let before = self.selected_index;
-        if move_up && self.selected_index > 0 {
-            self.selected_index -= 1;
+        if move_up && let Some(row) = self.selected_index.filter(|row| *row > 0) {
+            self.selected_index = Some(row - 1);
         }
-        if move_down && self.selected_index + 1 < self.filtered.len() {
-            self.selected_index += 1;
+        if move_down {
+            self.selected_index = match self.selected_index {
+                None if !self.filtered.is_empty() => Some(0),
+                Some(row) if row + 1 < self.filtered.len() => Some(row + 1),
+                row => row,
+            };
         }
         // Only a key or a new query scrolls to the highlight, so the wheel still scrolls freely.
         let mut reveal_selected = self.selected_index != before;
 
-        if execute && !self.filtered.is_empty() {
+        if execute && let Some(row) = self.selected_index {
             ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Enter));
-            let (cmd_idx, _) = self.filtered[self.selected_index];
-            executed_command = Some(self.commands[cmd_idx].id.clone());
+            let (cmd_idx, _) = self.filtered[row];
+            let id = self.commands[cmd_idx].id.clone();
+            self.record_recent(&id);
             *open = false;
             self.clear();
-            return executed_command;
+            return Some(id);
         }
 
         crate::ui_kit::modal::Modal::new("command_palette", "Search actions")
@@ -234,12 +294,23 @@ impl CommandPalette {
                         );
                     });
                 } else {
+                    if self.search_query.is_empty() {
+                        let theme = ui.active_theme();
+                        ui.horizontal(|ui| {
+                            ui.add_space(theme.spacing.md);
+                            ui.label(
+                                RichText::new(l10n::text(ui.ctx(), "Recent"))
+                                    .size(theme.text.small)
+                                    .color(ui.visuals().weak_text_color()),
+                            );
+                        });
+                    }
                     ScrollArea::vertical()
                         .max_height(ui.available_height())
                         .show(ui, |ui| {
                             for (list_idx, (cmd_idx, _)) in self.filtered.iter().enumerate() {
                                 let cmd = &self.commands[*cmd_idx];
-                                let selected = list_idx == self.selected_index;
+                                let selected = Some(list_idx) == self.selected_index;
                                 let row = command_row(ui, cmd, selected);
                                 if selected && reveal_selected {
                                     row.scroll_to_me(None);
@@ -252,6 +323,9 @@ impl CommandPalette {
                 }
             });
 
+        if let Some(id) = &executed_command {
+            self.record_recent(id);
+        }
         if executed_command.is_some() || !*open {
             ctx.input_mut(|i| {
                 i.consume_key(i.modifiers, Key::Enter);
@@ -422,6 +496,16 @@ impl CommandPaletteHandler {
         self.palette.remove_command(id);
     }
 
+    /// The ids of the commands last run, most recent first; see [`CommandPalette::recent`].
+    pub fn recent(&self) -> &[String] {
+        self.palette.recent()
+    }
+
+    /// Restores ids read from [`Self::recent`]; see [`CommandPalette::set_recent`].
+    pub fn set_recent(&mut self, ids: impl IntoIterator<Item = impl Into<String>>) {
+        self.palette.set_recent(ids);
+    }
+
     /// Update the command palette each frame
     ///
     /// Handles Ctrl+K / Cmd+K to open, and returns the executed command ID if any
@@ -475,6 +559,90 @@ mod tests {
         )
         .drop_without_applying_deltas();
         executed
+    }
+
+    #[test]
+    fn run_entries_are_listed_most_recent_first_on_reopening() {
+        fn texts(ctx: &Context, palette: &mut CommandPalette) -> Vec<(String, f32)> {
+            let output = ctx.run_ui(RawInput::default(), |ui| {
+                palette.show(ui.ctx(), &mut true);
+            });
+            let texts = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        Some((text.galley.text().to_owned(), text.pos.y))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            texts
+        }
+        let commands = || {
+            vec![
+                Command::new("a", "Alpha"),
+                Command::new("b", "Beta"),
+                Command::new("c", "Gamma"),
+                Command::new("d", "Delta"),
+            ]
+        };
+        let ctx = Context::default();
+        let mut p = CommandPalette::new(commands());
+        for (query, id) in [("alpha", "a"), ("beta", "b")] {
+            p.search_query = query.into();
+            frame(&ctx, &mut p, None);
+            assert_eq!(frame(&ctx, &mut p, Some(Key::Enter)).as_deref(), Some(id));
+        }
+        assert_eq!(p.recent(), ["b", "a"]);
+        frame(&ctx, &mut p, None);
+        let rows = texts(&ctx, &mut p);
+        let y = |label| rows.iter().find(|(text, _)| text == label).unwrap().1;
+        assert!(rows.iter().any(|(text, _)| text == "Recent"));
+        assert!(y("Beta") < y("Alpha"));
+        assert!(
+            !rows
+                .iter()
+                .any(|(text, _)| text == "Gamma" || text == "Type to search for actions")
+        );
+        assert_eq!(p.selected_index, None);
+        assert_eq!(frame(&ctx, &mut p, Some(Key::Enter)), None);
+        frame(&ctx, &mut p, Some(Key::ArrowDown));
+        frame(&ctx, &mut p, Some(Key::ArrowUp));
+        assert_eq!(frame(&ctx, &mut p, Some(Key::Enter)).as_deref(), Some("b"));
+        assert_eq!(p.recent(), ["b", "a"]);
+        frame(&ctx, &mut p, None);
+        frame(&ctx, &mut p, Some(Key::ArrowDown));
+        frame(&ctx, &mut p, Some(Key::ArrowDown));
+        assert_eq!(frame(&ctx, &mut p, Some(Key::Enter)).as_deref(), Some("a"));
+        assert_eq!(p.recent(), ["a", "b"]);
+
+        let mut p = CommandPalette::new(commands());
+        p.set_recent(["c", "zzz", "a", "c", "b", "x", "y"]);
+        assert_eq!(p.recent(), ["c", "zzz", "a", "b", "x"]);
+        frame(&ctx, &mut p, None);
+        let rows = texts(&ctx, &mut p);
+        let y = |label| rows.iter().find(|(text, _)| text == label).unwrap().1;
+        assert!(y("Gamma") < y("Alpha") && y("Alpha") < y("Beta"));
+        assert!(!rows.iter().any(|(text, _)| text == "zzz" || text == "x"));
+        p.search_query = "delta".into();
+        frame(&ctx, &mut p, None);
+        assert_eq!(frame(&ctx, &mut p, Some(Key::Enter)).as_deref(), Some("d"));
+        assert_eq!(p.recent(), ["d", "c", "zzz", "a", "b"]);
+        p.remove_command("c");
+        frame(&ctx, &mut p, None);
+        assert!(!texts(&ctx, &mut p).iter().any(|(text, _)| text == "Gamma"));
+        p.add_command(Command::new("c", "Gamma"));
+        assert!(texts(&ctx, &mut p).iter().any(|(text, _)| text == "Gamma"));
+        p.search_query = "alpha".into();
+        frame(&ctx, &mut p, None);
+        p.search_query.clear();
+        frame(&ctx, &mut p, None);
+        assert_eq!(p.selected_index, None);
+        frame(&ctx, &mut p, Some(Key::Escape));
+        assert_eq!(p.recent(), ["d", "c", "zzz", "a", "b"]);
     }
 
     #[test]
@@ -781,6 +949,9 @@ mod tests {
             visible_highlights = run(event);
         }
         assert_eq!(visible_highlights, 1, "the first result is painted in view");
-        assert_eq!((p.search_query.as_str(), p.selected_index), ("action", 0));
+        assert_eq!(
+            (p.search_query.as_str(), p.selected_index),
+            ("action", Some(0))
+        );
     }
 }

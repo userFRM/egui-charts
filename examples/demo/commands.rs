@@ -281,11 +281,13 @@ impl DemoApp {
 
     /// Opens quick search with the chart's current key bindings and saved templates.
     pub(super) fn open_quick_search(&mut self) {
+        let recent = self.quick_search.recent().to_vec();
         self.quick_search = CommandPaletteHandler::new(quick_search_commands(
             self.chart.shortcuts(),
             &self.top_toolbar.indicator_templates,
             self.indicator_dialog.factory(),
         ));
+        self.quick_search.set_recent(recent);
         self.quick_search.open();
     }
 
