@@ -5,8 +5,8 @@
 //! and one at it takes the side of the intrabar before; a first intrabar at its open counts as
 //! up. Up volume is positive, down volume negative and delta their sum. Missing intrabar
 //! history has no value; the parent candle's volume is never substituted for it. The Lower
-//! interval input chooses the candles' interval; one that is not shorter than the chart's or
-//! does not divide it reads the automatic one.
+//! interval input chooses the candles' interval, read as chosen when it is no longer than the
+//! chart's; a longer or trade-based one is not read, and the study shows a table saying so.
 
 use super::lower_interval;
 use crate::model::LineStyle;
@@ -15,7 +15,7 @@ use crate::scales::StudyFormat;
 use crate::studies::palette;
 use crate::studies::{
     Indicator, IndicatorValues, InputValue, PlotStyle, PlotType, StudyData, StudyDataRequest,
-    StudyInput,
+    StudyInput, StudyTable,
 };
 use egui::Color32;
 
@@ -28,6 +28,8 @@ pub struct UpDownVolume {
     values: IndicatorValues,
     colors: [Color32; 3],
     visible: bool,
+    /// Shown while the chosen lower interval is not read.
+    notice: Option<StudyTable>,
 }
 
 impl UpDownVolume {
@@ -44,6 +46,7 @@ impl UpDownVolume {
                 palette::GRAY,
             ],
             visible: true,
+            notice: None,
         }
     }
 
@@ -95,13 +98,14 @@ impl Indicator for UpDownVolume {
         "Up and down volume from lower-timeframe candles supplied by the host"
     }
     fn inputs(&self) -> Vec<StudyInput> {
-        vec![lower_interval::input(self.lower_interval)]
+        vec![lower_interval::input(&self.clock, self.lower_interval)]
     }
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         let ("lower_interval", InputValue::Timeframe(chosen)) = (id, value) else {
             return Err(crate::studies::StudyError::rejected(&self.inputs(), id));
         };
         self.lower_interval = chosen;
+        self.notice = lower_interval::notice(self.name(), &self.clock, chosen);
         self.calculate(&[]);
         Ok(())
     }
@@ -130,6 +134,7 @@ impl Indicator for UpDownVolume {
     fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
         let changed = self.clock != *clock;
         self.clock = clock.clone();
+        self.notice = lower_interval::notice(self.name(), &self.clock, self.lower_interval);
         changed
     }
     fn calculate(&mut self, data: &[Bar]) {
@@ -170,6 +175,9 @@ impl Indicator for UpDownVolume {
     }
     fn values(&self) -> &IndicatorValues {
         &self.values
+    }
+    fn table(&self) -> Option<&StudyTable> {
+        self.notice.as_ref()
     }
     fn colors(&self) -> Vec<Color32> {
         self.colors.to_vec()
@@ -324,8 +332,13 @@ mod tests {
         assert_eq!(study.values().value(2, 0), Some(-35.0));
         update(&mut study, &bars, Timeframe::Min1, &[]);
         assert_eq!(study.values().value(0, 0), None);
-        // Custom intervals must nest their intrabars without rounding long bars to dates.
-        for (seconds, lower) in [(90, Timeframe::Sec1), (90_000, Timeframe::Hour1)] {
+        // Custom intervals must nest their intrabars without rounding long bars to dates; a chart
+        // of whole days reads five-minute candles, as a daily chart does.
+        for (seconds, lower) in [
+            (90, Timeframe::Sec1),
+            (90_000, Timeframe::Hour1),
+            (172_800, Timeframe::Min5),
+        ] {
             let timeframe = Timeframe::Custom(std::num::NonZeroU64::new(seconds).unwrap());
             study.set_timeframe(timeframe);
             assert_eq!(requested_interval(&study), Some(lower));
@@ -349,25 +362,46 @@ mod tests {
             assert_eq!(study.values().value(0, 0), Some(2.0));
             assert_eq!(study.values().value(0, 1), Some(1.0));
         }
-        // A chosen lower interval replaces the automatic one when it is shorter than the
-        // chart's and divides it; otherwise the automatic one is read.
+        // On a five-minute chart a chosen lower interval no longer than the chart's is read as
+        // chosen, also when it equals the chart's or does not divide it. A longer or trade-based
+        // one is read neither as chosen nor replaced, and the study's table says so. Unset, the
+        // study reads one-minute candles, which its input names.
         study.set_bar_clock(&BarClock::new(Timeframe::Min5));
         let custom = |s| Timeframe::Custom(std::num::NonZeroU64::new(s).unwrap());
-        for (chosen, wanted) in [
-            (Some(Timeframe::Sec30), Timeframe::Sec30),
-            (Some(Timeframe::Min5), Timeframe::Min1),
-            (Some(custom(120)), Timeframe::Min1),
+        for (chosen, wanted, notice) in [
+            (Some(Timeframe::Sec30), Some(Timeframe::Sec30), None),
+            (Some(Timeframe::Min5), Some(Timeframe::Min5), None),
+            (Some(custom(180)), Some(custom(180)), None),
+            (
+                Some(Timeframe::Hour1),
+                None,
+                Some("1h is not used: choose 5min or shorter"),
+            ),
             (
                 Some(Timeframe::Ticks(std::num::NonZeroU64::MIN)),
-                Timeframe::Min1,
+                None,
+                Some("1t is not used: choose 5min or shorter"),
             ),
-            (None, Timeframe::Min1),
+            (None, Some(Timeframe::Min1), None),
         ] {
             study
                 .set_input("lower_interval", InputValue::Timeframe(chosen))
                 .unwrap();
-            assert_eq!(requested_interval(&study), Some(wanted), "{chosen:?}");
+            assert_eq!(requested_interval(&study), wanted, "{chosen:?}");
+            let shown = study.table().map(|table| {
+                assert_eq!(table.title, "Up/Down Volume");
+                table.rows.clone()
+            });
+            assert_eq!(
+                shown,
+                notice.map(|text| vec![vec![StudyCell::Text(text.into())]]),
+                "{chosen:?}"
+            );
         }
+        assert!(matches!(
+            study.inputs()[0].kind,
+            InputKind::AutoTimeframe(Some(Timeframe::Min1))
+        ));
         study
             .set_input(
                 "lower_interval",
