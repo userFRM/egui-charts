@@ -3604,11 +3604,7 @@ impl DemoApp {
                 let mut charts: Vec<_> =
                     self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
                 charts.insert(self.layout_slot, &mut self.chart);
-                // Symbol-specific controls must not change the canvas ids and lose chart focus.
-                ui.scope_builder(
-                    egui::UiBuilder::new().scope_id(egui::Id::unique("demo_charts")),
-                    |ui| self.layout.show(ui, &mut charts),
-                );
+                self.layout.show(ui, &mut charts);
                 // A chart that follows a linked symbol change shows the bars it would show had
                 // the symbol been chosen on it.
                 for (extra, symbol) in self.extra_charts.iter_mut().zip(symbols) {
@@ -7711,6 +7707,7 @@ mod tests {
         ui_click(&ctx, size, chart, |ui| {
             app.ui(ui, &mut eframe::Frame::_new_kittest())
         });
+        settle(&mut app, &ctx);
         let chart_focus = ctx.memory(|memory| memory.focused()).unwrap();
         let press = |app: &mut DemoApp, key, modifiers| {
             ui_frame(
