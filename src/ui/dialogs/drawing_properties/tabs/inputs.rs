@@ -457,15 +457,16 @@ impl InputsTab {
                         ui.end_row();
                     }
                 });
-                if let Some(mut updated) = VolumeProfileConfig::new(rows, percent / 100.0)
+                // A share times 100 over 100 is not always the same share: keep an untouched one.
+                let value_area = if percent == original.value_area() * 100.0 {
+                    original.value_area()
+                } else {
+                    percent / 100.0
+                };
+                if let Some(layout) = VolumeProfileConfig::new(rows, value_area)
                     .and_then(|c| c.with_row_size(fixed.then_some(height)))
                 {
-                    updated.display = config.display;
-                    updated.up_color = config.up_color;
-                    updated.down_color = config.down_color;
-                    updated.value_area_colors = config.value_area_colors;
-                    updated.show_value_area_lines = config.show_value_area_lines;
-                    updated.extend_right = config.extend_right;
+                    let updated = config.with_layout(layout);
                     if updated != original {
                         drawing.volume_profile = Some(updated);
                     }
@@ -2764,5 +2765,46 @@ mod tests {
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
             }
         }
+    }
+
+    /// Opening the Inputs tab of a volume profile drawing and pressing Ok keeps the display
+    /// settings the tab does not show, and a value area of 64.06%, which times 100 over 100 is
+    /// not the same share.
+    #[test]
+    fn volume_profile_inputs_keep_settings_they_do_not_edit() {
+        use egui::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+        let mut config = VolumeProfileConfig::new(24, 0.6406).unwrap();
+        config.show_poc = false;
+        config.show_rows = false;
+        config.show_value_area_high = true;
+        config.value_area_line_colors = [[1, 2, 3, 255]; 2];
+        let mut drawing = Drawing::new(7, Tool::FixedRangeVolumeProfile);
+        drawing.completed = true;
+        drawing.chart_points = vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(8.0, 200.0)];
+        drawing.volume_profile = Some(config);
+        chart.drawings_mut().drawings.push(drawing);
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, (chart, dialog): &mut (Chart, DrawingPropertiesDialog)| {
+                    dialog.show_and_apply(ui.ctx(), chart);
+                },
+                (chart, DrawingPropertiesDialog::new()),
+            );
+        let saved = |h: &Harness<'_, (Chart, DrawingPropertiesDialog)>| {
+            h.state().0.drawings().drawings[0].volume_profile
+        };
+        let (chart, dialog) = h.state_mut();
+        dialog.open_for_chart(chart, DrawingId(7));
+        dialog.active_tab = PropertiesTab::Inputs;
+        h.run();
+        assert_eq!(saved(&h), Some(config), "opened");
+        h.get_by_role_and_label(Role::Button, "Ok").click();
+        h.run();
+        assert_eq!(saved(&h), Some(config), "applied");
     }
 }

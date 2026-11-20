@@ -241,6 +241,17 @@ impl VolumeProfileConfig {
         self.row_size
     }
 
+    /// `self` with the row layout and value area of `layout`, keeping every display setting.
+    #[cfg(feature = "ui")]
+    pub(crate) fn with_layout(self, layout: Self) -> Self {
+        Self {
+            row_size: layout.row_size,
+            rows: layout.rows,
+            value_area: layout.value_area,
+            ..self
+        }
+    }
+
     /// Number of price rows.
     pub fn rows(&self) -> usize {
         self.rows
