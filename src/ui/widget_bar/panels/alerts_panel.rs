@@ -1170,7 +1170,7 @@ impl AlertsPanel {
                                 ));
                             }
                             if self.options.name && !alert.name.is_empty() {
-                                ui.label(l10n::text(ui.ctx(), &alert.name));
+                                ui.label(&alert.name);
                             }
                             let color = self.status_color(ui, alert.status);
                             ui.horizontal(|ui| {
@@ -2174,6 +2174,38 @@ mod tests {
         let refused = "Desktop notification failed: permission denied".to_owned();
         assert_eq!(errors[0], [(errors[0][0].0, refused)]);
         assert_eq!(errors[1], errors[0], "the first error toast stays, alone");
+    }
+
+    #[test]
+    fn a_user_alert_name_is_shown_as_saved_under_a_translator() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let host = Arc::new(Host::default());
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        // The name is also the catalogue key of the status shown below it.
+        let mut alert = Alert::new("SAMPLE", AlertCondition::Above(100.0));
+        alert.id = Some(AlertId("saved".into()));
+        alert.name = "Active".into();
+        let events = host.events.lock().unwrap().clone().unwrap();
+        events.push(AlertEvent::Upsert(Box::new(alert)));
+        let mut toasts = Toasts::new();
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(300.0, 700.0))
+            .with_context_setup(|ctx| {
+                l10n::set_translator(ctx, |key| (key == "Active").then(|| "Aktiv".to_owned()));
+            })
+            .build_ui_state(
+                move |ui, panel: &mut AlertsPanel| {
+                    panel.poll(ui.ctx(), &mut toasts);
+                    panel.show(ui);
+                },
+                panel,
+            );
+        h.run_steps(3);
+        let shown = |text: &str| h.query_all_by_label(text).count();
+        assert_eq!(shown("Active"), 1, "the name as saved");
+        assert_eq!(shown("Aktiv"), 1, "the translated status");
     }
 
     #[test]
