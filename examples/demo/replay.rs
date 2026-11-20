@@ -2088,14 +2088,41 @@ mod tests {
     /// chart. A daily update grows a weekly bar from completed daily bars only.
     #[test]
     fn replay_update_choices_and_weekly_daily_steps() {
-        use egui_kittest::{Harness, kittest::Queryable};
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1440.0, 900.0))
-            .allow_missing_glyphs()
-            .with_accessibility_check(false)
-            .build_eframe(|cc| *DemoApp::new_at(cc, "2026-11-12T15:00:00Z".parse().unwrap(), true));
-        let ctx = harness.ctx.clone();
-        super::super::tests::settle(harness.state_mut(), &ctx);
+        use super::super::tests::{ui_click, ui_frame};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        super::super::tests::settle(&mut app, &ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        let frame = |app: &mut DemoApp, events| {
+            ui_frame(&ctx, size, events, |ui| app.show_replay_control(ui.ctx()))
+        };
+        let texts = |app: &mut DemoApp| {
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = frame(app, vec![]);
+            }
+            texts
+        };
+        let click = |app: &mut DemoApp, label: &str| {
+            let point = texts(app)
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap_or_else(|| panic!("missing replay control: {label}"))
+                .1
+                .center();
+            ui_click(&ctx, size, point, |ui| app.show_replay_control(ui.ctx()));
+        };
+        let key = |pressed, key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
         let mut offered = Vec::new();
         for timeframe in [
             Timeframe::Min1,
@@ -2104,23 +2131,18 @@ mod tests {
             Timeframe::Week1,
             Timeframe::Month1,
         ] {
-            let app = harness.state_mut();
             app.stop_replay();
             app.switch_timeframe(timeframe);
-            super::super::tests::settle(app, &ctx);
+            super::super::tests::settle(&mut app, &ctx);
             app.start_replay_at(10);
-            harness.run();
-            harness
-                .get_by_value(&format!("{timeframe} updates"))
-                .click();
-            harness.run();
-            offered.push((
-                harness.query_by_label("Automatic").is_some(),
-                harness.query_by_label("1D updates").is_some(),
-                harness.query_by_label("1s updates").is_some(),
-            ));
-            harness.key_press(egui::Key::Escape);
-            harness.run();
+            click(&mut app, &format!("{timeframe} updates"));
+            let shown = texts(&mut app);
+            let has = |label| shown.iter().any(|(text, _)| text == label);
+            offered.push((has("Automatic"), has("1D updates"), has("1s updates")));
+            frame(
+                &mut app,
+                vec![key(true, egui::Key::Escape), key(false, egui::Key::Escape)],
+            );
         }
         assert_eq!(
             offered,
@@ -2133,24 +2155,32 @@ mod tests {
             ]
         );
 
-        let app = harness.state_mut();
         app.stop_replay();
         app.switch_timeframe(Timeframe::Week1);
-        super::super::tests::settle(app, &ctx);
-        app.start_replay_at(10);
+        super::super::tests::settle(&mut app, &ctx);
+        app.start_replay_at(2);
         let days = replay_source(&app.live, Timeframe::Day1, &app.chart).0;
-        harness.run();
-        harness.get_by_value("1W updates").click();
-        harness.run();
-        harness.get_by_label("1D updates").click();
-        harness.run();
-        assert_eq!(harness.state().replay_interval, Timeframe::Day1);
-        harness.get_by_label("Next bar (Right arrow)").click();
-        harness.run();
-        let first = harness.state().replay.as_ref().unwrap().state.curr_bar;
-        harness.get_by_label("Next bar (Right arrow)").click();
-        harness.run();
-        let shown = harness.state().chart.bars(SeriesId::MAIN).last().unwrap();
+        click(&mut app, "1W updates");
+        click(&mut app, "1D updates");
+        assert_eq!(app.replay_interval, Timeframe::Day1);
+        let step = |app: &mut DemoApp| {
+            // Return focus from the selector to the chart before its transport shortcut.
+            if let Some(id) = ctx.memory(|memory| memory.focused()) {
+                ctx.memory_mut(|memory| memory.surrender_focus(id));
+            }
+            frame(
+                app,
+                vec![
+                    key(true, egui::Key::ArrowRight),
+                    key(false, egui::Key::ArrowRight),
+                ],
+            );
+        };
+        step(&mut app);
+        let first = app.replay.as_ref().unwrap().state.curr_bar;
+        step(&mut app);
+        assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, first + 1);
+        let shown = app.chart.bars(SeriesId::MAIN).last().unwrap();
         let (a, b) = (&days[first], &days[first + 1]);
         assert_eq!(
             (shown.open, shown.high, shown.low, shown.close, shown.volume),
@@ -2163,23 +2193,16 @@ mod tests {
             )
         );
 
-        harness.get_by_value("1D updates").click();
-        harness.run();
-        harness.get_by_label("Automatic").click();
-        harness.run();
-        assert!(
-            harness
-                .state()
-                .replay_control
-                .uses_automatic_update_interval()
-        );
+        click(&mut app, "1D updates");
+        click(&mut app, "Automatic");
+        assert!(app.replay_control.uses_automatic_update_interval());
         // Automatic follows both changes; a fixed hourly step would have stayed hourly.
-        harness.state_mut().switch_timeframe(Timeframe::Hour1);
-        super::super::tests::settle(harness.state_mut(), &ctx);
-        assert_eq!(harness.state().replay_interval, Timeframe::Hour1);
-        harness.state_mut().switch_timeframe(Timeframe::Day1);
-        super::super::tests::settle(harness.state_mut(), &ctx);
-        assert_eq!(harness.state().replay_interval, Timeframe::Day1);
+        app.switch_timeframe(Timeframe::Hour1);
+        super::super::tests::settle(&mut app, &ctx);
+        assert_eq!(app.replay_interval, Timeframe::Hour1);
+        app.switch_timeframe(Timeframe::Day1);
+        super::super::tests::settle(&mut app, &ctx);
+        assert_eq!(app.replay_interval, Timeframe::Day1);
 
         // Hand values: gcd(2,17)=1 minute, gcd(4,6)=2 minutes; calendar periods use a day.
         for (a, b, expected) in [
