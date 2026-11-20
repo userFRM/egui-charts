@@ -2765,6 +2765,8 @@ mod tests {
         panel.set_service(engine.clone());
         let mut toasts = Toasts::new();
         let mut h = Harness::builder()
+            .with_step_dt(1.0 / 60.0)
+            .with_max_steps(60)
             .allow_missing_glyphs()
             .with_size(egui::vec2(400.0, 1000.0))
             .build_ui_state(
