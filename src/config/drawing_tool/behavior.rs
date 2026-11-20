@@ -116,8 +116,7 @@ impl DrawingToolType {
         )
     }
 
-    /// Whether the drawing is a text annotation: its text is its content and its colour is the
-    /// text's.
+    /// Whether the drawing is a text annotation, whose text is its content.
     pub(crate) fn is_text_annotation(&self) -> bool {
         matches!(
             self,
@@ -220,6 +219,34 @@ impl DrawingToolType {
                     | Self::Pitchfan
                     | Self::RegressionTrend
                     | Self::ProjectionTool
+            )
+    }
+
+    /// Whether the renderer paints the drawing's colour, so the Style tab and the floating
+    /// toolbar offer it. Post and idea cards follow the theme, a sticker's art and the ghost
+    /// feed's candles keep their own colours, pitchforks, the pitchfan, Gann squares and fans,
+    /// the Fib channel and the Fib speed resistance fan draw each level in its own colour, and a
+    /// position draws in its target and stop colours.
+    pub fn supports_color(&self) -> bool {
+        !self.is_cursor()
+            && !matches!(
+                self,
+                Self::Tweet
+                    | Self::Idea
+                    | Self::Sticker
+                    | Self::GhostFeed
+                    | Self::Pitchfork
+                    | Self::SchiffPitchfork
+                    | Self::ModifiedSchiffPitchfork
+                    | Self::InsidePitchfork
+                    | Self::Pitchfan
+                    | Self::GannSquare
+                    | Self::GannFixed
+                    | Self::GannFan
+                    | Self::FibonacciChannel
+                    | Self::FibonacciSpeedFan
+                    | Self::LongPos
+                    | Self::ShortPos
             )
     }
 
