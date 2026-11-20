@@ -140,6 +140,8 @@ impl Chart {
             volume_setting: false,
             #[cfg(feature = "studies")]
             volume_study: None,
+            #[cfg(feature = "studies")]
+            price_target_colors: None,
             main_series_visible: true,
             indicators_hidden: false,
             main_series_present: true,
