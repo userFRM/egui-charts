@@ -143,7 +143,21 @@ trade-driven studies still require individual executions.
 
 Call [`Chart::set_liquidity_heatmap(true)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_liquidity_heatmap) on a chart with a feed and an instrument tick size.
 It starts the default [`DepthHistory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistory.html) if the host has not configured one. Call
-[`Chart::set_depth_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_depth_history) first to choose cadence, grouping and retention. The book is sampled
+[`Chart::set_depth_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_depth_history) first to choose cadence and grouping.
+[`DepthHistoryConfig::with_retention`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistoryConfig.html#method.with_retention)
+chooses the fewest columns that span a retention time. Columns outside it leave on samples and
+pages, and the chart requests no depth page before its start. The cutoff follows the newest
+column's end, so an idle feed keeps its history.
+[`Chart::set_depth_retention`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_depth_retention)
+applies the choice to the chart's history, as the Order flow settings tab does. `None` restores
+600 columns per tier. The config's `span` reports its coverage and `max_memory` estimates its
+maximum column memory.
+[`Chart::clear_depth_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.clear_depth_history)
+empties held columns and heatmap textures, as the tab's Release memory button requests; live
+samples and historical pages within the retention fill it again. Hosts pass the chart's sampling
+with [`SettingsDialog::set_depth_history_config`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/dialogs/chart_settings/struct.SettingsDialog.html#method.set_depth_history_config) when opening the dialog, and handle its
+[`SettingsAction::ClearDepthHistory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/top_toolbar/components/settings_menu/actions/enum.SettingsAction.html#variant.ClearDepthHistory) by calling `Chart::clear_depth_history`. The dialog stays
+open after that action; edited settings still apply only with Ok. The book is sampled
 where depth arrives, independently of UI frames. No column covers a period that ends while the
 aggregate or order-level book waits for a snapshot, so merging never averages an outage into the
 sizes beside it. A merged historical column averages size over its span and uses its best
@@ -276,7 +290,8 @@ by skipping updates silently:
   resolution. Memory stays bounded.
 - A frame uploads only new or changed columns, in tiles no larger than the backend's texture
   limit (256 at most), and an unchanged history uploads nothing.
-- The library never changes these settings by itself. A host that cannot afford the budget on its
+- The library changes `columns` and `retention` only for a retention chosen in the Order flow
+  tab, as `with_retention` does. A host that cannot afford the budget on its
   machines raises [`cadence`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistoryConfig.html#structfield.cadence), lowers [`rows`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistoryConfig.html#structfield.rows) or [`columns`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistoryConfig.html#structfield.columns), or raises [`ticks_per_row`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistoryConfig.html#structfield.ticks_per_row).
 
 ## Execution profiles
