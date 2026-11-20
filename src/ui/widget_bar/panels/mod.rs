@@ -98,10 +98,9 @@ mod tests {
             reply.send(Err(FeedError::NotSupported));
         }
         fn hotlist(&self, _: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
-            reply.send(Ok(vec![
-                HotlistEntry::new("AAA", 123.45, 12.34),
-                HotlistEntry::new("B", 10.0, 0.0),
-            ]));
+            let mut first = HotlistEntry::new("AAA", 123.45, 12.34);
+            first.figure = Some(("Volume".into(), "123.4M".into()));
+            reply.send(Ok(vec![first, HotlistEntry::new("B", 10.0, 0.0)]));
         }
         fn screen(&self, _: ScreenerQuery, reply: Reply<Vec<ScreenerRow>>) {
             reply.send(Ok(vec![
@@ -239,6 +238,16 @@ mod tests {
                             (rect.is_positive()).then(|| (text.galley.text().to_owned(), rect))
                         })
                         .collect();
+                    let elided: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.elided => {
+                                Some(text.galley.text().to_owned())
+                            }
+                            _ => None,
+                        })
+                        .collect();
                     output.drop_without_applying_deltas();
                     assert!(
                         used.right() <= width,
@@ -274,6 +283,20 @@ mod tests {
                             "{panel}: rows must have watchlist height: {texts:?}"
                         );
                         assert!(!bounds("AAA").intersects(bounds("123.45")), "{texts:?}");
+                        if panel == "hotlist" {
+                            // The list's figure heads its own column, a dash stands for a missing
+                            // one, and four columns fit without cutting a heading or a value.
+                            for label in ["123.4M", "-"] {
+                                assert!(
+                                    (bounds(label).right() - bounds("Volume").right()).abs() < 2.0,
+                                    "{texts:?}"
+                                );
+                            }
+                            assert!(!bounds("+12.34%").intersects(bounds("123.4M")), "{texts:?}");
+                            for label in ["Symbol", "Chg%", "Volume", "+12.34%", "123.4M"] {
+                                assert!(!elided.contains(&label.to_owned()), "{label}: {elided:?}");
+                            }
+                        }
                         continue;
                     }
                     let row: Vec<_> = texts

@@ -409,26 +409,37 @@ pub struct HotlistQuery {
     pub list: String,
     /// Symbols wanted at most.
     pub limit: usize,
+    /// Only symbols of these exchanges, in the codes the feed uses, or of every exchange when
+    /// empty.
+    pub exchanges: Vec<String>,
+    /// Only symbols of these countries, in the codes the feed uses, or of every country when
+    /// empty.
+    pub countries: Vec<String>,
 }
 
 impl HotlistQuery {
-    /// Up to `limit` symbols of the hotlist `list`.
+    /// Up to `limit` symbols of the hotlist `list`, of every exchange and country. Assign
+    /// [`exchanges`](Self::exchanges) and [`countries`](Self::countries) to narrow it.
     ///
     /// ```
     /// use egui_charts::data::HotlistQuery;
     ///
     /// let query = HotlistQuery::new("Top gainers", 50);
     /// assert_eq!(query.list, "Top gainers");
+    /// assert!(query.exchanges.is_empty() && query.countries.is_empty());
     /// ```
     pub fn new(list: impl Into<String>, limit: usize) -> Self {
         Self {
             list: list.into(),
             limit,
+            exchanges: Vec::new(),
+            countries: Vec::new(),
         }
     }
 }
 
-/// One symbol of a hotlist, with its last price and its change since the previous close.
+/// One symbol of a hotlist, with its last price, its change since the previous close and
+/// optionally the figure the list ranks by.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct HotlistEntry {
@@ -440,16 +451,29 @@ pub struct HotlistEntry {
     pub change_percent: f64,
     /// Decimals of the price, or a default from its magnitude when `None`.
     pub price_decimals: Option<u8>,
+    /// The figure the list ranks by, as its column heading and its value, both formatted by the
+    /// host, such as `("Volume", "12.4M")` or `("Gap", "+3.1%")`. The panel shows it as a column
+    /// headed by the first entry that has one, and `-` for entries without. `None` by default.
+    pub figure: Option<(String, String)>,
 }
 
 impl HotlistEntry {
     /// `symbol` last at `last`, `change_percent` from the previous close.
+    ///
+    /// ```
+    /// use egui_charts::data::HotlistEntry;
+    ///
+    /// let mut entry = HotlistEntry::new("AAPL", 189.5, 2.4);
+    /// entry.figure = Some(("Volume".into(), "12.4M".into()));
+    /// assert_eq!(entry.price_decimals, None);
+    /// ```
     pub fn new(symbol: impl Into<String>, last: f64, change_percent: f64) -> Self {
         Self {
             symbol: symbol.into(),
             last,
             change_percent,
             price_decimals: None,
+            figure: None,
         }
     }
 }

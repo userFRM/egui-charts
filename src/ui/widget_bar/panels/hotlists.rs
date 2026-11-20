@@ -50,6 +50,8 @@ pub struct HotlistsPanel {
     loading: bool,
     inbox: Arc<Inbox>,
     request: u64,
+    exchanges: Vec<(String, bool)>,
+    countries: Vec<(String, bool)>,
     interval: Option<Duration>,
     timezone: TimezoneId,
     /// egui time of the answer on screen, from which the next ask is timed.
@@ -66,6 +68,8 @@ impl std::fmt::Debug for HotlistsPanel {
             .field("error", &self.error)
             .field("loading", &self.loading)
             .field("request", &self.request)
+            .field("exchanges", &self.exchanges)
+            .field("countries", &self.countries)
             .field("interval", &self.interval)
             .field("timezone", &self.timezone)
             .field("as_of", &self.as_of)
@@ -85,6 +89,8 @@ impl HotlistsPanel {
             loading: false,
             inbox: Arc::default(),
             request: 0,
+            exchanges: Vec::new(),
+            countries: Vec::new(),
             interval: None,
             timezone: TimezoneId::default(),
             answered_at: None,
@@ -104,6 +110,20 @@ impl HotlistsPanel {
         self.timezone = timezone;
     }
 
+    /// Offer `exchanges`, in the codes the feed uses, as a filter kept across lists. None is
+    /// selected at first, which lists every exchange. Asks the feed again.
+    pub fn set_exchanges(&mut self, exchanges: impl IntoIterator<Item = String>) {
+        self.exchanges = exchanges.into_iter().map(|code| (code, false)).collect();
+        self.reload();
+    }
+
+    /// Offer `countries`, in the codes the feed uses, as a filter kept across lists. None is
+    /// selected at first, which lists every country. Asks the feed again.
+    pub fn set_countries(&mut self, countries: impl IntoIterator<Item = String>) {
+        self.countries = countries.into_iter().map(|code| (code, false)).collect();
+        self.reload();
+    }
+
     /// Ask `feed` for the lists from now on, starting at once. The rows of the previous feed are
     /// cleared.
     pub fn set_feed(&mut self, feed: Arc<dyn Datafeed>) {
@@ -119,7 +139,9 @@ impl HotlistsPanel {
         };
         self.request += 1;
         self.loading = true;
-        let query = HotlistQuery::new(list.clone(), LIMIT);
+        let mut query = HotlistQuery::new(list.clone(), LIMIT);
+        query.exchanges = chosen(&self.exchanges);
+        query.countries = chosen(&self.countries);
         feed.hotlist(query, self.inbox.reply(self.request));
     }
 
@@ -172,15 +194,31 @@ impl HotlistsPanel {
                 .show(ui)
                 .clicked();
         });
-        let before = self.list;
-        if let Some(name) = self.lists.get(self.list) {
-            dropdown(ui, "hotlist", name, |ui| {
-                for (index, name) in self.lists.iter().enumerate() {
-                    ui.selectable_value(&mut self.list, index, l10n::text(ui.ctx(), name));
-                }
-            });
-        }
-        if self.list != before {
+        let before = (self.list, self.exchanges.clone(), self.countries.clone());
+        ui.horizontal_wrapped(|ui| {
+            if let Some(name) = self.lists.get(self.list) {
+                dropdown(ui, "hotlist", name, |ui| {
+                    for (index, name) in self.lists.iter().enumerate() {
+                        ui.selectable_value(&mut self.list, index, l10n::text(ui.ctx(), name));
+                    }
+                });
+            }
+            choices(
+                ui,
+                "hotlist_exchanges",
+                "All exchanges",
+                "{count} exchanges",
+                &mut self.exchanges,
+            );
+            choices(
+                ui,
+                "hotlist_countries",
+                "All countries",
+                "{count} countries",
+                &mut self.countries,
+            );
+        });
+        if before != (self.list, self.exchanges.clone(), self.countries.clone()) {
             self.reload();
         } else if refresh {
             self.refresh();
@@ -243,38 +281,83 @@ impl HotlistsPanel {
             }
             None => {}
         }
+        let heading = self
+            .entries
+            .iter()
+            .find_map(|entry| entry.figure.as_ref().map(|(heading, _)| heading.clone()));
+        let mut headings = vec!["Symbol".to_owned(), "Last".to_owned(), "Chg%".to_owned()];
+        headings.extend(heading.clone());
+        let rows: Vec<Vec<String>> = self
+            .entries
+            .iter()
+            .map(|entry| {
+                let decimals = entry
+                    .price_decimals
+                    .unwrap_or_else(|| price_decimals(entry.last));
+                let mut texts = vec![
+                    entry.symbol.clone(),
+                    format_price(entry.last, Some(decimals)),
+                    format!("{}%", signed(entry.change_percent, 2)),
+                ];
+                if heading.is_some() {
+                    texts.push(
+                        entry
+                            .figure
+                            .as_ref()
+                            .map_or_else(|| "-".to_owned(), |(_, value)| value.clone()),
+                    );
+                }
+                texts
+            })
+            .collect();
+        // Each value column is as wide as its widest text, up to 96 px, so four fit a narrow panel.
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let widths: Vec<f32> = (1..headings.len())
+            .map(|column| {
+                std::iter::once(&headings[column])
+                    .chain(rows.iter().map(|texts| &texts[column]))
+                    .map(|text| {
+                        let text = l10n::text(ui.ctx(), text.as_str());
+                        let galley = ui
+                            .painter()
+                            .layout_no_wrap(text, font.clone(), theme.ui.text);
+                        galley.size().x
+                    })
+                    .fold(0.0, f32::max)
+                    .ceil()
+                    .min(91.0)
+                    + 5.0
+            })
+            .collect();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let columns = |rect: egui::Rect| {
-                    let number = ((rect.width() - 18.0).max(0.0) * 0.3).min(96.0);
-                    let right = rect.right() - 8.0;
-                    let edges = [
-                        rect.left() + 10.0,
-                        right - 2.0 * number,
-                        right - number,
-                        right,
-                    ];
-                    std::array::from_fn::<_, 3, _>(|i| {
-                        egui::Rect::from_min_max(
-                            egui::pos2(edges[i], rect.top()),
-                            egui::pos2((edges[i + 1] - 4.0).max(edges[i]), rect.bottom()),
-                        )
-                    })
+                    let symbol_left = rect.left() + 10.0;
+                    let mut right = rect.right() - 8.0;
+                    let mut cells = Vec::with_capacity(widths.len() + 1);
+                    for width in widths.iter().rev() {
+                        let left = (right - width).max(symbol_left);
+                        cells.push(egui::Rect::from_min_max(
+                            egui::pos2(left, rect.top()),
+                            egui::pos2((right - 4.0).max(left), rect.bottom()),
+                        ));
+                        right = left;
+                    }
+                    cells.push(egui::Rect::from_min_max(
+                        egui::pos2(symbol_left, rect.top()),
+                        egui::pos2((right - 4.0).max(symbol_left), rect.bottom()),
+                    ));
+                    cells.reverse();
+                    cells
                 };
                 let (header, _) =
                     ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
-                for (index, title) in ["Symbol", "Last", "Chg%"].iter().enumerate() {
-                    cell(
-                        ui,
-                        columns(header)[index],
-                        title,
-                        index != 0,
-                        theme.ui.text_secondary,
-                    );
+                for (index, (title, column)) in headings.iter().zip(columns(header)).enumerate() {
+                    cell(ui, column, title, index != 0, theme.ui.text_secondary);
                 }
-                for entry in &self.entries {
+                for (entry, texts) in self.entries.iter().zip(&rows) {
                     let color = if entry.change_percent > 0.0 {
                         theme.chart.candle_up
                     } else if entry.change_percent < 0.0 {
@@ -283,29 +366,10 @@ impl HotlistsPanel {
                         theme.ui.text
                     };
                     let (rect, response) = row(ui);
-                    let cells = columns(rect);
-                    cell(ui, cells[0], &entry.symbol, false, theme.ui.text);
-                    cell(
-                        ui,
-                        cells[1],
-                        &format_price(
-                            entry.last,
-                            Some(
-                                entry
-                                    .price_decimals
-                                    .unwrap_or_else(|| price_decimals(entry.last)),
-                            ),
-                        ),
-                        true,
-                        theme.ui.text,
-                    );
-                    cell(
-                        ui,
-                        cells[2],
-                        &format!("{}%", signed(entry.change_percent, 2)),
-                        true,
-                        color,
-                    );
+                    for (index, (text, column)) in texts.iter().zip(columns(rect)).enumerate() {
+                        let color = if index == 2 { color } else { theme.ui.text };
+                        cell(ui, column, text, index != 0, color);
+                    }
                     let translated_label = l10n::text(ui.ctx(), &entry.symbol);
                     response.widget_info(|| {
                         egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
@@ -317,6 +381,37 @@ impl HotlistsPanel {
             });
         action
     }
+}
+
+/// The codes chosen in `choices`, in the order offered.
+fn chosen(choices: &[(String, bool)]) -> Vec<String> {
+    choices
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(code, _)| code.clone())
+        .collect()
+}
+
+/// A dropdown of checkboxes, read `all` with none chosen, the code with one and `many` with more.
+fn choices(ui: &mut Ui, id: &str, all: &str, many: &str, choices: &mut [(String, bool)]) {
+    if choices.is_empty() {
+        return;
+    }
+    let chosen = chosen(choices);
+    let text = match chosen.as_slice() {
+        [] => all.to_owned(),
+        [code] => code.clone(),
+        _ => l10n::format_text(
+            ui.ctx(),
+            many,
+            &[("count", chosen.len().to_string().as_str())],
+        ),
+    };
+    dropdown(ui, id, &text, |ui| {
+        for (code, on) in choices.iter_mut() {
+            ui.checkbox(on, l10n::text(ui.ctx(), code.as_str()));
+        }
+    });
 }
 
 #[cfg(test)]
@@ -362,6 +457,13 @@ mod tests {
             )
     }
 
+    /// Clicks the node labelled `label` and runs a frame past the click, so a menu it opens shows.
+    fn press(h: &mut Panel, label: &str) {
+        h.get_by_label(label).click();
+        h.step();
+        h.step();
+    }
+
     /// With an interval of one minute the shown panel asks again a minute after the answer, never
     /// with a request open, keeps the rows and their time until the new answer, and asks on
     /// Refresh.
@@ -400,5 +502,61 @@ mod tests {
         h.step();
         assert_eq!(asked(), 3, "not asked on Refresh");
         h.get_by_role_and_label(egui::Role::Button, "BBB");
+    }
+
+    /// The exchanges and countries the user ticks reach the query, each tick asks again, and a
+    /// list change keeps them.
+    #[test]
+    fn exchange_and_country_choices_reach_the_query_across_lists() {
+        let feed = Arc::new(Recorder::default());
+        let mut panel = HotlistsPanel::new(vec!["Gainers".into(), "Losers".into()]);
+        panel.set_exchanges(["NASDAQ", "NYSE"].map(String::from));
+        panel.set_countries(["US", "DE"].map(String::from));
+        panel.set_feed(feed.clone());
+        let reply = feed.replies.lock().unwrap().pop().unwrap();
+        reply.send(Ok(vec![HotlistEntry::new("AAA", 1.0, 1.0)]));
+        let mut h = harness(panel);
+        press(&mut h, "All exchanges");
+        press(&mut h, "NYSE");
+        assert!(
+            h.query_by_role_and_label(egui::Role::Button, "AAA")
+                .is_none()
+        );
+        if h.query_by_role_and_label(egui::Role::CheckBox, "NASDAQ")
+            .is_none()
+        {
+            press(&mut h, "NYSE");
+        }
+        press(&mut h, "NASDAQ");
+        press(&mut h, "All countries");
+        press(&mut h, "DE");
+        if h.query_by_role_and_label(egui::Role::CheckBox, "US")
+            .is_none()
+        {
+            press(&mut h, "DE");
+        }
+        press(&mut h, "US");
+        press(&mut h, "Gainers");
+        press(&mut h, "Losers");
+        let queries = feed.queries.lock().unwrap();
+        assert!(queries.iter().all(|query| query.limit == 50));
+        let asked: Vec<_> = queries
+            .iter()
+            .map(|query| {
+                let (exchanges, countries) = (query.exchanges.join(","), query.countries.join(","));
+                format!("{}|{exchanges}|{countries}", query.list)
+            })
+            .collect();
+        assert_eq!(
+            asked,
+            [
+                "Gainers||",
+                "Gainers|NYSE|",
+                "Gainers|NASDAQ,NYSE|",
+                "Gainers|NASDAQ,NYSE|DE",
+                "Gainers|NASDAQ,NYSE|US,DE",
+                "Losers|NASDAQ,NYSE|US,DE"
+            ]
+        );
     }
 }
