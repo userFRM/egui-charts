@@ -73,10 +73,6 @@ impl BarClock {
     }
 
     /// Clock in which every instant opens a bar of its own, for bars of an unknown timeframe.
-    #[cfg_attr(
-        not(any(feature = "widget", feature = "alert-engine")),
-        expect(dead_code, reason = "only charts and alerts read unaggregated bars")
-    )]
     pub(crate) fn exact() -> Self {
         Self {
             timeframe: None,
