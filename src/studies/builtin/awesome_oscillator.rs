@@ -59,11 +59,6 @@ impl AwesomeOscillator {
         }
     }
 
-    /// Create with default params (5, 34)
-    pub fn default_params() -> Self {
-        Self::new(5, 34)
-    }
-
     /// Set colours for increasing and decreasing oscillator values
     pub fn with_colors(mut self, positive: Color32, negative: Color32) -> Self {
         self.positive_color = positive;

@@ -457,15 +457,6 @@ impl IndicatorDialog {
         self.is_open
     }
 
-    /// Sync dialog open/close state from an external flag.
-    pub fn sync_open_state(&mut self, should_be_open: bool) {
-        if should_be_open && !self.is_open {
-            self.open();
-        } else if !should_be_open && self.is_open {
-            self.close();
-        }
-    }
-
     /// Show the dialog with live theme colors
     pub fn show(&mut self, ctx: &egui::Context, theme: &Theme) -> IndicatorDialogAction {
         if !self.is_open {
