@@ -1351,10 +1351,10 @@ pub enum LineTextOrientation {
     Horizontal,
 }
 
-/// Independent readouts of a trend line, ray, extended line, info line or trend angle, and the
-/// placement of the text of those tools and of a horizontal line or ray or a vertical line,
-/// which have no readouts. Readouts start hidden except on an info line, see [`Self::for_tool`];
-/// saves from before these settings read the same way.
+/// Independent readouts of a trend line, ray, extended line, info line, trend angle or arrow,
+/// and the placement of the text of those tools and of a horizontal line or ray or a vertical
+/// line, which have no readouts. Readouts start hidden except on an info line, see
+/// [`Self::for_tool`]; saves from before these settings read the same way.
 /// Price changes follow anchor order; lengths and elapsed time are unsigned.
 ///
 /// ```

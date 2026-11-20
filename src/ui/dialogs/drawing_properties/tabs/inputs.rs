@@ -1501,7 +1501,11 @@ fn projection(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerS
     }
 }
 
-fn gann_row(level: &mut GannLevel, range: std::ops::RangeInclusive<f32>) -> LevelRow<'_> {
+fn gann_row(
+    level: &mut GannLevel,
+    range: std::ops::RangeInclusive<f32>,
+    inherited_width: f32,
+) -> LevelRow<'_> {
     LevelRow {
         visible: &mut level.visible,
         value: &mut level.value,
@@ -1510,7 +1514,7 @@ fn gann_row(level: &mut GannLevel, range: std::ops::RangeInclusive<f32>) -> Leve
         color: &mut level.color,
         line_style: None,
         style_override: None,
-        width: None,
+        width: Some((&mut level.width, inherited_width)),
         range,
     }
 }
@@ -1529,7 +1533,8 @@ fn gann(
     let original = config.clone();
     let square = matches!(tool, Tool::GannSquare | Tool::GannFixed);
     let max = if square { GANN_SQUARE_UNITS } else { 1.0 };
-    let new = |value| GannLevel::new(value, drawing.color);
+    let (width, color) = (drawing.stroke_width, drawing.color);
+    let new = |value| GannLevel::new(value, color);
     if tool == Tool::GannFan {
         ui.strong(l10n::text(ui.ctx(), "Fan lines"));
         level_grid(
@@ -1538,7 +1543,7 @@ fn gann(
             &mut config.fan_ratios,
             grid_pickers(pickers, 0),
             new(1.0),
-            |level| gann_row(level, 0.01..=100.0),
+            |level| gann_row(level, 0.01..=100.0, width),
         );
     } else {
         if square {
@@ -1552,7 +1557,7 @@ fn gann(
                 &mut config.price_levels,
                 grid_pickers(pickers, 0),
                 new(max / 2.0),
-                |level| gann_row(level, 0.0..=max),
+                |level| gann_row(level, 0.0..=max, width),
             );
             ui.strong(l10n::text(ui.ctx(), "Time levels"));
             level_grid(
@@ -1561,7 +1566,7 @@ fn gann(
                 &mut config.time_levels,
                 grid_pickers(pickers, 1),
                 new(max / 2.0),
-                |level| gann_row(level, 0.0..=max),
+                |level| gann_row(level, 0.0..=max, width),
             );
         }
         if square {
@@ -1594,7 +1599,7 @@ fn gann(
                     &mut config.fan_ratios,
                     grid_pickers(pickers, 2),
                     new(1.0),
-                    |level| gann_row(level, 0.01..=100.0),
+                    |level| gann_row(level, 0.01..=100.0, width),
                 );
             }
             ui.checkbox(&mut config.show_arcs, l10n::text(ui.ctx(), "Show arcs"));
@@ -1606,13 +1611,34 @@ fn gann(
                     &mut config.arc_ratios,
                     grid_pickers(pickers, 3),
                     new(1.0),
-                    |level| gann_row(level, 0.01..=GANN_MAX_ARC),
+                    |level| gann_row(level, 0.01..=GANN_MAX_ARC, width),
                 );
             }
         } else {
             ui.checkbox(&mut config.show_angles, l10n::text(ui.ctx(), "Angles"));
         }
     }
+    ui.horizontal_wrapped(|ui| {
+        if matches!(tool, Tool::GannBox | Tool::GannFan) {
+            ui.checkbox(&mut config.show_labels, l10n::text(ui.ctx(), "Labels"));
+        }
+        if tool != Tool::GannFan {
+            ui.checkbox(&mut config.reverse, l10n::text(ui.ctx(), "Reverse"));
+        }
+        let mut one = config.one_color.is_some();
+        if ui
+            .checkbox(&mut one, l10n::text(ui.ctx(), "Use one colour"))
+            .changed()
+        {
+            // The one colour starts from the drawing's line colour.
+            config.one_color = one.then_some(color);
+        }
+        if let Some(one_color) = &mut config.one_color {
+            let picker = grid_pickers(pickers, 4);
+            picker.resize_with(1, ColorPickerState::default);
+            level_color(ui, one_color, &mut picker[0]);
+        }
+    });
     background(
         ui,
         &mut config.show_background,
@@ -2190,6 +2216,104 @@ mod tests {
                     h.run();
                 }
                 assert_eq!(h.state().0.drawings().drawings[0].projection, original);
+            }
+        }
+    }
+
+    /// The width of the first line of each list a Gann tool offers, Labels on the box and the fan,
+    /// Reverse on the box and the squares and Use one colour, which starts from the drawing's line
+    /// colour, preview without history; Cancel restores the drawing and Ok records one undo step.
+    #[test]
+    fn gann_controls_preview_cancel_and_commit() {
+        use egui::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        for tool in [
+            Tool::GannBox,
+            Tool::GannFan,
+            Tool::GannSquare,
+            Tool::GannFixed,
+        ] {
+            for confirm in [false, true] {
+                let mut chart = crate::widget::test_frames::chart(&[80.0], &[200.0]);
+                let mut drawing = Drawing::new(7, tool);
+                drawing.completed = true;
+                drawing.chart_points =
+                    vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 150.0)];
+                let one = vec![GannLevel::new(1.0, [128, 128, 128, 255])];
+                let original = GannConfig {
+                    price_levels: one.clone(),
+                    time_levels: one.clone(),
+                    fan_ratios: one.clone(),
+                    arc_ratios: one,
+                    ..GannConfig::for_tool(tool)
+                };
+                drawing.gann = Some(original.clone());
+                let mut expected = original.clone();
+                let mut widths = Vec::new();
+                if tool != Tool::GannFan {
+                    expected.price_levels[0].width = Some(5.0);
+                    expected.time_levels[0].width = Some(5.0);
+                    widths.extend(["Price level 1 width", "Time level 1 width"]);
+                }
+                if tool != Tool::GannBox {
+                    expected.fan_ratios[0].width = Some(5.0);
+                    widths.push("Fan line 1 width");
+                }
+                if matches!(tool, Tool::GannSquare | Tool::GannFixed) {
+                    expected.arc_ratios[0].width = Some(5.0);
+                    widths.push("Arc 1 width");
+                }
+                let mut switches = vec!["Use one colour"];
+                expected.one_color = Some(drawing.color);
+                if matches!(tool, Tool::GannBox | Tool::GannFan) {
+                    expected.show_labels = false;
+                    switches.push("Labels");
+                }
+                if tool != Tool::GannFan {
+                    expected.reverse = true;
+                    switches.push("Reverse");
+                }
+                chart.drawings_mut().drawings.push(drawing);
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.config.height = 1300.0;
+                dialog.open_for_chart(&chart, DrawingId(7));
+                dialog.active_tab = PropertiesTab::Inputs;
+                let mut h = Harness::builder()
+                    .with_size(egui::vec2(1440.0, 1400.0))
+                    .with_accessibility_check(false)
+                    .allow_missing_glyphs()
+                    .build_ui_state(
+                        |ui, (chart, dialog): &mut (Chart, DrawingPropertiesDialog)| {
+                            dialog.show_and_apply(ui.ctx(), chart);
+                        },
+                        (chart, dialog),
+                    );
+                h.run();
+                for label in widths {
+                    h.get_by_role_and_label(Role::SpinButton, label)
+                        .set_value_accesskit(5.0);
+                    h.run();
+                }
+                for label in switches {
+                    h.get_by_role_and_label(Role::CheckBox, label).click();
+                    h.run();
+                }
+                let gann = |h: &Harness<'_, (Chart, DrawingPropertiesDialog)>| {
+                    h.state().0.drawings().drawings[0].gann.clone()
+                };
+                assert_eq!(gann(&h), Some(expected.clone()), "{tool:?}");
+                assert!(!h.state().0.can_undo(), "{tool:?}");
+                if confirm {
+                    h.get_by_role_and_label(Role::Button, "Ok").click();
+                    h.run();
+                    assert_eq!(gann(&h), Some(expected), "{tool:?}");
+                    assert!(h.state_mut().0.undo(), "{tool:?}");
+                    assert!(!h.state().0.can_undo(), "{tool:?}");
+                } else {
+                    h.state_mut().1.close();
+                    h.run();
+                }
+                assert_eq!(gann(&h), Some(original), "{tool:?}");
             }
         }
     }

@@ -554,6 +554,7 @@ impl Chart {
         } else {
             self.leave_panes(super::SeriesId::MAIN);
         }
+        let outer = self.begin_study_batch();
         let mut replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
         if snapshot.series.is_some() {
             replaced.extend(self.series().map(|(id, _)| id));
@@ -695,6 +696,7 @@ impl Chart {
             }
         }
         self.recalculate_studies();
+        self.end_study_batch(outer);
         for (at, saved) in snapshot.panes.iter().enumerate() {
             let id = panes[&at];
             self.move_pane(id, at);
