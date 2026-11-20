@@ -424,8 +424,10 @@ pub struct Drawing {
     /// draws it over all of them, as drawings were drawn before this setting, and so does a
     /// count of at least the number of series and studies in the pane. Drawings with the same
     /// count are layered by [`z_order`](Self::z_order). The chart updates the count when a series
-    /// or study is removed, moved out of the pane or moved in its order, so the drawing stays
-    /// over and under the same other items.
+    /// or study is removed, moved out of the pane or moved in its order, and, in a user action,
+    /// when one joins the pane or the drawing moves to another pane with the main series or its
+    /// study, so the drawing stays over and under the same other items. An item new to the
+    /// drawing goes under it where its place leaves the choice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub series_layer: Option<usize>,
 }
@@ -931,12 +933,29 @@ impl Drawing {
         }
     }
 
+    /// The text colour of Text and Anchored text that has one. Their colour controls show and
+    /// edit it, as the drawing colour then paints at most a border left to follow it.
+    #[cfg(feature = "ui")]
+    pub(crate) fn text_color_override(&self) -> Option<[u8; 4]> {
+        matches!(
+            self.tool_type,
+            DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+        )
+        .then_some(self.text_color)
+        .flatten()
+    }
+
     /// Set the colour picked in a colour control. A price label's badge stays one colour, so its
-    /// border and fill follow as in [`Self::set_line_color`]; other tools keep theirs.
+    /// border and fill follow as in [`Self::set_line_color`]. Text with a colour of its own takes
+    /// the pick there, and its drawing colour takes the RGB at its own opacity; other tools keep
+    /// their other colours.
     #[cfg(feature = "ui")]
     pub(crate) fn recolor(&mut self, color: [u8; 4]) {
         if self.tool_type == DrawingToolType::PriceLabel {
             self.set_line_color(color);
+        } else if self.text_color_override().is_some() {
+            self.text_color = Some(color);
+            self.color[..3].copy_from_slice(&color[..3]);
         } else {
             self.color = color;
         }
