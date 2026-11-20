@@ -1053,6 +1053,34 @@ impl StudyTemplate {
                 changed = true;
             }
         }
+        // A single candlestick pattern study saved while it drew the bullish, bearish and
+        // neutral lines of All Candlestick Patterns, and took the trend rule whatever its rule
+        // reads, keeps the style of its side's line and drops a rule it now ignores.
+        if let Some(line) = crate::studies::CandlestickPatterns::pattern_line(study) {
+            if has("trend") && !declares("trend") {
+                template.inputs.retain(|(id, _)| id != "trend");
+                changed = true;
+            }
+            if self.settings.plots.len() == 3 {
+                let settings = &mut template.settings;
+                settings.plots = vec![self.settings.plots[line]];
+                settings.plot_variants = vec![
+                    self.settings
+                        .plot_variants
+                        .get(line)
+                        .cloned()
+                        .unwrap_or_default(),
+                ];
+                for flagged in [&mut settings.untagged_plots, &mut settings.price_line_plots] {
+                    *flagged = if flagged.contains(&line) {
+                        vec![0]
+                    } else {
+                        Vec::new()
+                    };
+                }
+                changed = true;
+            }
+        }
         changed.then_some(template)
     }
 }

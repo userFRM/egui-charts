@@ -128,8 +128,9 @@ pub use session::{
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
 pub use strategy::{
-    StrategyComparison, StrategyExcursion, StrategyExit, StrategyHolding, StrategyPerformance,
-    StrategyReport, StrategyTrade, StrategyTradeStats,
+    StrategyAnalysis, StrategyComparison, StrategyExcursion, StrategyExit, StrategyHolding,
+    StrategyPerformance, StrategyPeriod, StrategyReport, StrategyResultBin, StrategyTrade,
+    StrategyTradeGroup, StrategyTradeStats,
 };
 #[cfg(feature = "ui")]
 pub(crate) use strategy::{SummaryUnit, run_figures, trade_figures};
