@@ -210,12 +210,17 @@ placement, data loading and CSV storage. Chart entry/exit markers use the signal
 The assembled terminal and its demo mounting remain separate integration work.
 
 The Summary tab shows the selected range and its trade figures in All, Long and Short columns,
-followed by the drawdown, ratio, growth and buy-and-hold figures for the selected range, equity
-and drawdown in account units, and an optional fee-free buy-and-hold comparison on the same
-equity scale. Curve positions and hover values retain submillisecond timestamps. Time labels
-along the axis follow its span. Hover a curve for timestamped values. The virtualized trade
-list uses entry-time order, keeps equal-time trades in input order, filters to the range's
-trades and shows fill prices, net profit, fees, labels and excursions.
+followed by open profit, drawdown, run-up, ratio, growth and buy-and-hold figures for that range. Charts of equity,
+drawdown from peak and run-up from trough default to account units; **Percent of initial capital**
+switches all three to percentages of the selected range's initial capital, with equity starting at 100. The
+optional fee-free buy-and-hold comparison uses the same equity scale. Drawdown and run-up follow
+usable intrabar ranges, falling back to closes when ranges are unavailable. Replacing the report
+resets the switch to account units; the switch requires positive finite initial capital.
+The intrabar figures and all three charts follow the date range. Curve positions and hover
+values retain submillisecond timestamps. Time labels along the axis follow its span. Hover a curve
+for timestamped values. The virtualized trade list uses entry-time order, keeps equal-time
+trades in input order, filters to the range's trades and shows fill prices, net profit, fees,
+labels and excursions.
 Fill prices retain their precision and fill times retain fractional seconds.
 Properties includes run metadata and the host's ordered settings. Invalid inputs are
 counted visibly. An undefined or non-finite metric displays as `N/A`, including when
@@ -357,6 +362,35 @@ of downside excess returns over all steps, and both use the curve's actual steps
 365.25-day year and require at least 13 weeks. Non-finite equity points are skipped;
 unordered finite points invalidate the entire curve. [`equity_curve()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.equity_curve) exposes those same
 validated points for rendering.
+
+Drawdown and run-up are reported separately from closing marks and from equity inside each bar.
+Close-to-close drawdown is the largest fall below an earlier closing peak. Intrabar drawdown
+also uses [`StrategyReport::equity_ranges`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.equity_ranges), one [`EquityRange`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.EquityRange.html) per mark: its bar's low, high,
+largest fall and largest rise along the execution path, including finer bars and the close.
+Each bar's depth is the larger of the earlier peak less its low and its own fall. Peak-relative
+percentages take the larger of `(earlier peak - low) / earlier peak` and
+`fall / max(earlier peak, high)`. If the largest fall starts below both peaks, this second
+term understates that fall's own percentage. A separate percentage divides the maximum
+intrabar money drawdown by initial capital. Missing or unusable ranges make intrabar metrics
+unavailable; old saved reports load with empty ranges. Hosts knowing only the extremes can
+supply `high - low` for both fall and rise, yielding upper bounds.
+
+For capital 10,000 and 100 units bought at 100, a bar dipping to 70 and closing at 100 has
+close-to-close drawdown 0 and intrabar drawdown 3,000 (30%). Open profit reconciles equity with
+closed trades: last usable equity less initial capital and closed net profit, including entry
+fees already paid. It is exactly 0 without an open trade, or unavailable when an open trade
+has no usable equity mark. Holding those units at a final close of 90 gives open profit -1,000
+and closed net profit 0. The summary and summary CSV list open profit as a whole-run row and
+label both drawdown measures explicitly. Trade figures retain their All, Long and Short columns;
+whole-run CSV rows have an empty `side`.
+
+Run-up is the largest rise above an earlier equity trough. Close-to-close run-up uses closing
+marks; intrabar run-up takes, at each bar, the larger of its high less the earlier trough and
+its own rise. Both run-up percentages divide by initial capital and require positive finite
+capital. A path of equity 10,000, 12,000, 7,000, 10,000 has largest fall 5,000 but largest rise
+3,000 (7,000 to 10,000), so knowing only the high and low cannot recover both movements.
+The summary and CSV distinguish close-to-close and intrabar run-up, and the run-up chart shows
+each bar's rise from its trough.
 
 The largest winner is the greatest positive net profit, and the largest loser is the most
 negative net profit. Either is unavailable without a trade of that sign. Consecutive wins
