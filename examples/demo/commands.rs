@@ -243,6 +243,7 @@ impl DemoApp {
             ("Price unit", &icons::PRICE_LABEL),
             ("Market recording", &icons::REPLAY),
             ("Readout", &icons::EYE),
+            ("Scrolling", &icons::UI_DRAG_HANDLE),
             ("Appearance", &icons::BRUSH),
             ("Formatting", &icons::TEXT),
             ("Showcase", &icons::WIDGET_BAR_HIGHLIGHTS),
@@ -259,6 +260,7 @@ impl DemoApp {
                 )
                 .show(ui, &response, |ui| match label {
                     "Readout" => self.show_readout_controls(ui),
+                    "Scrolling" => self.show_scrolling_controls(ui),
                     "Appearance" => self.show_appearance_controls(ui),
                     "Formatting" => self.show_formatting_controls(ui),
                     "Price unit" => self.show_price_unit_controls(ui),
@@ -964,6 +966,7 @@ mod tests {
                 "Price unit",
                 "Market recording",
                 "Readout",
+                "Scrolling",
                 "Appearance",
                 "Formatting",
                 "Showcase",
@@ -1339,6 +1342,13 @@ mod tests {
             app.chart.chart_options().tooltip.touch_exit_mode,
             egui_charts::config::TouchTrackingExitMode::OnTouchEnd
         );
+        egui::Popup::close_all(&ctx);
+        click(&mut app, &ctx, "Menu");
+        click(&mut app, &ctx, "Scrolling");
+        click(&mut app, &ctx, "Coast after a touch swipe");
+        assert!(!app.chart.chart_options().kinetic_scroll.enabled);
+        click(&mut app, &ctx, "Coast after a mouse drag");
+        assert!(app.chart.chart_options().kinetic_scroll.mouse);
         egui::Popup::close_all(&ctx);
         click(&mut app, &ctx, "Menu");
         click(&mut app, &ctx, "Appearance");

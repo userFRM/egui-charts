@@ -273,10 +273,12 @@ pub struct Drawing {
     #[serde(default)]
     pub note_text_style: Option<NoteTextStyle>,
     /// Extend line to left edge; a trend line, ray, extended line, info line or trend angle
-    /// extends past its first anchor, whichever way it was drawn
+    /// extends past its first anchor, whichever way it was drawn, and a curve or double curve
+    /// continues along its tangent past its first anchor
     pub extend_left: bool,
     /// Extend line to right edge; a trend line, ray, extended line, info line or trend angle
-    /// extends past its second anchor, whichever way it was drawn
+    /// extends past its second anchor, whichever way it was drawn, and a curve or double curve
+    /// continues along its tangent past its last anchor
     pub extend_right: bool,
     /// Arrow style at start of line
     pub arrow_start_style: ArrowStyle,
@@ -403,10 +405,10 @@ pub struct Drawing {
     /// bars; `None` uses the defaults, OHLC bars, as drawings saved before this setting do.
     #[serde(default)]
     pub bars_pattern: Option<BarsPatternConfig>,
-    /// Levels, target zone backgrounds, coefficient labels and leg style of the projection
+    /// Sector levels, gradient, coefficient labels and outline style of the projection
     /// tool. New projections start from [`ProjectionConfig::default`]; `None`, as on projections
-    /// saved before these settings, draws one dashed level at the whole move in the drawing
-    /// colour with a zone in the fill colour and no coefficients. Other tools ignore it.
+    /// saved before these settings, draws one dashed level at the sector's arc in the drawing
+    /// colour with a flat fill and no coefficients. Other tools ignore it.
     #[serde(default)]
     pub projection: Option<ProjectionConfig>,
     /// Card and badge colours and the background transparency of the forecast tool. New
@@ -432,7 +434,7 @@ pub struct Drawing {
     pub series_layer: Option<usize>,
 }
 
-fn enabled() -> bool {
+pub(super) fn enabled() -> bool {
     true
 }
 
