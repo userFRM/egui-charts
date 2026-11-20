@@ -222,9 +222,12 @@ impl ReplaySpeed {
         }
     }
 
-    /// Get display label for the speed
+    /// Display label for the speed: the multiplier with at most two decimals and no trailing
+    /// zeros, so 0.25x, 1x, 2.5x and 100x.
     pub fn label(&self) -> String {
-        format!("{:.1}x", self.multiplier())
+        let text = format!("{:.2}", self.multiplier());
+        // `{:.2}` always writes a point, so trimming never reaches the integer digits.
+        format!("{}x", text.trim_end_matches('0').trim_end_matches('.'))
     }
 
     /// All standard presets

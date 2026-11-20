@@ -48,7 +48,7 @@ pub enum LayoutStyle {
 // Replay
 // =============================================================================
 
-pub use super::replay::model::{PlaybackSpeed, ReplayCommand, ReplayProgress, ToolbarReplayState};
+pub use super::replay::model::{ReplayCommand, ReplayProgress, ToolbarReplayState};
 
 // =============================================================================
 // Templates

@@ -555,7 +555,8 @@ impl FloatingReplayControl {
 
                             ui.separator();
 
-                            // As wide as the widest label, so the bar keeps its width for every speed.
+                            // As wide as the widest preset label or the current speed, so the bar
+                            // keeps its width for every preset speed.
                             let font = FontId::proportional(theme.text.label);
                             let text_width = |ui: &Ui, text: &str| {
                                 ui.painter()
@@ -567,18 +568,21 @@ impl FloatingReplayControl {
                                     .size()
                                     .x
                             };
+                            // The speed as the replay plays it, which may be none of the presets.
+                            let current = super::ReplaySpeed::from(self.state.speed).label();
                             let spacing = ui.spacing();
                             let combo_width = text_width(ui, ReplaySpeed::X0_5.label())
+                                .max(text_width(ui, &current))
                                 + spacing.icon_spacing
                                 + spacing.icon_width
                                 + 2.0 * spacing.button_padding.x;
-                            let mut speed = ReplaySpeed::from_multiplier(self.state.speed);
+                            let mut speed = self.state.speed;
                             let speed_response = ui.scope(|ui| {
                                 ui.combo_select_width(
                                     "replay_speed_selector",
                                     &mut speed,
-                                    ReplaySpeed::all().iter().copied(),
-                                    |speed| speed.label().to_owned(),
+                                    ReplaySpeed::all().iter().map(ReplaySpeed::multiplier),
+                                    |&speed| super::ReplaySpeed::from(speed).label(),
                                     combo_width,
                                 )
                             });
@@ -586,7 +590,7 @@ impl FloatingReplayControl {
                                 .response
                                 .on_hover_text(l10n::text(ui.ctx(), "Playback speed"));
                             if speed_response.inner {
-                                action = ReplayControlAction::SetSpeed(speed.multiplier());
+                                action = ReplayControlAction::SetSpeed(speed);
                             }
 
                             if !self.update_intervals.is_empty()
@@ -964,6 +968,41 @@ mod tests {
             bar.sync_from(true, false, 1.0, current, 300);
             assert_eq!(bar.state.progress_pct, expected, "bar {current} of 300");
         }
+    }
+
+    /// A speed the bar does not offer reads as the replay plays it, not as the nearest preset.
+    #[test]
+    fn speed_selector_shows_the_replay_speed() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let shown: Vec<String> = [0.25_f32, 2.0, 100.0]
+            .iter()
+            .map(|&speed| {
+                let mut bar = FloatingReplayControl::new();
+                bar.show_control();
+                bar.sync_from(true, false, speed, 0, 10);
+                let mut harness = Harness::builder()
+                    .allow_missing_glyphs()
+                    .with_accessibility_check(false)
+                    .with_size(Vec2::new(900.0, 600.0))
+                    .build_ui_state(
+                        |ui, bar: &mut FloatingReplayControl| {
+                            bar.show(ui.ctx());
+                        },
+                        bar,
+                    );
+                harness.run();
+                harness
+                    .get_by_role(egui::Role::ComboBox)
+                    .accesskit_node()
+                    .value()
+                    .map(|value| value.to_string())
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(shown, ["0.25x", "2x", "100x"]);
     }
 
     /// The key a shortcut reads goes to the replay only when nothing else should take it.

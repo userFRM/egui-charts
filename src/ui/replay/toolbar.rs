@@ -3,9 +3,8 @@
 //! Provide playback controls for market replay functionality including
 //! play/pause/stop buttons, speed selector, progress bar, and time display.
 
-use super::model::{
-    PlaybackSpeed, ReplayCommand, ReplayProgress, ToolbarReplayState as ReplayState,
-};
+use super::ReplaySpeed;
+use super::model::{ReplayCommand, ReplayProgress, ToolbarReplayState as ReplayState};
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
@@ -44,8 +43,8 @@ impl Default for ReplayToolbarConfig {
 pub struct ReplayToolbarState {
     /// Current replay state
     pub replay_state: ReplayState,
-    /// Current speed
-    pub speed: PlaybackSpeed,
+    /// Current speed, as the replay controller holds it
+    pub speed: ReplaySpeed,
     /// Current progress (if available)
     pub progress: Option<ReplayProgress>,
 }
@@ -53,8 +52,9 @@ pub struct ReplayToolbarState {
 impl ReplayToolbarState {
     /// Sync toolbar replay state from external values.
     ///
-    /// `active` / `playing` map to the toolbar-level replay state enum,
-    /// and `speed_multiplier` is converted to the closest `PlaybackSpeed`.
+    /// `active` / `playing` map to the toolbar-level replay state enum. `speed_multiplier` is
+    /// read as [`ReplayAction::SetSpeed`](super::ReplayAction::SetSpeed) reads it: clamped to
+    /// 0.1 to 100, 1 when not finite, and the preset within 0.01 when there is one.
     pub fn sync_from(&mut self, active: bool, playing: bool, speed_multiplier: f32) {
         if active {
             if playing {
@@ -66,12 +66,7 @@ impl ReplayToolbarState {
             self.replay_state = ReplayState::Stopped;
         }
 
-        self.speed = match speed_multiplier {
-            s if s <= 1.0 => PlaybackSpeed::RealTime,
-            s if s <= 4.0 => PlaybackSpeed::Fast,
-            s if s <= 100.0 => PlaybackSpeed::VeryFast,
-            _ => PlaybackSpeed::UltraFast,
-        };
+        self.speed = ReplaySpeed::from(speed_multiplier);
     }
 }
 
@@ -86,7 +81,7 @@ pub enum ReplayToolbarAction {
     /// Stop was clicked
     Stop,
     /// Speed was changed
-    SetSpeed(PlaybackSpeed),
+    SetSpeed(ReplaySpeed),
     /// Step forward
     StepForward,
     /// Step backward
@@ -252,8 +247,10 @@ impl<'a> ReplayToolbar<'a> {
     }
 
     fn show_step_buttons(&self, ui: &mut Ui) -> Option<ReplayToolbarAction> {
-        let can_step =
-            self.state.replay_state == ReplayState::Paused || self.state.replay_state.can_start();
+        let can_step = matches!(
+            self.state.replay_state,
+            ReplayState::Paused | ReplayState::Stopped | ReplayState::Finished
+        );
 
         let mut action = None;
 
@@ -285,20 +282,15 @@ impl<'a> ReplayToolbar<'a> {
         let current = self.state.speed;
 
         egui::ComboBox::from_id_salt("replay_speed")
-            .selected_text(l10n::text(ui.ctx(), current.display_name()))
+            .selected_text(l10n::text(ui.ctx(), current.label()))
             .width(DESIGN_TOKENS.sizing.replay.speed_dropdown_width)
             .show_ui(ui, |ui| {
-                for speed in [
-                    PlaybackSpeed::RealTime,
-                    PlaybackSpeed::Fast,
-                    PlaybackSpeed::VeryFast,
-                    PlaybackSpeed::UltraFast,
-                ] {
+                for speed in ReplaySpeed::presets().iter().copied() {
                     if ui
                         .selectable_value(
                             &mut self.state.speed.clone(),
                             speed,
-                            l10n::text(ui.ctx(), speed.display_name()),
+                            l10n::text(ui.ctx(), speed.label()),
                         )
                         .clicked()
                         && speed != current
@@ -378,5 +370,40 @@ impl Widget for ReplayToolbar<'_> {
             self.show(ui);
         })
         .response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
+
+    /// The speed text is the controller's own, also for speeds between the old four.
+    #[test]
+    fn toolbar_shows_the_speed_it_syncs() {
+        let shown: Vec<String> = [0.25_f32, 0.5, 1.0, 4.0, 10.0, 50.0, 100.0]
+            .iter()
+            .map(|&speed| {
+                let mut state = ReplayToolbarState::default();
+                state.sync_from(true, false, speed);
+                let mut harness = Harness::builder()
+                    .allow_missing_glyphs()
+                    .with_accessibility_check(false)
+                    .build_ui(move |ui| {
+                        ReplayToolbar::new(&state).show(ui);
+                    });
+                harness.run();
+                harness
+                    .get_by_role(egui::Role::ComboBox)
+                    .accesskit_node()
+                    .value()
+                    .map(|value| value.to_string())
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(shown, ["0.25x", "0.5x", "1x", "4x", "10x", "50x", "100x"]);
     }
 }

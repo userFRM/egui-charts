@@ -1,5 +1,6 @@
-//! Replay types shared with the host: commands, playback state, speed and progress.
+//! Replay types shared with the host: commands, playback state and progress.
 
+use super::actions::ReplaySpeed;
 use chrono::{DateTime, Utc};
 
 /// Replay command for the host to apply.
@@ -16,7 +17,7 @@ pub enum ReplayCommand {
     /// Move playback back by one step.
     StepBackward,
     /// Set the playback speed.
-    SetSpeed(PlaybackSpeed),
+    SetSpeed(ReplaySpeed),
 }
 
 /// Replay playback state (toolbar-level)
@@ -46,42 +47,6 @@ impl ToolbarReplayState {
     /// Whether the replay can be started from this state
     pub fn can_start(&self) -> bool {
         matches!(self, Self::Stopped | Self::Finished)
-    }
-}
-
-/// Playback speed for replay
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PlaybackSpeed {
-    #[default]
-    /// Play at the original speed.
-    RealTime,
-    /// Play at four times the original speed.
-    Fast,
-    /// Play at ten times the original speed.
-    VeryFast,
-    /// Play at one hundred times the original speed.
-    UltraFast,
-}
-
-impl PlaybackSpeed {
-    /// Display name for UI
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::RealTime => "1x",
-            Self::Fast => "4x",
-            Self::VeryFast => "10x",
-            Self::UltraFast => "100x",
-        }
-    }
-
-    /// Speed multiplier as f64
-    pub fn multiplier(&self) -> f64 {
-        match self {
-            Self::RealTime => 1.0,
-            Self::Fast => 4.0,
-            Self::VeryFast => 10.0,
-            Self::UltraFast => 100.0,
-        }
     }
 }
 
