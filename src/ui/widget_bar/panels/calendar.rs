@@ -23,6 +23,8 @@ enum CalendarRange {
     Yesterday,
     Today,
     Tomorrow,
+    /// Monday to Sunday of the preceding week.
+    LastWeek,
     /// Monday to Sunday of the current week.
     ThisWeek,
     /// Monday to Sunday of the following week.
@@ -32,10 +34,11 @@ enum CalendarRange {
 }
 
 impl CalendarRange {
-    const ALL: [CalendarRange; 6] = [
+    const ALL: [CalendarRange; 7] = [
         CalendarRange::Yesterday,
         CalendarRange::Today,
         CalendarRange::Tomorrow,
+        CalendarRange::LastWeek,
         CalendarRange::ThisWeek,
         CalendarRange::NextWeek,
         CalendarRange::Upcoming,
@@ -46,6 +49,7 @@ impl CalendarRange {
             CalendarRange::Yesterday => "Yesterday",
             CalendarRange::Today => "Today",
             CalendarRange::Tomorrow => "Tomorrow",
+            CalendarRange::LastWeek => "Last week",
             CalendarRange::ThisWeek => "This week",
             CalendarRange::NextWeek => "Next week",
             CalendarRange::Upcoming => "Upcoming",
@@ -66,11 +70,92 @@ impl CalendarRange {
             CalendarRange::Yesterday => (today - Days::new(1), 1),
             CalendarRange::Today => (today, 1),
             CalendarRange::Tomorrow => (today + Days::new(1), 1),
+            CalendarRange::LastWeek => (monday - Days::new(7), 7),
             CalendarRange::ThisWeek => (monday, 7),
             CalendarRange::NextWeek => (monday + Days::new(7), 7),
             CalendarRange::Upcoming => return (now, start(today + Days::new(29))),
         };
         (start(first), start(first + Days::new(days)))
+    }
+}
+
+/// Company calendars keep only columns that the answer supplies, in this order.
+#[derive(Clone, Copy)]
+enum Figure {
+    Actual,
+    Forecast,
+    Prior,
+    Revenue,
+    RevenueForecast,
+    MarketCap,
+    Surprise,
+    Yield,
+    PaymentDate,
+    DealAmount,
+    Shares,
+    Exchange,
+}
+
+impl Figure {
+    fn for_kind(kind: CalendarKind) -> &'static [Self] {
+        use Figure::*;
+        match kind {
+            CalendarKind::Economic => &[Actual, Forecast, Prior],
+            CalendarKind::Earnings => &[
+                Actual,
+                Forecast,
+                Prior,
+                Revenue,
+                RevenueForecast,
+                MarketCap,
+                Surprise,
+            ],
+            CalendarKind::Dividends => &[Actual, Yield, PaymentDate],
+            CalendarKind::Ipos => &[Actual, DealAmount, Shares, MarketCap, Exchange],
+        }
+    }
+
+    fn label(self, kind: CalendarKind) -> &'static str {
+        match (self, kind) {
+            (Self::Actual, CalendarKind::Earnings) => "EPS",
+            (Self::Forecast, CalendarKind::Earnings) => "EPS estimate",
+            (Self::Prior, CalendarKind::Earnings) => "Prior EPS",
+            (Self::Actual, CalendarKind::Dividends) => "Amount",
+            (Self::Actual, CalendarKind::Ipos) => "Offer price",
+            (Self::Actual, _) => "Actual",
+            (Self::Forecast, _) => "Forecast",
+            (Self::Prior, _) => "Prior",
+            (Self::Revenue, _) => "Revenue",
+            (Self::RevenueForecast, _) => "Revenue estimate",
+            (Self::MarketCap, _) => "Market cap",
+            (Self::Surprise, _) => "Surprise",
+            (Self::Yield, _) => "Yield",
+            (Self::PaymentDate, _) => "Payment date",
+            (Self::DealAmount, _) => "Deal amount",
+            (Self::Shares, _) => "Shares offered",
+            (Self::Exchange, _) => "Exchange",
+        }
+    }
+
+    fn value(self, event: &CalendarEvent) -> Option<&str> {
+        match self {
+            Self::Actual if event.kind == CalendarKind::Ipos => {
+                event.actual.as_ref().or(event.forecast.as_ref())
+            }
+            Self::Actual => event.actual.as_ref(),
+            Self::Forecast => event.forecast.as_ref(),
+            Self::Prior => event.prior.as_ref(),
+            Self::Revenue => event.revenue.as_ref(),
+            Self::RevenueForecast => event.revenue_forecast.as_ref(),
+            Self::MarketCap => event.market_cap.as_ref(),
+            Self::Surprise => event.surprise.as_ref(),
+            Self::Yield => event.dividend_yield.as_ref(),
+            Self::PaymentDate => event.payment_date.as_ref(),
+            Self::DealAmount => event.deal_amount.as_ref(),
+            Self::Shares => event.shares_offered.as_ref(),
+            Self::Exchange => event.exchange.as_ref(),
+        }
+        .map(String::as_str)
     }
 }
 
@@ -388,16 +473,36 @@ impl CalendarPanel {
             None => {}
         }
         let mut toggled = None;
-        egui::ScrollArea::vertical()
+        let columns: Vec<_> = Figure::for_kind(self.kind)
+            .iter()
+            .copied()
+            .filter(|figure| {
+                self.kind == CalendarKind::Economic
+                    || self
+                        .events
+                        .iter()
+                        .any(|event| figure.value(event).is_some())
+            })
+            .collect();
+        egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
+                if columns.len() > 3 {
+                    ui.set_min_width(columns.len() as f32 * 112.0);
+                }
+                let count = columns.len();
                 let figures = |rect: egui::Rect| {
                     let rect = rect.shrink2(vec2(8.0, 0.0));
-                    std::array::from_fn::<_, 3, _>(|i| {
-                        rect.with_min_x(rect.left() + rect.width() * i as f32 / 3.0)
-                            .with_max_x(rect.left() + rect.width() * (i + 1) as f32 / 3.0 - 4.0)
-                    })
+                    (0..count)
+                        .map(move |i| {
+                            rect.with_min_x(rect.left() + rect.width() * i as f32 / count as f32)
+                                .with_max_x(
+                                    rect.left() + rect.width() * (i + 1) as f32 / count as f32
+                                        - 4.0,
+                                )
+                        })
+                        .collect::<Vec<_>>()
                 };
                 let mut day = None;
                 for event in &self.events {
@@ -415,15 +520,20 @@ impl CalendarPanel {
                             .color(theme.ui.text_secondary),
                         );
                         ui.separator();
-                        let (header, _) = ui.allocate_exact_size(
-                            vec2(ui.available_width(), ROW_HEIGHT),
-                            Sense::hover(),
-                        );
-                        for (rect, title) in figures(header)
-                            .into_iter()
-                            .zip(["Actual", "Forecast", "Prior"])
-                        {
-                            cell(ui, rect, title, true, theme.ui.text_secondary);
+                        if !columns.is_empty() {
+                            let (header, _) = ui.allocate_exact_size(
+                                vec2(ui.available_width(), ROW_HEIGHT),
+                                Sense::hover(),
+                            );
+                            for (rect, title) in figures(header).into_iter().zip(&columns) {
+                                cell(
+                                    ui,
+                                    rect,
+                                    title.label(self.kind),
+                                    true,
+                                    theme.ui.text_secondary,
+                                );
+                            }
                         }
                     }
                     let opens = event.description.is_some();
@@ -433,8 +543,17 @@ impl CalendarPanel {
                     } else {
                         Sense::hover()
                     };
-                    let (rect, response) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), 2.0 * ROW_HEIGHT), sense);
+                    let (rect, response) = ui.allocate_exact_size(
+                        vec2(
+                            ui.available_width(),
+                            if columns.is_empty() {
+                                ROW_HEIGHT
+                            } else {
+                                2.0 * ROW_HEIGHT
+                            },
+                        ),
+                        sense,
+                    );
                     if response.hovered() {
                         ui.painter().rect_filled(rect, 0.0, theme.ui.btn_bg_hover);
                     }
@@ -486,12 +605,12 @@ impl CalendarPanel {
                     cell(ui, title_rect, &title, false, theme.ui.text);
                     for (rect, value) in figures(rect.with_min_y(rect.top() + ROW_HEIGHT))
                         .into_iter()
-                        .zip([&event.actual, &event.forecast, &event.prior])
+                        .zip(&columns)
                     {
                         cell(
                             ui,
                             rect,
-                            value.as_deref().unwrap_or("-"),
+                            value.value(event).unwrap_or("-"),
                             true,
                             theme.ui.text,
                         );
@@ -664,6 +783,20 @@ mod tests {
     fn ranges_cover_whole_local_days_and_monday_weeks() {
         let at = |text: &str| text.parse::<DateTime<Utc>>().unwrap();
         for (zone, now, range, from, to) in [
+            (
+                "UTC",
+                "2026-10-21T15:30:00Z",
+                CalendarRange::LastWeek,
+                "2026-10-12T00:00:00Z",
+                "2026-10-19T00:00:00Z",
+            ),
+            (
+                "America/New_York",
+                "2026-11-04T12:00:00Z",
+                CalendarRange::LastWeek,
+                "2026-10-26T04:00:00Z",
+                "2026-11-02T05:00:00Z",
+            ),
             (
                 "UTC",
                 "2026-10-21T15:30:00Z",
@@ -883,5 +1016,104 @@ mod tests {
         assert_eq!(query.kind, CalendarKind::Earnings);
         assert!(query.categories.is_empty());
         assert!(h.query_by_label("1 categories").is_none());
+    }
+
+    /// Each company calendar names its own figures, keeps a partially missing column aligned
+    /// and hides columns missing from the whole answer. Economic columns remain unchanged.
+    #[test]
+    fn calendar_kinds_show_their_figures_and_omit_empty_columns() {
+        for (kind, expected, absent) in [
+            (
+                CalendarKind::Economic,
+                vec![("Actual", "1.2"), ("Forecast", "1.1"), ("Prior", "1.0")],
+                vec!["Revenue", "Offer price"],
+            ),
+            (
+                CalendarKind::Earnings,
+                vec![
+                    ("EPS", "1.2"),
+                    ("EPS estimate", "1.1"),
+                    ("Prior EPS", "1.0"),
+                    ("Revenue", "12B"),
+                    ("Revenue estimate", "11B"),
+                    ("Market cap", "120B"),
+                    ("Surprise", "+9.09%"),
+                ],
+                vec!["Actual", "Forecast", "Yield"],
+            ),
+            (
+                CalendarKind::Dividends,
+                vec![
+                    ("Amount", "1.2"),
+                    ("Yield", "3.2%"),
+                    ("Payment date", "Nov 30, 2026"),
+                ],
+                vec!["Forecast", "Prior", "Revenue"],
+            ),
+            (
+                CalendarKind::Ipos,
+                vec![
+                    ("Offer price", "1.2"),
+                    ("Deal amount", "500M"),
+                    ("Shares offered", "25M"),
+                    ("Market cap", "120B"),
+                    ("Exchange", "XNAS"),
+                ],
+                vec!["Actual", "Forecast", "Revenue"],
+            ),
+        ] {
+            let mut panel = CalendarPanel::new();
+            panel.kind = kind;
+            let mut event =
+                CalendarEvent::new("report", kind, DateTime::UNIX_EPOCH, "Company report");
+            event.actual = Some("1.2".into());
+            event.forecast = Some("1.1".into());
+            event.prior = Some("1.0".into());
+            event.revenue = Some("12B".into());
+            event.revenue_forecast = Some("11B".into());
+            event.market_cap = Some("120B".into());
+            event.surprise = Some("+9.09%".into());
+            event.dividend_yield = Some("3.2%".into());
+            event.payment_date = Some("Nov 30, 2026".into());
+            event.deal_amount = Some("500M".into());
+            event.shares_offered = Some("25M".into());
+            event.exchange = Some("XNAS".into());
+            panel.events = vec![
+                event,
+                CalendarEvent::new("unknown", kind, DateTime::UNIX_EPOCH, "Not yet reported"),
+            ];
+            let mut h = Harness::builder()
+                .with_size(vec2(1100.0, 560.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, panel: &mut CalendarPanel| {
+                        panel.show(ui);
+                    },
+                    panel,
+                );
+            h.run();
+            for (heading, value) in expected {
+                h.get_by_role_and_label(egui::Role::Label, heading);
+                h.get_by_role_and_label(egui::Role::Label, value);
+            }
+            for heading in absent {
+                assert!(
+                    h.query_by_role_and_label(egui::Role::Label, heading)
+                        .is_none(),
+                    "{kind:?}: {heading}"
+                );
+            }
+            assert!(h.query_all_by_value("-").next().is_some());
+            h.state_mut().events.remove(0);
+            h.run();
+            if kind != CalendarKind::Economic {
+                for figure in Figure::for_kind(kind) {
+                    assert!(
+                        h.query_by_role_and_label(egui::Role::Label, figure.label(kind))
+                            .is_none()
+                    );
+                }
+            }
+        }
     }
 }

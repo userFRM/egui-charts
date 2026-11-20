@@ -168,6 +168,8 @@ impl CalendarQuery {
 /// `actual`, `forecast` and `prior` are the reported figure, the consensus and the previous
 /// figure: the release for an economic event, the earnings per share for earnings, the amount
 /// per share for a dividend and the offer price for an IPO. Leave unknown figures `None`.
+/// Company calendars also accept the optional figures below; columns absent from the entire
+/// answer are hidden. All figures and dates are formatted by the host.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct CalendarEvent {
@@ -197,6 +199,24 @@ pub struct CalendarEvent {
     pub forecast: Option<String>,
     /// Previous figure, formatted by the host, when available.
     pub prior: Option<String>,
+    /// Reported revenue, for earnings.
+    pub revenue: Option<String>,
+    /// Expected revenue, for earnings.
+    pub revenue_forecast: Option<String>,
+    /// Company capitalization, for earnings or an IPO.
+    pub market_cap: Option<String>,
+    /// Reported earnings compared with the estimate, for earnings.
+    pub surprise: Option<String>,
+    /// Dividend payout relative to the share price, for dividends.
+    pub dividend_yield: Option<String>,
+    /// Scheduled payment date, for dividends.
+    pub payment_date: Option<String>,
+    /// Planned capital raise, for an IPO.
+    pub deal_amount: Option<String>,
+    /// Number of shares offered, for an IPO.
+    pub shares_offered: Option<String>,
+    /// Listing venue, for an IPO.
+    pub exchange: Option<String>,
 }
 
 impl CalendarEvent {
@@ -220,6 +240,15 @@ impl CalendarEvent {
             actual: None,
             forecast: None,
             prior: None,
+            revenue: None,
+            revenue_forecast: None,
+            market_cap: None,
+            surprise: None,
+            dividend_yield: None,
+            payment_date: None,
+            deal_amount: None,
+            shares_offered: None,
+            exchange: None,
         }
     }
 }
