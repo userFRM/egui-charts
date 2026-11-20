@@ -83,7 +83,8 @@ struct NewsAlert {
 /// show in the zone given to [`set_timezone`](Self::set_timezone), UTC until set. Call
 /// [`poll`](Self::poll) each frame, then [`show`](Self::show) while the panel is open.
 /// With the keyboard, Up and Down move between stories, Enter opens one and Escape returns to
-/// the list.
+/// the list. Home and End reach the first and last headline; Page Up, Page Down and Space page
+/// through the headlines, with Shift+Space paging back.
 /// Named alerts keep the current filter, including its symbols, through storage. Call
 /// [`refresh`](Self::refresh) when the host learns of new stories, even while hidden, and drain
 /// [`take_notifications`](Self::take_notifications) after polling for host delivery. Historical
@@ -780,6 +781,7 @@ impl NewsPanel {
                     if response
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
+                        && !(focused && ui.input(|i| i.key_pressed(egui::Key::Space)))
                     {
                         self.open = Some(story.id.clone());
                         self.focus_back = focused;
@@ -789,12 +791,44 @@ impl NewsPanel {
                 if let Some(at) =
                     ui.memory(|m| responses.iter().position(|(id, _)| m.has_focus(*id)))
                 {
-                    let step = ui.input_mut(|i| {
-                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) as isize
-                            - i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) as isize
+                    let (step, page, home, end) = ui.input_mut(|i| {
+                        let step = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
+                            as isize
+                            - i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) as isize;
+                        let page = i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown)
+                            as isize
+                            + i.consume_key(egui::Modifiers::NONE, egui::Key::Space) as isize
+                            - i.consume_key(egui::Modifiers::NONE, egui::Key::PageUp) as isize
+                            - i.consume_key(egui::Modifiers::SHIFT, egui::Key::Space) as isize;
+                        (
+                            step,
+                            page,
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::Home),
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::End),
+                        )
                     });
-                    if step != 0 {
-                        let next = at.saturating_add_signed(step).min(responses.len() - 1);
+                    if step != 0 || page != 0 || home || end {
+                        let last = responses.len() - 1;
+                        let next = if home {
+                            0
+                        } else if end {
+                            last
+                        } else if page != 0 {
+                            let y = responses[at].1.top() + ui.clip_rect().height() * page as f32;
+                            if page > 0 {
+                                responses
+                                    .iter()
+                                    .position(|(_, rect)| rect.top() >= y)
+                                    .unwrap_or(last)
+                            } else {
+                                responses
+                                    .iter()
+                                    .rposition(|(_, rect)| rect.top() <= y)
+                                    .unwrap_or(0)
+                            }
+                        } else {
+                            at.saturating_add_signed(step).min(last)
+                        };
                         let (id, rect) = responses[next];
                         ui.memory_mut(|m| {
                             m.request_focus(id);
@@ -1249,6 +1283,13 @@ mod tests {
             (egui::Key::ArrowDown, "Second"),
             (egui::Key::ArrowDown, "Third"),
             (egui::Key::ArrowDown, "Third"),
+            (egui::Key::ArrowUp, "Second"),
+            (egui::Key::Home, "First"),
+            (egui::Key::PageDown, "Third"),
+            (egui::Key::PageUp, "First"),
+            (egui::Key::End, "Third"),
+            (egui::Key::Home, "First"),
+            (egui::Key::Space, "Third"),
             (egui::Key::ArrowUp, "Second"),
         ] {
             h.key_press(key);
