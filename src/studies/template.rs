@@ -1603,12 +1603,36 @@ mod tests {
             let mut restored = saved.create().unwrap();
             let inputs = restored.inputs();
             for (id, value) in &saved.inputs {
+                let expected = if saved.name == "Trading Sessions" {
+                    let clock = |hour, minute| {
+                        InputValue::TimeOfDay(
+                            chrono::NaiveTime::from_hms_opt(hour, minute, 0).unwrap(),
+                        )
+                    };
+                    match id.as_str() {
+                        "start [0]" => clock(9, 0),
+                        "end [0]" => clock(15, 0),
+                        "start [1]" => clock(8, 30),
+                        "end [1]" => clock(16, 30),
+                        "start [2]" => clock(9, 30),
+                        "end [2]" => clock(16, 0),
+                        "zone [0]" | "zone [1]" | "zone [2]" => {
+                            let InputValue::Text(zone) = value else {
+                                panic!("a legacy session zone is text");
+                            };
+                            InputValue::TimeZone(zone.clone())
+                        }
+                        _ => value.clone(),
+                    }
+                } else {
+                    value.clone()
+                };
                 assert_eq!(
                     inputs
                         .iter()
                         .find(|input| input.id == *id)
                         .map(|input| &input.value),
-                    Some(value),
+                    Some(&expected),
                     "{} {id}",
                     saved.name
                 );
