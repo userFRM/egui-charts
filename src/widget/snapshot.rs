@@ -318,6 +318,7 @@ impl Chart {
                 let mut settings = ChartSettingsState::from_chart(self);
                 settings.adjust_for_dividends = self.dividend_adjusted();
                 settings.extended_hours = None;
+                settings.overnight_hours = None;
                 settings
             },
             config: Some(self.config.clone()),
@@ -492,8 +493,9 @@ impl Chart {
         self.main_series_style.alerts = snapshot.main_series_alerts;
         self.main_series_style.display_format = snapshot.main_series_display_format;
         let mut settings = snapshot.settings.clone();
-        // The snapshot's own field holds the session, set above.
+        // The snapshot's own fields hold the hours, set above.
         settings.extended_hours = None;
+        settings.overnight_hours = None;
         // Layouts saved before a precision could be chosen hold the one shown, which followed
         // the next instrument; the saved scale holds the chosen decimals or fraction.
         settings.precision = snapshot.price_scale.as_ref().map_or(
@@ -1835,6 +1837,24 @@ mod tests {
         restored.apply_synced_time_scale(99.0, 4.0);
         assert_eq!(restored.get_time_scale_state(), (12.0, 4.0));
         restored.apply_synced_time_scale(0.25, 4.0);
+        // Older layouts used the shared fill for both phases and carried no background settings.
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let saved = &mut older["charts"][0];
+        saved["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("session_background");
+        saved["config"]["premarket_color"] = serde_json::Value::Null;
+        saved["config"]["postmarket_color"] = serde_json::Value::Null;
+        let older: SavedLayout = serde_json::from_value(older).unwrap();
+        let mut legacy = Chart::new(BarData::new());
+        legacy.restore(&older.charts[0]).unwrap();
+        assert_eq!(legacy.config().premarket_color, None);
+        assert_eq!(legacy.config().postmarket_color, None);
+        assert_eq!(
+            legacy.config().extended_hours_color,
+            chart.config().extended_hours_color
+        );
         assert_eq!(restored.config(), chart.config());
         assert_eq!(restored.chart_options(), chart.chart_options());
         assert_eq!(

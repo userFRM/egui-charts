@@ -1870,6 +1870,81 @@ mod tests {
         ));
     }
 
+    /// A crossing follows the configured ray's stable slot through drawing and alert restore,
+    /// including an older bar prepended while the drawing was stored.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn an_alert_on_a_fan_ray_fires_on_a_crossing_and_keeps_its_ray_when_restored() {
+        use crate::drawings::persistence::{drawing_to_stored, stored_to_drawing};
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType, GannConfig, GannLevel};
+        use crate::scales::PriceScaleMode;
+        let mut drawing = Drawing::new(9, DrawingToolType::GannFan);
+        drawing.stored_id = Some("fan".into());
+        drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(4.0, 104.0)];
+        let mut config = GannConfig::for_tool(DrawingToolType::GannFan);
+        config.fan_ratios = [2.0, 1.0, 0.5].map(|v| GannLevel::new(v, [0; 4])).to_vec();
+        config.fan_ratios[1].visible = false;
+        drawing.gann = Some(config);
+        assert_eq!(
+            drawing.alert_source(2),
+            AlertSource::Drawing("fan#2".into())
+        );
+        let resolve = |drawing: &Drawing, source: &AlertSource, bar: usize| {
+            let level = drawing.alert_level(source)?;
+            drawing
+                .alert_levels(bar as f64, PriceScaleMode::Normal)
+                .into_iter()
+                .find(|(index, ..)| *index == level)
+                .map(|(.., price)| price)
+        };
+        let host = Host::new(vec![alert(
+            AlertCondition::Compare {
+                other: drawing.alert_source(2),
+                comparison: AlertComparison::Crossing,
+            },
+            AlertFrequency::EveryTime,
+        )]);
+        let bars: Vec<_> = [99.0, 100.0, 102.0, 103.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, close)| bar(i as i64, close, 1.0))
+            .collect();
+        for n in 0..bars.len() {
+            host.engine.update(
+                "SYM",
+                None,
+                Timeframe::Min1,
+                &bars[..=n],
+                time(1_000 + n as i64),
+                |source, bar| resolve(&drawing, source, bar),
+            );
+        }
+        assert_eq!(host.fired(), [102.0]);
+        let saved = serde_json::to_value(&host.engine.alerts()[0]).unwrap();
+        let stored = drawing_to_stored(&drawing, |i| (i * 60_000.0) as i64);
+        let restored = stored_to_drawing(&stored, |t| t as f32 / 60_000.0 + 1.0, 3);
+        assert_eq!(
+            restored.alert_source(2),
+            AlertSource::Drawing("fan#2".into())
+        );
+        let host = Host::new(vec![serde_json::from_value(saved).unwrap()]);
+        let bars: Vec<_> = std::iter::once(bar(-1, 50.0, 1.0))
+            .chain(bars)
+            .chain(std::iter::once(bar(4, 101.0, 1.0)))
+            .collect();
+        for n in [5, 6] {
+            host.engine.update(
+                "SYM",
+                None,
+                Timeframe::Min1,
+                &bars[..n],
+                time(1_100 + n as i64),
+                |source, bar| resolve(&restored, source, bar),
+            );
+            assert_eq!(host.fired(), if n == 5 { vec![] } else { vec![101.0] });
+        }
+    }
+
     #[test]
     fn crossings_follow_the_previous_value_tick_to_tick() {
         let study = AlertSource::Study {

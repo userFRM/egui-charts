@@ -530,6 +530,21 @@ impl Chart {
             // Capture the removed study before the volume setting's action closes.
             self.remove_series(id);
         }
+        // Turning the volume setting on adds its study on the next frame, so at the study cap the
+        // action leaves the setting off, unless a volume study already on the chart serves it.
+        #[cfg(feature = "studies")]
+        if self.config.show_volume
+            && self
+                .history
+                .pending
+                .as_ref()
+                .and_then(|pending| pending.before.config.as_ref())
+                .is_some_and(|before| !before.show_volume)
+            && self.study_limit_reached()
+            && !self.indicators().any(|(_, study)| study.is_volume())
+        {
+            self.config.show_volume = false;
+        }
         let Some(mut pending) = self.history.pending.take() else {
             return;
         };
