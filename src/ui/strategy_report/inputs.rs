@@ -66,14 +66,23 @@ pub(crate) fn show_input(
         (InputKind::Symbol, InputValue::Symbol(value)) => ui
             .add(egui::TextEdit::singleline(value).hint_text(l10n::text(ui.ctx(), "Chart symbol"))),
         (InputKind::Text, InputValue::Text(value)) => ui.add(egui::TextEdit::singleline(value)),
-        (InputKind::Timeframe, InputValue::Timeframe(value)) => {
-            let response = egui::ComboBox::from_id_salt(&input.id)
-                .selected_text(l10n::text(
+        (InputKind::Timeframe | InputKind::AutoTimeframe(_), InputValue::Timeframe(value)) => {
+            // Unset, the input follows the chart or reads the interval the study picks.
+            let unset = match &input.kind {
+                InputKind::AutoTimeframe(Some(picked)) => l10n::format_text(
                     ui.ctx(),
-                    value.map_or_else(|| "Chart interval".to_owned(), |tf| tf.to_string()),
-                ))
+                    "Auto ({interval})",
+                    &[("interval", l10n::text(ui.ctx(), picked.to_string()))],
+                ),
+                InputKind::AutoTimeframe(None) => l10n::text(ui.ctx(), "Auto"),
+                _ => l10n::text(ui.ctx(), "Chart interval"),
+            };
+            let response = egui::ComboBox::from_id_salt(&input.id)
+                .selected_text(
+                    value.map_or_else(|| unset.clone(), |tf| l10n::text(ui.ctx(), tf.to_string())),
+                )
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(value, None, l10n::text(ui.ctx(), "Chart interval"));
+                    ui.selectable_value(value, None, unset);
                     for tf in Timeframe::all() {
                         ui.selectable_value(value, Some(tf), l10n::text(ui.ctx(), tf.to_string()));
                     }

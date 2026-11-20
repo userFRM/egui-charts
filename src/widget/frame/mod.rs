@@ -408,6 +408,7 @@ impl Chart {
         if self.prev_width.is_some() && !ui.ctx().will_discard() {
             self.pending_visible_range = None;
         }
+        self.restore_history_view(ui.ctx());
         self.record_host_events(ui);
         let needs_info = response.clicked()
             || response.double_clicked()
@@ -688,6 +689,10 @@ impl Chart {
         let drawing_tool_active = self.drawings.active_tool.is_some();
         #[cfg(not(feature = "drawings"))]
         let drawing_tool_active = false;
+        // A drawing tool or the eraser owns the plot's drags, so it ends box-zoom mode.
+        if drawing_tool_active || eraser_mode {
+            self.zoom_mode_active = false;
+        }
         #[cfg(not(feature = "drawings"))]
         let (is_drawing_interaction, drawing_gesture, edit_interaction, marking) =
             (false, false, false, false);
@@ -908,6 +913,7 @@ impl Chart {
             ),
         );
 
+        let view_before_input = self.time_scale_view();
         // Handle double-click to reset axes
         self.handle_double_click(&time_response, time_axis_rect);
 
@@ -965,8 +971,13 @@ impl Chart {
             chart_width,
             self.zoom_mode_active,
         );
+        if self.time_scale_view() != view_before_input {
+            // Pointer navigation replaces an undo still waiting for its bars or axis width.
+            self.history.clear_view_restore();
+        }
+        // Box zoom applies to one selection.
         if self.zoom_just_applied {
-            log::info!("Zoom applied - chart will auto-deactivate zoom mode");
+            self.zoom_mode_active = false;
         }
 
         // Set zoom-in cursor when zoom mode is active
