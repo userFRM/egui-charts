@@ -1,346 +1,183 @@
-//! Drawing interaction service.
+//! Hit testing of drawings, against each tool's geometry and against the shapes painted for
+//! a drawing.
 //!
-//! Provides a self-contained handler for drawing interaction: hit testing
-//! against all visible drawings (with timeframe filtering), handle discovery
-//! and hit testing, handle drag lifecycle, and handle rendering.
-//!
-//! This service can be used standalone (without [`DrawingManager`](crate::drawings::DrawingManager))
-//! for custom interaction implementations.
+//! [`DrawingManager`](crate::drawings::DrawingManager) uses both. Hosts with their own drawing
+//! interaction can call them directly.
 
-use crate::drawings::{Drawing, DrawingOptions, DrawingToolType, HandlePos};
-use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
+use crate::drawings::{Drawing, DrawingToolType};
+use crate::painting::{HIT_TOLERANCE, point_to_segment_distance};
+use egui::{Pos2, Rect};
 
-/// Self-contained interaction handler for chart drawings.
+/// Hit-tests a screen point against all visible drawings, from the top layer down
+/// (descending `series_layer`, `None` first, then descending z-order, and the later drawing
+/// first where both are the same).
 ///
-/// Manages selection state, handle dragging, and hit testing. Unlike
-/// [`DrawingManager`](crate::drawings::DrawingManager) which coordinates all
-/// services, `DrawingInteraction` focuses purely on pointer-based interaction.
-#[derive(Debug)]
-pub struct DrawingInteraction {
-    /// Currently selected drawing ID, or `None`.
-    pub sel_drawing: Option<usize>,
-    /// Handle currently being dragged: `(drawing_id, handle_position)`.
-    pub dragging_handle: Option<(usize, HandlePos)>,
-    /// Snapshot of the drawing state before the current drag began (for undo).
-    drag_old_state: Option<Drawing>,
-}
+/// Returns the ID of the topmost drawing at `point`, or `None` if no drawing
+/// was hit. Respects visibility and per-timeframe visibility filtering.
+/// Uses tool-specific hit testing (line distance, rectangle containment,
+/// Fibonacci level proximity, etc.) with a 5-pixel tolerance.
+pub fn hit_test(point: Pos2, drawings: &[Drawing], timeframe: &str) -> Option<usize> {
+    let hit_distance = HIT_TOLERANCE;
 
-impl Default for DrawingInteraction {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl DrawingInteraction {
-    /// Creates a new interaction handler with no selection and no active drag.
-    pub fn new() -> Self {
-        Self {
-            sel_drawing: None,
-            dragging_handle: None,
-            drag_old_state: None,
+    for drawing in super::in_z_order(drawings).into_iter().rev() {
+        // Skip hidden drawings
+        if !drawing.visible {
+            continue;
         }
-    }
 
-    /// Clears the current drawing selection.
-    pub fn deselect(&mut self) {
-        self.sel_drawing = None;
-    }
+        // Skip drawings not visible on current timeframe
+        if !drawing.timeframe_visibility.is_visible_on(timeframe) {
+            continue;
+        }
 
-    /// Returns the selection handle positions for a drawing, determined by its
-    /// tool type (see [`HandleService::get_handles`](super::HandleService::get_handles)
-    /// for the canonical implementation).
-    pub fn get_handles(&self, drawing: &Drawing) -> Vec<(HandlePos, Pos2)> {
-        super::HandleService::get_handles(drawing)
-    }
-
-    /// Hit-tests a screen point against the handles of a drawing.
-    ///
-    /// Returns `Some(HandlePos)` if the point is within `handle_size * 1.5`
-    /// pixels of a handle center, `None` otherwise.
-    pub fn hit_test_handle(
-        &self,
-        point: Pos2,
-        drawing: &Drawing,
-        handle_size: f32,
-    ) -> Option<HandlePos> {
-        let handles = self.get_handles(drawing);
-        let hit_distance = handle_size * 1.5;
-
-        for (pos, handle_point) in handles {
-            let dist =
-                ((point.x - handle_point.x).powi(2) + (point.y - handle_point.y).powi(2)).sqrt();
-            if dist <= hit_distance {
-                return Some(pos);
+        match drawing.tool_type {
+            DrawingToolType::HorizontalLine => {
+                if !drawing.points.is_empty()
+                    && (point.y - drawing.points[0].y).abs() <= hit_distance
+                {
+                    return Some(drawing.id);
+                }
             }
-        }
-        None
-    }
-
-    /// Begins a handle drag operation, saving the drawing's current state for undo.
-    pub fn start_drag_handle(&mut self, drawing: &Drawing, handle: HandlePos) {
-        self.drag_old_state = Some(drawing.clone());
-        self.dragging_handle = Some((drawing.id, handle));
-    }
-
-    /// Takes the pre-drag drawing state for undo purposes. Consumes the stored
-    /// snapshot, returning `None` on subsequent calls until a new drag begins.
-    pub fn take_drag_old_state(&mut self) -> Option<Drawing> {
-        self.drag_old_state.take()
-    }
-
-    /// Ends the handle drag operation, returning the pre-drag drawing state
-    /// (for undo) and clearing the drag state.
-    pub fn end_drag_handle(&mut self) -> Option<Drawing> {
-        self.dragging_handle = None;
-        self.drag_old_state.take()
-    }
-
-    /// Returns `true` if a handle drag is currently in progress.
-    pub fn is_dragging(&self) -> bool {
-        self.dragging_handle.is_some()
-    }
-
-    /// Returns the current drag target: `(drawing_id, handle_position)`, or
-    /// `None` if no drag is active.
-    pub fn get_drag_target(&self) -> Option<(usize, HandlePos)> {
-        self.dragging_handle
-    }
-
-    /// Renders selection handles for a drawing as filled squares with borders.
-    ///
-    /// The actively dragged handle is highlighted with [`DrawingOptions::handle_sel_color`].
-    pub fn render_handles(
-        &self,
-        painter: &egui::Painter,
-        drawing: &Drawing,
-        options: &DrawingOptions,
-    ) {
-        if !options.show_handles {
-            return;
-        }
-
-        let handles = self.get_handles(drawing);
-        let size = options.handle_size;
-
-        for (pos, point) in handles {
-            let is_dragging = self
-                .dragging_handle
-                .map(|(id, h)| id == drawing.id && h == pos)
-                .unwrap_or(false);
-
-            let color = if is_dragging {
-                Color32::from_rgba_unmultiplied(
-                    options.handle_sel_color[0],
-                    options.handle_sel_color[1],
-                    options.handle_sel_color[2],
-                    options.handle_sel_color[3],
-                )
-            } else {
-                Color32::from_rgba_unmultiplied(
-                    options.handle_color[0],
-                    options.handle_color[1],
-                    options.handle_color[2],
-                    options.handle_color[3],
-                )
-            };
-
-            // Draw handle as filled square with border
-            let rect = Rect::from_center_size(point, egui::vec2(size, size));
-            painter.rect_filled(rect, 1.0, color);
-            painter.rect_stroke(
-                rect,
-                1.0,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.extended.chart_bg,
-                ),
-                StrokeKind::Outside,
-            );
-        }
-    }
-
-    /// Hit-tests a screen point against all visible drawings, from the top layer down
-    /// (descending `series_layer`, `None` first, then descending z-order, and the later drawing
-    /// first where both are the same).
-    ///
-    /// Returns the ID of the topmost drawing at `point`, or `None` if no drawing
-    /// was hit. Respects visibility and per-timeframe visibility filtering.
-    /// Uses tool-specific hit testing (line distance, rectangle containment,
-    /// Fibonacci level proximity, etc.) with a 5-pixel tolerance.
-    pub fn hit_test(&self, point: Pos2, drawings: &[Drawing], timeframe: &str) -> Option<usize> {
-        let hit_distance = 5.0;
-
-        for drawing in super::in_z_order(drawings).into_iter().rev() {
-            // Skip hidden drawings
-            if !drawing.visible {
-                continue;
+            DrawingToolType::VerticalLine => {
+                if !drawing.points.is_empty()
+                    && (point.x - drawing.points[0].x).abs() <= hit_distance
+                {
+                    return Some(drawing.id);
+                }
             }
-
-            // Skip drawings not visible on current timeframe
-            if !drawing.timeframe_visibility.is_visible_on(timeframe) {
-                continue;
+            DrawingToolType::Rect => {
+                if drawing
+                    .rectangle_bounds(Rect::EVERYTHING)
+                    .is_some_and(|rect| rect.contains(point))
+                {
+                    return Some(drawing.id);
+                }
             }
-
-            match drawing.tool_type {
-                DrawingToolType::HorizontalLine => {
-                    if !drawing.points.is_empty()
-                        && (point.y - drawing.points[0].y).abs() <= hit_distance
-                    {
-                        return Some(drawing.id);
-                    }
-                }
-                DrawingToolType::VerticalLine => {
-                    if !drawing.points.is_empty()
-                        && (point.x - drawing.points[0].x).abs() <= hit_distance
-                    {
-                        return Some(drawing.id);
-                    }
-                }
-                DrawingToolType::Rect => {
-                    if drawing
-                        .rectangle_bounds(Rect::EVERYTHING)
-                        .is_some_and(|rect| rect.contains(point))
-                    {
-                        return Some(drawing.id);
-                    }
-                }
-                // Fibonacci tools
-                // The level lines the renderer draws, over the extent it draws them
-                DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension => {
-                    if drawing.points.len() >= 2 {
-                        let config = drawing.fibonacci_config();
-                        let on_level = drawing
-                            .fib_level_x_range(&config, Rect::EVERYTHING)
-                            .contains(point.x)
-                            && config
-                                .visible_levels()
-                                .zip(&drawing.level_ys)
-                                .any(|(level, y)| {
-                                    (point.y - y).abs()
-                                        <= hit_distance
-                                            .max(level.width.unwrap_or(config.level_width) / 2.0)
-                                });
-                        let on_trend = config.trend_visible
-                            && drawing
-                                .points
-                                .windows(2)
-                                .any(|p| point_to_line_distance(point, p[0], p[1]) <= hit_distance);
-                        if on_level || on_trend {
-                            return Some(drawing.id);
-                        }
-                    }
-                }
-                DrawingToolType::FibonacciTimeZones | DrawingToolType::TrendBasedFibTime => {
+            // Fibonacci tools
+            // The level lines the renderer draws, over the extent it draws them
+            DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension => {
+                if drawing.points.len() >= 2 {
                     let config = drawing.fibonacci_config();
-                    let on_level = config.visible_levels().any(|level| {
-                        drawing
-                            .fibonacci_time_level_x(level.value)
-                            .is_some_and(|x| {
-                                (point.x - x).abs()
+                    let on_level = drawing
+                        .fib_level_x_range(&config, Rect::EVERYTHING)
+                        .contains(point.x)
+                        && config
+                            .visible_levels()
+                            .zip(&drawing.level_ys)
+                            .any(|(level, y)| {
+                                (point.y - y).abs()
                                     <= hit_distance
                                         .max(level.width.unwrap_or(config.level_width) / 2.0)
-                            })
-                    });
+                            });
                     let on_trend = config.trend_visible
-                        && drawing.points.windows(2).any(|p| {
-                            point_to_line_distance(point, p[0], p[1])
-                                <= hit_distance.max(drawing.stroke_width / 2.0)
-                        });
+                        && drawing
+                            .points
+                            .windows(2)
+                            .any(|p| point_to_segment_distance(point, p[0], p[1]) <= hit_distance);
                     if on_level || on_trend {
                         return Some(drawing.id);
                     }
                 }
-                DrawingToolType::FibonacciChannel => {
-                    // Extended levels are cut at a box around the anchors and the point, as below.
-                    let reach = Rect::from_points(&drawing.points)
-                        .union(Rect::from_pos(point))
-                        .expand(2.0 * hit_distance);
-                    if drawing
-                        .fib_channel_level_lines(reach)
-                        .is_some_and(|(config, lines)| {
-                            lines
-                                .iter()
-                                .zip(config.visible_levels())
-                                .any(|(&[a, b], level)| {
-                                    point_to_line_distance(point, a, b)
-                                        <= hit_distance
-                                            .max(level.width.unwrap_or(config.level_width) / 2.0)
-                                })
+            }
+            DrawingToolType::FibonacciTimeZones | DrawingToolType::TrendBasedFibTime => {
+                let config = drawing.fibonacci_config();
+                let on_level = config.visible_levels().any(|level| {
+                    drawing
+                        .fibonacci_time_level_x(level.value)
+                        .is_some_and(|x| {
+                            (point.x - x).abs()
+                                <= hit_distance.max(level.width.unwrap_or(config.level_width) / 2.0)
                         })
+                });
+                let on_trend = config.trend_visible
+                    && drawing.points.windows(2).any(|p| {
+                        point_to_segment_distance(point, p[0], p[1])
+                            <= hit_distance.max(drawing.stroke_width / 2.0)
+                    });
+                if on_level || on_trend {
+                    return Some(drawing.id);
+                }
+            }
+            DrawingToolType::FibonacciChannel => {
+                // Extended levels are cut at a box around the anchors and the point, as below.
+                let reach = Rect::from_points(&drawing.points)
+                    .union(Rect::from_pos(point))
+                    .expand(2.0 * hit_distance);
+                if drawing
+                    .fib_channel_level_lines(reach)
+                    .is_some_and(|(config, lines)| {
+                        lines
+                            .iter()
+                            .zip(config.visible_levels())
+                            .any(|(&[a, b], level)| {
+                                point_to_segment_distance(point, a, b)
+                                    <= hit_distance
+                                        .max(level.width.unwrap_or(config.level_width) / 2.0)
+                            })
+                    })
+                {
+                    return Some(drawing.id);
+                }
+            }
+            _ => {
+                // Lines that run to the chart's edge are cut at a box around the anchors and
+                // the point, which holds every part of a line within reach of the point.
+                let reach = Rect::from_points(&drawing.points)
+                    .union(Rect::from_pos(point))
+                    .expand(2.0 * hit_distance);
+                if let Some(outline) = drawing.outline(reach) {
+                    let tolerance = hit_distance.max(outline.width / 2.0);
+                    let on_line = outline
+                        .lines
+                        .iter()
+                        .any(|&[a, b]| point_to_segment_distance(point, a, b) <= tolerance);
+                    if on_line
+                        || outline
+                            .areas
+                            .iter()
+                            .any(|area| convex_contains(area, point))
                     {
                         return Some(drawing.id);
                     }
+                    continue;
                 }
-                _ => {
-                    // Lines that run to the chart's edge are cut at a box around the anchors and
-                    // the point, which holds every part of a line within reach of the point.
-                    let reach = Rect::from_points(&drawing.points)
-                        .union(Rect::from_pos(point))
-                        .expand(2.0 * hit_distance);
-                    if let Some(outline) = drawing.outline(reach) {
-                        let tolerance = hit_distance.max(outline.width / 2.0);
-                        let on_line = outline
-                            .lines
-                            .iter()
-                            .any(|&[a, b]| point_to_line_distance(point, a, b) <= tolerance);
-                        if on_line
-                            || outline
-                                .areas
-                                .iter()
-                                .any(|area| convex_contains(area, point))
-                        {
-                            return Some(drawing.id);
-                        }
-                        continue;
-                    }
-                    // The other tools: proximity to any anchor. A bars pattern draws nothing at its source.
-                    for &p in drawing.points.iter().skip(drawing.first_moved_anchor()) {
-                        let dist = ((point.x - p.x).powi(2) + (point.y - p.y).powi(2)).sqrt();
-                        if dist <= hit_distance * 2.0 {
-                            return Some(drawing.id);
-                        }
+                // The other tools: proximity to any anchor. A bars pattern draws nothing at its source.
+                for &p in drawing.points.iter().skip(drawing.first_moved_anchor()) {
+                    let dist = ((point.x - p.x).powi(2) + (point.y - p.y).powi(2)).sqrt();
+                    if dist <= hit_distance * 2.0 {
+                        return Some(drawing.id);
                     }
                 }
             }
         }
-        None
     }
+    None
+}
 
-    /// Hit-tests the shapes painted for one drawing, including text extents and filled zones.
-    ///
-    /// Pass the clipped shapes emitted by the renderer, excluding selection handles. The
-    /// manager records them during `render_all`; standalone hosts can retain their own paint
-    /// commands. Uses a five-pixel tolerance along strokes and respects every shape's clip.
-    pub fn hit_test_painted(point: Pos2, shapes: &[egui::epaint::ClippedShape]) -> bool {
-        shapes
-            .iter()
-            .any(|s| s.clip_rect.contains(point) && hit_shape(point, &s.shape))
-    }
-
-    /// Hit-tests at `point` and selects the topmost drawing found.
-    ///
-    /// Returns `true` if a drawing was selected, `false` if the click hit empty
-    /// space (which deselects the current selection).
-    pub fn select_at(&mut self, point: Pos2, drawings: &[Drawing], timeframe: &str) -> bool {
-        if let Some(id) = self.hit_test(point, drawings, timeframe) {
-            self.sel_drawing = Some(id);
-            true
-        } else {
-            self.sel_drawing = None;
-            false
-        }
-    }
+/// Hit-tests the shapes painted for one drawing, including text extents and filled zones.
+///
+/// Pass the clipped shapes emitted by the renderer, excluding selection handles. The
+/// manager records them during `render_all`; standalone hosts can retain their own paint
+/// commands. Uses a five-pixel tolerance along strokes and respects every shape's clip.
+pub fn hit_test_painted(point: Pos2, shapes: &[egui::epaint::ClippedShape]) -> bool {
+    shapes
+        .iter()
+        .any(|s| s.clip_rect.contains(point) && hit_shape(point, &s.shape))
 }
 
 /// Selection follows the renderer's primitives, so text layout and data-driven geometry
 /// need no second implementation in the interaction service.
 fn hit_shape(point: Pos2, shape: &egui::Shape) -> bool {
     use egui::Shape;
-    if !shape.visual_bounding_rect().expand(5.0).contains(point) {
+    if !shape
+        .visual_bounding_rect()
+        .expand(HIT_TOLERANCE)
+        .contains(point)
+    {
         return false;
     }
-    let line = |a, b, width: f32| point_to_line_distance(point, a, b) <= 5.0_f32.max(width / 2.0);
+    let line =
+        |a, b, width: f32| point_to_segment_distance(point, a, b) <= HIT_TOLERANCE.max(width / 2.0);
     let path = |points: &[Pos2], closed: bool, fill: bool, width: f32| {
         (fill && polygon_contains(points, point))
             || (width > 0.0
@@ -369,7 +206,7 @@ fn hit_shape(point: Pos2, shape: &egui::Shape) -> bool {
             let distance = point.distance(c.center);
             (c.fill.a() > 0 && distance <= c.radius)
                 || (!c.stroke.is_empty()
-                    && (distance - c.radius).abs() <= 5.0_f32.max(c.stroke.width / 2.0))
+                    && (distance - c.radius).abs() <= HIT_TOLERANCE.max(c.stroke.width / 2.0))
         }
         Shape::Ellipse(e) => {
             let ring: Vec<_> = (0..64)
@@ -458,35 +295,11 @@ fn convex_contains(area: &[Pos2], point: Pos2) -> bool {
     sides >= 3 && (left || right) && !(left && right)
 }
 
-/// Calculates the perpendicular distance from `point` to the closest point on
-/// the line segment `[line_start, line_end]`.
-///
-/// The projection is clamped to the segment endpoints. Returns the Euclidean
-/// distance to `line_start` if the segment is degenerate (zero-length).
-pub fn point_to_line_distance(point: Pos2, line_start: Pos2, line_end: Pos2) -> f32 {
-    let dx = line_end.x - line_start.x;
-    let dy = line_end.y - line_start.y;
-    let len_sq = dx * dx + dy * dy;
-
-    if len_sq < 1e-6 {
-        // Line is a point
-        return ((point.x - line_start.x).powi(2) + (point.y - line_start.y).powi(2)).sqrt();
-    }
-
-    // Project point onto line
-    let t = ((point.x - line_start.x) * dx + (point.y - line_start.y) * dy) / len_sq;
-    let t = t.clamp(0.0, 1.0);
-
-    let proj_x = line_start.x + t * dx;
-    let proj_y = line_start.y + t * dy;
-
-    ((point.x - proj_x).powi(2) + (point.y - proj_y).powi(2)).sqrt()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::drawings::ChartPoint;
+    use egui::Color32;
 
     /// The glyph box is about [0, w] x [0, h] from the text's position. Turned 45 degrees clockwise,
     /// the upright box around it has its top-right corner at about (w c, 0), with c = cos 45. Turned
@@ -496,7 +309,7 @@ mod tests {
         use egui::epaint::{ClippedShape, TextShape};
         let pos = Pos2::new(100., 100.);
         let hits = |shape: &TextShape, point: Pos2| {
-            DrawingInteraction::hit_test_painted(
+            hit_test_painted(
                 point,
                 &[ClippedShape::new(
                     Rect::EVERYTHING,
@@ -526,35 +339,15 @@ mod tests {
             .drop_without_applying_deltas();
     }
 
-    #[test]
-    fn test_point_to_line_distance() {
-        // Point on line
-        let dist = point_to_line_distance(
-            Pos2::new(50.0, 50.0),
-            Pos2::new(0.0, 0.0),
-            Pos2::new(100.0, 100.0),
-        );
-        assert!(dist < 0.01);
-
-        // Point perpendicular to line
-        let dist = point_to_line_distance(
-            Pos2::new(50.0, 60.0),
-            Pos2::new(0.0, 50.0),
-            Pos2::new(100.0, 50.0),
-        );
-        assert!((dist - 10.0).abs() < 0.01);
-    }
-
     /// Anchors at y 400 then 100: the 23.6% level is at 100 + 300 * 0.236 = 170.8, or at
     /// 400 - 300 * 0.236 = 329.2 when reversed.
     #[test]
     fn fib_retracement_hit_follows_level_orientation() {
-        let interaction = DrawingInteraction::new();
         let mut fib = Drawing::new(7, DrawingToolType::FibonacciRetracement);
         fib.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 400.0)];
         let hit = |fib: &mut Drawing, y| {
             fib.update_screen_coords(|bar| bar * 30.0, |price| 500.0 - price as f32);
-            interaction.hit_test(Pos2::new(150.0, y), std::slice::from_ref(fib), "1D")
+            hit_test(Pos2::new(150.0, y), std::slice::from_ref(fib), "1D")
         };
 
         assert_eq!(hit(&mut fib, 170.8), Some(7));
@@ -570,7 +363,6 @@ mod tests {
     #[test]
     fn fib_level_hits_follow_the_price_scale() {
         use crate::drawings::{FibonacciConfig, FibonacciLevel};
-        let interaction = DrawingInteraction::new();
         for (tool, logarithmic, ratio, want) in [
             (DrawingToolType::FibonacciRetracement, false, 0.5, 505.0),
             (DrawingToolType::FibonacciRetracement, false, 0.99, 990.1),
@@ -621,8 +413,7 @@ mod tests {
                 });
                 fib.update_screen_coords(|bar| bar * 30.0, price_to_y);
                 let y = price_to_y(want);
-                let hit =
-                    interaction.hit_test(Pos2::new(150.0, y), std::slice::from_ref(&fib), "1D");
+                let hit = hit_test(Pos2::new(150.0, y), std::slice::from_ref(&fib), "1D");
                 assert_eq!(
                     hit,
                     Some(7),
@@ -689,7 +480,6 @@ mod tests {
     #[test]
     fn fib_drawings_are_hit_along_the_levels_they_draw() {
         use crate::drawings::FibonacciConfig;
-        let interaction = DrawingInteraction::new();
         let extended = || {
             Some(FibonacciConfig {
                 extend_right: true,
@@ -796,7 +586,7 @@ mod tests {
             }
             fib.update_screen_coords(|bar| bar * 30.0, |price| 500.0 - price as f32);
             let extend = fib.fib_config.as_ref().is_some_and(|c| c.extend_right);
-            let got = interaction.hit_test(Pos2::new(x, y), std::slice::from_ref(&fib), "1D");
+            let got = hit_test(Pos2::new(x, y), std::slice::from_ref(&fib), "1D");
             if got != want {
                 wrong.push(format!(
                     "{tool:?} extend_right {extend} at ({x}, {y}): got {got:?}, want {want:?}"
@@ -810,7 +600,6 @@ mod tests {
     /// `update_screen_coords`; until then no tool is hit, and none panics.
     #[test]
     fn drawings_without_screen_points_are_not_hit() {
-        let interaction = DrawingInteraction::new();
         let hit: Vec<_> = DrawingToolType::all()
             .iter()
             .filter(|&&tool| {
@@ -818,9 +607,7 @@ mod tests {
                 drawing.chart_points = (0..5)
                     .map(|i| ChartPoint::new(i as f32, 100.0 + f64::from(i)))
                     .collect();
-                interaction
-                    .hit_test(Pos2::new(1.0, 1.0), std::slice::from_ref(&drawing), "1D")
-                    .is_some()
+                hit_test(Pos2::new(1.0, 1.0), std::slice::from_ref(&drawing), "1D").is_some()
             })
             .collect();
         assert!(hit.is_empty(), "hit without screen points: {hit:?}");
@@ -852,7 +639,6 @@ mod tests {
     #[test]
     fn drawings_are_hit_along_what_they_draw() {
         use DrawingToolType as T;
-        let interaction = DrawingInteraction::new();
         // (tool, point, expected hit, anchors)
         let cases = [
             (
@@ -1048,7 +834,7 @@ mod tests {
             }
             drawing.points = anchors.iter().map(|&(x, y)| Pos2::new(x, y)).collect();
             (drawing.extend_left, drawing.extend_right) = (true, true);
-            let got = interaction.hit_test(Pos2::new(x, y), std::slice::from_ref(&drawing), "1D");
+            let got = hit_test(Pos2::new(x, y), std::slice::from_ref(&drawing), "1D");
             if got != want {
                 wrong.push(format!(
                     "{tool:?} at ({x}, {y}): got {got:?}, want {want:?}"
@@ -1056,22 +842,5 @@ mod tests {
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    }
-
-    #[test]
-    fn test_selection() {
-        let mut interaction = DrawingInteraction::new();
-        let mut drawing = Drawing::new(5, DrawingToolType::HorizontalLine);
-        drawing.points = vec![Pos2::new(0.0, 100.0)];
-        let drawings = [drawing];
-        let hit = Pos2::new(50.0, 102.0);
-        assert!(interaction.select_at(hit, &drawings, "1D"));
-        assert_eq!(interaction.sel_drawing, Some(5));
-        assert!(!interaction.select_at(Pos2::new(50.0, 150.0), &drawings, "1D"));
-        assert_eq!(interaction.sel_drawing, None);
-        assert!(interaction.select_at(hit, &drawings, "1D"));
-        assert_eq!(interaction.sel_drawing, Some(5));
-        interaction.deselect();
-        assert_eq!(interaction.sel_drawing, None);
     }
 }

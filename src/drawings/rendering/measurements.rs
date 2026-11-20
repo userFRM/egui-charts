@@ -961,7 +961,7 @@ mod tests {
     /// Every range readout and style reaches the painted shapes; extensions share their hit area.
     #[test]
     fn range_settings_reach_the_card_text_colours_and_edges() {
-        use crate::drawings::services::DrawingInteraction;
+        use crate::drawings::services::hit_test;
         use crate::drawings::{FontWeight, RangeSettings};
         use crate::theme::{Theme, apply_to_egui};
         use egui::Shape;
@@ -1206,11 +1206,7 @@ mod tests {
                     }
                     for (y, on) in [(50.0, top), (350.0, bottom)] {
                         assert_eq!(
-                            DrawingInteraction::new().hit_test(
-                                Pos2::new(10.0, y),
-                                std::slice::from_ref(&drawing),
-                                "1D"
-                            ),
+                            hit_test(Pos2::new(10.0, y), std::slice::from_ref(&drawing), "1D"),
                             (extended && on && border).then_some(1),
                             "{tool:?} hit {top}/{bottom}/{border}/{y}"
                         );
