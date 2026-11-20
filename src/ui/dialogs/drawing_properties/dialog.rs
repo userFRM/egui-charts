@@ -254,6 +254,7 @@ impl DrawingPropertiesDialog {
                 drawing.ghost_feed = old.ghost_feed;
                 drawing.bars_pattern = old.bars_pattern;
                 drawing.projection = old.projection;
+                drawing.table = old.table;
                 // Only the opacity is previewed; a corner drag may have resized the frame since.
                 if let Some(image) = &mut drawing.image {
                     image.opacity = old.image.map_or(255, |c| c.opacity);

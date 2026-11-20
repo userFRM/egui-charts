@@ -633,16 +633,20 @@ impl DrawingManager {
             {
                 return;
             }
+            let table_edge = matches!(
+                handle,
+                HandlePos::Column(_) | HandlePos::Row(_) | HandlePos::BottomRight
+            );
             // Size and rotation handles follow the pointer rather than a bar's price.
             let free = handle != HandlePos::Middle
                 && self.drawings.iter().any(|d| {
                     d.id == id
-                        && matches!(
+                        && (matches!(
                             d.tool_type,
                             DrawingToolType::FontIcon
                                 | DrawingToolType::Sticker
                                 | DrawingToolType::Image
-                        )
+                        ) || (d.tool_type == DrawingToolType::Table && table_edge))
                 });
             let mut snapped = if free {
                 new_pos
@@ -729,6 +733,12 @@ impl DrawingManager {
                     }
                 }
             }
+            // A table sizes itself from the grid it was last painted with.
+            let table_edges = self
+                .drawings
+                .iter()
+                .find(|d| d.id == id && d.tool_type == DrawingToolType::Table && table_edge)
+                .map(|d| self.handle_drawing(d).into_owned().points);
             if let Some(drawing) = self
                 .drawings
                 .iter_mut()
@@ -777,6 +787,8 @@ impl DrawingManager {
                     for (point, before) in drawing.points.iter_mut().zip(&old.points).skip(skip) {
                         *point = *before + moved;
                     }
+                } else if let Some(edges) = &table_edges {
+                    drawing.resize_table(handle, snapped, edges);
                 } else {
                     HandleService::update_handle(
                         drawing,

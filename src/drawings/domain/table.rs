@@ -1,7 +1,7 @@
 //! Settings of a table drawing beyond its cell text.
 
 use super::{LineTextHorizontalAlign, LineTextVerticalAlign};
-use crate::drawings::validation::MAX_TABLE_CELL;
+use crate::drawings::validation::{MAX_TABLE_CELL, MIN_TABLE_CELL};
 use serde::{Deserialize, Serialize};
 
 /// Column widths, row heights, cell styles and placement of a
@@ -71,6 +71,14 @@ fn drawable(size: Option<&Option<f32>>) -> Option<f32> {
         .filter(|size| (1.0..=MAX_TABLE_CELL).contains(size))
 }
 
+/// Sets the size at `index`, with unset sizes before it.
+fn set_size(sizes: &mut Vec<Option<f32>>, index: usize, size: f32) {
+    if sizes.len() <= index {
+        sizes.resize(index + 1, None);
+    }
+    sizes[index] = Some(size);
+}
+
 impl TableConfig {
     /// The width set for `column`, if it is one a table can be drawn with.
     pub(crate) fn column_width(&self, column: usize) -> Option<f32> {
@@ -80,6 +88,34 @@ impl TableConfig {
     /// The height set for `row`, if it is one a table can be drawn with.
     pub(crate) fn row_height(&self, row: usize) -> Option<f32> {
         drawable(self.row_heights.get(row))
+    }
+
+    /// Sets the width of `column`.
+    pub(crate) fn set_column_width(&mut self, column: usize, width: f32) {
+        set_size(&mut self.column_widths, column, width);
+    }
+
+    /// Sets the height of `row`.
+    pub(crate) fn set_row_height(&mut self, row: usize, height: f32) {
+        set_size(&mut self.row_heights, row, height);
+    }
+
+    /// Sets each column to its painted width in `widths` times `scale.x`, and each row to its
+    /// painted height in `heights` times `scale.y`, from 8 to 10,000 points. An axis scaled by
+    /// exactly 1, or by no finite factor, keeps its sizes, so that a table made only taller
+    /// keeps the columns that fit their text.
+    pub(crate) fn scale(&mut self, widths: &[f32], heights: &[f32], scale: egui::Vec2) {
+        let scaled = |size: f32, factor: f32| (size * factor).clamp(MIN_TABLE_CELL, MAX_TABLE_CELL);
+        if scale.x.is_finite() && scale.x != 1.0 {
+            for (column, &width) in widths.iter().enumerate() {
+                self.set_column_width(column, scaled(width, scale.x));
+            }
+        }
+        if scale.y.is_finite() && scale.y != 1.0 {
+            for (row, &height) in heights.iter().enumerate() {
+                self.set_row_height(row, scaled(height, scale.y));
+            }
+        }
     }
 
     /// The style of the cell at `row` and `column`, or the table's for a cell without one.

@@ -171,7 +171,7 @@ struct PaintedDrawing {
     start: usize,
     points: Vec<Pos2>,
     shapes: Vec<ClippedShape>,
-    /// Where the handles of a drawing that fits itself to the bars sit.
+    /// Where the handles of a drawing that fits itself to the bars sit, or a table's grid edges.
     handle_points: Option<Vec<Pos2>>,
     /// The tessellation of `shapes`, made once a second frame paints the same shapes.
     tessellated: Option<Tessellated>,

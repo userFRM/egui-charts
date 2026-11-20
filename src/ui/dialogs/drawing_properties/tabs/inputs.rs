@@ -56,6 +56,7 @@ impl InputsTab {
                 | Tool::ElliottTriangle
                 | Tool::ElliottDoubleCombo
                 | Tool::ElliottTripleCombo
+                | Tool::Table
         )
     }
 
@@ -698,8 +699,68 @@ impl InputsTab {
                     ui.end_row();
                 });
             }
+            Tool::Table => table(ui, drawing),
             _ => {}
         }
+    }
+}
+
+/// The size of a table, the width of each column and the height of each row, as the chart
+/// paints them. A new table size scales every column or every row.
+fn table(ui: &mut Ui, drawing: &mut Drawing) {
+    /// A size of `cells` columns or rows, from 1 point each, so that a size a host set below
+    /// what a drag sets shows unchanged.
+    fn size(value: &mut f32, cells: usize) -> egui::DragValue<'_> {
+        let cells = cells as f32;
+        egui::DragValue::new(value)
+            .range(cells..=cells * crate::drawings::validation::MAX_TABLE_CELL)
+            .max_decimals(1)
+            .suffix(" px")
+    }
+    let mut config = drawing.table_config().into_owned();
+    let layout = drawing.table_layout(ui.painter(), egui::Pos2::ZERO);
+    let sizes =
+        |edges: &[f32]| -> Vec<f32> { edges.windows(2).map(|pair| pair[1] - pair[0]).collect() };
+    let (widths, heights) = (sizes(&layout.xs), sizes(&layout.ys));
+    FormGrid::new("table_inputs").show(ui, |ui| {
+        let (width, height) = (widths.iter().sum::<f32>(), heights.iter().sum::<f32>());
+        let (mut new_width, mut new_height) = (width, height);
+        let label = ui.label(l10n::text(ui.ctx(), "Table size"));
+        ui.label_inputs_by(label.id, |ui| {
+            ui.add(size(&mut new_width, widths.len()));
+            ui.add(size(&mut new_height, heights.len()));
+        });
+        ui.end_row();
+        if new_width != width {
+            config.scale(&widths, &heights, egui::vec2(new_width / width, 1.0));
+        }
+        if new_height != height {
+            config.scale(&widths, &heights, egui::vec2(1.0, new_height / height));
+        }
+        for (name, painted, rows) in [
+            ("Column widths", &widths, false),
+            ("Row heights", &heights, true),
+        ] {
+            let label = ui.label(l10n::text(ui.ctx(), name));
+            ui.label_inputs_by(label.id, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for (index, &painted) in painted.iter().enumerate() {
+                        let mut value = painted;
+                        if ui.add(size(&mut value, 1)).changed() {
+                            if rows {
+                                config.set_row_height(index, value);
+                            } else {
+                                config.set_column_width(index, value);
+                            }
+                        }
+                    }
+                });
+            });
+            ui.end_row();
+        }
+    });
+    if config != *drawing.table_config() {
+        drawing.table = Some(config);
     }
 }
 

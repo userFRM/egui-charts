@@ -4,8 +4,9 @@
 //! tab-separated field.
 
 use crate::drawings::domain::{
-    Drawing, LineTextHorizontalAlign, LineTextVerticalAlign, TableCellStyle, TableConfig,
+    Drawing, HandlePos, LineTextHorizontalAlign, LineTextVerticalAlign, TableCellStyle, TableConfig,
 };
+use crate::drawings::validation::{MAX_TABLE_CELL, MIN_TABLE_CELL};
 use crate::localization as l10n;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, CornerRadius, Pos2, Rect, epaint::StrokeKind};
@@ -64,6 +65,68 @@ impl Drawing {
         self.text
             .clone()
             .unwrap_or_else(|| join(&vec![vec![String::new(); NEW_TABLE.1]; NEW_TABLE.0]))
+    }
+
+    /// The number of rows and columns of the table's text.
+    pub(crate) fn table_shape(&self) -> (usize, usize) {
+        let grid = cells(&self.table_text());
+        (grid.len(), grid[0].len())
+    }
+
+    /// The table's anchor, the top end of the right edge of each column and the left end of the
+    /// bottom edge of each row, as painted: the points the table's handles sit at.
+    pub(crate) fn table_handle_points(&self, painter: &egui::Painter) -> Option<Vec<Pos2>> {
+        let &origin = self.points.first()?;
+        let TableLayout { xs, ys, .. } = self.table_layout(painter, origin);
+        let column_tops = xs[1..].iter().map(|&x| Pos2::new(x, origin.y));
+        let row_lefts = ys[1..].iter().map(|&y| Pos2::new(origin.x, y));
+        Some(
+            std::iter::once(origin)
+                .chain(column_tops)
+                .chain(row_lefts)
+                .collect(),
+        )
+    }
+
+    /// Sizes the table so that the edge `handle` names follows `pos`: a column's right edge sets
+    /// its width, a row's bottom edge its height, and the bottom-right corner scales every
+    /// column and row. `edges` are the points [`Self::table_handle_points`] gave for the last
+    /// paint, which a column's or row's own left or top edge keeps while it is sized. Sizes stay
+    /// from 8 to 10,000 points, and the text keeps its size.
+    pub(crate) fn resize_table(&mut self, handle: HandlePos, pos: Pos2, edges: &[Pos2]) {
+        let (rows, cols) = self.table_shape();
+        if edges.len() != 1 + cols + rows || !pos.is_finite() {
+            return;
+        }
+        let xs: Vec<f32> = std::iter::once(edges[0].x)
+            .chain(edges[1..=cols].iter().map(|edge| edge.x))
+            .collect();
+        let ys: Vec<f32> = std::iter::once(edges[0].y)
+            .chain(edges[1 + cols..].iter().map(|edge| edge.y))
+            .collect();
+        let size = |size: f32| size.clamp(MIN_TABLE_CELL, MAX_TABLE_CELL);
+        match handle {
+            HandlePos::Column(c) if c < cols => self
+                .table
+                .get_or_insert_with(Default::default)
+                .set_column_width(c, size(pos.x - xs[c])),
+            HandlePos::Row(r) if r < rows => self
+                .table
+                .get_or_insert_with(Default::default)
+                .set_row_height(r, size(pos.y - ys[r])),
+            HandlePos::BottomRight => {
+                let painted = |edges: &[f32]| -> Vec<f32> {
+                    edges.windows(2).map(|pair| pair[1] - pair[0]).collect()
+                };
+                let scale = (pos - edges[0]) / egui::vec2(xs[cols] - xs[0], ys[rows] - ys[0]);
+                self.table.get_or_insert_with(Default::default).scale(
+                    &painted(&xs),
+                    &painted(&ys),
+                    scale,
+                );
+            }
+            _ => {}
+        }
     }
 
     /// Whether `draft` holds the same cells as the table's text, so that closing its editor
