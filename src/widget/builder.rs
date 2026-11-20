@@ -207,6 +207,8 @@ impl Chart {
             study_formatters: Default::default(),
             extended_hours: false,
             overnight_hours: false,
+            back_adjust_futures: false,
+            settlement_as_close: true,
             conversion: None,
             measured_axis_width: 0.0,
             last_layout: None,

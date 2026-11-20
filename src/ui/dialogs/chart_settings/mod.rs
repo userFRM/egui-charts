@@ -3093,8 +3093,8 @@ mod tests {
             dialog.open(current);
             load_template(&mut dialog, "Old");
             let shown = dialog.settings();
-            // Older templates keep their last-trade closes, independently of the new default.
-            assert!(!shown.settlement_as_close);
+            // Older templates hold the default futures data choices.
+            assert!(shown.settlement_as_close);
             assert!(!shown.back_adjust_futures);
             assert_eq!(shown.extended_hours, Some(true), "{pixels:?}");
             assert_eq!(shown.overnight_hours, Some(true), "{pixels:?}");
