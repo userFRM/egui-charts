@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::data::{FeedError, inbox::Inbox};
 use crate::icons::icons;
+pub use crate::model::AlertTrigger;
 use crate::model::{Alert, AlertCondition, AlertId, AlertSource, AlertSourceName, AlertStatus};
 use crate::services::{AlertEvent, Alerts, Listener, Notification, Notifications};
 use crate::theme::ThemeExt;
@@ -129,27 +130,6 @@ struct PresentationRestore {
     source_index: usize,
     destination_index: usize,
     inverse: PresentationEdit,
-}
-
-/// One trigger the host reported, retained even after the alert is removed.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct AlertTrigger {
-    /// Host alert identifier.
-    pub id: AlertId,
-    /// The alert's [`display_name`](Alert::display_name) when the trigger arrived, empty if its
-    /// alert was not yet supplied.
-    pub name: String,
-    /// Symbol as known when the trigger arrived, empty if its alert was not yet supplied.
-    pub symbol: String,
-    /// Host trigger time, including triggers missed while the application was closed.
-    pub time: DateTime<Utc>,
-    /// Finite trigger price, if supplied.
-    pub price: Option<f64>,
-    /// The alert's message with its placeholders filled in, empty if there is none.
-    pub message: String,
-    /// The trigger fell outside the alert's notification schedule: logged without a popup.
-    pub silent: bool,
 }
 
 /// Reply key of the inline draft's save, apart from the stream generations and other replies.
@@ -816,6 +796,13 @@ impl AlertsPanel {
                     },
                     toasts,
                 );
+            }
+            AlertEvent::Logged(mut trigger) => {
+                trigger.price = trigger.price.filter(|p| p.is_finite());
+                if trigger.name.is_empty() {
+                    trigger.name = self.name_of(&trigger.id);
+                }
+                self.log_trigger(trigger);
             }
         }
     }
