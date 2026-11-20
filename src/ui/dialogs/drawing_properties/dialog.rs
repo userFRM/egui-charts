@@ -950,6 +950,12 @@ mod tests {
                 };
                 let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;
                 settings.forecast = Some(forecast);
+                let table = crate::drawings::TableConfig {
+                    screen_anchored: true,
+                    column_widths: vec![None, Some(90.0)],
+                    ..Default::default()
+                };
+                settings.table = Some(table.clone());
                 settings.position_target_color = Some([40, 100, 220, 255]);
                 settings.position_stop_color = Some([220, 140, 40, 255]);
                 settings.position_style.border = true;
@@ -1006,6 +1012,7 @@ mod tests {
                     Some(forecast),
                     "{finish}: forecast preview"
                 );
+                assert_eq!(preview.table, Some(table), "{finish}: table preview");
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
                 assert!(!chart.can_undo());
                 assert!(chart.can_redo(), "preview must retain existing redo");
@@ -1078,6 +1085,7 @@ mod tests {
             );
             assert!(restored.elliott_show_wave, "{finish}");
             assert_eq!(restored.forecast, None, "{finish}");
+            assert_eq!(restored.table, None, "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");
             assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0, "{finish}");
             assert_eq!(
