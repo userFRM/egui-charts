@@ -2009,7 +2009,7 @@ impl ChartLayout {
                         egui::CentralPanel::default().show(ui, |ui| {
                             slot_background(ui, ui.max_rect(), chart);
                             let response = render(ui, index, chart);
-                            if focus {
+                            if focus && !response.has_focus() {
                                 response.request_focus();
                             }
                             activate |= response.is_pointer_button_down_on()
@@ -2059,7 +2059,8 @@ impl ChartLayout {
                     let response = render(ui, index, charts[index]);
                     charts[index].layout_link_controls = false;
                     charts[index].layout_inactive = false;
-                    if focus {
+                    // Reselecting a focused canvas must keep its arrow-key filter.
+                    if focus && !response.has_focus() {
                         response.request_focus();
                     }
                     if link_controls {
