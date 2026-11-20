@@ -173,6 +173,9 @@ impl Chart {
         if !self.main_bars_live() || !holds_bars(series, "set_data") {
             return false;
         }
+        if let Some(link) = &mut self.feed_link {
+            link.non_trade_bars = true;
+        }
         self.replace_main_data(bars);
         self.data_set(series);
         true
@@ -265,6 +268,11 @@ impl Chart {
             return false;
         };
         if changed {
+            if series == SeriesId::MAIN
+                && let Some(link) = &mut self.feed_link
+            {
+                link.non_trade_bars = true;
+            }
             self.data_updated(series);
         }
         if let Some(operation) = operation {
@@ -319,6 +327,11 @@ impl Chart {
             return Vec::new();
         };
         if !removed.is_empty() {
+            if series == SeriesId::MAIN
+                && let Some(link) = &mut self.feed_link
+            {
+                link.non_trade_bars = true;
+            }
             self.data_updated(series);
         }
         removed
@@ -817,6 +830,8 @@ impl Chart {
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
         #[cfg(feature = "drawings")]
         let placed = self.placement_pane();
+        #[cfg(feature = "drawings")]
+        let drawings = self.drawings.begin_removal();
         let dependents = self.study_dependents(id);
         let removed = self.remove_one_series(id);
         if removed {
@@ -826,6 +841,8 @@ impl Chart {
         }
         #[cfg(feature = "drawings")]
         self.keep_placement_in(placed);
+        #[cfg(feature = "drawings")]
+        self.drawings.finish_removal(drawings);
         removed
     }
 

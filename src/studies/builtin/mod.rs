@@ -40,7 +40,7 @@
 //! [`Median`], [`VolatilityIndex`]
 //!
 //! ## Price
-//! [`BollingerBars`]
+//! [`BollingerBars`], [`AnalystPriceForecast`]
 //!
 //! ## Volume
 //! [`OnBalanceVolume`], [`VolumeWeightedAvgPrice`], [`MoneyFlowIndex`],
@@ -87,6 +87,9 @@ mod chart_patterns;
 pub use chart_patterns::{
     ChartPatterns, Formation, FormationKind, FormationStatus, PatternDirection, PatternFamily,
 };
+
+mod analyst_price_forecast;
+pub use analyst_price_forecast::AnalystPriceForecast;
 
 mod higher_interval_candles;
 pub use higher_interval_candles::HigherIntervalCandles;

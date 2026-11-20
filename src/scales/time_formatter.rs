@@ -599,6 +599,24 @@ pub enum TimezoneMode {
 }
 
 impl TimezoneMode {
+    /// The wall time this zone shows at `time`; `Local` reads the system zone.
+    #[cfg(feature = "widget")]
+    pub(crate) fn wall_time(&self, time: DateTime<Utc>) -> chrono::NaiveDateTime {
+        match self {
+            Self::Local => crate::model::local_time(chrono::Local, time),
+            _ => crate::model::local_time(self.to_tz().unwrap_or_default(), time),
+        }
+    }
+
+    /// The first instant this zone shows `wall`; a skipped wall time opens at the clock jump.
+    #[cfg(feature = "ui")]
+    pub(crate) fn instant(&self, wall: chrono::NaiveDateTime) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Local => crate::model::local_instant(chrono::Local, wall),
+            _ => crate::model::local_instant(self.to_tz().unwrap_or_default(), wall),
+        }
+    }
+
     /// New York exchange time, with daylight-saving rules (`timezones` feature).
     #[cfg(feature = "timezones")]
     pub fn nyse() -> Self {

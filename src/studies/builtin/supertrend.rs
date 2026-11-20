@@ -88,11 +88,6 @@ impl SuperTrend {
         }
     }
 
-    /// Create with default params (10, 3.0)
-    pub fn default_params() -> Self {
-        Self::new(10, 3.0)
-    }
-
     /// Set colors for bullish and bearish trends
     pub fn with_colors(mut self, bullish: Color32, bearish: Color32) -> Self {
         self.bullish_color = bullish;
@@ -197,6 +192,32 @@ impl Indicator for SuperTrend {
         true
     }
 
+    fn alert_conditions(&self) -> Vec<String> {
+        ["Trend turns up", "Trend turns down", "Trend change"]
+            .map(str::to_owned)
+            .into()
+    }
+
+    fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+        let up = |bar| {
+            if self.values.value(0, bar).is_some() {
+                Some(true)
+            } else if self.values.value(1, bar).is_some() {
+                Some(false)
+            } else {
+                None
+            }
+        };
+        let now = up(bar)?;
+        let before = up(bar.checked_sub(1)?)?;
+        match condition {
+            0 => Some(now && !before),
+            1 => Some(!now && before),
+            2 => Some(now != before),
+            _ => None,
+        }
+    }
+
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
@@ -214,6 +235,10 @@ impl Indicator for SuperTrend {
             plot_type: crate::studies::PlotType::LineWithBreaks,
             visible: true,
         }
+    }
+
+    fn draws_only_plots(&self) -> bool {
+        true
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {

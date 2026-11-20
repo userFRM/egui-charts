@@ -71,13 +71,24 @@ struct State {
     ema: Option<f64>,
 }
 
+const DEFAULT_PERIOD: usize = 9;
+
 impl Default for Volume {
     fn default() -> Self {
-        Self::new(9)
+        Self::new(DEFAULT_PERIOD)
     }
 }
 
 impl Volume {
+    /// The chart's automatic volume columns are derived solely from each displayed bar.
+    #[cfg(feature = "widget")]
+    pub(crate) fn default_replay_display(&self) -> bool {
+        !self.show_average
+            && self.period == DEFAULT_PERIOD
+            && self.average == VolumeAverage::Simple
+            && self.color_rule == VolumeColorRule::Open
+    }
+
     /// Volume with an SMA of `period` bars (zero becomes one) that is off until enabled,
     /// overlaid by default.
     pub fn new(period: usize) -> Self {
@@ -234,6 +245,16 @@ impl Indicator for Volume {
                 self.period
             ),
         ]
+    }
+
+    // The average holds values only while it is shown.
+    fn alert_outputs(&self) -> Vec<(usize, String)> {
+        let outputs = if self.show_average { 3 } else { 2 };
+        self.line_names()
+            .into_iter()
+            .take(outputs)
+            .enumerate()
+            .collect()
     }
 }
 

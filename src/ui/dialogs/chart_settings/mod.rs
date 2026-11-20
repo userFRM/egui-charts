@@ -71,8 +71,13 @@ pub struct SettingsDialog {
     sound_preview: Option<(String, f32)>,
     /// Heatmap, book, individual orders and bubbles offered by the host.
     order_flow_layers: [bool; 4],
+    /// Sampling used to estimate depth history memory and the longest retention offered.
+    depth_config: crate::data::DepthHistoryConfig,
+    release_depth_history: bool,
     /// Whether the host's feed answers analyst price targets for the chart's instrument.
     price_targets_offered: bool,
+    /// Whether regular/extended and overnight hours can be chosen.
+    hours_offered: (bool, bool),
     /// The axis font family the dialog was opened with, shown while the settings hold none.
     opened_font_family: Option<egui::FontFamily>,
     /// The precision the dialog was opened with, listed while the list lacks it.
@@ -106,6 +111,7 @@ struct ColorPickerStates {
     price_target_positive: ColorPickerState,
     price_target_negative: ColorPickerState,
     prev_close_line: ColorPickerState,
+    session_background: [ColorPickerState; 3],
 }
 
 impl Default for SettingsDialog {
@@ -144,6 +150,7 @@ impl SettingsDialog {
                 scales_lines: ColorPickerState::new(settings.scales_appearance.lines_color),
                 alert: ColorPickerState::new(settings.alerts.alert_color),
                 prev_close_line: ColorPickerState::new(Color32::PLACEHOLDER),
+                session_background: Default::default(),
                 symbol_value: ColorPickerState::new(
                     settings
                         .scales_and_lines
@@ -178,7 +185,10 @@ impl SettingsDialog {
             execution_sounds: Vec::new(),
             sound_preview: None,
             order_flow_layers: [true; 4],
+            depth_config: Default::default(),
+            release_depth_history: false,
             price_targets_offered: true,
+            hours_offered: (true, true),
             opened_font_family: None,
             opened_precision: PrecisionMode::Default,
             loaded_margins: (0.0, 0.0),
@@ -223,6 +233,8 @@ impl SettingsDialog {
     /// [`Chart::instrument`](crate::Chart::instrument) again when they change. A missing instrument
     /// hides both; a non-positive, non-finite or missing tick size hides the Order flow tab only.
     /// Before the first call, everything is offered. Hidden controls retain their saved values.
+    /// The Symbol tab omits Session for an instrument without trading hours and offers overnight
+    /// hours with overnight windows or while chosen; no instrument offers regular and extended hours.
     pub fn set_feed_capabilities(
         &mut self,
         capabilities: Option<&crate::data::FeedCapabilities>,
@@ -249,11 +261,22 @@ impl SettingsDialog {
             declares(FeedService::Trades) || declares(FeedService::LiveTrades),
         ];
         self.price_targets_offered = declared(FeedService::PriceTargets);
+        self.hours_offered = (
+            crate::ui::timeframe_toolbar::state::has_trading_hours(instrument),
+            crate::ui::timeframe_toolbar::state::has_overnight_windows(instrument),
+        );
         if !self.order_flow_layers.iter().any(|available| *available)
             && self.active_tab == SettingsTab::OrderFlow
         {
             self.active_tab = SettingsTab::Symbol;
         }
+    }
+
+    /// Supplies depth sampling for the Order flow tab's memory estimate and retention choices.
+    /// Pass `chart.depth_history(SeriesId::MAIN).map(DepthHistory::config)` when opening the
+    /// dialog. `None`, and a dialog before this call, assume default depth sampling.
+    pub fn set_depth_history_config(&mut self, config: Option<&crate::data::DepthHistoryConfig>) {
+        self.depth_config = config.cloned().unwrap_or_default();
     }
 
     /// Open the dialog with the supplied state.
@@ -262,6 +285,7 @@ impl SettingsDialog {
         self.template_menu_open = false;
         self.save_name = None;
         self.sound_preview = None;
+        self.release_depth_history = false;
         self.opened_font_family = settings.scales_appearance.font_family.clone();
         self.opened_precision = settings.precision;
         self.settings = settings;
@@ -451,6 +475,9 @@ impl SettingsDialog {
 
         if let Some((name, volume)) = self.sound_preview.take() {
             return SettingsAction::PreviewSound { name, volume };
+        }
+        if std::mem::take(&mut self.release_depth_history) {
+            return SettingsAction::ClearDepthHistory;
         }
         action
     }
@@ -844,6 +871,11 @@ impl SettingsDialog {
                     .thousands_sep
                     .or(scales.thousands_sep);
                 let extended_hours = template.extended_hours.or(self.settings.extended_hours);
+                let overnight_hours = template.overnight_hours.or(self.settings.overnight_hours);
+                let session_background = template
+                    .session_background
+                    .clone()
+                    .or_else(|| self.settings.session_background.clone());
                 let date_format = template
                     .scales_and_lines
                     .date_format
@@ -857,6 +889,7 @@ impl SettingsDialog {
                 let session_breaks = template
                     .show_session_breaks
                     .or(self.settings.show_session_breaks);
+                let crosshair_lines = template.crosshair_lines.or(self.settings.crosshair_lines);
                 let positive = template
                     .price_target_positive_color
                     .or(self.settings.price_target_positive_color);
@@ -890,7 +923,10 @@ impl SettingsDialog {
                 self.settings.scales_and_lines.use_24_hour = use_24_hour;
                 self.settings.scales_and_lines.weekday_names = weekday_names;
                 self.settings.show_session_breaks = session_breaks;
+                self.settings.crosshair_lines = crosshair_lines;
                 self.settings.extended_hours = extended_hours;
+                self.settings.overnight_hours = overnight_hours;
+                self.settings.session_background = session_background;
                 self.settings.price_target_positive_color = positive;
                 self.settings.price_target_negative_color = negative;
                 self.settings.margins.right_bars = right_bars;
@@ -963,12 +999,14 @@ impl SettingsDialog {
                 chart_type_params: Some(Default::default()),
                 price_source: Some(Default::default()),
                 show_session_breaks: Some(false),
+                crosshair_lines: Some(Default::default()),
                 price_target_positive_color: Some(Color32::PLACEHOLDER),
                 price_target_negative_color: Some(Color32::PLACEHOLDER),
                 ..Default::default()
             };
             // What a new chart holds, where the default settings hold no choice.
             self.settings.extended_hours = Some(false);
+            self.settings.session_background = Some(Default::default());
             self.settings.scales_appearance.font_family = Some(Default::default());
             self.settings.scales_and_lines.price_line_source = Some(Default::default());
             let style = crate::model::SeriesStyle::default();
@@ -1086,6 +1124,10 @@ mod tests {
                 chart.pane_options_mut().separator_color = Some(Color32::GREEN);
                 chart.set_date_format(Some("%d.%m.%Y".into()));
                 let mut options = chart.chart_options().clone();
+                options.crosshair.vert_line_visible = false;
+                options.crosshair.horz_line_visible = false;
+                options.crosshair.vert_label_visible = false;
+                options.crosshair.horz_label_visible = false;
                 options.time_scale.use_24_hour = false;
                 options.time_scale.weekday_names = crate::scales::WeekdayNames::Never;
                 chart.set_chart_options(options);
@@ -1334,7 +1376,14 @@ mod tests {
                     None,
                     "{preset}, templates visible: {templates_visible}, {size:?}: pane separators"
                 );
-                // A new chart keeps a tenth of the pane free above and below, and 2.5 bars after
+                let crosshair = &chart.chart_options().crosshair;
+                assert!(crosshair.vert_line_visible && crosshair.horz_line_visible);
+                assert!(
+                    crosshair.label_visible
+                        && crosshair.vert_label_visible
+                        && crosshair.horz_label_visible
+                );
+                // A new chart keeps a tenth of the pane free above, 8% below, and 2.5 bars after
                 // the last one.
                 let price = chart.state().price_scale().options().scale_margins;
                 assert_eq!(
@@ -1343,7 +1392,7 @@ mod tests {
                         price.bottom,
                         chart.chart_options().time_scale.right_offset
                     ),
-                    (0.1, 0.1, 2.5),
+                    (0.1, 0.08, 2.5),
                     "{preset}: margins"
                 );
             }
@@ -2585,6 +2634,157 @@ mod tests {
         }
     }
 
+    /// Each Canvas switch reaches the painted stroke or axis label and reads back, including
+    /// enabling one label while the chart's master label switch is off.
+    #[test]
+    fn crosshair_parts_are_chosen_in_the_dialog() {
+        use crate::widget::settings::CrosshairVisibility;
+        use crate::widget::test_frames::{chart, frame, shapes};
+        use egui::{Event, Shape};
+        for (master, label, expected) in [
+            (true, "Vertical line", (false, true, true, true)),
+            (true, "Horizontal line", (true, false, true, true)),
+            (true, "Time label", (true, true, false, true)),
+            (true, "Price label", (true, true, true, false)),
+            (false, "Time label", (true, true, true, false)),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+            let mut options = chart.chart_options().clone();
+            options.crosshair.label_visible = master;
+            options.crosshair.vert_label_background_color = Color32::DARK_RED;
+            options.crosshair.horz_label_background_color = Color32::DARK_GREEN;
+            chart.set_chart_options(options);
+            let mut settings = ChartSettingsState::from_chart(&chart);
+            let color = Color32::from_rgb(1, 2, 3);
+            settings.crosshair.color = color;
+            settings.crosshair.line_style = crate::model::LineStyle::Solid;
+            let mut dialog = SettingsDialog::new();
+            dialog.open(settings);
+            dialog.active_tab = SettingsTab::Canvas;
+            let SettingsAction::Apply(settings) = click_through(&mut dialog, &[label, "Ok"]) else {
+                panic!("Ok must apply the settings");
+            };
+            let settings: ChartSettingsState =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let pointer = chart.get_rendered_price_rect().center();
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pointer)]);
+            let line = |vertical| {
+                painted.iter().any(|shape| {
+                    matches!(shape,
+                Shape::LineSegment { points, stroke } if stroke.color == color &&
+                    if vertical { points[0].x == points[1].x } else { points[0].y == points[1].y })
+                })
+            };
+            let fill = |color| {
+                painted
+                    .iter()
+                    .any(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == color))
+            };
+            assert_eq!(
+                (
+                    line(true),
+                    line(false),
+                    fill(Color32::DARK_RED),
+                    fill(Color32::DARK_GREEN)
+                ),
+                expected,
+                "{master} {label}"
+            );
+            assert_eq!(
+                ChartSettingsState::from_chart(&chart).crosshair_lines,
+                Some(CrosshairVisibility {
+                    vertical_line: expected.0,
+                    horizontal_line: expected.1,
+                    time_label: expected.2,
+                    price_label: expected.3,
+                })
+            );
+        }
+    }
+
+    /// Retention edits apply only with Ok; releasing memory is immediate and keeps editing open,
+    /// including while the heatmap is hidden. Cancel returns its action.
+    #[test]
+    fn order_flow_retention_and_release_memory() {
+        use chrono::TimeDelta;
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut dialog = SettingsDialog::new();
+        let config = crate::data::DepthHistoryConfig {
+            columns: 1_000,
+            ..Default::default()
+        };
+        dialog.set_depth_history_config(Some(&config));
+        dialog.open(ChartSettingsState::default());
+        dialog.active_tab = SettingsTab::OrderFlow;
+        let theme = Theme::light();
+        let mut harness = Harness::builder()
+            .with_context_setup(|ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::theme::apply_to_egui(ctx, &Theme::light());
+            })
+            .with_size(Vec2::new(1440.0, 900.0))
+            .build_ui_state(
+                move |ui, (dialog, actions): &mut (SettingsDialog, Vec<SettingsAction>)| {
+                    let action = dialog.show(ui.ctx(), &theme);
+                    if !matches!(action, SettingsAction::None) {
+                        actions.push(action);
+                    }
+                },
+                (dialog, Vec::new()),
+            );
+        harness.run();
+        // An unchanged choice keeps the host's 1,000 columns, rather than restoring 600.
+        harness.get_by_label(if usize::BITS == 64 {
+            "Up to 26.8 MB"
+        } else {
+            "Up to 26.3 MB"
+        });
+        harness
+            .get_by_role_and_label(Role::ComboBox, "History retention")
+            .click();
+        harness.run();
+        harness.get_by_label("1 hour").click();
+        harness.run();
+        harness.get_by_label("Up to 0.4 MB");
+        harness
+            .get_by_role_and_label(Role::Button, "Release memory")
+            .click();
+        harness.run();
+        assert!(matches!(
+            &harness.state().1[..],
+            [SettingsAction::ClearDepthHistory]
+        ));
+        assert!(harness.state().0.is_open);
+        harness.get_by_label("Ok").click();
+        harness.run();
+        let SettingsAction::Apply(settings) = harness.state().1.last().unwrap() else {
+            panic!("Ok applies the settings");
+        };
+        assert_eq!(
+            settings.order_flow.heatmap_retention,
+            Some(TimeDelta::hours(1))
+        );
+        let accepted = settings.clone();
+        let (dialog, actions) = harness.state_mut();
+        dialog.open(*accepted);
+        dialog.active_tab = SettingsTab::OrderFlow;
+        actions.clear();
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::ComboBox, "History retention")
+            .click();
+        harness.run();
+        harness.get_by_label("4 hours").click();
+        harness.run();
+        harness.get_by_label("Cancel").click();
+        harness.run();
+        assert!(matches!(&harness.state().1[..], [SettingsAction::Cancel]));
+    }
+
     /// Choosing a pane separator colour on the Canvas tab paints the separator above the study
     /// pane at the opacity its well showed, in one undoable step.
     #[test]
@@ -2650,6 +2850,104 @@ mod tests {
         assert!(!chart.undo(), "only the separator changed");
         assert!(chart.redo());
         assert_eq!(chart.pane_options().separator_color, Some(chosen));
+    }
+
+    /// Background edits wait for acceptance, retain opacity in templates and reach every chart
+    /// through the settings copy used by Apply to all. Cancel reports dismissal of the edits.
+    #[test]
+    fn session_background_edits_accept_cancel_save_and_copy() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        for accept in [false, true] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            chart.set_chart_type(crate::model::ChartType::Line);
+            chart.config_mut().premarket_color =
+                Some(Color32::from_rgba_unmultiplied(255, 0, 255, 128));
+            let mut dialog = SettingsDialog::new();
+            dialog.offer_apply_to_all(true);
+            dialog.set_control_visible(Control::Templates, false);
+            dialog.set_feed_capabilities(None, None);
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1440.0, 900.0))
+                .allow_missing_glyphs()
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &Theme::light());
+                })
+                .build_ui_state(
+                    move |ui, (dialog, action): &mut (SettingsDialog, _)| {
+                        let next = dialog.show(ui.ctx(), &Theme::light());
+                        if !matches!(next, SettingsAction::None) {
+                            *action = next;
+                        }
+                    },
+                    (dialog, SettingsAction::None),
+                );
+            harness.run();
+            harness.hover_at(Pos2::new(900.0, 450.0));
+            harness.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                source: egui::MouseWheelSource::Wheel,
+                phase: egui::TouchPhase::Move,
+                delta: Vec2::new(0.0, -250.0),
+                modifiers: Default::default(),
+            });
+            harness.run();
+            harness
+                .get_by_role_and_label(Role::ColorWell, "#FF00FF")
+                .click();
+            harness.run();
+            harness
+                .get_by_role_and_label(Role::ColorWell, "#311B92")
+                .click();
+            harness.run();
+            harness.get_by_label("Post-market").click();
+            harness.run();
+            harness.get_by_label("Highlight extended sessions").click();
+            harness.run();
+            if !accept {
+                harness.get_by_label("Cancel").click();
+                harness.run();
+                assert!(matches!(harness.state().1, SettingsAction::Cancel));
+                continue;
+            }
+            harness.get_by_label("Apply to all").click();
+            harness.run();
+            let SettingsAction::ApplyToAll(settings) = &harness.state().1 else {
+                panic!("Apply to all must carry the edited settings");
+            };
+            let saved: ChartSettingsState =
+                serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
+            let chosen = saved.session_background.as_ref().unwrap();
+            assert!(!chosen.show_extended_hours);
+            assert!(!chosen.shade_postmarket);
+            assert_eq!(
+                chosen.premarket_color,
+                Some(Color32::from_rgba_unmultiplied(49, 27, 146, 128))
+            );
+            let mut second = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            // Every recipient receives this same settings value; layout copy calls apply_to_chart.
+            for target in [&mut chart, &mut second] {
+                saved.apply_to_chart(target).unwrap();
+            }
+            assert_eq!(
+                ChartSettingsState::from_chart(&chart).session_background,
+                Some(chosen.clone())
+            );
+            assert_eq!(
+                ChartSettingsState::from_chart(&second).session_background,
+                Some(chosen.clone())
+            );
+            harness.state_mut().0.open(saved.clone());
+            harness.run();
+            harness.get_by_label("Ok").click();
+            harness.run();
+            let SettingsAction::Apply(settings) = &harness.state().1 else {
+                panic!("Ok must accept");
+            };
+            assert_eq!(settings.session_background, saved.session_background);
+        }
     }
 
     /// Choosing a thousands separator on the Scales and lines tab groups the digits of the last
@@ -2825,7 +3123,10 @@ mod tests {
             .unwrap();
             for (group, choice) in [
                 ("", "show_session_breaks"),
+                ("", "crosshair_lines"),
                 ("", "extended_hours"),
+                ("", "overnight_hours"),
+                ("", "session_background"),
                 ("", "back_adjust_futures"),
                 ("", "settlement_as_close"),
                 ("", "price_target_positive_color"),
@@ -2847,6 +3148,7 @@ mod tests {
                 saved = serde_json::from_str(document).unwrap();
             }
             let mut options = crate::config::ChartOptions::default();
+            options.crosshair.horz_line_visible = false;
             options.time_scale.right_offset_pixels = pixels;
             options.time_scale.use_24_hour = false;
             options.time_scale.weekday_names = WeekdayNames::Never;
@@ -2855,7 +3157,9 @@ mod tests {
             chart.config_mut().axis_font_family = FontFamily::Monospace;
             chart.config_mut().thousands_sep = Some('\'');
             chart.config_mut().show_session_breaks = true;
-            chart.set_extended_hours(true);
+            chart.set_overnight_hours(true);
+            chart.config_mut().show_extended_hours = false;
+            chart.config_mut().premarket_color = Some(Color32::GOLD);
             chart.config_mut().price_target_positive_color = Color32::BLUE;
             chart.config_mut().price_target_negative_color = Color32::YELLOW;
             chart.pane_options_mut().separator_color = Some(Color32::RED);
@@ -2876,10 +3180,21 @@ mod tests {
             dialog.open(current);
             load_template(&mut dialog, "Old");
             let shown = dialog.settings();
-            // Older templates keep their last-trade closes, independently of the new default.
-            assert!(!shown.settlement_as_close);
+            // Older templates hold the default futures data choices.
+            assert!(shown.settlement_as_close);
             assert!(!shown.back_adjust_futures);
             assert_eq!(shown.extended_hours, Some(true), "{pixels:?}");
+            assert_eq!(
+                shown.crosshair_lines,
+                Some(crate::widget::settings::CrosshairVisibility {
+                    horizontal_line: false,
+                    ..Default::default()
+                })
+            );
+            assert_eq!(shown.overnight_hours, Some(true), "{pixels:?}");
+            let backgrounds = shown.session_background.as_ref().unwrap();
+            assert!(!backgrounds.show_extended_hours);
+            assert_eq!(backgrounds.premarket_color, Some(Color32::GOLD));
             assert_eq!(shown.margins.right_bars, row, "{pixels:?}");
             assert_eq!(dialog.margin_right_str, row.to_string(), "{pixels:?}");
             assert_eq!(
@@ -2929,6 +3244,12 @@ mod tests {
             assert_eq!(config.thousands_sep, Some('\''));
             assert!(config.show_session_breaks);
             assert!(chart.extended_hours());
+            assert!(!chart.chart_options().crosshair.horz_line_visible);
+            let margins = chart.state().price_scale().options().scale_margins;
+            assert_eq!((margins.top, margins.bottom), (0.1, 0.1));
+            assert!(chart.overnight_hours());
+            assert!(!config.show_extended_hours);
+            assert_eq!(config.premarket_color, Some(Color32::GOLD));
             assert_eq!(
                 (
                     config.price_target_positive_color,

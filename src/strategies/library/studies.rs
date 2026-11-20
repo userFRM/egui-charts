@@ -1,11 +1,12 @@
 //! Signals read public study columns at the signal bar and its predecessor. A crossing
 //! requires a strict inequality now and the opposite inequality or equality one bar ago.
 
-use super::{StrategyFactory, length, number, number_input, set_input};
-use crate::model::{Bar, OrderSide, OrderType};
+use super::{StrategyFactory, length, number, number_input, set_input, timeframe};
+use crate::model::{Bar, BarClock, OrderSide, OrderType, PriceSource, StudySource, Timeframe};
+use crate::strategies::backtest::valid_bar;
 use crate::strategies::{OrderSize, Strategy, StrategyContext};
 use crate::studies::{
-    BollingerBands, Indicator, InputKind, InputValue, KeltnerChannels, MACD, Momentum,
+    ATR, BollingerBands, Indicator, InputKind, InputValue, KeltnerChannels, MACD, Momentum,
     ParabolicSAR, RSI, SMA, Stochastic, StudyInput, SuperTrend, TechnicalRatings,
 };
 
@@ -49,6 +50,8 @@ struct StudyStrategy {
     studies: Vec<Box<dyn Indicator>>,
     inputs: Vec<StudyInput>,
     signals: Vec<[Option<OrderType>; 2]>,
+    timeframe: Option<Timeframe>,
+    atr: Vec<Option<f64>>,
 }
 
 impl StudyStrategy {
@@ -77,6 +80,12 @@ impl StudyStrategy {
                 InputValue::Choice(0),
                 InputKind::Choice(vec!["Long".into(), "Short".into()]),
             )],
+            Rule::Rating => vec![StudyInput::new(
+                "timeframe",
+                "Indicator timeframe",
+                InputValue::Timeframe(None),
+                InputKind::Timeframe,
+            )],
             Rule::Rsi | Rule::Stochastic => {
                 let (low, high) = if matches!(rule, Rule::Rsi) {
                     (30., 70.)
@@ -95,6 +104,8 @@ impl StudyStrategy {
             studies,
             inputs,
             signals: Vec::new(),
+            timeframe: None,
+            atr: Vec::new(),
         }
     }
 
@@ -112,17 +123,46 @@ impl StudyStrategy {
         match self.rule {
             // A band crossing holds for one bar: its stop works through the next bar only.
             Rule::Bollinger | Rule::DirectedBollinger => signals.map(|signal| signal.is_none()),
-            // A Keltner stop works until the close falls back through the basis.
+            // A Keltner stop works until the source falls back through the basis.
             Rule::Keltner => {
-                let close = context.bars()[at].close;
+                let bar = &context.bars()[at];
+                let source = self
+                    .source()
+                    .compute(bar.open, bar.high, bar.low, bar.close);
                 self.studies[0]
                     .values()
                     .value(0, at)
-                    .map_or([false; 2], |basis| [close < basis, close > basis])
+                    .map_or([false; 2], |basis| [source < basis, source > basis])
             }
             _ => [false; 2],
         }
     }
+
+    /// The price the Keltner basis averages and its signals compare.
+    fn source(&self) -> PriceSource {
+        match self.studies[0].source() {
+            Some(StudySource::Price(source)) => source,
+            _ => PriceSource::Close,
+        }
+    }
+}
+
+/// One `tick` beyond `price`, upwards for a long stop and downwards for a short one, or `price`
+/// itself without a tick. A tick whose reciprocal is a whole number, such as 0.01, puts the
+/// result on a multiple of it, so a later price quoted exactly one tick beyond reaches it.
+fn tick_beyond(price: f64, tick: Option<f64>, up: bool) -> f64 {
+    let Some(tick) = tick else {
+        return price;
+    };
+    let stepped = if up { price + tick } else { price - tick };
+    let per_unit = tick.recip().round();
+    if per_unit >= 1.0 && (per_unit * tick - 1.0).abs() <= 1e-9 {
+        let snapped = (stepped * per_unit).round() / per_unit;
+        if snapped.is_finite() {
+            return snapped;
+        }
+    }
+    stepped
 }
 
 fn crosses(a: &[f64], b: &[f64], at: usize) -> bool {
@@ -135,6 +175,60 @@ fn crosses(a: &[f64], b: &[f64], at: usize) -> bool {
         return false;
     };
     [a, b, pa, pb].iter().all(|v| v.is_finite()) && a > b && pa <= pb
+}
+
+/// Whether no chart bar spans two bars of `interval` on UTC boundaries, so that
+/// `data::resample` can build the longer bars from the chart's.
+fn nests_in(chart: Timeframe, interval: Timeframe) -> bool {
+    use Timeframe::{Month1, Months, Week1, Weeks};
+    const DAY: i64 = 86_400_000;
+    let (c, h) = (chart.duration_ms(), interval.duration_ms());
+    if chart.is_trade_based()
+        || interval.is_trade_based()
+        || matches!(chart, Week1 | Weeks(_) | Month1 | Months(_))
+    {
+        return false;
+    }
+    // Chart bars shorter than a day start at midnight and the last one ends there early when
+    // they do not divide the day; longer bars count from the epoch.
+    match interval {
+        // Months start at midnight, a boundary of daily bars but not of longer ones.
+        Month1 | Months(_) => c <= DAY,
+        // Weeks start on Monday 1970-01-05, four days after the epoch.
+        Week1 | Weeks(_) => c < DAY || (4 * DAY % c == 0 && h % c == 0),
+        _ if c < DAY && h >= DAY => h % DAY == 0 || (DAY % c == 0 && h % c == 0),
+        _ => h % c == 0,
+    }
+}
+
+/// Builds higher bars and maps each chart bar to the last higher bar closed by its end.
+/// Returns `None` when the chart bars cannot nest in the requested interval.
+fn closed_higher_bars(
+    bars: &[Bar],
+    chart: Timeframe,
+    interval: Timeframe,
+) -> Option<(Vec<Bar>, Vec<Option<usize>>)> {
+    let valid: Vec<Bar> = bars.iter().filter(|bar| valid_bar(bar)).cloned().collect();
+    let built = crate::data::resample(&valid, chart, interval)?;
+    let (chart, higher) = (BarClock::from(chart), BarClock::from(interval));
+    let read = bars
+        .iter()
+        .map(|bar| {
+            let open = chart.bar_open(bar.time);
+            let slot = higher.bar_open(open);
+            let before = built.partition_point(|built| built.time < slot);
+            let closed = built.get(before).is_some_and(|built| built.time == slot)
+                && chart
+                    .next_open(open)
+                    .is_some_and(|end| higher.bar_open(end) != slot);
+            if closed {
+                Some(before)
+            } else {
+                before.checked_sub(1)
+            }
+        })
+        .collect();
+    Some((built, read))
 }
 
 impl Strategy for StudyStrategy {
@@ -197,6 +291,16 @@ impl Strategy for StudyStrategy {
         {
             return Err("oversold must be below overbought");
         }
+        if matches!(self.rule, Rule::Rating)
+            && let (Some(chart), Some(interval)) =
+                (self.timeframe, timeframe(&self.inputs, "timeframe"))
+            && interval != chart
+            && !nests_in(chart, interval)
+        {
+            return Err(
+                "indicator timeframe must be the chart interval or a longer time interval made of whole chart bars",
+            );
+        }
         Ok(())
     }
 
@@ -208,11 +312,48 @@ impl Strategy for StudyStrategy {
         }
     }
 
+    fn set_timeframe(&mut self, timeframe: Timeframe) {
+        self.timeframe = Some(timeframe);
+        self.signals.clear();
+    }
+
     fn prepare(&mut self, bars: &[Bar]) {
-        for study in &mut self.studies {
-            study.calculate(bars);
+        // Read a higher rating only once its bar has closed by this chart bar's end.
+        let mut read: Option<Vec<Option<usize>>> = None;
+        let mut higher = Vec::new();
+        if matches!(self.rule, Rule::Rating)
+            && let Some(interval) = timeframe(&self.inputs, "timeframe")
+            && Some(interval) != self.timeframe
+        {
+            read = Some(
+                self.timeframe
+                    .filter(|chart| nests_in(*chart, interval))
+                    .and_then(|chart| closed_higher_bars(bars, chart, interval))
+                    .map_or_else(
+                        || vec![None; bars.len()],
+                        |(built, read)| {
+                            higher = built;
+                            read
+                        },
+                    ),
+            );
         }
+        for study in &mut self.studies {
+            study.calculate(if read.is_some() { &higher } else { bars });
+        }
+        self.atr = if matches!(self.rule, Rule::Rating) {
+            let mut atr = ATR::new(14);
+            atr.calculate(bars);
+            (0..bars.len()).map(|i| atr.values().value(0, i)).collect()
+        } else {
+            Vec::new()
+        };
         let close: Vec<_> = bars.iter().map(|bar| bar.close).collect();
+        let source = self.source();
+        let source: Vec<_> = bars
+            .iter()
+            .map(|bar| source.compute(bar.open, bar.high, bar.low, bar.close))
+            .collect();
         let zero = vec![0.; bars.len()];
         let values = self.studies[0].values();
         let line = |column| values.line(column);
@@ -248,9 +389,10 @@ impl Strategy for StudyStrategy {
                         stop(2).filter(|_| crosses(&close, line(2), i)),
                         stop(0).filter(|_| crosses(line(0), &close, i)),
                     ],
+                    // The stops wait beyond the signal bar; `on_bar` adds the run's tick.
                     Rule::Keltner => [
-                        stop(1).filter(|_| crosses(&close, line(1), i)),
-                        stop(2).filter(|_| crosses(line(2), &close, i)),
+                        crosses(&source, line(1), i).then_some(OrderType::Stop(bar.high)),
+                        crosses(line(2), &source, i).then_some(OrderType::Stop(bar.low)),
                     ],
                     Rule::Macd => [
                         market(crosses(line(2), &zero, i)),
@@ -305,10 +447,16 @@ impl Strategy for StudyStrategy {
                     ],
                     // Strong Buy and Strong Sell, strictly beyond 0.5. Every such bar places the
                     // entry; the pyramiding limit keeps a held position from growing.
-                    Rule::Rating => [
-                        market(value(2).is_some_and(|rating| rating > 0.5)),
-                        market(value(2).is_some_and(|rating| rating < -0.5)),
-                    ],
+                    Rule::Rating => {
+                        let rating = read.as_ref().map_or_else(
+                            || value(2),
+                            |read| read[i].and_then(|at| values.value(2, at)),
+                        );
+                        [
+                            market(rating.is_some_and(|rating| rating > 0.5)),
+                            market(rating.is_some_and(|rating| rating < -0.5)),
+                        ]
+                    }
                 }
             })
             .collect();
@@ -353,11 +501,25 @@ impl Strategy for StudyStrategy {
             return;
         }
         for (index, side) in [OrderSide::Buy, OrderSide::Sell].into_iter().enumerate() {
-            if let Some(order) = signals[index] {
+            if let Some(mut order) = signals[index] {
+                if let (Rule::Keltner, OrderType::Stop(price)) = (self.rule, order) {
+                    order =
+                        OrderType::Stop(tick_beyond(price, context.price_increment(), index == 0));
+                }
                 context.cancel(if index == 0 { "Short" } else { "Long" });
                 context.entry(if index == 0 { "Long" } else { "Short" }, side, None, order);
             } else if expired[index] {
                 context.cancel(if index == 0 { "Long" } else { "Short" });
+            }
+        }
+        if matches!(self.rule, Rule::Rating)
+            && let Some(atr) = self.atr.get(at).copied().flatten().filter(|atr| *atr > 0.0)
+        {
+            for (id, side) in [
+                ("Long stop", OrderSide::Buy),
+                ("Short stop", OrderSide::Sell),
+            ] {
+                context.exit_trailing(id, side, Some(3.0 * atr), 5.0 * atr, 2.0 * atr);
             }
         }
     }

@@ -292,6 +292,7 @@ impl Chart {
                 self.replace_main_data(Vec::new());
                 link.resumed_from = None;
                 link.pushed_from = None;
+                link.non_trade_bars = false;
                 self.quote = None;
                 self.session_quote = None;
                 link.trades = Trades::new(TRADE_CAPACITY);
@@ -673,6 +674,7 @@ impl Chart {
         } else {
             // Timestamp anchors survive the empty interval between history requests.
             self.replace_main_data(Vec::new());
+            link.non_trade_bars = false;
             link.resumed_from = None;
         }
         self.feed = FeedState::default();
@@ -849,6 +851,7 @@ impl Chart {
         }
         let oldest = self.bars(SeriesId::MAIN).first().map(|bar| bar.time);
         let empty = page.bars.is_empty();
+        link.non_trade_bars |= !empty;
         let continuation = page.continue_before.filter(|_| empty);
         if let Some(error) = non_progressing(asked.before, continuation) {
             link.paging_stopped = true;
@@ -1160,6 +1163,14 @@ impl Chart {
             .into_iter()
             .chain(link.depth_cursor)
             .min();
+        // Pages entirely before the retention would be pruned immediately.
+        let since = history.retention_start();
+        if before
+            .zip(since)
+            .is_some_and(|(before, since)| before <= since)
+        {
+            return;
+        }
         if let Some(before) = before
             && (!self.older_bars_drawn
                 || self
@@ -1172,12 +1183,14 @@ impl Chart {
         }
         let mut request = DepthRequest::new(
             self.symbol.clone(),
-            history.config().columns,
+            history.config().page_columns(),
             history.config().clone(),
             tick,
         );
         request.before = before;
-        request.since = before.and_then(|before| self.range_start(before));
+        request.since = before
+            .and_then(|before| self.range_start(before))
+            .max(since);
         request.conversion = self.conversion.clone();
         let reply = link.reply(Request::Depth(request.clone()));
         link.feed.depth_history(request, reply);

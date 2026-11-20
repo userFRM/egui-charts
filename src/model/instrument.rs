@@ -114,6 +114,34 @@ pub enum FeedService {
     OrderDepth,
 }
 
+/// Kind of a security identifier in [`Instrument::identifiers`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IdentifierKind {
+    /// International Securities Identification Number (ISO 6166), such as "US0378331005".
+    Isin,
+    /// CUSIP number, such as "037833100".
+    Cusip,
+    /// SEDOL code, such as "2046251".
+    Sedol,
+    /// Financial Instrument Global Identifier, such as "BBG000B9XRY4".
+    Figi,
+    /// Any other code, named by the label shown before its value, such as "WKN".
+    Other(String),
+}
+
+impl std::fmt::Display for IdentifierKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Isin => "ISIN",
+            Self::Cusip => "CUSIP",
+            Self::Sedol => "SEDOL",
+            Self::Figi => "FIGI",
+            Self::Other(label) => label,
+        })
+    }
+}
+
 /// What a feed or a search service reports about a symbol. Build it with [`Instrument::new`] and the `with_` setters;
 /// fields left out stay unknown.
 #[derive(Clone, Debug, PartialEq)]
@@ -143,6 +171,11 @@ pub struct Instrument {
     /// one security listed on several exchanges. Symbol search lists the first instrument of a
     /// root and offers the others under it, keeping the futures of each exchange apart.
     pub root: Option<String>,
+    /// Security identifiers, such as the ISIN and CUSIP of a listing, each with its kind. The
+    /// search over a fixed list finds the instrument by any of them typed exactly, ignoring case
+    /// and whitespace, and the symbol choosers show the identifier a query names. Empty, the
+    /// default, when the host supplies none.
+    pub identifiers: Vec<(IdentifierKind, String)>,
     /// Instrument type.
     pub symbol_type: Option<SymbolType>,
     /// Smallest price increment: positive and finite. Consumers ignore any other value.
@@ -152,7 +185,8 @@ pub struct Instrument {
     /// Decimals of price labels.
     pub price_decimals: Option<u8>,
     /// Decimals of volume readouts, including abbreviated K/M/B values, of studies in volume
-    /// units without a precision chosen in their settings, and of measured volume.
+    /// units without a precision chosen in their settings, of measured volume, of footprint
+    /// volumes and of volume profile row values.
     pub volume_decimals: Option<u8>,
     /// Currency of prices, such as "USD". A code that mixes upper and lower case names a minor
     /// unit and matches only itself, such as "GBp" for pence against "GBP"; other codes match
@@ -203,6 +237,7 @@ impl Instrument {
             sector: None,
             source: None,
             root: None,
+            identifiers: Vec::new(),
             symbol_type: None,
             tick_size: None,
             pip_size: None,
@@ -287,6 +322,21 @@ impl Instrument {
     /// Sets [`root`](Self::root).
     pub fn with_root(mut self, root: impl Into<String>) -> Self {
         self.root = Some(root.into());
+        self
+    }
+
+    /// Adds an identifier to [`identifiers`](Self::identifiers), after those already set.
+    ///
+    /// ```
+    /// use egui_charts::model::{IdentifierKind, Instrument};
+    ///
+    /// let apple = Instrument::new("AAPL")
+    ///     .with_identifier(IdentifierKind::Isin, "US0378331005")
+    ///     .with_identifier(IdentifierKind::Other("WKN".into()), "865985");
+    /// assert_eq!(apple.identifiers.len(), 2);
+    /// ```
+    pub fn with_identifier(mut self, kind: IdentifierKind, value: impl Into<String>) -> Self {
+        self.identifiers.push((kind, value.into()));
         self
     }
 

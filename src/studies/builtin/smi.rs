@@ -199,6 +199,10 @@ impl Indicator for StochasticMomentumIndex {
         false
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             height: None,

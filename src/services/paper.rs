@@ -10,8 +10,8 @@ use crate::data::{FeedError, Reply};
 use crate::model::rounding_tolerance;
 use crate::model::{
     Account, BalanceChange, Capabilities, ClosedPosition, Execution, JournalEntry, Order, OrderId,
-    OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce,
-    TradingRules,
+    OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, StrategyExit,
+    StrategyReport, StrategyTrade, TimeInForce, Timeframe, TradingRules,
 };
 
 /// The times in force the account supports, the default first.
@@ -34,7 +34,8 @@ const MAX_TAKE_PROFIT_LEVELS: usize = 4;
 ///
 /// Feed it the last price of every symbol it trades with [`set_price`](Self::set_price), live or
 /// replayed. During replay, call [`set_replay_time`](Self::set_replay_time) before each price so
-/// fills and history use the source bar's time. Good-till-cancelled orders work until they fill or
+/// fills and history use the source bar's time; it refuses times before the account's last change.
+/// Good-till-cancelled orders work until they fill or
 /// are cancelled. Immediate-or-cancel and fill-or-kill orders fill at placement where a marketable
 /// order would, and are cancelled at once otherwise; since every fill is complete, the two behave
 /// alike. Day, week and month orders are refused, since the account has no trading-session
@@ -83,8 +84,8 @@ pub struct PaperAccount {
 
 /// What a [`PaperAccount`] keeps between sessions, from [`PaperAccount::save`]: its settings,
 /// symbol rules, balance, working orders with their exits, positions and history, without the
-/// prices, quotes and replay clock, which the host feeds again. Write it in any serde format
-/// and read it back for [`PaperAccount::restore`].
+/// prices, quotes and replay clock, which the host feeds again, or the equity marked during
+/// replay. Write it in any serde format and read it back for [`PaperAccount::restore`].
 ///
 /// Fields added later to this type and the trading types it holds will carry `#[serde(default)]`,
 /// so accounts saved by an earlier version keep loading.
@@ -110,6 +111,67 @@ pub struct SavedPaperAccount {
     trips: Vec<(String, Trip)>,
     #[serde(default)]
     closed_positions: Vec<ClosedPosition>,
+}
+
+/// The account a replay trading session starts with, as the replay start menu offers it: its
+/// currency, initial capital and commission rate. [`account`](Self::account) builds a
+/// [`PaperAccount`] for it, separate from any live account.
+///
+/// ```
+/// use egui_charts::services::ReplayAccountSettings;
+///
+/// let settings = ReplayAccountSettings::new("EUR", 10_000.0, 0.001);
+/// assert!(settings.is_valid());
+/// let account = settings.account().expect("valid settings");
+/// account.set_price("AAPL", 187.5);
+/// ```
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct ReplayAccountSettings {
+    /// The account's currency, such as "USD".
+    pub currency: String,
+    /// The starting balance in `currency`: positive and finite.
+    pub initial_capital: f64,
+    /// The commission each fill pays, as a fraction of its value: 0.001 for 0.1%.
+    pub commission: f64,
+}
+
+impl Default for ReplayAccountSettings {
+    /// 100,000 USD without commission.
+    fn default() -> Self {
+        Self::new("USD", 100_000.0, 0.0)
+    }
+}
+
+impl ReplayAccountSettings {
+    /// Settings with `currency`, `initial_capital` and the commission rate `commission`.
+    pub fn new(currency: impl Into<String>, initial_capital: f64, commission: f64) -> Self {
+        Self {
+            currency: currency.into(),
+            initial_capital,
+            commission,
+        }
+    }
+
+    /// Whether the currency is not blank, the initial capital is positive and finite and the
+    /// commission is finite and not negative.
+    pub fn is_valid(&self) -> bool {
+        !self.currency.trim().is_empty()
+            && self.initial_capital.is_finite()
+            && self.initial_capital > 0.0
+            && self.commission.is_finite()
+            && self.commission >= 0.0
+    }
+
+    /// A new account with these settings, its currency trimmed, without leverage or other
+    /// commissions, or `None` when the settings are not [valid](Self::is_valid).
+    pub fn account(&self) -> Option<PaperAccount> {
+        self.is_valid().then(|| {
+            PaperAccount::new(self.currency.trim(), self.initial_capital)
+                .commission(self.commission)
+        })
+    }
 }
 
 impl std::fmt::Debug for PaperAccount {
@@ -147,6 +209,8 @@ struct State {
     quotes: HashMap<String, (f64, f64)>,
     balance_history: Vec<BalanceChange>,
     journal: Vec<JournalEntry>,
+    /// Equity marked at each replay time the account was priced or filled at, oldest first.
+    equity: Vec<(DateTime<Utc>, f64)>,
 }
 
 /// Negative and non-finite costs count as zero.
@@ -170,6 +234,9 @@ struct Trip {
     exited: f64,
     exit_value: f64,
     realized: f64,
+    /// Commissions of the trip's fills so far.
+    #[serde(default)]
+    fees: f64,
 }
 
 /// Describes an order in the journal, such as "buy 2 AAPL limit 185".
@@ -253,10 +320,14 @@ impl PaperAccount {
     }
 
     /// Takes `price` as the last price of `symbol`: fills the working orders it reaches and
-    /// revalues the position. Non-finite prices are ignored.
+    /// revalues the position. During replay, it marks the account's equity at the replay time
+    /// for [`report`](Self::report). Non-finite prices are ignored.
     pub fn set_price(&self, symbol: &str, price: f64) {
+        if !price.is_finite() {
+            return;
+        }
         let mut state = self.lock();
-        if price.is_finite() && state.last.insert(symbol.to_owned(), price) != Some(price) {
+        if state.last.insert(symbol.to_owned(), price) != Some(price) {
             state.reach(self, symbol, price);
             if let Some(mut position) = state.positions.remove(symbol) {
                 state.value(self, &mut position);
@@ -265,6 +336,7 @@ impl PaperAccount {
                 state.push(state.account(self));
             }
         }
+        state.mark(self);
     }
 
     /// Takes `bid` and `ask` as the quote of `symbol`: while both are known and the bid is not
@@ -334,9 +406,91 @@ impl PaperAccount {
 
     /// Uses `time` for orders, executions, balance changes and journal entries during replay.
     /// Set it to the revealed source bar's time before feeding its price. `None` restores the
-    /// live UTC clock.
-    pub fn set_replay_time(&self, time: Option<DateTime<Utc>>) {
-        self.lock().replay_time = time;
+    /// live UTC clock. Returns `false`, and keeps the clock, when `time` is before the account's
+    /// [`last_change`](Self::last_change), so its history never runs backwards: before moving
+    /// the replay cursor back past the account's orders or fills, or starting again from an
+    /// earlier bar, [`reset`](Self::reset) the account or build a new one, or ask the user, as
+    /// the replay trading prompt of `ui::replay` does. Feed no prices of earlier bars to an
+    /// account that refused their time.
+    pub fn set_replay_time(&self, time: Option<DateTime<Utc>>) -> bool {
+        let mut state = self.lock();
+        if time.is_some_and(|time| state.last_change().is_some_and(|last| time < last)) {
+            return false;
+        }
+        state.replay_time = time;
+        true
+    }
+
+    /// The time of the account's newest change: the last order placed, changed, filled,
+    /// cancelled or rejected. `None` for an account without history, as after
+    /// [`reset`](Self::reset). During replay, [`set_replay_time`](Self::set_replay_time) refuses
+    /// earlier times.
+    pub fn last_change(&self) -> Option<DateTime<Utc>> {
+        self.lock().last_change()
+    }
+
+    /// The account's trades as a strategy report named `name` for `symbol` and `timeframe`, for
+    /// the results of a replay trading session: its starting balance and currency, every closed
+    /// position as a closed trade and every open position as an open trade, each labelled with
+    /// its symbol, with its commissions as fees and its profit net of them, and the equity
+    /// marked at each replay time the account was priced or filled at.
+    /// [`StrategyReport::performance`] then gives the net profit, win rate, profit factor and
+    /// largest drawdown, and `StrategyReport::trades_csv` the list of trades. The newest 1,000
+    /// closed positions are kept. A position closed in parts counts as one trade once it is
+    /// flat or reversed; until then its realised part is only in the equity. Live prices mark
+    /// no equity, and a saved account keeps no marks. A position without a reported opening
+    /// time, from a save older than round-trip tracking, enters at its closing time; such an
+    /// open position is left out.
+    pub fn report(
+        &self,
+        name: impl Into<String>,
+        symbol: impl Into<String>,
+        timeframe: Timeframe,
+    ) -> StrategyReport {
+        let state = self.lock();
+        let mut report = StrategyReport::new(name, symbol, timeframe, self.initial);
+        report.currency = Some(self.currency.clone());
+        for closed in &state.closed_positions {
+            let fees = closed.commission.unwrap_or(0.0);
+            let mut trade = StrategyTrade::new(
+                closed.side,
+                closed.quantity,
+                closed.opened.unwrap_or(closed.closed),
+                closed.average_price,
+            );
+            trade.fees = fees;
+            trade.label = Some(closed.symbol.clone());
+            trade.exit = Some(StrategyExit::new(
+                closed.closed,
+                closed.exit_price,
+                closed.realized_pnl - fees,
+            ));
+            report.trades.push(trade);
+        }
+        let mut positions: Vec<_> = state.positions.values().collect();
+        positions.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+        for position in positions {
+            let Some(Trip {
+                side,
+                opened: Some(opened),
+                fees,
+                ..
+            }) = state.trips.get(&position.symbol)
+            else {
+                continue;
+            };
+            let mut trade = StrategyTrade::new(
+                *side,
+                position.quantity.abs(),
+                *opened,
+                position.average_price,
+            );
+            trade.fees = *fees;
+            trade.label = Some(position.symbol.clone());
+            report.trades.push(trade);
+        }
+        report.equity = state.equity.clone();
+        report
     }
 
     /// The account as [`restore`](Self::restore) reads it back.
@@ -398,7 +552,8 @@ impl PaperAccount {
     /// 1,000 entries of each history are kept. Positions and account figures retain their saved
     /// marks until a host price arrives. Returns `None` when the saved balance or starting balance
     /// is not finite. Older saves without round-trip tracking start it from the saved position's
-    /// quantity and average price, with no reported opening time or earlier partial closes.
+    /// quantity and average price, with no reported opening time, earlier partial closes or
+    /// commissions, and saves without its commissions count those of later fills only.
     pub fn restore(mut saved: SavedPaperAccount) -> Option<Self> {
         if !saved.initial.is_finite() || !saved.balance.is_finite() {
             return None;
@@ -450,6 +605,7 @@ impl PaperAccount {
                         exited: 0.0,
                         exit_value: 0.0,
                         realized: 0.0,
+                        fees: 0.0,
                     });
             }
             state.positions = saved
@@ -517,6 +673,24 @@ impl State {
 
     fn now(&self) -> DateTime<Utc> {
         self.replay_time.unwrap_or_else(Utc::now)
+    }
+
+    fn last_change(&self) -> Option<DateTime<Utc>> {
+        // Every stamped change writes a journal entry at the same time.
+        self.journal.last().map(|entry| entry.time)
+    }
+
+    /// Marks the equity at the replay time, replacing marks at or after it, which a move back
+    /// over bars without changes leaves behind. Live time marks nothing.
+    fn mark(&mut self, terms: &PaperAccount) {
+        let Some(time) = self.replay_time else {
+            return;
+        };
+        let (equity, _) = self.equity_and_margin(terms);
+        while self.equity.last().is_some_and(|&(at, _)| at >= time) {
+            self.equity.pop();
+        }
+        self.equity.push((time, equity));
     }
 
     fn push(&self, event: AccountEvent) {
@@ -730,8 +904,9 @@ impl State {
         self.finished.push(order);
     }
 
-    /// Follows an opening, adding or reducing fill through its round trip. The rounded remaining
-    /// position decides when to finish the trip and whether the fill also opens the next one.
+    /// Follows an opening, adding or reducing fill and its commission through its round trip. The
+    /// rounded remaining position decides when to finish the trip and whether the fill also opens
+    /// the next one, which then takes the share of the commission for the quantity it opens.
     fn track(
         &mut self,
         request: &OrderRequest,
@@ -739,9 +914,10 @@ impl State {
         price: f64,
         realized: f64,
         remaining: f64,
+        commission: f64,
     ) -> Option<ClosedPosition> {
         let now = self.now();
-        let open = |quantity: f64| Trip {
+        let open = |quantity: f64, fees: f64| Trip {
             side: request.side,
             opened: Some(now),
             entered: quantity,
@@ -749,26 +925,36 @@ impl State {
             exited: 0.0,
             exit_value: 0.0,
             realized: 0.0,
+            fees,
         };
         if held == 0.0 {
             self.trips
-                .insert(request.symbol.clone(), open(request.quantity));
+                .insert(request.symbol.clone(), open(request.quantity, commission));
             return None;
         }
         let symbol = request.symbol.as_str();
         if request.side.reduces(held) {
             let mut trip = self.trips.remove(symbol)?;
             let closed = request.quantity.min(held.abs());
+            let reversed = remaining != 0.0 && (remaining > 0.0) != (held > 0.0);
+            let closing = if reversed {
+                commission * closed / request.quantity
+            } else {
+                commission
+            };
             trip.exited += closed;
             trip.exit_value += closed * price;
             trip.realized += realized;
-            let reversed = remaining != 0.0 && (remaining > 0.0) != (held > 0.0);
+            trip.fees += closing;
             if remaining != 0.0 && !reversed {
                 self.trips.insert(symbol.to_owned(), trip);
                 return None;
             }
             if reversed {
-                self.trips.insert(symbol.to_owned(), open(remaining.abs()));
+                self.trips.insert(
+                    symbol.to_owned(),
+                    open(remaining.abs(), commission - closing),
+                );
             }
             let mut closed = ClosedPosition::new(
                 symbol,
@@ -780,11 +966,13 @@ impl State {
                 now,
             );
             closed.opened = trip.opened;
+            closed.commission = Some(trip.fees);
             Some(closed)
         } else {
             if let Some(trip) = self.trips.get_mut(symbol) {
                 trip.entered += request.quantity;
                 trip.entry_value += request.quantity * price;
+                trip.fees += commission;
             }
             None
         }
@@ -804,6 +992,7 @@ impl State {
             .unwrap_or_else(|| Position::new(&request.symbol, 0.0, price));
         let held = position.quantity;
         let (pv, _) = self.terms_of(terms, &request.symbol);
+        let commission = terms.commission_of(request.quantity, request.quantity * price.abs() * pv);
         let mut realized = 0.0;
         if held * signed >= 0.0 {
             position.average_price =
@@ -822,7 +1011,14 @@ impl State {
             } else {
                 remaining
             };
-        let closed = self.track(&request, held, price, realized, position.quantity);
+        let closed = self.track(
+            &request,
+            held,
+            price,
+            realized,
+            position.quantity,
+            commission,
+        );
         self.value(terms, &mut position);
         if position.quantity != 0.0 {
             self.positions
@@ -865,10 +1061,7 @@ impl State {
                 request.symbol
             ),
         );
-        self.book(
-            -terms.commission_of(request.quantity, request.quantity * price.abs() * pv),
-            format!("Commission for order {id}"),
-        );
+        self.book(-commission, format!("Commission for order {id}"));
         if held != 0.0 && position.quantity == 0.0 {
             self.log(format!("Position {} closed", request.symbol));
         }
@@ -1010,6 +1203,7 @@ impl State {
             self.working.push(exit);
         }
         self.push(self.account(terms));
+        self.mark(terms);
     }
 
     fn cancel_working(&mut self, id: &OrderId) -> bool {
@@ -1350,7 +1544,7 @@ mod tests {
         rules.point_value = 50.0;
         rules.leverage = Some(20.0);
         rules.time_in_force = vec![
-            TimeInForce::Day,
+            TimeInForce::GoodTillDate,
             TimeInForce::ImmediateOrCancel,
             TimeInForce::GoodTillCancelled,
         ];
@@ -1840,6 +2034,169 @@ mod tests {
         assert!((closed.average_price - 301.0 / 3.0).abs() < 1e-9);
         assert_eq!(closed.exit_price, 104.0);
         assert!((closed.realized_pnl - 550.0).abs() < 1e-9);
+
+        // Written by a save with round trips but without their commissions, which restores the
+        // open trip with none: closing it counts the commission paid since.
+        let json = r#"{
+          "currency": "USD",
+          "initial": 10000.0,
+          "leverage": 1.0,
+          "commission": 0.001,
+          "commission_per_order": 0.0,
+          "commission_per_unit": 0.0,
+          "rules": [],
+          "balance": 10019.47,
+          "next_id": 2,
+          "working": [],
+          "exits": [],
+          "positions": [
+            {
+              "symbol": "SYM",
+              "quantity": -1.0,
+              "average_price": 110.0,
+              "unrealized_pnl": -0.0,
+              "last_price": 110.0,
+              "trade_value": 110.0,
+              "market_value": 110.0,
+              "leverage": 1.0,
+              "margin": 110.0,
+              "expiration": null
+            }
+          ],
+          "finished": [
+            {
+              "id": "1",
+              "request": {
+                "symbol": "SYM",
+                "side": "Buy",
+                "quantity": 2.0,
+                "order_type": "Market",
+                "take_profit": null,
+                "take_profit_levels": [],
+                "stop_loss": null,
+                "time_in_force": "GoodTillCancelled",
+                "position_bracket": null
+              },
+              "status": "Filled",
+              "filled": 2.0,
+              "fill_price": 100.0,
+              "placed": "2024-01-01T00:01:00Z",
+              "closed": "2024-01-01T00:01:00Z"
+            },
+            {
+              "id": "2",
+              "request": {
+                "symbol": "SYM",
+                "side": "Sell",
+                "quantity": 3.0,
+                "order_type": "Market",
+                "take_profit": null,
+                "take_profit_levels": [],
+                "stop_loss": null,
+                "time_in_force": "GoodTillCancelled",
+                "position_bracket": null
+              },
+              "status": "Filled",
+              "filled": 3.0,
+              "fill_price": 110.0,
+              "placed": "2024-01-01T00:02:00Z",
+              "closed": "2024-01-01T00:02:00Z"
+            }
+          ],
+          "executions": [
+            {
+              "order": "1",
+              "time": "2024-01-01T00:01:00Z",
+              "side": "Buy",
+              "price": 100.0,
+              "quantity": 2.0
+            },
+            {
+              "order": "2",
+              "time": "2024-01-01T00:02:00Z",
+              "side": "Sell",
+              "price": 110.0,
+              "quantity": 3.0
+            }
+          ],
+          "balance_history": [
+            {
+              "time": "2024-01-01T00:01:00Z",
+              "balance": 9999.8,
+              "amount": -0.2,
+              "action": "Commission for order 1"
+            },
+            {
+              "time": "2024-01-01T00:02:00Z",
+              "balance": 10019.8,
+              "amount": 20.0,
+              "action": "Profit or loss of 2 SYM closed by order 2"
+            },
+            {
+              "time": "2024-01-01T00:02:00Z",
+              "balance": 10019.47,
+              "amount": -0.33,
+              "action": "Commission for order 2"
+            }
+          ],
+          "journal": [
+            {
+              "time": "2024-01-01T00:01:00Z",
+              "text": "Order 1 placed: buy 2 SYM at market"
+            },
+            {
+              "time": "2024-01-01T00:01:00Z",
+              "text": "Order 1 filled: buy 2 SYM at market at 100"
+            },
+            {
+              "time": "2024-01-01T00:02:00Z",
+              "text": "Order 2 placed: sell 3 SYM at market"
+            },
+            {
+              "time": "2024-01-01T00:02:00Z",
+              "text": "Order 2 filled: sell 3 SYM at market at 110"
+            }
+          ],
+          "trips": [
+            [
+              "SYM",
+              {
+                "side": "Sell",
+                "opened": "2024-01-01T00:02:00Z",
+                "entered": 1.0,
+                "entry_value": 110.0,
+                "exited": 0.0,
+                "exit_value": 0.0,
+                "realized": 0.0
+              }
+            ]
+          ],
+          "closed_positions": [
+            {
+              "symbol": "SYM",
+              "side": "Buy",
+              "quantity": 2.0,
+              "average_price": 100.0,
+              "exit_price": 110.0,
+              "realized_pnl": 20.0,
+              "opened": "2024-01-01T00:01:00Z",
+              "closed": "2024-01-01T00:02:00Z"
+            }
+          ]
+        }"#;
+        let paper = PaperAccount::restore(serde_json::from_str(json).unwrap()).unwrap();
+        assert_eq!(paper.save().closed_positions[0].commission, None);
+        paper.set_price("SYM", 100.0);
+        place(
+            &paper,
+            OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Market),
+        )
+        .unwrap();
+        let saved = paper.save();
+        let closed = &saved.closed_positions[1];
+        assert_eq!(closed.opened, "2024-01-01T00:02:00Z".parse().ok());
+        assert_eq!((closed.side, closed.realized_pnl), (OrderSide::Sell, 10.0));
+        assert_eq!(closed.commission, Some(0.1));
     }
 
     /// A JSON round trip preserves terms, history, working exits and the next id. Restored orders
@@ -2027,6 +2384,264 @@ mod tests {
         saved.closed_positions = vec![saved.closed_positions[0].clone(); HISTORY + 3];
         let restored = PaperAccount::restore(saved).unwrap();
         assert_eq!(restored.save().closed_positions.len(), HISTORY);
+    }
+
+    /// Replay time cannot move before the account's last change, so fills stay in time order;
+    /// after a reset, the account trades from the earlier bar alone.
+    #[test]
+    fn replay_history_stays_in_time_order_and_a_new_account_trades_from_the_earlier_bar() {
+        use OrderSide::{Buy, Sell};
+        let paper = PaperAccount::new("USD", 10_000.0);
+        let bar = |n: i64| DateTime::from_timestamp(1_704_067_200 + n * 60, 0).unwrap();
+        let trade = |side, price| {
+            paper.set_price("SYM", price);
+            place(
+                &paper,
+                OrderRequest::new("SYM", side, 1.0, OrderType::Market),
+            )
+            .unwrap();
+        };
+        let executions = || {
+            snapshot(&paper)
+                .into_iter()
+                .filter_map(|event| match event {
+                    AccountEvent::Execution(fill) => Some((fill.time, fill.side, fill.price)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(paper.set_replay_time(Some(bar(100))));
+        trade(Buy, 100.0);
+        assert!(paper.set_replay_time(Some(bar(120))));
+        trade(Sell, 110.0);
+        assert_eq!(paper.last_change(), Some(bar(120)));
+        assert!(!paper.set_replay_time(Some(bar(90))));
+        // A host that feeds the earlier bar anyway fills at the clock the account kept.
+        trade(Buy, 95.0);
+        assert_eq!(
+            executions(),
+            [
+                (bar(100), Buy, 100.0),
+                (bar(120), Sell, 110.0),
+                (bar(120), Buy, 95.0)
+            ]
+        );
+        assert!(paper.set_replay_time(Some(bar(120))));
+
+        paper.reset();
+        assert_eq!(paper.last_change(), None);
+        assert!(paper.set_replay_time(Some(bar(90))));
+        trade(Buy, 95.0);
+        assert_eq!(executions(), [(bar(90), Buy, 95.0)]);
+        let saved = paper.save();
+        let held: Vec<_> = saved
+            .positions
+            .iter()
+            .map(|position| (position.quantity, position.average_price))
+            .collect();
+        assert_eq!(held, [(1.0, 95.0)]);
+        assert!(saved.closed_positions.is_empty());
+        assert!(saved.journal.iter().all(|entry| entry.time == bar(90)));
+    }
+
+    /// A replay report keeps round trips net of fees, splits a reversal's commission by quantity
+    /// and marks equity after fills, matching the hand-calculated trades and strategy figures.
+    #[test]
+    fn a_replay_report_matches_the_strategy_report_of_the_same_trades() {
+        use OrderSide::{Buy, Sell};
+        let paper = PaperAccount::new("USD", 10_000.0).commission(0.001);
+        let bar = |n: i64| DateTime::from_timestamp(1_704_067_200 + n * 60, 0).unwrap();
+        for (n, price, order) in [
+            (1, 100.0, Some((Buy, 10.0))),
+            (2, 105.0, Some((Sell, 4.0))),
+            (3, 95.0, Some((Sell, 16.0))),
+            (4, 90.0, Some((Buy, 10.0))),
+            (5, 92.0, Some((Buy, 5.0))),
+            (6, 91.0, None),
+        ] {
+            assert!(paper.set_replay_time(Some(bar(n))));
+            paper.set_price("SYM", price);
+            if let Some((side, quantity)) = order {
+                place(
+                    &paper,
+                    OrderRequest::new("SYM", side, quantity, OrderType::Market),
+                )
+                .unwrap();
+            }
+        }
+        let report = paper.report("Replay trading", "SYM", Timeframe::Min1);
+        assert_eq!(report.initial_capital, 10_000.0);
+        assert_eq!(report.currency.as_deref(), Some("USD"));
+        assert!(report.properties.is_empty());
+        let near = |actual: f64, expected: f64| {
+            assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+        };
+        // The long pays 1 + 0.42 and 6/16 of the reversal's 1.52; the short the rest and 0.9.
+        let expected = [
+            (Buy, 10.0, 1, 100.0, 1.99, Some((3, 99.0, -11.99))),
+            (Sell, 10.0, 3, 95.0, 1.85, Some((4, 90.0, 48.15))),
+            (Buy, 5.0, 5, 92.0, 0.46, None),
+        ];
+        let mut expected_report =
+            StrategyReport::new("Replay trading", "SYM", Timeframe::Min1, 10_000.0);
+        expected_report.currency = Some("USD".into());
+        assert_eq!(report.trades.len(), expected.len());
+        for (trade, (side, quantity, entry, price, fees, exit)) in
+            report.trades.iter().zip(expected)
+        {
+            let mut expected_trade = StrategyTrade::new(side, quantity, bar(entry), price);
+            expected_trade.fees = fees;
+            expected_trade.label = Some("SYM".into());
+            expected_trade.exit =
+                exit.map(|(time, price, profit)| StrategyExit::new(bar(time), price, profit));
+            expected_report.trades.push(expected_trade);
+            assert_eq!(trade.side, side);
+            assert_eq!(trade.entry_time, bar(entry));
+            assert_eq!(trade.label.as_deref(), Some("SYM"));
+            near(trade.quantity, quantity);
+            near(trade.entry_price, price);
+            near(trade.fees, fees);
+            assert_eq!(trade.exit.is_some(), exit.is_some());
+            if let (Some(actual), Some((time, price, profit))) = (&trade.exit, exit) {
+                assert_eq!(actual.time, bar(time));
+                near(actual.price, price);
+                near(actual.profit, profit);
+            }
+        }
+        // Bars 1 to 3 hold the equity after their fills, not before them.
+        let equity = [9_999.0, 10_048.58, 9_987.06, 10_036.16, 10_035.7, 10_030.7];
+        assert_eq!(report.equity.len(), equity.len());
+        for (n, (&(time, actual), expected)) in (1..).zip(report.equity.iter().zip(equity)) {
+            assert_eq!(time, bar(n));
+            near(actual, expected);
+        }
+        expected_report.equity = (1..)
+            .zip(equity)
+            .map(|(n, equity)| (bar(n), equity))
+            .collect();
+        let expected_performance = expected_report.performance();
+        let performance = report.performance();
+        for (actual, expected) in [
+            (&performance.all, &expected_performance.all),
+            (&performance.long, &expected_performance.long),
+            (&performance.short, &expected_performance.short),
+        ] {
+            assert_eq!(actual.closed_trades, expected.closed_trades);
+            assert_eq!(actual.open_trades, expected.open_trades);
+            assert_eq!(actual.winning_trades, expected.winning_trades);
+            assert_eq!(actual.losing_trades, expected.losing_trades);
+            near(actual.net_profit, expected.net_profit);
+            near(actual.gross_profit, expected.gross_profit);
+            near(actual.gross_loss, expected.gross_loss);
+            near(actual.total_fees, expected.total_fees);
+        }
+        let all = &performance.all;
+        assert_eq!(
+            (
+                all.closed_trades,
+                all.open_trades,
+                all.winning_trades,
+                all.losing_trades
+            ),
+            (2, 1, 1, 1)
+        );
+        near(all.net_profit, 36.16);
+        near(all.gross_profit, 48.15);
+        near(all.gross_loss, 11.99);
+        near(all.total_fees, 3.84);
+        near(paper.save().balance, 10_035.7);
+        near(all.net_profit - 0.46, paper.save().balance - 10_000.0);
+        near(all.profit_factor.unwrap(), 48.15 / 11.99);
+        near(all.win_rate.unwrap(), 0.5);
+        near(performance.max_drawdown.unwrap(), 61.52);
+        near(
+            performance.max_drawdown.unwrap(),
+            expected_performance.max_drawdown.unwrap(),
+        );
+        #[cfg(feature = "csv")]
+        {
+            let csv = report.trades_csv();
+            let mut reader = csv::Reader::from_reader(csv.as_bytes());
+            let headers = reader.headers().unwrap().clone();
+            let column = |name| headers.iter().position(|h| h == name).unwrap();
+            let rows: Vec<_> = reader.records().map(Result::unwrap).collect();
+            assert_eq!(rows.len(), 3);
+            for (row, side) in rows.iter().zip(["long", "short", "long"]) {
+                assert_eq!(&row[column("side")], side);
+            }
+            for name in ["exit_time", "exit_price", "profit"] {
+                assert!(rows[2][column(name)].is_empty());
+            }
+            for (row, profit) in rows.iter().zip([-11.99, 48.15]) {
+                near(row[column("profit")].parse().unwrap(), profit);
+            }
+        }
+    }
+
+    /// A replay account books its own settings and leaves the live account untouched; invalid
+    /// settings cannot reach the account constructor, which rejects non-finite capital.
+    #[test]
+    fn replay_account_settings_build_a_separate_account_that_books_and_reports_them() {
+        let live = PaperAccount::new("USD", 100_000.0);
+        live.set_price("SYM", 100.0);
+        let before = live.save();
+        let session = ReplayAccountSettings::new("EUR", 10_000.0, 0.001)
+            .account()
+            .unwrap();
+        let bar = |n: i64| DateTime::from_timestamp(1_704_067_200 + n * 60, 0).unwrap();
+        for (n, price, side) in [(1, 100.0, OrderSide::Buy), (2, 110.0, OrderSide::Sell)] {
+            assert!(session.set_replay_time(Some(bar(n))));
+            session.set_price("SYM", price);
+            place(
+                &session,
+                OrderRequest::new("SYM", side, 10.0, OrderType::Market),
+            )
+            .unwrap();
+        }
+        let near = |actual: f64, expected: f64| {
+            assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+        };
+        let saved = session.save();
+        near(saved.balance, 10_097.9);
+        assert_eq!(saved.balance_history.len(), 3);
+        for (change, expected) in saved.balance_history.iter().zip([-1.0, 100.0, -1.1]) {
+            near(change.amount, expected);
+        }
+        let report = session.report("Replay trading", "SYM", Timeframe::Min1);
+        assert_eq!(report.currency.as_deref(), Some("EUR"));
+        assert_eq!(report.initial_capital, 10_000.0);
+        assert_eq!(report.trades.len(), 1);
+        let trade = &report.trades[0];
+        assert_eq!(
+            (
+                trade.side,
+                trade.quantity,
+                trade.entry_time,
+                trade.entry_price
+            ),
+            (OrderSide::Buy, 10.0, bar(1), 100.0)
+        );
+        near(trade.fees, 2.1);
+        let exit = trade.exit.as_ref().unwrap();
+        assert_eq!((exit.time, exit.price), (bar(2), 110.0));
+        near(exit.profit, 97.9);
+        near(report.performance().all.net_profit, 97.9);
+        assert_eq!(live.save(), before);
+        for (currency, capital, commission) in [
+            ("  ", 10_000.0, 0.001),
+            ("USD", f64::NAN, 0.001),
+            ("USD", f64::INFINITY, 0.001),
+            ("USD", 0.0, 0.001),
+            ("USD", -1.0, 0.001),
+            ("USD", 10_000.0, -0.001),
+            ("USD", 10_000.0, f64::NAN),
+        ] {
+            let settings = ReplayAccountSettings::new(currency, capital, commission);
+            assert!(!settings.is_valid(), "{settings:?}");
+            assert!(settings.account().is_none(), "{settings:?}");
+        }
+        let settings = ReplayAccountSettings::new(" usd ", 10_000.0, 0.0);
+        assert_eq!(settings.account().unwrap().save().currency, "usd");
     }
 
     #[test]
@@ -2749,7 +3364,9 @@ mod tests {
     #[test]
     fn immediate_orders_fill_at_once_or_are_cancelled_and_session_orders_are_refused() {
         use OrderSide::{Buy, Sell};
-        use TimeInForce::{Day, FillOrKill, GoodTillCancelled, ImmediateOrCancel, Month, Week};
+        use TimeInForce::{
+            Day, FillOrKill, GoodTillCancelled, GoodTillDate, ImmediateOrCancel, Month, Week,
+        };
         let paper = PaperAccount::new("USD", 1_000.0);
         paper.set_price("SYM", 100.0);
         assert_eq!(
@@ -2761,8 +3378,17 @@ mod tests {
         let id = place(&paper, request.clone()).unwrap();
         let before = snapshot(&paper);
         let inbox = Arc::new(Inbox::default());
-        for tif in [Day, Week, Month, ImmediateOrCancel, FillOrKill] {
+        for tif in [
+            Day,
+            Week,
+            Month,
+            GoodTillDate,
+            ImmediateOrCancel,
+            FillOrKill,
+        ] {
             request.time_in_force = tif;
+            request.expires =
+                (tif == GoodTillDate).then(|| "2026-12-01T21:00:00Z".parse().unwrap());
             paper.modify(id.clone(), request.clone(), inbox.reply(0));
             let result = *inbox
                 .drain()
@@ -2833,11 +3459,14 @@ mod tests {
             (Day, OrderType::Market, Buy, None),
             (Week, OrderType::Market, Buy, None),
             (Month, OrderType::Market, Buy, None),
+            (GoodTillDate, OrderType::Market, Buy, None),
         ] {
             let paper = PaperAccount::new("USD", 1_000.0);
             paper.set_price("SYM", 100.0);
             let mut request = OrderRequest::new("SYM", side, 1.0, kind);
             request.time_in_force = tif;
+            request.expires =
+                (tif == GoodTillDate).then(|| "2026-12-01T21:00:00Z".parse().unwrap());
             paper.place(request, inbox.reply(0));
             let result = *inbox
                 .drain()

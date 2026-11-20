@@ -59,14 +59,14 @@ mod watchlist;
 pub use alert::{
     Alert, AlertCalendar, AlertChannelComparison, AlertComparison, AlertCondition, AlertDelivery,
     AlertFrequency, AlertId, AlertInputs, AlertPositionProgress, AlertRule, AlertSource,
-    AlertSourceName, AlertStatus, AlertStudy, CustomAlertEvent, NotificationSchedule,
+    AlertSourceName, AlertStatus, AlertStudy, AlertTrigger, CustomAlertEvent, NotificationSchedule,
     NotificationWindow,
 };
+#[cfg(any(feature = "widget", feature = "studies"))]
+pub(crate) use bar::index_at_with_timeframe;
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
-pub(crate) use bar::{
-    index_at, index_at_with_timeframe, numeric_positions, time_at, time_at_with_timeframe,
-};
+pub(crate) use bar::{index_at, numeric_positions, time_at, time_at_with_timeframe};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 #[cfg(feature = "widget")]
@@ -78,8 +78,8 @@ pub use chart_style::{
 };
 pub use chart_type::{
     BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams, CustomProfileSession,
-    FootprintColor, FootprintMode, FootprintStatistic, NodeSensitivity, ProfileRows,
-    ProfileSession, TradeProfileSettings,
+    FootprintColor, FootprintIntensity, FootprintMode, FootprintStatistic, NodeSensitivity,
+    ProfileRows, ProfileSession, TradeProfileSettings,
 };
 pub use clock::BarClock;
 pub(crate) use clock::Placement;
@@ -88,8 +88,8 @@ pub use date_range::DateRange;
 #[cfg(any(feature = "studies", feature = "drawings", feature = "strategies"))]
 pub(crate) use instrument::same_currency;
 pub use instrument::{
-    DataStatus, FeedService, Instrument, OverrideWindow, ProfileResolution, Session,
-    SessionOverride, SessionWindow, SymbolType,
+    DataStatus, FeedService, IdentifierKind, Instrument, OverrideWindow, ProfileResolution,
+    Session, SessionOverride, SessionWindow, SymbolType,
 };
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{
@@ -128,8 +128,9 @@ pub use session::{
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
 pub use strategy::{
-    StrategyComparison, StrategyExcursion, StrategyExit, StrategyHolding, StrategyPerformance,
-    StrategyReport, StrategyTrade, StrategyTradeStats,
+    StrategyAnalysis, StrategyComparison, StrategyExcursion, StrategyExit, StrategyHolding,
+    StrategyPerformance, StrategyPeriod, StrategyReport, StrategyResultBin, StrategyTrade,
+    StrategyTradeGroup, StrategyTradeStats,
 };
 #[cfg(feature = "ui")]
 pub(crate) use strategy::{SummaryUnit, run_figures, trade_figures};
@@ -141,8 +142,8 @@ pub use timescale::{LogicalRange, NumericPositions, TimeScale};
 pub use timezone::{TimezoneId, TimezoneOffset};
 pub(crate) use timezone::{local_instant, local_time};
 pub use tpo::{
-    ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLetter, TPOProfile,
-    TPOProfilePeriod, derive_tick_size, to_tpo_profiles,
+    ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLabels, TPOLetter,
+    TPOProfile, TPOProfilePeriod, derive_tick_size, to_tpo_profiles,
 };
 pub(crate) use trading::rounding_tolerance;
 pub use trading::{
