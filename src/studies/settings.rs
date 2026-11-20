@@ -1911,6 +1911,15 @@ impl Indicator for ConfiguredStudy {
     fn line_names(&self) -> Vec<String> {
         self.study.line_names()
     }
+    fn alert_outputs(&self) -> Vec<(usize, String)> {
+        let mut outputs = self.study.alert_outputs();
+        // Values kept after eviction or aligned to another interval hold only plotted lines.
+        if self.kept.is_some() || self.aligned.is_some() {
+            let plots = self.study.line_count();
+            outputs.retain(|(output, _)| *output < plots);
+        }
+        outputs
+    }
     fn projection_fill_color(&self, projection: &super::StudyProjection) -> Color32 {
         self.study.projection_fill_color(projection)
     }
@@ -2990,6 +2999,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A study calculated on other bars offers no output its aligned values cannot hold.
+    #[test]
+    fn studies_on_other_bars_offer_alerts_only_on_their_plots() {
+        use crate::model::BarClock;
+        use crate::studies::{AutoKeyLevels, StudyData};
+        let start: chrono::DateTime<chrono::Utc> = "2026-02-02T09:00:00Z".parse().unwrap();
+        let bars = |count: i32, interval: Timeframe| -> Vec<Bar> {
+            (0..count)
+                .map(|i| {
+                    let time = start + interval.duration() * i;
+                    let price = 100.0 + f64::from(i);
+                    Bar::new(time, price, price, price, price, 1.0)
+                })
+                .collect()
+        };
+        let chart = bars(10, Timeframe::Min1);
+        let five = bars(2, Timeframe::Min5);
+        let mut study = ConfiguredStudy::new(Box::new(AutoKeyLevels::new()));
+        study.set_timeframe(Timeframe::Min1);
+        study.calculate(&chart);
+        assert_eq!(
+            study.alert_outputs(),
+            [
+                (7, "dPOC"),
+                (8, "dVAL"),
+                (9, "dVAH"),
+                (14, "wPOC"),
+                (15, "wVAL"),
+                (16, "wVAH")
+            ]
+            .map(|(output, name)| (output, name.to_owned()))
+        );
+        study
+            .set_input(
+                "calculation_timeframe",
+                InputValue::Timeframe(Some(Timeframe::Min5)),
+            )
+            .unwrap();
+        let request = study.data_requests().remove(0);
+        study.update_data(
+            &chart,
+            0,
+            &[StudyData {
+                request,
+                bars: &five,
+                clock: BarClock::new(Timeframe::Min5),
+                instrument: None,
+                timeframe: Timeframe::Min5,
+            }],
+        );
+        assert_eq!(study.zones().len(), 6);
+        assert!(study.alert_outputs().is_empty());
     }
 
     /// Guards #3494: a volume profile offers the Interval and Wait for interval close whatever
