@@ -304,15 +304,6 @@ impl DrawingPropertiesDialog {
         self.drawing_id = None;
     }
 
-    /// Sync dialog open/close state from an external flag.
-    ///
-    /// Opening requires drawing context, so only close is synced here.
-    pub fn sync_open_state(&mut self, should_be_open: bool) {
-        if !should_be_open && self.is_open {
-            self.close();
-        }
-    }
-
     /// Show the dialog
     pub fn show(&mut self, ctx: &Context) -> DrawingPropertiesAction {
         self.templates.poll(ctx);
