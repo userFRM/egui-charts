@@ -183,8 +183,14 @@ mod tests {
         ];
         let inside = egui::pos2(125.0, 125.0);
         let outside = egui::pos2(50.0, 150.0);
-        assert_eq!(hit_test(inside, std::slice::from_ref(&drawing), "1m"), Some(7));
-        assert_eq!(hit_test(outside, std::slice::from_ref(&drawing), "1m"), None);
+        assert_eq!(
+            hit_test(inside, std::slice::from_ref(&drawing), "1m"),
+            Some(7)
+        );
+        assert_eq!(
+            hit_test(outside, std::slice::from_ref(&drawing), "1m"),
+            None
+        );
 
         let config = drawing.projection.as_mut().unwrap();
         config.trend_visible = false;
@@ -192,7 +198,10 @@ mod tests {
         config.show_coefficients = false;
         config.levels[0].coefficient = 0.5;
         let on_level = egui::pos2(135.35534, 135.35534);
-        assert_eq!(hit_test(on_level, std::slice::from_ref(&drawing), "1m"), None);
+        assert_eq!(
+            hit_test(on_level, std::slice::from_ref(&drawing), "1m"),
+            None
+        );
         let ctx = egui::Context::default();
         for visible in [true, false] {
             drawing.projection.as_mut().unwrap().levels[0].visible = visible;
