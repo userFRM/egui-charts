@@ -1,7 +1,7 @@
 //! Drawing options and configuration types.
 //!
 //! Contains styling enums ([`LineStyle`](crate::model::LineStyle), [`ArrowStyle`], [`FontWeight`]),
-//! interaction configuration ([`DrawingOptions`], [`HandlePos`]),
+//! handle positions ([`HandlePos`]),
 //! per-timeframe visibility ([`TimeframeVisibility`]), Fibonacci level
 //! configuration ([`FibonacciConfig`], [`FibonacciLevel`]), and the settings of
 //! the volume profile, regression trend and position drawings
@@ -102,38 +102,6 @@ impl ArrowStyle {
 
 pub use crate::config::FontWeight;
 pub use crate::model::TimeframeVisibility;
-
-/// Selection handle settings read by `DrawingInteraction::render_handles`.
-///
-/// ```
-/// use egui_charts::drawings::DrawingOptions;
-///
-/// let mut options = DrawingOptions::default();
-/// options.handle_size = 10.0;
-/// ```
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub struct DrawingOptions {
-    /// Show selection handles
-    pub show_handles: bool,
-    /// Handle size in pixels
-    pub handle_size: f32,
-    /// Handle color (RGBA)
-    pub handle_color: [u8; 4],
-    /// Selected handle color (RGBA)
-    pub handle_sel_color: [u8; 4],
-}
-
-impl Default for DrawingOptions {
-    fn default() -> Self {
-        Self {
-            show_handles: true,
-            handle_size: 6.0,
-            handle_color: [255, 255, 255, 200],
-            handle_sel_color: [242, 54, 69, 255], // Default red
-        }
-    }
-}
 
 /// Configuration for a single Fibonacci level
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

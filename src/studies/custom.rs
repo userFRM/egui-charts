@@ -393,6 +393,11 @@ impl Indicator for CustomIndicator {
         self.offsets.get(line).copied().unwrap_or(0)
     }
 
+    fn draws_only_plots(&self) -> bool {
+        // A study reading histories of its own keeps its inputs.
+        self.data_requests.is_none()
+    }
+
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
         self.plot_color
             .as_ref()
