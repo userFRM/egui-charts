@@ -2,10 +2,10 @@
 //!
 //! Manages the state of the time scale controls and range selection.
 
-use super::DateRange;
+use crate::model::DateRange;
 use crate::model::Timeframe;
 
-/// Session type for Regular Trading Hours / Extended Hours
+/// The trading hours the time scale toolbar's session control shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SessionType {
     /// Regular Trading Hours only
@@ -13,16 +13,71 @@ pub enum SessionType {
     RTH,
     /// Extended Trading Hours (pre-market + after-hours)
     ETH,
+    /// Regular, extended and overnight hours, as
+    /// [`Chart::set_overnight_hours`](crate::widget::Chart::set_overnight_hours) requests them.
+    Overnight,
     /// 24/7 (for crypto, forex)
     Full24x7,
 }
 
 impl SessionType {
+    /// Reads the chart's hours, or [`Full24x7`](Self::Full24x7) for an instrument without
+    /// session windows or date-specific hours. Without an instrument, reads the hours flags.
+    /// Pass this to [`TimeframeToolbar::set_session`](super::TimeframeToolbar::set_session)
+    /// before each [`show`](super::TimeframeToolbar::show) so the control follows choices
+    /// made elsewhere, including settings and undo.
+    pub fn from_chart(chart: &crate::widget::Chart) -> Self {
+        if has_trading_hours(chart.instrument()) {
+            Self::from_hours(chart.extended_hours(), chart.overnight_hours())
+        } else {
+            Self::Full24x7
+        }
+    }
+
+    /// The requested hours; regular hours take precedence, as the chart's setters enforce.
+    pub(crate) fn from_hours(extended: bool, overnight: bool) -> Self {
+        match (extended, overnight) {
+            (false, _) => Self::RTH,
+            (true, false) => Self::ETH,
+            (true, true) => Self::Overnight,
+        }
+    }
+
+    /// The choices offered, including overnight hours when available or already selected.
+    pub(crate) fn choices(overnight: bool) -> &'static [Self] {
+        if overnight {
+            &[Self::RTH, Self::ETH, Self::Overnight]
+        } else {
+            &[Self::RTH, Self::ETH]
+        }
+    }
+
+    /// The name of this choice in a session selector.
+    pub(crate) fn choice_label(self) -> &'static str {
+        match self {
+            Self::RTH => "Regular trading hours",
+            Self::ETH => "Extended trading hours",
+            Self::Overnight => "Overnight trading hours",
+            Self::Full24x7 => "24/7 trading",
+        }
+    }
+
+    /// The requested extended and overnight flags, absent for an always-open instrument.
+    pub(crate) fn hours(self) -> Option<(bool, bool)> {
+        match self {
+            Self::RTH => Some((false, false)),
+            Self::ETH => Some((true, false)),
+            Self::Overnight => Some((true, true)),
+            Self::Full24x7 => None,
+        }
+    }
+
     /// Get display label
     pub fn label(&self) -> &'static str {
         match self {
             SessionType::RTH => "RTH",
             SessionType::ETH => "ETH",
+            SessionType::Overnight => "ALL",
             SessionType::Full24x7 => "24/7",
         }
     }
@@ -32,9 +87,36 @@ impl SessionType {
         match self {
             SessionType::RTH => "Regular trading hours: on",
             SessionType::ETH => "Regular trading hours: off (extended hours)",
+            SessionType::Overnight => "Regular trading hours: off (extended and overnight hours)",
             SessionType::Full24x7 => "Regular trading hours: off (24/7 trading)",
         }
     }
+}
+
+/// Whether hours can be chosen. A missing instrument can still request hours, as in the time
+/// axis menu; a session without windows or date-specific hours is always open.
+pub(crate) fn has_trading_hours(instrument: Option<&crate::model::Instrument>) -> bool {
+    instrument.is_none_or(|instrument| {
+        instrument.session.as_ref().is_some_and(|session| {
+            !session.windows.is_empty()
+                || !session.extended_windows.is_empty()
+                || !session.overnight_windows.is_empty()
+                || !session.overrides.is_empty()
+        })
+    })
+}
+
+/// Whether weekly or date-specific overnight windows exist.
+pub(crate) fn has_overnight_windows(instrument: Option<&crate::model::Instrument>) -> bool {
+    instrument
+        .and_then(|instrument| instrument.session.as_ref())
+        .is_some_and(|session| {
+            !session.overnight_windows.is_empty()
+                || session
+                    .overrides
+                    .iter()
+                    .any(|date| !date.overnight_windows.is_empty())
+        })
 }
 
 /// Bottom panel state
@@ -52,7 +134,7 @@ pub struct TimeframeToolbarState {
     pub timezone: String,
     /// Whether timezone menu is open
     pub timezone_menu_open: bool,
-    /// Current session type (RTH/ETH/24x7)
+    /// Current session type: RTH, ETH, ALL (overnight) or 24/7
     pub session_type: SessionType,
     /// Whether session menu is open
     pub session_menu_open: bool,
@@ -171,6 +253,62 @@ impl TimeframeToolbarState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The control follows every hours choice, with or without overnight windows, and reserves
+    /// 24/7 for instruments that trade without sessions: #3560.
+    #[test]
+    fn session_control_follows_the_chart_hours() {
+        use crate::model::{Instrument, Session, SessionOverride, SessionWindow};
+        use chrono::{NaiveDate, NaiveTime, Weekday::Mon};
+
+        let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        let regular = Session::new([SessionWindow::new([Mon], at(9), at(16))]);
+        let overnight =
+            regular
+                .clone()
+                .with_overnight_windows([SessionWindow::new([Mon], at(20), at(4))]);
+        let regular = Some(Instrument::new("A").with_session(regular));
+        let overnight = Some(Instrument::new("A").with_session(overnight));
+        let date = NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
+        for (instrument, extended, overnight, expected) in
+            [
+                (regular.clone(), false, false, "RTH"),
+                (regular.clone(), true, false, "ETH"),
+                (regular, false, true, "ALL"),
+                (overnight.clone(), false, false, "RTH"),
+                (overnight.clone(), true, false, "ETH"),
+                (overnight, true, true, "ALL"),
+                (Some(Instrument::new("BTC")), true, false, "24/7"),
+                (
+                    Some(Instrument::new("BTC").with_session(Session::new([]))),
+                    false,
+                    false,
+                    "24/7",
+                ),
+                (
+                    Some(Instrument::new("A").with_session(Session::new([]).with_holidays([date]))),
+                    true,
+                    true,
+                    "24/7",
+                ),
+                (
+                    Some(Instrument::new("A").with_session(
+                        Session::new([]).with_overrides([SessionOverride::new(date)]),
+                    )),
+                    false,
+                    false,
+                    "RTH",
+                ),
+                (None, true, false, "ETH"),
+            ]
+        {
+            let mut chart = crate::Chart::new(crate::model::BarData::new());
+            chart.set_instrument(instrument);
+            chart.set_extended_hours(extended);
+            chart.set_overnight_hours(overnight);
+            assert_eq!(SessionType::from_chart(&chart).label(), expected);
+        }
+    }
 
     #[test]
     fn clock_converts_the_named_zone_and_falls_back_to_utc() {

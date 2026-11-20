@@ -152,6 +152,7 @@ impl FeedDisplay {
             return;
         };
         chart.set_liquidity_heatmap_config(self.settings.heatmap);
+        chart.set_depth_retention(self.settings.heatmap_retention);
         chart.set_liquidity_heatmap(self.settings.show_heatmap);
         chart.set_order_book_view(self.settings.order_book.clone());
         chart.set_volume_bubbles(
@@ -529,6 +530,23 @@ impl Chart {
             // Capture the removed study before the volume setting's action closes.
             self.remove_series(id);
         }
+        #[cfg(feature = "studies")]
+        self.pull_price_target_colors();
+        // Turning the volume setting on adds its study on the next frame, so at the study cap the
+        // action leaves the setting off, unless a volume study already on the chart serves it.
+        #[cfg(feature = "studies")]
+        if self.config.show_volume
+            && self
+                .history
+                .pending
+                .as_ref()
+                .and_then(|pending| pending.before.config.as_ref())
+                .is_some_and(|before| !before.show_volume)
+            && self.study_limit_reached()
+            && !self.indicators().any(|(_, study)| study.is_volume())
+        {
+            self.config.show_volume = false;
+        }
         let Some(mut pending) = self.history.pending.take() else {
             return;
         };
@@ -821,6 +839,7 @@ impl Chart {
     }
 
     pub(super) fn record_study(&mut self, id: SeriesId) {
+        self.watch_studies([id]);
         self.element_studies.dirty = true;
         if self
             .history
@@ -965,7 +984,8 @@ impl Chart {
     /// [`Self::overnight_hours`] changed, and synchronize their UI.
     /// Added series that the step removed or brought back are reported by
     /// [`drain_events`](Self::drain_events) as [`ChartEvent::SeriesRemoved`] and
-    /// [`ChartEvent::SeriesAdded`].
+    /// [`ChartEvent::SeriesAdded`]. Studies added, removed, hidden, shown or given other inputs
+    /// by the step are reported as [`ChartEvent::Study`].
     pub fn take_history_changed(&mut self) -> bool {
         std::mem::take(&mut self.history.changed)
     }
@@ -1193,10 +1213,14 @@ impl Chart {
         if let Some(set) = &mut action.series {
             self.swap_series(set);
         }
+        // Removing and reinserting a study below is one change of it.
+        let outer = self.begin_study_batch();
+        self.watch_studies(action.studies.iter().map(|change| change.id));
         self.element_studies.dirty |= !action.studies.is_empty();
         // Restore by original index after removing every touched study, so bulk removal and
         // templates retain order and stable ids while unrelated host studies stay present.
         let show_volume = self.config.show_volume;
+        let show_price_targets = self.show_price_targets;
         for (change, current) in action.studies.iter().zip(&mut current) {
             let indicator = self.take_study(change.id);
             if change.before.is_none()
@@ -1225,8 +1249,10 @@ impl Chart {
             self.next_refresh.insert(at, f64::NEG_INFINITY);
         }
         self.recalculate_studies();
-        // Replacing a study during history replay is not a volume-switch edit.
+        // Replacing a study during history replay is not a volume-switch or targets edit.
         self.config.show_volume = show_volume;
+        self.show_price_targets = show_price_targets;
+        self.end_study_batch(outer);
         for (change, before) in action.studies.iter_mut().zip(current) {
             change.before = before;
         }
@@ -1268,6 +1294,11 @@ impl Chart {
         }
         if let Some(edit) = &action.layout_edit {
             edit.request(redo);
+        }
+        // The configuration brought back gives the forecast studies their colours.
+        #[cfg(feature = "studies")]
+        {
+            self.price_target_colors = None;
         }
         if redo {
             self.history.undo.push(action);
@@ -2365,6 +2396,7 @@ mod tests {
             chart.attach_feed(std::sync::Arc::new(Feed), 1);
             chart.feed_link.as_mut().unwrap().book_visible = visible;
             chart.user_action(|chart| {
+                chart.set_depth_retention(Some(chrono::TimeDelta::hours(1)));
                 chart.set_liquidity_heatmap(true);
                 let mut view = chart.order_book_view();
                 view.profile = BookProfile::LargestOrder;
@@ -2373,12 +2405,17 @@ mod tests {
             });
             assert!(chart.undo());
             let settings = ChartSettingsState::from_chart(&chart).order_flow;
+            assert_eq!(settings.heatmap_retention, None);
             assert!(!settings.show_heatmap);
             assert!(!settings.show_volume_bubbles);
             assert_eq!(settings.order_book.profile, BookProfile::Total);
             assert_eq!(chart.feed_link.as_ref().unwrap().book_visible, visible);
             assert!(chart.redo());
             let settings = ChartSettingsState::from_chart(&chart).order_flow;
+            assert_eq!(
+                settings.heatmap_retention,
+                Some(chrono::TimeDelta::hours(1))
+            );
             assert!(settings.show_heatmap && settings.show_volume_bubbles);
             assert_eq!(settings.order_book.profile, BookProfile::LargestOrder);
             chart.set_liquidity_heatmap(false);

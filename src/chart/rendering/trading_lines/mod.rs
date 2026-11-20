@@ -14,9 +14,9 @@ use crate::chart::rendering::{draw_dashed_polyline, render_price_line};
 use crate::localization as l10n;
 use crate::model::{
     Capabilities, LineStyle, Order, OrderId, OrderRequest, OrderSide, OrderType, Position,
-    PositionBracket, PriceLine,
+    PositionBracket, PriceLine, TimeInForce,
 };
-use crate::scales::{decimals, to_step};
+use crate::scales::{TimezoneMode, decimals, to_step};
 use crate::theme::{Theme, ThemeExt};
 
 /// What the user asked for on a trading line. Confirm a change with the user, then send it to
@@ -201,6 +201,8 @@ pub struct TradingLineOptions<'a> {
     pub currency: &'a str,
     /// The positive tick size used to round dragged prices.
     pub tick_size: f64,
+    /// The zone in which good-till-date order labels write their expiry.
+    pub timezone: TimezoneMode,
 }
 
 impl<'a> TradingLineOptions<'a> {
@@ -238,6 +240,7 @@ impl<'a> TradingLineOptions<'a> {
             point_value: 1.0,
             currency,
             tick_size,
+            timezone: TimezoneMode::Utc,
         }
     }
 }
@@ -363,6 +366,7 @@ pub(crate) fn coverage_text(ctx: &egui::Context, coverage: (f64, f64)) -> String
 /// chart's symbol, and call it after drawing the chart. The price axis is left to the caller; see
 /// [`TradingLines::tags`]. A stop-limit order draws its stop and its limit as two lines joined
 /// at the node column; each is dragged on its own, and exits follow the stop.
+/// Equal prices share one line and move together.
 pub fn render_trading_lines<'a>(
     ui: &mut Ui,
     mapping: &ChartMapping,
@@ -506,17 +510,38 @@ pub fn render_trading_lines<'a>(
                 if level == Level::Limit {
                     return l10n::text(&ctx, "Limit");
                 }
-                if let Some(text) = look.and_then(|look| look.text.as_ref()) {
-                    return text.clone();
-                }
-                match (appearance, options.bracket_pnl, entry) {
-                    (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
-                        let gain = (price - entry)
-                            * parent.map_or(direction(request.side), |p| p.quantity.signum());
-                        let money = gain * quantity * options.point_value;
-                        pnl_text(&ctx, unit, money, gain, entry, options).0
+                let body = if let Some(text) = look.and_then(|look| look.text.as_ref()) {
+                    text.clone()
+                } else {
+                    match (appearance, options.bracket_pnl, entry) {
+                        (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
+                            let gain = (price - entry)
+                                * parent.map_or(direction(request.side), |p| p.quantity.signum());
+                            let money = gain * quantity * options.point_value;
+                            pnl_text(&ctx, unit, money, gain, entry, options).0
+                        }
+                        _ => name.clone(),
                     }
-                    _ => name.clone(),
+                };
+                match request.expires.filter(|_| {
+                    level == Level::Entry && request.time_in_force == TimeInForce::GoodTillDate
+                }) {
+                    Some(expires) => l10n::format_text(
+                        &ctx,
+                        "{kind} until {expiry}",
+                        &[
+                            ("kind", body),
+                            (
+                                "expiry",
+                                options
+                                    .timezone
+                                    .wall_time(expires)
+                                    .format("%Y-%m-%d %H:%M")
+                                    .to_string(),
+                            ),
+                        ],
+                    ),
+                    None => body,
                 }
             };
             let line = PriceLine::new(price, color).with_style(
@@ -652,9 +677,11 @@ pub fn render_trading_lines<'a>(
                         changed.order_type = match request.order_type {
                             OrderType::Limit(_) => OrderType::Limit(price),
                             OrderType::Stop(_) => OrderType::Stop(price),
-                            OrderType::StopLimit { limit, .. } => {
-                                OrderType::StopLimit { stop: price, limit }
-                            }
+                            // A limit equal to its stop shares its line, so it moves with it.
+                            OrderType::StopLimit { stop, limit } => OrderType::StopLimit {
+                                stop: price,
+                                limit: if limit == stop { price } else { limit },
+                            },
                             other => other,
                         };
                         changed.take_profit = changed.take_profit.map(shift);
@@ -1889,12 +1916,15 @@ mod tests {
     }
 
     /// Both stop-limit prices are visible and independent; exits keep following the stop.
+    /// A limit equal to its stop shares its line and moves with it.
     #[test]
     fn stop_limit_orders_drag_their_stop_and_limit_apart() {
         for theme in [Theme::light(), Theme::dark()] {
-            for (label, target, expected, take_profit) in [
+            for (label, limit, drawn, target, expected, take_profit) in [
                 (
                     "Limit",
+                    101.5,
+                    &[101.0, 101.5][..],
                     102.0,
                     OrderType::StopLimit {
                         stop: 101.0,
@@ -1904,12 +1934,25 @@ mod tests {
                 ),
                 (
                     "Stop limit",
+                    101.5,
+                    &[101.0, 101.5],
                     100.5,
                     OrderType::StopLimit {
                         stop: 100.5,
                         limit: 101.5,
                     },
                     102.5,
+                ),
+                (
+                    "Stop limit",
+                    101.0,
+                    &[101.0],
+                    103.0,
+                    OrderType::StopLimit {
+                        stop: 103.0,
+                        limit: 103.0,
+                    },
+                    105.0,
                 ),
             ] {
                 let ctx = egui::Context::default();
@@ -1919,10 +1962,7 @@ mod tests {
                     "SYM",
                     OrderSide::Buy,
                     1.0,
-                    OrderType::StopLimit {
-                        stop: 101.0,
-                        limit: 101.5,
-                    },
+                    OrderType::StopLimit { stop: 101.0, limit },
                 );
                 request.take_profit = Some(103.0);
                 let order = Order::new(OrderId::new("S"), request, OrderStatus::Working);
@@ -1964,9 +2004,18 @@ mod tests {
                                 let buy = crate::theme::trading_side_color(&theme, OrderSide::Buy);
                                 assert_eq!(
                                     lines.tags,
-                                    [(101.0, buy), (101.5, buy), (103.0, theme.ui.take_profit)]
+                                    drawn
+                                        .iter()
+                                        .map(|&price| (price, buy))
+                                        .chain([(103.0, theme.ui.take_profit)])
+                                        .collect::<Vec<_>>(),
+                                    "{label} {limit}"
                                 );
-                                assert_eq!(lines.outlined, [0, 1]);
+                                assert_eq!(
+                                    lines.outlined,
+                                    (0..drawn.len()).collect::<Vec<_>>(),
+                                    "{label} {limit}"
+                                );
                             }
                             action = action.take().or(lines.action);
                         },
@@ -1992,7 +2041,7 @@ mod tests {
                 assert_eq!(
                     action,
                     Some(TradingLineAction::Modify(order, changed)),
-                    "{label}"
+                    "{label} {limit}"
                 );
             }
         }
@@ -2015,6 +2064,7 @@ mod tests {
             let position = Position::new("SYM", 1.0, 95.0);
             for (submit, is_position) in [(false, false), (true, false), (false, true)] {
                 let options = TradingLineOptions {
+                    timezone: TimezoneMode::Utc,
                     show_orders: true,
                     show_positions: true,
                     extend_lines: true,

@@ -341,7 +341,6 @@ impl Drawing {
                         | DrawingToolType::Image
                         | DrawingToolType::Tweet
                         | DrawingToolType::Idea
-                        | DrawingToolType::Forecast
                 )
                 && let Some(configured) = self.fill_color32()
             {
@@ -395,7 +394,11 @@ impl Drawing {
             }
             Shape::Rect(r) => {
                 fill(&mut r.fill);
-                if dash.is_none() || r.stroke.is_empty() {
+                // A forecast's card frames stay solid; its line takes the pattern.
+                if dash.is_none()
+                    || r.stroke.is_empty()
+                    || self.tool_type == DrawingToolType::Forecast
+                {
                     return;
                 }
                 egui::epaint::tessellator::path::rounded_rectangle(
@@ -509,6 +512,24 @@ impl Drawing {
         }
     }
 
+    /// The size `render_marker` paints an end marker in `style` at.
+    fn end_marker_size(&self, style: ArrowStyle) -> f32 {
+        (self.stroke_width * style.size_multiplier()).max(4.0)
+    }
+
+    /// The radius of the smallest circle about its tip that holds an end marker in `style`:
+    /// an arrowhead's back corners, a square's corners, half the size of the other markers.
+    pub(super) fn end_marker_reach(&self, style: ArrowStyle) -> f32 {
+        let size = self.end_marker_size(style);
+        match style {
+            ArrowStyle::None => 0.0,
+            ArrowStyle::Arrow => size * 5_f32.sqrt() / 2.0,
+            ArrowStyle::OpenArrow => size * 5_f32.sqrt() / 2.0 + self.stroke_width / 2.0,
+            ArrowStyle::Circle | ArrowStyle::Diamond => size / 2.0,
+            ArrowStyle::Square => size * std::f32::consts::FRAC_1_SQRT_2,
+        }
+    }
+
     fn render_marker(
         &self,
         painter: &Painter,
@@ -520,7 +541,7 @@ impl Drawing {
             return;
         }
         let color = self.color32();
-        let size = (self.stroke_width * style.size_multiplier()).max(4.0);
+        let size = self.end_marker_size(style);
         let along = direction.normalized() * size;
         let across = egui::vec2(-along.y, along.x) / 2.0;
         let base = tip - along;
@@ -758,6 +779,7 @@ pub(super) fn ellipse_point(center: Pos2, radii: egui::Vec2, angle: f64) -> Pos2
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::painting::point_to_segment_distance;
     use egui::epaint::StrokeKind;
 
     fn paint(drawing: &Drawing) -> Vec<Shape> {
@@ -1839,12 +1861,7 @@ mod tests {
                 let point = Pos2::from(expected);
                 let distance = lines
                     .iter()
-                    .map(|&[a, b]| {
-                        let ab = b - a;
-                        point.distance(
-                            a + ab * ((point - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0),
-                        )
-                    })
+                    .map(|&[a, b]| point_to_segment_distance(point, a, b))
                     .fold(f32::INFINITY, f32::min);
                 assert!(distance * ppp <= 0.25, "{tool:?} at {ppp}x: {distance} pt");
                 if matches!(tool, T::Circle | T::Ellipse) {
@@ -1882,12 +1899,10 @@ mod tests {
                     .outline(Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.)))
                     .unwrap();
                 assert!(
-                    outline.lines.iter().any(|&[a, b]| {
-                        let ab = b - a;
-                        point.distance(
-                            a + ab * ((point - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0),
-                        ) <= 0.25
-                    }),
+                    outline
+                        .lines
+                        .iter()
+                        .any(|&[a, b]| point_to_segment_distance(point, a, b) <= 0.25),
                     "{tool:?} hit outline"
                 );
             }

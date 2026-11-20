@@ -113,6 +113,10 @@ pub struct Toast {
     pub title: Option<String>,
     /// Optional structured order details.
     pub trading: Option<TradingToast>,
+    /// Labels of buttons shown under the message, in order, translated when shown. Pressing one
+    /// closes the toast, and [`Toasts::take_pressed`](super::Toasts::take_pressed) returns its
+    /// index. Order notifications (with [`trading`](Self::trading)) show none.
+    pub actions: Vec<String>,
     /// Duration in seconds (0 = permanent until dismissed)
     pub duration: f32,
     /// Timestamp when the toast was created (in seconds since app start)
@@ -130,6 +134,7 @@ impl Toast {
             message: message.into(),
             title: None,
             trading: None,
+            actions: Vec::new(),
             duration: 5.0, // Default 5 seconds
             created_at: 0.0,
             dismissible: true,
@@ -159,6 +164,12 @@ impl Toast {
     /// Set the title
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
+        self
+    }
+
+    /// Add a button labelled `label` after the existing ones.
+    pub fn with_action(mut self, label: impl Into<String>) -> Self {
+        self.actions.push(label.into());
         self
     }
 

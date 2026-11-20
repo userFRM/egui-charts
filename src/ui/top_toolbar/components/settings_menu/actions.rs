@@ -21,6 +21,10 @@ pub enum SettingsAction {
         /// Gain from zero (muted) to one.
         volume: f32,
     },
+    /// Empty depth columns and heatmap textures through
+    /// [`Chart::clear_depth_history`](crate::Chart::clear_depth_history). The Order flow tab's
+    /// Release memory button leaves the dialog open; edited settings still apply only with Ok.
+    ClearDepthHistory,
     /// Cancel and discard pending settings changes
     Cancel,
     /// Save current settings as a named template

@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 #[path = "live.rs"]
 mod live;
 pub use live::StrategyFill;
+#[cfg(feature = "ui")]
+pub(crate) use live::same_bars;
 
 use crate::data::StudyDataRequest;
 use crate::model::range_bar::price_path;
@@ -306,6 +308,9 @@ pub trait Strategy {
                         _ => index.to_string(),
                     },
                     InputValue::Text(value) | InputValue::Symbol(value) => value,
+                    InputValue::Timeframe(value) => {
+                        value.map_or_else(|| "Chart interval".into(), |tf| tf.to_string())
+                    }
                     value => format!("{value:?}"),
                 };
                 (input.label, value)
@@ -345,6 +350,14 @@ pub trait Strategy {
     /// only its settings. Returns `None` by default.
     fn default_order_size(&self) -> Option<OrderSize> {
         None
+    }
+
+    /// Receives the interval of the bars this strategy will see. [`Backtest::run`],
+    /// [`Backtest::run_async`] and [`Backtest::update`] pass it before preparing;
+    /// [`optimise`](crate::strategies::optimise) and the strategy tester pass it before
+    /// [`validate_inputs`](Self::validate_inputs). Does nothing by default.
+    fn set_timeframe(&mut self, timeframe: Timeframe) {
+        let _ = timeframe;
     }
 
     /// Computes what the strategy needs from the whole run once, before the first bar, such as
@@ -390,6 +403,7 @@ pub struct StrategyContext<'a> {
     trading: bool,
     tick: u64,
     order_delay: u32,
+    price_increment: f64,
 }
 
 impl std::fmt::Debug for StrategyContext<'_> {
@@ -438,6 +452,13 @@ impl StrategyContext<'_> {
     /// Historical tick fill callbacks include its developing candle; other intrabar fills exclude it.
     pub fn is_forming_bar(&self) -> bool {
         self.forming
+    }
+
+    /// The run's [`BacktestSettings::price_increment`], or `None` when it is not positive and
+    /// finite.
+    #[cfg_attr(not(feature = "studies"), allow(dead_code))]
+    pub(crate) fn price_increment(&self) -> Option<f64> {
+        Some(self.price_increment).filter(|tick| tick.is_finite() && *tick > 0.0)
     }
 
     /// Places an entry of `quantity` on `side`. Against an open position on the other side it
@@ -511,6 +532,42 @@ impl StrategyContext<'_> {
         }
     }
 
+    /// Protects entries on `side` with a trailing stop and an optional fixed stop at
+    /// `stop_loss` distance from the position's average fill price. Trailing starts when price
+    /// reaches `activation` distance in its favour, then follows the best price at `offset`.
+    /// Both fill and slip as stops along the bar path; the nearer stop fills first.
+    /// Like [`Self::exit_relative`], this closes the whole position, can precede its entry and
+    /// protects it on its execution bar. Closing or reversing cancels it unless an entry on
+    /// `side` is still working. A new request keeps the best price; closing forgets it.
+    /// `activation` must be finite and nonnegative, `offset` finite and positive, and any
+    /// `stop_loss` finite and positive. Other requests are ignored.
+    pub fn exit_trailing(
+        &mut self,
+        id: impl Into<String>,
+        side: OrderSide,
+        stop_loss: Option<f64>,
+        activation: f64,
+        offset: f64,
+    ) {
+        if activation.is_finite()
+            && activation >= 0.0
+            && offset.is_finite()
+            && offset > 0.0
+            && stop_loss.is_none_or(|loss| loss.is_finite() && loss > 0.0)
+        {
+            self.place(
+                id.into(),
+                None,
+                Kind::TrailingExit {
+                    stop_loss,
+                    activation,
+                    offset,
+                    side,
+                },
+            );
+        }
+    }
+
     fn place(&mut self, id: String, quantity: Option<f64>, kind: Kind) {
         if !self.trading {
             return;
@@ -526,6 +583,7 @@ impl StrategyContext<'_> {
             delay: self.order_delay,
             triggered: None,
             active: None,
+            best: None,
         };
         match self
             .orders
@@ -535,7 +593,17 @@ impl StrategyContext<'_> {
             Some(working)
                 if working.quantity == order.quantity
                     && (working.kind == order.kind || working.triggered == Some(order.kind)) => {}
-            Some(working) => *working = order,
+            Some(working) => {
+                let best = match (working.kind, order.kind) {
+                    (Kind::TrailingExit { side: a, .. }, Kind::TrailingExit { side: b, .. })
+                        if a == b =>
+                    {
+                        working.best
+                    }
+                    _ => None,
+                };
+                *working = Working { best, ..order };
+            }
             None => self.orders.push(order),
         }
     }
@@ -558,6 +626,8 @@ struct Working {
     /// reached, at the point it was placed or its delay ended. A limit already reached there
     /// never traded through its threshold while working.
     active: Option<u64>,
+    /// A trailing exit's best price since activation, absent before it starts.
+    best: Option<f64>,
 }
 
 /// How an execution at a reached price point is priced.
@@ -578,6 +648,13 @@ enum Kind {
     Exit(Option<f64>, Option<f64>, Option<OrderSide>),
     /// Distances from the position's average fill price and the entry side to protect.
     RelativeExit(f64, f64, OrderSide),
+    /// Fixed stop distance, activation distance, trail offset and the entry side to protect.
+    TrailingExit {
+        stop_loss: Option<f64>,
+        activation: f64,
+        offset: f64,
+        side: OrderSide,
+    },
 }
 
 /// An entry's quantity that is still open.
@@ -601,7 +678,9 @@ struct Lot {
 /// its limit or stop price, or at the open when the bar opened beyond it; a triggered stop-limit
 /// order works on as a limit order from its stop. Orders the path reaches at the same point fill
 /// in the order they were first placed. An exit with a take profit and a stop loss fills whichever
-/// the path reaches first. With `settings.fill_on_close`, orders are tried again at the close of
+/// the path reaches first. A trailing exit follows the best price after its activation level
+/// is reached and fills as a stop when the path returns to its offset.
+/// With `settings.fill_on_close`, orders are tried again at the close of
 /// the bar they were placed on, where market orders fill and priced orders fill if the close
 /// satisfies them. `settings.order_delay` holds new orders back for that many further price points.
 ///
@@ -609,11 +688,13 @@ struct Lot {
 /// exit is its own trade with its share of the entry. A trade's label names its entry and exit
 /// orders, such as "Long / Take profit", or the entry alone while open. Profit is the price
 /// difference times the quantity, converted at the exit's exchange rate when the account currency
-/// differs from the instrument's, less its allocated fees. Without a start time, the equity curve
-/// holds the initial capital one interval before the first bar, then the account value at each
-/// bar's close, stamped with the bar's time. With a start time it begins there and subsequent
-/// marks use chart-bar closing times. Fills use the times of their chart or finer bars.
-/// Close fills on trade-based bars use the last source time, which stays fixed as bars arrive.
+/// differs from the instrument's, less its allocated fees. Each trade records that rate in
+/// [`StrategyTrade::exchange_rate`], and an open trade the latest rate, so its excursions convert
+/// at it. Without a start time, the equity curve holds the initial capital one interval before
+/// the first bar, then the account value at each bar's close, stamped with the bar's time. With a
+/// start time it begins there and subsequent marks use chart-bar closing times. Fills use the
+/// times of their chart or finer bars. Close fills on trade-based bars use the last source time,
+/// which stays fixed as bars arrive.
 ///
 /// Bars are oldest first, in strictly increasing time order. A bar without finite prices, or
 /// whose high and low do not contain its open and close, fills no orders and has no equity value.
@@ -747,6 +828,7 @@ impl Backtest {
         let mut lower: Vec<_> = lower.iter().filter(|bar| valid_bar(bar)).collect();
         lower.sort_by_key(|bar| bar.time);
         lower.dedup_by_key(|bar| bar.time);
+        strategy.set_timeframe(self.timeframe);
         strategy.prepare(
             if settings.recalculate_on_history && !settings.chart_type.transforms_data() {
                 &[]
@@ -991,6 +1073,23 @@ pub(super) fn valid_bar(bar: &Bar) -> bool {
         && bar.high >= bar.open.max(bar.close)
 }
 
+/// Best price since reaching `level`, in direction `s` (1 long, -1 short).
+fn trailed(
+    best: Option<f64>,
+    level: f64,
+    s: f64,
+    points: impl IntoIterator<Item = f64>,
+) -> Option<f64> {
+    points.into_iter().fold(best, |best, point| match best {
+        Some(best) => Some(if s * (point - best) > 0.0 {
+            point
+        } else {
+            best
+        }),
+        None => (s * (point - level) >= 0.0).then_some(point),
+    })
+}
+
 /// The side of an exit from `position`, `None` while flat.
 fn exit_side(position: f64) -> Option<OrderSide> {
     if position > 0.0 {
@@ -1052,17 +1151,6 @@ impl<'a> Run<'a> {
                 self.settings.initial_capital,
             ));
         }
-    }
-
-    fn closed_bar(
-        &mut self,
-        bars: &'a [Bar],
-        index: usize,
-        lower: &[&Bar],
-        report: &mut StrategyReport,
-        walk: bool,
-    ) {
-        finish_now(self.closed_bar_inner(bars, index, lower, report, walk, &mut None));
     }
 
     async fn closed_bar_inner(
@@ -1192,6 +1280,7 @@ impl<'a> Run<'a> {
         report.trades = self.trades.clone();
         report.trades.extend(self.lots.iter().map(|lot| {
             let mut trade = StrategyTrade::new(lot.side, lot.quantity, lot.time, lot.price);
+            trade.exchange_rate = self.rate;
             trade.label = Some(lot.entry.clone());
             trade.fees = lot.fees;
             trade
@@ -1272,6 +1361,7 @@ impl<'a> Run<'a> {
             trading: self.trading,
             tick: self.tick,
             order_delay: self.settings.order_delay,
+            price_increment: self.settings.price_increment,
         });
     }
 
@@ -1416,6 +1506,45 @@ impl<'a> Run<'a> {
                     delay: 0,
                     triggered: None,
                     active: None,
+                    best: None,
+                };
+                self.reach(&exit, start, end)
+            }
+            Kind::TrailingExit {
+                stop_loss,
+                activation,
+                offset,
+                side,
+            } => {
+                let quantity = self.position();
+                if quantity * sign(side) <= 0.0 {
+                    return None;
+                }
+                let (average, s) = (self.average_price(), sign(side));
+                let trail = trailed(order.best, average + s * activation, s, [start])
+                    .map(|best| best - s * offset)
+                    .filter(|level| level.is_finite());
+                let fixed = stop_loss.map(|loss| average - s * loss);
+                // Both are stops on the exit side; the nearer one is reached first.
+                let stop = match (trail, fixed) {
+                    (Some(a), Some(b)) => {
+                        if s * (a - b) > 0.0 {
+                            a
+                        } else {
+                            b
+                        }
+                    }
+                    (a, b) => a.or(b)?,
+                };
+                let exit = Working {
+                    id: String::new(),
+                    quantity: None,
+                    kind: Kind::Exit(None, Some(stop), exit_side(quantity)),
+                    deferred: None,
+                    delay: 0,
+                    triggered: None,
+                    active: None,
+                    best: None,
                 };
                 self.reach(&exit, start, end)
             }
@@ -1577,6 +1706,26 @@ impl<'a> Run<'a> {
         }
     }
 
+    /// Moves working trailing exits with the favourable extreme of a linear path step.
+    fn trail(&mut self, from: f64, to: f64) {
+        let position = self.position();
+        if position == 0.0 {
+            return;
+        }
+        let average = self.average_price();
+        for order in &mut self.orders {
+            if let Kind::TrailingExit {
+                activation, side, ..
+            } = order.kind
+                && order.delay == 0
+                && position * sign(side) > 0.0
+            {
+                let s = sign(side);
+                order.best = trailed(order.best, average + s * activation, s, [from, to]);
+            }
+        }
+    }
+
     fn fill_segment(&mut self, mut start: f64, end: f64, time: DateTime<Utc>, advance: bool) {
         self.set_rate(time);
         let mut at_end = !advance;
@@ -1606,6 +1755,7 @@ impl<'a> Run<'a> {
                     self.next_tick(start, end);
                     at_end = price == end;
                 }
+                self.trail(start, price);
                 start = price;
                 let held = self.position().abs();
                 self.fill(
@@ -1617,6 +1767,7 @@ impl<'a> Run<'a> {
                         delay: 0,
                         triggered: None,
                         active: None,
+                        best: None,
                     },
                     price,
                     Pricing::Slips,
@@ -1631,16 +1782,20 @@ impl<'a> Run<'a> {
                 if !at_end {
                     // Equal OHLC prices still denote successive points in the bar.
                     self.next_tick(start, end);
+                    self.trail(start, end);
                     start = end;
                     at_end = true;
                     continue;
                 }
+                // A closing fill can activate a trail without another path step.
+                self.trail(start, start);
                 return;
             };
             if price != start {
                 self.next_tick(start, end);
                 at_end = price == end;
             }
+            self.trail(start, price);
             start = price;
             if let Kind::Entry(side, OrderType::StopLimit { limit, .. }) = self.orders[index].kind {
                 self.orders[index].triggered = Some(self.orders[index].kind);
@@ -1662,7 +1817,7 @@ impl<'a> Run<'a> {
     fn fill(&mut self, order: Working, mark: f64, pricing: Pricing, time: DateTime<Utc>) {
         let side = match order.kind {
             Kind::Entry(side, _) => side,
-            Kind::RelativeExit(_, _, side) => {
+            Kind::RelativeExit(_, _, side) | Kind::TrailingExit { side, .. } => {
                 if side == OrderSide::Buy {
                     OrderSide::Sell
                 } else {
@@ -1728,7 +1883,7 @@ impl<'a> Run<'a> {
                     fees: fee * (quantity / filled),
                 });
             }
-            Kind::Exit(..) | Kind::RelativeExit(..) => {
+            Kind::Exit(..) | Kind::RelativeExit(..) | Kind::TrailingExit { .. } => {
                 let quantity = order.quantity.unwrap_or(held).min(held);
                 if quantity <= 0.0 {
                     return;
@@ -1747,12 +1902,12 @@ impl<'a> Run<'a> {
                     quantity,
                     time,
                 );
-                if let Kind::RelativeExit(_, _, side) = order.kind
+                if let Kind::RelativeExit(_, _, side) | Kind::TrailingExit { side, .. } = order.kind
                     && self.orders.iter().any(|working| {
                         matches!(working.kind, Kind::Entry(entry_side, _) if entry_side == side)
                     })
                 {
-                    self.orders.push(order);
+                    self.orders.push(Working { best: None, ..order });
                 }
             }
         }
@@ -1781,6 +1936,13 @@ impl<'a> Run<'a> {
             Kind::Entry(..) => true,
             Kind::RelativeExit(_, _, side) => {
                 position * sign(*side) > 0.0 || pending[usize::from(*side == OrderSide::Sell)]
+            }
+            Kind::TrailingExit { side, .. } => {
+                let open = position * sign(*side) > 0.0;
+                if !open {
+                    order.best = None;
+                }
+                open || pending[usize::from(*side == OrderSide::Sell)]
             }
         });
         if self.settings.recalculate_after_fills {
@@ -1823,6 +1985,7 @@ impl<'a> Run<'a> {
                 self.unconverted.set(true);
             }
             let mut trade = StrategyTrade::new(lot.side, closed, lot.time, lot.price);
+            trade.exchange_rate = self.rate;
             trade.exit = Some(StrategyExit::new(time, price, gross - fees + 0.0));
             trade.fees = fees;
             trade.label = Some(format!("{} / {exit}", lot.entry));
@@ -2968,6 +3131,37 @@ mod tests {
                 context.exit_relative("X", Buy, 10.0, 5.0);
             }
         }
+        fn trailing(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("A", Buy, None, OrderType::Market);
+                context.exit_trailing("X", Buy, Some(5.0), 4.0, 3.0);
+            }
+        }
+        fn trailing_short(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("A", Sell, None, OrderType::Market);
+                context.exit_trailing("X", Sell, Some(5.0), 4.0, 3.0);
+            }
+        }
+        fn trailing_at_close(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("A", Buy, None, OrderType::Market);
+                context.exit_trailing("X", Buy, None, 0.0, 3.0);
+            }
+        }
+        fn trailing_again(bar: usize, context: &mut StrategyContext<'_>) {
+            match bar {
+                0 => {
+                    context.entry("A", Buy, None, OrderType::Market);
+                    context.exit_trailing("X", Buy, None, 2.0, 1.0);
+                }
+                1 => {
+                    context.exit_trailing("X", Buy, None, 2.0, 0.5);
+                    context.entry("B", Buy, None, OrderType::Limit(100.0));
+                }
+                _ => {}
+            }
+        }
         fn decimal_buy_limit(bar: usize, context: &mut StrategyContext<'_>) {
             if bar == 0 {
                 context.entry("A", Buy, None, OrderType::Limit(1.2));
@@ -3049,6 +3243,10 @@ mod tests {
             let mut result = trade(side, quantity, entry, entry_price, exit, label);
             result.fees = fees;
             result
+        };
+        let at_rate = |mut trade: StrategyTrade, rate| {
+            trade.exchange_rate = rate;
+            trade
         };
         // An exchange rate point: its close applies from its hour.
         let rate = |at: i64, value: f64| Bar::new(hour(at), value, value, value, value, 0.0);
@@ -4225,6 +4423,69 @@ mod tests {
                 0,
             ),
             (
+                // The closing fill at 100 activates a zero-distance trail at 97. The next
+                // open gaps through it at 96: two units close for a loss of 8.
+                "a closing fill activates its trailing exit before the next opening gap",
+                trailing_at_close,
+                BacktestSettings {
+                    fill_on_close: true,
+                    ..terms.clone()
+                },
+                flat(&[100.0, 96.0]),
+                vec![trade(Buy, 2.0, 0, 100.0, Some((1, 96.0, -8.0)), "A / X")],
+                vec![1000.0, 1000.0, 992.0],
+                0,
+            ),
+            (
+                // Activation 104 is not reached on bar 1. Bar 2 reaches 107, then falls to
+                // the trailing stop 107 - 3 = 104: two units gain 8.
+                "a trailing exit starts at its activation distance and trails inside the bar",
+                trailing,
+                terms.clone(),
+                vec![
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 103.0, 99.0, 99.5),
+                    (99.5, 107.0, 99.0, 103.0),
+                ],
+                vec![trade(Buy, 2.0, 1, 100.0, Some((2, 104.0, 8.0)), "A / X")],
+                vec![1000.0, 1000.0, 999.0, 1008.0],
+                0,
+            ),
+            (
+                // Short at 99.5 after slippage, fixed stop at 104.5, slipped buy at 105.
+                "a short trailing exit's fixed stop is measured from the slipped fill and slips",
+                trailing_short,
+                BacktestSettings {
+                    slippage: Slippage::Ticks {
+                        ticks: 2,
+                        tick_size: 0.25,
+                    },
+                    ..terms.clone()
+                },
+                vec![(100.0, 100.0, 100.0, 100.0), (100.0, 106.0, 99.0, 101.0)],
+                vec![trade(Sell, 2.0, 1, 99.5, Some((1, 105.0, -11.0)), "A / X")],
+                vec![1000.0, 1000.0, 989.0],
+                0,
+            ),
+            (
+                // Best 110 survives the new offset: A closes at 109.5. B's queued limit
+                // fills at 100, below its fresh activation 102, and stays open.
+                "a trailing exit keeps its best price when requested again and forgets it on close",
+                trailing_again,
+                terms.clone(),
+                vec![
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 110.0, 100.0, 109.75),
+                    (109.75, 109.75, 99.0, 100.0),
+                ],
+                vec![
+                    trade(Buy, 2.0, 1, 100.0, Some((2, 109.5, 19.0)), "A / X"),
+                    trade(Buy, 2.0, 2, 100.0, None, "B"),
+                ],
+                vec![1000.0, 1000.0, 1019.5, 1019.0],
+                0,
+            ),
+            (
                 // 180 EUR buys 180 / (100 * 0.9) = 2 units. The entry fee is 2 * 100 * 1% * 0.9
                 // = 1.8 and needs 2 * 100 * 0.9 + 1.8 = 181.8 of 190. At 105 equity is 188.2 +
                 // 10 * 0.9 = 197.2 against a margin of 189. The exit at 110 converts at 0.8: fee
@@ -4233,14 +4494,9 @@ mod tests {
                 sized,
                 converted.clone(),
                 converted_prices.clone(),
-                vec![fee_trade(
-                    Buy,
-                    2.0,
-                    1,
-                    100.0,
-                    Some((2, 110.0, 12.44)),
-                    3.56,
-                    "A / X",
+                vec![at_rate(
+                    fee_trade(Buy, 2.0, 1, 100.0, Some((2, 110.0, 12.44)), 3.56, "A / X"),
+                    0.8,
                 )],
                 vec![190.0, 190.0, 197.2, 202.44],
                 0,
@@ -4260,15 +4516,18 @@ mod tests {
                 },
                 flat(&[100.0, 100.0, 68.0]),
                 vec![
-                    trade(
-                        Buy,
-                        4.0,
-                        1,
-                        100.0,
-                        Some((2, 68.0, -102.4)),
-                        "A / Margin call",
+                    at_rate(
+                        trade(
+                            Buy,
+                            4.0,
+                            1,
+                            100.0,
+                            Some((2, 68.0, -102.4)),
+                            "A / Margin call",
+                        ),
+                        0.8,
                     ),
-                    trade(Buy, 6.0, 1, 100.0, None, "A"),
+                    at_rate(trade(Buy, 6.0, 1, 100.0, None, "A"), 0.8),
                 ],
                 vec![500.0, 500.0, 500.0, 244.0],
                 0,

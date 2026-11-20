@@ -49,11 +49,6 @@ impl StandardDeviation {
         }
     }
 
-    /// Create with default param (20)
-    pub fn default_params() -> Self {
-        Self::new(20)
-    }
-
     /// Set the line color
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;

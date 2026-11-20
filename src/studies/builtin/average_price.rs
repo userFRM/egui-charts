@@ -83,6 +83,10 @@ impl Indicator for OHLC4 {
         true
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }
@@ -177,6 +181,10 @@ impl Indicator for HLC3 {
         true
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }
@@ -268,6 +276,10 @@ impl Indicator for HL2 {
     }
 
     fn is_overlay(&self) -> bool {
+        true
+    }
+
+    fn draws_only_plots(&self) -> bool {
         true
     }
 
@@ -400,6 +412,10 @@ impl Indicator for TrueRange {
 
     fn is_overlay(&self) -> bool {
         false
+    }
+
+    fn draws_only_plots(&self) -> bool {
+        true
     }
 
     fn is_visible(&self) -> bool {
