@@ -1708,6 +1708,8 @@ mod tests {
                             })
                             .collect();
                         let mut chart = Chart::new(BarData::from_bars(bars));
+                        chart.config_mut().navigation_buttons =
+                            crate::config::NavigationButtons::Never;
                         let series = if added {
                             let series = chart.add_series(crate::widget::SeriesOptions {
                                 chart_type,

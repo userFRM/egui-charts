@@ -138,6 +138,7 @@ mod tests {
         ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], &[110.0]);
+            chart.config_mut().navigation_buttons = crate::config::NavigationButtons::Never;
             let mut theme = crate::theme::Theme::light();
             theme.text.label = 19.0;
             theme.radius.sm = 7.0;
