@@ -187,6 +187,25 @@ impl Indicator for AwesomeOscillator {
         true
     }
 
+    fn alert_conditions(&self) -> Vec<String> {
+        ["Changes to increasing bars", "Changes to decreasing bars"]
+            .map(str::to_owned)
+            .into()
+    }
+
+    fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+        let value = self.values.value(0, bar)?;
+        let previous = self.values.value(0, bar.checked_sub(1)?)?;
+        let before = self.values.value(0, bar.checked_sub(2)?)?;
+        let rising = value > previous;
+        let rose = previous > before;
+        match condition {
+            0 => Some(rising && !rose),
+            1 => Some(!rising && rose),
+            _ => None,
+        }
+    }
+
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
