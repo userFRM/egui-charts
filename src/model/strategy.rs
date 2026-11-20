@@ -2902,7 +2902,6 @@ mod tests {
             p.intrabar_max_drawdown_initial_capital_fraction = Some(fraction);
             p.max_run_up_fraction = Some(fraction);
             p.intrabar_max_run_up_fraction = Some(fraction);
-
             let mut c = r.comparison(&[]);
             c.buy_and_hold_return = Some(fraction);
             let csv = r.summary_csv(&p, &c);
@@ -2948,7 +2947,6 @@ mod tests {
             intrabar_max_drawdown: Some(-0.0),
             max_run_up: Some(-0.0),
             intrabar_max_run_up: Some(-0.0),
-
             return_over_max_drawdown: Some(-0.0),
             sharpe_ratio: Some(-0.0),
             sortino_ratio: Some(-0.0),

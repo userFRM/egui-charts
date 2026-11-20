@@ -206,8 +206,8 @@ drawdown from peak and run-up from trough default to account units; **Percent of
 switches all three to percentages of the starting capital, with equity starting at 100. The
 optional fee-free buy-and-hold comparison uses the same equity scale. Drawdown and run-up follow
 usable intrabar ranges, falling back to closes when ranges are unavailable. Replacing the report
-resets the switch to account units; the switch requires positive finite initial capital. Curve positions
-and hover values retain submillisecond timestamps. Hover a curve
+resets the switch to account units; the switch requires positive finite initial capital.
+Curve positions and hover values retain submillisecond timestamps. Hover a curve
 for timestamped values. The virtualized trade list uses entry-time order, keeps equal-time
 trades in input order, and shows fill prices, net profit, fees, labels and excursions.
 Fill prices retain their precision and fill times retain fractional seconds.
@@ -256,9 +256,9 @@ close-to-close drawdown 0 and intrabar drawdown 3,000 (30%). Open profit reconci
 closed trades: last usable equity less initial capital and closed net profit, including entry
 fees already paid. It is exactly 0 without an open trade, or unavailable when an open trade
 has no usable equity mark. Holding those units at a final close of 90 gives open profit -1,000
-and closed net profit 0. The summary and summary CSV list open profit as a whole-run row and label both drawdown
-measures explicitly. Trade figures retain their All, Long and Short columns; whole-run CSV
-rows have an empty `side`.
+and closed net profit 0. The summary and summary CSV list open profit as a whole-run row and
+label both drawdown measures explicitly. Trade figures retain their All, Long and Short columns;
+whole-run CSV rows have an empty `side`.
 
 Run-up is the largest rise above an earlier equity trough. Close-to-close run-up uses closing
 marks; intrabar run-up takes, at each bar, the larger of its high less the earlier trough and
