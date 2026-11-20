@@ -57,8 +57,8 @@ impl Chart {
     /// Creates a new chart with default configuration.
     ///
     /// Initializes the chart with the provided OHLCV data and sensible defaults:
-    /// candlestick chart type, default bar spacing, tracking mode off, and 10 % of the pane
-    /// free above the prices and 8 % below. The bars are cleaned as by [`Chart::set_data`].
+    /// candlestick chart type, default bar spacing, tracking mode off, and 10% of the pane
+    /// free above the prices and 8% below. The bars are cleaned as by [`Chart::set_data`].
     ///
     /// # Arguments
     ///

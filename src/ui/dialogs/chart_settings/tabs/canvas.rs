@@ -166,8 +166,6 @@ impl SettingsDialog {
                     dialog.settings.crosshair.line_width = lw;
                 });
 
-                ui.add_space(ui.active_theme().spacing.xxl);
-
                 self.draw_setting_row_with_controls(ui, "Crosshair lines", theme, |ui, dialog| {
                     let mut shown = dialog.settings.crosshair_lines.unwrap_or_default();
                     let text = |label| {
@@ -198,6 +196,8 @@ impl SettingsDialog {
                         dialog.settings.crosshair_lines = Some(shown);
                     }
                 });
+
+                ui.add_space(ui.active_theme().spacing.xxl);
 
                 // WATERMARK
                 self.draw_section_header(ui, "WATERMARK", theme);
