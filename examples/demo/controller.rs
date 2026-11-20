@@ -750,9 +750,17 @@ impl DemoApp {
                 for alert in &mut alerts {
                     alert.symbol = DemoSymbol::current(&alert.symbol);
                 }
+                let mut triggers: Vec<egui_charts::model::AlertTrigger> = cc
+                    .storage
+                    .and_then(|storage| eframe::get_value(storage, "alert_triggers"))
+                    .unwrap_or_default();
+                for trigger in &mut triggers {
+                    trigger.symbol = DemoSymbol::current(&trigger.symbol);
+                }
                 let notifications = notification_host.clone();
                 Arc::new(crate::panel_alerts::DemoAlerts::new(
                     alerts,
+                    triggers,
                     move |symbol| {
                         notifications.notify(format!("Alert triggered: {symbol}"), Some(symbol));
                     },
@@ -900,6 +908,7 @@ impl DemoApp {
             app.symbol_search.record_symbol(&row);
         }
         app.alerts.set_service(app.alert_host.clone());
+        app.alerts.set_popup_actions(true);
         app.alerts.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.top_toolbar.state.can_trade = true;
         app.watchlist.set_selected(symbol);
@@ -1727,6 +1736,11 @@ impl eframe::App for DemoApp {
         );
         eframe::set_value(storage, "watchlists", &self.watchlist.lists());
         eframe::set_value(storage, "alerts", &self.alert_host.engine().alerts());
+        eframe::set_value(
+            storage,
+            "alert_triggers",
+            &self.alert_host.engine().triggers(),
+        );
         eframe::set_value(storage, "alert_list_options", self.alerts.options());
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
@@ -1767,9 +1781,21 @@ impl eframe::App for DemoApp {
         let alerts = &self.settings_state.alerts;
         self.alerts
             .set_sound(alerts.play_sound.then(|| alerts.sound.clone()));
+        self.alerts.set_timezone(
+            self.timeframe_toolbar
+                .state
+                .timezone
+                .parse()
+                .unwrap_or_default(),
+        );
         self.alerts.poll(&ctx, &mut self.toasts);
         self.monitor_alerts(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
+        match self.alerts.take_popup_action() {
+            AlertPanelAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+            AlertPanelAction::EditAlert(alert) => self.edit_alert(*alert),
+            _ => {}
+        }
         self.symbol_details.poll(&ctx);
         self.highlights.poll(&ctx);
         self.news.poll(&ctx);
@@ -3268,12 +3294,10 @@ impl DemoApp {
         self.alerts.set_symbol(&self.state.symbol);
         match self.alerts.show(ui) {
             AlertPanelAction::CreateAlert => self.open_alert(None),
-            AlertPanelAction::EditAlert(mut alert)
-            | AlertPanelAction::DuplicateAlert(mut alert) => {
-                self.list_alert_sources();
-                self.chart.prepare_alert(&mut alert);
-                self.alert_dialog.edit(*alert);
+            AlertPanelAction::EditAlert(alert) | AlertPanelAction::DuplicateAlert(alert) => {
+                self.edit_alert(*alert)
             }
+            AlertPanelAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
             AlertPanelAction::ExportLog(csv) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 let path = std::env::temp_dir().join("alerts.csv");
@@ -3291,6 +3315,12 @@ impl DemoApp {
             AlertPanelAction::None => {}
             _ => {}
         }
+    }
+
+    fn edit_alert(&mut self, mut alert: Alert) {
+        self.list_alert_sources();
+        self.chart.prepare_alert(&mut alert);
+        self.alert_dialog.edit(alert);
     }
 
     /// Advance the sample clock explicitly while preparing a paused session.
