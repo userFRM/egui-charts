@@ -31,8 +31,11 @@ impl Default for KeyboardOptions {
     }
 }
 
-/// Keyboard actions that can be performed on the chart
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Keyboard actions that can be performed on the chart.
+///
+/// Serde writes and reads the variant name (`"Redo"`), and a drawing tool as
+/// `{"DrawingTool": "TrendLine"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum KeyboardAction {
     /// Pan left by a page.
@@ -55,7 +58,17 @@ pub enum KeyboardAction {
     InvertScale,
     /// Copy the selected drawing.
     CopyDrawing,
-    /// Paste a copied drawing.
+    /// Paste a copied drawing. The chart reports clipboard text as
+    /// [`ShortcutRequest::PasteDrawing`](crate::widget::ShortcutRequest::PasteDrawing), and a
+    /// paste without text as [`ShortcutRequest::Action`](crate::widget::ShortcutRequest::Action)
+    /// with this action: there a host looks for a picture on its clipboard.
+    #[cfg_attr(
+        feature = "drawings",
+        doc = "A picture the platform read comes as \
+               [`ShortcutRequest::PasteImage`](crate::widget::ShortcutRequest::PasteImage) \
+               instead. A host places a picture with \
+               [`Chart::paste_image`](crate::Chart::paste_image)."
+    )]
     PasteDrawing,
     /// Hide or show drawings.
     ToggleDrawings,
@@ -503,7 +516,8 @@ impl KeyboardAction {
         }
     }
 
-    /// The actions with a bound key, grouped by category (for the shortcuts dialog).
+    /// The actions the shortcuts dialog offers, grouped by category, including those without a
+    /// default key.
     pub fn all_by_category() -> Vec<(&'static str, Vec<KeyboardAction>)> {
         use crate::config::DrawingToolType;
         vec![

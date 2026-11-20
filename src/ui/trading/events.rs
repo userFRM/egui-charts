@@ -7,7 +7,9 @@ use super::{Numbers, Sent, Trading};
 use crate::chart::TradingLineAction;
 use crate::data::FeedError;
 use crate::localization as l10n;
-use crate::model::{OrderId, OrderPreview, OrderRequest, OrderStatus, OrderType, TradingRules};
+use crate::model::{
+    OrderId, OrderPreview, OrderRequest, OrderStatus, OrderType, TimeInForce, TradingRules,
+};
 use crate::services::{AccountEvent, HistoryKind, HistoryPage};
 use crate::ui_kit::notifications::{Toast, ToastKind, Toasts};
 use crate::widget::settings::TradingNotifications;
@@ -42,7 +44,11 @@ impl Trading {
                 let (_, _, mut order) = self.placing.remove(index);
                 if let Ok(answer) = answer.downcast::<Result<TradingRules, FeedError>>() {
                     match *answer {
-                        Ok(rules) if rules.symbol == order.symbol && rules.is_valid() => {
+                        Ok(rules)
+                            if rules.symbol == order.symbol
+                                && rules.is_valid()
+                                && rules.time_in_force[0] != TimeInForce::GoodTillDate =>
+                        {
                             order.time_in_force = rules.time_in_force[0];
                             self.place(order);
                         }
@@ -100,7 +106,11 @@ impl Trading {
             if key == self.rules_key {
                 if let Ok(answer) = answer.downcast::<Result<TradingRules, FeedError>>() {
                     match *answer {
-                        Ok(rules) if rules.symbol == self.rules.symbol && rules.is_valid() => {
+                        Ok(rules)
+                            if rules.symbol == self.rules.symbol
+                                && rules.is_valid()
+                                && rules.time_in_force[0] != TimeInForce::GoodTillDate =>
+                        {
                             self.rules = rules;
                             self.rules_ready = true;
                         }

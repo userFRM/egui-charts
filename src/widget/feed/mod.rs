@@ -780,7 +780,7 @@ impl Chart {
                 next.0.eraser_mode = self.drawings.eraser_mode;
                 next.0.set_hidden(self.drawings.is_hidden());
                 next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
-                self.flush_drawing_events();
+                self.flush_change_events();
                 next.0.events.clear();
                 next.0.events_dropped = 0;
                 std::mem::swap(&mut self.drawings, &mut next.0);

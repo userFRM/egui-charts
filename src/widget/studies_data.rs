@@ -2126,7 +2126,7 @@ pub(super) mod tests {
         let dropped = FeedError::Network("stream dropped".into());
         for (shared, error) in [(false, None), (true, None), (false, Some(dropped))] {
             let (mut chart, daily) = minute_chart(|day| Bar::new(day, 50.0, 50.0, 50.0, 50.0, 1.0));
-            let id = chart.add_indicator(Box::new(crate::studies::Performance::new()));
+            let id = chart.add_indicator(chart_performance());
             if shared {
                 let mut average = crate::studies::ConfiguredStudy::new(Box::new(SMA::new(2)));
                 average
@@ -2198,6 +2198,17 @@ pub(super) mod tests {
         pages
     }
 
+    /// Performance of the chart symbol alone over the six standard periods, whose daily history
+    /// reaches one year back.
+    fn chart_performance() -> Box<dyn crate::studies::Indicator> {
+        use crate::studies::Indicator;
+        let mut study = crate::studies::Performance::new();
+        for (id, text) in [("symbols", ""), ("periods", "1W, 1M, 3M, 6M, YTD, 1Y")] {
+            study.set_input(id, InputValue::Text(text.into())).unwrap();
+        }
+        Box::new(study)
+    }
+
     /// 390 one-minute bars of 2024-03-15 at 100 on MAIN, and daily bars at 00:00 UTC on every
     /// weekday of the two years before, from `bar`.
     fn minute_chart(bar: impl Fn(DateTime<chrono::Utc>) -> Bar) -> (Chart, Vec<Bar>) {
@@ -2233,9 +2244,7 @@ pub(super) mod tests {
     /// of Projected Pivot Points are the same levels.
     #[test]
     fn yearly_pivots_read_the_whole_previous_year_of_paged_daily_bars() {
-        use crate::studies::{
-            Indicator, Performance, PivotPoints, PivotTimeframe, ProjectedPivotPoints,
-        };
+        use crate::studies::{Indicator, PivotPoints, PivotTimeframe, ProjectedPivotPoints};
         let spike: DateTime<chrono::Utc> = "2023-01-10T00:00:00Z".parse().unwrap();
         let pivots = || -> Box<dyn Indicator> {
             Box::new(
@@ -2269,7 +2278,7 @@ pub(super) mod tests {
                 Bar::new(day, 100.0, high, low, 100.0, 1.0)
             });
             if after_performance {
-                chart.add_indicator(Box::new(Performance::new()));
+                chart.add_indicator(chart_performance());
             }
             let id = chart.add_indicator(study);
             let feed = Arc::new(RetryFeed::default());
@@ -2330,7 +2339,7 @@ pub(super) mod tests {
         ] {
             let (mut chart, daily) = minute_chart(|day| Bar::new(day, 50.0, 50.0, 50.0, 50.0, 1.0));
             chart.set_chart_type(chart_type);
-            let id = chart.add_indicator(Box::new(crate::studies::Performance::new()));
+            let id = chart.add_indicator(chart_performance());
             let pages = page_daily(&mut chart, &daily, None);
             let study = chart.indicators().find(|(at, _)| *at == id).unwrap().1;
             let changes: Vec<_> = (0..6).map(|line| study.values().value(line, 389)).collect();
@@ -2465,7 +2474,7 @@ pub(super) mod tests {
     #[test]
     fn live_daily_bars_refresh_only_their_studies_and_keep_them_drawn() {
         use crate::model::ChartType;
-        use crate::studies::{Indicator, IndicatorValues, Performance};
+        use crate::studies::{Indicator, IndicatorValues};
         use std::sync::atomic::{AtomicUsize, Ordering};
         /// A study counting its calculations from the first bar.
         struct Counted(Box<dyn Indicator>, Arc<AtomicUsize>);
@@ -2534,7 +2543,7 @@ pub(super) mod tests {
             chart.set_chart_type(chart_type);
             let counts = [(); 2].map(|_| Arc::new(AtomicUsize::new(0)));
             let mut studies = [
-                Counted(Box::new(Performance::new()), counts[0].clone()),
+                Counted(chart_performance(), counts[0].clone()),
                 Counted(Box::new(SMA::new(3)), counts[1].clone()),
             ]
             .map(Some);

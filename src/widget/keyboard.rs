@@ -1,218 +1,21 @@
-//! Shared shortcut bindings and chart command dispatch.
+//! Chart command dispatch through the shared shortcut map.
 
 use crate::config::KeyboardAction;
-use egui::{Context, Event, KeyboardShortcut};
-
-/// Editable bindings shared by input dispatch, menus and shortcut help.
-///
-/// Remove a binding to disable it, or replace its key or action to rebind it.
-/// The first binding wins if several actions use the same key combination.
-/// A binding on a punctuation key also runs when the press differs from it only by Shift and
-/// types that key's character, as some layouts need, unless another binding names that exact
-/// combination.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub struct ShortcutMap {
-    /// Key combinations and their actions, in precedence order.
-    pub bindings: Vec<(KeyboardShortcut, KeyboardAction)>,
-}
-
-impl Default for ShortcutMap {
-    fn default() -> Self {
-        Self {
-            bindings: KeyboardAction::all_by_category()
-                .into_iter()
-                .flat_map(|(_, actions)| actions)
-                .flat_map(|action| action.shortcuts().iter().map(move |key| (*key, action)))
-                .collect(),
-        }
-    }
-}
-
-impl ShortcutMap {
-    /// The first binding for an action, for a platform-formatted menu hint.
-    pub fn shortcut(&self, action: KeyboardAction) -> Option<KeyboardShortcut> {
-        self.keys_for(action).next()
-    }
-
-    pub(crate) fn keys_for(
-        &self,
-        action: KeyboardAction,
-    ) -> impl Iterator<Item = KeyboardShortcut> + '_ {
-        self.bindings
-            .iter()
-            .enumerate()
-            .filter_map(move |(index, (key, bound))| {
-                (*bound == action
-                    && !self.bindings[..index]
-                        .iter()
-                        .any(|(earlier, _)| earlier == key))
-                .then_some(*key)
-            })
-    }
-
-    /// The binding a key press that typed `typed` runs. Layouts differ in which punctuation
-    /// needs Shift, so a key named by a punctuation character matches with Shift ignored when no
-    /// binding names the exact modifiers and the press typed that character or nothing.
-    fn binding(
-        &self,
-        key: egui::Key,
-        modifiers: egui::Modifiers,
-        typed: Option<&str>,
-    ) -> Option<(KeyboardShortcut, KeyboardAction)> {
-        let find = |ignore_shift: bool| {
-            let held = |modifiers: egui::Modifiers| egui::Modifiers {
-                shift: modifiers.shift && !ignore_shift,
-                ..modifiers
-            };
-            self.bindings.iter().copied().find(|(shortcut, _)| {
-                key == shortcut.logical_key
-                    && held(modifiers).matches_exact(held(shortcut.modifiers))
-            })
-        };
-        find(false).or_else(|| {
-            typed_char(key)
-                // Punctuation only: Shift with a letter, a digit or space is its own shortcut.
-                .filter(|c| !c.is_alphanumeric() && !c.is_whitespace())
-                // Shift+Period typing `>` on a US layout is not the period.
-                .filter(|_| typed.is_none_or(|text| egui::Key::from_name(text) == Some(key)))
-                .and_then(|_| find(true))
-        })
-    }
-
-    /// Consume the first bound key press with the text it typed, leaving other input for its
-    /// owner.
-    pub(crate) fn consume(
-        &self,
-        ctx: &Context,
-        stop_at_text: bool,
-        accepts: impl Fn(KeyboardAction, KeyboardShortcut) -> bool,
-    ) -> Option<(KeyboardAction, Event)> {
-        ctx.input_mut(|input| {
-            let pairs = typed_pairs(&input.events);
-            let bound = |index: usize| {
-                let (key, modifiers) = match &input.events[index] {
-                    Event::Key {
-                        key,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => (*key, *modifiers),
-                    Event::Copy => (egui::Key::C, egui::Modifiers::COMMAND),
-                    Event::Paste(_) => (egui::Key::V, egui::Modifiers::COMMAND),
-                    _ => return None,
-                };
-                let typed = pairs[index].and_then(|text| match &input.events[text] {
-                    Event::Text(text) => Some(text.as_str()),
-                    _ => None,
-                });
-                let (shortcut, action) = self.binding(key, modifiers, typed)?;
-                accepts(action, shortcut).then_some(action)
-            };
-            let (index, action) = input
-                .events
-                .iter()
-                .enumerate()
-                .take_while(|(index, event)| {
-                    // Typed text ends the search, unless the bound key that typed it follows.
-                    !stop_at_text
-                        || !matches!(event, Event::Text(text) if starts_entry(text))
-                        || (pairs[*index] == Some(index + 1) && bound(index + 1).is_some())
-                })
-                .find_map(|(index, _)| Some((index, bound(index)?)))?;
-            let mut event = input.events.remove(index);
-            // The press ran a binding, so its text is dropped whatever character it carries.
-            if let Some(text) = pairs[index] {
-                input.events.remove(text.min(index));
-            }
-            // A browser reports the paste key and then the clipboard text: one paste, with it.
-            if action == KeyboardAction::PasteDrawing
-                && matches!(event, Event::Key { .. })
-                && let Some(paste) = input
-                    .events
-                    .iter()
-                    .position(|event| matches!(event, Event::Paste(_)))
-            {
-                event = input.events.remove(paste);
-            }
-            Some((action, event))
-        })
-    }
-
-    /// Bound actions grouped for help, including bindings added by the host.
-    pub fn by_category(&self) -> Vec<(&'static str, Vec<KeyboardAction>)> {
-        let mut categories = KeyboardAction::all_by_category();
-        for (_, actions) in &mut categories {
-            actions.retain(|action| self.shortcut(*action).is_some());
-        }
-        let mut custom = Vec::new();
-        for (_, action) in &self.bindings {
-            if self.shortcut(*action).is_some()
-                && !categories
-                    .iter()
-                    .any(|(_, actions)| actions.contains(action))
-                && !custom.contains(action)
-            {
-                custom.push(*action);
-            }
-        }
-        if !custom.is_empty() {
-            categories.push(("Custom", custom));
-        }
-        categories.retain(|(_, actions)| !actions.is_empty());
-        categories
-    }
-}
-
-fn starts_entry(text: &str) -> bool {
-    text.chars()
-        .next()
-        .is_some_and(|c| !c.is_control() && !c.is_whitespace())
-}
-
-/// The character of a letter, digit, punctuation or space key, the keys whose press types text.
-fn typed_char(key: egui::Key) -> Option<char> {
-    let mut symbol = match key {
-        // egui names these two by a word, although they type a character.
-        egui::Key::Quote => "'",
-        egui::Key::Space => " ",
-        _ => key.symbol_or_name(),
-    }
-    .chars();
-    let c = symbol.next()?;
-    // The arrows are named by a glyph and type nothing; the minus key by the minus sign.
-    (symbol.next().is_none() && (c.is_ascii() || key == egui::Key::Minus)).then_some(c)
-}
-
-/// For each event, the index of the other half of its key press: the text a key typed, or the
-/// key that typed a text.
-///
-/// The two are adjacent, the key first on the desktop and the text first in a browser. A
-/// press types at most one text and none with Ctrl or Command held, so a text belongs to the
-/// press before it unless that press already has its text, and otherwise to the press after.
-fn typed_pairs(events: &[Event]) -> Vec<Option<usize>> {
-    let types = |event: &Event| {
-        matches!(event, Event::Key { key, pressed: true, modifiers, .. }
-            if typed_char(*key).is_some() && !modifiers.ctrl && !modifiers.command)
-    };
-    let mut pairs = vec![None; events.len()];
-    for (text, event) in events.iter().enumerate() {
-        if !matches!(event, Event::Text(_)) {
-            continue;
-        }
-        let key = [text.checked_sub(1), Some(text + 1)]
-            .into_iter()
-            .flatten()
-            .find(|&key| pairs.get(key) == Some(&None) && types(&events[key]));
-        if let Some(key) = key {
-            pairs[text] = Some(key);
-            pairs[key] = Some(text);
-        }
-    }
-    pairs
-}
+use crate::config::shortcut_map::{ShortcutMap, starts_entry};
+use egui::{Context, Event};
 
 /// A shortcut that needs the host's dialogs, layout or clipboard.
+///
+/// Ctrl+V or Command+V comes as [`PasteDrawing`](Self::PasteDrawing) with clipboard text,
+/// and a paste the platform reports with neither text nor a picture as
+/// [`Action`](Self::Action) with
+/// [`KeyboardAction::PasteDrawing`](crate::config::KeyboardAction::PasteDrawing). A paste
+/// without drawing text is where a host looks for a picture on its clipboard.
+#[cfg_attr(
+    feature = "drawings",
+    doc = "A picture the platform read comes as [`PasteImage`](Self::PasteImage). \
+           Place a picture with [`Chart::paste_image`](crate::Chart::paste_image)."
+)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ShortcutRequest {
@@ -220,6 +23,14 @@ pub enum ShortcutRequest {
     Action(KeyboardAction),
     /// Paste clipboard text. The host recognizes its drawing format before inserting anything.
     PasteDrawing(String),
+    /// Paste a picture the platform read from a clipboard that held no text, as desktop
+    /// platforms report Ctrl+V or Command+V on a copied screenshot. The pixels are the host's
+    /// to install under an address its image loaders resolve, for example with an
+    /// [`egui::load::ImageLoader`] that returns this image for that address. Place it with
+    /// [`Chart::paste_image`](crate::Chart::paste_image), passing its pixel size.
+    #[cfg(feature = "drawings")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+    PasteImage(std::sync::Arc<egui::ColorImage>),
     /// Open symbol search with the typed text.
     SymbolSearch(String),
     /// Open interval entry with the typed digits; a comma opens it empty.
@@ -244,6 +55,12 @@ pub(crate) struct KeyboardState {
 pub(crate) fn shortcuts_suppressed(ctx: &Context) -> bool {
     ctx.data(|data| data.get_temp::<u64>(egui::Id::NULL.with("chart_keyboard_capture")))
         == Some(ctx.cumulative_pass_nr())
+}
+
+/// Keeps every chart and drawing toolbar that dispatches later in this pass from reading keys.
+pub(crate) fn suppress_shortcuts_this_pass(ctx: &Context) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|data| data.insert_temp(egui::Id::NULL.with("chart_keyboard_capture"), pass));
 }
 
 impl super::Chart {
@@ -310,8 +127,7 @@ impl super::Chart {
 
     /// Give host dialogs keyboard priority over every chart and drawing toolbar this pass.
     pub fn suppress_shortcuts(&mut self, ctx: &Context) {
-        let pass = ctx.cumulative_pass_nr();
-        ctx.data_mut(|data| data.insert_temp(egui::Id::NULL.with("chart_keyboard_capture"), pass));
+        suppress_shortcuts_this_pass(ctx);
         self.keyboard.focus_elsewhere = true;
     }
 
@@ -419,13 +235,17 @@ impl super::Chart {
             {
                 continue;
             }
-            if action == KeyboardAction::PasteDrawing
-                && let Event::Paste(text) = event
-            {
-                self.keyboard
-                    .requests
-                    .push(ShortcutRequest::PasteDrawing(text));
-                continue;
+            if action == KeyboardAction::PasteDrawing {
+                let request = match event {
+                    Event::Paste(text) => Some(ShortcutRequest::PasteDrawing(text)),
+                    #[cfg(feature = "drawings")]
+                    Event::PasteImage(image) => Some(ShortcutRequest::PasteImage(image)),
+                    _ => None,
+                };
+                if let Some(request) = request {
+                    self.keyboard.requests.push(request);
+                    continue;
+                }
             }
             let rect = if self.last_rendered_price_rect.width().is_finite()
                 && self.last_rendered_price_rect.width() > 0.0
@@ -482,7 +302,9 @@ impl super::Chart {
             for (index, event) in input.events.iter().enumerate() {
                 match event {
                     Event::Text(text) if starts_entry(text) => return None,
-                    Event::Copy | Event::Paste(_) => return None,
+                    Event::Copy | Event::Cut | Event::Paste(_) | Event::PasteImage(_) => {
+                        return None;
+                    }
                     Event::Key {
                         key,
                         modifiers,
@@ -735,7 +557,7 @@ mod tests {
     use super::*;
     use crate::scales::PriceScaleMode;
     use crate::widget::test_frames::chart;
-    use egui::{Key, Modifiers, RawInput};
+    use egui::{Key, KeyboardShortcut, Modifiers, RawInput};
 
     /// Line shortcuts place once at the pointer; a missing pointer only arms the tool.
     #[cfg(feature = "drawings")]
@@ -1296,6 +1118,11 @@ mod tests {
             KeyboardShortcut::new(Modifiers::NONE, Key::F2),
             KeyboardAction::ToggleLogScale,
         ));
+        // The desktop reports Ctrl+X as a cut command, not as the key.
+        chart.shortcuts_mut().bindings.push((
+            KeyboardShortcut::new(Modifiers::COMMAND, Key::X),
+            KeyboardAction::ToggleLogScale,
+        ));
         for (event, expected) in [
             (
                 Event::Key {
@@ -1320,6 +1147,7 @@ mod tests {
             (Event::Text("IBM".into()), PriceScaleMode::Logarithmic),
             (Event::Text("15".into()), PriceScaleMode::Logarithmic),
             (Event::Text(",".into()), PriceScaleMode::Logarithmic),
+            (Event::Cut, PriceScaleMode::Normal),
         ] {
             let before = chart.state.time_scale().right_offset();
             ctx.run_ui(
@@ -1415,34 +1243,40 @@ mod tests {
         }
         assert_eq!(
             chart.state.price_scale().options().mode,
-            PriceScaleMode::Normal,
-            "Alt+L switched the logarithmic scale back"
+            PriceScaleMode::Logarithmic,
+            "Alt+L switched the logarithmic scale on after cut"
         );
     }
 
     /// The desktop reports a paste as the paste event alone, a browser as the key press and
-    /// then the paste event: either way the host gets one request carrying the text.
+    /// then the paste event: either way the host gets one request carrying the text. A picture
+    /// the desktop read from a clipboard without text reaches the host as well.
     #[test]
     fn a_paste_reported_with_its_key_press_is_one_request_with_the_text() {
-        for with_key in [true, false] {
+        let key = Event::Key {
+            key: Key::V,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        };
+        let text = Event::Paste("clip".into());
+        let pasted = ShortcutRequest::PasteDrawing("clip".into());
+        let image = std::sync::Arc::new(egui::ColorImage::filled([2, 1], egui::Color32::RED));
+        #[cfg(feature = "drawings")]
+        let picture = ShortcutRequest::PasteImage(image.clone());
+        #[cfg(not(feature = "drawings"))]
+        let picture = ShortcutRequest::Action(KeyboardAction::PasteDrawing);
+        for (events, expected) in [
+            (vec![text.clone()], pasted.clone()),
+            (vec![key, text], pasted),
+            (vec![Event::PasteImage(image)], picture),
+        ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
-            let mut events = vec![Event::Paste("clip".into())];
-            if with_key {
-                events.insert(
-                    0,
-                    Event::Key {
-                        key: Key::V,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: Modifiers::COMMAND,
-                    },
-                );
-            }
             ctx.run_ui(
                 RawInput {
-                    events,
+                    events: events.clone(),
                     ..Default::default()
                 },
                 |ui| {
@@ -1450,11 +1284,7 @@ mod tests {
                 },
             )
             .drop_without_applying_deltas();
-            assert_eq!(
-                chart.take_shortcut_requests(),
-                vec![ShortcutRequest::PasteDrawing("clip".into())],
-                "key press reported: {with_key}"
-            );
+            assert_eq!(chart.take_shortcut_requests(), vec![expected], "{events:?}");
         }
     }
 

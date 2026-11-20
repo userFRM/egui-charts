@@ -1682,6 +1682,92 @@ mod tests {
         }
     }
 
+    /// Every TPO label control changes only its own saved field, after Ok; Cancel discards it.
+    #[test]
+    fn tpo_label_switches_apply_on_ok_only() {
+        use crate::model::ChartTypeParams;
+        use egui::Vec2;
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        for (label, field) in [
+            ("POC", "poc"),
+            ("VAH", "value_area_high"),
+            ("VAL", "value_area_low"),
+            ("Mid", "midpoint"),
+            ("IBH", "initial_balance_high"),
+            ("IBL", "initial_balance_low"),
+            ("Open", "opening_price"),
+            ("Close", "closing_price"),
+            ("PH", "poor_high"),
+            ("PL", "poor_low"),
+            ("SP", "single_prints"),
+            ("Label prices", "prices"),
+            ("Price scale tags", "tpo_level_tags"),
+        ] {
+            for accept in [false, true] {
+                let mut chart = Chart::new(BarData::from_bars(vec![Bar::new(
+                    chrono::DateTime::UNIX_EPOCH,
+                    100.0,
+                    102.0,
+                    99.0,
+                    101.0,
+                    1.0,
+                )]));
+                chart.set_chart_type(ChartType::TimePriceOpportunity);
+                let mut dialog = SettingsDialog::new();
+                dialog.set_control_visible(crate::ui::Control::Templates, false);
+                dialog.open(ChartSettingsState::from_chart(&chart));
+                let mut harness = Harness::builder()
+                    .with_context_setup(|ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &Theme::light());
+                    })
+                    .with_size(Vec2::new(1440.0, 900.0))
+                    .build_ui_state(
+                        |ui, (dialog, accepted): &mut (SettingsDialog, _)| {
+                            if let SettingsAction::Apply(settings) =
+                                dialog.show(ui.ctx(), &Theme::light())
+                            {
+                                *accepted = Some(settings);
+                            }
+                        },
+                        (dialog, None),
+                    );
+                harness.run();
+                harness
+                    .get_by_role_and_label(Role::CheckBox, label)
+                    .scroll_to_me();
+                harness.run();
+                harness.get_by_role_and_label(Role::CheckBox, label).click();
+                harness.run();
+                harness
+                    .get_by_label(if accept { "Ok" } else { "Cancel" })
+                    .click();
+                harness.run();
+                let (dialog, accepted) = harness.state();
+                assert!(!dialog.is_open);
+                assert_eq!(accepted.is_some(), accept);
+                if let Some(settings) = accepted {
+                    settings.apply_to_chart(&mut chart).unwrap();
+                }
+                let mut expected = serde_json::to_value(ChartTypeParams::default()).unwrap();
+                if accept {
+                    let value = if field == "tpo_level_tags" {
+                        &mut expected[field]
+                    } else {
+                        &mut expected["tpo_labels"][field]
+                    };
+                    *value = serde_json::Value::Bool(!value.as_bool().unwrap());
+                }
+                assert_eq!(
+                    chart.chart_type_params(),
+                    &serde_json::from_value::<ChartTypeParams>(expected).unwrap(),
+                    "{label}, accept={accept}"
+                );
+            }
+        }
+    }
+
     /// Renko bricks and Line Break lines without border colours of their own are outlined in the
     /// rising and falling body colours at full opacity, and the Border row starts from them, so a
     /// palette colour picked after ticking Custom up is stored and painted opaque. Flat bars
@@ -1876,6 +1962,7 @@ mod tests {
                 "Keep host values",
                 "Fixed volume default",
                 "Expiry on",
+                "Zones end only when broken",
             ] {
                 let mut seeded = seeded.clone();
                 if edit == "Fixed volume default" {
@@ -1883,6 +1970,9 @@ mod tests {
                 }
                 if edit == "Expiry on" {
                     seeded.footprint_extend_bars = None;
+                }
+                if edit == "Zones end only when broken" {
+                    seeded.footprint_stacked_imbalances = true;
                 }
                 if edit == "Keep host values" {
                     seeded.footprint_intensity = FootprintIntensity::Volume(-1.0);
@@ -1960,6 +2050,18 @@ mod tests {
                         harness.get_by_label("Annotations").scroll_to_me();
                         harness.run();
                         harness.get_by_label("Annotations").click();
+                    }
+                    "Zones end only when broken" => {
+                        harness.get_by_label("Annotations").scroll_to_me();
+                        harness.run();
+                        harness.get_by_label("Annotations").click();
+                        harness.run();
+                        harness
+                            .get_by_role_and_label(Role::CheckBox, edit)
+                            .scroll_to_me();
+                        harness.run();
+                        harness.get_by_role_and_label(Role::CheckBox, edit).click();
+                        expected.footprint_zones_until_broken = true;
                     }
                     "Expiry value" | "Expiry off" | "Expiry on" => {
                         harness.get_by_label("Annotations").scroll_to_me();

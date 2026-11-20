@@ -217,6 +217,80 @@ mod tests {
         }
     }
 
+    /// Rows of four 0.25 ticks: day one counts 2,2 (POC 100, VA 100..101);
+    /// day two counts 2,3,2 (POC 111, VA 110..112). Only day two tags the scale.
+    #[test]
+    fn tpo_level_tags_mark_only_the_latest_profile() {
+        use crate::model::{Bar, BarData, ChartType, ChartTypeParams, Instrument, Timeframe};
+        use crate::widget::SeriesId;
+        let start: chrono::DateTime<chrono::Utc> = "2024-01-02T14:30:00Z".parse().unwrap();
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let mut baseline = Vec::new();
+            for tags in [false, true] {
+                let bars = [
+                    (0, 100.25, 101.0, 100.0, 100.75),
+                    (30, 100.25, 101.0, 100.0, 100.75),
+                    (1440, 110.5, 112.0, 110.0, 111.0),
+                    (1470, 111.0, 112.0, 110.0, 111.5),
+                    (1500, 111.0, 111.0, 111.0, 111.0),
+                ]
+                .into_iter()
+                .map(|(m, o, h, l, c)| {
+                    Bar::new(start + chrono::Duration::minutes(m), o, h, l, c, 1.0)
+                })
+                .collect();
+                let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+                chart.set_timeframe(Timeframe::Min30);
+                chart.set_instrument(Some(Instrument::new("ES").with_tick_size(0.25)));
+                chart.set_chart_type(ChartType::TimePriceOpportunity);
+                chart.set_chart_type_params(ChartTypeParams {
+                    tpo_row_ticks: 4,
+                    tpo_level_tags: tags,
+                    ..Default::default()
+                });
+                chart.config_mut().show_volume = false;
+                chart.config_mut().show_symbol_last_val = false;
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let painted = shapes(&ctx, &mut chart, 0.0, vec![]);
+                let plot = chart.get_rendered_price_rect();
+                let mut tag_rects: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Rect(r)
+                            if r.rect.left() >= plot.right() - 1.0
+                                && [theme.chart.axis_text, theme.chart.axis_text_secondary]
+                                    .contains(&r.fill) =>
+                        {
+                            Some((r.rect, r.fill))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                // The scale's existing controls can use the caption colours too.
+                if !tags {
+                    baseline = tag_rects;
+                    continue;
+                }
+                tag_rects.retain(|tag| !baseline.contains(tag));
+                // Exactly three newest-profile tags leave none for the earlier profile.
+                assert_eq!(tag_rects.len(), 3, "background {:?}", theme.chart.bg);
+                let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+                for (price, color) in [
+                    (111.0, theme.chart.axis_text),
+                    (112.0, theme.chart.axis_text_secondary),
+                    (110.0, theme.chart.axis_text_secondary),
+                ] {
+                    assert!(
+                        tag_rects.iter().any(|(r, fill)| *fill == color
+                            && r.y_range().contains(map.price_to_y(price))),
+                        "missing {price}"
+                    );
+                }
+            }
+        }
+    }
+
     #[cfg(feature = "studies")]
     #[test]
     fn tpo_study_draws_the_table_of_its_statistics_input() {
@@ -867,12 +941,12 @@ mod tests {
                     }
                     if count <= 8 {
                         let range = map.price.range();
-                        // At 10% margins each side: 60.25 / 0.8 = 75.3125 for executed rows;
-                        // TPO rows of 2 span 99.875..161.875, so 62 / 0.8 = 77.5.
+                        // The span takes 82% of the pane, with 8% below and 10% above.
+                        // Executed rows span 99.875..160.125; TPO rows of 2 end at 161.875.
                         let (low, high) = if kind == ChartType::SessionVolumeProfile {
-                            (92.34375, 167.65625)
+                            (99.875 - 60.25 / 0.82 * 0.08, 160.125 + 60.25 / 0.82 * 0.1)
                         } else {
-                            (92.125, 169.625)
+                            (99.875 - 62.0 / 0.82 * 0.08, 161.875 + 62.0 / 0.82 * 0.1)
                         };
                         assert!(
                             (range.min - low).abs() < 1e-9 && (range.max - high).abs() < 1e-9,
@@ -990,11 +1064,21 @@ mod tests {
                     for (prices, expected) in [
                         (
                             [100.0, 100.0],
-                            crate::scales::PriceRange::new(99.875, 100.125),
+                            // Flat data uses 1% of its price, so the margin span is 1 / 0.82.
+                            crate::scales::PriceRange::new(
+                                100.0 - 1.0 / 0.82 * 0.08,
+                                100.0 + 1.0 / 0.82 * 0.1,
+                            ),
                         ),
                         // Rows of 2 cover 7..73; rows of 2.5 cover 8.75..71.25. Starting over
-                        // would alternate between spans 66/0.8 = 82.5 and 62.5/0.8 = 78.125.
-                        ([8.9, 71.0], crate::scales::PriceRange::new(-1.25, 81.25)),
+                        // would alternate between spans 66/0.82 and 62.5/0.82.
+                        (
+                            [8.9, 71.0],
+                            crate::scales::PriceRange::new(
+                                7.0 - 66.0 / 0.82 * 0.08,
+                                73.0 + 66.0 / 0.82 * 0.1,
+                            ),
+                        ),
                     ] {
                         let mut chart =
                             crate::widget::Chart::new(crate::model::BarData::from_bars(
@@ -1012,10 +1096,11 @@ mod tests {
                         chart.set_visible_bars(8);
                         chart.set_start_idx(0);
                         draw(&mut chart, None);
-                        assert_eq!(
-                            chart.state.price_scale().range(),
-                            expected,
-                            "automatic rows converge and preserve flat-session bounds: {prices:?}"
+                        let range = chart.state.price_scale().range();
+                        assert!(
+                            (range.min - expected.min).abs() < 1e-9
+                                && (range.max - expected.max).abs() < 1e-9,
+                            "automatic rows converge and preserve flat-session bounds: {prices:?}, {range:?}, expected {expected:?}"
                         );
                     }
                 }

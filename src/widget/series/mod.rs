@@ -830,6 +830,8 @@ impl Chart {
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
         #[cfg(feature = "drawings")]
         let placed = self.placement_pane();
+        #[cfg(feature = "drawings")]
+        let drawings = self.drawings.begin_removal();
         let dependents = self.study_dependents(id);
         let removed = self.remove_one_series(id);
         if removed {
@@ -839,6 +841,8 @@ impl Chart {
         }
         #[cfg(feature = "drawings")]
         self.keep_placement_in(placed);
+        #[cfg(feature = "drawings")]
+        self.drawings.finish_removal(drawings);
         removed
     }
 
