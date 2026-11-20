@@ -390,6 +390,7 @@ pub struct StrategyContext<'a> {
     trading: bool,
     tick: u64,
     order_delay: u32,
+    price_increment: f64,
 }
 
 impl std::fmt::Debug for StrategyContext<'_> {
@@ -438,6 +439,13 @@ impl StrategyContext<'_> {
     /// Historical tick fill callbacks include its developing candle; other intrabar fills exclude it.
     pub fn is_forming_bar(&self) -> bool {
         self.forming
+    }
+
+    /// The run's [`BacktestSettings::price_increment`], or `None` when it is not positive and
+    /// finite.
+    #[cfg_attr(not(feature = "studies"), allow(dead_code))]
+    pub(crate) fn price_increment(&self) -> Option<f64> {
+        Some(self.price_increment).filter(|tick| tick.is_finite() && *tick > 0.0)
     }
 
     /// Places an entry of `quantity` on `side`. Against an open position on the other side it
@@ -1272,6 +1280,7 @@ impl<'a> Run<'a> {
             trading: self.trading,
             tick: self.tick,
             order_delay: self.settings.order_delay,
+            price_increment: self.settings.price_increment,
         });
     }
 
