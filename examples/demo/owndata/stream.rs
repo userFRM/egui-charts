@@ -810,7 +810,6 @@ pub(crate) mod tests {
                         side: key("side"),
                         buy: "buy".to_owned(),
                         sell: "sell".to_owned(),
-                        ..TradeFields::default()
                     }),
                 },
             ],
