@@ -120,6 +120,8 @@ struct ProfileStudy {
     /// Leave the bars outside regular, extended or custom hours out of each session profile.
     hours_only: bool,
     tick_size: Option<f64>,
+    /// The instrument's volume decimals, which row values are written in, from `set_instrument`.
+    volume_decimals: Option<u8>,
     resolutions: Vec<ProfileResolution>,
     /// The finer interval and data start stated before the chart emptied the profile to wait
     /// for its full recompute, still stated until it has bars again.
@@ -354,6 +356,7 @@ impl ProfileStudy {
             },
             hours_only: false,
             tick_size: None,
+            volume_decimals: None,
             resolutions: Vec::new(),
             held: None,
             view: 0..0,
@@ -1613,7 +1616,11 @@ impl ProfileStudy {
             if let Some(plot) = cache.iter().find(|cached| {
                 cached.plot.bars == range && cached.layout == config && !cached.dirty
             }) {
-                profiles.push(plot.plot.clone());
+                // The decimals only format the values, so a cached profile takes the current ones.
+                profiles.push(StudyProfile {
+                    volume_decimals: self.volume_decimals,
+                    ..plot.plot.clone()
+                });
             } else if let Some((profile, effective)) = held
                 .get_or_insert_with(|| self.held_executions(range.start))
                 .as_ref()
@@ -1627,6 +1634,7 @@ impl ProfileStudy {
                     right_aligned: self.right,
                     strip: (self.kind == Kind::Visible).then_some(self.width as f32),
                     width,
+                    volume_decimals: self.volume_decimals,
                 };
                 profiles.push(plot.clone());
                 cache.retain(|cached| cached.plot.bars != range);
@@ -1661,6 +1669,7 @@ impl ProfileStudy {
                     right_aligned: self.right,
                     strip: (self.kind == Kind::Visible).then_some(self.width as f32),
                     width,
+                    volume_decimals: self.volume_decimals,
                 };
                 profiles.push(plot.clone());
                 cache.retain(|cached| cached.plot.bars != range);
@@ -1706,6 +1715,7 @@ impl ProfileStudy {
                     right_aligned: self.right,
                     strip: (self.kind == Kind::Visible).then_some(self.width as f32),
                     width,
+                    volume_decimals: self.volume_decimals,
                 };
                 profiles.push(plot.clone());
                 cache.retain(|cached| cached.plot.bars != range);
@@ -2024,6 +2034,8 @@ macro_rules! profile_study {
                     .filter(|t| t.is_finite() && *t > 0.0);
                 let tick_changed = self.profile.tick_size != tick_size;
                 self.profile.tick_size = tick_size;
+                // Formats the row values only, so it changes no calculation.
+                self.profile.volume_decimals = instrument.and_then(|i| i.volume_decimals);
                 let hours = instrument.map_or((TimezoneId::utc(), None), |i| {
                     let zone = i.time_zone.clone().unwrap_or_else(TimezoneId::utc);
                     (zone, i.session.clone())
