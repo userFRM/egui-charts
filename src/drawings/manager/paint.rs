@@ -3,7 +3,7 @@
 use super::{DrawingManager, PaintedDrawing};
 use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType};
 use crate::drawings::rendering::ChartView;
-use crate::drawings::services::{DrawingInteraction, HandleService, in_z_order};
+use crate::drawings::services::{self, HandleService, in_z_order};
 use egui::epaint::{ClippedShape, Mesh, TessellationOptions, Tessellator, emath::TSTransform};
 use egui::{Color32, Pos2, Rect, Shape};
 use std::borrow::Cow;
@@ -131,7 +131,7 @@ impl DrawingManager {
     /// Hit-tests a screen point against all visible drawings (back-to-front).
     ///
     /// Returns the ID of the topmost drawing at `point`, or `None` if no
-    /// drawing was hit. Delegates to [`DrawingInteraction::hit_test`], the single
+    /// drawing was hit. Delegates to [`services::hit_test`], the single
     /// source of truth for per-segment / per-level geometry hit testing, so that
     /// channels, Fibonacci levels, fans, and pitchforks are selectable along
     /// their drawn geometry rather than only near a control point. Honors the
@@ -176,11 +176,14 @@ impl DrawingManager {
                 {
                     return false;
                 }
-                paint.is_some_and(|p| DrawingInteraction::hit_test_painted(point, &p.shapes))
+                paint.is_some_and(|p| services::hit_test_painted(point, &p.shapes))
                     || (drawing.tool_type != DrawingToolType::RegressionTrend
-                        && DrawingInteraction::new()
-                            .hit_test(point, std::slice::from_ref(*drawing), &self.curr_timeframe)
-                            .is_some())
+                        && services::hit_test(
+                            point,
+                            std::slice::from_ref(*drawing),
+                            &self.curr_timeframe,
+                        )
+                        .is_some())
             })
             .map(|d| d.id)
     }

@@ -58,6 +58,9 @@ use egui::{Pos2, Rect, Vec2};
 #[cfg(feature = "ui")]
 pub(crate) use export::ColumnId;
 pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
+pub use feed::checkpoint::{
+    TradeReplayCheckpoint, TradeReplayCheckpointError, TradeReplayCheckpointPlan,
+};
 pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
 #[cfg(feature = "ui")]
 pub(crate) use readout::SeriesFingerprint;
@@ -167,7 +170,8 @@ pub use sync::VisibleTimeRange;
 #[cfg(feature = "drawings")]
 pub(crate) mod tool_interaction;
 
-pub use keyboard::{ShortcutMap, ShortcutRequest};
+pub use crate::config::shortcut_map::ShortcutMap;
+pub use keyboard::ShortcutRequest;
 pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 
 /// The main bars' revision, length and last high, low and close, and the pending sizes, that
@@ -328,6 +332,10 @@ pub struct Chart {
     volume_setting: bool,
     #[cfg(feature = "studies")]
     volume_study: Option<SeriesId>,
+    /// The colours last given to or taken from the Analyst price forecast studies, positive then
+    /// negative; `None` gives them the configured colours on the next frame.
+    #[cfg(feature = "studies")]
+    price_target_colors: Option<[egui::Color32; 2]>,
     /// Id of each study in `studies`.
     pub(crate) study_ids: Vec<SeriesId>,
     /// The most studies the chart takes through the interface, if capped.
@@ -425,6 +433,9 @@ pub struct Chart {
         std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
     overnight_hours: bool,
+    /// The futures data choices the chart settings applied, which the host's history follows.
+    back_adjust_futures: bool,
+    settlement_as_close: bool,
     conversion: Option<String>,
     pub(crate) measured_axis_width: f32,
     /// Last usable widget width and its first frame, including discarded sizing passes.
@@ -477,6 +488,9 @@ pub struct Chart {
     /// X positions of the vertical grid lines of the last rendered price pane, which the study
     /// panes below it repeat; empty when the chart hides its vertical grid.
     pub(crate) last_vertical_grid_x: Vec<f32>,
+    /// X positions of the session breaks of the last rendered price pane, which the other panes
+    /// repeat; empty when the chart draws none.
+    pub(crate) last_session_break_x: Vec<f32>,
     /// Last rendered indicator pane info for hit testing
     /// Each entry: (indicator_index, panel_rect, chart_rect, y_min, y_max, coords)
     pub(crate) last_rendered_indicator_panes: Vec<RenderedIndicatorPane>,

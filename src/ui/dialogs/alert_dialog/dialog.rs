@@ -396,13 +396,6 @@ impl AlertDialog {
         self.is_open = false;
     }
 
-    /// Follow an external close flag.
-    pub fn sync_open_state(&mut self, should_be_open: bool) {
-        if !should_be_open {
-            self.close();
-        }
-    }
-
     fn poll(&mut self, ctx: &Context) {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
@@ -644,7 +637,9 @@ impl AlertDialog {
                             status_message(ui, MessageKind::Error, message);
                         } else if !self.alert.is_valid() {
                             let intervals = self.alert.timeframes();
-                            let message = if !self.alert.delivery.is_valid() {
+                            let message = if !self.alert.delivery.plain_text_is_valid() {
+                                "Enter one email address for plain text, or leave it empty"
+                            } else if !self.alert.delivery.webhook_is_valid() {
                                 "Enter the webhook URL, starting with http:// or https://"
                             } else if self.alert.additional_conditions.len() > 4 {
                                 "An alert accepts five conditions"
@@ -933,19 +928,32 @@ impl AlertDialog {
                 ui.end_row();
             }
             ui.label(l10n::text(ui.ctx(), "Delivery"));
-            ui.horizontal_wrapped(|ui| {
-                let delivery = &mut self.alert.delivery;
-                for (selected, label) in [
-                    (&mut delivery.popup, "Popup"),
-                    (&mut delivery.sound, "Sound"),
-                    (&mut delivery.email, "Email"),
-                    (&mut delivery.push, "Mobile push"),
-                    (&mut delivery.webhook, "Webhook"),
-                ] {
-                    ui.checkbox(selected, l10n::text(ui.ctx(), label));
-                }
+            // Measure every wrapped line as part of the same grid cell.
+            ui.vertical(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let delivery = &mut self.alert.delivery;
+                    for (selected, label) in [
+                        (&mut delivery.popup, "Popup"),
+                        (&mut delivery.sound, "Sound"),
+                        (&mut delivery.email, "Email"),
+                        (&mut delivery.plain_text, "Plain-text email"),
+                        (&mut delivery.push, "Mobile push"),
+                        (&mut delivery.webhook, "Webhook"),
+                    ] {
+                        ui.checkbox(selected, l10n::text(ui.ctx(), label));
+                    }
+                });
             });
             ui.end_row();
+            if self.alert.delivery.plain_text {
+                ui.label(l10n::text(ui.ctx(), "Plain-text address"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.alert.delivery.plain_text_address)
+                        .hint_text(l10n::text(ui.ctx(), "Account's alternative address")),
+                )
+                .accessible_name(l10n::text(ui.ctx(), "Plain-text address"));
+                ui.end_row();
+            }
             if self.alert.delivery.webhook {
                 ui.label(l10n::text(ui.ctx(), "Webhook URL"));
                 ui.add(
@@ -1156,7 +1164,7 @@ impl AlertDialog {
             ui.label(
                 egui::RichText::new(l10n::text(
                     ui.ctx(),
-                    "Presets leave out levels, drawings and webhook URLs.",
+                    "Presets leave out levels, drawings, webhook URLs and plain-text addresses.",
                 ))
                 .weak(),
             );
@@ -1390,43 +1398,32 @@ pub(crate) fn rule_form(
             AlertCondition::Crossing(0.0)
         };
     }
-    let level = condition.level().unwrap_or(0.0);
+    // A channel keeps its bounds and a level keeps its value across operators.
+    let (lower, upper) = preset::seeded_bounds(condition).unwrap_or((0.0, 1.0));
     let channel = drawing_channel(source, condition, sources);
     let position = offer_position
         .then(|| drawing_position(source, condition, sources))
         .flatten();
     let choices = [
-        (AlertCondition::Crossing(level), "Crossing"),
-        (AlertCondition::CrossingUp(level), "Crossing up"),
-        (AlertCondition::CrossingDown(level), "Crossing down"),
-        (AlertCondition::Above(level), "Greater than"),
-        (AlertCondition::Below(level), "Less than"),
+        (AlertCondition::Crossing(lower), "Crossing"),
+        (AlertCondition::CrossingUp(lower), "Crossing up"),
+        (AlertCondition::CrossingDown(lower), "Crossing down"),
+        (AlertCondition::Above(lower), "Greater than"),
+        (AlertCondition::Below(lower), "Less than"),
         (
-            AlertCondition::EnteringChannel {
-                lower: level,
-                upper: level + 1.0,
-            },
+            AlertCondition::EnteringChannel { lower, upper },
             "Entering channel",
         ),
         (
-            AlertCondition::ExitingChannel {
-                lower: level,
-                upper: level + 1.0,
-            },
+            AlertCondition::ExitingChannel { lower, upper },
             "Exiting channel",
         ),
         (
-            AlertCondition::InsideChannel {
-                lower: level,
-                upper: level + 1.0,
-            },
+            AlertCondition::InsideChannel { lower, upper },
             "Inside channel",
         ),
         (
-            AlertCondition::OutsideChannel {
-                lower: level,
-                upper: level + 1.0,
-            },
+            AlertCondition::OutsideChannel { lower, upper },
             "Outside channel",
         ),
         (
@@ -1756,41 +1753,104 @@ mod tests {
         assert_eq!((inputs.start, inputs.visible), (None, None));
     }
 
-    /// The limits count characters, not bytes, and apply where the user edits the text.
+    /// The limits count characters, not bytes, and apply where the user edits the text. A
+    /// plain-text email address must be one address, and the saved alert carries it.
     #[test]
-    fn save_stops_at_the_name_and_message_limits() {
+    fn save_stops_at_text_limits_and_invalid_plain_text_addresses() {
+        use egui::accesskit::Role;
         use egui_kittest::{
             Harness,
             kittest::{NodeT, Queryable},
         };
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 4] = [
-            (|a| a.name = "é".repeat(Alert::MAX_NAME_CHARS), true),
-            (|a| a.name = "é".repeat(Alert::MAX_NAME_CHARS + 1), false),
-            (|a| a.message = "€".repeat(Alert::MAX_MESSAGE_CHARS), true),
+        const ADDRESS: &str = "Enter one email address for plain text, or leave it empty";
+        // `None` saves; otherwise Save is off and the dialog says why.
+        let rows: [(Edit, Option<&str>); 7] = [
+            (|a| a.name = "é".repeat(Alert::MAX_NAME_CHARS), None),
+            (
+                |a| a.name = "é".repeat(Alert::MAX_NAME_CHARS + 1),
+                Some("The name is too long"),
+            ),
+            (|a| a.message = "€".repeat(Alert::MAX_MESSAGE_CHARS), None),
             (
                 |a| a.message = "€".repeat(Alert::MAX_MESSAGE_CHARS + 1),
-                false,
+                Some("The message is too long"),
+            ),
+            (
+                |a| {
+                    a.delivery.plain_text = true;
+                    a.delivery.plain_text_address = "pager@example.com".into();
+                },
+                None,
+            ),
+            (
+                |a| {
+                    a.delivery.plain_text = true;
+                    a.delivery.plain_text_address = "pager@example".into();
+                },
+                Some(ADDRESS),
+            ),
+            // Without the plain-text email the address is not used, so it is not checked.
+            (
+                |a| a.delivery.plain_text_address = "pager@example".into(),
+                None,
             ),
         ];
-        for (index, (edit, allowed)) in rows.into_iter().enumerate() {
-            let mut alert = Alert::new("SAMPLE", AlertCondition::Crossing(1.0));
-            edit(&mut alert);
+        for (index, (edit, error)) in rows.into_iter().enumerate() {
+            let mut edited = Alert::new("SAMPLE", AlertCondition::Crossing(1.0));
+            edit(&mut edited);
             let mut dialog = AlertDialog::new();
-            dialog.edit(alert);
+            dialog.edit(edited.clone());
             let mut h = Harness::builder()
                 .allow_missing_glyphs()
+                .with_context_setup(|ctx| {
+                    crate::theme::apply_to_egui(ctx, &crate::theme::Theme::light());
+                })
                 .with_size(egui::vec2(1440.0, 900.0))
                 .build_ui_state(
-                    |ui, dialog: &mut AlertDialog| {
-                        dialog.show(ui.ctx());
+                    |ui, (dialog, saved): &mut (AlertDialog, Option<Alert>)| {
+                        if let AlertDialogAction::Create(alert) = dialog.show(ui.ctx()) {
+                            *saved = Some(*alert);
+                        }
                     },
-                    dialog,
+                    (dialog, None),
                 );
             h.run();
+            if edited.delivery.plain_text {
+                let address = h
+                    .get_by_role_and_label(Role::TextInput, "Plain-text address")
+                    .rect();
+                for label in [
+                    "Popup",
+                    "Sound",
+                    "Email",
+                    "Plain-text email",
+                    "Mobile push",
+                    "Webhook",
+                ] {
+                    assert!(
+                        h.get_by_label(label).rect().bottom() <= address.top(),
+                        "{label} overlaps the plain-text address in row {index}"
+                    );
+                }
+            }
             assert_eq!(
                 h.get_by_label("Save alert").accesskit_node().is_disabled(),
-                !allowed,
+                error.is_some(),
+                "row {index}"
+            );
+            if let Some(error) = error {
+                assert!(h.query_by_label(error).is_some(), "row {index}");
+                continue;
+            }
+            h.get_by_label("Save alert").click();
+            h.run();
+            assert_eq!(
+                h.state()
+                    .1
+                    .as_ref()
+                    .map(|alert| (&alert.name, &alert.message, &alert.delivery)),
+                Some((&edited.name, &edited.message, &edited.delivery)),
                 "row {index}"
             );
         }
@@ -1852,6 +1912,61 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The condition menu keeps a channel's bounds across channel operators, gives a single
+    /// level the lower bound and seeds a channel from a level.
+    #[test]
+    fn condition_menu_keeps_channel_bounds() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut dialog = AlertDialog::new();
+        dialog.edit(Alert::new(
+            "SAMPLE",
+            AlertCondition::EnteringChannel {
+                lower: 100.0,
+                upper: 110.0,
+            },
+        ));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(960.0, 900.0))
+            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+        h.run();
+        let (lower, upper) = (100.0, 110.0);
+        let steps = [
+            (
+                "Exiting channel",
+                AlertCondition::ExitingChannel { lower, upper },
+            ),
+            (
+                "Inside channel",
+                AlertCondition::InsideChannel { lower, upper },
+            ),
+            (
+                "Outside channel",
+                AlertCondition::OutsideChannel { lower, upper },
+            ),
+            (
+                "Entering channel",
+                AlertCondition::EnteringChannel { lower, upper },
+            ),
+            ("Crossing", AlertCondition::Crossing(100.0)),
+            (
+                "Entering channel",
+                AlertCondition::EnteringChannel {
+                    lower: 100.0,
+                    upper: 101.0,
+                },
+            ),
+        ];
+        for (label, expected) in steps {
+            h.get_by_label("Condition").click();
+            h.run();
+            h.get_by_label(label).scroll_to_me();
+            h.run();
+            h.get_by_label(label).click();
+            h.run();
+            assert_eq!(h.state().alert.condition, expected, "{label}");
         }
     }
 

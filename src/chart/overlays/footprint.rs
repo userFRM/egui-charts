@@ -100,9 +100,17 @@ pub struct FootprintConfig {
     pub value_area_low: Option<Stroke>,
     /// Trade profiles: how volume nodes are chosen.
     pub node_sensitivity: NodeSensitivity,
-    /// Prefer 1.2K for 1,200 and 3.4M for 3,400,000, even when every digit would fit.
-    /// Otherwise compact units are only a width-fitting fallback.
+    /// Prefer 1.2K for 1,200 and 3.4M for 3,400,000, even when every digit would fit, at the
+    /// [`volume_decimals`](Self::volume_decimals) when they are set. Otherwise compact units are
+    /// only a width-fitting fallback.
     pub abbreviate: bool,
+    /// Decimals of volumes, abbreviated K, M and B values included, as
+    /// [`Instrument::volume_decimals`](crate::model::Instrument::volume_decimals) sets them for
+    /// the chart's other volume readouts. `None`, the default, keeps the footprint's own rule:
+    /// up to three decimals below 100, none from 100 up, scientific notation below 0.001 and one
+    /// decimal in compact units. Trade counts and open interest keep that rule either way. The
+    /// chart takes its instrument's decimals when this is `None`.
+    pub volume_decimals: Option<u8>,
     /// Write zero volumes as 0. Otherwise they are left blank, so a one-sided row shows only
     /// the side that traded.
     pub show_zero: bool,
@@ -165,6 +173,7 @@ impl Default for FootprintConfig {
             value_area_low: Some(Stroke::new(1.0, Color32::GRAY)),
             node_sensitivity: NodeSensitivity::default(),
             abbreviate: true,
+            volume_decimals: None,
             show_zero: true,
             font_size: [10.0, 10.0],
             extreme_ratio: false,
@@ -304,8 +313,9 @@ pub(crate) fn footprint_column_width(bar_spacing: f32, config: &FootprintConfig)
 /// footprint's clock and grouping anchor; trade-based bars keep their exact allocated opens.
 /// Text layout uses egui's galley cache; rows below the minimum height never request a layout.
 /// Row bands extend half an instrument tick below their first tick and above their last tick,
-/// including grouped rows. Fractional volumes below 100 retain
-/// up to three decimals; nonzero magnitudes below 0.001 use scientific notation. Only display
+/// including grouped rows. Volumes take [`FootprintConfig::volume_decimals`]; without them,
+/// fractional volumes below 100 retain up to three decimals and nonzero magnitudes below 0.001
+/// use scientific notation. Only display
 /// grouping runs during painting. Cells under a point wide are too narrow to read and are skipped
 /// before looking up executions. Unless a [`FootprintMode::Ladder`] column draws its candle, a
 /// price spine occupies a separate gutter to the left of each bar: the opening tick points left,
@@ -508,7 +518,13 @@ pub(crate) fn render_footprint_read(
                     }
                 } else {
                     let text = |row: &FootprintLevel, compact| {
-                        cell_text(*mode, row, config.abbreviate || compact, config.show_zero)
+                        cell_text(
+                            *mode,
+                            row,
+                            config.abbreviate || compact,
+                            config.show_zero,
+                            config.volume_decimals,
+                        )
                     };
                     [fit(width - 2.5, &text), None]
                 }
@@ -1002,20 +1018,24 @@ fn column_galleys(
 }
 
 /// The text of one cell in `mode`; empty when every number in it is a hidden zero.
-fn cell_text(
+pub(super) fn cell_text(
     mode: FootprintMode,
     row: &FootprintLevel,
     abbreviate: bool,
     show_zero: bool,
+    decimals: Option<u8>,
 ) -> String {
     let hidden = |value: f64| value == 0.0 && !show_zero;
-    let number = |value: f64| {
+    let text = |value: f64, decimals| {
         if hidden(value) {
             String::new()
         } else {
-            volume_text(value, abbreviate)
+            volume_text(value, abbreviate, decimals)
         }
     };
+    let number = |value: f64| text(value, decimals);
+    // Trade counts are whole numbers, not volumes.
+    let count = |value: f64| text(value, None);
     let signed = |value: f64| match number(value) {
         text if text.is_empty() || value < 0.0 => text,
         text => format!("+{text}"),
@@ -1041,10 +1061,10 @@ fn cell_text(
         }
         FootprintMode::BidAskTrades => format!(
             "{} × {}",
-            number(row.bid_trades as f64),
-            number(row.ask_trades as f64)
+            count(row.bid_trades as f64),
+            count(row.ask_trades as f64)
         ),
-        FootprintMode::Trades => number(row.trades() as f64),
+        FootprintMode::Trades => count(row.trades() as f64),
         FootprintMode::AverageSize => row.average_size().map_or_else(String::new, number),
     }
 }
@@ -1054,7 +1074,7 @@ fn ladder_text(value: f64, config: &FootprintConfig, compact: bool) -> String {
     if value == 0.0 && !config.show_zero {
         return String::new();
     }
-    if config.abbreviate && !compact && value.abs() >= 1000.0 {
+    if config.abbreviate && !compact && value.abs() >= 1000.0 && config.volume_decimals.is_none() {
         // 999,995 and above round to 1000.00K, so they take the next unit.
         let (scaled, unit) = if value.abs() >= 999_995.0 {
             (value / 1e6, 'M')
@@ -1066,10 +1086,24 @@ fn ladder_text(value: f64, config: &FootprintConfig, compact: bool) -> String {
             egui::emath::format_with_decimals_in_range(scaled, 0..=2)
         );
     }
-    volume_text(value, config.abbreviate || compact)
+    volume_text(value, config.abbreviate || compact, config.volume_decimals)
 }
 
-fn volume_text(value: f64, abbreviate: bool) -> String {
+/// A volume as cells, ladders and statistics write it: with `decimals`, as the chart's other
+/// volume readouts write it, else by the footprint's own rule, see
+/// [`FootprintConfig::volume_decimals`].
+fn volume_text(value: f64, abbreviate: bool, decimals: Option<u8>) -> String {
+    if let Some(decimals) = decimals {
+        let precision = usize::from(decimals);
+        return if abbreviate {
+            crate::scales::PriceFormatter::format(
+                &crate::scales::VolumeFormatter { precision },
+                value,
+            )
+        } else {
+            crate::scales::format_decimal(value, precision)
+        };
+    }
     if abbreviate && value.abs() >= 1000.0 {
         // 999,950 and above round to 1000.0K at one decimal, so they take the next unit.
         let (scaled, unit) = if value.abs() >= 999_950.0 {
@@ -1795,7 +1829,15 @@ pub(crate) fn render_footprint_statistics_rows_read(
                                             | FootprintStatistic::PointOfControl,
                                             Some(value),
                                         ) => format!("{value:.decimals$}"),
-                                        (_, Some(value)) => volume_text(value, abbreviate),
+                                        (
+                                            FootprintStatistic::Trades
+                                            | FootprintStatistic::OpenInterestHigh
+                                            | FootprintStatistic::OpenInterestLow,
+                                            Some(value),
+                                        ) => volume_text(value, abbreviate, None),
+                                        (_, Some(value)) => {
+                                            volume_text(value, abbreviate, config.volume_decimals)
+                                        }
                                     };
                                     painter.layout_no_wrap(
                                         text,
@@ -4415,6 +4457,11 @@ mod tests {
             show_zero,
             ..Default::default()
         };
+        let decimals = |abbreviate, decimals| FootprintConfig {
+            abbreviate,
+            volume_decimals: Some(decimals),
+            ..Default::default()
+        };
         let counted = FootprintLevel {
             bid: 4.0,
             ask: 8.0,
@@ -4442,15 +4489,30 @@ mod tests {
             (FootprintMode::DominantSide, row(2.0, 3.0, 9.0), config(false, true), "3"),
             (FootprintMode::BidAskTrades, counted.clone(), config(false, true), "1 × 2"),
             (FootprintMode::Trades, counted.clone(), config(false, true), "4"),
-            (FootprintMode::AverageSize, counted, config(false, true), "5"),
+            (FootprintMode::AverageSize, counted.clone(), config(false, true), "5"),
             (FootprintMode::BidAskTrades, row(0.0, 0.0, 0.0), config(false, false), ""),
             (FootprintMode::BidAskTrades, row(0.0, 0.0, 0.0), config(false, true), "0 × 0"),
             (FootprintMode::Trades, row(0.0, 0.0, 0.0), config(false, true), "0"),
             (FootprintMode::AverageSize, row(0.0, 0.0, 0.0), config(false, true), ""),
+            (FootprintMode::Volume, row(0.0, 1234.56, 0.0), decimals(true, 3), "1.235K"),
+            (FootprintMode::Volume, row(0.0, 1234.56, 0.0), decimals(false, 3), "1234.560"),
+            (FootprintMode::Volume, row(0.0, 1234.0, 0.0), decimals(true, 0), "1K"),
+            (FootprintMode::Delta, row(0.0004, 0.0, 0.0), decimals(false, 3), "0.000"),
+            (FootprintMode::BidAskTrades, counted.clone(), decimals(false, 3), "1 × 2"),
+            (FootprintMode::Trades, counted.clone(), decimals(false, 3), "4"),
+            (FootprintMode::AverageSize, counted, decimals(false, 3), "5.000"),
         ];
+        // A ladder keeps its own two-decimal units only without volume decimals.
+        assert_eq!(ladder_text(1234.56, &decimals(true, 3), false), "1.235K");
         for (mode, row, config, expected) in texts {
             assert_eq!(
-                cell_text(mode, &row, config.abbreviate, config.show_zero),
+                cell_text(
+                    mode,
+                    &row,
+                    config.abbreviate,
+                    config.show_zero,
+                    config.volume_decimals
+                ),
                 expected,
                 "{mode:?} {row:?}"
             );

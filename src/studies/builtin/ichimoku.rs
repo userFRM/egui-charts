@@ -84,11 +84,6 @@ impl IchimokuCloud {
         }
     }
 
-    /// Create with default params (9, 26, 52)
-    pub fn default_params() -> Self {
-        Self::new(9, 26, 52)
-    }
-
     /// Set displacement periods, counting the current bar as the first.
     /// The Kijun period is the default; 0 and 1 both leave spans unshifted.
     pub fn with_displacement(mut self, displacement: usize) -> Self {

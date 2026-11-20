@@ -72,6 +72,13 @@ their unallocated entry fees, already deducted from equity. Market and stop orde
 against their side once per fill, by ticks times tick size, ticks of the price increment or an
 absolute-price fraction. Limits, including the limit execution of a stop-limit order, never slip.
 
+[`StrategyContext::exit_trailing`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.exit_trailing)
+protects a position with an optional fixed stop from its average fill price and a trailing stop.
+The trail starts at an activation distance in the position's favour and follows the best price
+the bar path reaches at an offset. It can activate and fill within one bar, and fills and slips
+like other stops. Activation at a closing fill carries into the next bar. Requesting it with new
+distances keeps the best price; closing the position forgets it.
+
 A report is in `settings.currency`, or in [`Backtest::instrument_currency`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.instrument_currency), the currency of the
 prices, when that is unset. When the settings name another currency, the engine converts what it
 derives from prices into it: sizing, funding, margin and liquidation, fraction commissions,
@@ -228,6 +235,33 @@ including negative numbers, are unchanged. The summary CSV ends with a `side` co
 `all`, `long` or `short` on trade figures, with one row per side in that order, and empty
 on whole-run figures and properties. Largest position uses the unit `quantity` and holding
 times use `bars`.
+
+With `ui` and `strategies`, [`StrategyTester`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyTester.html)
+keeps the engine and strategy of a completed Run. As `show` receives new closed bars, it
+continues the report to the same result as a fresh Run over the longer history and returns
+[`StrategyTesterAction::Signals`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyTesterAction.html#variant.Signals) to replace the chart's fill markers. The report keeps its
+open tab, buy-and-hold toggle, date range and selected entry when that entry remains;
+[`selected_trade`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyTester.html#method.selected_trade) returns its index in the report's trades, so a chart highlight can
+follow it. A corrected processed chart bar rebuilds the run; a shorter history ends
+continuation and marks the report stale. For a run on host history, a changed or missing
+chart bar at or before its last host bar also ends continuation and marks it stale, since
+newer host history is needed. Chart bars that close later within the host history are
+already part of the run.
+
+Runs with finer fill bars or currency conversion request the finer bars or exchange rates
+for each new chart bar with [`StrategyTesterAction::RequestHistory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyTesterAction.html#variant.RequestHistory) and stay stale while
+waiting. Answer through `set_history` or `set_history_with_rates`; continuation uses the
+reply's finer bars and rates with the chart history captured when requested. A failed
+request ends continuation and preserves the last report as stale. The host supplies these
+data; the library fetches no market history or rates. End dates still bound the run.
+Optimisation results do not continue. Form edits, symbol or interval changes, Run and
+`set_report` end continuation; editing optimisation ranges or running an optimisation
+keeps the single run following its chart. Continuation leaves the tester's form tab open.
+
+A host running its own engine uses [`Backtest::update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.update)
+while the final bar is forming, or [`Backtest::update_closed_async`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.update_closed_async)
+when every bar is closed. Closed-bar updates respect the historical end date and do not
+make forming-bar decisions, even when live recalculation is enabled.
 
 ## Date ranges and analysis
 

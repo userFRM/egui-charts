@@ -295,8 +295,10 @@ pub struct Drawing {
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
-    /// info line, trend angle or arrow, the text placement of a horizontal line or ray or a
-    /// vertical line, and the reach of a vertical line. Other tools ignore these settings.
+    /// info line, trend angle or arrow, the text placement of a horizontal line or ray, a
+    /// vertical line, a cross line, a channel or a regression trend, the prices of a flat
+    /// top/bottom or disjoint channel, and the reach of a vertical line. Other tools ignore
+    /// these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
     /// Readouts, card, box border and vertical reach of a date range or date and price range.
@@ -349,7 +351,7 @@ pub struct Drawing {
     pub gann: Option<GannConfig>,
     /// Average range and noise, in ticks, and colours of the candles a Ghost Feed projects. New
     /// feeds start from [`GhostFeedConfig::drawing_default`]; `None` uses the defaults, the
-    /// colours of feeds saved before these settings.
+    /// range, noise and colours of feeds saved before these settings.
     #[serde(default)]
     pub ghost_feed: Option<GhostFeedConfig>,
     /// Whether a rectangle or parallel channel draws its halfway line; a channel's takes
@@ -422,8 +424,10 @@ pub struct Drawing {
     /// draws it over all of them, as drawings were drawn before this setting, and so does a
     /// count of at least the number of series and studies in the pane. Drawings with the same
     /// count are layered by [`z_order`](Self::z_order). The chart updates the count when a series
-    /// or study is removed, moved out of the pane or moved in its order, so the drawing stays
-    /// over and under the same other items.
+    /// or study is removed, moved out of the pane or moved in its order, and, in a user action,
+    /// when one joins the pane or the drawing moves to another pane with the main series or its
+    /// study, so the drawing stays over and under the same other items. An item new to the
+    /// drawing goes under it where its place leaves the choice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub series_layer: Option<usize>,
 }
@@ -579,7 +583,11 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             width: 1.0,
             ..LINE
         },
-        T::AnchoredVWAP => DefaultStyle { width: 1.0, ..LINE },
+        T::AnchoredVWAP => DefaultStyle {
+            color: [30, 136, 229, 255],
+            width: 1.0,
+            ..LINE
+        },
         // The colour of the range tint, the same cyan as the rows of rising volume.
         T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile => colored([83, 196, 216, 255]),
         T::XABCDPattern | T::CypherPattern => DefaultStyle {
@@ -766,7 +774,7 @@ impl Drawing {
             price_axis_label: true,
             time_axis_label: true,
             line_measurements: LineMeasurements::for_tool(tool_type),
-            range_settings: RangeSettings::default(),
+            range_settings: RangeSettings::for_tool(tool_type),
             position_size: matches!(
                 tool_type,
                 DrawingToolType::LongPos | DrawingToolType::ShortPos
@@ -966,6 +974,7 @@ impl Drawing {
     pub(crate) fn former_default_color(tool: DrawingToolType) -> Option<[u8; 4]> {
         use DrawingToolType as T;
         match tool {
+            T::AnchoredVWAP => Some(BLUE),
             T::Circle | T::RegressionTrend => Some(RED),
             T::SineLine => Some(TEAL),
             T::ElliottTriangle | T::ElliottDoubleCombo | T::ElliottTripleCombo => {
@@ -1558,7 +1567,9 @@ mod tests {
     /// Elliott wave has its colour and starts at the Intermediate degree; a regression trend
     /// draws a 1 px line in red at 30% opacity (77 of 255) under opaque red text, with 2 px bands
     /// in blue at 30% opacity; a price label is bold; a position risks 25% of an account of
-    /// 1,000 in lots of 1, over a green target and a red stop zone at 20% opacity (51). The
+    /// 1,000 in lots of 1, over a green target and a red stop zone at 20% opacity (51). A
+    /// parallel channel, flat top/bottom or disjoint channel starts its text at the left end of
+    /// its first line, and one saved without line measurements keeps it in the middle. The
     /// triangle, ellipse and double curve keep the styles they shared before.
     #[test]
     fn new_drawings_start_in_their_tool_style() {
@@ -1728,6 +1739,37 @@ mod tests {
             );
         }
         assert_eq!(Drawing::new(1, T::PriceLabel).font_weight, FontWeight::Bold);
+        let placed = Drawing::new(1, T::DateAndPriceRange);
+        assert_eq!(
+            (
+                placed.range_settings.border,
+                placed.range_settings.border_width
+            ),
+            (false, Some(1.0))
+        );
+        assert_eq!(placed.range_settings.border_color, None);
+        let mut saved = serde_json::to_value(&placed).unwrap();
+        saved.as_object_mut().unwrap().remove("range_settings");
+        let read: Drawing = serde_json::from_value(saved).unwrap();
+        assert!(read.range_settings.border);
+        assert_eq!(read.range_settings.border_width, None);
+        // Channels write their text from the left end of their first line; a channel saved
+        // without line measurements keeps it in the middle.
+        use crate::drawings::LineTextHorizontalAlign as H;
+        for tool in [T::ParallelChannel, T::FlatTopBottom, T::DisjointChannel] {
+            let placed = Drawing::new(1, tool);
+            let mut saved = serde_json::to_value(&placed).unwrap();
+            saved.as_object_mut().unwrap().remove("line_measurements");
+            let read: Drawing = serde_json::from_value(saved).unwrap();
+            assert_eq!(
+                (
+                    placed.line_measurements.text_horizontal_align,
+                    read.line_measurements.text_horizontal_align
+                ),
+                (H::Left, H::Center),
+                "{tool:?}"
+            );
+        }
         let config = Drawing::new(1, T::RegressionTrend)
             .regression_trend
             .unwrap();

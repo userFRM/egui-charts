@@ -151,7 +151,7 @@ impl SourceItem {
     ///
     /// ```
     /// use egui_charts::drawings::DrawingToolType;
-    /// use egui_charts::ui::widget_bar::panels::object_tree::SourceItem;
+    /// use egui_charts::ui::widget_bar::SourceItem;
     ///
     /// let mut item = SourceItem::drawing(7, DrawingToolType::TrendLine, egui::Color32::GOLD);
     /// item.locked = true;
@@ -366,7 +366,7 @@ impl SourceItem {
 /// [`Self::from_chart`], [`Self::from_pointer`] or [`Self::new`].
 ///
 /// ```
-/// use egui_charts::ui::widget_bar::panels::object_tree::{DataWindowInfo, DataWindowSeries};
+/// use egui_charts::ui::widget_bar::{DataWindowInfo, DataWindowSeries};
 ///
 /// let mut info = DataWindowInfo::new("XAUUSD").with_ohlcv(2400.0, 2410.0, 2395.0, 2405.0, 9.0);
 /// let value = Some("5,000.00".to_owned());

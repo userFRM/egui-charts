@@ -1,8 +1,8 @@
 //! Painting drawings against bars and a coordinate mapping.
 //!
 //! [`ChartView`] supplies data and mappings to [`Drawing::render`]; [`traits`]
-//! provides handle drawing and hit-testing helpers for custom
-//! renderers. A chart invokes drawing rendering automatically.
+//! re-exports the [`DrawingRenderer`] trait for custom renderers. A chart invokes drawing
+//! rendering automatically.
 
 mod annotations;
 mod channels;
@@ -813,6 +813,7 @@ mod tests {
         }
         for &tool in DrawingToolType::all() {
             let mut drawing = Drawing::new(7, tool);
+            drawing.range_settings.border = true;
             drawing.points = [
                 (100., 100.),
                 (300., 300.),
@@ -1463,17 +1464,24 @@ mod tests {
                         }
                         assert_eq!(painted_lines, lines);
                         assert_eq!(areas, outline.areas);
-                        let hit = crate::drawings::services::DrawingInteraction::new();
                         for x in [125.0, 275.0] {
                             for y in [250.0 - x / 2.0, other_y(x)] {
                                 assert_eq!(
-                                    hit.hit_test(Pos2::new(x, y), &[drawing.clone()], "1m"),
+                                    crate::drawings::services::hit_test(
+                                        Pos2::new(x, y),
+                                        &[drawing.clone()],
+                                        "1m"
+                                    ),
                                     Some(1)
                                 );
                             }
                             let y = (250.0 - x / 2.0 + other_y(x)) / 2.0;
                             assert_eq!(
-                                hit.hit_test(Pos2::new(x, y), &[drawing.clone()], "1m"),
+                                crate::drawings::services::hit_test(
+                                    Pos2::new(x, y),
+                                    &[drawing.clone()],
+                                    "1m"
+                                ),
                                 filled.then_some(1)
                             );
                         }
@@ -1486,7 +1494,7 @@ mod tests {
     /// Even-odd fills and their hit areas agree for concave and crossing paths and curve lobes.
     #[test]
     fn filled_shapes_cover_the_area_their_line_encloses() {
-        use crate::drawings::services::DrawingInteraction;
+        use crate::drawings::services::{hit_test, hit_test_painted};
         use DrawingToolType as T;
         let concave = vec![
             (50., 50.),
@@ -1612,12 +1620,12 @@ mod tests {
             for (points, want) in [(hits, true), (misses, false)] {
                 for point in points.into_iter().map(Pos2::from) {
                     assert_eq!(
-                        DrawingInteraction::new().hit_test(point, &[drawing.clone()], "1m"),
+                        hit_test(point, &[drawing.clone()], "1m"),
                         want.then_some(1),
                         "{tool:?} outline at {point:?}"
                     );
                     assert_eq!(
-                        DrawingInteraction::hit_test_painted(point, &clipped),
+                        hit_test_painted(point, &clipped),
                         want,
                         "{tool:?} paint at {point:?}"
                     );
