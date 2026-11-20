@@ -257,14 +257,14 @@ fn render_profiles(
         }
         let x = start.max(mapping.rect.left());
         let session_width = (stop - x).max(1.0);
-        // Keep the edge a histogram grows from in view, with the far edge at its session.
+        // Fit each histogram to the visible part of its session, so both of its edges stay in view.
         let (anchor, toward, width) = match settings {
             Some((s, _)) if s.right_aligned => {
                 let anchor = stop.min(mapping.rect.right());
                 (
                     anchor,
                     -1.0,
-                    (anchor - start).max(1.0) * histogram_share(s.width),
+                    (anchor - x).max(1.0) * histogram_share(s.width),
                 )
             }
             Some((s, _)) => (x, 1.0, session_width * histogram_share(s.width)),
@@ -615,6 +615,13 @@ mod tests {
                 true,
                 [(260.0, 280.0), (270.0, 280.0)],
             ),
+            // Start=20 is before the viewport; the longest row stops at its edge, x=40.
+            (
+                serde_json::json!({"right_aligned": true}),
+                9.0,
+                true,
+                [(40.0, 99.0), (69.5, 99.0)],
+            ),
             (
                 serde_json::json!({"width": 2.0}),
                 0.0,
@@ -667,6 +674,8 @@ mod tests {
             // The box and the POC span the session, whatever the histogram's share.
             let (left, right) = if offset == 0.0 {
                 (200.0, 279.0)
+            } else if offset > 0.0 {
+                (40.0, 99.0)
             } else {
                 (240.0, 319.0)
             };
