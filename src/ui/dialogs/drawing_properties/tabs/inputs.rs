@@ -382,33 +382,67 @@ impl InputsTab {
                 let original = drawing.volume_profile.unwrap_or_default();
                 let mut config = original;
                 let mut rows = config.rows();
-                let mut fixed = config.row_size().is_some();
+                let mut layout = match (config.row_ticks(), config.row_size()) {
+                    (Some(_), _) => RowLayout::Ticks,
+                    (None, Some(_)) => RowLayout::Height,
+                    (None, None) => RowLayout::Count,
+                };
                 let mut height = config.row_size().unwrap_or(1.0);
+                let mut ticks = config.row_ticks().unwrap_or(1);
                 let mut percent = config.value_area() * 100.0;
                 FormGrid::new("profile_inputs").show(ui, |ui| {
                     let label = ui.label(l10n::text(ui.ctx(), "Row layout"));
                     ui.label_inputs_by(label.id, |ui| {
-                        ui.combo_select("profile_layout", &mut fixed, [false, true], |fixed| {
-                            if *fixed {
-                                "Price height".into()
-                            } else {
-                                "Number of rows".into()
-                            }
-                        });
+                        ui.combo_select(
+                            "profile_layout",
+                            &mut layout,
+                            [RowLayout::Count, RowLayout::Height, RowLayout::Ticks],
+                            |layout| match layout {
+                                RowLayout::Count => "Number of rows".into(),
+                                RowLayout::Height => "Price height".into(),
+                                RowLayout::Ticks => "Ticks per row".into(),
+                            },
+                        );
                     });
                     ui.end_row();
-                    if fixed {
-                        number(
+                    let row_count = |ui: &mut Ui, rows: &mut usize| {
+                        let label = ui.label(l10n::text(ui.ctx(), "Rows"));
+                        ui.add(egui::DragValue::new(rows).range(VolumeProfileConfig::ROWS))
+                            .labelled_by(label.id);
+                        ui.end_row();
+                    };
+                    match layout {
+                        RowLayout::Count => row_count(ui, &mut rows),
+                        RowLayout::Height => number(
                             ui,
                             "Price height",
                             &mut height,
                             f64::MIN_POSITIVE..=f64::MAX,
-                        );
-                    } else {
-                        let label = ui.label(l10n::text(ui.ctx(), "Rows"));
-                        ui.add(egui::DragValue::new(&mut rows).range(VolumeProfileConfig::ROWS))
+                        ),
+                        RowLayout::Ticks => {
+                            let label = ui.label(l10n::text(ui.ctx(), "Ticks per row"));
+                            ui.add(
+                                egui::DragValue::new(&mut ticks)
+                                    .range(VolumeProfileConfig::ROW_TICKS),
+                            )
                             .labelled_by(label.id);
-                        ui.end_row();
+                            ui.end_row();
+                            // The rule the drawing applies, so the note shows exactly when it
+                            // draws the row count.
+                            if VolumeProfileConfig::default()
+                                .with_row_ticks(Some(ticks))
+                                .and_then(|c| c.tick_height(tick_size))
+                                .is_none()
+                            {
+                                ui.label("");
+                                ui.label(l10n::text(
+                                    ui.ctx(),
+                                    "No tick size for this symbol: rows follow the row count",
+                                ));
+                                ui.end_row();
+                                row_count(ui, &mut rows);
+                            }
+                        }
                     }
                     number(
                         ui,
@@ -463,10 +497,14 @@ impl InputsTab {
                 } else {
                     percent / 100.0
                 };
-                if let Some(layout) = VolumeProfileConfig::new(rows, value_area)
-                    .and_then(|c| c.with_row_size(fixed.then_some(height)))
+                if let Some(sized) =
+                    VolumeProfileConfig::new(rows, value_area).and_then(|c| match layout {
+                        RowLayout::Count => Some(c),
+                        RowLayout::Height => c.with_row_size(Some(height)),
+                        RowLayout::Ticks => c.with_row_ticks(Some(ticks)),
+                    })
                 {
-                    let updated = config.with_layout(layout);
+                    let updated = config.with_layout(sized);
                     if updated != original {
                         drawing.volume_profile = Some(updated);
                     }
@@ -812,6 +850,14 @@ fn position_number(
         .changed();
     ui.end_row();
     changed
+}
+
+/// How the Inputs tab of a volume profile drawing lays out its rows.
+#[derive(Clone, Copy, PartialEq)]
+enum RowLayout {
+    Count,
+    Height,
+    Ticks,
 }
 
 fn number(ui: &mut Ui, label: &str, value: &mut f64, range: std::ops::RangeInclusive<f64>) {
@@ -2767,14 +2813,16 @@ mod tests {
         }
     }
 
-    /// Opening the Inputs tab of a volume profile drawing and pressing Ok keeps the display
-    /// settings the tab does not show, and a value area of 64.06%, which times 100 over 100 is
-    /// not the same share.
+    /// Opening the Inputs tab of a volume profile drawing keeps the display settings the tab
+    /// does not show, and a value area of 64.06%, which times 100 over 100 is not the same share.
+    /// Ticks per row previews on the drawing with them, Cancel
+    /// restores the drawing, and Ok records one undoable edit.
     #[test]
     fn volume_profile_inputs_keep_settings_they_do_not_edit() {
         use egui::Role;
         use egui_kittest::{Harness, kittest::Queryable};
         let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+        chart.set_instrument(Some(Instrument::new("TEST").with_tick_size(0.25)));
         let mut config = VolumeProfileConfig::new(24, 0.6406).unwrap();
         config.show_poc = false;
         config.show_rows = false;
@@ -2798,13 +2846,31 @@ mod tests {
         let saved = |h: &Harness<'_, (Chart, DrawingPropertiesDialog)>| {
             h.state().0.drawings().drawings[0].volume_profile
         };
-        let (chart, dialog) = h.state_mut();
-        dialog.open_for_chart(chart, DrawingId(7));
-        dialog.active_tab = PropertiesTab::Inputs;
-        h.run();
-        assert_eq!(saved(&h), Some(config), "opened");
-        h.get_by_role_and_label(Role::Button, "Ok").click();
-        h.run();
-        assert_eq!(saved(&h), Some(config), "applied");
+        let ticks = config.with_row_ticks(Some(1)).unwrap();
+        for confirm in [false, true] {
+            let (chart, dialog) = h.state_mut();
+            dialog.open_for_chart(chart, DrawingId(7));
+            dialog.active_tab = PropertiesTab::Inputs;
+            h.run();
+            assert_eq!(saved(&h), Some(config), "opened");
+            h.get_by_role_and_label(Role::ComboBox, "Row layout")
+                .click();
+            h.run();
+            h.get_by_label("Ticks per row").click();
+            h.run();
+            assert_eq!(saved(&h), Some(ticks), "previewed");
+            assert!(!h.state().0.can_undo());
+            if confirm {
+                h.get_by_role_and_label(Role::Button, "Ok").click();
+                h.run();
+                assert_eq!(saved(&h), Some(ticks), "applied");
+                assert!(h.state_mut().0.undo());
+            } else {
+                h.state_mut().1.close();
+                h.run();
+            }
+            assert_eq!(saved(&h), Some(config), "restored");
+            assert!(!h.state().0.can_undo());
+        }
     }
 }

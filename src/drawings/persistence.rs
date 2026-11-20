@@ -1614,7 +1614,12 @@ mod tests {
             };
             for &display in modes {
                 let config = drawing.volume_profile.as_mut().unwrap();
-                *config = config.with_row_size(Some(0.25)).unwrap();
+                *config = if display == UpDown {
+                    config.with_row_ticks(Some(4))
+                } else {
+                    config.with_row_size(Some(0.25))
+                }
+                .unwrap();
                 config.display = display;
                 config.up_color = [1, 2, 3, 240];
                 config.down_color = [4, 5, 6, 200];
@@ -1757,7 +1762,14 @@ mod tests {
             let (storage, skipped) = DrawingStorage::from_json(saved).unwrap();
             assert!(skipped.is_empty(), "{skipped:?}");
             for stored in storage.drawings() {
-                assert_eq!(restore(stored, 1).series_layer, None);
+                let drawing = restore(stored, 1);
+                assert_eq!(drawing.series_layer, None);
+                // These literal older saves have no tick layout and keep their row count.
+                if let Some(config) = drawing.volume_profile {
+                    assert_eq!(config.row_ticks(), None);
+                    assert_eq!((config.rows(), config.value_area()), (50, 0.68));
+                    assert_eq!(config.row_size(), None);
+                }
                 assert!(
                     !serde_json::to_string(&stored.drawing)
                         .unwrap()

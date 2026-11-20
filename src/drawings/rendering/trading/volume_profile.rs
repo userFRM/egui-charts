@@ -1,6 +1,8 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
-use crate::data::{FootprintBarView, FootprintView, StudyDataRequest, VolumeProfile};
+use crate::data::{
+    FootprintBarView, FootprintView, StudyDataRequest, VolumeProfile, VolumeProfileConfig,
+};
 use crate::drawings::domain::Drawing;
 use crate::drawings::domain::DrawingToolType;
 use crate::drawings::domain::{VwapBandLine, VwapBandMode, VwapConfig, VwapPlotType};
@@ -406,6 +408,16 @@ impl Drawing {
         );
     }
 
+    /// The drawing's row layout on the view's instrument: rows of its ticks per row where the
+    /// instrument has a tick size, else its row count or price height.
+    fn profile_config(&self, view: &ChartView) -> VolumeProfileConfig {
+        let config = self.volume_profile.unwrap_or_default();
+        config
+            .tick_height(view.instrument.and_then(|instrument| instrument.tick_size))
+            .and_then(|height| config.with_row_size(Some(height)))
+            .unwrap_or(config)
+    }
+
     /// The profile of `bars`, the span that starts at bar `first`: the executed volume in the
     /// drawing's rows when the view holds complete executions in the span, else the finer bars
     /// where they cover chart bars, else estimated from the chart bars.
@@ -415,7 +427,7 @@ impl Drawing {
         first: usize,
         bars: &[Bar],
     ) -> Rc<Option<VolumeProfile>> {
-        let config = self.volume_profile.unwrap_or_default();
+        let config = self.profile_config(view);
         if let (Some(flow), Some(start), Some(end)) = (view.executions, bars.first(), bars.last()) {
             let executed = flow.profile(start.time, end.time);
             let complete = flow.span_is_complete(start.time, end.time);
@@ -439,7 +451,8 @@ impl Drawing {
     /// with its [source](VolumeProfile::source): executed volume, in the drawing's rows as the
     /// volume profile studies group executions, when [`ChartView::executions`] holds complete
     /// bars in the selected span, including prepared bars before a missing join, else the finer
-    /// bars of [`ChartView::finer`], else the bar estimate.
+    /// bars of [`ChartView::finer`], else the bar estimate. Rows set in ticks take the tick size
+    /// of [`ChartView::instrument`], or the row count without one.
     /// `None` for other tools, a drawing without its anchors, or an empty selection.
     pub fn volume_profile_of(&self, view: &ChartView) -> Option<VolumeProfile> {
         let (first, bars) = self.profile_span(view.bars)?;
@@ -2290,6 +2303,211 @@ mod tests {
                 Some((poc, (poc, poc))),
                 "{label}"
             );
+        }
+    }
+
+    /// Both profile drawings draw rows set in ticks that many ticks of the instrument high, on
+    /// multiples of that height, from executions, finer bars and chart bars, and the row count on an
+    /// instrument without a tick size. Settings saved with a row count or a price height, before
+    /// rows could be set in ticks, draw the rows they drew then.
+    #[test]
+    fn profile_rows_follow_ticks_of_the_instrument() {
+        use crate::data::{Footprint, ProfileSource};
+        use crate::drawings::ChartPoint;
+        use crate::model::{BarClock, Instrument, OrderSide, Tick};
+        use crate::studies::StudyData;
+        // A rising bar over 10.25..11.25 and a falling one over 11.5..12.5.
+        let bars: Vec<_> = [
+            (10.25, 11.25, 10.25, 11.0, 40.0),
+            (12.0, 12.5, 11.5, 11.75, 20.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (open, high, low, close, volume))| {
+            let time = DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+            Bar::new(time, open, high, low, close, volume)
+        })
+        .collect();
+        // Bar 0 trades 10.25 (1 sold), 10.75 (2 bought) and 11 (3 bought); bar 1 trades 11.5
+        // (4 sold), 12 (5 unknown) and 12.25 (6 bought), in a footprint of 0.25 ticks.
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for (bar, price, size, side) in [
+            (0, 10.25, 1.0, Some(OrderSide::Sell)),
+            (0, 10.75, 2.0, Some(OrderSide::Buy)),
+            (0, 11.0, 3.0, Some(OrderSide::Buy)),
+            (1, 11.5, 4.0, Some(OrderSide::Sell)),
+            (1, 12.0, 5.0, None),
+            (1, 12.25, 6.0, Some(OrderSide::Buy)),
+        ] {
+            flow.push(&Tick::new(bars[bar].time, price, size, side))
+                .unwrap();
+        }
+        // Finer bars have the same ranges and twice the volume, so using chart bars would fail.
+        let finer_bars: Vec<_> = bars
+            .iter()
+            .cloned()
+            .map(|mut bar| {
+                bar.volume *= 2.0;
+                bar
+            })
+            .collect();
+        let history = [StudyData {
+            request: StudyDataRequest {
+                symbol: "TEST".into(),
+                timeframe: Some(Timeframe::Sec1),
+                metric: None,
+            },
+            bars: &finer_bars,
+            clock: BarClock::new(Timeframe::Sec1),
+            instrument: None,
+            timeframe: Timeframe::Sec1,
+        }];
+        let four_ticks = VolumeProfileConfig::default()
+            .with_row_ticks(Some(4))
+            .unwrap();
+        let saved = |json| serde_json::from_str::<VolumeProfileConfig>(json).unwrap();
+        // The layout and the instrument's tick size, then the rows from chart bars and from
+        // executions: bottom edge, height, volume, buys and sells. Executed rows start half a
+        // tick below their first tick.
+        for (label, config, tick, from_bars, executed) in [
+            (
+                "4 ticks of 0.25",
+                four_ticks,
+                Some(0.25),
+                (
+                    10.0,
+                    1.0,
+                    vec![30.0, 20.0, 10.0],
+                    vec![30.0, 10.0, 0.0],
+                    vec![0.0, 10.0, 10.0],
+                ),
+                (
+                    9.875,
+                    1.0,
+                    vec![3.0, 7.0, 11.0],
+                    vec![2.0, 3.0, 6.0],
+                    vec![1.0, 4.0, 0.0],
+                ),
+            ),
+            (
+                "4 ticks of 0.5",
+                four_ticks,
+                Some(0.5),
+                (
+                    10.0,
+                    2.0,
+                    vec![50.0, 10.0],
+                    vec![40.0, 0.0],
+                    vec![10.0, 10.0],
+                ),
+                (9.875, 2.0, vec![10.0, 11.0], vec![5.0, 6.0], vec![5.0, 0.0]),
+            ),
+            (
+                "4 ticks without a tick size",
+                VolumeProfileConfig::new(3, 0.7)
+                    .and_then(|c| c.with_row_ticks(Some(4)))
+                    .unwrap(),
+                None,
+                (
+                    10.25,
+                    0.75,
+                    vec![30.0, 15.0, 15.0],
+                    vec![30.0, 10.0, 0.0],
+                    vec![0.0, 5.0, 15.0],
+                ),
+                (9.875, 1.25, vec![6.0, 15.0], vec![5.0, 6.0], vec![1.0, 4.0]),
+            ),
+            (
+                "saved row count",
+                saved(r#"{"rows":3,"value_area":0.7}"#),
+                Some(0.25),
+                (
+                    10.25,
+                    0.75,
+                    vec![30.0, 15.0, 15.0],
+                    vec![30.0, 10.0, 0.0],
+                    vec![0.0, 5.0, 15.0],
+                ),
+                (9.875, 1.25, vec![6.0, 15.0], vec![5.0, 6.0], vec![1.0, 4.0]),
+            ),
+            (
+                "saved price height",
+                saved(r#"{"row_size":0.5,"rows":24,"value_area":0.7}"#),
+                Some(0.25),
+                (
+                    10.0,
+                    0.5,
+                    vec![10.0, 20.0, 10.0, 10.0, 10.0, 0.0],
+                    vec![10.0, 20.0, 10.0, 0.0, 0.0, 0.0],
+                    vec![0.0, 0.0, 0.0, 10.0, 10.0, 0.0],
+                ),
+                (
+                    9.875,
+                    0.5,
+                    vec![1.0, 2.0, 3.0, 4.0, 11.0],
+                    vec![0.0, 2.0, 3.0, 0.0, 6.0],
+                    vec![1.0, 0.0, 0.0, 4.0, 0.0],
+                ),
+            ),
+        ] {
+            let mut instrument = Instrument::new("TEST")
+                .with_profile_resolutions([ProfileResolution::new(Timeframe::Sec1, None)]);
+            if let Some(tick) = tick {
+                instrument = instrument.with_tick_size(tick);
+            }
+            for tool in [
+                DrawingToolType::FixedRangeVolumeProfile,
+                DrawingToolType::AnchoredVolumeProfile,
+            ] {
+                let mut drawing = Drawing::new(1, tool);
+                drawing.chart_points = vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(1.0, 10.0)];
+                drawing.volume_profile = Some(config);
+                for (executions, finer, source, (low, height, volume, up, down)) in [
+                    (None, false, ProfileSource::Estimated, &from_bars),
+                    (None, true, ProfileSource::Estimated, &from_bars),
+                    (
+                        Some((&flow).into()),
+                        false,
+                        ProfileSource::Executions { complete: true },
+                        &executed,
+                    ),
+                ] {
+                    let view = ChartView {
+                        price_formatter: None,
+                        thousands_sep: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
+                        instrument: Some(&instrument),
+                        bars: &bars,
+                        revision: 0,
+                        bar_to_x: &|x| x,
+                        bar_spacing: 1.0,
+                        price_to_y: &|price| price as f32,
+                        y_to_price: &f64::from,
+                        time_axis: true,
+                        executions,
+                        timeframe: Some(Timeframe::Min1),
+                        finer: if finer { &history } else { &[] },
+                    };
+                    let profile = drawing.volume_profile_of(&view).unwrap();
+                    let at = format!("{label}, {tool:?}, {source:?}, finer={finer}");
+                    assert_eq!(profile.source(), source, "{at}");
+                    assert_eq!(
+                        (profile.low(), profile.row_height()),
+                        (*low, *height),
+                        "{at}"
+                    );
+                    let expected = |values: &[f64]| {
+                        values
+                            .iter()
+                            .map(|value| value * if finer { 2.0 } else { 1.0 })
+                            .collect::<Vec<_>>()
+                    };
+                    assert_eq!(profile.volume(), expected(volume), "{at}");
+                    assert_eq!(profile.up(), expected(up), "{at}");
+                    assert_eq!(profile.down(), expected(down), "{at}");
+                }
+            }
         }
     }
 
