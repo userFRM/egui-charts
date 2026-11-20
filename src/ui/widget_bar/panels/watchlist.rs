@@ -2014,12 +2014,32 @@ fn summarise(mut values: Vec<f64>) -> Option<[f64; 4]> {
     }
     values.sort_by(f64::total_cmp);
     let n = values.len();
-    // Rounding a sum of scaled finite values can still overshoot the finite range.
-    let mean = values
-        .iter()
-        .map(|v| v / n as f64)
-        .sum::<f64>()
-        .clamp(values[0], values[n - 1]);
+    // Carry rounding errors so opposite large values do not erase smaller figures. Divide
+    // after adding to retain tiny values, scaling the terms first only when the sum overflows.
+    let sum = |divisor: f64| {
+        let (mut total, mut error) = (0.0_f64, 0.0);
+        for value in &values {
+            let value = value / divisor;
+            let next = total + value;
+            if !next.is_finite() {
+                return next;
+            }
+            error += if total.abs() >= value.abs() {
+                (total - next) + value
+            } else {
+                (value - next) + total
+            };
+            total = next;
+        }
+        total + error
+    };
+    let total = sum(1.0);
+    let mean = if total.is_finite() {
+        total / n as f64
+    } else {
+        sum(n as f64)
+    }
+    .clamp(values[0], values[n - 1]);
     let median = if n % 2 == 1 {
         values[n / 2]
     } else {
@@ -3069,6 +3089,16 @@ mod tests {
                 Some([0.0, 0.0, -f64::MAX, f64::MAX]),
             ),
             (vec![f64::from_bits(1); 2], Some([f64::from_bits(1); 4])),
+            (vec![-1e16, 1.0, 1e16], Some([1.0 / 3.0, 1.0, -1e16, 1e16])),
+            (
+                vec![f64::from_bits(1), f64::from_bits(2)],
+                Some([
+                    f64::from_bits(2),
+                    f64::from_bits(2),
+                    f64::from_bits(1),
+                    f64::from_bits(2),
+                ]),
+            ),
         ] {
             assert_eq!(summarise(values), expected);
         }
