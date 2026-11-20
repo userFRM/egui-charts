@@ -1,6 +1,8 @@
 //! Compare symbols dialog.
 
-use super::row::{SEARCH_RADIUS, SYMBOL_ROW_HEIGHT, paint_symbol_text, search_backdrop};
+use super::row::{
+    SEARCH_RADIUS, SYMBOL_ROW_HEIGHT, matched_identifier, paint_symbol_text, search_backdrop,
+};
 use super::service::Search;
 use crate::icons::icons;
 use crate::localization as l10n;
@@ -431,8 +433,13 @@ impl CompareSymbolsDialog {
                 &symbol.symbol,
             )
         });
-        ui.ctx()
-            .accesskit_node_builder(response.id, |node| node.set_selected(is_compared));
+        let identifier = matched_identifier(ui.ctx(), &self.search_query, symbol);
+        ui.ctx().accesskit_node_builder(response.id, |node| {
+            node.set_selected(is_compared);
+            if let Some((kind, value)) = identifier {
+                node.set_description(format!("{kind} {value}"));
+            }
+        });
         crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.md);
 
         // The placement buttons follow the pointer or the keyboard focus into the row.

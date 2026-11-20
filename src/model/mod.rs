@@ -88,8 +88,8 @@ pub use date_range::DateRange;
 #[cfg(any(feature = "studies", feature = "drawings", feature = "strategies"))]
 pub(crate) use instrument::same_currency;
 pub use instrument::{
-    DataStatus, FeedService, Instrument, OverrideWindow, ProfileResolution, Session,
-    SessionOverride, SessionWindow, SymbolType,
+    DataStatus, FeedService, IdentifierKind, Instrument, OverrideWindow, ProfileResolution,
+    Session, SessionOverride, SessionWindow, SymbolType,
 };
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{
