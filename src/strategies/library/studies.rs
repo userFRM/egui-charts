@@ -148,11 +148,28 @@ fn crosses(a: &[f64], b: &[f64], at: usize) -> bool {
     [a, b, pa, pb].iter().all(|v| v.is_finite()) && a > b && pa <= pb
 }
 
-/// Whether a time interval is at least as long as the chart's interval.
-fn longer_interval(chart: Timeframe, interval: Timeframe) -> bool {
-    !chart.is_trade_based()
-        && !interval.is_trade_based()
-        && interval.duration_ms() >= chart.duration_ms()
+/// Whether no chart bar spans two bars of `interval` on UTC boundaries, so that
+/// `data::resample` can build the longer bars from the chart's.
+fn nests_in(chart: Timeframe, interval: Timeframe) -> bool {
+    use Timeframe::{Month1, Months, Week1, Weeks};
+    const DAY: i64 = 86_400_000;
+    let (c, h) = (chart.duration_ms(), interval.duration_ms());
+    if chart.is_trade_based()
+        || interval.is_trade_based()
+        || matches!(chart, Week1 | Weeks(_) | Month1 | Months(_))
+    {
+        return false;
+    }
+    // Chart bars shorter than a day start at midnight and the last one ends there early when
+    // they do not divide the day; longer bars count from the epoch.
+    match interval {
+        // Months start at midnight, a boundary of daily bars but not of longer ones.
+        Month1 | Months(_) => c <= DAY,
+        // Weeks start on Monday 1970-01-05, four days after the epoch.
+        Week1 | Weeks(_) => c < DAY || (4 * DAY % c == 0 && h % c == 0),
+        _ if c < DAY && h >= DAY => h % DAY == 0 || (DAY % c == 0 && h % c == 0),
+        _ => h % c == 0,
+    }
 }
 
 /// Builds higher bars and maps each chart bar to the last higher bar closed by its end.
@@ -249,9 +266,11 @@ impl Strategy for StudyStrategy {
             && let (Some(chart), Some(interval)) =
                 (self.timeframe, timeframe(&self.inputs, "timeframe"))
             && interval != chart
-            && !longer_interval(chart, interval)
+            && !nests_in(chart, interval)
         {
-            return Err("indicator timeframe must be the chart interval or a longer time interval");
+            return Err(
+                "indicator timeframe must be the chart interval or a longer time interval made of whole chart bars",
+            );
         }
         Ok(())
     }
@@ -279,7 +298,7 @@ impl Strategy for StudyStrategy {
         {
             read = Some(
                 self.timeframe
-                    .filter(|chart| longer_interval(*chart, interval))
+                    .filter(|chart| nests_in(*chart, interval))
                     .and_then(|chart| closed_higher_bars(bars, chart, interval))
                     .map_or_else(
                         || vec![None; bars.len()],

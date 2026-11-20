@@ -669,7 +669,14 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
         .collect();
     assert_eq!(ids, ["period", "oversold", "overbought"]);
     let tick = Timeframe::Ticks(std::num::NonZeroU64::new(1).unwrap());
+    let seconds = |count| Timeframe::Custom(std::num::NonZeroU64::new(count).unwrap());
     for (chart, interval, valid) in [
+        // A 3-minute bar from 00:03 spans 00:05, and weeks do not nest in months.
+        (seconds(180), Timeframe::Min5, false),
+        (Timeframe::Week1, Timeframe::Month1, false),
+        // The last 7-minute bar of a day ends early, at midnight.
+        (seconds(420), Timeframe::Day1, true),
+        (Timeframe::Day1, Timeframe::Week1, true),
         (Timeframe::Min1, Timeframe::Sec30, false),
         (Timeframe::Min1, Timeframe::Min5, true),
         (Timeframe::Min1, Timeframe::Min1, true),
@@ -687,7 +694,9 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             if valid {
                 Ok(())
             } else {
-                Err("indicator timeframe must be the chart interval or a longer time interval")
+                Err(
+                    "indicator timeframe must be the chart interval or a longer time interval made of whole chart bars",
+                )
             },
             "{chart} into {interval}",
         );

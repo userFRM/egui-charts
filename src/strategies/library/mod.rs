@@ -26,8 +26,8 @@ type StrategyConstructor = Box<dyn Fn() -> Box<dyn Strategy> + Send + Sync>;
 /// price, or with a stop activated at 5 ATR(14) in profit that trails the best price by 2 ATR(14).
 /// Its Indicator timeframe input uses the chart interval by default, or the last longer-interval
 /// bar closed by each chart bar's end. Higher bars use UTC boundaries and are built from chart
-/// bars; intervals that do not nest, including weekly or monthly charts into another interval,
-/// build none. A shorter or trade-based alternative interval is refused by input validation.
+/// bars, so input validation refuses another interval that is shorter, trade-based or not made
+/// of whole chart bars, such as 5 minutes on a 3-minute chart or a month on a weekly one.
 /// Built-ins ignore fill callbacks and decide
 /// at bar close, or on forming-bar updates when tick recalculation is enabled.
 ///
