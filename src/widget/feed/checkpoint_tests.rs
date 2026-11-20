@@ -3,12 +3,13 @@ use crate::widget::TradeReplayCheckpointError as Error;
 use std::num::NonZeroU64;
 
 #[derive(Default)]
-struct ReplayFeed(Mutex<Option<Sink>>);
+struct ReplayFeed(Mutex<Option<Sink>>, std::sync::atomic::AtomicUsize);
 impl Datafeed for ReplayFeed {
     fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
         reply.send(Ok(Instrument::new(symbol).with_tick_size(0.25)));
     }
     fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+        self.1.fetch_add(1, Ordering::Relaxed);
         reply.send(page(Vec::new(), true));
     }
     fn subscribe(&self, subscription: Subscription) {
@@ -135,6 +136,63 @@ fn restoring_replay_counters_preserves_current_subscription_health() {
     assert_eq!(state.symbol_catalog_revision, 1);
     assert_eq!(state.last_error.as_ref(), Some(&error));
     assert_eq!(state.repeated_ticks, 0);
+}
+
+#[test]
+fn restoring_history_completeness_avoids_reloading_evicted_bars() {
+    let feed = Arc::new(ReplayFeed::default());
+    let mut chart = ChartBuilder::new()
+        .with_feed(feed.clone())
+        .with_symbol("A")
+        .with_timeframe(Timeframe::Volume(NonZeroU64::new(10).unwrap()))
+        .build();
+    chart.set_bar_limit(SeriesId::MAIN, std::num::NonZeroUsize::new(30));
+    let mut frames = Frames::new();
+    for _ in 0..6 {
+        frames.run(&mut chart);
+    }
+    let sink = feed.0.lock().unwrap().clone().unwrap();
+    for id in 0..25 {
+        let mut tick = trade(id, 10.);
+        tick.ts += TimeDelta::seconds(id as i64);
+        sink.push_tick(tick);
+    }
+    frames.run(&mut chart);
+    assert_eq!(chart.bars(SeriesId::MAIN).len(), 25);
+    assert!(chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
+    let complete = chart
+        .capture_trade_replay_checkpoint(chart.plan_trade_replay_checkpoint().unwrap())
+        .unwrap();
+    for id in 25..35 {
+        let mut tick = trade(id, 10.);
+        tick.ts += TimeDelta::seconds(id as i64);
+        sink.push_tick(tick);
+    }
+    frames.run(&mut chart);
+    // Eviction temporarily keeps the volume display's old values until its throttled rebuild.
+    for _ in 0..20 {
+        frames.run(&mut chart);
+    }
+    // Retention evicts in chunks, keeping limit - limit / 8 bars.
+    assert_eq!(chart.bars(SeriesId::MAIN).len(), 27);
+    assert!(!chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
+    let evicted = chart
+        .capture_trade_replay_checkpoint(chart.plan_trade_replay_checkpoint().unwrap())
+        .unwrap();
+
+    let requests = feed.1.load(Ordering::Relaxed);
+    chart.restore_trade_replay_checkpoint(&complete).unwrap();
+    assert!(chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(chart.bars(SeriesId::MAIN).len(), 25);
+    assert_eq!(feed.1.load(Ordering::Relaxed), requests);
+
+    // The reverse restore must not claim completeness for a tape that already evicted bars.
+    chart.restore_trade_replay_checkpoint(&evicted).unwrap();
+    assert!(!chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
+    assert_eq!(chart.bars(SeriesId::MAIN).len(), 27);
 }
 
 #[test]

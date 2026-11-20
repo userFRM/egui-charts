@@ -78,6 +78,7 @@ struct Stamp {
 // Replay diagnostics and tape paging decisions, not the destination subscription's health.
 #[derive(Debug, PartialEq)]
 struct FeedProgress {
+    history_complete: bool,
     rejected_bars: u64,
     late_ticks: u64,
     repeated_ticks: u64,
@@ -93,6 +94,7 @@ impl Stamp {
             edits: chart.readout_revision,
             close_time: chart.bar_close_time,
             progress: FeedProgress {
+                history_complete: chart.feed.history_complete,
                 rejected_bars: chart.feed.rejected_bars,
                 late_ticks: chart.feed.late_ticks,
                 repeated_ticks: chart.feed.repeated_ticks,
@@ -367,6 +369,7 @@ impl Chart {
         self.replace_main_data(checkpoint.bars.clone());
         self.from_ticks.extend(checkpoint.origins.iter().copied());
         self.bar_close_time = checkpoint.close_time;
+        self.feed.history_complete = checkpoint.progress.history_complete;
         self.feed.rejected_bars = checkpoint.progress.rejected_bars;
         self.feed.late_ticks = checkpoint.progress.late_ticks;
         self.feed.repeated_ticks = checkpoint.progress.repeated_ticks;
