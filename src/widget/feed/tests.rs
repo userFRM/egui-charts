@@ -6328,6 +6328,175 @@ fn heatmap_appearance_survives_visibility_and_frozen_images() {
     }
 }
 
+/// Releasing history frees its textures, restarts paging and leaves the open sample intact.
+#[test]
+fn clearing_depth_history_frees_textures_and_refills() {
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_liquidity_heatmap(true);
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    feed.page().send(page(bars(1), true));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    feed.depth
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(DepthPage::new(vec![], false)));
+    let time = bars(1)[0].time;
+    let sink = feed.sink();
+    sink.set_server_time(time);
+    let level = |price| crate::model::OrderBookLevel {
+        price,
+        size: 5.0,
+        order_cnt: None,
+    };
+    sink.push_depth_snapshot(
+        1,
+        crate::model::OrderBook {
+            ts: time,
+            symbol: "A".into(),
+            bids: vec![level(99.0)],
+            asks: vec![level(101.0)],
+        },
+    );
+    sink.advance_time(time + TimeDelta::seconds(1));
+    let ctx = frames.ctx.clone();
+    let paint = |chart: &Chart| {
+        ctx.run_ui(Default::default(), |ui| {
+            chart.paint_liquidity(ui.painter(), &chart.get_chart_mapping());
+        })
+    };
+    let populated = |output: &egui::FullOutput| {
+        output.textures_delta.set.values().flatten().any(|delta| {
+            let egui::ImageData::Color(image) = &delta.image;
+            delta.pos.is_some() && image.size == [1, 256] && image.pixels[99].a() > 0
+        })
+    };
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        chart.show(ui);
+    });
+    assert!(populated(&output));
+    output.textures_delta.clear();
+    feed.calls();
+    chart.clear_depth_history();
+    assert_eq!(
+        chart
+            .depth_history(SeriesId::MAIN)
+            .unwrap()
+            .columns()
+            .count(),
+        0
+    );
+    let mut output = paint(&chart);
+    assert!(!output.textures_delta.free.is_empty());
+    assert!(output.textures_delta.set.is_empty());
+    output.textures_delta.clear();
+    frames.run(&mut chart);
+    assert!(
+        feed.calls()
+            .iter()
+            .any(|call| matches!(call, Call::Depth(r) if r.before.is_none()))
+    );
+    sink.advance_time(time + TimeDelta::seconds(2));
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        chart.show(ui);
+    });
+    let held: Vec<_> = chart
+        .depth_history(SeriesId::MAIN)
+        .unwrap()
+        .columns()
+        .map(|c| c.time)
+        .collect();
+    assert_eq!(held, [time + TimeDelta::seconds(1)]);
+    assert!(populated(&output));
+    output.textures_delta.clear();
+}
+
+/// Releasing history forgets scroll-back pages and their retries so paging starts at the newest.
+#[test]
+fn clearing_depth_history_discards_old_pages_and_retries() {
+    for retry in [false, true] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_depth_history(Some(DepthHistory::new(Default::default()).unwrap()));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(0.25)));
+        let bars = bars(1000);
+        feed.page().send(page(bars.clone(), true));
+        frames.run(&mut chart);
+        let column = |index: usize| crate::data::DepthColumn {
+            time: bars[index].time,
+            span: TimeDelta::seconds(60),
+            bids: vec![(400, 2.0)],
+            ..Default::default()
+        };
+        chart.set_visible_logical_range(crate::model::LogicalRange {
+            left: 950.0,
+            right: 999.0,
+        });
+        feed.depth
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(DepthPage::new(vec![column(900)], false)));
+        frames.run(&mut chart);
+        feed.calls();
+        chart.set_visible_logical_range(crate::model::LogicalRange {
+            left: 850.0,
+            right: 899.0,
+        });
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert!(matches!(
+            &feed.calls()[..],
+            [Call::Depth(r)] if r.before == Some(bars[900].time)
+        ));
+        let old = feed.depth.lock().unwrap().remove(0);
+        if retry {
+            old.send(Err(FeedError::Network("offline".into())));
+            frames.run(&mut chart);
+            chart.clear_depth_history();
+        } else {
+            chart.clear_depth_history();
+            old.send(Ok(DepthPage::new(vec![column(899)], false)));
+        }
+        frames.time += 2.0;
+        frames.run(&mut chart);
+        assert_eq!(
+            chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .columns()
+                .count(),
+            0,
+            "a released page must not refill history (retry: {retry})"
+        );
+        assert!(
+            matches!(&feed.calls()[..], [Call::Depth(r)] if r.before.is_none()),
+            "release must request the newest page (retry: {retry})"
+        );
+        feed.depth
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(DepthPage::new(vec![column(999)], true)));
+        frames.run(&mut chart);
+        let held: Vec<_> = chart
+            .depth_history(SeriesId::MAIN)
+            .unwrap()
+            .columns()
+            .map(|c| c.time)
+            .collect();
+        assert_eq!(held, [bars[999].time]);
+    }
+}
+
 /// A history filter that needs metadata absent from every held order samples no column, and the
 /// pane says why whatever the book profile shows. Two different failures each get one notice.
 #[test]
@@ -6466,16 +6635,47 @@ fn depth_paging_ends_independently_and_drops_old_settings_replies() {
 /// window names where they continue.
 #[test]
 fn depth_pages_follow_visible_time_and_stop_without_older_columns() {
-    for (name, offset, span, end, continuation, expected) in [
-        ("overlapping page", Some(899), 120, false, None, vec![900]),
-        ("final page", Some(899), 60, true, None, vec![899, 900]),
-        ("empty page", None, 60, false, None, vec![900]),
-        ("repeated page", Some(900), 60, false, None, vec![900]),
-        ("empty window", None, 60, false, Some(880), vec![900]),
+    for (name, offset, span, end, continuation, retention, expected) in [
+        (
+            "overlapping page",
+            Some(899),
+            120,
+            false,
+            None,
+            None,
+            vec![900],
+        ),
+        (
+            "final page",
+            Some(899),
+            60,
+            true,
+            None,
+            None,
+            vec![899, 900],
+        ),
+        ("empty page", None, 60, false, None, None, vec![900]),
+        ("repeated page", Some(900), 60, false, None, None, vec![900]),
+        ("empty window", None, 60, false, Some(880), None, vec![900]),
+        (
+            "retention reached",
+            Some(899),
+            60,
+            false,
+            None,
+            Some(120),
+            vec![899, 900],
+        ),
     ] {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
-        chart.set_depth_history(Some(DepthHistory::new(Default::default()).unwrap()));
+        chart.set_depth_history(Some(
+            DepthHistory::new(
+                crate::data::DepthHistoryConfig::default()
+                    .with_retention(retention.map(TimeDelta::seconds)),
+            )
+            .unwrap(),
+        ));
         let mut frames = Frames::new();
         frames.run(&mut chart);
         let mut instrument = Instrument::new("A");
@@ -6509,8 +6709,9 @@ fn depth_pages_follow_visible_time_and_stop_without_older_columns() {
         frames.run(&mut chart);
         let calls = feed.calls();
         assert_eq!(calls.len(), 1, "{name}: {calls:?}");
+        let since = retention.map(|_| bars[899].time);
         assert!(
-            matches!(&calls[0], Call::Depth(r) if r.before == Some(bars[900].time)),
+            matches!(&calls[0], Call::Depth(r) if r.before == Some(bars[900].time) && r.count == 600 && r.since == since),
             "{name}: {calls:?}"
         );
         let mut answer = DepthPage::new(offset.map(|i| column(i, span)).into_iter().collect(), end);

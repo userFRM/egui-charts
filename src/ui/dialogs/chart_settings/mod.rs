@@ -71,6 +71,9 @@ pub struct SettingsDialog {
     sound_preview: Option<(String, f32)>,
     /// Heatmap, book, individual orders and bubbles offered by the host.
     order_flow_layers: [bool; 4],
+    /// Sampling used to estimate depth history memory and the longest retention offered.
+    depth_config: crate::data::DepthHistoryConfig,
+    release_depth_history: bool,
     /// Whether the host's feed answers analyst price targets for the chart's instrument.
     price_targets_offered: bool,
     /// The axis font family the dialog was opened with, shown while the settings hold none.
@@ -178,6 +181,8 @@ impl SettingsDialog {
             execution_sounds: Vec::new(),
             sound_preview: None,
             order_flow_layers: [true; 4],
+            depth_config: Default::default(),
+            release_depth_history: false,
             price_targets_offered: true,
             opened_font_family: None,
             opened_precision: PrecisionMode::Default,
@@ -256,12 +261,20 @@ impl SettingsDialog {
         }
     }
 
+    /// Supplies depth sampling for the Order flow tab's memory estimate and retention choices.
+    /// Pass `chart.depth_history(SeriesId::MAIN).map(DepthHistory::config)` when opening the
+    /// dialog. `None`, and a dialog before this call, assume default depth sampling.
+    pub fn set_depth_history_config(&mut self, config: Option<&crate::data::DepthHistoryConfig>) {
+        self.depth_config = config.cloned().unwrap_or_default();
+    }
+
     /// Open the dialog with the supplied state.
     pub fn open(&mut self, settings: ChartSettingsState) {
         self.is_open = true;
         self.template_menu_open = false;
         self.save_name = None;
         self.sound_preview = None;
+        self.release_depth_history = false;
         self.opened_font_family = settings.scales_appearance.font_family.clone();
         self.opened_precision = settings.precision;
         self.settings = settings;
@@ -451,6 +464,9 @@ impl SettingsDialog {
 
         if let Some((name, volume)) = self.sound_preview.take() {
             return SettingsAction::PreviewSound { name, volume };
+        }
+        if std::mem::take(&mut self.release_depth_history) {
+            return SettingsAction::ClearDepthHistory;
         }
         action
     }
@@ -2668,6 +2684,86 @@ mod tests {
                 })
             );
         }
+    }
+
+    /// Retention edits apply only with Ok; releasing memory is immediate and keeps editing open,
+    /// including while the heatmap is hidden. Cancel returns its action.
+    #[test]
+    fn order_flow_retention_and_release_memory() {
+        use chrono::TimeDelta;
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut dialog = SettingsDialog::new();
+        let config = crate::data::DepthHistoryConfig {
+            columns: 1_000,
+            ..Default::default()
+        };
+        dialog.set_depth_history_config(Some(&config));
+        dialog.open(ChartSettingsState::default());
+        dialog.active_tab = SettingsTab::OrderFlow;
+        let theme = Theme::light();
+        let mut harness = Harness::builder()
+            .with_context_setup(|ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::theme::apply_to_egui(ctx, &Theme::light());
+            })
+            .with_size(Vec2::new(1440.0, 900.0))
+            .build_ui_state(
+                move |ui, (dialog, actions): &mut (SettingsDialog, Vec<SettingsAction>)| {
+                    let action = dialog.show(ui.ctx(), &theme);
+                    if !matches!(action, SettingsAction::None) {
+                        actions.push(action);
+                    }
+                },
+                (dialog, Vec::new()),
+            );
+        harness.run();
+        // An unchanged choice keeps the host's 1,000 columns, rather than restoring 600.
+        harness.get_by_label(if usize::BITS == 64 {
+            "Up to 26.8 MB"
+        } else {
+            "Up to 26.3 MB"
+        });
+        harness
+            .get_by_role_and_label(Role::ComboBox, "History retention")
+            .click();
+        harness.run();
+        harness.get_by_label("1 hour").click();
+        harness.run();
+        harness.get_by_label("Up to 0.4 MB");
+        harness
+            .get_by_role_and_label(Role::Button, "Release memory")
+            .click();
+        harness.run();
+        assert!(matches!(
+            &harness.state().1[..],
+            [SettingsAction::ClearDepthHistory]
+        ));
+        assert!(harness.state().0.is_open);
+        harness.get_by_label("Ok").click();
+        harness.run();
+        let SettingsAction::Apply(settings) = harness.state().1.last().unwrap() else {
+            panic!("Ok applies the settings");
+        };
+        assert_eq!(
+            settings.order_flow.heatmap_retention,
+            Some(TimeDelta::hours(1))
+        );
+        let accepted = settings.clone();
+        let (dialog, actions) = harness.state_mut();
+        dialog.open(*accepted);
+        dialog.active_tab = SettingsTab::OrderFlow;
+        actions.clear();
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::ComboBox, "History retention")
+            .click();
+        harness.run();
+        harness.get_by_label("4 hours").click();
+        harness.run();
+        harness.get_by_label("Cancel").click();
+        harness.run();
+        assert!(matches!(&harness.state().1[..], [SettingsAction::Cancel]));
     }
 
     /// Choosing a pane separator colour on the Canvas tab paints the separator above the study

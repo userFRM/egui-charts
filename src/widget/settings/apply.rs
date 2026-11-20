@@ -178,6 +178,10 @@ impl ChartSettingsState {
                     .as_ref()
                     .is_some_and(|link| link.heatmap.is_some()),
                 heatmap: chart.liquidity_heatmap_config(),
+                heatmap_retention: chart
+                    .feed_link
+                    .as_ref()
+                    .and_then(|link| link.depth_retention),
                 show_order_book: chart
                     .feed_link
                     .as_ref()
@@ -515,6 +519,7 @@ impl ChartSettingsState {
             chart.config_mut().price_source = source;
         }
         chart.set_liquidity_heatmap_config(self.order_flow.heatmap);
+        chart.set_depth_retention(self.order_flow.heatmap_retention);
         chart.set_liquidity_heatmap(self.order_flow.show_heatmap);
         chart.set_order_book_view(self.order_flow.order_book.clone());
         chart.set_order_book_visible(self.order_flow.show_order_book);
@@ -1002,6 +1007,7 @@ mod tests {
                 flow.show_heatmap = flags & 1 != 0;
                 flow.show_order_book = flags & 2 != 0;
                 flow.show_volume_bubbles = flags & 4 != 0;
+                flow.heatmap_retention = Some(chrono::TimeDelta::hours(1));
                 flow.heatmap.brightness = 0.5;
                 flow.heatmap.lower_cutoff = 2.0;
                 flow.heatmap.full_intensity_size = Some(20.0);
@@ -1013,6 +1019,12 @@ mod tests {
                 flow.volume_bubbles.clamp_std_devs = clamp_std_devs;
                 flow.volume_bubbles.shaded = false;
                 settings.apply_to_chart(&mut chart).unwrap();
+                assert_eq!(
+                    chart
+                        .depth_history(crate::widget::SeriesId::MAIN)
+                        .map(|h| h.config().columns),
+                    (flags & 1 != 0).then_some(15)
+                );
                 assert_eq!(chart.chart_type(), kind);
                 assert_eq!(
                     ChartSettingsState::from_chart(&chart).order_flow,
@@ -1041,6 +1053,10 @@ mod tests {
                 );
                 // Settings saved before the flat style existed take the shaded default.
                 let mut unshaded = json.clone();
+                unshaded["settings"]["order_flow"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("heatmap_retention");
                 unshaded["settings"]["order_flow"]["volume_bubbles"]
                     .as_object_mut()
                     .unwrap()
@@ -1053,6 +1069,12 @@ mod tests {
                         .order_flow
                         .volume_bubbles
                         .shaded
+                );
+                assert_eq!(
+                    ChartSettingsState::from_chart(&chart)
+                        .order_flow
+                        .heatmap_retention,
+                    None
                 );
                 let mut legacy = json;
                 legacy["settings"]

@@ -389,7 +389,9 @@ pub struct ScalesAndLinesSettings {
     pub show_currency: bool,
     /// Display host-supplied price unit metadata.
     pub show_unit: bool,
-    /// Show the currency and unit only while the pointer is over the price scale.
+    /// Show the currency and unit only while the pointer is over the price scale. Settings saved
+    /// without this field keep them always visible.
+    #[serde(default)]
     pub currency_unit_on_hover: bool,
     /// Display Auto, Log and Percent navigation buttons.
     pub show_scale_mode_buttons: bool,
@@ -490,7 +492,7 @@ impl Default for ScalesAndLinesSettings {
             axis_layout: Default::default(),
             show_currency: true,
             show_unit: true,
-            currency_unit_on_hover: false,
+            currency_unit_on_hover: true,
             show_scale_mode_buttons: true,
             show_plus_button: true,
             allow_label_overlap: false,
@@ -712,6 +714,10 @@ pub struct OrderFlowSettings {
     pub show_heatmap: bool,
     /// Brightness and resting-size range, retained while the heatmap is off.
     pub heatmap: crate::chart::overlays::LiquidityHeatmapConfig,
+    /// How long to keep depth columns, see
+    /// [`DepthHistoryConfig::retention`](crate::data::DepthHistoryConfig::retention). `None`, the
+    /// default, keeps the full history, including for settings saved without this field.
+    pub heatmap_retention: Option<chrono::TimeDelta>,
     /// Draw the live book's side profile independently of the heatmap.
     pub show_order_book: bool,
     /// Live book measure, order filter and size highlights.
