@@ -32,6 +32,12 @@ pub(crate) fn shortcuts_suppressed(ctx: &Context) -> bool {
         == Some(ctx.cumulative_pass_nr())
 }
 
+/// Keeps every chart and drawing toolbar that dispatches later in this pass from reading keys.
+pub(crate) fn suppress_shortcuts_this_pass(ctx: &Context) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|data| data.insert_temp(egui::Id::NULL.with("chart_keyboard_capture"), pass));
+}
+
 impl super::Chart {
     /// Pointer commands yield to editors, popups and in-progress drawing operations.
     pub(crate) fn pointer_commands_enabled(&self, ctx: &Context) -> bool {
@@ -96,8 +102,7 @@ impl super::Chart {
 
     /// Give host dialogs keyboard priority over every chart and drawing toolbar this pass.
     pub fn suppress_shortcuts(&mut self, ctx: &Context) {
-        let pass = ctx.cumulative_pass_nr();
-        ctx.data_mut(|data| data.insert_temp(egui::Id::NULL.with("chart_keyboard_capture"), pass));
+        suppress_shortcuts_this_pass(ctx);
         self.keyboard.focus_elsewhere = true;
     }
 

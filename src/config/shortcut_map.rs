@@ -112,18 +112,7 @@ impl ShortcutMap {
         ctx.input_mut(|input| {
             let pairs = typed_pairs(&input.events);
             let bound = |index: usize| {
-                let (key, modifiers) = match &input.events[index] {
-                    Event::Key {
-                        key,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => (*key, *modifiers),
-                    Event::Copy => (egui::Key::C, egui::Modifiers::COMMAND),
-                    Event::Cut => (egui::Key::X, egui::Modifiers::COMMAND),
-                    Event::Paste(_) => (egui::Key::V, egui::Modifiers::COMMAND),
-                    _ => return None,
-                };
+                let (key, modifiers) = pressed(&input.events[index])?;
                 let typed = pairs[index].and_then(|text| match &input.events[text] {
                     Event::Text(text) => Some(text.as_str()),
                     _ => None,
@@ -243,6 +232,23 @@ fn parse_shortcut(text: &str) -> Option<KeyboardShortcut> {
         });
     }
     Some(KeyboardShortcut::new(modifiers, key))
+}
+
+/// The key and modifiers of a key press, with the clipboard commands the desktop reports in place
+/// of Ctrl+C, Ctrl+X and Ctrl+V.
+pub(crate) fn pressed(event: &Event) -> Option<(egui::Key, egui::Modifiers)> {
+    match event {
+        Event::Key {
+            key,
+            pressed: true,
+            modifiers,
+            ..
+        } => Some((*key, *modifiers)),
+        Event::Copy => Some((egui::Key::C, egui::Modifiers::COMMAND)),
+        Event::Cut => Some((egui::Key::X, egui::Modifiers::COMMAND)),
+        Event::Paste(_) => Some((egui::Key::V, egui::Modifiers::COMMAND)),
+        _ => None,
+    }
 }
 
 pub(crate) fn starts_entry(text: &str) -> bool {
