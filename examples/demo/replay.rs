@@ -1412,22 +1412,29 @@ fn common_replay_interval(a: Timeframe, b: Timeframe) -> Timeframe {
     if a.is_trade_based() || b.is_trade_based() {
         return Timeframe::Ticks(NonZeroU64::MIN);
     }
-    let duration = |interval: Timeframe| match interval {
+    let normalize = |interval| match interval {
         Timeframe::Week1 | Timeframe::Month1 | Timeframe::Weeks(_) | Timeframe::Months(_) => {
-            Timeframe::Day1.duration_ms()
+            Timeframe::Day1
         }
-        _ => interval.duration_ms(),
+        _ => interval,
     };
-    let mut left = duration(a);
-    let mut right = duration(b);
+    let (a, b) = (normalize(a), normalize(b));
+    let mut left = a.duration_ms();
+    let mut right = b.duration_ms();
     while right != 0 {
         (left, right) = (right, left % right);
     }
-    // Keep a preset's identity as well as its duration. Unsupported subsecond common steps
-    // use individual executions instead.
+    // Keep the source interval's identity when it is already the common step.
+    if left == a.duration_ms() {
+        return a;
+    }
+    if left == b.duration_ms() {
+        return b;
+    }
+    // A fixed duration must not become a calendar week or month of the same nominal length.
     Timeframe::all()
         .into_iter()
-        .find(|interval| interval.duration_ms() == left)
+        .find(|interval| interval.duration_ms() == left && left < Timeframe::Day1.duration_ms())
         .unwrap_or_else(|| {
             if left % 1000 == 0 {
                 Timeframe::Custom(NonZeroU64::new((left / 1000) as u64).unwrap())
@@ -2218,6 +2225,8 @@ mod tests {
             ("1W", "1M", Timeframe::Day1),
             ("25h", "1h", Timeframe::Hour1),
             ("25h", "25h", "25h".parse().unwrap()),
+            ("14d", "21d", "7d".parse().unwrap()),
+            ("30d", "30d", "30d".parse().unwrap()),
             ("100ms", "250ms", Timeframe::Ticks(NonZeroU64::MIN)),
         ] {
             assert_eq!(
