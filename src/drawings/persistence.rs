@@ -1502,6 +1502,7 @@ mod tests {
             font_size: 18.0,
             background: false,
             background_color: Some([29, 30, 31, 32]),
+            shadow_color: [37, 38, 39, 40],
             border: false,
             border_color: Some([33, 34, 35, 36]),
             border_width: Some(2.5),
@@ -2585,6 +2586,7 @@ mod tests {
                     assert!(drawing.range_settings.border, "{tool:?}");
                     assert_eq!(drawing.range_settings.border_width, None, "{tool:?}");
                     assert_eq!(drawing.range_settings.border_color, None, "{tool:?}");
+                    assert_eq!(drawing.range_settings.shadow_color, [0; 4], "{tool:?}");
                 }
                 let tint = if prices[1] < prices[0] {
                     [242, 54, 69]

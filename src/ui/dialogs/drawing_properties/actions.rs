@@ -364,6 +364,7 @@ impl DrawingProps {
                     range_settings.font_size,
                     range_settings.background,
                     range_settings.background_color,
+                    range_settings.shadow_color,
                     range_settings.border,
                     range_settings.border_color,
                     range_settings.border_width,
@@ -785,6 +786,8 @@ mod tests {
             DrawingToolType::HorizontalRay,
             DrawingToolType::VerticalLine,
             DrawingToolType::CrossLine,
+            DrawingToolType::DateRange,
+            DrawingToolType::DateAndPriceRange,
         ] {
             chart.drawings_mut().drawings.clear();
             let mut drawing = Drawing::new(7, tool);
@@ -955,7 +958,17 @@ mod tests {
             settings.note_text_style = Some(note_text);
             settings.arrow_start_style = crate::drawings::ArrowStyle::Arrow;
             settings.arrow_end_style = crate::drawings::ArrowStyle::None;
+            settings.range_settings.shadow_color = [50, 60, 70, 128];
             let expected = format!("{:?}", settings.fib_config);
+            let template: DrawingTemplate = serde_json::from_value(
+                serde_json::to_value(props.tool_settings.as_ref().unwrap()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                template.settings.range_settings.shadow_color,
+                [50, 60, 70, 128]
+            );
+            props.tool_settings = Some(Box::new(template));
             props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
             let saved = &chart.drawings().drawings[0];
             assert_eq!(format!("{:?}", saved.fib_config), expected);
@@ -1000,6 +1013,7 @@ mod tests {
             assert_eq!(saved.note_text_style, Some(note_text));
             assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);
             assert_eq!(saved.arrow_end_style, crate::drawings::ArrowStyle::None);
+            assert_eq!(saved.range_settings.shadow_color, [50, 60, 70, 128]);
             assert!(chart.drawings().drawings[1].fib_config.is_none());
             let peer = &chart.drawings().drawings[1];
             assert!(!peer.italic && peer.background && peer.border);
@@ -1011,6 +1025,10 @@ mod tests {
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
             assert_eq!(
+                chart.drawings().drawings[0].range_settings.shadow_color,
+                Drawing::new(7, tool).range_settings.shadow_color
+            );
+            assert_eq!(
                 chart.drawings().drawings[0].line_measurements,
                 crate::drawings::LineMeasurements::for_tool(tool)
             );
@@ -1019,6 +1037,10 @@ mod tests {
                 format!("{:?}", Drawing::new(7, tool).fib_config)
             );
             assert!(chart.redo());
+            assert_eq!(
+                chart.drawings().drawings[0].range_settings.shadow_color,
+                [50, 60, 70, 128]
+            );
             chart
                 .drawings_mut()
                 .edit_drawing(7, |d| d.locked = true)

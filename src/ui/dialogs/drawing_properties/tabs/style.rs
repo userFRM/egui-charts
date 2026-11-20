@@ -507,6 +507,7 @@ impl StyleTab {
                     &mut template.settings.range_settings,
                     (exact, props.line_width, props.line_style),
                     badge_pickers,
+                    glyph_picker,
                 );
             }
             // Last, so that the long list of readouts keeps the other rows above the fold.
@@ -698,6 +699,7 @@ fn range_rows(
     settings: &mut RangeSettings,
     (color, width, style): ([u8; 4], f32, LineStyle),
     pickers: &mut [ColorPickerState; 3],
+    shadow_picker: &mut ColorPickerState,
 ) {
     let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
     let [text_picker, background_picker, border_picker] = pickers;
@@ -785,6 +787,13 @@ fn range_rows(
             );
         }
     });
+    ui.end_row();
+    ui.label(l10n::text(ui.ctx(), "Label shadow"));
+    let shown = rgba(settings.shadow_color);
+    if let Some(picked) = color_swatch(ui, shadow_picker, shown, "range_label_shadow") {
+        settings.shadow_color =
+            keep_opacity(picked, shown, shadow_picker.custom_mode).to_srgba_unmultiplied();
+    }
     ui.end_row();
     for (label, value) in [
         ("Price range", &mut settings.price_change),
@@ -1518,6 +1527,7 @@ mod tests {
                     "Label",
                     "Label background",
                     "Bar range",
+                    "Label shadow",
                     "Date and time range",
                     "Volume",
                 ][..],
@@ -1538,6 +1548,7 @@ mod tests {
                     "Label",
                     "Label background",
                     "Price range",
+                    "Label shadow",
                     "Percent change",
                     "Change in pips or ticks",
                     "Bar range",

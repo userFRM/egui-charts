@@ -1513,6 +1513,9 @@ pub struct RangeSettings {
     pub background: bool,
     /// Colour of the card, whose alpha is its opacity; `None` takes the theme's tooltip colour.
     pub background_color: Option<[u8; 4]>,
+    /// Colour of the card's shadow, whose alpha is its opacity. Missing saved fields are
+    /// transparent; new range cards start with black at 20% opacity.
+    pub shadow_color: [u8; 4],
     /// Whether the box edges are drawn: at the measured times and, on a date and price range,
     /// at the measured prices.
     pub border: bool,
@@ -1541,6 +1544,7 @@ impl Default for RangeSettings {
             font_size: 12.0,
             background: true,
             background_color: None,
+            shadow_color: [0; 4],
             border: true,
             border_color: None,
             border_width: None,
@@ -1552,18 +1556,21 @@ impl Default for RangeSettings {
 }
 
 impl RangeSettings {
-    /// Settings for a new range. A date and price range starts without box edges; enabling
-    /// them draws a 1 px border in the line colour.
+    /// Settings for a new range, with a black card shadow at 20% opacity. A date and price
+    /// range starts without box edges; enabling them draws a 1 px border in the line colour.
     pub fn for_tool(tool: super::DrawingToolType) -> Self {
-        if tool == super::DrawingToolType::DateAndPriceRange {
-            Self {
-                border: false,
-                border_width: Some(1.0),
-                ..Self::default()
-            }
-        } else {
-            Self::default()
+        let mut settings = Self::default();
+        if matches!(
+            tool,
+            super::DrawingToolType::DateRange | super::DrawingToolType::DateAndPriceRange
+        ) {
+            settings.shadow_color = [0, 0, 0, 51];
         }
+        if tool == super::DrawingToolType::DateAndPriceRange {
+            settings.border = false;
+            settings.border_width = Some(1.0);
+        }
+        settings
     }
 
     /// Whether the font size lies in 1 to 256 points and a set border width above 0 and at
