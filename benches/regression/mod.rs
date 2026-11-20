@@ -7,6 +7,10 @@ use egui_charts::widget::SeriesId;
 use std::hint::black_box;
 
 pub fn run(name: &str, frames: usize) {
+    if name.starts_with("profiles-") {
+        profiles(name, frames);
+        return;
+    }
     if name == "session-resample" {
         use chrono::{Duration, NaiveTime, Weekday::*};
         use egui_charts::data::resample;
@@ -192,6 +196,62 @@ pub fn run(name: &str, frames: usize) {
         if name.ends_with("-studies") { 3 } else { 0 },
         "the workload must contain only the requested studies"
     );
+}
+
+/// Trending prices force equal-row boundaries and whole-tick heights to change.
+fn profiles(name: &str, frames: usize) {
+    use egui_charts::model::{Bar, Instrument};
+    use egui_charts::studies::{
+        VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
+        VolProfileSession, VolProfileVisible,
+    };
+
+    let count = name.rsplit('-').next().unwrap().parse::<usize>().unwrap();
+    let calculate = name.starts_with("profiles-calculate-");
+    let mut data: Vec<_> = (0..count)
+        .map(|i| {
+            let p = 100.0 + i as f64 * 0.004 + (i as f64 * 0.37).sin() * 0.3;
+            Bar::new(
+                chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(i as i64),
+                p,
+                p + 0.05,
+                p - 0.05,
+                p + 0.01,
+                100.0 + (i % 7) as f64,
+            )
+        })
+        .collect();
+    let mut configured = Vec::new();
+    for tick in [None, Some(0.01)] {
+        let mut instrument = Instrument::new("BENCH");
+        instrument.tick_size = tick;
+        let studies: [Box<dyn Indicator>; 6] = [
+            Box::new(VolProfileAnchored::default()),
+            Box::new(VolProfileAutoAnchored::default()),
+            Box::new(VolProfileFixed::default()),
+            Box::new(VolProfilePeriodic::default()),
+            Box::new(VolProfileSession::default()),
+            Box::new(VolProfileVisible::default()),
+        ];
+        for mut study in studies {
+            study.set_instrument(Some(&instrument));
+            study.set_visible_range(0..count);
+            study.calculate(&data);
+            configured.push(study);
+        }
+    }
+    // Finish setup before any measured update can change later setup's allocator state.
+    for _ in 0..frames {
+        for study in &mut configured {
+            if calculate {
+                study.calculate(black_box(&data));
+            } else {
+                data[count - 1].close += 0.001;
+                study.update(black_box(&data), count - 1);
+            }
+            black_box(study.values());
+        }
+    }
 }
 
 /// Small updates near the touch and a best-first batch that exceeds the book's bound.

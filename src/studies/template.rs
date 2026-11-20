@@ -428,6 +428,7 @@ impl StudyTemplate {
             _ => None,
         });
         let mut template = self.clone();
+        let mut changed = true;
         match study {
             // Older Knoxville saves drew only momentum and its confirmation marks, and saves
             // from before the window rule took pivot sides and the momentum pane's own scale.
@@ -909,9 +910,40 @@ impl StudyTemplate {
             now if IndicatorFactory::renamed(&self.name) == Some(now) => {
                 template.name = now.to_owned();
             }
-            _ => return None,
+            _ => changed = false,
         }
-        Some(template)
+        // Profile inputs added since a save, set to draw what it drew.
+        if matches!(
+            study,
+            "Vol Profile VR"
+                | "Vol Profile FR"
+                | "Vol Profile Session"
+                | "Vol Profile Session HD"
+                | "Vol Profile Periodic"
+                | "Vol Profile Anchored"
+                | "Vol Profile Auto Anchored"
+        ) && declares("show_rows")
+        {
+            if declares("whole_tick_rows") && !has("whole_tick_rows") {
+                template
+                    .inputs
+                    .push(("whole_tick_rows".to_owned(), InputValue::Toggle(false)));
+                changed = true;
+            }
+            if study == "Vol Profile Periodic" && !has("restart_yearly") {
+                template
+                    .inputs
+                    .push(("restart_yearly".to_owned(), InputValue::Toggle(false)));
+                changed = true;
+            }
+            if self.settings.plots.is_empty() {
+                let declared = crate::studies::VolProfileSession::default();
+                template.settings.plots = (0..3).map(|line| declared.plot_style(line)).collect();
+                template.settings.untagged_plots.clear();
+                changed = true;
+            }
+        }
+        changed.then_some(template)
     }
 }
 
@@ -1760,14 +1792,88 @@ mod tests {
             }
         }
 
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Periodic","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["period_count",{"Length":1}],["period",{"Choice":1}],["restart_yearly",{"Toggle":false}],["width",{"Number":30.0}],["extend_poc",{"Toggle":false}],["extend_vah",{"Toggle":false}],["extend_val",{"Toggle":false}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfilePeriodic.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        for legacy in [
+            saved.clone(),
+            StudyTemplate {
+                inputs: saved
+                    .inputs
+                    .iter()
+                    .filter(|(id, _)| id != "restart_yearly")
+                    .cloned()
+                    .collect(),
+                ..saved
+            },
+        ] {
+            let restored = legacy.create().unwrap();
+            assert_eq!(
+                restored
+                    .inputs()
+                    .into_iter()
+                    .find(|input| input.id == "restart_yearly")
+                    .unwrap()
+                    .value,
+                Toggle(false)
+            );
+        }
+
+        let hd: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Session HD","inputs":[["sessions",{"Choice":3}],["session_start",{"Length":570}],["session_end",{"Length":960}],["show_values",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileSessionHd.html","plots":[{"color":[255,152,0,255],"width":1.0,"pattern":"Solid","plot_type":"StepLine","visible":false},{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"StepLine","visible":false},{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"StepLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let study = hd.create().unwrap();
+        assert_eq!(study.name(), "Vol Profile Session HD");
+        assert!(!study.inputs().iter().any(|input| input.id == "row_count"));
+        let template = StudyTemplate::from_study(study.as_ref());
+        let restored =
+            serde_json::from_str::<StudyTemplate>(&serde_json::to_string(&template).unwrap())
+                .unwrap()
+                .create()
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(StudyTemplate::from_study(restored.as_ref())).unwrap(),
+            serde_json::to_value(template).unwrap()
+        );
+
         // A chart save of an anchored profile from before tick heights and width were inputs
         // keeps its settings and inputs and takes the defaults of both.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Session","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["adaptive_rows",{"Toggle":false}],["sessions",{"Choice":0}],["session_start",{"Length":0}],["session_end",{"Length":0}],["session_zone",{"Text":""}],["hours_only",{"Toggle":false}],["width",{"Number":30.0}],["extend_poc",{"Toggle":false}],["extend_vah",{"Toggle":false}],["extend_val",{"Toggle":false}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileSession.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let restored = saved.create().unwrap();
+        let mut expected = saved.settings.clone();
+        expected.plots = (0..3)
+            .map(|line| crate::studies::VolProfileSession::default().plot_style(line))
+            .collect();
+        expected.plot_variants = vec![vec![]; 3];
+        assert_eq!(restored.settings(), expected);
+        for (id, value) in &saved.inputs {
+            assert_eq!(
+                restored
+                    .inputs()
+                    .iter()
+                    .find(|input| &input.id == id)
+                    .map(|input| &input.value),
+                Some(value),
+                "{id}"
+            );
+        }
+        assert_eq!(
+            restored
+                .inputs()
+                .iter()
+                .find(|input| input.id == "whole_tick_rows")
+                .unwrap()
+                .value,
+            Toggle(false)
+        );
         let saved: StudyTemplate = serde_json::from_str(
             r#"{"name":"Vol Profile Anchored","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["start_time",{"Text":""}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileAnchored.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
         )
         .unwrap();
         let study = saved.create().unwrap();
-        assert_eq!(study.settings(), saved.settings);
+        let mut expected_settings = saved.settings.clone();
+        expected_settings.plots = (0..3)
+            .map(|line| crate::studies::VolProfileSession::default().plot_style(line))
+            .collect();
+        expected_settings.plot_variants = vec![vec![]; 3];
+        assert_eq!(study.settings(), expected_settings);
+        assert!(study.settings().plots.iter().all(|plot| !plot.visible));
         let inputs = study.inputs();
         let value = |id: &str| {
             inputs
@@ -1778,8 +1884,37 @@ mod tests {
         for (id, kept) in &saved.inputs {
             assert_eq!(value(id), Some(kept), "{id}");
         }
+        assert_eq!(value("whole_tick_rows"), Some(&Toggle(false)));
         assert_eq!(value("row_ticks"), Some(&Length(0)));
         assert_eq!(value("width"), Some(&Number(30.0)));
+        for (id, expected) in [
+            ("show_rows", Toggle(true)),
+            ("show_poc", Toggle(true)),
+            ("show_vah", Toggle(false)),
+            ("show_val", Toggle(false)),
+            ("poc_color", InputValue::Color(Color32::PLACEHOLDER)),
+            ("vah_color", InputValue::Color(Color32::PLACEHOLDER)),
+            ("val_color", InputValue::Color(Color32::PLACEHOLDER)),
+        ] {
+            assert_eq!(value(id), Some(&expected), "{id}");
+        }
+        let mut edited = study.clone_box();
+        edited
+            .set_input("up_color", InputValue::Color(Color32::BLUE))
+            .unwrap();
+        let mut settings = edited.settings();
+        settings.plots[0].visible = true;
+        edited.apply_settings(&[], settings).unwrap();
+        let template = StudyTemplate::from_study(edited.as_ref());
+        let encoded = serde_json::to_string(&template).unwrap();
+        let restored = serde_json::from_str::<StudyTemplate>(&encoded)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(StudyTemplate::from_study(restored.as_ref())).unwrap(),
+            serde_json::to_value(template).unwrap()
+        );
 
         // A Zig Zag as a chart saved it before the extension and the new label defaults.
         let saved: StudyTemplate = serde_json::from_str(
