@@ -15,7 +15,7 @@ mod widgets;
 pub use account_panel::{AccountPanel, AccountPanelAction};
 pub use broker_picker::{BrokerFact, BrokerPicker, BrokerPickerAction, BrokerTile};
 pub use dom::DepthPanel;
-pub use executions::{ExecutionMark, render_executions};
+pub use executions::{ExecutionMark, ExecutionMarkStyle, render_executions};
 pub use format::TradingFormatter;
 pub use ticket::{Bracket, BracketMode, Kind as OrderKind, OrderPreset, PresetLevel, PresetSizing};
 
