@@ -688,6 +688,10 @@ impl Chart {
         let drawing_tool_active = self.drawings.active_tool.is_some();
         #[cfg(not(feature = "drawings"))]
         let drawing_tool_active = false;
+        // A drawing tool or the eraser owns the plot's drags, so it ends box-zoom mode.
+        if drawing_tool_active || eraser_mode {
+            self.zoom_mode_active = false;
+        }
         #[cfg(not(feature = "drawings"))]
         let (is_drawing_interaction, drawing_gesture, edit_interaction, marking) =
             (false, false, false, false);
@@ -965,8 +969,9 @@ impl Chart {
             chart_width,
             self.zoom_mode_active,
         );
+        // Box zoom applies to one selection.
         if self.zoom_just_applied {
-            log::info!("Zoom applied - chart will auto-deactivate zoom mode");
+            self.zoom_mode_active = false;
         }
 
         // Set zoom-in cursor when zoom mode is active
@@ -1031,6 +1036,7 @@ impl Chart {
             self.last_rendered_price_rect = layout.price_rect;
             self.last_rendered_volume_rect = Rect::NOTHING;
             self.last_vertical_grid_x.clear();
+            self.last_session_break_x.clear();
             let scale = self.state.price_scale();
             self.last_price_map = scale
                 .map(scale.transform(), chart_rect.top(), chart_rect.bottom())
@@ -1700,24 +1706,21 @@ impl Chart {
         // horizontal scales and from daily and longer bars.
         let intraday = host_scale.is_none()
             && session_tf.duration_ms() < crate::model::Timeframe::Day1.duration_ms();
-        if self.config.show_session_breaks && intraday {
+        self.last_session_break_x = if self.config.show_session_breaks && intraday {
             let provider = self
                 .session_provider
                 .as_deref()
                 .unwrap_or(&exchange_session);
-            rendering::SessionBreakRenderer::new(rendering::SessionBreakRenderConfig {
-                line_color: self.config.session_break_color,
-                line_width: self.config.session_break_width,
-                style: self.config.session_break_style,
-            })
-            .render(
+            self.session_break_renderer().render(
                 &session_ctx,
                 time_data,
                 provider,
                 &time_coords,
                 time_coords.start_idx,
-            );
-        }
+            )
+        } else {
+            Vec::new()
+        };
         let extended_hours = if time_based && intraday && self.config.show_extended_hours {
             let accent = ui.active_theme().ui.accent;
             let shade = |color: egui::Color32, opacity| {
@@ -1874,10 +1877,14 @@ impl Chart {
 
         // Both paint paths and the summary box mix their shades with what the chart paints.
         let plot_background = self.plot_background(rect, rect.center());
+        let volume_decimals = self
+            .instrument()
+            .and_then(|instrument| instrument.volume_decimals);
         let host_config = footprint
             .filter(|_| time_based)
             .map(|(_, config)| FootprintConfig {
                 background: config.background.or(plot_background),
+                volume_decimals: config.volume_decimals.or(volume_decimals),
                 ..config.clone()
             });
         let host = footprint.map(|(flow, _)| flow).zip(host_config.as_ref());
@@ -1895,6 +1902,7 @@ impl Chart {
             });
         let feed_config = feed.map(|_| FootprintConfig {
             background: plot_background,
+            volume_decimals,
             ..FootprintConfig::from_chart_params(
                 &self.chart_type_params,
                 [colors.bullish, colors.bearish, colors.text, colors.text],
@@ -2482,6 +2490,7 @@ impl Chart {
                             profiles,
                             flow,
                             self.trade_profile_settings(),
+                            volume_decimals,
                         );
                     }
                 }
@@ -3400,6 +3409,39 @@ impl Chart {
                 } else {
                     time_tags.push(rendering::axes::render_primitive_time_label(
                         &painter, axis, x, label,
+                    ));
+                }
+            }
+            for (_, study) in self
+                .study_ids
+                .iter()
+                .zip(self.rendered_studies().indicators())
+                .filter(|(id, study)| {
+                    self.shows_study(study.as_ref()) && self.series_pane(**id) == Some(main_pane)
+                })
+            {
+                for plot in study.volume_profiles(rendering::volume_profile::profile_range(&coords))
+                {
+                    let Some((date, [r, g, b, a])) = plot.profile.expiry_tag else {
+                        continue;
+                    };
+                    let index = if plot.right_aligned {
+                        plot.bars.end.saturating_sub(1)
+                    } else {
+                        plot.bars.start
+                    };
+                    let Some(time) = date.and_hms_opt(0, 0, 0).map(|time| time.and_utc()) else {
+                        continue;
+                    };
+                    time_tags.push(rendering::axes::render_primitive_time_label(
+                        &painter,
+                        axis,
+                        coords.idx_to_x(index),
+                        super::TimeAxisLabel::new(
+                            time,
+                            date.to_string(),
+                            egui::Color32::from_rgba_unmultiplied(r, g, b, a),
+                        ),
                     ));
                 }
             }
