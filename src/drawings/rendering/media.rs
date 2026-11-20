@@ -521,7 +521,7 @@ impl Drawing {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::drawings::domain::DrawingToolType;
     use crate::model::{PostContent, PostLink};
@@ -588,7 +588,7 @@ mod tests {
     }
 
     /// Serves a 50 x 50 picture at `test://square` and never finishes `test://pending`.
-    struct Pictures;
+    pub(in crate::drawings::rendering) struct Pictures;
 
     impl ImageLoader for Pictures {
         fn id(&self) -> &str {
