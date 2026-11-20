@@ -1287,6 +1287,7 @@ impl Indicator for OptionsVolumeProfile {
                     right_aligned,
                     strip: Some(0.3),
                     width,
+                    volume_decimals: None,
                 })
                 .collect();
         }
@@ -1317,6 +1318,7 @@ impl Indicator for OptionsVolumeProfile {
                     right_aligned: self.left,
                     strip: None,
                     width: 0.9,
+                    volume_decimals: None,
                 })
             })
             .collect()
@@ -2394,6 +2396,7 @@ mod tests {
                                         strip: true,
                                         walls_visible: [true; 2],
                                         width: 0.9,
+                                        volume_decimals: None,
                                     },
                                     &|price| 300.0 + direction * (price - 105.0) as f32,
                                 );
@@ -4321,6 +4324,7 @@ mod tests {
                             strip: false,
                             walls_visible: [true; 2],
                             width: 0.9,
+                            volume_decimals: None,
                         },
                         &|price| price as f32,
                     );
