@@ -166,9 +166,9 @@ impl Chart {
     /// Every output of every study and every level of every completed drawing whose pane marks
     /// the price or a study, as [`Self::alert_value`] resolves it, with the name the alert dialog
     /// shows, for `AlertDialog::sources`. Drawing levels are those at the newest bar. A name keeps
-    /// the study's name, the drawing's number and a fork or fan level's value as given and translates the
-    /// study output, the drawing tool and the level when shown. A level in a study pane is named
-    /// after the study first in its pane, as in `RSI: Horizontal Line 7`.
+    /// the study's name, the drawing's number and a fork or fan level's value as given and
+    /// translates the study output, the drawing tool and the level when shown. A level in a study
+    /// pane is named after the study first in its pane, as in `RSI: Horizontal Line 7`.
     pub fn alert_sources(&self) -> Vec<(AlertSource, AlertSourceName)> {
         let bar = self.bars(SeriesId::MAIN).len().saturating_sub(1) as f64;
         let studies = self.indicators().flat_map(|(id, study)| {

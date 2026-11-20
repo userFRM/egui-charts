@@ -1173,7 +1173,14 @@ impl Drawing {
         };
         let log = scale == PriceScaleMode::Logarithmic;
         let to_axis = |price: f64| if log { price.ln() } else { price };
-        let from_axis = |value: f64| if log { value.exp() } else { value };
+        // A vertical line or one through a non-positive price is minus infinity here, not zero.
+        let from_axis = |value: f64| {
+            if log && value.is_finite() {
+                value.exp()
+            } else {
+                value
+            }
+        };
         // The line through `a` and `b` at `bar`, in axis coordinates.
         let along = |a: &ChartPoint, b: &ChartPoint, bar: f64| {
             let (from, to) = (to_axis(a.price), to_axis(b.price));
@@ -2133,6 +2140,19 @@ mod tests {
             (
                 drawing(T::TrendLine, &[(10.0, 0.0), (20.0, 10.0)]),
                 15.0,
+                Logarithmic,
+                vec![],
+            ),
+            // Before the anchor at zero, and beside a vertical base, the log line has no price.
+            (
+                drawing(T::TrendLine, &[(10.0, 0.0), (20.0, 10.0)]),
+                5.0,
+                Logarithmic,
+                vec![],
+            ),
+            (
+                channel(&[(10.0, 100.0), (10.0, 120.0), (14.0, 130.0)]),
+                5.0,
                 Logarithmic,
                 vec![],
             ),
