@@ -52,7 +52,7 @@ fn same_bar(a: &Bar, b: &Bar) -> bool {
             == [b.open, b.high, b.low, b.close, b.volume].map(f64::to_bits)
 }
 
-fn same_bars(a: &[Bar], b: &[Bar]) -> bool {
+pub(crate) fn same_bars(a: &[Bar], b: &[Bar]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_bar(a, b))
 }
 
@@ -70,7 +70,7 @@ fn same_lower(a: &[Bar], b: &[Bar], before: Option<DateTime<Utc>>) -> bool {
 }
 
 impl Backtest {
-    /// The current live report, available after the first [`Self::update`].
+    /// The current live report, available after the first [`Self::update`] or [`Self::update_closed_async`].
     /// With tick recalculation, trades include forming-bar fills; equity marks are closed bars.
     /// [`Self::run`] remains an independent historical calculation and does not change this state.
     pub fn report(&self) -> Option<&StrategyReport> {
@@ -106,6 +106,44 @@ impl Backtest {
         bars: &[Bar],
         lower: &[Bar],
     ) -> Vec<StrategyFill> {
+        let closed = bars.len().saturating_sub(1);
+        finish_now(self.advance(strategy, bars, lower, closed, &mut None))
+    }
+
+    /// Continues a run on closed bars, yielding after every 256 chart or finer bars as
+    /// [`Self::run_async`] does. Pass the same strategy and full history, oldest first, each time.
+    ///
+    /// The first call leaves [`Self::report`] equal to [`Self::run`] over the same bars; later
+    /// calls process appended bars and return their fills. Corrections to processed bars or
+    /// finer bars, removed history, changed settings, inputs, instrument currency or conversion
+    /// rates rebuild the run without returning replayed fills again. Identical calls do nothing.
+    /// [`BacktestSettings::end_time`] bounds the run as in [`Self::run`]; there is no forming-bar
+    /// decision, regardless of `recalculate_on_every_update`. Dropping an unfinished future
+    /// discards the run, as a new `Backtest` would.
+    ///
+    /// # Panics
+    ///
+    /// Panics if starting capital is not finite or bar timestamps are not strictly increasing.
+    pub async fn update_closed_async(
+        &mut self,
+        strategy: &mut dyn Strategy,
+        bars: &[Bar],
+        lower: &[Bar],
+    ) -> Vec<StrategyFill> {
+        let closed = self.settings.bars_before_end(self.timeframe, bars);
+        self.advance(strategy, bars, lower, closed, &mut Some(0))
+            .await
+    }
+
+    async fn advance(
+        &mut self,
+        strategy: &mut dyn Strategy,
+        bars: &[Bar],
+        lower: &[Bar],
+        closed: usize,
+        processed: &mut Option<usize>,
+    ) -> Vec<StrategyFill> {
+        let forming = processed.is_none();
         assert!(
             bars.windows(2).all(|pair| pair[0].time < pair[1].time),
             "bar times must be strictly increasing"
@@ -115,19 +153,22 @@ impl Backtest {
         let replay_before = previous
             .as_ref()
             .and_then(|live| live.bars.last().map(|bar| bar.time));
-        let replayed_forming = previous.as_ref().is_some_and(|live| live.forming.is_some());
+        // The previous last bar announced fills if observed forming or already processed closed.
+        let replayed_forming = previous
+            .as_ref()
+            .is_some_and(|live| live.forming.is_some() || live.processed == live.bars.len());
         let replayed = |time| {
             replay_before
                 .is_some_and(|before| time < before || (replayed_forming && time == before))
         };
         let sequence = previous.as_ref().map_or(0, |live| live.sequence);
         let rebuild = previous.as_ref().is_none_or(|live| {
-            let prefix = live.bars.len().saturating_sub(1);
+            let prefix = live.processed;
             bars.len() < live.bars.len()
                 || !same_bars(&live.bars[..prefix], &bars[..prefix.min(bars.len())])
                 || live
                     .bars
-                    .last()
+                    .get(prefix)
                     .zip(bars.get(prefix))
                     .is_some_and(|(a, b)| a.time != b.time)
                 || live.settings != self.settings
@@ -138,7 +179,16 @@ impl Backtest {
                 || live.instrument_currency != self.instrument_currency
                 || (self.conversion().is_some()
                     && !same_bars(&live.exchange_rates, &self.exchange_rates))
-                || !same_lower(&live.lower, lower, replay_before)
+                || !same_lower(
+                    &live.lower,
+                    lower,
+                    if forming {
+                        replay_before
+                    } else {
+                        // Only finer bars of previously processed chart bars can correct a run.
+                        bars.get(live.processed).map(|bar| bar.time)
+                    },
+                )
         });
         let mut live = if rebuild {
             Box::new(LiveState {
@@ -176,9 +226,8 @@ impl Backtest {
         {
             *count = lower.len().to_string();
         }
-        let closed = bars.len().saturating_sub(1);
         let tick_changed =
-            self.settings.recalculate_on_every_update && !same_bars(&live.bars, bars);
+            forming && self.settings.recalculate_on_every_update && !same_bars(&live.bars, bars);
         let changed = rebuild || live.processed < closed || tick_changed;
         if !changed {
             live.bars = bars.to_vec();
@@ -189,7 +238,7 @@ impl Backtest {
         let candles = (self.settings.chart_type == ChartType::Heikin)
             .then(|| crate::model::BarData::from_bars(bars.to_vec()).to_heikin_ashi());
         let decision_bars = candles.as_ref().map_or(bars, |data| data.bars.as_slice());
-        let calculation_bars = if self.settings.recalculate_on_every_update {
+        let calculation_bars = if forming && self.settings.recalculate_on_every_update {
             decision_bars
         } else if self.settings.recalculate_on_history
             && !self.settings.chart_type.transforms_data()
@@ -253,13 +302,19 @@ impl Backtest {
                 }
                 live.forming = None;
             }
-            run.closed_bar(
-                &decision_bars[..closed],
+            run.closed_bar_inner(
+                if forming {
+                    &decision_bars[..closed]
+                } else {
+                    decision_bars
+                },
                 index,
                 &finer,
                 &mut live.report,
                 !observed,
-            );
+                processed,
+            )
+            .await;
             if rebuild
                 && replayed(bar.time)
                 && let Some(fills) = &mut run.fills
@@ -268,8 +323,9 @@ impl Backtest {
             }
         }
         live.processed = closed;
-        if self.settings.recalculate_on_every_update
-            && let Some(bar) = bars.last()
+        if forming
+            && self.settings.recalculate_on_every_update
+            && let Some(bar) = bars.get(closed)
         {
             let previous_price = live
                 .forming
@@ -411,6 +467,23 @@ mod tests {
 
     #[test]
     fn closed_updates_match_full_runs_without_repeating_decisions() {
+        fn closed(
+            engine: &mut Backtest,
+            strategy: &mut dyn Strategy,
+            bars: &[Bar],
+            lower: &[Bar],
+        ) -> (Vec<StrategyFill>, usize) {
+            let mut future = std::pin::pin!(engine.update_closed_async(strategy, bars, lower));
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            for polls in 1.. {
+                if let std::task::Poll::Ready(fills) =
+                    std::future::Future::poll(future.as_mut(), &mut context)
+                {
+                    return (fills, polls);
+                }
+            }
+            unreachable!()
+        }
         let bars: Vec<_> = [100., 101., 104., 102., 98., 95., 97., 99., 96.]
             .into_iter()
             .enumerate()
@@ -523,6 +596,45 @@ mod tests {
                 engine.report(),
                 Some(&engine.run(&mut Script::default(), &corrected[..8], &[]))
             );
+
+            let mut engine = engine.clone();
+            engine.live = None;
+            let mut script = Script::default();
+            let mut sequence = 0;
+            for count in 0..=bars.len() {
+                let lower = if magnifier {
+                    bars[..count].to_vec()
+                } else {
+                    vec![]
+                };
+                for fill in closed(&mut engine, &mut script, &bars[..count], &lower).0 {
+                    sequence += 1;
+                    assert_eq!(fill.sequence, sequence);
+                }
+                assert_eq!(
+                    engine.report(),
+                    Some(&engine.run(&mut Script::default(), &bars[..count], &lower,)),
+                    "closed prefix {count}, close {fill_on_close}, start {start_time:?}"
+                );
+                assert_eq!(script.decisions, (1..=count).collect::<Vec<_>>());
+                assert!(
+                    closed(&mut engine, &mut script, &bars[..count], &lower)
+                        .0
+                        .is_empty()
+                );
+                assert_eq!(script.decisions, (1..=count).collect::<Vec<_>>());
+            }
+            assert_eq!(script.resets, 1);
+            assert!(
+                closed(&mut engine, &mut script, &corrected, &[])
+                    .0
+                    .is_empty()
+            );
+            assert_eq!(script.resets, 2);
+            assert_eq!(
+                engine.report(),
+                Some(&engine.run(&mut Script::default(), &corrected, &[]))
+            );
         }
         // A rate missing at minute 3 alone withholds every later report, as it does the run's.
         let mut engine = Backtest::new("Live", "SYM", Timeframe::Min1, 10_000.0);
@@ -557,7 +669,62 @@ mod tests {
                 &[],
             );
             assert_eq!(engine.report(), Some(&full), "{name}");
+            for (variant, settings) in [
+                ("default", BacktestSettings::default()),
+                (
+                    "history",
+                    BacktestSettings {
+                        recalculate_on_history: true,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "ticks",
+                    BacktestSettings {
+                        recalculate_on_every_update: true,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "ticks and history",
+                    BacktestSettings {
+                        recalculate_on_every_update: true,
+                        recalculate_on_history: true,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "Heikin",
+                    BacktestSettings {
+                        chart_type: ChartType::Heikin,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "end",
+                    BacktestSettings {
+                        end_time: Some(source[42].time),
+                        ..Default::default()
+                    },
+                ),
+            ] {
+                let mut engine = Backtest::new(name, "SYM", Timeframe::Min1, 10_000.0);
+                engine.settings = settings;
+                let mut strategy = factory.create(name).unwrap();
+                for count in (0..=80).step_by(7).chain([80]) {
+                    closed(&mut engine, strategy.as_mut(), &source[..count], &[]);
+                    let full = engine.run(
+                        factory.create(name).unwrap().as_mut(),
+                        &source[..count],
+                        &[],
+                    );
+                    assert_eq!(engine.report(), Some(&full), "{variant} {name} {count}");
+                }
+            }
         }
+        let mut engine = Backtest::new("Closed", "SYM", Timeframe::Min1, 10_000.0);
+        let many: Vec<_> = (0..1000).map(|i| bar(i, 100.0)).collect();
+        assert!(closed(&mut engine, &mut Script::default(), &many, &[]).1 > 1);
     }
 
     #[test]

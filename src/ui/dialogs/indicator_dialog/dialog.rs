@@ -1940,6 +1940,7 @@ mod tests {
         let cases: &[Row] = &[
             ("52 Week High/Low", &["52W High/Low"], &[]),
             ("Accumulative Swing Index", &["ASI"], &[]),
+            ("Analyst price targets", &["Analyst price forecast"], &[]),
             ("Arnaud Legoux Moving Average", &["ALMA"], &[]),
             (
                 "Auto Fib Retracement",
