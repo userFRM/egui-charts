@@ -225,6 +225,7 @@ impl DemoApp {
         if slot == self.layout_slot {
             return;
         }
+        self.range_fit = None;
         self.stop_replay();
         // `chart` always holds the active slot so every existing toolbar and dialog acts on it.
         let other = if slot < self.layout_slot {
