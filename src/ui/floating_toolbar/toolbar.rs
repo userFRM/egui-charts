@@ -580,14 +580,11 @@ impl FloatingSelectionToolbar {
                             {
                                 action = Some(FloatingToolbarAction::ToggleLock);
                             }
-                            if ui
-                                .add_enabled_ui(!self.is_locked && self.user_edit_enabled, |ui| {
-                                    IconButton::new(&icons::TRASH)
-                                        .size(ButtonSize::SM)
-                                        .tooltip("Delete")
-                                        .show(ui)
-                                })
-                                .inner
+                            if IconButton::new(&icons::TRASH)
+                                .size(ButtonSize::SM)
+                                .tooltip("Delete")
+                                .enabled(!self.is_locked && self.user_edit_enabled)
+                                .show(ui)
                                 .clicked()
                             {
                                 action = Some(FloatingToolbarAction::Delete);
@@ -1292,7 +1289,16 @@ mod tests {
             .clear();
             assert_eq!(toolbar.position, expected, "viewport {w}x{h}");
         }
-        for (width, dark) in [(320.0, false), (320.0, true), (800.0, false), (800.0, true)] {
+        for (width, dark, mixed) in [
+            (320.0, false, false),
+            (320.0, false, true),
+            (320.0, true, false),
+            (320.0, true, true),
+            (800.0, false, false),
+            (800.0, false, true),
+            (800.0, true, false),
+            (800.0, true, true),
+        ] {
             let ctx = egui::Context::default();
             crate::theme::apply_to_egui(
                 &ctx,
@@ -1310,8 +1316,8 @@ mod tests {
                 false,
                 true,
             );
-            toolbar.width = Some(Some(2.0));
-            toolbar.line_style = Some(Some(LineStyle::Solid));
+            toolbar.width = Some((!mixed).then_some(2.0));
+            toolbar.line_style = Some((!mixed).then_some(LineStyle::Solid));
             toolbar.set_colors(vec![ColorSlot {
                 label: "Line color",
                 color: Color32::BLUE,
@@ -1330,7 +1336,7 @@ mod tests {
             }
             assert!(
                 bounds.contains_rect(toolbar.last_rect),
-                "{width}, dark {dark}: {:?}",
+                "{width}, dark {dark}, mixed {mixed}: {:?}",
                 toolbar.last_rect
             );
             let mut chart = Chart::new(crate::model::BarData::new());
