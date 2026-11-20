@@ -215,6 +215,17 @@ fn typed_pairs(events: &[Event]) -> Vec<Option<usize>> {
 }
 
 /// A shortcut that needs the host's dialogs, layout or clipboard.
+///
+/// Ctrl+V or Command+V comes as [`PasteDrawing`](Self::PasteDrawing) with clipboard text,
+/// and a paste the platform reports with neither text nor a picture as
+/// [`Action`](Self::Action) with
+/// [`KeyboardAction::PasteDrawing`](crate::config::KeyboardAction::PasteDrawing). A paste
+/// without drawing text is where a host looks for a picture on its clipboard.
+#[cfg_attr(
+    feature = "drawings",
+    doc = "A picture the platform read comes as [`PasteImage`](Self::PasteImage). \
+           Place a picture with [`Chart::paste_image`](crate::Chart::paste_image)."
+)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ShortcutRequest {
@@ -225,7 +236,8 @@ pub enum ShortcutRequest {
     /// Paste a picture the platform read from a clipboard that held no text, as desktop
     /// platforms report Ctrl+V or Command+V on a copied screenshot. The pixels are the host's
     /// to install under an address its image loaders resolve, for example with an
-    /// [`egui::load::ImageLoader`] that returns this image for that address.
+    /// [`egui::load::ImageLoader`] that returns this image for that address. Place it with
+    /// [`Chart::paste_image`](crate::Chart::paste_image), passing its pixel size.
     #[cfg(feature = "drawings")]
     #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
     PasteImage(std::sync::Arc<egui::ColorImage>),
