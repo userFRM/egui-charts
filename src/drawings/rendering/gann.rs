@@ -43,7 +43,7 @@ fn level_label(value: f32) -> String {
 }
 
 /// A fan ratio as price by time units: 2 is "2×1", 0.5 "1×2", one third "1×3".
-fn ratio_label(ratio: f32) -> String {
+pub(crate) fn ratio_label(ratio: f32) -> String {
     let (price, time) = if ratio >= 1.0 {
         (ratio, 1.0)
     } else {
