@@ -346,6 +346,7 @@ impl Drawing {
                 *color = configured;
             }
         };
+        // The Gann fan dashes each line in its renderer.
         let dash = if custom_projection
             || custom_fork
             || matches!(
@@ -362,6 +363,7 @@ impl Drawing {
                     | DrawingToolType::FibonacciSpeedResistanceArcs
                     | DrawingToolType::FibonacciWedge
                     | DrawingToolType::AnchoredVWAP
+                    | DrawingToolType::GannFan
             ) {
             None
         } else {

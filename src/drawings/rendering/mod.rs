@@ -509,7 +509,9 @@ impl Drawing {
             };
             // Five times the anchors' span can pass the reach below when the span is steep.
             let corner = self.gann_square_corner(first, second);
-            return Some(Rect::from_two_pos(first, corner).expand(PAINT_MARGIN));
+            return Some(
+                Rect::from_two_pos(first, corner).expand(PAINT_MARGIN + self.gann_label_room()),
+            );
         }
         if self.tool_type == T::Image {
             return self.image_frame().map(|frame| frame.expand(PAINT_MARGIN));
@@ -520,7 +522,7 @@ impl Drawing {
         let text = self.text.as_deref().map_or(0.0, |t| {
             1.5 * crate::styles::typography::font_size(self.font_size) * t.chars().count() as f32
         });
-        let reach = 3.0 * hull.size().length() + PAINT_MARGIN + text;
+        let reach = 3.0 * hull.size().length() + PAINT_MARGIN + text + self.gann_label_room();
         let bounds = hull.expand(reach);
         let time_only = matches!(
             self.tool_type,
