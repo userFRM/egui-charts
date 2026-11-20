@@ -6,8 +6,9 @@ use super::{
     rows, show_menu,
 };
 use crate::chart::selection::{ChartElementId, SeriesId};
+use crate::config::KeyboardAction;
 use crate::icons::Icon;
-use crate::model::Capabilities;
+use crate::model::{Capabilities, OrderSide, OrderType};
 use crate::theme::ThemeExt;
 use crate::ui::Control;
 use crate::ui::app_state::set_control_visible;
@@ -341,7 +342,7 @@ impl ChartMenus {
         let (_, price) = chart.pointer_price(pos)?;
         self.price_button = Some(pos);
         let chart_response = ctx.read_response(chart.keyboard.chart_id?)?;
-        if !chart_response.enabled() || ctx.layer_id_at(pos) != Some(chart_response.layer_id) {
+        if !pointer_on_chart(ctx, chart, pos) {
             self.price_button = None;
             return None;
         }
@@ -364,13 +365,65 @@ impl ChartMenus {
             .then_some(RightClickTarget::Background { pos, price })
     }
 
+    /// The order of the chart menu's buy or sell limit row at the pointer, or `None` where the
+    /// menu would show no such row there.
+    fn limit_order_at_pointer(
+        &mut self,
+        ctx: &Context,
+        chart: &Chart,
+        key: KeyboardAction,
+    ) -> Option<ChartContextAction> {
+        let side = match key {
+            KeyboardAction::BuyLimitAtPointer => OrderSide::Buy,
+            KeyboardAction::SellLimitAtPointer => OrderSide::Sell,
+            _ => return None,
+        };
+        if !chart.pointer_commands_enabled(ctx) {
+            return None;
+        }
+        let pos = ctx.input(|input| input.pointer.hover_pos())?;
+        let (pane, price) = chart.pointer_price(pos)?;
+        if chart.series_pane(SeriesId::MAIN) != Some(pane) || !pointer_on_chart(ctx, chart, pos) {
+            return None;
+        }
+        self.load_order_context(chart, pos);
+        self.chart
+            .order_requests(price)
+            .into_iter()
+            .find(|order| order.side == side && matches!(order.order_type, OrderType::Limit(_)))
+            .map(|order| ChartContextAction::Chart(ContextMenuAction::Order(order)))
+    }
+
+    /// Reads the symbol, its last price and tick size, and whether `pos` reads prices of the
+    /// chart symbol into the chart menu, for its alert and order rows.
+    fn load_order_context(&mut self, chart: &Chart, pos: egui::Pos2) {
+        self.chart.set_symbol(chart.symbol.clone());
+        self.chart.market_price =
+            crate::model::last_with_value(chart.bars(SeriesId::MAIN)).map(|b| b.close);
+        self.chart.tick_size = chart
+            .instrument()
+            .and_then(|instrument| instrument.tick_size)
+            .filter(|tick| tick.is_finite() && *tick > 0.0);
+        self.chart.symbol_price = chart
+            .pane_at_position(pos)
+            .is_none_or(|pane| Some(pane) == chart.series_pane(SeriesId::MAIN));
+    }
+
     /// Opens the menu for the chart's last right-click, shows the open one and returns the
     /// chosen action. Alt plus the platform command modifier reveals a price button at the
     /// pointer, including when the price-axis button is hidden. Clicking it offers the line in
     /// the pointed pane, and alert and order actions in the pane of the main series, whose scale
-    /// reads prices of the chart symbol. Editors and drawing drags retain their input.
+    /// reads prices of the chart symbol. [`KeyboardAction::BuyLimitAtPointer`] and
+    /// [`KeyboardAction::SellLimitAtPointer`], Alt+Shift+B and Alt+Shift+S unless the chart's
+    /// [`ShortcutMap`](crate::widget::ShortcutMap) binds them otherwise, return the order of the
+    /// chart menu's buy or sell limit row at the pointer, and nothing where the menu would show
+    /// no such row. Editors and drawing drags retain their input.
     /// While a menu is open the chart draws no crosshair or tooltip under it.
+    ///
+    /// [`KeyboardAction::BuyLimitAtPointer`]: crate::config::KeyboardAction::BuyLimitAtPointer
+    /// [`KeyboardAction::SellLimitAtPointer`]: crate::config::KeyboardAction::SellLimitAtPointer
     pub fn show(&mut self, ctx: &Context, chart: &mut Chart) -> Option<ChartContextAction> {
+        let order_key = chart.keyboard.order_key.take();
         if self.chart.hidden.contains(&Control::ContextMenus) {
             self.chart.close();
             self.series.close();
@@ -391,6 +444,7 @@ impl ChartMenus {
             self.context = None;
             self.context_pane = None;
         }
+        let key_order = order_key.and_then(|key| self.limit_order_at_pointer(ctx, chart, key));
         let quick_price = self.show_price_button(ctx, chart);
         if let Some(target) = quick_price.or_else(|| chart.take_right_click()) {
             self.price_menu = quick_price.is_some();
@@ -461,21 +515,12 @@ impl ChartMenus {
                 }
                 RightClickTarget::Background { pos, price } => {
                     self.chart.set_indicator_cnt(chart.indicators().count());
-                    self.chart.set_symbol(chart.symbol.clone());
-                    self.chart.market_price =
-                        crate::model::last_with_value(chart.bars(SeriesId::MAIN)).map(|b| b.close);
-                    self.chart.tick_size = chart
-                        .instrument()
-                        .and_then(|instrument| instrument.tick_size)
-                        .filter(|tick| tick.is_finite() && *tick > 0.0);
+                    self.load_order_context(chart, pos);
                     let line = chart
                         .drawings()
                         .registry
                         .availability(crate::drawings::DrawingToolType::HorizontalLine);
                     self.chart.horizontal_line = line.visible && line.enabled;
-                    self.chart.symbol_price = chart
-                        .pane_at_position(pos)
-                        .is_none_or(|pane| Some(pane) == chart.series_pane(SeriesId::MAIN));
                     self.chart.open(pos, price);
                 }
             }
@@ -563,8 +608,9 @@ impl ChartMenus {
             || self.drawing.is_open()
             || self.axes.is_open();
 
-        // At most one menu is open at a time, so at most one action resolves.
-        axis_action.or(menu_action)
+        // At most one menu is open at a time, and keys wait while one is, so at most one action
+        // resolves.
+        axis_action.or(menu_action).or(key_order)
     }
 
     fn build_menu_items(
@@ -710,6 +756,17 @@ pub(super) fn bar_time_at(chart: &Chart, x: f32) -> Option<chrono::DateTime<chro
         .then(|| chart.state().shown().get(index as usize))
         .flatten()
         .map(|bar| bar.time)
+}
+
+/// Whether `pos` is on the enabled chart's own layer, not on a window or popup over it.
+fn pointer_on_chart(ctx: &Context, chart: &Chart, pos: egui::Pos2) -> bool {
+    chart
+        .keyboard
+        .chart_id
+        .and_then(|id| ctx.read_response(id))
+        .is_some_and(|response| {
+            response.enabled() && ctx.layer_id_at(pos) == Some(response.layer_id)
+        })
 }
 
 #[cfg(test)]

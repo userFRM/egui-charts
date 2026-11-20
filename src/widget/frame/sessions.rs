@@ -217,6 +217,80 @@ mod tests {
         }
     }
 
+    /// Rows of four 0.25 ticks: day one counts 2,2 (POC 100, VA 100..101);
+    /// day two counts 2,3,2 (POC 111, VA 110..112). Only day two tags the scale.
+    #[test]
+    fn tpo_level_tags_mark_only_the_latest_profile() {
+        use crate::model::{Bar, BarData, ChartType, ChartTypeParams, Instrument, Timeframe};
+        use crate::widget::SeriesId;
+        let start: chrono::DateTime<chrono::Utc> = "2024-01-02T14:30:00Z".parse().unwrap();
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let mut baseline = Vec::new();
+            for tags in [false, true] {
+                let bars = [
+                    (0, 100.25, 101.0, 100.0, 100.75),
+                    (30, 100.25, 101.0, 100.0, 100.75),
+                    (1440, 110.5, 112.0, 110.0, 111.0),
+                    (1470, 111.0, 112.0, 110.0, 111.5),
+                    (1500, 111.0, 111.0, 111.0, 111.0),
+                ]
+                .into_iter()
+                .map(|(m, o, h, l, c)| {
+                    Bar::new(start + chrono::Duration::minutes(m), o, h, l, c, 1.0)
+                })
+                .collect();
+                let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+                chart.set_timeframe(Timeframe::Min30);
+                chart.set_instrument(Some(Instrument::new("ES").with_tick_size(0.25)));
+                chart.set_chart_type(ChartType::TimePriceOpportunity);
+                chart.set_chart_type_params(ChartTypeParams {
+                    tpo_row_ticks: 4,
+                    tpo_level_tags: tags,
+                    ..Default::default()
+                });
+                chart.config_mut().show_volume = false;
+                chart.config_mut().show_symbol_last_val = false;
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let painted = shapes(&ctx, &mut chart, 0.0, vec![]);
+                let plot = chart.get_rendered_price_rect();
+                let mut tag_rects: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Rect(r)
+                            if r.rect.left() >= plot.right() - 1.0
+                                && [theme.chart.axis_text, theme.chart.axis_text_secondary]
+                                    .contains(&r.fill) =>
+                        {
+                            Some((r.rect, r.fill))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                // The scale's existing controls can use the caption colours too.
+                if !tags {
+                    baseline = tag_rects;
+                    continue;
+                }
+                tag_rects.retain(|tag| !baseline.contains(tag));
+                // Exactly three newest-profile tags leave none for the earlier profile.
+                assert_eq!(tag_rects.len(), 3, "background {:?}", theme.chart.bg);
+                let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+                for (price, color) in [
+                    (111.0, theme.chart.axis_text),
+                    (112.0, theme.chart.axis_text_secondary),
+                    (110.0, theme.chart.axis_text_secondary),
+                ] {
+                    assert!(
+                        tag_rects.iter().any(|(r, fill)| *fill == color
+                            && r.y_range().contains(map.price_to_y(price))),
+                        "missing {price}"
+                    );
+                }
+            }
+        }
+    }
+
     #[cfg(feature = "studies")]
     #[test]
     fn tpo_study_draws_the_table_of_its_statistics_input() {
@@ -477,14 +551,16 @@ mod tests {
             "2024-03-11T23:59:00Z",
             "2024-03-12T00:00:00Z",
         ];
-        for (shade, custom, metadata, overnight, pre, post, expected) in [
-            (true, false, false, false, true, true, vec![2]),
-            (false, false, false, false, true, true, vec![2]),
-            (true, true, false, false, true, true, vec![1, 6]),
-            (true, false, true, false, true, true, vec![3]),
-            (true, false, true, true, true, true, vec![1, 7]),
-            (true, false, true, false, false, true, vec![3]),
-            (true, false, true, false, true, false, vec![3]),
+        for (shade, custom, metadata, overnight, pre, post, defaults, expected) in [
+            (true, false, false, false, true, true, false, vec![2]),
+            (false, false, false, false, true, true, false, vec![2]),
+            (true, true, false, false, true, true, false, vec![1, 6]),
+            (true, false, true, false, true, true, false, vec![3]),
+            (true, false, true, true, true, true, false, vec![1, 7]),
+            (true, false, true, false, false, true, false, vec![3]),
+            (true, false, true, false, true, false, false, vec![3]),
+            (true, false, true, false, true, true, true, vec![3]),
+            (false, false, true, false, true, true, true, vec![3]),
         ] {
             let ctx = egui::Context::default();
             let bars = times
@@ -535,8 +611,17 @@ mod tests {
                 egui::Color32::from_rgba_unmultiplied(90, 40, 170, 30);
             chart.config.overnight_hours_color =
                 egui::Color32::from_rgba_unmultiplied(170, 90, 40, 30);
-            chart.config.show_extended_hours = shade;
-            chart.config.premarket_color = Some(PREMARKET);
+            if !defaults {
+                chart.config.premarket_color = Some(PREMARKET);
+                chart.config.postmarket_color = None;
+            }
+            let mut settings = crate::widget::settings::ChartSettingsState::from_chart(&chart);
+            settings
+                .session_background
+                .as_mut()
+                .unwrap()
+                .show_extended_hours = shade;
+            settings.apply_to_chart(&mut chart).unwrap();
             chart.config.shade_premarket = pre;
             chart.config.shade_postmarket = post;
             if custom {
@@ -564,10 +649,15 @@ mod tests {
                     .map(|index| map.idx_to_x(*index))
                     .collect::<Vec<_>>()
             );
-            // The pre-market has its own colour; the post-market uses the shared fallback.
+            // Defaults use distinct phase colours at round(255 * 0.08) = 20 alpha; explicit
+            // pre-market and shared post-market colours remain independent of those defaults.
             for (color, spans) in [
                 (
-                    PREMARKET,
+                    if defaults {
+                        egui::Color32::from_rgba_unmultiplied(255, 152, 0, 20)
+                    } else {
+                        PREMARKET
+                    },
                     if shade && pre {
                         vec![(if metadata { 3 } else { 2 }, 4)]
                     } else {
@@ -575,7 +665,11 @@ mod tests {
                     },
                 ),
                 (
-                    chart.config.extended_hours_color,
+                    if defaults {
+                        egui::Color32::from_rgba_unmultiplied(41, 98, 255, 20)
+                    } else {
+                        chart.config.extended_hours_color
+                    },
                     if shade && post {
                         vec![(0, 1), (5, 7)]
                     } else {

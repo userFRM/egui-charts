@@ -418,7 +418,7 @@ pub(super) struct HostEvents {
     range: Option<VisibleTimeRange>,
     logical_range: Option<crate::model::LogicalRange>,
     time_scale_size: egui::Vec2,
-    pointer: Option<ChartPointer>,
+    pub(super) pointer: Option<ChartPointer>,
     kind: Option<PointerKind>,
     cursor_data_policy: CursorDataPolicy,
     click_frames: [Option<u64>; 3],
@@ -1132,15 +1132,9 @@ impl Chart {
         if !ui.rect_contains_pointer(plot) {
             return;
         }
-        let index = self
-            .state
-            .time_scale()
-            .coord_to_idx_precise(pos.x, plot.left(), plot.width())
-            .round();
-        let Some(time) = crate::model::time_at(self.state.shown(), index) else {
+        let Some((time, price)) = self.price_pane_point(pos) else {
             return;
         };
-        let price = self.last_price_map.y_to_price(pos.y);
         if !price.is_finite() {
             return;
         }

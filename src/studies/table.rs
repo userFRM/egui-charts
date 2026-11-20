@@ -23,6 +23,13 @@ pub struct StudyTable {
     /// Background of each cell, row by row and in column order within a row. Cells past the end
     /// of their row's fills, and rows past the end of the list, keep the default cell background.
     pub cell_colors: Vec<Vec<egui::Color32>>,
+    /// Text colour of each cell, laid out as `cell_colors`. `None`, and cells past the end of
+    /// the list, take the default. A colour that does not read against the background shown
+    /// behind it moves towards the theme's text colour only as far as needed.
+    pub cell_text_colors: Vec<Vec<Option<egui::Color32>>>,
+    /// Text shown while the pointer rests on each cell, laid out as `cell_colors`. An empty
+    /// text, and cells past the end of the list, show none.
+    pub cell_tooltips: Vec<Vec<String>>,
     /// Background of the column headings, which also frames the table in white, or `None` for
     /// the default.
     pub header_color: Option<egui::Color32>,
@@ -318,6 +325,11 @@ pub(crate) fn paint(
                             .and_then(|fills| fills.get(column))
                             .copied(),
                     };
+                    // The headings take neither a text colour nor a tooltip of their own.
+                    let body = row_index.checked_sub(1);
+                    let given = body
+                        .and_then(|row| table.cell_text_colors.get(row)?.get(column).copied())
+                        .flatten();
                     let color = if let Some(fill) = fill {
                         painter.rect_filled(cell_rect, 0.0, fill);
                         if styled && row_index > 0 {
@@ -328,10 +340,16 @@ pub(crate) fn paint(
                                 StrokeKind::Inside,
                             );
                         }
-                        let text = table.text_color.unwrap_or(egui::Color32::WHITE);
+                        let (text, towards) = match given {
+                            Some(given) => (given, theme.ui.text),
+                            None => (
+                                table.text_color.unwrap_or(egui::Color32::WHITE),
+                                egui::Color32::BLACK,
+                            ),
+                        };
                         crate::theme::readable_color(
                             text,
-                            egui::Color32::BLACK,
+                            towards,
                             &[theme.ui.panel_bg_floating.blend(fill)],
                             4.5,
                         )
@@ -348,13 +366,20 @@ pub(crate) fn paint(
                                 );
                                 painter.rect_filled(cell_rect, 0.0, tint);
                                 crate::theme::readable_color(
-                                    color,
+                                    given.unwrap_or(color),
                                     theme.ui.text,
                                     &[theme.ui.panel_bg_floating.blend(tint)],
                                     4.5,
                                 )
                             }
-                            _ => theme.ui.text,
+                            _ => given.map_or(theme.ui.text, |given| {
+                                crate::theme::readable_color(
+                                    given,
+                                    theme.ui.text,
+                                    &[theme.ui.panel_bg_floating],
+                                    4.5,
+                                )
+                            }),
                         }
                     };
                     painter.text(
@@ -364,6 +389,21 @@ pub(crate) fn paint(
                         font.clone(),
                         color,
                     );
+                    if let Some(tip) = body
+                        .and_then(|row| table.cell_tooltips.get(row)?.get(column))
+                        .filter(|tip| !tip.is_empty())
+                        && ui.rect_contains_pointer(cell_rect)
+                    {
+                        egui::Tooltip::always_open(
+                            ui.ctx().clone(),
+                            ui.layer_id(),
+                            id.with(("cell tooltip", row_index, column)),
+                            cell_rect,
+                        )
+                        .show(|ui| {
+                            ui.label(tip);
+                        });
+                    }
                     x += width;
                 }
                 y += row_height;
@@ -500,21 +540,24 @@ mod tests {
 
     /// A width or height share sizes the table to that share of its pane, within the pane's
     /// margins, its cells stretched to fill it, while a NaN share fits the cells. Text over a
-    /// translucent cell background reads against the colour shown, and a table without a header
-    /// colour draws no white grid round its cells.
+    /// translucent cell background reads against the colour shown, in the cell's own text colour
+    /// when it has one, and a table without a header colour draws no white grid round its cells.
     #[test]
     fn sized_tables_take_their_share_of_the_pane() {
         use egui::{Color32, Pos2, RawInput, Rect, Shape, Stroke, pos2, vec2};
 
         let faint = crate::studies::palette::UP.gamma_multiply(0.1);
+        let navy = Color32::from_rgb(0, 0, 128);
         let sized = StudyTable {
             title: "Sized".into(),
-            columns: vec!["A".into(), "B".into()],
+            columns: vec!["A".into(), "B".into(), "C".into()],
             rows: vec![vec![
                 StudyCell::Text("faint".into()),
+                StudyCell::Text("tinted".into()),
                 StudyCell::Text("last".into()),
             ]],
-            cell_colors: vec![vec![faint, Color32::GOLD]],
+            cell_colors: vec![vec![faint, faint, Color32::GOLD]],
+            cell_text_colors: vec![vec![None, Some(crate::studies::palette::UP), Some(navy)]],
             ..Default::default()
         };
         // An 800 by 300 pane leaves (8, 32) to (792, 292) inside its 8-point margin and below its
@@ -582,18 +625,27 @@ mod tests {
                     (last.max - bounds.max).length() < 0.5,
                     "{position:?}: the last cell {last:?} ends inside {bounds:?}"
                 );
-                let text = shapes.iter().find_map(|shape| match shape {
-                    Shape::Text(text) if text.galley.text() == "faint" => {
-                        Some(text.galley.job.sections[0].format.color)
-                    }
-                    _ => None,
-                });
-                let text = text.expect("text over the faint fill");
+                let text = |label: &str| {
+                    let color = shapes.iter().find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.text() == label => {
+                            Some(text.galley.job.sections[0].format.color)
+                        }
+                        _ => None,
+                    });
+                    color.unwrap_or_else(|| panic!("{label} painted"))
+                };
                 let shown = theme.ui.panel_bg_floating.blend(faint);
-                assert!(
-                    crate::theme::contrast(text, shown) >= 4.5,
-                    "{position:?}: {text:?} over {shown:?}"
-                );
+                for label in ["faint", "tinted"] {
+                    assert!(
+                        crate::theme::contrast(text(label), shown) >= 4.5,
+                        "{position:?}: {label} {:?} over {shown:?}",
+                        text(label)
+                    );
+                }
+                // A cell's own text colour is kept apart from the default one, and painted as
+                // given where it reads: navy on gold has a contrast of 11.4.
+                assert_ne!(text("tinted"), text("faint"), "{position:?}");
+                assert_eq!(text("last"), navy, "{position:?}");
                 assert!(
                     !shapes.iter().any(|shape| matches!(shape,
                         Shape::Rect(cell) if cell.stroke == Stroke::new(1.0, Color32::WHITE))),
