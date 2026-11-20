@@ -6,7 +6,6 @@ use super::{DrawingToolbar, DrawingToolbarAction};
 use crate::drawings::DrawingToolType;
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::localization as l10n;
-use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Id, Pos2, Rect, Sense, Ui, Vec2};
@@ -223,7 +222,8 @@ impl DrawingToolbar {
         ui.painter()
             .rect_filled(rect, ui.active_theme().radius.sm, bg);
 
-        let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(icon_sizes::MD));
+        let icon_rect =
+            Rect::from_center_size(rect.center(), Vec2::splat(DESIGN_TOKENS.sizing.icon_md));
         render_svg_at_rect_themed(ui, icon, icon_rect, response.hovered(), is_sel);
         ui.set_opacity(opacity);
 
@@ -232,7 +232,7 @@ impl DrawingToolbar {
 
     /// The dotted grip at the strip's leading edge. Returns how far the user dragged it.
     fn strip_grip(ui: &mut Ui) -> Vec2 {
-        let size = Vec2::new(icon_sizes::SM, DESIGN_TOKENS.sizing.button_md);
+        let size = Vec2::new(DESIGN_TOKENS.sizing.icon_sm, DESIGN_TOKENS.sizing.button_md);
         let (rect, response) = ui.allocate_exact_size(size, Sense::drag());
         let label = l10n::text(ui.ctx(), "Move favorite tools");
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
