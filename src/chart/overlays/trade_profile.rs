@@ -45,6 +45,7 @@ pub(crate) fn render_session_volume_profiles(
     profiles: &[TradeProfile],
     flow: FootprintView<'_>,
     settings: &TradeProfileSettings,
+    volume_decimals: Option<u8>,
 ) {
     let theme = painter.ctx().active_theme();
     let colors = SessionColors::new(settings, &theme);
@@ -53,6 +54,7 @@ pub(crate) fn render_session_volume_profiles(
     };
     let config = FootprintConfig {
         modes: vec![settings.mode],
+        volume_decimals,
         value_area: settings.value_area,
         node_sensitivity: settings.nodes.unwrap_or_default(),
         neutral_color: theme.chart.axis_text_secondary,
@@ -386,7 +388,13 @@ fn render_profiles(
                 && let Some(colors) = &colors
                 && (y0 - y1).abs() >= *height
             {
-                let text = super::footprint::cell_text(value_mode(mode), row, true, true);
+                let text = super::footprint::cell_text(
+                    value_mode(mode),
+                    row,
+                    true,
+                    true,
+                    config.volume_decimals,
+                );
                 let (lo, hi) = (x + 2.0, (x + session_width).min(mapping.rect.right()) - 2.0);
                 let galley = painter.layout_no_wrap(text, font.clone(), colors.values);
                 let size = galley.size();
@@ -659,6 +667,7 @@ mod tests {
                         &profiles,
                         (&flow).into(),
                         &settings,
+                        None,
                     )
                 },
             );
@@ -744,46 +753,65 @@ mod tests {
             .collect();
         let ranges = TradeProfileRanges::new(vec![time..time + TimeDelta::minutes(4)]).unwrap();
         let profiles = trade_profiles(&flow, &ranges);
-        let cases: [(serde_json::Value, bool, &[&str]); 9] = [
-            (serde_json::json!({}), false, &[]),
+        let cases: [(serde_json::Value, bool, Option<u8>, &[&str]); 11] = [
+            (serde_json::json!({}), false, None, &[]),
             (
                 serde_json::json!({"values": true}),
                 false,
+                None,
                 &["500 × 1.5K", "1K × 0"],
             ),
             (
                 serde_json::json!({"values": true, "values_color": [0, 0, 200, 200], "mode": "Volume"}),
                 false,
+                None,
                 &["2K", "1K"],
             ),
             (
                 serde_json::json!({"values": true, "values_color": [0, 0, 200, 200], "mode": "Delta"}),
                 false,
+                None,
                 &["+1K", "-1K"],
             ),
-            (serde_json::json!({"values": true}), true, &[]),
+            (serde_json::json!({"values": true}), true, None, &[]),
             (
                 serde_json::json!({"values": true, "right_aligned": true}),
                 false,
+                None,
                 &["500 × 1.5K", "1K × 0"],
             ),
             (
                 serde_json::json!({"values": true, "mode": "DeltaVolume"}),
                 false,
+                None,
                 &["+1K / 2K", "-1K / 1K"],
             ),
             (
                 serde_json::json!({"values": true, "mode": "Ladder"}),
                 false,
+                None,
                 &["500 × 1.5K", "1K × 0"],
             ),
             (
                 serde_json::json!({"values": true, "mode": "Trades"}),
                 false,
+                None,
                 &["+1K", "-1K"],
             ),
+            (
+                serde_json::json!({"values": true, "mode": "Volume"}),
+                false,
+                Some(0),
+                &["2K", "1K"],
+            ),
+            (
+                serde_json::json!({"values": true, "mode": "Volume"}),
+                false,
+                Some(3),
+                &["2.000K", "1.000K"],
+            ),
         ];
-        for (saved, short, expected) in cases {
+        for (saved, short, decimals, expected) in cases {
             let settings = serde_json::from_value(saved.clone()).unwrap();
             for theme in [Theme::dark(), Theme::light()] {
                 let mapping = ChartMapping::new(
@@ -819,6 +847,7 @@ mod tests {
                             &profiles,
                             (&flow).into(),
                             &settings,
+                            decimals,
                         )
                     },
                 );
@@ -1172,6 +1201,7 @@ mod tests {
                             &profiles,
                             (&flow).into(),
                             &settings,
+                            None,
                         )
                     },
                 );
@@ -1265,6 +1295,7 @@ mod tests {
                     extend_val: true,
                     ..Default::default()
                 },
+                None,
             );
         });
         output.textures_delta.clear();
@@ -1360,6 +1391,7 @@ mod tests {
                     extend_val: true,
                     ..Default::default()
                 },
+                None,
             );
         });
         output.textures_delta.clear();
@@ -1493,6 +1525,7 @@ mod tests {
                         &profiles,
                         (flow).into(),
                         &settings,
+                        None,
                     );
                 });
                 output.textures_delta.clear();

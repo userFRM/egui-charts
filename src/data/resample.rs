@@ -170,6 +170,8 @@ pub fn resample_with_session_hours(
     )
 }
 
+/// As [`resample_with_session_hours`], with the range of `bars` each output bar was built from.
+/// The ranges are in order and never empty, and each kept bar is in exactly one.
 pub(crate) fn resample_periods(
     bars: &[Bar],
     from: impl Into<BarClock>,
@@ -190,15 +192,30 @@ pub(crate) fn resample_periods(
         || to.is_trade_based()
     {
         let output = resample(bars, source.clone(), target.clone())?;
+        // As many output bars as input bars leaves one input bar to each. Equal clocks return
+        // the bars unchanged, also those off the clock's grid, which the count below misses.
+        if output.len() == bars.len() {
+            return Some(
+                output
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, bar)| (i..i + 1, bar))
+                    .collect(),
+            );
+        }
         let mut start = 0;
         return Some(
             output
                 .into_iter()
                 .map(|bar| {
+                    // The run `resample` folded into this bar, counted as it folds: bar by bar.
                     let end = start
-                        + bars[start..].partition_point(|input| {
-                            target.bar_open(source.bar_open(input.time)) == bar.time
-                        });
+                        + bars[start..]
+                            .iter()
+                            .take_while(|input| {
+                                target.bar_open(source.bar_open(input.time)) == bar.time
+                            })
+                            .count();
                     let range = start..end;
                     start = end;
                     (range, bar)
@@ -529,6 +546,56 @@ mod tests {
                 bar("2024-03-10T08:00:00Z", [103.0, 105.0, 102.0, 104.0, 4.0]),
             ])
         );
+    }
+
+    /// Each period names the input bars it was built from: every bar once, none left out. Equal
+    /// clocks keep each bar as its own period, off the clock's grid or twice at one time, and a
+    /// period ends where the next bar leaves it even when a later bar returns to it.
+    #[test]
+    fn periods_name_the_bars_they_hold() {
+        // (source interval, bar times, (bars in the period, period time))
+        type Row = (
+            Timeframe,
+            &'static [&'static str],
+            &'static [(usize, &'static str)],
+        );
+        #[rustfmt::skip]
+        let rows: [Row; 3] = [
+            (Timeframe::Hour4, &["2024-03-15T01:00:00Z", "2024-03-15T05:00:00Z"],
+                &[(1, "2024-03-15T01:00:00Z"), (1, "2024-03-15T05:00:00Z")]),
+            (Timeframe::Hour4, &["2024-03-15T04:00:00Z", "2024-03-15T04:00:00Z"],
+                &[(1, "2024-03-15T04:00:00Z"), (1, "2024-03-15T04:00:00Z")]),
+            (Timeframe::Hour1, &[
+                "2024-03-15T00:00:00Z", "2024-03-15T04:00:00Z", "2024-03-15T00:00:00Z",
+                "2024-03-15T01:00:00Z", "2024-03-15T02:00:00Z", "2024-03-15T03:00:00Z",
+                "2024-03-15T03:00:00Z",
+            ], &[(1, "2024-03-15T00:00:00Z"), (1, "2024-03-15T04:00:00Z"), (5, "2024-03-15T00:00:00Z")]),
+        ];
+        for (from, times, expected) in rows {
+            let input: Vec<Bar> = times.iter().map(|time| bar(time, [1.0; 5])).collect();
+            let periods = resample_periods(
+                &input,
+                from,
+                Timeframe::Hour4,
+                &Instrument::new("PERIODS"),
+                true,
+                true,
+            )
+            .unwrap();
+            let got: Vec<_> = periods
+                .iter()
+                .map(|(range, bar)| (range.clone(), bar.time))
+                .collect();
+            let mut start = 0;
+            let expected: Vec<_> = expected
+                .iter()
+                .map(|&(len, time)| {
+                    start += len;
+                    (start - len..start, time.parse::<DateTime<Utc>>().unwrap())
+                })
+                .collect();
+            assert_eq!(got, expected, "{from} to 4h, {times:?}");
+        }
     }
 
     /// Guards the three hour choices a chart requests on a session with overnight windows:
