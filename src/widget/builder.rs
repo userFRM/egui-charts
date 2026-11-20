@@ -184,6 +184,8 @@ impl Chart {
             legend_instrument: None,
             currency_choices: Vec::new(),
             currency_choice: None,
+            unit_choices: Vec::new(),
+            unit_choice: None,
             legend_badge: None,
             legend_statuses: Vec::new(),
             quote: None,
