@@ -1,6 +1,7 @@
 //! Hotlists the feed supplies: the market's top movers by the measures the host names.
 
 use crate::localization as l10n;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,6 +17,7 @@ use crate::data::{Datafeed, FeedError, HotlistEntry, HotlistQuery};
 use crate::icons::icons;
 use crate::model::TimezoneId;
 use crate::theme::ThemeExt;
+use crate::ui_kit::buttons::ButtonSize;
 use crate::ui_kit::status_message::{MessageKind, status_message, translated_status_message};
 use crate::ui_kit::{EmptyState, IconButton, LoadingIndicator, PanelHeader};
 
@@ -31,6 +33,19 @@ pub enum HotlistsAction {
     None,
     /// Show this symbol, such as on the chart.
     SelectSymbol(String),
+    /// Add the symbol to the watchlist at this index of the names given to
+    /// [`HotlistsPanel::set_watchlists`], such as with
+    /// [`WatchlistPanel::add_symbol_to`](crate::ui::widget_bar::WatchlistPanel::add_symbol_to).
+    AddToWatchlist {
+        /// Index into the names given to [`HotlistsPanel::set_watchlists`].
+        list: usize,
+        /// Instrument identifier used by the host.
+        symbol: String,
+    },
+    /// The user starred or unstarred a list. These are the names of the starred lists in the order
+    /// given to [`HotlistsPanel::new`], for the host to keep and give back with
+    /// [`HotlistsPanel::set_starred`].
+    Starred(Vec<String>),
 }
 
 /// Hotlists fed by the host's [`Datafeed::hotlist`], one at a time.
@@ -42,8 +57,10 @@ pub enum HotlistsAction {
 /// received. Call [`poll`](Self::poll) each frame, then [`show`](Self::show) while the panel is
 /// open.
 pub struct HotlistsPanel {
-    lists: Vec<String>,
+    /// The lists' names, each with whether it is starred.
+    lists: Vec<(String, bool)>,
     list: usize,
+    watchlists: Vec<String>,
     feed: Option<Arc<dyn Datafeed>>,
     entries: Vec<HotlistEntry>,
     error: Option<FeedError>,
@@ -65,6 +82,7 @@ impl std::fmt::Debug for HotlistsPanel {
         f.debug_struct("HotlistsPanel")
             .field("lists", &self.lists)
             .field("list", &self.list)
+            .field("watchlists", &self.watchlists)
             .field("error", &self.error)
             .field("loading", &self.loading)
             .field("request", &self.request)
@@ -81,8 +99,9 @@ impl HotlistsPanel {
     /// A panel of the hotlists named `lists`, showing the first, without a feed.
     pub fn new(lists: Vec<String>) -> Self {
         Self {
-            lists,
+            lists: lists.into_iter().map(|name| (name, false)).collect(),
             list: 0,
+            watchlists: Vec::new(),
             feed: None,
             entries: Vec::new(),
             error: None,
@@ -124,6 +143,23 @@ impl HotlistsPanel {
         self.reload();
     }
 
+    /// Offers adding a row's symbol to these watchlists, such as the names of
+    /// [`WatchlistPanel::lists`](crate::ui::widget_bar::WatchlistPanel::lists), in the row's menu.
+    /// The choice returns as [`HotlistsAction::AddToWatchlist`]. Without names rows have no menu.
+    pub fn set_watchlists(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
+        self.watchlists = names.into_iter().map(Into::into).collect();
+    }
+
+    /// Stars the lists named in `lists`, such as the names kept from [`HotlistsAction::Starred`],
+    /// and unstars the others; names that are not lists are ignored. Starred lists come first in
+    /// the list menu, each group in the order given to [`new`](Self::new). The shown list stays.
+    pub fn set_starred(&mut self, lists: impl IntoIterator<Item = String>) {
+        let starred: HashSet<String> = lists.into_iter().collect();
+        for (name, star) in &mut self.lists {
+            *star = starred.contains(name);
+        }
+    }
+
     /// Ask `feed` for the lists from now on, starting at once. The rows of the previous feed are
     /// cleared.
     pub fn set_feed(&mut self, feed: Arc<dyn Datafeed>) {
@@ -134,7 +170,7 @@ impl HotlistsPanel {
     /// Ask the feed again, such as to update the figures. The rows stay on screen until the
     /// answer.
     pub fn refresh(&mut self) {
-        let (Some(feed), Some(list)) = (&self.feed, self.lists.get(self.list)) else {
+        let (Some(feed), Some((list, _))) = (&self.feed, self.lists.get(self.list)) else {
             return;
         };
         self.request += 1;
@@ -195,11 +231,34 @@ impl HotlistsPanel {
                 .clicked();
         });
         let before = (self.list, self.exchanges.clone(), self.countries.clone());
+        // Starred lists first, each group in the given order.
+        let mut order: Vec<usize> = (0..self.lists.len()).collect();
+        order.sort_by_key(|&index| !self.lists[index].1);
+        let mut starred = None;
         ui.horizontal_wrapped(|ui| {
-            if let Some(name) = self.lists.get(self.list) {
+            if let Some((name, _)) = self.lists.get(self.list) {
                 dropdown(ui, "hotlist", name, |ui| {
-                    for (index, name) in self.lists.iter().enumerate() {
-                        ui.selectable_value(&mut self.list, index, l10n::text(ui.ctx(), name));
+                    for index in order {
+                        let (name, star) = &self.lists[index];
+                        ui.horizontal(|ui| {
+                            if IconButton::new(if *star {
+                                &icons::STAR_FILLED
+                            } else {
+                                &icons::STAR_EMPTY
+                            })
+                            .size(ButtonSize::SM)
+                            .tooltip(if *star {
+                                "Remove from favorites"
+                            } else {
+                                "Add to favorites"
+                            })
+                            .show(ui)
+                            .clicked()
+                            {
+                                starred = Some(index);
+                            }
+                            ui.selectable_value(&mut self.list, index, l10n::text(ui.ctx(), name));
+                        });
                     }
                 });
             }
@@ -218,6 +277,11 @@ impl HotlistsPanel {
                 &mut self.countries,
             );
         });
+        if let Some(index) = starred {
+            self.lists[index].1 = !self.lists[index].1;
+            let names = self.lists.iter().filter(|(_, star)| *star);
+            action = HotlistsAction::Starred(names.map(|(name, _)| name.clone()).collect());
+        }
         if before != (self.list, self.exchanges.clone(), self.countries.clone()) {
             self.reload();
         } else if refresh {
@@ -374,6 +438,26 @@ impl HotlistsPanel {
                     response.widget_info(|| {
                         egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
                     });
+                    if !self.watchlists.is_empty() {
+                        response.context_menu(|ui| {
+                            let label = l10n::format_text(
+                                ui.ctx(),
+                                "Add {symbol} to watchlist",
+                                &[("symbol", entry.symbol.as_str())],
+                            );
+                            ui.menu_button(label, |ui| {
+                                for (list, name) in self.watchlists.iter().enumerate() {
+                                    if ui.button(l10n::text(ui.ctx(), name)).clicked() {
+                                        action = HotlistsAction::AddToWatchlist {
+                                            list,
+                                            symbol: entry.symbol.clone(),
+                                        };
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        });
+                    }
                     if response.clicked() {
                         action = HotlistsAction::SelectSymbol(entry.symbol.clone());
                     }
@@ -558,5 +642,56 @@ mod tests {
                 "Losers|NASDAQ,NYSE|US,DE"
             ]
         );
+    }
+
+    /// A row's menu returns the chosen watchlist with the row's symbol. A star returns the starred
+    /// lists in the given order and moves them first in the list menu; `set_starred` replaces the
+    /// stars without an action and ignores names that are not lists.
+    #[test]
+    fn row_menu_adds_to_a_watchlist_and_stars_lead_the_list_menu() {
+        let feed = Arc::new(Recorder::default());
+        let mut panel = HotlistsPanel::new(vec!["Gainers".into(), "Losers".into()]);
+        panel.set_watchlists(["Main", "Tech"]);
+        panel.set_feed(feed.clone());
+        let reply = feed.replies.lock().unwrap().pop().unwrap();
+        reply.send(Ok(vec![HotlistEntry::new("AAA", 1.0, 1.0)]));
+        let mut h = harness(panel);
+        h.get_by_role_and_label(egui::Role::Button, "AAA")
+            .click_secondary();
+        h.run();
+        press(&mut h, "Add AAA to watchlist");
+        press(&mut h, "Tech");
+        let added = HotlistsAction::AddToWatchlist {
+            list: 1,
+            symbol: "AAA".into(),
+        };
+        assert_eq!(h.state().1, [added]);
+        let starred = |names: &[&str]| {
+            HotlistsAction::Starred(names.iter().map(|name| name.to_string()).collect())
+        };
+        let top = |h: &Panel, label: &str| h.get_by_label(label).rect().top();
+        press(&mut h, "Gainers");
+        h.get_all_by_label("Add to favorites")
+            .nth(1)
+            .expect("a star for Losers")
+            .click();
+        h.run();
+        assert_eq!(h.state().1.last(), Some(&starred(&["Losers"])));
+        press(&mut h, "Gainers");
+        assert!(top(&h, "Remove from favorites") < top(&h, "Add to favorites"));
+        assert!(
+            top(&h, "Losers") < top(&h, "Add to favorites"),
+            "the starred list leads"
+        );
+        press(&mut h, "Add to favorites");
+        assert_eq!(h.state().1.last(), Some(&starred(&["Gainers", "Losers"])));
+        h.state_mut()
+            .0
+            .set_starred(["Losers", "Missing"].map(String::from));
+        press(&mut h, "Gainers");
+        assert!(top(&h, "Losers") < top(&h, "Add to favorites"));
+        press(&mut h, "Add to favorites");
+        assert_eq!(h.state().1.len(), 4, "set_starred returns no action");
+        assert_eq!(h.state().1.last(), Some(&starred(&["Gainers", "Losers"])));
     }
 }
