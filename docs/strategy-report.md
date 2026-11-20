@@ -219,8 +219,11 @@ resets the switch to account units; the switch requires positive finite initial 
 The intrabar figures and all three charts follow the date range. Curve positions and hover
 values retain submillisecond timestamps. Time labels along the axis follow its span. Hover a curve
 for timestamped values. The virtualized trade list uses entry-time order, keeps equal-time
-trades in input order, filters to the range's trades and shows fill prices, net profit, fees,
-labels and excursions.
+trades in input order, filters to the range's trades and shows fill prices, net profit,
+cumulative profit, fees, labels and excursions. Cumulative profit adds the net profit of the
+listed trades closed in the range, in list order up to and including the row. An open trade
+has an empty cell and adds nothing, as does a trade that closes at or after the range's end,
+which the range counts as open like the Summary.
 Fill prices retain their precision and fill times retain fractional seconds.
 Properties includes run metadata and the host's ordered settings. Invalid inputs are
 counted visibly. An undefined or non-finite metric displays as `N/A`, including when
@@ -228,8 +231,10 @@ converting a fraction to a displayed percentage overflows.
 Both exports cover the whole run whatever date range is selected.
 Export trades CSV writes valid trades using
 [`StrategyReport::trades_csv_with_excursions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv_with_excursions): the columns of
-[`StrategyReport::trades_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv) with the displayed excursions in the final `mae` and `mfe` cells,
-empty when unavailable, and the same quoting and UTC timestamps. Export summary CSV returns
+[`StrategyReport::trades_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv) with the displayed excursions in the `mae` and `mfe` cells,
+empty when unavailable, and the same quoting and UTC timestamps. The last column,
+`cumulative_profit`, is the whole run's running total of `profit` in row order, empty on an
+open trade, which adds nothing, and when the total is not finite. Export summary CSV returns
 [`StrategyReportAction::ExportSummaryCsv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyReportAction.html#variant.ExportSummaryCsv) with a suggested file name and the whole-run metrics and
 properties, as [`StrategyReport::summary_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.summary_csv) writes them: a dot as the decimal
 separator, no thousands separator, and an empty cell for an unavailable value. Percent

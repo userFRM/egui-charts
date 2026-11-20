@@ -1401,10 +1401,12 @@ impl StrategyReport {
     /// order), one header line and one line per trade, each ending with `\n`.
     ///
     /// Columns: `number` (from 1, in this order), `side` (`long` or `short`), `quantity`,
-    /// `entry_time`, `entry_price`, `exit_time`, `exit_price`, `profit`, `fees`, `label`, `mae` and
-    /// `mfe`. Times are RFC 3339 in UTC (`2024-01-02T00:00:00Z`), numbers use the shortest form that
-    /// reads back to the same value, and an open trade leaves the three exit columns empty. `mae`
-    /// and `mfe` stay empty here; [`Self::trades_csv_with_excursions`] fills them.
+    /// `entry_time`, `entry_price`, `exit_time`, `exit_price`, `profit`, `fees`, `label`, `mae`,
+    /// `mfe` and `cumulative_profit`. Times are RFC 3339 in UTC (`2024-01-02T00:00:00Z`), numbers
+    /// use the shortest form that reads back to the same value, and an open trade leaves the three
+    /// exit columns empty. `mae` and `mfe` stay empty here; [`Self::trades_csv_with_excursions`]
+    /// fills them. `cumulative_profit` is the sum of `profit` over the rows up to and including
+    /// its own; an open trade adds nothing and leaves it empty, as does a sum that is not finite.
     /// Text cells starting with `=`, `+`, `-`, `@`, tab or carriage return gain a leading apostrophe
     /// so spreadsheets treat them as text. Numeric cells, including negative numbers, are unchanged.
     #[cfg(feature = "csv")]
@@ -1443,9 +1445,20 @@ impl StrategyReport {
             "label",
             "mae",
             "mfe",
+            "cumulative_profit",
         ])
         .expect(IN_MEMORY);
+        let mut total = 0.0;
         for (i, (index, trade)) in trades.into_iter().enumerate() {
+            let cumulative = trade
+                .exit
+                .as_ref()
+                .map(|exit| {
+                    total += exit.profit;
+                    total
+                })
+                .filter(|total| total.is_finite())
+                .map_or_else(String::new, |total| total.to_string());
             let (exit_time, exit_price, profit) = match &trade.exit {
                 Some(exit) => (
                     time(exit.time),
@@ -1481,6 +1494,7 @@ impl StrategyReport {
                 csv_text(trade.label.as_deref().unwrap_or_default()),
                 mae,
                 mfe,
+                cumulative,
             ])
             .expect(IN_MEMORY);
         }
@@ -3589,17 +3603,17 @@ mod tests {
         };
         assert_eq!(
             r.trades_csv_with_excursions(&comparison),
-            "number,side,quantity,entry_time,entry_price,exit_time,exit_price,profit,fees,label,mae,mfe\n\
-             1,long,1,2024-01-02T01:00:00Z,100,2024-01-02T02:00:00Z,101,-1.25,0.25,,6,16\n\
-             2,long,1,2024-01-02T01:00:00Z,100,2024-01-02T03:00:00Z,101,3,0.5,,,\n\
-             3,short,2,2024-01-02T05:00:00Z,101.5,,,,0,\"Breakout, short\",0.5,3.25\n"
+            "number,side,quantity,entry_time,entry_price,exit_time,exit_price,profit,fees,label,mae,mfe,cumulative_profit\n\
+             1,long,1,2024-01-02T01:00:00Z,100,2024-01-02T02:00:00Z,101,-1.25,0.25,,6,16,-1.25\n\
+             2,long,1,2024-01-02T01:00:00Z,100,2024-01-02T03:00:00Z,101,3,0.5,,,,1.75\n\
+             3,short,2,2024-01-02T05:00:00Z,101.5,,,,0,\"Breakout, short\",0.5,3.25,\n"
         );
         assert_eq!(
             r.trades_csv(),
-            "number,side,quantity,entry_time,entry_price,exit_time,exit_price,profit,fees,label,mae,mfe\n\
-             1,long,1,2024-01-02T01:00:00Z,100,2024-01-02T02:00:00Z,101,-1.25,0.25,,,\n\
-             2,long,1,2024-01-02T01:00:00Z,100,2024-01-02T03:00:00Z,101,3,0.5,,,\n\
-             3,short,2,2024-01-02T05:00:00Z,101.5,,,,0,\"Breakout, short\",,\n"
+            "number,side,quantity,entry_time,entry_price,exit_time,exit_price,profit,fees,label,mae,mfe,cumulative_profit\n\
+             1,long,1,2024-01-02T01:00:00Z,100,2024-01-02T02:00:00Z,101,-1.25,0.25,,,,-1.25\n\
+             2,long,1,2024-01-02T01:00:00Z,100,2024-01-02T03:00:00Z,101,3,0.5,,,,1.75\n\
+             3,short,2,2024-01-02T05:00:00Z,101.5,,,,0,\"Breakout, short\",,,\n"
         );
         // 10 units bought at 100 and sold at 110 through a bar from 90 to 120, converted at
         // 0.5 EUR per USD: profit, drawdown and run-up are 50, 50 and 100 EUR. A rate that is
@@ -3616,11 +3630,52 @@ mod tests {
             assert_eq!(
                 r.trades_csv_with_excursions(&r.comparison(std::slice::from_ref(&bar))),
                 format!(
-                    "number,side,quantity,entry_time,entry_price,exit_time,exit_price,profit,fees,label,mae,mfe\n\
-                     1,long,10,2024-01-02T01:00:00Z,100,2024-01-02T02:00:00Z,110,50,0,L / X,{excursions}\n"
+                    "number,side,quantity,entry_time,entry_price,exit_time,exit_price,profit,fees,label,mae,mfe,cumulative_profit\n\
+                     1,long,10,2024-01-02T01:00:00Z,100,2024-01-02T02:00:00Z,110,50,0,L / X,{excursions},50\n"
                 ),
                 "rate {rate}"
             );
+        }
+        // Entry order passes over an open trade and excludes the invalid trade's 100.
+        let largest = f64::MAX.to_string();
+        for (case, profits, expected) in [
+            (
+                "continues past an open trade",
+                vec![Some(10.0), None, Some(-4.0), Some(1.5)],
+                vec!["10", "", "6", "7.5"],
+            ),
+            (
+                "a total beyond f64 is unavailable",
+                vec![Some(f64::MAX), Some(f64::MAX)],
+                vec![largest.as_str(), ""],
+            ),
+            (
+                "retains the sum's precision",
+                vec![Some(0.1), Some(0.2)],
+                vec!["0.1", "0.30000000000000004"],
+            ),
+        ] {
+            let mut trades: Vec<_> = profits
+                .iter()
+                .enumerate()
+                .map(|(hour, profit)| {
+                    let entry = t0() + TimeDelta::hours(hour as i64);
+                    let mut trade = StrategyTrade::new(OrderSide::Buy, 1.0, entry, 100.0);
+                    trade.exit = profit.map(|profit| StrategyExit::new(entry, 101.0, profit));
+                    trade
+                })
+                .collect();
+            trades.reverse();
+            let mut invalid = closed(100.0, 0.0);
+            invalid.quantity = f64::NAN;
+            trades.insert(1, invalid);
+            r.trades = trades;
+            let csv = r.trades_csv();
+            let cells: Vec<String> = csv::Reader::from_reader(csv.as_bytes())
+                .records()
+                .map(|row| row.unwrap()[12].to_owned())
+                .collect();
+            assert_eq!(cells, expected, "{case}");
         }
         for (label, expected) in [
             ("=1+1", "'=1+1"),

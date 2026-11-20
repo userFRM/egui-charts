@@ -111,6 +111,9 @@ struct ReportData {
     run_up: Vec<(DateTime<Utc>, f64)>,
     /// Original indices of valid trades in the range, sorted by entry.
     trades: Vec<usize>,
+    /// Net profit of the trades closed in the range up to each row of `trades`; `None` on a
+    /// trade that is open in the range.
+    cumulative: Vec<Option<f64>>,
 }
 
 impl ReportData {
@@ -132,6 +135,7 @@ impl ReportData {
             drawdown: Vec::new(),
             run_up: Vec::new(),
             trades: Vec::new(),
+            cumulative: Vec::new(),
         };
         data.select(None);
         data
@@ -182,6 +186,20 @@ impl ReportData {
             .collect();
         self.trades
             .sort_by_key(|&i| self.report.trades[i].entry_time);
+        let mut total = 0.0;
+        self.cumulative = self
+            .trades
+            .iter()
+            .map(|&i| {
+                // An exit at or after the range's end leaves the trade open in it, as `within` does.
+                let exit = self.report.trades[i]
+                    .exit
+                    .as_ref()
+                    .filter(|exit| range.as_ref().is_none_or(|r| exit.time < r.end))?;
+                total += exit.profit;
+                Some(total)
+            })
+            .collect();
         self.range = range;
     }
 
@@ -665,7 +683,9 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
                 .column(Column::initial(150.0))
                 .column(Column::initial(80.0))
                 .column(Column::initial(150.0))
-                .columns(Column::initial(85.0), 5)
+                .columns(Column::initial(85.0), 2)
+                .column(Column::initial(120.0))
+                .columns(Column::initial(85.0), 3)
                 .column(Column::remainder().at_least(100.0))
                 .header(28.0, |mut header| {
                     for label in [
@@ -677,6 +697,7 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
                         "Exit (UTC)",
                         "Exit price",
                         "Net profit",
+                        "Cumulative profit",
                         "Fees",
                         "MAE",
                         "MFE",
@@ -726,6 +747,8 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
                                 .as_ref()
                                 .map_or_else(|| "N/A".into(), |e| e.price.to_string()),
                             money(t.exit.as_ref().map(|e| e.profit), &data.report),
+                            data.cumulative[ordinal]
+                                .map_or_else(String::new, |total| money(Some(total), &data.report)),
                             money(Some(t.fees), &data.report),
                             money(excursion.map(|e| e.adverse), &data.report),
                             money(excursion.map(|e| e.favourable), &data.report),

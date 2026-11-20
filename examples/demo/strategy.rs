@@ -882,6 +882,10 @@ mod tests {
                 let output = frame(&mut app, vec![]);
                 assert_eq!(fills_visible(&output, &app.chart, last), [false, false]);
                 let first = text_at(&output, "1");
+                // At 640 px the column starts beyond the visible part of the list.
+                if width == 1440.0 {
+                    text_at(&output, "Cumulative profit");
+                }
                 output.drop_without_applying_deltas();
                 click(&mut app, first);
                 assert_eq!(app.state.symbol, report.symbol);
