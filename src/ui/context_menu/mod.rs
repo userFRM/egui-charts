@@ -361,57 +361,20 @@ impl ChartContextMenu {
                     .collect(),
             });
         }
-        if self.symbol_price
-            && !symbol.is_empty()
-            && !self.hidden.contains(&Control::Trading)
-            && self.order_quantity.is_finite()
-            && self.order_quantity > 0.0
-            && self.click_price.is_finite()
-            && let Some(market) = self.market_price.filter(|price| price.is_finite())
-        {
-            let tick = self
-                .tick_size
-                .filter(|tick| tick.is_finite() && *tick > 0.0);
-            let price = tick.map_or(self.click_price, |tick| {
-                crate::scales::to_step(self.click_price, tick, f64::round)
-            });
-            // Above the market a sell waits as a limit order and a buy as a stop order; below it,
-            // the other way round. At the market either order can fill immediately.
-            let (limit, stop) = if price >= market {
-                (OrderSide::Sell, OrderSide::Buy)
-            } else {
-                (OrderSide::Buy, OrderSide::Sell)
-            };
+        let requests = self.order_requests(self.click_price);
+        if !requests.is_empty() {
             let quantity = crate::ui::trading::quantity_text(
                 self.order_formatter.as_ref().map(|formatter| &*formatter.0),
                 symbol,
                 self.order_quantity,
             );
-            // The limit lies one tick beyond the stop, in the direction it triggers.
-            let stop_limit = tick.map(|tick| {
-                let beyond = if stop == OrderSide::Buy {
-                    price + tick
-                } else {
-                    price - tick
+            for request in requests {
+                let (price, limit) = match request.order_type {
+                    OrderType::Limit(price) | OrderType::Stop(price) => (price, None),
+                    OrderType::StopLimit { stop, limit } => (stop, Some(limit)),
+                    OrderType::Market => continue,
                 };
-                OrderType::StopLimit {
-                    stop: price,
-                    limit: crate::scales::to_step(beyond, tick, f64::round),
-                }
-            });
-            for (side, order_type) in [
-                (limit, Some(OrderType::Limit(price))),
-                (stop, Some(OrderType::Stop(price))),
-                (stop, stop_limit),
-            ] {
-                let Some(order_type) = order_type else {
-                    continue;
-                };
-                if !self.order_types.accepts(&order_type) {
-                    continue;
-                }
-                let request = OrderRequest::new(symbol, side, self.order_quantity, order_type);
-                let key = match (side, order_type) {
+                let key = match (request.side, request.order_type) {
                     (OrderSide::Buy, OrderType::Limit(_)) => {
                         "Buy {quantity} {symbol} @ {price} limit"
                     }
@@ -427,7 +390,7 @@ impl ChartContextMenu {
                     }
                     (OrderSide::Sell, _) => "Sell {quantity} {symbol} @ {price} stop",
                 };
-                let icon = match side {
+                let icon = match request.side {
                     OrderSide::Buy => &embedded_icons::LONG_POS,
                     OrderSide::Sell => &embedded_icons::SHORT_POS,
                 };
@@ -437,9 +400,8 @@ impl ChartContextMenu {
                     ("symbol", symbol.as_str()),
                     ("price", price.as_str()),
                 ];
-                let limit;
-                if let OrderType::StopLimit { limit: value, .. } = order_type {
-                    limit = price_text(value);
+                let limit = limit.map(price_text);
+                if let Some(limit) = &limit {
                     values.push(("limit", limit.as_str()));
                 }
                 trading.push(MenuEntry::Item(
@@ -535,6 +497,68 @@ impl ChartContextMenu {
         });
         trim_separators(&mut items);
         items
+    }
+
+    /// The requests of the order rows at `price`, in menu order: a limit and a stop order, and
+    /// a stop-limit order with a known tick size, each only if the account accepts it. `price`
+    /// is rounded to the tick size. Empty where the menu offers no order rows: no symbol, a
+    /// price that is not of the chart symbol, trading hidden, no positive finite quantity, or no
+    /// finite price or market price.
+    fn order_requests(&self, price: f64) -> Vec<OrderRequest> {
+        let Some(market) = self.market_price.filter(|price| price.is_finite()) else {
+            return Vec::new();
+        };
+        if !self.symbol_price
+            || self.symbol.is_empty()
+            || self.hidden.contains(&Control::Trading)
+            || !self.order_quantity.is_finite()
+            || self.order_quantity <= 0.0
+            || !price.is_finite()
+        {
+            return Vec::new();
+        }
+        let tick = self
+            .tick_size
+            .filter(|tick| tick.is_finite() && *tick > 0.0);
+        let price = tick.map_or(price, |tick| {
+            crate::scales::to_step(price, tick, f64::round)
+        });
+        // Above the market a sell waits as a limit order and a buy as a stop order; below it,
+        // the other way round. At the market either order can fill immediately.
+        let (limit, stop) = if price >= market {
+            (OrderSide::Sell, OrderSide::Buy)
+        } else {
+            (OrderSide::Buy, OrderSide::Sell)
+        };
+        // The limit lies one tick beyond the stop, in the direction it triggers.
+        let stop_limit = tick.map(|tick| {
+            let beyond = if stop == OrderSide::Buy {
+                price + tick
+            } else {
+                price - tick
+            };
+            OrderType::StopLimit {
+                stop: price,
+                limit: crate::scales::to_step(beyond, tick, f64::round),
+            }
+        });
+        [
+            (limit, Some(OrderType::Limit(price))),
+            (stop, Some(OrderType::Stop(price))),
+            (stop, stop_limit),
+        ]
+        .into_iter()
+        .filter_map(|(side, order_type)| {
+            let order_type =
+                order_type.filter(|order_type| self.order_types.accepts(order_type))?;
+            Some(OrderRequest::new(
+                &self.symbol,
+                side,
+                self.order_quantity,
+                order_type,
+            ))
+        })
+        .collect()
     }
 
     /// Show the context menu
