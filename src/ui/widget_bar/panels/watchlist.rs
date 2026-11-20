@@ -2772,10 +2772,11 @@ mod tests {
                         .min
                         .y
             );
+            h.state_mut().0.set_selected("ZZZ");
             assert_eq!(
                 h.state_mut().0.select_next_symbol(),
                 WatchlistAction::SelectSymbol("AAA".into()),
-                "chart navigation follows compact list order under a hidden sort"
+                "chart navigation follows compact list order under a hidden {label} sort"
             );
             let from = h
                 .get_by_role_and_label(egui::Role::ListBoxOption, "BBB")
