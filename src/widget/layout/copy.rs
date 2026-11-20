@@ -30,13 +30,17 @@ pub enum LayoutCopy {
     Studies,
     /// Applies these settings to every chart, the source included. Each other chart takes the
     /// source's styles for every chart type and its footprint, session volume profile and TPO
-    /// colours, but keeps its symbol, interval and chart type, the sizes and other parameters of
-    /// that type, its own price-to-bar ratio when the settings lock it, its quantity unit and
-    /// order-flow sizes, and its bubble grouping when the source uses a price step. It keeps the
-    /// precision of its instrument unless the source was given another one. A chart without a
-    /// feed has no order flow to give: from it, each chart keeps its order-flow layers and
-    /// settings. A chart that has not been drawn yet fits its bars on its first frame, and a lock
-    /// in the settings then locks that view.
+    /// colours. The TPO drawing switches, including period columns and the legacy poor highs and
+    /// lows flag, block mode, outside value area opacity and initial balance minutes also follow
+    /// the source. Profile sessions, TPO session splitting, period lengths, profile grouping,
+    /// composites, manual profile splits, row sizes and value area shares stay per chart. Each
+    /// other chart keeps its symbol, interval and chart type, the other parameters of that type,
+    /// its own price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes,
+    /// and its bubble grouping when the source uses a price step. It keeps the precision of its
+    /// instrument unless the source was given another one. A chart without a feed has no order
+    /// flow to give: from it, each chart keeps its order-flow layers and settings. A chart that
+    /// has not been drawn yet fits its bars on its first frame, and a lock in the settings then
+    /// locks that view.
     Settings(Box<ChartSettingsState>),
 }
 
@@ -279,13 +283,16 @@ impl CopiedStudies {
 
 /// Applies the settings of the chart with `from` as its configuration to another chart. That
 /// chart takes the chart type styles and the footprint, session profile and TPO colours of the
-/// settings, but keeps the other parameters of its chart type, whose sizes and base prices suit
-/// its own prices, its own price-to-bar ratio when the settings lock it, its quantity unit and
-/// order-flow sizes, and its bubble grouping when the source uses a price step, which suit its
-/// own instrument. It keeps all its order-flow settings when `from_feed` is false, since a chart
-/// without a feed holds none. It takes the colours of `from` for its candles when the settings
-/// describe another style of candles and so do not hold them. A precision left at its default
-/// follows each chart's instrument.
+/// settings. TPO drawing switches, including period columns and the legacy poor highs and lows
+/// flag, block mode, outside value area opacity and initial balance minutes also follow the
+/// source. Profile sessions, TPO session splitting, period lengths, profile grouping, composites,
+/// manual profile splits, row sizes and value area shares stay per chart. It keeps the other
+/// parameters of its chart type, whose sizes and base prices suit its own prices, its own
+/// price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes, and its
+/// bubble grouping when the source uses a price step, which suit its own instrument. It keeps
+/// all its order-flow settings when `from_feed` is false, since a chart without a feed holds none.
+/// It takes the colours of `from` for its candles when the settings describe another style of
+/// candles and so do not hold them. A precision left at its default follows each chart's instrument.
 fn apply_to_other_chart(
     settings: &ChartSettingsState,
     from: &ChartConfig,
@@ -308,6 +315,25 @@ fn apply_to_other_chart(
         profile.value_area_down_color = source.value_area_down_color;
         own.tpo_block_colors = params.tpo_block_colors;
         own.tpo_block_color = params.tpo_block_color;
+        own.tpo_poc = params.tpo_poc;
+        own.tpo_volume_profile = params.tpo_volume_profile;
+        own.tpo_value_area_levels = params.tpo_value_area_levels;
+        own.tpo_open_price = params.tpo_open_price;
+        own.tpo_close_price = params.tpo_close_price;
+        own.tpo_poor_high = params.tpo_poor_high;
+        own.tpo_poor_low = params.tpo_poor_low;
+        own.tpo_poor_highs_lows = params.tpo_poor_highs_lows;
+        own.tpo_extend_poor = params.tpo_extend_poor;
+        own.tpo_initial_balance = params.tpo_initial_balance;
+        own.tpo_initial_balance_minutes = params.tpo_initial_balance_minutes;
+        own.tpo_initial_balance_extensions = params.tpo_initial_balance_extensions;
+        own.tpo_single_prints = params.tpo_single_prints;
+        own.tpo_midpoint = params.tpo_midpoint;
+        own.tpo_letters = params.tpo_letters;
+        own.tpo_statistics = params.tpo_statistics;
+        own.tpo_colored_blocks = params.tpo_colored_blocks;
+        own.tpo_outside_value_area_opacity = params.tpo_outside_value_area_opacity;
+        own.tpo_split_periods = params.tpo_split_periods;
         if &own != chart.chart_type_params() {
             chart.apply_chart_type_params(own);
         }
@@ -997,8 +1023,8 @@ mod tests {
     }
 
     /// Settings reach every chart whatever its style of candles, give it the source's profile and
-    /// TPO colours, and leave its chart type, the other parameters of that type and the precision
-    /// of its instrument alone.
+    /// TPO colours and TPO display settings, and leave its chart type, profile structure, the other
+    /// parameters of that type and the precision of its instrument alone.
     #[test]
     fn settings_copy_reaches_every_chart_and_reverses_as_one_edit() {
         let (mut a, mut b) = (chart(50), chart(50));
@@ -1010,6 +1036,13 @@ mod tests {
         params.profile.value_area = Some(0.6);
         params.tpo_row_ticks = 3;
         params.tpo_value_area = 60.0;
+        params.tpo_poor_highs_lows = true;
+        params.tpo_poor_high = true;
+        params.tpo_poor_low = true;
+        params.tpo_split_sessions = true;
+        params.tpo_split_periods = true;
+        params.tpo_period_minutes = 15;
+        params.tpo_profile_period = crate::model::TPOProfilePeriod::Week;
         b.set_chart_type_params(params);
         a.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.01)));
         b.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.0001)));
@@ -1031,6 +1064,21 @@ mod tests {
             egui::Color32::WHITE,
         ];
         params.tpo_block_color = egui::Color32::BLACK;
+        params.tpo_poc = false;
+        params.tpo_volume_profile = true;
+        params.tpo_value_area_levels = false;
+        params.tpo_open_price = false;
+        params.tpo_close_price = true;
+        params.tpo_initial_balance = false;
+        params.tpo_initial_balance_minutes = 30;
+        params.tpo_extend_poor = true;
+        params.tpo_initial_balance_extensions = true;
+        params.tpo_single_prints = true;
+        params.tpo_midpoint = true;
+        params.tpo_letters = false;
+        params.tpo_statistics = true;
+        params.tpo_colored_blocks = false;
+        params.tpo_outside_value_area_opacity = 80;
         a.set_chart_type_params(params);
         let mut settings = ChartSettingsState::from_chart(&a);
         settings.chart_basic_styles.background_color = egui::Color32::KHAKI;
@@ -1094,6 +1142,40 @@ mod tests {
         );
         assert_eq!(
             (
+                params.tpo_poc,
+                params.tpo_volume_profile,
+                params.tpo_initial_balance,
+                params.tpo_initial_balance_minutes,
+            ),
+            (false, true, false, 30),
+            "the TPO display switches and initial balance minutes follow the source"
+        );
+        assert_eq!(
+            [
+                params.tpo_value_area_levels,
+                params.tpo_open_price,
+                params.tpo_close_price,
+                params.tpo_poor_high,
+                params.tpo_poor_low,
+                params.tpo_poor_highs_lows,
+                params.tpo_extend_poor,
+                params.tpo_initial_balance_extensions,
+                params.tpo_single_prints,
+                params.tpo_midpoint,
+                params.tpo_letters,
+                params.tpo_statistics,
+                params.tpo_colored_blocks,
+                params.tpo_split_periods,
+            ],
+            [
+                false, false, true, false, false, false, true, true, true, true, false, true,
+                false, false,
+            ],
+            "the other TPO display switches follow the source, including the legacy poor flag"
+        );
+        assert_eq!(params.tpo_outside_value_area_opacity, 80);
+        assert_eq!(
+            (
                 &profile.session,
                 profile.rows,
                 profile.value_area,
@@ -1108,6 +1190,15 @@ mod tests {
                 60.0
             ),
             "the profile and TPO content settings stay the chart's own"
+        );
+        assert_eq!(
+            (
+                params.tpo_split_sessions,
+                params.tpo_period_minutes,
+                params.tpo_profile_period,
+            ),
+            (true, 15, crate::model::TPOProfilePeriod::Week),
+            "the TPO session and period grouping stay the chart's own"
         );
         // Neither chose a precision, so each writes its own instrument's.
         let precision = |chart: &Chart| chart.state().price_scale().price_precision();
