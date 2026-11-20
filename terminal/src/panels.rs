@@ -7,7 +7,6 @@ use chrono::{DateTime, Datelike, TimeDelta, TimeZone, Utc};
 use egui_charts::config::KeyboardAction;
 use egui_charts::icons::{Icon, icons};
 use egui_charts::localization as l10n;
-use egui_charts::model::Tick;
 use egui_charts::model::{Bar, Watchlist};
 use egui_charts::services::{ProfileDirectory, ProfileId, Profiles, UserSettings};
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
@@ -123,6 +122,9 @@ pub(super) struct State {
     tape_in_replay: bool,
     /// Identifies the retained chart tape the panel has been reading.
     tape_generation: Option<u64>,
+    /// Last page revision and stream cursor, for distinguishing backfill from fresh executions.
+    tape_page: Option<u64>,
+    tape_live: usize,
     /// The newest trade listed: its time and how many trades share that time.
     tape_cursor: Option<(DateTime<Utc>, usize)>,
     /// Open financials in place of the charts: the symbol and whether its figures had arrived
@@ -157,6 +159,8 @@ impl Default for State {
             tape_symbol: String::new(),
             tape_in_replay: false,
             tape_generation: None,
+            tape_page: None,
+            tape_live: 0,
             tape_cursor: None,
             financials: None,
         }
@@ -373,6 +377,8 @@ impl Terminal {
             tape_symbol,
             tape_in_replay,
             tape_generation,
+            tape_page,
+            tape_live,
             tape_cursor,
             returns_input,
             ..
@@ -430,21 +436,29 @@ impl Terminal {
         let generation = chart.trade_generation(SeriesId::MAIN);
         let changed_tape = tape_generation.is_some() && *tape_generation != generation;
         *tape_generation = generation;
+        if changed_tape {
+            *tape_live = 0;
+        }
+        let progress = chart.trade_progress(SeriesId::MAIN, tape_live);
+        let page = progress.map(|(page, _)| page);
+        let page_changed = page != *tape_page;
+        *tape_page = page;
+        let first_live = progress.map_or(usize::MAX, |(_, index)| index);
         let rebuild = changed_tape
             || *tape_in_replay != cutoff.is_some()
             || cutoff
                 .zip(*tape_cursor)
                 .is_some_and(|(end, (last, _))| last >= end);
         *tape_in_replay = cutoff.is_some();
-        if rebuild || *tape_symbol != chart_symbol {
+        if rebuild || page_changed || *tape_symbol != chart_symbol {
             market.time_and_sales.clear();
             tape_symbol.clone_from(&chart_symbol);
             *tape_cursor = None;
         }
         let (since, seen) = tape_cursor.unwrap_or((DateTime::<Utc>::MIN_UTC, 0));
         let mut at_since = 0;
-        let mut large: Option<Tick> = None;
-        for trade in chart.trades(SeriesId::MAIN) {
+        let mut large = None;
+        for (index, trade) in chart.trades(SeriesId::MAIN).enumerate() {
             if cutoff.is_some_and(|end| trade.ts >= end) {
                 break;
             }
@@ -461,8 +475,9 @@ impl Terminal {
                 Some((time, count)) if time == trade.ts => Some((time, count + 1)),
                 _ => Some((trade.ts, 1)),
             };
-            if market.time_and_sales.push(trade.clone()).is_some() && !rebuild {
-                large = Some(trade.clone());
+            let alert = !rebuild && (index >= first_live || (cutoff.is_some() && !page_changed));
+            if market.time_and_sales.push(trade.clone()).is_some() && alert {
+                large = Some(trade);
             }
         }
         if let Some(trade) = large {
@@ -922,7 +937,7 @@ mod tests {
     use egui_charts::data::{
         Datafeed, HistoryPage, HistoryRequest, Reply, TradePage, TradeRequest,
     };
-    use egui_charts::model::{Instrument, Watchlist};
+    use egui_charts::model::{Instrument, Tick, Watchlist};
     use std::sync::Arc;
 
     /// The test feed, with one recent trade at 181.25.
@@ -1076,39 +1091,127 @@ mod tests {
 
     // Read the panel's actual rows, not the trade store it follows.
     fn listed_times(terminal: &mut Terminal) -> Vec<String> {
+        painted_times(terminal, &["12:34:56", "12:34:57", "12:34:58"])
+    }
+
+    fn painted_times(terminal: &mut Terminal, times: &[&str]) -> Vec<String> {
         // Resolution, subscription and the asynchronous trade page span several frames.
         for _ in 0..5 {
             frame(terminal, SIZE, vec![]);
         }
         texts(terminal)
             .into_iter()
-            .filter(|label| matches!(label.as_str(), "12:34:56" | "12:34:57" | "12:34:58"))
+            .filter(|label| times.contains(&label.as_str()))
             .collect()
     }
 
     #[test]
-    fn time_and_sales_replaces_rows_after_a_feed_reset() {
-        use egui_charts::data::{Sink, Subscription};
-        use std::sync::Mutex;
+    fn time_and_sales_lists_a_late_trade_page_without_alerting() {
+        check_late_page(false);
+    }
 
-        struct Feed(Mutex<Option<Sink>>);
-        impl Datafeed for Feed {
-            fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
-                reply.send(Ok(Instrument::new(symbol)));
-            }
-            fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
-                reply.send(Ok(HistoryPage::new(Vec::new(), true)));
-            }
-            fn subscribe(&self, subscription: Subscription) {
-                *self.0.lock().unwrap() = Some(subscription.sink);
-            }
+    #[test]
+    fn time_and_sales_alerts_on_a_live_trade_arriving_with_the_page() {
+        check_late_page(true);
+    }
+
+    fn check_late_page(live_with_page: bool) {
+        use egui_charts::ui::widget_bar::TradeSizeFilter;
+
+        let feed = Arc::new(DeferredTape::default());
+        let mut terminal = Terminal::new(feed.clone()).with_symbol("AAPL");
+        terminal.run(Action::WidgetBar(WidgetBarAction::WidgetClicked(u64::MAX)));
+        let mut filter = TradeSizeFilter::new(1.0);
+        filter.sound = true;
+        terminal.panels.market.time_and_sales.filters.push(filter);
+        let rows =
+            |t: &mut Terminal| painted_times(t, &["10:00:01", "10:00:02", "11:00:03", "11:00:04"]);
+        assert!(rows(&mut terminal).is_empty());
+        let sink = feed.sink.lock().unwrap().take().unwrap();
+        let tick = |time: &str, size| {
+            Tick::new(
+                format!("2026-01-01T{time}Z").parse().unwrap(),
+                171.0,
+                size,
+                None,
+            )
+        };
+        let live = tick("11:00:03", 3.0);
+        sink.set_server_time(live.ts);
+        sink.push_tick(live);
+        assert_eq!(rows(&mut terminal), ["11:00:03"]);
+        terminal.toasts.toasts_mut().clear();
+
+        let mut page = TradePage::default();
+        page.trades = vec![tick("10:00:01", 1.0), tick("10:00:02", 2.0)];
+        feed.page.lock().unwrap().take().unwrap().send(Ok(page));
+        if !live_with_page {
+            let painted = rows(&mut terminal);
+            let mut held: Vec<_> = terminal
+                .chart()
+                .trades(SeriesId::MAIN)
+                .map(|t| t.ts.format("%T").to_string())
+                .collect();
+            held.reverse();
+            assert_eq!(held, ["11:00:03", "10:00:02", "10:00:01"]);
+            assert_eq!(painted, held);
+            assert!(terminal.toasts.toasts().is_empty());
         }
 
-        let feed = Arc::new(Feed(Mutex::new(None)));
+        let live = tick("11:00:04", 4.0);
+        sink.set_server_time(live.ts);
+        sink.push_tick(live);
+        assert_eq!(
+            rows(&mut terminal),
+            ["11:00:04", "11:00:03", "10:00:02", "10:00:01"]
+        );
+        let alerts = terminal.toasts.toasts();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].message, "Large trade: 4 at 171.00");
+
+        // Reload drains the old subscription before reanchoring the interval. That last
+        // execution still arrived live, even though a subsequent page can now cover it.
+        terminal.toasts.toasts_mut().clear();
+        let live = tick("12:00:02", 5.0);
+        sink.set_server_time(live.ts);
+        sink.push_tick(live);
+        terminal
+            .chart_mut()
+            .set_timeframe(egui_charts::model::Timeframe::Min5);
+        assert_eq!(painted_times(&mut terminal, &["12:00:02"]), ["12:00:02"]);
+        let alerts = terminal.toasts.toasts();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].message, "Large trade: 5 at 171.00");
+    }
+
+    #[derive(Default)]
+    struct DeferredTape {
+        sink: std::sync::Mutex<Option<egui_charts::data::Sink>>,
+        page: std::sync::Mutex<Option<Reply<TradePage>>>,
+    }
+
+    impl Datafeed for DeferredTape {
+        fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+            reply.send(Ok(Instrument::new(symbol)));
+        }
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            reply.send(Ok(HistoryPage::new(Vec::new(), true)));
+        }
+        fn subscribe(&self, subscription: egui_charts::data::Subscription) {
+            *self.sink.lock().unwrap() = Some(subscription.sink);
+        }
+        fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
+            *self.page.lock().unwrap() = Some(reply);
+        }
+    }
+
+    #[test]
+    fn time_and_sales_replaces_rows_after_a_feed_reset() {
+        let feed = Arc::new(DeferredTape::default());
         let mut terminal = Terminal::new(feed.clone()).with_symbol("AAPL");
         terminal.run(Action::WidgetBar(WidgetBarAction::WidgetClicked(u64::MAX)));
         assert!(listed_times(&mut terminal).is_empty());
-        let sink = feed.0.lock().unwrap().take().unwrap();
+        let sink = feed.sink.lock().unwrap().take().unwrap();
         let start: DateTime<Utc> = "2026-01-01T12:34:56Z".parse().unwrap();
         let push = |offsets: &[i64]| {
             for (i, &offset) in offsets.iter().enumerate() {
