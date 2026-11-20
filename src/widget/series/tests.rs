@@ -6,7 +6,7 @@ use crate::widget::test_frames::frame;
 use chrono::{DateTime, TimeDelta, Utc};
 use std::time::Duration;
 
-/// Bars span 100..110 and the overlay reaches 120. With 10 % above and 8 % below the span is
+/// Bars span 100..110 and the overlay reaches 120. With 10% above and 8% below the span is
 /// 20 / 0.82, giving 98.048780..122.439024. Every study line counts; non-finite values do not.
 /// Without eligible values, with the study group hidden, or with a volume profile, the bars
 /// alone give 99.024390..111.219512. Relative modes use close 110.

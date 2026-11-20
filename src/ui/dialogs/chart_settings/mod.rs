@@ -1364,7 +1364,7 @@ mod tests {
                         && crosshair.vert_label_visible
                         && crosshair.horz_label_visible
                 );
-                // A new chart keeps a tenth of the pane free above, 8 % below, and 2.5 bars after
+                // A new chart keeps a tenth of the pane free above, 8% below, and 2.5 bars after
                 // the last one.
                 let price = chart.state().price_scale().options().scale_margins;
                 assert_eq!(

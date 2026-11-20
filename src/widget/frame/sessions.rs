@@ -847,7 +847,7 @@ mod tests {
                     }
                     if count <= 8 {
                         let range = map.price.range();
-                        // The span takes 82 % of the pane, with 8 % below and 10 % above.
+                        // The span takes 82% of the pane, with 8% below and 10% above.
                         // Executed rows span 99.875..160.125; TPO rows of 2 end at 161.875.
                         let (low, high) = if kind == ChartType::SessionVolumeProfile {
                             (99.875 - 60.25 / 0.82 * 0.08, 160.125 + 60.25 / 0.82 * 0.1)
@@ -970,7 +970,7 @@ mod tests {
                     for (prices, expected) in [
                         (
                             [100.0, 100.0],
-                            // Flat data uses 1 % of its price, so the margin span is 1 / 0.82.
+                            // Flat data uses 1% of its price, so the margin span is 1 / 0.82.
                             crate::scales::PriceRange::new(
                                 100.0 - 1.0 / 0.82 * 0.08,
                                 100.0 + 1.0 / 0.82 * 0.1,

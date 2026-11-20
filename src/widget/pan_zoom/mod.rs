@@ -2135,7 +2135,7 @@ mod tests {
             let (one, slow) = (drag_price_axis(1, left), drag_price_axis(20, left));
             let span = one.1 - one.0;
             // A 95..110 fit has span 15 / 0.82, from 93.536585 to 111.829268.
-            // Dragging down widens it beyond the initial 10 % top and 8 % bottom margins.
+            // Dragging down widens it beyond the initial 10% top and 8% bottom margins.
             assert!(span > 15.0 / 0.82, "1 frame: {one:?}");
             assert!(
                 (one.0 - slow.0).abs() < span * 1e-9 && (one.1 - slow.1).abs() < span * 1e-9,

@@ -2016,7 +2016,7 @@ mod tests {
     }
 
     /// An export uses the same scales as the widget, so a main series that reserves 60 and 70
-    /// points keeps them: on a new chart's 10 % top and 8 % bottom margins its high, 20, sits
+    /// points keeps them: on a new chart's 10% top and 8% bottom margins its high, 20, sits
     /// 0.1 h + 60 below the top of the plot and its low, 10, 0.08 h + 70 above the bottom.
     /// The style the host set on the main series is the one the snapshot reports.
     #[test]

@@ -1808,7 +1808,7 @@ fn magnet_snaps_to_study_values_on_their_own_scale() {
 }
 
 /// Logarithms are monotone on positive prices. On the main scale ln(2)..ln(100) occupies
-/// 82 % of the pane, with 8 % below and 10 % above; a secondary scale keeps 10 % on each
+/// 82% of the pane, with 8% below and 10% above; a secondary scale keeps 10% on each
 /// side. A lone zero-crossing bar instead starts at ln(5).
 #[test]
 fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
@@ -2227,7 +2227,7 @@ fn heikin_ashi_fit_uses_the_transformed_visible_candles() {
 
 /// Percent compares returns, not absolute prices: 100 -> 110 and 200 -> 220
 /// coincide at +10%; 200 -> 240 extends the shared range to 20%. The main scale leaves
-/// 10 % of the pane above and 8 % below, so its span is 20 / 0.82.
+/// 10% of the pane above and 8% below, so its span is 20 / 0.82.
 #[test]
 fn comparisons_share_percent_ranges_with_individual_visible_references() {
     let ctx = egui::Context::default();
@@ -4974,7 +4974,7 @@ fn pane_axis_commands_enumerate_sources_and_restore_layout() {
 }
 
 /// Empty studies contribute no fallback prices; attached primitives still fit. Bars from 10 to 20
-/// fit 9.024390..21.219512 with 10 % above and 8 % below, or 9..21 with a pane's 10% price padding.
+/// fit 9.024390..21.219512 with 10% above and 8% below, or 9..21 with a pane's 10% price padding.
 /// A study from 1000 to 1010 pads to 999..1011, or -0.1..1.1% and 99.9..101.1 indexed.
 /// Logarithmic panes fit ln(1000)..ln(1010). A 40 point margin at each edge widens a
 /// span s in a plot h points tall by s / (1 - 80 / h), centred on the original range.
@@ -5237,7 +5237,7 @@ fn pinned_volume_adds_no_range_where_the_chart_type_hides_volume() {
 
 /// A margin-only request (prices left out, as the hook allows) while no bar is in view: the
 /// main scale has nothing to fit, so it keeps the range it had, as `PriceScale::autoscale`
-/// documents for bounds that are not finite. With 10 % above, 8 % below and 40 points at each
+/// documents for bounds that are not finite. With 10% above, 8% below and 40 points at each
 /// edge of a plot h points tall, bars from 10 to 20 fit a span of 10 / (0.82 - 80 / h), with
 /// 0.08 + 40 / h of it below and 0.1 + 40 / h above.
 #[test]
@@ -5438,8 +5438,8 @@ fn placed_axes_report_their_side_and_respect_hidden_chart_axes() {
 
 /// A locked axis keeps its units per bar, span * spacing / height, whichever axis shows it, and
 /// an unlocked scale keeps its range. The main axis is the control: a range of 10 inside margins
-/// of 10 % above and 8 % below spans 10 / 0.82; twice the spacing at the same height halves it.
-/// Added scales retain 10 % on each side and span 12.5. A scale of a secondary
+/// of 10% above and 8% below spans 10 / 0.82; twice the spacing at the same height halves it.
+/// Added scales retain 10% on each side and span 12.5. A scale of a secondary
 /// pane has no margins and fits 10% of padding, so it spans 12.
 #[test]
 fn named_axis_lock_keeps_units_per_bar() {

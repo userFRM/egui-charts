@@ -117,7 +117,7 @@ impl Default for PriceScaleMargins {
 #[cfg(feature = "widget")]
 impl PriceScaleMargins {
     /// The margins of a new chart's price scale: a tenth of the pane above the highest price
-    /// and 8 % below the lowest.
+    /// and 8% below the lowest.
     pub(crate) const CHART: Self = Self {
         top: 0.1,
         bottom: 0.08,
