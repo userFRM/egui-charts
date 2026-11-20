@@ -467,6 +467,13 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
     }
     events.retain(|event| {
         (query.countries.is_empty() || query.countries.contains(&event.country))
+            && (query.symbols.is_empty()
+                || event.symbol.as_deref().is_some_and(|symbol| {
+                    query
+                        .symbols
+                        .iter()
+                        .any(|asked| asked.eq_ignore_ascii_case(symbol))
+                }))
             && query
                 .importance
                 .is_none_or(|least| event.importance >= Some(least))
