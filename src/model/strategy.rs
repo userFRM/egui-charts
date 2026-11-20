@@ -31,6 +31,16 @@ fn null_as_nan<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Err
     Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(f64::NAN))
 }
 
+/// The exchange rate of a trade in the instrument's own currency.
+fn unit_rate() -> f64 {
+    1.0
+}
+
+/// Leaves the rate of an unconverted trade out of saved reports, which stay as they were.
+fn is_unit_rate(rate: &f64) -> bool {
+    *rate == 1.0
+}
+
 /// [`null_as_nan`] for the values of an equity curve.
 fn curve_null_as_nan<'de, D: Deserializer<'de>>(
     deserializer: D,
@@ -138,6 +148,18 @@ pub struct StrategyTrade {
     /// the exit's profit.
     #[serde(default, deserialize_with = "null_as_nan")]
     pub fees: f64,
+    /// Units of the report's currency per unit of the instrument's currency at which a backtest
+    /// converted this trade's profit: the rate at its exit, or for an open trade the latest rate
+    /// of the run. 1 when the report is in the instrument's currency, and for trades a host
+    /// builds unless it sets another. [`StrategyReport::comparison`] converts the trade's
+    /// excursions at it; a rate that is not finite and positive leaves them unavailable. Price,
+    /// quantity and fees are not affected.
+    #[serde(
+        default = "unit_rate",
+        skip_serializing_if = "is_unit_rate",
+        deserialize_with = "null_as_nan"
+    )]
+    pub exchange_rate: f64,
     /// The host's name for the entry, such as the rule that opened it. Display only.
     #[serde(default)]
     pub label: Option<String>,
@@ -336,8 +358,9 @@ pub struct StrategyComparison {
 
 /// Largest unrealised loss and gain relative to a trade's entry, before fees.
 ///
-/// Both are nonnegative price movements times quantity, for a linear contract with unit point
-/// value. They need conversion for other contracts or currencies. Entry and exit fills participate.
+/// Both are nonnegative price movements times quantity, converted into the report's currency at
+/// the trade's [`StrategyTrade::exchange_rate`], for a linear contract with unit point value;
+/// other contracts need conversion by the host. Entry and exit fills participate.
 /// Source highs and lows participate from the bar containing entry through bars opening strictly
 /// before exit; open trades use all remaining bars. At intrabar fills these are whole-bar estimates:
 /// OHLC cannot distinguish movement before entry or after exit. Time bars end after their interval
@@ -1145,8 +1168,12 @@ impl StrategyReport {
                 OrderSide::Buy => (trade.entry_price - low, high - trade.entry_price),
                 OrderSide::Sell => (high - trade.entry_price, trade.entry_price - low),
             };
-            let (adverse, favourable) = (adverse * trade.quantity, favourable * trade.quantity);
-            if adverse.is_finite() && favourable.is_finite() {
+            let rate = trade.exchange_rate;
+            let (adverse, favourable) = (
+                adverse * trade.quantity * rate,
+                favourable * trade.quantity * rate,
+            );
+            if rate > 0.0 && adverse.is_finite() && favourable.is_finite() {
                 result.excursions[i] = Some(StrategyExcursion {
                     adverse,
                     favourable,
@@ -1420,6 +1447,7 @@ impl StrategyTrade {
             entry_price,
             exit: None,
             fees: 0.0,
+            exchange_rate: 1.0,
             label: None,
         }
     }
@@ -3124,6 +3152,27 @@ mod tests {
              2,long,1,2024-01-02T01:00:00Z,100,2024-01-02T03:00:00Z,101,3,0.5,,,\n\
              3,short,2,2024-01-02T05:00:00Z,101.5,,,,0,\"Breakout, short\",,\n"
         );
+        // 10 units bought at 100 and sold at 110 through a bar from 90 to 120, converted at
+        // 0.5 EUR per USD: profit, drawdown and run-up are 50, 50 and 100 EUR. A rate that is
+        // not positive leaves the excursions unavailable rather than understating risk.
+        r.currency = Some("EUR".into());
+        let bar = Bar::new(t0() + TimeDelta::hours(1), 100.0, 120.0, 90.0, 110.0, 0.0);
+        for (rate, excursions) in [(0.5, "50,100"), (0.0, ",")] {
+            let mut trade =
+                StrategyTrade::new(OrderSide::Buy, 10.0, t0() + TimeDelta::hours(1), 100.0);
+            trade.exit = Some(StrategyExit::new(t0() + TimeDelta::hours(2), 110.0, 50.0));
+            trade.label = Some("L / X".into());
+            trade.exchange_rate = rate;
+            r.trades = vec![trade];
+            assert_eq!(
+                r.trades_csv_with_excursions(&r.comparison(std::slice::from_ref(&bar))),
+                format!(
+                    "number,side,quantity,entry_time,entry_price,exit_time,exit_price,profit,fees,label,mae,mfe\n\
+                     1,long,10,2024-01-02T01:00:00Z,100,2024-01-02T02:00:00Z,110,50,0,L / X,{excursions}\n"
+                ),
+                "rate {rate}"
+            );
+        }
         for (label, expected) in [
             ("=1+1", "'=1+1"),
             ("+SUM(1,2)", "'+SUM(1,2)"),

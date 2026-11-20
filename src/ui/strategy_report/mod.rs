@@ -586,7 +586,7 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
         EmptyState::new("No valid trades").show(ui);
         return None;
     }
-    ui.label(l10n::text(ui.ctx(), "Select a trade to reveal it on the chart. Times are UTC; MAE/MFE are before fees in price × quantity units."));
+    ui.label(l10n::text(ui.ctx(), "Select a trade to reveal it on the chart. Times are UTC; MAE/MFE are before fees in the report's currency."));
     let mut clicked = None;
     let ctx = ui.ctx().clone();
     egui::ScrollArea::horizontal()
@@ -666,8 +666,8 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
                                 .map_or_else(|| "N/A".into(), |e| e.price.to_string()),
                             money(t.exit.as_ref().map(|e| e.profit), &data.report),
                             money(Some(t.fees), &data.report),
-                            number(excursion.map(|e| e.adverse)),
-                            number(excursion.map(|e| e.favourable)),
+                            money(excursion.map(|e| e.adverse), &data.report),
+                            money(excursion.map(|e| e.favourable), &data.report),
                             t.label.clone().unwrap_or_default(),
                         ] {
                             row.col(|ui| {
