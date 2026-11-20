@@ -397,6 +397,11 @@ impl Chart {
             && (maximized.is_some() || panes.len() > 1))
             .then_some(main_pane);
         let current_selection = self.selection.selected_id();
+        // The price frame decided this frame's mark; on a study pane it owns the gesture too.
+        #[cfg(feature = "drawings")]
+        let marking = self.cursor_modes.marking();
+        #[cfg(not(feature = "drawings"))]
+        let marking = false;
         // Draws the background, grid, axis and crosshair of a pane without a visible study.
         let frame = CustomIndicator::new("", |_| Vec::new())
             .with_overlay(false)
@@ -1221,6 +1226,7 @@ impl Chart {
                         && pane_response.clicked()
                         && !drawing_tool_active
                         && !eraser_mode
+                        && !marking
                         && let Some(click_pos) = pane_response.interact_pointer_pos()
                     {
                         let hit = study_at(click_pos);
@@ -1518,6 +1524,7 @@ impl Chart {
                 let (mut drawing_gesture, selected) = (
                     drawing_tool_active
                         || eraser_mode
+                        || marking
                         || self.chart_options.crosshair.style
                             == crate::config::CrosshairStyle::Magic
                         || self.drawings.curr_drawing.is_some()
@@ -1532,6 +1539,8 @@ impl Chart {
                     let history = self.history.start_drawing_action(&mut self.drawings);
                     let mut drawings = std::mem::take(&mut self.drawings);
                     let mut cursors = std::mem::take(&mut self.cursor_modes);
+                    // A mark owns the primary gesture, as on the price pane.
+                    let drawing_response = cursors.drawing_response(&pane_response);
                     let timescale = self.state.time_scale().clone();
                     let painter = ui.painter().clone();
                     // Sampled once: inferred spacing sorts the gaps of the bars in view.
@@ -1542,7 +1551,7 @@ impl Chart {
                         ui,
                         &mut drawings,
                         &mut cursors,
-                        &pane_response,
+                        &drawing_response,
                         chart_rect,
                         &drawing_map,
                         &painter,
@@ -1600,7 +1609,7 @@ impl Chart {
                 if pane_response.double_clicked() && drawing_hit.is_none() && !drawing_gesture {
                     pending_pane_maximize = Some(pane_id);
                 }
-                if pane_response.clicked() && drawing_hit.is_some() {
+                if pane_response.clicked() && drawing_hit.is_some() && !marking {
                     pending_pane_selection = None;
                     self.selection.deselect();
                 }

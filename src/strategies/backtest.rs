@@ -390,6 +390,7 @@ pub struct StrategyContext<'a> {
     trading: bool,
     tick: u64,
     order_delay: u32,
+    price_increment: f64,
 }
 
 impl std::fmt::Debug for StrategyContext<'_> {
@@ -438,6 +439,13 @@ impl StrategyContext<'_> {
     /// Historical tick fill callbacks include its developing candle; other intrabar fills exclude it.
     pub fn is_forming_bar(&self) -> bool {
         self.forming
+    }
+
+    /// The run's [`BacktestSettings::price_increment`], or `None` when it is not positive and
+    /// finite.
+    #[cfg_attr(not(feature = "studies"), allow(dead_code))]
+    pub(crate) fn price_increment(&self) -> Option<f64> {
+        Some(self.price_increment).filter(|tick| tick.is_finite() && *tick > 0.0)
     }
 
     /// Places an entry of `quantity` on `side`. Against an open position on the other side it
@@ -609,11 +617,13 @@ struct Lot {
 /// exit is its own trade with its share of the entry. A trade's label names its entry and exit
 /// orders, such as "Long / Take profit", or the entry alone while open. Profit is the price
 /// difference times the quantity, converted at the exit's exchange rate when the account currency
-/// differs from the instrument's, less its allocated fees. Without a start time, the equity curve
-/// holds the initial capital one interval before the first bar, then the account value at each
-/// bar's close, stamped with the bar's time. With a start time it begins there and subsequent
-/// marks use chart-bar closing times. Fills use the times of their chart or finer bars.
-/// Close fills on trade-based bars use the last source time, which stays fixed as bars arrive.
+/// differs from the instrument's, less its allocated fees. Each trade records that rate in
+/// [`StrategyTrade::exchange_rate`], and an open trade the latest rate, so its excursions convert
+/// at it. Without a start time, the equity curve holds the initial capital one interval before
+/// the first bar, then the account value at each bar's close, stamped with the bar's time. With a
+/// start time it begins there and subsequent marks use chart-bar closing times. Fills use the
+/// times of their chart or finer bars. Close fills on trade-based bars use the last source time,
+/// which stays fixed as bars arrive.
 ///
 /// Bars are oldest first, in strictly increasing time order. A bar without finite prices, or
 /// whose high and low do not contain its open and close, fills no orders and has no equity value.
@@ -1192,6 +1202,7 @@ impl<'a> Run<'a> {
         report.trades = self.trades.clone();
         report.trades.extend(self.lots.iter().map(|lot| {
             let mut trade = StrategyTrade::new(lot.side, lot.quantity, lot.time, lot.price);
+            trade.exchange_rate = self.rate;
             trade.label = Some(lot.entry.clone());
             trade.fees = lot.fees;
             trade
@@ -1272,6 +1283,7 @@ impl<'a> Run<'a> {
             trading: self.trading,
             tick: self.tick,
             order_delay: self.settings.order_delay,
+            price_increment: self.settings.price_increment,
         });
     }
 
@@ -1823,6 +1835,7 @@ impl<'a> Run<'a> {
                 self.unconverted.set(true);
             }
             let mut trade = StrategyTrade::new(lot.side, closed, lot.time, lot.price);
+            trade.exchange_rate = self.rate;
             trade.exit = Some(StrategyExit::new(time, price, gross - fees + 0.0));
             trade.fees = fees;
             trade.label = Some(format!("{} / {exit}", lot.entry));
@@ -3050,6 +3063,10 @@ mod tests {
             result.fees = fees;
             result
         };
+        let at_rate = |mut trade: StrategyTrade, rate| {
+            trade.exchange_rate = rate;
+            trade
+        };
         // An exchange rate point: its close applies from its hour.
         let rate = |at: i64, value: f64| Bar::new(hour(at), value, value, value, value, 0.0);
         let converted = BacktestSettings {
@@ -4233,14 +4250,9 @@ mod tests {
                 sized,
                 converted.clone(),
                 converted_prices.clone(),
-                vec![fee_trade(
-                    Buy,
-                    2.0,
-                    1,
-                    100.0,
-                    Some((2, 110.0, 12.44)),
-                    3.56,
-                    "A / X",
+                vec![at_rate(
+                    fee_trade(Buy, 2.0, 1, 100.0, Some((2, 110.0, 12.44)), 3.56, "A / X"),
+                    0.8,
                 )],
                 vec![190.0, 190.0, 197.2, 202.44],
                 0,
@@ -4260,15 +4272,18 @@ mod tests {
                 },
                 flat(&[100.0, 100.0, 68.0]),
                 vec![
-                    trade(
-                        Buy,
-                        4.0,
-                        1,
-                        100.0,
-                        Some((2, 68.0, -102.4)),
-                        "A / Margin call",
+                    at_rate(
+                        trade(
+                            Buy,
+                            4.0,
+                            1,
+                            100.0,
+                            Some((2, 68.0, -102.4)),
+                            "A / Margin call",
+                        ),
+                        0.8,
                     ),
-                    trade(Buy, 6.0, 1, 100.0, None, "A"),
+                    at_rate(trade(Buy, 6.0, 1, 100.0, None, "A"), 0.8),
                 ],
                 vec![500.0, 500.0, 500.0, 244.0],
                 0,
