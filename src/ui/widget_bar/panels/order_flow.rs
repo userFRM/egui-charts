@@ -111,7 +111,9 @@ impl OrderFlowPanel {
                         number(ui, "Minimum ticks", &mut rule.min_ticks, 0..=u64::MAX);
                         number(ui, "Minimum aggressors", &mut rule.min_aggressors, 0..=u8::MAX);
                         number(ui, "Minimum size", &mut rule.min_size, 0.0..=f64::MAX);
-                        if !rule.min_size.is_finite() { rule.min_size = 0.0; }
+                        if !rule.min_size.is_finite() {
+                            rule.min_size = 0.0;
+                        }
                     });
                     self.counts(
                         ui,

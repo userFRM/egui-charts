@@ -79,6 +79,7 @@ const TRADE_IDS: usize = 100_000;
 /// detectors.track(&instrument).unwrap();
 /// let mut settings = detectors.settings();
 /// settings.big_trades.enabled = true;
+/// settings.big_trades.rule.passive_orders = true;
 /// detectors.set_settings(settings);
 /// // `Chart::set_signal_source(Some(detectors.clone()))` draws the detections.
 ///
