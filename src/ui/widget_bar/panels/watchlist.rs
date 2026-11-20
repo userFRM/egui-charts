@@ -39,7 +39,7 @@ const MARK_SIZE: f32 = 18.0;
 /// column.
 const MIN_COLUMN_WIDTH: f32 = 32.0;
 
-pub use crate::model::{SkippedEntries, Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
+use crate::model::{SkippedEntries, Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
 
 /// The header label of `column`.
 fn column_label(column: WatchlistColumn) -> &'static str {

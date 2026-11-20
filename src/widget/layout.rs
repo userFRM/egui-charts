@@ -1,7 +1,7 @@
 //! Tiled and tabbed charts with independent state and timestamp-based synchronization.
 
 use super::keyboard::ShortcutRequest;
-use super::{Chart, VisibleTimeRange};
+use super::{Chart, ShortcutMap, VisibleTimeRange};
 use crate::config::KeyboardAction;
 use crate::localization as l10n;
 use crate::model::Timeframe;
@@ -1046,6 +1046,8 @@ pub struct ChartLayout {
     previous_sync: ChartSyncOptions,
     sizing: SizingState,
     edits: LayoutEdits,
+    /// The bindings [`Self::show`] gives every chart, if set.
+    shortcuts: Option<ShortcutMap>,
 }
 
 impl std::fmt::Debug for ChartLayout {
@@ -1611,6 +1613,19 @@ impl ChartLayout {
         self.detached.get(index).copied().unwrap_or(false)
     }
 
+    /// Gives `map` to every chart this layout shows, at each [`Self::show`] before the charts
+    /// dispatch keys, so a chart supplied later takes it at its first show. While a map is set it
+    /// replaces bindings changed through [`Chart::shortcuts_mut`]. `None`, the default, leaves
+    /// each chart the bindings it has.
+    pub fn set_shortcuts(&mut self, map: Option<ShortcutMap>) {
+        self.shortcuts = map;
+    }
+
+    /// The map [`Self::set_shortcuts`] gives every chart, if any.
+    pub fn shortcuts(&self) -> Option<&ShortcutMap> {
+        self.shortcuts.as_ref()
+    }
+
     /// Fits an explicit date selection to the active chart. With `sync_time_axis` on, the other
     /// charts of its synchronization group then show the active chart's new span, as after a
     /// scroll or zoom; otherwise they fit the selection itself when `sync_date_range` is on, and
@@ -1748,6 +1763,13 @@ impl ChartLayout {
                 self.previous[index] = None;
                 self.previous_ranges[index] = None;
                 self.pending_ranges[index] = None;
+            }
+        }
+        if let Some(map) = &self.shortcuts {
+            for chart in charts.iter_mut() {
+                if chart.shortcuts() != map {
+                    *chart.shortcuts_mut() = map.clone();
+                }
             }
         }
         // A switch turned on aligns the charts that follow it, except in a show that brings a
@@ -5529,6 +5551,62 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// The map set on the layout reaches every chart it shows and decides what a key does in the
+    /// active one, also in a chart first supplied after the map was set.
+    #[test]
+    fn a_layout_map_drives_every_chart_and_charts_supplied_later() {
+        let alt_o = egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::O);
+        let mut map = ShortcutMap::default();
+        for (key, action) in &mut map.bindings {
+            if *action == KeyboardAction::OpenLayout {
+                *key = alt_o;
+            }
+        }
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        layout.set_shortcuts(Some(map.clone()));
+        let mut charts = vec![chart(60), chart(60)];
+        let mut time = 0.0;
+        let mut frame = |layout: &mut ChartLayout, charts: &mut Vec<Chart>, events| {
+            time += 0.1;
+            frame_texts(&ctx, layout, charts, vec2(1440.0, 900.0), time, events);
+        };
+        let press_alt_o = Event::Key {
+            key: egui::Key::O,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::ALT,
+        };
+        let open = || vec![ShortcutRequest::Action(KeyboardAction::OpenLayout)];
+        frame(&mut layout, &mut charts, vec![]);
+        assert!(charts.iter().all(|chart| *chart.shortcuts() == map));
+        for index in 0..2 {
+            layout.set_active(index);
+            frame(&mut layout, &mut charts, vec![]);
+            frame(&mut layout, &mut charts, vec![press_alt_o.clone()]);
+            let requests: Vec<_> = charts
+                .iter_mut()
+                .map(Chart::take_shortcut_requests)
+                .collect();
+            let mut expected = vec![vec![], vec![]];
+            expected[index] = open();
+            assert_eq!(requests, expected, "active chart {index}");
+        }
+        layout.mode = ChartLayoutMode::ThreeHorizontal;
+        charts.push(chart(60));
+        layout.set_active(2);
+        frame(&mut layout, &mut charts, vec![]);
+        assert_eq!(*charts[2].shortcuts(), map);
+        frame(&mut layout, &mut charts, vec![press_alt_o]);
+        assert_eq!(charts[2].take_shortcut_requests(), open());
+        frame(&mut layout, &mut charts, vec![key(egui::Key::Period)]);
+        assert!(charts[2].take_shortcut_requests().is_empty());
     }
 
     /// A host exchanges two charts with `swap_slots`, as the demo does when a smaller preset

@@ -31,8 +31,11 @@ impl Default for KeyboardOptions {
     }
 }
 
-/// Keyboard actions that can be performed on the chart
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Keyboard actions that can be performed on the chart.
+///
+/// Serde writes and reads the variant name (`"Redo"`), and a drawing tool as
+/// `{"DrawingTool": "TrendLine"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum KeyboardAction {
     /// Pan left by a page.
@@ -535,7 +538,8 @@ impl KeyboardAction {
         }
     }
 
-    /// The actions with a bound key, grouped by category (for the shortcuts dialog).
+    /// The actions the shortcuts dialog offers, grouped by category, including those without a
+    /// default key.
     pub fn all_by_category() -> Vec<(&'static str, Vec<KeyboardAction>)> {
         use crate::config::DrawingToolType;
         vec![

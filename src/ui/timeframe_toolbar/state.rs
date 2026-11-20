@@ -2,7 +2,7 @@
 //!
 //! Manages the state of the time scale controls and range selection.
 
-use super::DateRange;
+use crate::model::DateRange;
 use crate::model::Timeframe;
 
 /// The trading hours the time scale toolbar's session control shows.

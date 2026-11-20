@@ -530,6 +530,8 @@ impl Chart {
             // Capture the removed study before the volume setting's action closes.
             self.remove_series(id);
         }
+        #[cfg(feature = "studies")]
+        self.pull_price_target_colors();
         // Turning the volume setting on adds its study on the next frame, so at the study cap the
         // action leaves the setting off, unless a volume study already on the chart serves it.
         #[cfg(feature = "studies")]
@@ -1218,6 +1220,7 @@ impl Chart {
         // Restore by original index after removing every touched study, so bulk removal and
         // templates retain order and stable ids while unrelated host studies stay present.
         let show_volume = self.config.show_volume;
+        let show_price_targets = self.show_price_targets;
         for (change, current) in action.studies.iter().zip(&mut current) {
             let indicator = self.take_study(change.id);
             if change.before.is_none()
@@ -1246,8 +1249,9 @@ impl Chart {
             self.next_refresh.insert(at, f64::NEG_INFINITY);
         }
         self.recalculate_studies();
-        // Replacing a study during history replay is not a volume-switch edit.
+        // Replacing a study during history replay is not a volume-switch or targets edit.
         self.config.show_volume = show_volume;
+        self.show_price_targets = show_price_targets;
         self.end_study_batch(outer);
         for (change, before) in action.studies.iter_mut().zip(current) {
             change.before = before;
@@ -1290,6 +1294,11 @@ impl Chart {
         }
         if let Some(edit) = &action.layout_edit {
             edit.request(redo);
+        }
+        // The configuration brought back gives the forecast studies their colours.
+        #[cfg(feature = "studies")]
+        {
+            self.price_target_colors = None;
         }
         if redo {
             self.history.undo.push(action);
