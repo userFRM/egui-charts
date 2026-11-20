@@ -1283,9 +1283,10 @@ mod tests {
             .enumerate()
             .map(|(id, column_widths)| {
                 let mut table = Drawing::new(id + 1, DrawingToolType::Table);
-                let mut config = crate::drawings::TableConfig::default();
-                config.column_widths = column_widths;
-                table.table = Some(config);
+                table.table = Some(crate::drawings::TableConfig {
+                    column_widths,
+                    ..Default::default()
+                });
                 table
             })
             .collect();

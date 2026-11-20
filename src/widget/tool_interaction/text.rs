@@ -1682,9 +1682,10 @@ mod tests {
             let mut drawing = Drawing::new(7, tool);
             drawing.chart_points.push(ChartPoint::new(50.0, 15.0));
             if tool == DrawingToolType::Table && pinned {
-                let mut table = TableConfig::default();
-                table.screen_anchored = true;
-                drawing.table = Some(table);
+                drawing.table = Some(TableConfig {
+                    screen_anchored: true,
+                    ..Default::default()
+                });
             }
             chart.drawings_mut().drawings.push(drawing);
             frame(&ctx, &mut chart, 0.0, vec![]);

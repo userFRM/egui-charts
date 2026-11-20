@@ -694,21 +694,22 @@ mod tests {
                 "alignment",
                 "A\tA\tA\nA\tA\tA\nA\tA\tA",
                 |table| {
-                    let mut config = TableConfig::default();
-                    config.column_widths = vec![Some(100.0); 3];
-                    config.row_heights = vec![Some(40.0); 3];
-                    config.cells = [V::Top, V::Middle, V::Bottom]
-                        .map(|vertical| {
-                            [H::Left, H::Center, H::Right]
-                                .map(|horizontal| TableCellStyle {
-                                    horizontal_align: Some(horizontal),
-                                    vertical_align: Some(vertical),
-                                    ..Default::default()
-                                })
-                                .to_vec()
-                        })
-                        .to_vec();
-                    table.table = Some(config);
+                    table.table = Some(TableConfig {
+                        column_widths: vec![Some(100.0); 3],
+                        row_heights: vec![Some(40.0); 3],
+                        cells: [V::Top, V::Middle, V::Bottom]
+                            .map(|vertical| {
+                                [H::Left, H::Center, H::Right]
+                                    .map(|horizontal| TableCellStyle {
+                                        horizontal_align: Some(horizontal),
+                                        vertical_align: Some(vertical),
+                                        ..Default::default()
+                                    })
+                                    .to_vec()
+                            })
+                            .to_vec(),
+                        ..Default::default()
+                    });
                 },
                 |painted| {
                     let [(rect, ..)] = painted.fills[..] else {
@@ -730,10 +731,11 @@ mod tests {
                 "sizes and clipping",
                 "Symbol\tLast\tA cell much wider than thirty points\nAAPL\t189.50",
                 |table| {
-                    let mut config = TableConfig::default();
-                    config.column_widths = vec![Some(120.0), None, Some(30.0)];
-                    config.row_heights = vec![None, Some(50.0)];
-                    table.table = Some(config);
+                    table.table = Some(TableConfig {
+                        column_widths: vec![Some(120.0), None, Some(30.0)],
+                        row_heights: vec![None, Some(50.0)],
+                        ..Default::default()
+                    });
                 },
                 |painted| {
                     let [(rect, ..)] = painted.fills[..] else {
@@ -806,10 +808,12 @@ mod tests {
             background: Some([255, 0, 0, 255]),
             ..plain
         };
-        let mut table = TableConfig::default();
-        table.column_widths = vec![None, Some(90.0), Some(120.0)];
-        table.row_heights = vec![None, Some(30.0), Some(40.0)];
-        table.cells = vec![vec![], vec![], vec![plain, plain, red]];
+        let table = TableConfig {
+            column_widths: vec![None, Some(90.0), Some(120.0)],
+            row_heights: vec![None, Some(30.0), Some(40.0)],
+            cells: vec![vec![], vec![], vec![plain, plain, red]],
+            ..Default::default()
+        };
         let mut harness = Harness::builder()
             .allow_missing_glyphs()
             .with_size(egui::vec2(600.0, 400.0))
