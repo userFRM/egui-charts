@@ -13,7 +13,7 @@ use super::{
     ElliottDegree, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig,
     ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig,
     PositionReadout, PositionSize, PositionSizing, PositionStyle, ProjectionConfig, RangeSettings,
-    RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    RegressionTrendConfig, TableConfig, TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -204,9 +204,9 @@ pub struct Drawing {
     #[serde(skip)]
     pub completed: bool,
     /// Optional annotation content, preserved with the drawing. Tables use one row per line
-    /// and tab-separated cells. Images use an image URI resolved by the host's egui image
-    /// loaders. Posts and ideas use the first line as author or title and the rest as body,
-    /// when they have no [`post`](Self::post).
+    /// and tab-separated cells, styled by [`table`](Self::table). Images use an image URI
+    /// resolved by the host's egui image loaders. Posts and ideas use the first line as author or
+    /// title and the rest as body, when they have no [`post`](Self::post).
     pub text: Option<String>,
     /// The post or idea a post or idea drawing shows: its link and the content the host
     /// resolved it to through [`Posts`](crate::services::Posts). The content is saved with the
@@ -376,6 +376,12 @@ pub struct Drawing {
     /// Frame size and opacity of the image tool; `None` uses the defaults.
     #[serde(default)]
     pub image: Option<ImageConfig>,
+    /// Column widths, row heights, cell styles and the Anchor to screen switch of a table, by
+    /// the rows and columns of its [`text`](Self::text). `None`, as on tables saved before these
+    /// settings, fits each column to its text and each row to one line, with no cell styles, on
+    /// the table's bar and price. Other tools ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<TableConfig>,
     /// Clockwise rotation of an icon, emoji or sticker about its centre, in degrees; 0 is upright.
     /// Its handles, selection frame and hit area rotate with it. Other tools ignore this field.
     /// Drawings saved before this setting load upright.
@@ -832,6 +838,7 @@ impl Drawing {
             middle_line: MiddleLineStyle::default(),
             theme_shade: tool_type != DrawingToolType::ProjectionTool,
             image: None,
+            table: None,
             glyph_angle: 0.0,
             closed: false,
             gann: None,
@@ -915,6 +922,14 @@ impl Drawing {
         match &self.projection {
             Some(config) => std::borrow::Cow::Borrowed(config),
             None => std::borrow::Cow::Owned(ProjectionConfig::legacy(self)),
+        }
+    }
+
+    /// The table settings in use: its own, or the defaults.
+    pub(crate) fn table_config(&self) -> std::borrow::Cow<'_, TableConfig> {
+        match &self.table {
+            Some(config) => std::borrow::Cow::Borrowed(config),
+            None => std::borrow::Cow::Owned(TableConfig::default()),
         }
     }
 

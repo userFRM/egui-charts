@@ -189,6 +189,9 @@ impl StoredDrawing {
         }) {
             return Some("image.size".into());
         }
+        if d.table.as_ref().is_some_and(|table| !table.is_valid()) {
+            return Some("table".into());
+        }
         if !FONT_SIZES.contains(&d.font_size) {
             return Some("font_size".into());
         }
@@ -3045,7 +3048,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 44] = [
+        let cases: [(Spoil, &str); 45] = [
             (
                 |s| {
                     first(s)
@@ -3055,6 +3058,16 @@ mod tests {
                         .size = Some([f32::NAN, 1.0])
                 },
                 "invalid image.size",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .table
+                        .get_or_insert_with(Default::default)
+                        .column_widths = vec![Some(f32::NAN)]
+                },
+                "invalid table",
             ),
             (
                 |s| {

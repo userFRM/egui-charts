@@ -15,6 +15,7 @@ mod image;
 mod options;
 mod pitchfork;
 mod projection;
+mod table;
 mod template;
 mod vwap;
 
@@ -37,5 +38,6 @@ pub use options::{
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use projection::{ProjectionConfig, ProjectionLevel};
+pub use table::{TableCellStyle, TableConfig};
 pub use template::DrawingTemplate;
 pub use vwap::{VwapBand, VwapBandLine, VwapBandMode, VwapConfig, VwapFill, VwapPlotType};
