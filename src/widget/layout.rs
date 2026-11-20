@@ -1740,6 +1740,9 @@ impl ChartLayout {
     /// Activates the chart that the queued Tab and Shift+Tab requests of the first `count` charts
     /// move to, handing it any maximized place; reports whether the active chart moved.
     fn cycle_charts(&mut self, ui: &Ui, charts: &mut [&mut Chart], count: usize) -> bool {
+        if ui.ctx().will_discard() {
+            return false;
+        }
         let mut moved = false;
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
             let mut steps = Vec::new();
@@ -1754,8 +1757,7 @@ impl ChartLayout {
                 }
                 _ => true,
             });
-            // A discarded pass replays its input, so only the last one moves.
-            if steps.is_empty() || ui.ctx().will_discard() {
+            if steps.is_empty() {
                 continue;
             }
             let target = steps.into_iter().fold(index, |slot, forward| {
@@ -2186,15 +2188,15 @@ impl ChartLayout {
             ui.memory_mut(|memory| memory.request_focus(id));
         }
         // Alt+Enter toggles the focused tile in a grid; a lone chart leaves it to the host.
-        if self.mode != ChartLayoutMode::Tabs && count > 1 {
+        // A discarded pass does not repeat key events; leave its requests for the next pass.
+        if self.mode != ChartLayoutMode::Tabs && count > 1 && !ui.ctx().will_discard() {
             for (index, chart) in charts.iter_mut().take(count).enumerate() {
                 let requests = &mut chart.keyboard.requests;
                 let before = requests.len();
                 requests.retain(|request| {
                     *request != ShortcutRequest::Action(KeyboardAction::MaximizeChart)
                 });
-                // A discarded pass replays its input, so only the last one toggles.
-                if requests.len() != before && !ui.ctx().will_discard() {
+                if requests.len() != before {
                     self.maximized = if self.maximized == Some(index) {
                         None
                     } else {
@@ -5013,6 +5015,7 @@ mod tests {
                 } else {
                     vec![]
                 };
+                let mut discard = pressed && host_first;
                 ctx.run_ui(
                     RawInput {
                         screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
@@ -5021,9 +5024,13 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
+                        if discard {
+                            ui.ctx().request_discard("layout shortcut sizing pass");
+                            discard = false;
+                        }
                         if host_first {
                             charts[2].dispatch_shortcuts(ui.ctx());
-                            requests = charts[2].take_shortcut_requests();
+                            requests.extend(charts[2].take_shortcut_requests());
                         }
                         layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
                     },
@@ -5212,7 +5219,12 @@ mod tests {
                 (0, None),
             ),
         ];
-        for (row, mode, supplied, detached, maximized, start, forward, host_first, expected) in rows
+        for (
+            discard_input,
+            (row, mode, supplied, detached, maximized, start, forward, host_first, expected),
+        ) in [false, true]
+            .into_iter()
+            .flat_map(|discard| rows.map(|row| (discard, row)))
         {
             let ctx = egui::Context::default();
             let mut layout = ChartLayout {
@@ -5234,6 +5246,7 @@ mod tests {
             };
             let mut requests = Vec::new();
             let mut time = 0.0;
+            let mut discarded = false;
             let mut frame = |layout: &mut ChartLayout, charts: &mut Vec<Chart>, pressed| {
                 time += 0.1;
                 ctx.run_ui(
@@ -5257,6 +5270,10 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
+                        if pressed && discard_input && !discarded {
+                            ui.ctx().request_discard("layout shortcut sizing pass");
+                            discarded = true;
+                        }
                         if host_first {
                             let chart = &mut charts[layout.active()];
                             chart.dispatch_shortcuts(ui.ctx());
@@ -5274,7 +5291,11 @@ mod tests {
             for _ in 0..2 {
                 frame(&mut layout, &mut charts, false);
             }
-            assert_eq!((layout.active(), layout.maximized()), expected, "{row}");
+            assert_eq!(
+                (layout.active(), layout.maximized()),
+                expected,
+                "{row}, discard={discard_input}"
+            );
             let count = supplied.min(mode.chart_count());
             if count > 1 {
                 let focused = ctx.memory(|memory| memory.focused()).and_then(|id| {
@@ -5282,7 +5303,11 @@ mod tests {
                         .iter()
                         .position(|chart| chart.keyboard.chart_id == Some(id))
                 });
-                assert_eq!(focused, Some(expected.0), "{row}: canvas focus");
+                assert_eq!(
+                    focused,
+                    Some(expected.0),
+                    "{row}, discard={discard_input}: canvas focus"
+                );
             }
             for chart in &mut charts {
                 requests.extend(chart.take_shortcut_requests());
