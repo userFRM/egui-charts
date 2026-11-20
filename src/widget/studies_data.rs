@@ -2968,6 +2968,7 @@ pub(super) mod tests {
         assert_eq!(StudyTemplate::from_study(study).inputs, saved.inputs);
         check("Ratio: restored", &mut restored, id);
     }
+
     /// Bar studies read the host's other-symbol history by time, keep a gap for a missing bar,
     /// and shift Ichimoku's leading and lagging plots on the chart's bars.
     #[test]
