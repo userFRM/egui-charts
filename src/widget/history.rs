@@ -1152,7 +1152,6 @@ impl Chart {
             .view_restore
             .as_ref()
             .map_or_else(|| self.get_time_scale_state(), |restore| restore.view);
-        self.history.view_restore = None;
         // Steps of one preset or slot on different charts only restore it in the order taken.
         static ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let order = ORDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1266,13 +1265,18 @@ impl Chart {
         if let Some(view) = &mut action.view
             && (symbol_step || *view != current_view)
         {
+            let waiting_for_bars = self.history.view_restore.as_ref().is_some_and(|restore| {
+                !restore.loaded
+                    && restore.symbol == self.symbol
+                    && restore.interval == self.timeframe
+            });
             self.apply_synced_time_scale(view.0, view.1);
             if interval_changed || !symbol_step {
                 self.history.view_restore = Some(ViewRestore {
                     symbol: self.symbol.clone(),
                     interval: self.timeframe,
                     view: *view,
-                    loaded: !interval_changed,
+                    loaded: !interval_changed && !waiting_for_bars,
                     applied_frame: None,
                 });
             }
