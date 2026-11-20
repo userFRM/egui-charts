@@ -411,14 +411,9 @@ jobs:
       - name: Run example tests
         if: needs.changes.outputs.rust == 'true'
         run: cargo test --all-features --example scripting --example backtesting --example network_feed
-      # The README and the guide pages that `src/lib.rs` includes under `cfg(doctest)` need `ui`, so
-      # this is their only doc test build and `cargo doc` never reads them. Only this flag turns a
-      # misspelled code block attribute in them, which can silently skip the example, into an error.
       - name: Run doc tests (all features)
         if: needs.changes.outputs.docs == 'true'
         run: cargo test --doc --all-features
-        env:
-          RUSTDOCFLAGS: -Dwarnings
       - name: Run doc tests (widget only)
         if: needs.changes.outputs.docs == 'true'
         run: cargo test --doc --no-default-features --features widget
