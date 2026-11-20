@@ -47,9 +47,8 @@ impl ShareControls {
         self.sharing = Some(sharing);
     }
 
-    /// Takes the host's answer, copying a link to the clipboard. Returns the document a saved
-    /// copy was made of and the copy's name.
-    pub(crate) fn poll(&mut self, ctx: &egui::Context) -> Option<(String, String)> {
+    /// Takes the host's answer, copying a link to the clipboard. Returns the saved copy's name.
+    pub(crate) fn poll(&mut self, ctx: &egui::Context) -> Option<String> {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
         let mut copied = None;
@@ -70,12 +69,12 @@ impl ShareControls {
                             Err(error) => Outcome::Failed(error),
                         },
                     ),
-                Operation::Copy(name) => {
+                Operation::Copy(_) => {
                     answer.downcast::<Result<String, FeedError>>().map_or_else(
                         |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
                         |answer| match *answer {
                             Ok(copy) => {
-                                copied = Some((name.clone(), copy.clone()));
+                                copied = Some(copy.clone());
                                 Outcome::Copy(copy)
                             }
                             Err(error) => Outcome::Failed(error),
@@ -201,8 +200,8 @@ mod tests {
         }
     }
 
-    /// A link reaches the clipboard with the host's copy policy, a copy names the document it
-    /// came from, and a rejection is kept for the menu to show.
+    /// A link reaches the clipboard with the host's copy policy, a copy returns its saved name,
+    /// and a rejection is kept for the menu to show.
     #[test]
     fn answers_become_clipboard_text_copies_and_errors() {
         let ctx = egui::Context::default();
@@ -242,7 +241,7 @@ mod tests {
             Operation::Copy("a".into()),
             ShareKind::Layout,
         );
-        assert_eq!((copied, text), (Some(("a".into(), "a copy".into())), None));
+        assert_eq!((copied, text), (Some("a copy".into()), None));
 
         let (_, text) = run(
             &mut controls,

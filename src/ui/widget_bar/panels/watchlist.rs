@@ -359,7 +359,7 @@ impl WatchlistPanel {
     /// Subscribes again when the symbols to quote changed or the stream lagged, and applies the
     /// quotes the service pushed. The quotes of symbols no longer subscribed are dropped.
     pub fn poll(&mut self, ctx: &egui::Context) {
-        if let Some((_, name)) = self.share.poll(ctx)
+        if let Some(name) = self.share.poll(ctx)
             && let Some(mut copy) = self.copy_source.take()
         {
             (copy.name, copy.favorite) = (name, false);
