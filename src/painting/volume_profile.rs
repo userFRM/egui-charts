@@ -29,6 +29,8 @@ pub(crate) enum ProfileStyle {
         width: f32,
         /// Visibility of the option profile's call and put wall plots.
         walls_visible: [bool; 2],
+        /// Decimals of the row values, two without.
+        volume_decimals: Option<u8>,
     },
     #[cfg(feature = "drawings")]
     Drawing {
@@ -90,30 +92,33 @@ pub(crate) fn paint_profile(
         return;
     }
     let options = profile.source() == ProfileSource::Options;
-    let (drawing, right_aligned, strip, share, poc_width, walls_visible) = match style {
-        ProfileStyle::Study {
-            right_aligned,
-            strip,
-            width,
-            walls_visible,
-        } => (
-            false,
-            right_aligned,
-            strip,
-            width,
-            if options {
-                stroke::HAIRLINE
-            } else {
-                stroke::THICK
-            },
-            walls_visible,
-        ),
-        #[cfg(feature = "drawings")]
-        ProfileStyle::Drawing {
-            anchored,
-            poc_width,
-        } => (true, anchored, false, 0.3, poc_width, [true; 2]),
-    };
+    let (drawing, right_aligned, strip, share, poc_width, walls_visible, volume_decimals) =
+        match style {
+            ProfileStyle::Study {
+                right_aligned,
+                strip,
+                width,
+                walls_visible,
+                volume_decimals,
+            } => (
+                false,
+                right_aligned,
+                strip,
+                width,
+                if options {
+                    stroke::HAIRLINE
+                } else {
+                    stroke::THICK
+                },
+                walls_visible,
+                volume_decimals,
+            ),
+            #[cfg(feature = "drawings")]
+            ProfileStyle::Drawing {
+                anchored,
+                poc_width,
+            } => (true, anchored, false, 0.3, poc_width, [true; 2], None),
+        };
     if profile.exposure.is_some() {
         paint_exposure(painter, profile, config, span.clone(), share, price_to_y);
         paint_option_walls(
@@ -316,7 +321,9 @@ pub(crate) fn paint_profile(
 
     if config.show_values && !drawing {
         use crate::scales::PriceFormatter;
-        let formatter = crate::scales::VolumeFormatter { precision: 2 };
+        let formatter = crate::scales::VolumeFormatter {
+            precision: volume_decimals.map_or(2, usize::from),
+        };
         let font = egui::FontId::proportional(typography::XS);
         let text_color = painter.ctx().active_theme().ui.text;
         for (row, &volume) in profile.volume.iter().enumerate() {
@@ -812,6 +819,7 @@ mod tests {
                             strip: false,
                             walls_visible: [true; 2],
                             width: 0.9,
+                            volume_decimals: None,
                         }
                     },
                     &|price| (price - 100.0) as f32 * 10.0,
@@ -908,6 +916,7 @@ mod tests {
                         strip: right_aligned,
                         walls_visible: [true; 2],
                         width: if right_aligned { 1.0 } else { 0.9 },
+                        volume_decimals: None,
                     },
                     &|price| (price - 100.0) as f32 * 10.0,
                 );
