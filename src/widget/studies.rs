@@ -12,7 +12,10 @@ impl Chart {
     /// chart of a layout and to the object tree's Duplicate; studies already on the chart stay. A
     /// user action that turns the volume setting on, such as the Toggle volume shortcut, leaves
     /// [`ChartConfig::show_volume`](crate::config::ChartConfig::show_volume) off at the cap unless
-    /// a Volume study is already on the chart.
+    /// a Volume study is already on the chart. The same applies to the
+    /// [analyst targets setting](Self::set_price_targets_visible), served by an Analyst price
+    /// forecast study. Both settings stay uncapped outside user actions, as do restores and
+    /// undo/redo.
     /// [`set_chained_study_limit`](Self::set_chained_study_limit) caps, on the same paths, the
     /// studies that read another study's output; a study is refused when it would pass either cap.
     pub fn set_study_limit(&mut self, limit: Option<usize>) {

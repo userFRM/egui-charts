@@ -31,11 +31,14 @@ impl Chart {
     /// and [`price_target_negative_color`](crate::config::ChartConfig::price_target_negative_color).
     ///
     /// With the `studies` feature, the targets are the Analyst price forecast study's, which the
-    /// study catalogue offers: showing them adds that study unless the chart holds one, past the
-    /// [study cap](Self::set_study_limit) as the volume setting does, and hiding them removes
-    /// every such study. Adding the study turns this setting on and removing the last one turns it
-    /// off. The chart draws the targets while the study is shown in the main series' pane, so
-    /// hiding the study, or every study, hides them and keeps this setting on.
+    /// study catalogue offers: showing them adds that study unless the chart holds one, and
+    /// hiding them removes every such study. Inside a [user action](Self::user_action), showing
+    /// them at the [study cap](Self::set_study_limit) leaves the setting off unless a forecast
+    /// study is already on the chart, as the volume setting does. Host calls outside user
+    /// actions, restores and undo/redo stay uncapped. Adding the study turns this setting on
+    /// and removing the last one turns it off. The chart draws the targets while the study is
+    /// shown in the main series' pane, so hiding the study, or every study, hides them and keeps
+    /// this setting on.
     ///
     /// ```rust
     /// use egui::Color32;
@@ -58,6 +61,10 @@ impl Chart {
                 .map(|(id, _)| id)
                 .collect();
             if visible && held.is_empty() {
+                if self.history.recording() && self.study_limit_reached() {
+                    self.show_price_targets = false;
+                    return;
+                }
                 self.add_indicator(Box::new(crate::studies::AnalystPriceForecast::default()));
             } else if !visible {
                 for id in held {
@@ -570,6 +577,78 @@ mod tests {
             .filter(|(_, study)| study.name() == crate::studies::AnalystPriceForecast::NAME)
             .map(|(id, _)| id)
             .collect()
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn targets_setting_respects_the_study_cap_in_user_actions() {
+        use crate::studies::{AnalystPriceForecast, SMA};
+        use crate::widget::settings::ChartSettingsState;
+
+        for (cap, with_forecast, shown, count) in [
+            (Some(2), false, false, 2),
+            (Some(3), false, true, 3),
+            (None, false, true, 3),
+            (Some(2), true, true, 2),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = test_frames::chart(&[100.0], &[200.0]);
+            chart.config_mut().show_volume = false;
+            chart.add_indicator(Box::new(SMA::new(2)));
+            if with_forecast {
+                chart.add_indicator(Box::new(AnalystPriceForecast::default()));
+            } else {
+                chart.add_indicator(Box::new(SMA::new(5)));
+            }
+            chart.set_study_limit(cap);
+            test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.user_action(|chart| {
+                let mut settings = ChartSettingsState::from_chart(chart);
+                settings.show_price_targets = true;
+                settings.apply_to_chart(chart).unwrap();
+            });
+            assert_eq!(
+                (
+                    chart.price_targets_visible(),
+                    chart.indicators().count(),
+                    forecast(&chart).len(),
+                    chart.can_undo(),
+                ),
+                (shown, count, usize::from(shown), shown && !with_forecast),
+                "cap {cap:?}, forecast study {with_forecast}"
+            );
+
+            if shown && !with_forecast {
+                chart.set_study_limit(Some(2));
+                assert!(chart.undo());
+                assert!(!chart.price_targets_visible());
+                assert_eq!(chart.indicators().count(), 2);
+                assert!(chart.redo());
+                assert!(chart.price_targets_visible());
+                assert_eq!(chart.indicators().count(), 3);
+            } else if !shown {
+                // Host calls and saved layouts still restore a study past the cap.
+                chart.set_price_targets_visible(true);
+                assert!(chart.price_targets_visible());
+                assert_eq!(chart.indicators().count(), 3);
+                assert!(!chart.can_undo());
+                #[cfg(feature = "ui")]
+                {
+                    let saved = chart.snapshot().unwrap();
+                    chart.set_price_targets_visible(false);
+                    let mut legacy = chart.snapshot().unwrap();
+                    legacy.settings.show_price_targets = true;
+                    for snapshot in [saved, legacy] {
+                        chart.set_price_targets_visible(false);
+                        chart.user_action(|chart| chart.restore(&snapshot).unwrap());
+                        assert!(chart.price_targets_visible());
+                        assert_eq!(chart.indicators().count(), 3);
+                        assert_eq!(forecast(&chart).len(), 1);
+                        assert!(!chart.can_undo());
+                    }
+                }
+            }
+        }
     }
 
     /// Publication colours and dotted projections use the publication close; percentages keep
