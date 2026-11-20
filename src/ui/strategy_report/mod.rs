@@ -112,6 +112,27 @@ struct ReportData {
 }
 
 impl ReportData {
+    fn new(report: StrategyReport, bars: &[Bar]) -> Self {
+        let performance = report.performance();
+        let comparison = report.comparison(bars);
+        let analysis = report.analysis(bars);
+        let mut data = Self {
+            report,
+            bars: bars.to_vec(),
+            shown: performance.clone(),
+            performance,
+            shown_comparison: StrategyComparison::default(),
+            comparison,
+            range: None,
+            analysis,
+            equity: Vec::new(),
+            drawdown: Vec::new(),
+            trades: Vec::new(),
+        };
+        data.select(None);
+        data
+    }
+
     fn select(&mut self, range: Option<Range<DateTime<Utc>>>) {
         let part = range.clone().map(|r| self.report.within(r));
         let run = part.as_ref().unwrap_or(&self.report);
@@ -201,30 +222,40 @@ impl StrategyReportPanel {
         self.selected = None;
         self.compare = false;
         self.range_error = false;
-        self.data = report.map(|report| {
-            let performance = report.performance();
-            let comparison = report.comparison(bars);
-            let analysis = report.analysis(bars);
-            let mut data = ReportData {
-                report,
-                bars: bars.to_vec(),
-                shown: performance.clone(),
-                performance,
-                shown_comparison: StrategyComparison::default(),
-                comparison,
-                range: None,
-                analysis,
-                equity: Vec::new(),
-                drawdown: Vec::new(),
-                trades: Vec::new(),
-            };
-            data.select(None);
-            data
-        });
+        self.data = report.map(|report| ReportData::new(report, bars));
         self.range_text = self
             .data
             .as_ref()
             .map_or_else(Default::default, ReportData::dates);
+    }
+
+    /// Keep the report controls and the selected entry as its trades grow or rebuild.
+    #[cfg(feature = "strategies")]
+    pub(super) fn continue_report(&mut self, report: StrategyReport, bars: &[Bar]) {
+        self.selected = self.selected.and_then(|index| {
+            let old = self.data.as_ref()?.report.trades.get(index)?;
+            report.trades.iter().position(|trade| {
+                trade.side == old.side
+                    && trade.entry_time == old.entry_time
+                    && (trade.label == old.label
+                        // A closing exit appends " / {exit}" to the label of the open trade.
+                        || (old.exit.is_none()
+                            && trade
+                                .label
+                                .as_deref()
+                                .zip(old.label.as_deref())
+                                .and_then(|(label, entry)| label.strip_prefix(entry))
+                                .is_some_and(|exit| exit.starts_with(" / "))))
+            })
+        });
+        let range = self.data.as_ref().and_then(|data| data.range.clone());
+        let mut data = ReportData::new(report, bars);
+        if range.is_some() {
+            data.select(range);
+        } else if !self.range_error {
+            self.range_text = data.dates();
+        }
+        self.data = Some(data);
     }
 
     /// The currently supplied report, or `None` when cleared.

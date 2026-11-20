@@ -2818,7 +2818,8 @@ mod tests {
     /// market must now leave the UI idle.
     #[test]
     fn an_unchanged_market_lets_the_demo_go_idle() {
-        use egui_charts::ui::widget_bar::{Watchlist, WatchlistPanel};
+        use egui_charts::model::Watchlist;
+        use egui_charts::ui::widget_bar::WatchlistPanel;
         use std::time::Duration;
         let ctx = egui::Context::default();
         let now = "2026-10-23T19:07:05Z".parse().unwrap();
@@ -2875,7 +2876,8 @@ mod tests {
     /// differs from the one pushed before, the push reaches the panel and wakes the UI.
     #[test]
     fn a_changed_quote_still_wakes_the_ui() {
-        use egui_charts::ui::widget_bar::{Watchlist, WatchlistPanel};
+        use egui_charts::model::Watchlist;
+        use egui_charts::ui::widget_bar::WatchlistPanel;
         use std::time::Duration;
         let ctx = egui::Context::default();
         let now = "2026-10-23T22:07:05Z".parse().unwrap();
