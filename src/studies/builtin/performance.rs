@@ -4,11 +4,14 @@
 //! Each reference is the last finite close on or before the same trading date a period earlier,
 //! a number of days, weeks, months or years; month subtraction clamps to the last day of a
 //! shorter month, and year to date uses the last close of the previous calendar year. Dates
-//! follow the instrument's trading calendar, as VWAP does. On an interval shorter than a day the
-//! study requests the symbol's daily bars and takes the later of the daily close and the chart's
-//! own close on or before each date, the daily close on the same date. A connected feed loads
-//! those daily bars back to the oldest period's date, five years before the latest with the
-//! default periods. Missing history and a zero reference close have no value.
+//! follow the instrument's trading calendar, as VWAP does. On every interval but one day the
+//! study requests the symbol's daily bars. Below a day it takes the later of the daily close and
+//! the chart's own close on or before each date, the daily close on the same date. On bars longer
+//! than a day, which are dated by their first day, it measures from daily closes alone: each bar
+//! counts as closed on the date of the last daily close inside it, and without daily bars a
+//! period has no value. A connected feed loads those daily bars back to the oldest period's date,
+//! five years before the latest with the default periods. Missing history and a zero reference
+//! close have no value.
 //!
 //! The table has a row for the chart symbol and one for each other symbol of the Symbol list,
 //! whose daily bars the study requests on every interval and measures from that symbol's own
@@ -85,7 +88,8 @@ pub struct Performance {
     history: Vec<(NaiveDate, f64)>,
     before_last_history: usize,
     intraday: bool,
-    /// The chart interval, which decides whether daily bars are requested.
+    /// The chart interval, which decides whether daily bars are requested and whether the
+    /// chart's own bars may start a period.
     timeframe: Option<Timeframe>,
     /// Trading date and finite close of each requested daily bar, in time order.
     daily: Vec<(NaiveDate, f64)>,
@@ -135,8 +139,9 @@ struct State {
 }
 
 impl Performance {
-    /// Performance over the chart's loaded bars, and on intraday charts over the daily bars the
-    /// host supplies for [`Indicator::data_requests`], in UTC until an instrument is supplied.
+    /// Performance over the chart's loaded bars, and on every interval but one day over the daily
+    /// bars the host supplies for [`Indicator::data_requests`], in UTC until an instrument is
+    /// supplied.
     pub fn new() -> Self {
         Self {
             days: ExchangeDays::default(),
@@ -169,11 +174,18 @@ impl Performance {
         }
     }
 
-    /// The chart symbol's daily bars, on intervals shorter than a day.
+    /// The chart symbol's daily bars, on every interval but one day, whose own bars are daily.
     fn daily_request(&self) -> Option<StudyDataRequest> {
         self.timeframe
-            .filter(|timeframe| timeframe.duration_ms() < Timeframe::Day1.duration_ms())
+            .filter(|timeframe| timeframe.duration_ms() != Timeframe::Day1.duration_ms())
             .map(|_| daily_bars(""))
+    }
+
+    /// Whether each chart bar spans more than a day. Such a bar is dated by its first day and
+    /// closes at its end, so its periods are measured from daily closes alone.
+    fn long_bars(&self) -> bool {
+        self.timeframe
+            .is_some_and(|timeframe| timeframe.duration_ms() > Timeframe::Day1.duration_ms())
     }
 
     /// The symbols of the Symbol list, each once, in list order.
@@ -226,8 +238,16 @@ impl Performance {
                 None if self.chart_symbol.is_empty() => "Chart".to_owned(),
                 None => self.chart_symbol.clone(),
             };
-            let histories = [&self.history[..], &self.daily[..]];
-            rows.push((label, changes(self.history.last(), histories)));
+            let long = self.long_bars();
+            let latest = self.history.last().map(|&(date, close)| {
+                if long {
+                    (close_date(&self.daily, date, None), close)
+                } else {
+                    (date, close)
+                }
+            });
+            let own = if long { &[][..] } else { &self.history[..] };
+            rows.push((label, changes(latest.as_ref(), [own, &self.daily[..]])));
         }
         for symbol in self.compared_symbols() {
             // The chart symbol's row stands for a listed copy of it.
@@ -314,6 +334,19 @@ fn closes(bars: &[Bar]) -> Vec<(NaiveDate, f64)> {
     } else {
         Vec::new()
     }
+}
+
+/// The date of the close of a chart bar longer than a day, dated `date`, whose next bar is
+/// dated `next`: the last daily close from `date` up to `next`, or `date` without one.
+fn close_date(daily: &[(NaiveDate, f64)], date: NaiveDate, next: Option<NaiveDate>) -> NaiveDate {
+    let end = next.map_or(daily.len(), |next| {
+        daily.partition_point(|(day, _)| *day < next)
+    });
+    daily[..end]
+        .last()
+        .map(|(day, _)| *day)
+        .filter(|day| *day >= date)
+        .unwrap_or(date)
 }
 
 /// The trimmed description of `instrument`, or `None` when it has none or a blank one.
@@ -424,13 +457,13 @@ impl Indicator for Performance {
 
     fn set_timeframe(&mut self, timeframe: Timeframe) {
         self.timeframe = Some(timeframe);
-        // Daily and longer charts read their own bars; drop daily bars of an earlier interval.
+        // Daily charts read their own bars; drop daily bars of an earlier interval.
         if self.daily_request().is_none() {
             self.daily.clear();
         }
     }
 
-    /// The chart symbol's daily bars on intervals shorter than a day, then the daily bars of
+    /// The chart symbol's daily bars on every interval but one day, then the daily bars of
     /// each compared symbol on every interval.
     fn data_requests(&self) -> Vec<StudyDataRequest> {
         self.daily_request()
@@ -477,6 +510,11 @@ impl Indicator for Performance {
 
     fn update(&mut self, data: &[Bar], mut from: usize) {
         let len = self.values.len();
+        let long = self.long_bars();
+        // A long bar's close date depends on the bar after it, so an append redoes the last bar.
+        if long {
+            from = from.min(len.saturating_sub(1));
+        }
         let start = if len > 0 && from >= len - 1 && data.len() >= len {
             from.min(len)
         } else {
@@ -502,14 +540,16 @@ impl Indicator for Performance {
                         return IndicatorValue::None;
                     }
                     let date = self.days.day(bar, !self.intraday);
+                    let (closed, own) = if long {
+                        let next = data.get(source + 1).map(|next| next.time.date_naive());
+                        (close_date(&self.daily, date, next), &[][..])
+                    } else {
+                        (date, &self.history[..])
+                    };
                     for (line, (_, period)) in PERIODS.into_iter().enumerate() {
-                        state.latest[line] = change(
-                            bar.close,
-                            date,
-                            period,
-                            [&self.history[..], &self.daily[..]],
-                        )
-                        .map(|(change, _)| change);
+                        state.latest[line] =
+                            change(bar.close, closed, period, [own, &self.daily[..]])
+                                .map(|(change, _)| change);
                     }
                     self.history.push((date, bar.close));
                     IndicatorValue::Multiple(
@@ -763,6 +803,145 @@ mod tests {
             study.set_timeframe(Timeframe::Day1);
             assert!(study.data_requests().is_empty());
         }
+    }
+
+    /// Long bars end on their last daily close and start periods from daily closes alone.
+    /// Appending a bar bounds the previous bar again, as a fresh calculation does.
+    #[test]
+    fn performance_measures_long_bars_from_daily_closes() {
+        use crate::model::{BarClock, Timeframe};
+
+        let bar = |(y, m, d, c)| {
+            Bar::new(
+                Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap(),
+                c,
+                c,
+                c,
+                c,
+                1.0,
+            )
+        };
+        let daily = [
+            (2023, 11, 29, 80.0),
+            (2023, 12, 29, 100.0),
+            (2024, 1, 29, 125.0),
+            (2024, 1, 31, 120.0),
+            (2024, 2, 22, 160.0),
+            (2024, 2, 28, 190.0),
+            (2024, 2, 29, 200.0),
+        ]
+        .map(bar);
+        let monthly = [
+            (2023, 11, 1, 80.0),
+            (2023, 12, 1, 100.0),
+            (2024, 1, 1, 120.0),
+            (2024, 2, 1, 200.0),
+        ]
+        .map(bar);
+        let weekly = [
+            (2024, 2, 5, 140.0),
+            (2024, 2, 12, 150.0),
+            (2024, 2, 19, 170.0),
+            (2024, 2, 26, 200.0),
+        ]
+        .map(bar);
+        let new = |timeframe| {
+            let mut study = Performance::new();
+            study
+                .set_input("symbols", InputValue::Text(String::new()))
+                .unwrap();
+            study
+                .set_input(
+                    "periods",
+                    InputValue::Text("1W, 1M, 3M, 6M, YTD, 1Y".into()),
+                )
+                .unwrap();
+            study.set_timeframe(timeframe);
+            study
+        };
+        let request = StudyDataRequest {
+            symbol: String::new(),
+            timeframe: Some(Timeframe::Day1),
+            metric: None,
+        };
+        let changes = [Some(25.0), Some(60.0), Some(150.0), None, Some(100.0), None];
+        let dates = [
+            "",
+            "22 Feb 2024",
+            "29 Jan 2024",
+            "29 Nov 2023",
+            "",
+            "29 Dec 2023",
+            "",
+        ];
+        for (timeframe, chart) in [(Timeframe::Month1, &monthly), (Timeframe::Week1, &weekly)] {
+            for supplied in [&daily[..], &[][..]] {
+                let mut study = new(timeframe);
+                let source = StudyData {
+                    request: request.clone(),
+                    bars: supplied,
+                    clock: BarClock::new(Timeframe::Day1),
+                    instrument: None,
+                    timeframe: Timeframe::Day1,
+                };
+                study.update_data(chart, 0, &[source]);
+                let table = study.table().unwrap();
+                for (cell, expected) in table.rows[0][1..].iter().zip(if supplied.is_empty() {
+                    [None; 6]
+                } else {
+                    changes
+                }) {
+                    match expected {
+                        Some(expected) => {
+                            let StudyCell::Percent(Some(got)) = cell else {
+                                panic!("a percentage: {cell:?}")
+                            };
+                            assert!(
+                                (got - expected).abs() < 1e-10,
+                                "{timeframe:?}: {got}, expected {expected}"
+                            );
+                        }
+                        None => assert_eq!(*cell, StudyCell::Text("No data".into())),
+                    }
+                }
+                assert_eq!(
+                    table.cell_tooltips[0],
+                    if supplied.is_empty() { [""; 7] } else { dates }
+                );
+                assert_eq!(study.data_requests(), [request.clone()]);
+                if timeframe == Timeframe::Month1 && !supplied.is_empty() {
+                    // January closes at 120; all three starts use December's daily close, 100.
+                    for line in [0, 1, 4] {
+                        assert!((study.values().value(line, 2).unwrap() - 20.0).abs() < 1e-10);
+                    }
+                    assert_eq!(study.values().value(2, 2), None);
+                }
+            }
+        }
+        let daily = [daily.as_slice(), &[bar((2024, 3, 1, 210.0))]].concat();
+        let grown = [monthly.as_slice(), &[bar((2024, 3, 1, 210.0))]].concat();
+        let sources = [StudyData {
+            request,
+            bars: &daily,
+            clock: BarClock::new(Timeframe::Day1),
+            instrument: None,
+            timeframe: Timeframe::Day1,
+        }];
+        let mut updated = new(Timeframe::Month1);
+        updated.update_data(&monthly, 0, &sources);
+        updated.update_data(&grown, monthly.len(), &sources);
+        let mut fresh = new(Timeframe::Month1);
+        fresh.update_data(&grown, 0, &sources);
+        for line in 0..6 {
+            for bar in 0..grown.len() {
+                assert_eq!(
+                    updated.values().value(line, bar),
+                    fresh.values().value(line, bar),
+                    "line {line}, bar {bar}"
+                );
+            }
+        }
+        assert!((updated.values().value(1, 3).unwrap() - 60.0).abs() < 1e-10);
     }
 
     /// The chart symbol and each listed symbol get a row under a column per listed period, each
