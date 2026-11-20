@@ -1216,11 +1216,13 @@ mod tests {
         params.tpo_statistics = true;
         params.tpo_colored_blocks = false;
         params.tpo_outside_value_area_opacity = 80;
-        let mut labels = TPOLabels::default();
-        labels.poc = false;
-        labels.initial_balance_high = true;
-        labels.poor_high = true;
-        labels.prices = true;
+        let labels = TPOLabels {
+            poc: false,
+            initial_balance_high: true,
+            poor_high: true,
+            prices: true,
+            ..TPOLabels::default()
+        };
         params.tpo_labels = labels;
         params.tpo_level_tags = true;
         params.footprint_modes = vec![FootprintMode::BidAsk, FootprintMode::Delta];
