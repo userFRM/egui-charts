@@ -847,7 +847,7 @@ Studies,Strategy tester,Backtest engine,unverified,library,src/strategies/backte
 Studies,Strategy tester,Built-in Bollinger Bands strategy,incomplete,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/bollinger_bands.rs,1155;3493;3528;3253;3568
 Studies,Strategy tester,Built-in Bollinger Bands strategy Directed,incomplete,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/bollinger_bands.rs,1155;3493;3528;3253;3184;3568
 Studies,Strategy tester,Built-in Consecutive Up/Down strategy,verified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,1154
-Studies,Strategy tester,Built-in Keltner Channels strategy,incomplete,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/keltner.rs,1155;3493;3528;3700
+Studies,Strategy tester,Built-in Keltner Channels strategy,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/keltner.rs,1155;3493;3528;3700
 Studies,Strategy tester,Built-in MACD strategy,verified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/macd.rs,1155
 Studies,Strategy tester,Built-in Momentum strategy,verified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/momentum.rs,1155
 Studies,Strategy tester,Built-in Parabolic SAR strategy,verified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/parabolic_sar.rs,1155
