@@ -444,6 +444,10 @@ impl CalendarPanel {
                 self.categories.clone(),
             )
         {
+            if before.0 != self.kind {
+                self.events.clear();
+                self.open = None;
+            }
             self.refresh();
         }
         match &self.error {
@@ -1028,6 +1032,10 @@ mod tests {
         let query = latest();
         assert_eq!(query.kind, CalendarKind::Earnings);
         assert!(query.categories.is_empty());
+        assert!(
+            h.state().events.is_empty(),
+            "old figures wait for their own calendar kind"
+        );
         assert!(h.query_by_label("1 categories").is_none());
     }
 
