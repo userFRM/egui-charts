@@ -163,6 +163,7 @@ fn instrument_bytes(instrument: &Instrument) -> Option<usize> {
         sector,
         source,
         root,
+        identifiers,
         symbol_type: _,
         tick_size: _,
         pip_size: _,
@@ -197,7 +198,19 @@ fn instrument_bytes(instrument: &Instrument) -> Option<usize> {
     .into_iter()
     .flatten()
     .try_fold(symbol.len(), |sum, s| sum.checked_add(s.len()))?;
+    let text = identifiers.iter().try_fold(text, |sum, (kind, value)| {
+        use crate::model::IdentifierKind;
+        let label = match kind {
+            IdentifierKind::Other(label) => label.len(),
+            IdentifierKind::Isin
+            | IdentifierKind::Cusip
+            | IdentifierKind::Sedol
+            | IdentifierKind::Figi => 0,
+        };
+        sum.checked_add(label)?.checked_add(value.len())
+    })?;
     [
+        std::mem::size_of_val(identifiers.as_slice()),
         time_zone.as_ref().map_or(0, |z| z.name().len()),
         std::mem::size_of_val(native_timeframes.as_deref().unwrap_or_default()),
         std::mem::size_of_val(supported_timeframes.as_deref().unwrap_or_default()),

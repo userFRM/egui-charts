@@ -322,3 +322,24 @@ fn pending_resolution_and_changed_instrument_have_distinct_refusals() {
     frames.run(&mut chart);
     assert_eq!(chart.bars(SeriesId::MAIN)[0].volume, 7.0);
 }
+
+#[test]
+fn named_security_identifiers_count_against_the_hosts_capture_budget() {
+    let (mut chart, _, _) = ready(2048);
+    let without = chart.plan_trade_replay_checkpoint().unwrap().max_bytes();
+    let label = "x".repeat(4096);
+    let value = "y".repeat(8192);
+    let payload_bytes = label.len() + value.len();
+    let instrument = chart
+        .feed_link
+        .as_mut()
+        .unwrap()
+        .instrument
+        .as_mut()
+        .unwrap();
+    instrument
+        .identifiers
+        .push((crate::model::IdentifierKind::Other(label), value));
+    let with = chart.plan_trade_replay_checkpoint().unwrap().max_bytes();
+    assert!(with >= without + payload_bytes);
+}
