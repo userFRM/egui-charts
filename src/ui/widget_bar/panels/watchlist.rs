@@ -25,6 +25,7 @@ use crate::scales::StudyFormat;
 use crate::services::{Listener, Quotes, ShareKind, Sharing};
 use crate::theme::ThemeExt;
 use crate::ui::share_controls::ShareControls;
+use crate::ui_kit::alert::Alert;
 use crate::ui_kit::buttons::ButtonSize;
 use crate::ui_kit::{EmptyState, IconButton};
 
@@ -36,7 +37,7 @@ const MARK_SIZE: f32 = 18.0;
 /// column.
 const MIN_COLUMN_WIDTH: f32 = 32.0;
 
-pub use crate::model::{Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
+pub use crate::model::{SkippedEntries, Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
 
 /// The header label of `column`.
 fn column_label(column: WatchlistColumn) -> &'static str {
@@ -178,6 +179,9 @@ pub struct WatchlistPanel {
     subscribed: Vec<String>,
     /// Clears and section moves, newest last.
     undo: Vec<ListEdit>,
+    /// What the last import left out and the list it made, shown above that list until
+    /// dismissed.
+    import_note: Option<(usize, SkippedEntries)>,
 }
 
 impl std::fmt::Debug for WatchlistPanel {
@@ -231,6 +235,7 @@ impl WatchlistPanel {
             generation: 0,
             subscribed: Vec::new(),
             undo: Vec::new(),
+            import_note: None,
         }
     }
 
@@ -399,10 +404,14 @@ impl WatchlistPanel {
             .is_some_and(|list| list.add_symbol(symbol))
     }
 
-    /// Adds a list read with [`Watchlist::from_text`] and shows it, turning any flag filter off.
+    /// Adds a list read with [`Watchlist::read_text`] and shows it, turning any flag filter off.
+    /// When the text held entries the list leaves out, the panel says how many above the list
+    /// until the user dismisses it or imports again.
     pub fn import(&mut self, name: impl Into<String>, text: &str) {
-        self.lists.push(Watchlist::from_text(name, text));
+        let (list, skipped) = Watchlist::read_text(name, text);
+        self.lists.push(list);
         (self.active, self.flag_filter) = (self.lists.len() - 1, None);
+        self.import_note = (skipped != SkippedEntries::default()).then_some((self.active, skipped));
     }
 
     /// Render the active list and return the host action.
@@ -437,6 +446,7 @@ impl WatchlistPanel {
             flag_filter,
             selected,
             undo,
+            import_note,
             ..
         } = self;
         let theme = ui.active_theme();
@@ -612,8 +622,9 @@ impl WatchlistPanel {
             {
                 lists.remove(*active);
                 *active = active.saturating_sub(1);
-                // The recorded edits name lists by position.
+                // The recorded edits and the import note name lists by position.
                 undo.clear();
+                *import_note = None;
             }
         });
         egui::Popup::menu(&more).show(|ui| {
@@ -637,6 +648,36 @@ impl WatchlistPanel {
             }
             share.show(ui, ShareKind::Watchlist, &lists[*active].name);
         });
+        if let Some((list, skipped)) = *import_note
+            && list == *active
+            && flag_filter.is_none()
+        {
+            let mut lines = Vec::new();
+            if skipped.past_limit > 0 {
+                lines.push(l10n::format_text(
+                    ui.ctx(),
+                    "Entries past the limit of {0} not imported: {1}",
+                    &[
+                        ("0", grouped(Watchlist::MAX_IMPORTED as f64, 0)),
+                        ("1", grouped(skipped.past_limit as f64, 0)),
+                    ],
+                ));
+            }
+            if skipped.invalid > 0 {
+                lines.push(l10n::format_text(
+                    ui.ctx(),
+                    "Entries with control characters not imported: {0}",
+                    &[("0", grouped(skipped.invalid as f64, 0))],
+                ));
+            }
+            if Alert::warning(lines.join("\n"))
+                .dismissible(true)
+                .show(ui)
+                .dismissed
+            {
+                *import_note = None;
+            }
+        }
         if let Some(details) = wide {
             ui.horizontal(|ui| {
                 for (choice, label) in [
@@ -1487,7 +1528,18 @@ mod tests {
         );
         assert_eq!(list.to_text(), "AAPL,###Tech,MSFT,###Crypto,BTCUSD");
         let mut list = list;
-        for invalid in ["", " ", "AAPL", "A,B", "A\nB", "A\rB", "###Section"] {
+        for invalid in [
+            "",
+            " ",
+            "AAPL",
+            "A,B",
+            "A\nB",
+            "A\rB",
+            "A;B",
+            "A\tB",
+            "A\u{7f}B",
+            "###Section",
+        ] {
             assert!(!list.add_symbol(invalid), "{invalid:?}");
         }
         assert!(list.add_symbol(" EURUSD "));
@@ -1500,6 +1552,54 @@ mod tests {
             Watchlist::from_text("Again", &titled.to_text()).items,
             [WatchlistItem::Section("Rates  FX and more".into())]
         );
+        titled.items = vec![WatchlistItem::Section("A;B\tC\u{1}D".into())];
+        assert_eq!(
+            Watchlist::from_text("Again", &titled.to_text()).items,
+            [WatchlistItem::Section("A B C D".into())]
+        );
+        // A byte order mark, as an editor writes, semicolons, tabs, and control characters, as
+        // a binary file chosen by mistake gives.
+        assert_eq!(
+            Watchlist::from_text("Mine", "\u{feff}AAPL;MSFT\t\u{0}JUNK,\u{1b}[0m\n AAPL ").items,
+            [symbol("AAPL"), symbol("MSFT")]
+        );
+    }
+
+    /// An import keeps the first items up to the limit and leaves out entries with control
+    /// characters, and the panel says above the imported list what it left out until dismissed.
+    #[test]
+    fn imports_stop_at_the_limit_and_say_what_they_left_out() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut text: String = (0..1_003).map(|i| format!("S{i},")).collect();
+        text.push_str("S0,###Late,\u{7}X");
+        let (list, skipped) = Watchlist::read_text("Big", &text);
+        assert_eq!(list.items.len(), Watchlist::MAX_IMPORTED);
+        assert_eq!(
+            (list.items.first(), list.items.last()),
+            (Some(&symbol("S0")), Some(&symbol("S999")))
+        );
+        // S1000 to S1002 and the late section; the repeated S0 is in the list already.
+        assert_eq!((skipped.invalid, skipped.past_limit), (1, 4));
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 600.0))
+            .build_ui_state(
+                |ui, panel: &mut WatchlistPanel| {
+                    panel.show(ui);
+                },
+                WatchlistPanel::default(),
+            );
+        h.state_mut().import("Big", &text);
+        h.run();
+        for line in [
+            "past the limit of 1,000 not imported: 4",
+            "with control characters not imported: 1",
+        ] {
+            assert!(h.query_by_label_contains(line).is_some(), "{line}");
+        }
+        h.get_by_label("Dismiss").click();
+        h.run();
+        assert!(h.query_by_label_contains("not imported").is_none());
     }
 
     /// A section moves with its symbols past the neighbouring section, and the symbols before the
@@ -1727,7 +1827,11 @@ mod tests {
             ["AAPL", "BP", "SHEL"]
         );
         panel.import("Imported", "TSLA");
-        assert_eq!(panel.flag_filter(), None, "an import shows the imported list");
+        assert_eq!(
+            panel.flag_filter(),
+            None,
+            "an import shows the imported list"
+        );
         assert_eq!(panel.symbols().collect::<Vec<_>>(), ["TSLA"]);
 
         let time = chrono::Utc::now();
