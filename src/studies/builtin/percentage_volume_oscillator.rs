@@ -197,6 +197,10 @@ impl Indicator for PercentageVolumeOscillator {
         3
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn line_names(&self) -> Vec<String> {
         vec![
             format!("PVO({},{})", self.short_period, self.long_period),

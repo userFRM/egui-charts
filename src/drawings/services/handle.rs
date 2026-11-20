@@ -1282,7 +1282,7 @@ mod tests {
     #[test]
     fn glyph_rotation_turns_its_handles_frame_and_hit_area() {
         use crate::drawings::DrawingManager;
-        use crate::drawings::services::DrawingInteraction;
+        use crate::drawings::services::hit_test_painted;
 
         let mut manager = DrawingManager::new();
         let mut drawing = create_test_drawing(DrawingToolType::FontIcon, vec![pos2(100.0, 200.0)]);
@@ -1320,14 +1320,8 @@ mod tests {
             Some(HandlePos::Rotate)
         );
         let upright = paint(&manager.drawings[0], false);
-        assert!(DrawingInteraction::hit_test_painted(
-            pos2(115.0, 215.0),
-            &upright
-        ));
-        assert!(!DrawingInteraction::hit_test_painted(
-            pos2(100.0, 221.0),
-            &upright
-        ));
+        assert!(hit_test_painted(pos2(115.0, 215.0), &upright));
+        assert!(!hit_test_painted(pos2(100.0, 221.0), &upright));
         manager.start_drag_handle(1, HandlePos::Rotate);
         for pointer in [pos2(140.0, 160.0), pos2(100.5, 200.5)] {
             manager.update_drag_handle(pointer, x_to_bar, y_to_price, |p, from, to| {
@@ -1367,14 +1361,8 @@ mod tests {
         // The painted square has half-side 15: at 45 degrees its bottom vertex is y=221.213.
         // The former corner (115,215) is now 6.21 pt from an edge, outside the 5 pt tolerance.
         let rotated = paint(drawing, false);
-        assert!(DrawingInteraction::hit_test_painted(
-            pos2(100.0, 221.0),
-            &rotated
-        ));
-        assert!(!DrawingInteraction::hit_test_painted(
-            pos2(115.0, 215.0),
-            &rotated
-        ));
+        assert!(hit_test_painted(pos2(100.0, 221.0), &rotated));
+        assert!(!hit_test_painted(pos2(115.0, 215.0), &rotated));
         manager.end_drag_handle();
         assert!(manager.undo());
         assert_eq!(manager.drawings[0].glyph_angle, 0.0);
