@@ -5069,6 +5069,8 @@ mod tests {
             (Some("Hide orders"), (false, false, true)),
             (Some("Hide executions"), (false, false, false)),
             (Some("Hide positions"), (true, false, false)),
+            (Some("Hide orders"), (true, true, false)),
+            (Some("Hide executions"), (true, true, true)),
             (Some("Hide all"), (false, false, false)),
             (Some("Hide all"), (true, true, true)),
         ] {
