@@ -2239,7 +2239,7 @@ mod tests {
                 .is_disabled()
         );
         assert!(
-            h.get_by_label("Level")
+            h.get_by_role_and_label(egui::Role::TextInput, "Level")
                 .value()
                 .is_none_or(|value| value.is_empty())
         );
@@ -2253,9 +2253,11 @@ mod tests {
                 .accesskit_node()
                 .is_disabled()
         );
-        h.get_by_label("Level").click();
+        h.get_by_role_and_label(egui::Role::TextInput, "Level")
+            .click();
         h.run();
-        h.get_by_label("Level").type_text("123.45");
+        h.get_by_role_and_label(egui::Role::TextInput, "Level")
+            .type_text("123.45");
         h.key_press(egui::Key::Enter);
         h.run();
         assert_eq!(h.state().draft.condition, AlertCondition::Crossing(123.45));
