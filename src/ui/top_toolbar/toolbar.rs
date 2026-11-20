@@ -1677,7 +1677,7 @@ mod tests {
                 let direct = matches!(slot, S::Undo | S::Redo | S::Replay | S::Publish | S::Trade);
                 let mut toolbar = TopToolbar::new();
                 let publishing = label != "Copy image";
-                toolbar.state.can_publish_image = publishing && slot != S::Publish;
+                toolbar.state.can_publish_image = publishing;
                 toolbar.state.can_publish_ideas = publishing;
                 toolbar.state.can_undo = expected != TopToolbarAction::None;
                 toolbar.state.can_redo = expected != TopToolbarAction::None;
@@ -1925,7 +1925,6 @@ mod tests {
         let broker = || {
             let mut toolbar = TopToolbar::default();
             toolbar.state.can_trade = true;
-            toolbar.state.can_publish_image = true;
             toolbar.state.can_publish_ideas = true;
             toolbar.timeframe_selector.favorites.insert(Timeframe::Min5);
             toolbar
