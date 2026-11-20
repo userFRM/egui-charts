@@ -501,7 +501,14 @@ impl NewsPanel {
                         seen.insert(story.id);
                         let mut notification = Notification::new(story.time, name.clone());
                         notification.body = story.headline;
-                        notification.symbol = story.symbols.first().cloned();
+                        notification.symbol = story
+                            .symbols
+                            .iter()
+                            .find(|symbol| {
+                                requested.view.symbols.is_empty()
+                                    || requested.view.symbols.contains(symbol)
+                            })
+                            .cloned();
                         self.notifications.push(notification);
                     }
                 }
@@ -1426,14 +1433,19 @@ mod tests {
                 && query.countries == [country]));
         }
         let time = Utc::now();
-        let stories: Vec<_> = [("a1", "AAA"), ("a2", "AAA"), ("b1", "BBB")]
-            .into_iter()
-            .map(|(id, symbol)| {
-                let mut story = NewsStory::new(id, time, id);
-                story.symbols = vec![symbol.into()];
-                story
-            })
-            .collect();
+        let stories: Vec<_> = [
+            ("a1", &["AAA"][..]),
+            ("a2", &["AAA"][..]),
+            ("b1", &["BBB"][..]),
+            ("both", &["AAA", "BBB"][..]),
+        ]
+        .into_iter()
+        .map(|(id, symbols)| {
+            let mut story = NewsStory::new(id, time, id);
+            story.symbols = symbols.iter().map(|symbol| (*symbol).to_owned()).collect();
+            story
+        })
+        .collect();
         for (_, reply) in requests {
             reply.send(Ok(stories.clone()));
         }
@@ -1455,7 +1467,9 @@ mod tests {
             [
                 ("Alpha", "a1", "AAA"),
                 ("Alpha", "a2", "AAA"),
-                ("Beta", "b1", "BBB")
+                ("Alpha", "both", "AAA"),
+                ("Beta", "b1", "BBB"),
+                ("Beta", "both", "BBB")
             ]
         );
 
