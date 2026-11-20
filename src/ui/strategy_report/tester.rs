@@ -641,13 +641,14 @@ impl StrategyTester {
         Ok(strategy)
     }
 
-    /// A single run needs the form's inputs valid together; an optimisation checks each
-    /// combination instead and skips those refused.
-    fn check_run(&self, optimise: bool) -> Result<(), &'static str> {
-        let strategy = self.configured_strategy()?;
+    /// A single run needs the form's inputs valid together on the chart's `timeframe`; an
+    /// optimisation checks each combination instead and skips those refused.
+    fn check_run(&self, timeframe: Timeframe, optimise: bool) -> Result<(), &'static str> {
+        let mut strategy = self.configured_strategy()?;
         if optimise {
             Ok(())
         } else {
+            strategy.set_timeframe(timeframe);
             strategy.validate_inputs()
         }
     }
@@ -672,7 +673,7 @@ impl StrategyTester {
     ) -> Result<(), &'static str> {
         let (symbol, timeframe) = scope;
         super::properties::validate(&self.settings)?;
-        self.check_run(optimise)?;
+        self.check_run(timeframe, optimise)?;
         let mut engine = self.engine(symbol, timeframe);
         engine.exchange_rates = rates;
         if !optimise {
@@ -724,6 +725,7 @@ impl StrategyTester {
                 for input in &inputs {
                     strategy.set_input(&input.id, input.value.clone())?;
                 }
+                strategy.set_timeframe(timeframe);
                 if let Err(reason) = strategy.validate_inputs() {
                     skip(&mut skipped, reason);
                     completed.set(ordinal + 1);
@@ -773,7 +775,7 @@ impl StrategyTester {
             return Err("Choose a fill interval shorter than the chart interval");
         }
         super::properties::validate(&self.settings)?;
-        self.check_run(optimise)?;
+        self.check_run(timeframe, optimise)?;
         if optimise {
             optimisation::grid(&self.ranges)?;
         }
@@ -817,7 +819,7 @@ impl StrategyTester {
         timeframe: Timeframe,
     ) -> Result<StrategyTesterAction, &'static str> {
         super::properties::validate(&self.settings)?;
-        self.check_run(false)?;
+        self.check_run(timeframe, false)?;
         Ok(StrategyTesterAction::AddAlert {
             strategy: self.name.clone(),
             inputs: self

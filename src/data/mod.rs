@@ -113,6 +113,8 @@ pub use inbox::{
     aggregate_trades_with_tick_size,
 };
 pub use order_flow::{BarBook, OrderFlowBars, OrderFlowFootprints, OrderFlowInput, OrderFlowKind};
+#[cfg(all(feature = "widget", feature = "studies"))]
+pub(crate) use order_flow::{PackedTradeRate, RateGuard};
 pub use orders::{
     OrderEvent, OrderFilter, OrderFilterUnavailable, OrderQueue, OrderSizeTier, OrderSizeTiers,
     RestingOrder,
