@@ -1,13 +1,13 @@
 //! Projection sector rendering.
 
 use crate::drawings::domain::Drawing;
-use crate::drawings::rendering::shapes::projection_arc;
+use crate::drawings::rendering::style::ellipse_arc;
 use crate::drawings::validation::MAX_PROJECTION_LEVEL;
 use crate::model::LineStyle;
 use crate::painting::dashed_line::draw_dashed_polyline;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Align, Align2, Color32, Pos2, Shape, Stroke, Vec2};
+use egui::{Align, Align2, Color32, Pos2, Rect, Shape, Stroke, Vec2};
 
 impl Drawing {
     /// A circular sector with a radial gradient, independently styled level arcs and coefficients.
@@ -55,12 +55,13 @@ impl Drawing {
             return;
         };
         if config.show_background {
+            let arc = projection_arc(center, radius, range, clip, ppp);
             let mut mesh = egui::Mesh::default();
             mesh.colored_vertex(center, rgba(config.background_colors[0]));
-            for &point in &sector[1..] {
+            for &point in &arc {
                 mesh.colored_vertex(point, rgba(config.background_colors[1]));
             }
-            for i in 1..sector.len() - 1 {
+            for i in 1..arc.len() {
                 mesh.add_triangle(0, i as u32, (i + 1) as u32);
             }
             painter.add(Shape::mesh(mesh));
@@ -146,6 +147,22 @@ impl Drawing {
         painter.line_segment([end, p1], Stroke::new(stroke::THICK, color));
         painter.line_segment([end, p2], Stroke::new(stroke::THICK, color));
     }
+}
+
+/// Keeps a projection's radial fill accurate even when its arc is offscreen. Spans of at most
+/// π/64 keep the fan's colour interpolation radial; visible arcs still refine to physical pixels.
+fn projection_arc(center: Pos2, radius: f32, range: [f64; 2], clip: Rect, ppp: f32) -> Vec<Pos2> {
+    let sweep = range[1] - range[0];
+    let parts = (sweep.abs() / (std::f64::consts::PI / 64.0))
+        .ceil()
+        .max(1.0) as usize;
+    let mut points = Vec::new();
+    for i in 0..parts {
+        let angles = [i, i + 1].map(|i| range[0] + sweep * i as f64 / parts as f64);
+        let arc = ellipse_arc(center, Vec2::splat(radius), angles, clip, ppp);
+        points.extend(arc.into_iter().skip(usize::from(i != 0)));
+    }
+    points
 }
 
 #[cfg(test)]
@@ -259,10 +276,11 @@ mod tests {
         let cross = |a: Vec2, b: Vec2| a.x * b.y - a.y * b.x;
         let blue = mesh
             .indices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .find_map(|triangle| {
-                let [a, b, c] =
-                    [triangle[0], triangle[1], triangle[2]].map(|i| mesh.vertices[i as usize]);
+                let [a, b, c] = triangle.map(|i| mesh.vertices[i as usize]);
                 let area = cross(b.pos - a.pos, c.pos - a.pos);
                 let wb = cross(point - a.pos, c.pos - a.pos) / area;
                 let wc = cross(b.pos - a.pos, point - a.pos) / area;

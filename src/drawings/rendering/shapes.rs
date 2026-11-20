@@ -69,11 +69,13 @@ impl Drawing {
     pub(super) fn sector_points(&self, clip: Rect, ppp: f32) -> Option<Vec<Pos2>> {
         let (center, radius, range) = self.sector_arc()?;
         let mut points = vec![center];
-        points.extend(if self.tool_type == DrawingToolType::ProjectionTool {
-            projection_arc(center, radius, range, clip, ppp)
-        } else {
-            ellipse_arc(center, egui::Vec2::splat(radius), range, clip, ppp)
-        });
+        points.extend(ellipse_arc(
+            center,
+            egui::Vec2::splat(radius),
+            range,
+            clip,
+            ppp,
+        ));
         Some(points)
     }
 
@@ -375,28 +377,6 @@ impl Drawing {
             painter.add(Shape::mesh(mesh));
         }
     }
-}
-
-/// Keeps a projection's radial fill accurate even when its arc is offscreen. Spans of at most
-/// π/64 keep the fan's colour interpolation radial; visible arcs still refine to physical pixels.
-pub(super) fn projection_arc(
-    center: Pos2,
-    radius: f32,
-    range: [f64; 2],
-    clip: Rect,
-    ppp: f32,
-) -> Vec<Pos2> {
-    let sweep = range[1] - range[0];
-    let parts = (sweep.abs() / (std::f64::consts::PI / 64.0))
-        .ceil()
-        .max(1.0) as usize;
-    let mut points = Vec::new();
-    for i in 0..parts {
-        let angles = [i, i + 1].map(|i| range[0] + sweep * i as f64 / parts as f64);
-        let arc = ellipse_arc(center, egui::Vec2::splat(radius), angles, clip, ppp);
-        points.extend(arc.into_iter().skip(usize::from(i != 0)));
-    }
-    points
 }
 
 /// The quadratic Bezier curve from `a` to `c` pulled towards `b`.
