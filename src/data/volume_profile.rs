@@ -11,7 +11,8 @@ use std::sync::Arc;
 ///
 /// Build a profile beside its bars, as a custom study can return from
 /// `Indicator::volume_profiles`. Set `strip: Some(0.3)` with `right_aligned: true` to
-/// place it in the plot's rightmost 30% instead.
+/// place it in the plot's rightmost 30% instead. A study that writes row values keeps the
+/// volume decimals of the instrument `Indicator::set_instrument` gives it.
 ///
 /// ```
 /// use egui_charts::data::{StudyProfile, VolumeProfile, VolumeProfileConfig};
@@ -28,6 +29,7 @@ use std::sync::Arc;
 ///     right_aligned: false,
 ///     strip: None,
 ///     width: 0.8,
+///     volume_decimals: None,
 /// };
 /// assert_eq!(profile.bars, 0..1);
 /// assert_eq!(profile.strip, None);
@@ -58,6 +60,11 @@ pub struct StudyProfile {
     /// Share of the span, from 0 to 1, that the row with the most volume takes. An options
     /// exposure overlay's largest bar takes half of it on each side of its centre.
     pub width: f32,
+    /// Decimals of the row values that [`VolumeProfileConfig::show_values`] writes, abbreviated
+    /// K, M and B values included, as
+    /// [`Instrument::volume_decimals`](crate::model::Instrument::volume_decimals) sets them;
+    /// `None` writes two decimals.
+    pub volume_decimals: Option<u8>,
 }
 
 /// A level of a finished study profile carried right past the profile's bars: from the bar
@@ -405,6 +412,16 @@ pub(crate) struct ExpiryParts {
     pub rows: Vec<Vec<f64>>,
 }
 
+/// The call and put walls of an options profile drawn at its expiration, marked across its span.
+#[cfg(any(feature = "studies", feature = "widget"))]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct OptionWalls {
+    /// Call and put wall strikes; `None` for a side without one.
+    pub strikes: [Option<f64>; 2],
+    /// Call and put wall colours, unmultiplied RGBA.
+    pub colors: [[u8; 4]; 2],
+}
+
 /// Volume traded at each price row of bars or host-supplied option strikes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VolumeProfile {
@@ -429,6 +446,15 @@ pub struct VolumeProfile {
     // Each row split by expiry, for an options profile drawn by expiry.
     #[cfg(any(feature = "studies", feature = "widget"))]
     pub(crate) expiry_parts: Option<ExpiryParts>,
+    // Each row holds its strike's puts over calls, for an options profile of put/call ratios.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) ratio_rows: bool,
+    // The walls of an options profile drawn at its expiration.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) walls: Option<OptionWalls>,
+    // The expiration date an options profile is drawn at and the colour of its time scale tag.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) expiry_tag: Option<(chrono::NaiveDate, [u8; 4])>,
 }
 
 fn valid_bar(bar: &Bar) -> bool {
@@ -746,6 +772,12 @@ impl VolumeProfile {
             exposure: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             expiry_parts: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            ratio_rows: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            walls: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_tag: None,
         };
         let mut total = 0.0;
         let rows = data
@@ -819,6 +851,12 @@ impl VolumeProfile {
             exposure: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             expiry_parts: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            ratio_rows: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            walls: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_tag: None,
         };
         for (&level, row) in &bar.levels {
             let i = (level - first) as usize;
@@ -933,6 +971,12 @@ impl VolumeProfile {
             exposure: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             expiry_parts: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            ratio_rows: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            walls: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_tag: None,
         })
     }
 
@@ -1571,7 +1615,9 @@ mod tests {
                         crate::painting::volume_profile::ProfileStyle::Study {
                             right_aligned,
                             strip: right_aligned,
+                            walls_visible: [true; 2],
                             width: 0.9,
+                            volume_decimals: None,
                         },
                         &|price| price as f32 * direction,
                     );
