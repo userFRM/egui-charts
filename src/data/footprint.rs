@@ -2239,6 +2239,7 @@ mod tests {
             (depth(DepthHistoryConfig { cadence: TimeDelta::zero(), ..base.clone() }), "depth history cadence must be at least one millisecond, got P0D"),
             (depth(DepthHistoryConfig { rows: 0, ..base.clone() }), "depth history rows must be at least 1, got 0"),
             (depth(DepthHistoryConfig { ticks_per_row: 0, ..base.clone() }), "depth history ticks_per_row must be at least 1, got 0"),
+            (depth(DepthHistoryConfig { retention: Some(TimeDelta::zero()), ..base.clone() }), "depth history retention must be positive, got P0D"),
             (depth(DepthHistoryConfig { columns: 1, ..base.clone() }), "depth history columns must be at least 2, got 1"),
             (Footprint::new(clock(), f64::NAN, 1).map(drop), "footprint tick_size must be finite and above zero, got NaN"),
             (Footprint::new(clock(), 1.0, 0).map(drop), "footprint ticks_per_row must be at least 1, got 0"),
