@@ -346,6 +346,15 @@ impl Indicator for MissedPivots {
     fn line_names(&self) -> Vec<String> {
         vec!["Missed high".to_string(), "Missed low".to_string()]
     }
+
+    // The lines only style zones and hold no values.
+    fn legend_lines(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    fn alert_outputs(&self) -> Vec<(usize, String)> {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
