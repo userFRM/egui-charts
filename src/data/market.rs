@@ -16,6 +16,9 @@ pub struct NewsQuery {
     /// Only stories from these providers, in the identifiers the feed uses, or from every
     /// provider when empty.
     pub providers: Vec<String>,
+    /// Only stories about these countries, in the codes the feed uses, such as `"US"`, or about
+    /// every country when empty.
+    pub countries: Vec<String>,
     /// Short summaries of what moves the market or the symbol, instead of headlines.
     pub highlights: bool,
     /// Stories wanted at most.
@@ -23,9 +26,10 @@ pub struct NewsQuery {
 }
 
 impl NewsQuery {
-    /// Up to `limit` headlines about the whole market, of every topic and provider. Assign
-    /// [`symbols`](Self::symbols), [`topics`](Self::topics) and [`providers`](Self::providers) to
-    /// narrow it, and [`highlights`](Self::highlights) for summaries instead of headlines.
+    /// Up to `limit` headlines about the whole market, of every topic, provider and country.
+    /// Assign [`symbols`](Self::symbols), [`topics`](Self::topics),
+    /// [`providers`](Self::providers) and [`countries`](Self::countries) to narrow it, and
+    /// [`highlights`](Self::highlights) for summaries instead of headlines.
     ///
     /// ```
     /// use egui_charts::data::NewsQuery;
@@ -33,12 +37,14 @@ impl NewsQuery {
     /// let mut query = NewsQuery::new(50);
     /// query.symbols.push("AAPL".into());
     /// assert!(query.topics.is_empty());
+    /// assert!(query.countries.is_empty());
     /// ```
     pub fn new(limit: usize) -> Self {
         Self {
             symbols: Vec::new(),
             topics: Vec::new(),
             providers: Vec::new(),
+            countries: Vec::new(),
             highlights: false,
             limit,
         }

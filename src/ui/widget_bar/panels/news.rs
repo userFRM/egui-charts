@@ -1,18 +1,23 @@
 //! Headlines and highlights the feed supplies, for the chart's symbol, more symbols or the whole
-//! market, narrowed by topic and provider.
+//! market, narrowed by topic, provider and country, with named views of the selection.
 
 use crate::localization as l10n;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Offset, Utc};
 use egui::{Label, RichText, Sense, Ui};
+use serde::{Deserialize, Serialize};
 
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, NewsQuery, NewsStory};
 use crate::icons::icons;
 use crate::model::TimezoneId;
+use crate::services::{ConflictChoice, Storage, StoreKind};
 use crate::theme::ThemeExt;
+use crate::ui::dialogs::templates::TemplateStore;
 use crate::ui_kit::buttons::Button;
+use crate::ui_kit::filter::FilterWidget;
 use crate::ui_kit::status_message::{MessageKind, status_message, translated_status_message};
 use crate::ui_kit::{EmptyState, IconButton, LoadingIndicator, PanelHeader};
 
@@ -34,17 +39,40 @@ pub enum NewsAction {
     OpenUrl(String),
 }
 
+/// A selection the user named.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct NewsView {
+    /// Stories about the whole market instead of the followed symbol.
+    market: bool,
+    /// The symbols added to the followed one.
+    symbols: Vec<String>,
+    topics: Vec<String>,
+    providers: Vec<String>,
+    countries: Vec<String>,
+}
+
+/// The views of one panel and the one shown last, as kept in [`StoreKind::NewsViews`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct NewsViews {
+    current: Option<String>,
+    views: BTreeMap<String, NewsView>,
+}
+
 /// News or highlights fed by the host's [`Datafeed::news`].
 ///
 /// Keep it on the chart's symbol with [`set_symbol`](Self::set_symbol); the user switches between
 /// that symbol's stories and the whole market's. With [`set_symbols`](Self::set_symbols) they can
-/// add symbols, and with [`set_topics`](Self::set_topics) and
-/// [`set_providers`](Self::set_providers) narrow the stories by topic and provider; offering the
-/// values again keeps the choices still offered. Each change asks the feed again with the
-/// complete selection, and only the answer to the latest request is shown. A story opens to its
-/// text, with actions to show the chart at its time and to open its link. Publication times show
-/// in the zone given to [`set_timezone`](Self::set_timezone), UTC until set. Call [`poll`](Self::poll) each frame, then
-/// [`show`](Self::show) while the panel is open.
+/// add symbols, and with [`set_topics`](Self::set_topics), [`set_providers`](Self::set_providers)
+/// and [`set_countries`](Self::set_countries) narrow the stories by topic, provider and country;
+/// offering the values again keeps the choices still offered. With
+/// [`set_storage`](Self::set_storage) they save the selection as a named view, switch, rename and
+/// delete views, and get the last view back when the panel opens. Each change asks the feed again
+/// with the complete selection, and only the answer to the latest request is shown. A story opens
+/// to its text, with actions to show the chart at its time and to open its link. Publication times
+/// show in the zone given to [`set_timezone`](Self::set_timezone), UTC until set. Call
+/// [`poll`](Self::poll) each frame, then [`show`](Self::show) while the panel is open.
 pub struct NewsPanel {
     highlights: bool,
     feed: Option<Arc<dyn Datafeed>>,
@@ -53,6 +81,14 @@ pub struct NewsPanel {
     more_symbols: Vec<(String, bool)>,
     topics: Vec<(String, bool)>,
     providers: Vec<(String, bool)>,
+    countries: Vec<(String, bool)>,
+    /// The named views, in this panel's document.
+    saved: TemplateStore<NewsViews>,
+    stored: bool,
+    /// Whether the view shown last is still to be shown once the views are read.
+    restore: bool,
+    /// The name being written.
+    name: FilterWidget,
     timezone: TimezoneId,
     stories: Vec<NewsStory>,
     open: Option<String>,
@@ -71,6 +107,9 @@ impl std::fmt::Debug for NewsPanel {
             .field("more_symbols", &self.more_symbols)
             .field("topics", &self.topics)
             .field("providers", &self.providers)
+            .field("countries", &self.countries)
+            .field("saved", &self.saved)
+            .field("stored", &self.stored)
             .field("timezone", &self.timezone)
             .field("stories", &self.stories)
             .field("open", &self.open)
@@ -98,6 +137,13 @@ impl NewsPanel {
             more_symbols: Vec::new(),
             topics: Vec::new(),
             providers: Vec::new(),
+            countries: Vec::new(),
+            saved: TemplateStore::new(StoreKind::NewsViews),
+            stored: false,
+            restore: false,
+            name: FilterWidget::new()
+                .placeholder("View name")
+                .show_icon(false),
             timezone: TimezoneId::utc(),
             stories: Vec::new(),
             open: None,
@@ -156,6 +202,34 @@ impl NewsPanel {
         }
     }
 
+    /// Offer `countries`, in the codes the feed uses, as a filter. None is selected at first,
+    /// which lists every country; choices still offered stay selected.
+    pub fn set_countries(&mut self, countries: impl IntoIterator<Item = String>) {
+        if offer(&mut self.countries, countries) {
+            self.refresh();
+        }
+    }
+
+    /// Keep named views in `storage`, in [`StoreKind::NewsViews`], and show the view shown last
+    /// once they are read. Poll every frame, as the panel is.
+    pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
+        self.stored = true;
+        self.restore = true;
+        self.saved.set_storage(storage);
+    }
+
+    /// The views document whose write the host refused because another client changed or created
+    /// it; see [`TemplateStore::storage_conflict`].
+    pub fn storage_conflict(&self) -> Option<&str> {
+        self.saved.storage_conflict()
+    }
+
+    /// Settles the refused write of the views document `name`; see
+    /// [`TemplateStore::resolve_storage_conflict`].
+    pub fn resolve_storage_conflict(&mut self, name: &str, choice: ConflictChoice) {
+        self.saved.resolve_storage_conflict(name, choice);
+    }
+
     /// Show publication times in `timezone`, such as the chart's. UTC until set.
     pub fn set_timezone(&mut self, timezone: TimezoneId) {
         self.timezone = timezone;
@@ -181,16 +255,85 @@ impl NewsPanel {
             symbols,
             topics: chosen(&self.topics).cloned().collect(),
             providers: chosen(&self.providers).cloned().collect(),
+            countries: chosen(&self.countries).cloned().collect(),
             highlights: self.highlights,
             limit: LIMIT,
         };
         feed.news(query, self.inbox.reply(self.request));
     }
 
+    /// The name of this panel's views document.
+    fn document(&self) -> &'static str {
+        if self.highlights {
+            "highlights"
+        } else {
+            "news"
+        }
+    }
+
+    fn views(&self) -> NewsViews {
+        self.saved
+            .entries()
+            .get(self.document())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The selection shown, as a view.
+    fn view(&self) -> NewsView {
+        NewsView {
+            market: self.market,
+            symbols: chosen(&self.more_symbols).cloned().collect(),
+            topics: chosen(&self.topics).cloned().collect(),
+            providers: chosen(&self.providers).cloned().collect(),
+            countries: chosen(&self.countries).cloned().collect(),
+        }
+    }
+
+    /// Select what `view` names. Values not offered are added as chosen, so that the request
+    /// reproduces the view; the host's next offer of that list keeps them only if offered.
+    fn apply(&mut self, view: &NewsView) {
+        self.market = view.market;
+        for (choices, values) in [
+            (&mut self.more_symbols, &view.symbols),
+            (&mut self.topics, &view.topics),
+            (&mut self.providers, &view.providers),
+            (&mut self.countries, &view.countries),
+        ] {
+            for (value, on) in choices.iter_mut() {
+                *on = values.contains(value);
+            }
+            for value in values {
+                if !choices.iter().any(|(offered, _)| offered == value) {
+                    choices.push((value.clone(), true));
+                }
+            }
+        }
+    }
+
+    fn write(&mut self, views: NewsViews) {
+        let document = self.document();
+        if let Err(error) = self.saved.save(document, views) {
+            self.saved.error = Some(error);
+        }
+    }
+
     /// Receive the feed's answer and wake the UI when the next one arrives.
     pub fn poll(&mut self, ctx: &egui::Context) {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
+        self.saved.poll(ctx);
+        if self.restore && self.saved.ready() {
+            self.restore = false;
+            let views = self.views();
+            if let Some(name) = views.current
+                && let Some(view) = views.views.get(&name)
+            {
+                self.apply(view);
+                *self.name.query_mut() = name;
+                self.refresh();
+            }
+        }
         for (key, answer) in self.inbox.drain().answers {
             if key != self.request {
                 continue;
@@ -326,9 +469,11 @@ impl NewsPanel {
             self.more_symbols.clone(),
             self.topics.clone(),
             self.providers.clone(),
+            self.countries.clone(),
         );
-        let offered = !(self.topics.is_empty() && self.providers.is_empty())
-            || (!self.more_symbols.is_empty() && !self.market);
+        let offered =
+            !(self.topics.is_empty() && self.providers.is_empty() && self.countries.is_empty())
+                || (!self.more_symbols.is_empty() && !self.market);
         if offered {
             ui.horizontal_wrapped(|ui| {
                 for (id, all, some, choices) in [
@@ -350,6 +495,12 @@ impl NewsPanel {
                         "{count} providers",
                         &mut self.providers,
                     ),
+                    (
+                        "news_countries",
+                        "All countries",
+                        "{count} countries",
+                        &mut self.countries,
+                    ),
                 ] {
                     if choices.is_empty() || (id == "news_symbols" && self.market) {
                         continue;
@@ -368,6 +519,9 @@ impl NewsPanel {
                 }
             });
         }
+        if self.stored {
+            self.show_views(ui);
+        }
         if refresh
             || market != self.market
             || before
@@ -375,6 +529,7 @@ impl NewsPanel {
                     self.more_symbols.clone(),
                     self.topics.clone(),
                     self.providers.clone(),
+                    self.countries.clone(),
                 )
         {
             self.refresh();
@@ -424,9 +579,12 @@ impl NewsPanel {
                                     ui.set_min_height(26.0);
                                     ui.style_mut().interaction.selectable_labels = false;
                                     ui.label(
-                                        RichText::new(l10n::text(ui.ctx(), meta(story, &self.timezone)))
-                                            .size(theme.text.small)
-                                            .color(theme.ui.text_secondary),
+                                        RichText::new(l10n::text(
+                                            ui.ctx(),
+                                            meta(story, &self.timezone),
+                                        ))
+                                        .size(theme.text.small)
+                                        .color(theme.ui.text_secondary),
                                     );
                                     ui.add(
                                         Label::new(
@@ -455,6 +613,84 @@ impl NewsPanel {
                 }
             });
         action
+    }
+
+    /// The views row: switch to a view, and save, rename or delete one under the written name.
+    fn show_views(&mut self, ui: &mut Ui) {
+        let mut views = self.views();
+        let ready = self.saved.ready();
+        let mut switch = None;
+        let (mut save, mut rename, mut delete) = (false, false, false);
+        ui.horizontal_wrapped(|ui| {
+            if !views.views.is_empty() {
+                dropdown(
+                    ui,
+                    "news_views",
+                    views.current.as_deref().unwrap_or("Views"),
+                    |ui| {
+                        for name in views.views.keys() {
+                            let on = views.current.as_ref() == Some(name);
+                            if ui
+                                .selectable_label(on, l10n::text(ui.ctx(), name))
+                                .clicked()
+                                && ready
+                            {
+                                switch = Some(name.clone());
+                            }
+                        }
+                    },
+                );
+            }
+            ui.allocate_ui(egui::vec2(128.0, 28.0), |ui| {
+                self.name.show(ui);
+            });
+            let named = ready && !self.name.query().trim().is_empty();
+            save = Button::new("Save").enabled(named).show(ui).clicked();
+            rename = Button::new("Rename")
+                .enabled(named && views.current.is_some())
+                .show(ui)
+                .clicked();
+            delete = Button::new("Delete")
+                .enabled(ready && views.current.is_some())
+                .show(ui)
+                .clicked();
+        });
+        let name = self.name.query().trim().to_owned();
+        if let Some(target) = switch
+            && let Some(view) = views.views.get(&target).cloned()
+        {
+            self.apply(&view);
+            *self.name.query_mut() = target.clone();
+            views.current = Some(target);
+            self.write(views);
+        } else if save {
+            views.views.insert(name.clone(), self.view());
+            views.current = Some(name);
+            self.write(views);
+        } else if rename
+            && let Some(old) = views.current.clone()
+            && old != name
+        {
+            if let Some(view) = views.views.remove(&old) {
+                views.views.insert(name.clone(), view);
+            }
+            views.current = Some(name);
+            self.write(views);
+        } else if delete && let Some(old) = views.current.take() {
+            views.views.remove(&old);
+            self.write(views);
+        }
+        if let Some(error) = &self.saved.error {
+            translated_status_message(
+                ui,
+                MessageKind::Error,
+                l10n::format_text(
+                    ui.ctx(),
+                    "Saved views: {error}",
+                    &[("error", error.as_str())],
+                ),
+            );
+        }
     }
 }
 
@@ -496,10 +732,32 @@ fn meta(story: &NewsStory, zone: &TimezoneId) -> String {
 mod tests {
     use super::*;
     use crate::data::{HistoryPage, HistoryRequest, Reply};
+    use egui_kittest::{Harness, kittest::Queryable};
+    use serde_json::json;
     use std::sync::Mutex;
 
     #[derive(Default)]
     struct Feed(Mutex<Vec<(NewsQuery, Reply<Vec<NewsStory>>)>>);
+
+    #[derive(Default)]
+    struct Documents(Mutex<BTreeMap<String, String>>);
+
+    impl Storage for Documents {
+        fn list(&self, _: StoreKind, reply: Reply<Vec<String>>) {
+            reply.send(Ok(self.0.lock().unwrap().keys().cloned().collect()));
+        }
+        fn load(&self, _: StoreKind, name: &str, reply: Reply<Option<String>>) {
+            reply.send(Ok(self.0.lock().unwrap().get(name).cloned()));
+        }
+        fn save(&self, _: StoreKind, name: &str, document: String, reply: Reply<()>) {
+            self.0.lock().unwrap().insert(name.into(), document);
+            reply.send(Ok(()));
+        }
+        fn delete(&self, _: StoreKind, name: &str, reply: Reply<()>) {
+            self.0.lock().unwrap().remove(name);
+            reply.send(Ok(()));
+        }
+    }
 
     impl Datafeed for Feed {
         fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
@@ -595,4 +853,91 @@ mod tests {
         assert_eq!(panel.error, Some(FeedError::NotSupported));
     }
 
+    /// Guards named views through storage: saving, switching, renaming and deleting each write
+    /// the panel's document, a switch asks for the view's selection, and a panel opened on the
+    /// same storage asks for the view shown last.
+    #[test]
+    fn views_save_switch_rename_delete_and_restore_through_storage() {
+        fn panel(feed: &Arc<Feed>, documents: &Arc<Documents>) -> NewsPanel {
+            let mut panel = NewsPanel::new();
+            panel.set_topics(["fx".into(), "oil".into()]);
+            panel.set_countries(["US".into(), "DE".into()]);
+            panel.set_feed(feed.clone());
+            panel.set_storage(documents.clone());
+            panel
+        }
+        /// Write `name` and press `button`. The loading spinner asks for a frame after every
+        /// frame, so step a few at a time.
+        fn press(h: &mut Harness<'_, NewsPanel>, name: &str, button: &str) {
+            *h.state_mut().name.query_mut() = name.into();
+            h.run_steps(3);
+            h.get_by_label(button).click();
+            h.run_steps(3);
+        }
+        let feed = Arc::new(Feed::default());
+        let documents = Arc::new(Documents::default());
+        let stored = || {
+            let document = documents.0.lock().unwrap()["news"].clone();
+            let mut document: serde_json::Value = serde_json::from_str(&document).unwrap();
+            document["template"].take()
+        };
+        let latest = || {
+            let (query, _) = feed.0.lock().unwrap().pop().unwrap();
+            (query.topics, query.countries)
+        };
+        let mut h = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, panel: &mut NewsPanel| {
+                    panel.poll(ui.ctx());
+                    panel.show(ui);
+                },
+                panel(&feed, &documents),
+            );
+        h.run_steps(3);
+        h.state_mut().topics[0].1 = true;
+        h.state_mut().countries[0].1 = true;
+        press(&mut h, "Rates", "Save");
+        let rates = json!({
+            "market": false,
+            "symbols": [],
+            "topics": ["fx"],
+            "providers": [],
+            "countries": ["US"],
+        });
+        assert_eq!(
+            stored(),
+            json!({ "current": "Rates", "views": { "Rates": rates } })
+        );
+
+        h.state_mut().topics = vec![("fx".into(), false), ("oil".into(), true)];
+        h.state_mut().countries[0].1 = false;
+        press(&mut h, "Energy", "Save");
+        assert_eq!(stored()["current"], "Energy");
+        assert_eq!(stored()["views"]["Energy"]["topics"], json!(["oil"]));
+        h.get_by_label("Energy").click();
+        h.run_steps(3);
+        h.get_by_label("Rates").click();
+        h.run_steps(3);
+        assert_eq!(latest(), (vec!["fx".to_owned()], vec!["US".to_owned()]));
+        assert_eq!(stored()["current"], "Rates");
+
+        press(&mut h, "Rates EU", "Rename");
+        let views = stored();
+        assert_eq!(views["current"], "Rates EU");
+        assert_eq!(views["views"]["Rates EU"], rates);
+        assert!(views["views"].get("Rates").is_none() && views["views"].get("Energy").is_some());
+
+        let mut restored = panel(&feed, &documents);
+        for _ in 0..3 {
+            restored.poll(&egui::Context::default());
+        }
+        assert_eq!(latest(), (vec!["fx".to_owned()], vec!["US".to_owned()]));
+
+        press(&mut h, "Rates EU", "Delete");
+        let views = stored();
+        assert_eq!(views["current"], serde_json::Value::Null);
+        assert_eq!(views["views"].as_object().unwrap().len(), 1);
+        assert!(views["views"].get("Energy").is_some());
+    }
 }
