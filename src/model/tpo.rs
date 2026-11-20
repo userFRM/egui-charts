@@ -240,7 +240,7 @@ impl Default for TPOConfig {
 /// Level captions beside a TPO profile, with optional prices.
 ///
 /// Each switch requires its level to be drawn by [`TPOConfig`]: `show_poc`,
-/// `show_value_area`, `show_midpoint`, `show_initial_balance`, `show_opening_range`,
+/// `show_value_area`, `show_midpoint`, `show_initial_balance`, `show_opening_range`, `show_closing_price`,
 /// `show_poor_high`, `show_poor_low` or `show_single_prints`. Initial balance and poor extremes
 /// also require that level to exist. The midpoint has no mark apart from its caption,
 /// so hiding its caption hides the midpoint. Coinciding captions occupy separate rows,
@@ -274,6 +274,8 @@ pub struct TPOLabels {
     pub initial_balance_low: bool,
     /// Caption the session's opening price `Open`.
     pub opening_price: bool,
+    /// Caption the profile's closing price `Close`. Off by default.
+    pub closing_price: bool,
     /// Caption a poor high `PH`.
     pub poor_high: bool,
     /// Caption a poor low `PL`.
@@ -296,6 +298,7 @@ impl Default for TPOLabels {
             initial_balance_high: false,
             initial_balance_low: false,
             opening_price: false,
+            closing_price: false,
             poor_high: false,
             poor_low: false,
             single_prints: false,
@@ -381,6 +384,7 @@ impl TPOConfig {
             || ((labels.initial_balance_high || labels.initial_balance_low)
                 && self.show_initial_balance)
             || (labels.opening_price && self.show_opening_range)
+            || (labels.closing_price && self.show_closing_price)
             || (labels.poor_high && self.show_poor_high)
             || (labels.poor_low && self.show_poor_low)
             || (labels.single_prints && self.show_single_prints)

@@ -1484,6 +1484,7 @@ mod tests {
             ("IBH", "initial_balance_high"),
             ("IBL", "initial_balance_low"),
             ("Open", "opening_price"),
+            ("Close", "closing_price"),
             ("PH", "poor_high"),
             ("PL", "poor_low"),
             ("SP", "single_prints"),

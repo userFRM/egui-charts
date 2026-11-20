@@ -1141,6 +1141,7 @@ impl SymbolTab {
                                 &mut labels.initial_balance_low,
                             ),
                             ("Open", "Opening price", &mut labels.opening_price),
+                            ("Close", "Closing price", &mut labels.closing_price),
                             ("PH", "Poor high", &mut labels.poor_high),
                             ("PL", "Poor low", &mut labels.poor_low),
                             ("SP", "Single prints", &mut labels.single_prints),

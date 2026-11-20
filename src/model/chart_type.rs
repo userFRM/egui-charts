@@ -1421,7 +1421,7 @@ mod tests {
         });
         settings["tpo_labels"] = serde_json::json!({"poc": false, "value_area_high": true, "value_area_low": false,
                 "midpoint": true, "initial_balance_high": true, "initial_balance_low": false,
-                "opening_price": true, "poor_high": false, "poor_low": true,
+                "opening_price": true, "closing_price": true, "poor_high": false, "poor_low": true,
                 "single_prints": true, "prices": true});
         settings["tpo_level_tags"] = true.into();
         let params: ChartTypeParams = serde_json::from_value(settings.clone()).unwrap();
@@ -1593,7 +1593,7 @@ mod tests {
                 legacy["tpo_labels"],
                 serde_json::json!({
                     "poc": true, "value_area_high": true, "value_area_low": true, "midpoint": true,
-                    "initial_balance_high": false, "initial_balance_low": false, "opening_price": false,
+                    "initial_balance_high": false, "initial_balance_low": false, "opening_price": false, "closing_price": false,
                     "poor_high": false, "poor_low": false, "single_prints": false, "prices": false
                 })
             );

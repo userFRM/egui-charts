@@ -70,6 +70,7 @@ enum Level {
     InitialBalanceHigh,
     InitialBalanceLow,
     Open,
+    Close,
     PoorHigh,
     PoorLow,
     SinglePrints,
@@ -86,6 +87,7 @@ impl Level {
             Self::InitialBalanceHigh => "IBH",
             Self::InitialBalanceLow => "IBL",
             Self::Open => "Open",
+            Self::Close => "Close",
             Self::PoorHigh => "PH",
             Self::PoorLow => "PL",
             Self::SinglePrints => "SP",
@@ -148,6 +150,11 @@ fn level_captions(profile: &TPOProfile, config: &TPOConfig) -> Vec<Caption> {
             Level::Open,
             config.show_opening_range && labels.opening_price,
             profile.opening_price,
+        ),
+        (
+            Level::Close,
+            config.show_closing_price && labels.closing_price && profile.closing_price.is_finite(),
+            profile.closing_price,
         ),
         (
             Level::PoorHigh,
@@ -213,6 +220,13 @@ fn caption_color(
         Level::InitialBalanceHigh | Level::InitialBalanceLow => render_config.initial_balance_color,
         Level::Open => {
             if profile.poc_price >= profile.opening_price {
+                bullish
+            } else {
+                bearish
+            }
+        }
+        Level::Close => {
+            if profile.closing_price >= profile.opening_price {
                 bullish
             } else {
                 bearish
@@ -3047,7 +3061,7 @@ mod tests {
         ]);
         let f2 = fixture(&[(100.5, 101.25, 100.0, 101.0), (101.0, 101.0, 100.25, 100.5)]);
         let names = [
-            "POC", "VAH", "VAL", "Mid", "IBH", "IBL", "Open", "PH", "PL", "SP",
+            "POC", "VAH", "VAL", "Mid", "IBH", "IBL", "Open", "Close", "PH", "PL", "SP",
         ];
         let labels = |on: &[&str], prices| TPOLabels {
             poc: on.contains(&"POC"),
@@ -3057,6 +3071,7 @@ mod tests {
             initial_balance_high: on.contains(&"IBH"),
             initial_balance_low: on.contains(&"IBL"),
             opening_price: on.contains(&"Open"),
+            closing_price: on.contains(&"Close"),
             poor_high: on.contains(&"PH"),
             poor_low: on.contains(&"PL"),
             single_prints: on.contains(&"SP"),
@@ -3064,6 +3079,7 @@ mod tests {
         };
         let config = TPOConfig {
             show_midpoint: true,
+            show_closing_price: true,
             show_poor_high: true,
             show_poor_low: true,
             show_single_prints: true,
@@ -3096,6 +3112,7 @@ mod tests {
                     "IBH 110",
                     "IBL 105",
                     "Open 107",
+                    "Close 108",
                     "PH 110",
                     "PL 100",
                     "SP 104 / 105",
@@ -3134,6 +3151,15 @@ mod tests {
                 TPOConfig {
                     show_opening_range: false,
                     ..with_labels(&["Open"], false)
+                },
+                vec![],
+            ),
+            (
+                "closing hidden",
+                &f1,
+                TPOConfig {
+                    show_closing_price: false,
+                    ..with_labels(&["Close"], false)
                 },
                 vec![],
             ),
