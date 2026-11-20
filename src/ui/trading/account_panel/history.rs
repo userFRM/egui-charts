@@ -191,11 +191,7 @@ impl AccountPanel {
                 let mut older = unlisted(page, &fills.executions[fills.paged..], room);
                 for fill in &older {
                     *fills.filled.entry(fill.order.clone()).or_default() += fill.quantity;
-                    if let Some(symbol) = fills
-                        .orders
-                        .get(&fill.order)
-                        .map(|order| order.symbol.clone())
-                    {
+                    if let Some(symbol) = fills.symbol(fill).map(str::to_owned) {
                         fills.remember(&symbol, fill);
                     }
                 }
@@ -287,6 +283,85 @@ mod tests {
 
     fn at(seconds: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(1_704_067_200 + seconds, 0).unwrap()
+    }
+
+    /// A history page can name a fill without supplying its old order. Its symbol reaches the
+    /// last-fill price, the account row and the chart mark.
+    #[test]
+    fn paged_fills_of_unknown_orders_use_their_own_symbol() {
+        use crate::theme::ThemeExt;
+        use crate::widget::{SeriesId, test_frames};
+        use egui::{Shape, pos2};
+        use egui_kittest::Harness;
+
+        let ctx = egui::Context::default();
+        let mut chart = test_frames::chart(&[90.0], &[110.0]);
+        chart.symbol = "ES".into();
+        let mut fill = Execution::new(
+            OrderId::new("old"),
+            chart.bars(SeriesId::MAIN)[95].time + chrono::Duration::hours(12),
+            OrderSide::Buy,
+            95.0,
+            2.0,
+        );
+        fill.symbol = Some("ES".into());
+        let broker = Arc::new(Recorder::default());
+        let mut trading = Trading::default();
+        trading.set_service(broker.clone());
+        trading.poll(&ctx, &mut Toasts::new());
+        trading.load_older(HistoryKind::Executions);
+        let (_, reply) = broker.histories.lock().unwrap().pop().unwrap();
+        reply.send(Ok(HistoryPage::new(
+            vec![AccountEvent::Execution(fill)],
+            None,
+        )));
+        trading.poll(&ctx, &mut Toasts::new());
+        assert_eq!(trading.account_panel.fills.price("ES"), Some(95.0));
+
+        trading.account_panel.tab = Tab::History;
+        trading.account_panel.show_executions = true;
+        trading.account_panel.broker = "Broker".into();
+        {
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1000.0, 400.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui(|ui| {
+                    trading.show_account_panel(ui, "OTHER");
+                });
+            harness.run();
+            assert!(harness.output().shapes.iter().any(|shape| {
+                matches!(&shape.shape, Shape::Text(text) if text.galley.text() == "ES")
+            }));
+        }
+        let mut tips = Vec::new();
+        for _ in 0..3 {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                chart.show(ui);
+                trading.show(ui, &mut chart);
+            });
+            tips = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Path(path)
+                        if path.closed
+                            && path.points.len() == 3
+                            && path.fill == ctx.active_theme().ui.accent =>
+                    {
+                        Some(path.points[0])
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+        }
+        assert_eq!(
+            tips,
+            [pos2(
+                chart.index_to_x(95.0).unwrap(),
+                chart.get_chart_mapping().price_to_y(90.0) + 4.0
+            )]
+        );
     }
 
     /// Orders are matched by id and other entries one to one by value, so each entry is listed
