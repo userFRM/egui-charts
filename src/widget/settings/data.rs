@@ -311,7 +311,7 @@ impl Default for ScalesAppearanceSettings {
     }
 }
 
-/// Canvas tab: Buttons visibility settings
+/// Canvas tab: Buttons visibility settings. Both groups show on mouse over by default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ButtonsSettings {
     /// Visibility of chart navigation controls.
@@ -323,7 +323,7 @@ pub struct ButtonsSettings {
 impl Default for ButtonsSettings {
     fn default() -> Self {
         Self {
-            navigation: ButtonVisibility::Hidden,
+            navigation: ButtonVisibility::VisibleOnMouseOver,
             pane: ButtonVisibility::VisibleOnMouseOver,
         }
     }
