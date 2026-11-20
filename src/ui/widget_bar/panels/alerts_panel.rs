@@ -2711,9 +2711,9 @@ mod tests {
         for field in ["log_symbol", "log_price", "log_message"] {
             assert_eq!(restored[field], true, "{field}");
         }
-        h.get_by_label("Fields").click();
-        h.run();
         for field in ["Message", "Price"] {
+            h.get_by_label("Fields").click();
+            h.run();
             h.get_by_label(field).click();
             h.run();
         }
