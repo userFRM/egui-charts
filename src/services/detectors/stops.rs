@@ -303,6 +303,7 @@ impl StopSweeps {
                     self.footprint = Some(footprint);
                     self.bars.clear();
                     self.volumes.clear();
+                    self.zones.clear();
                 }
             }
         }
@@ -367,13 +368,10 @@ impl StopSweeps {
                 continue;
             }
             self.closed = Some(at);
-            if self.first.is_some_and(|first| at <= first) {
-                continue;
-            }
-            let Some(bar) = footprint.bar_at(at) else {
-                continue;
-            };
-            if settings.footprint.enabled {
+            let bar = footprint
+                .bar_at(at)
+                .filter(|_| self.first.is_none_or(|first| at > first));
+            if settings.footprint.enabled && bar.is_some() {
                 footprint::closed(
                     footprint,
                     at,
@@ -382,7 +380,12 @@ impl StopSweeps {
                     &mut self.zones,
                     out,
                 );
+            } else {
+                self.zones.clear();
             }
+            let Some(bar) = bar else {
+                continue;
+            };
             let volume = bar.volume();
             let buy = prices.close > prices.open;
             let delta = if buy { bar.delta() } else { -bar.delta() };

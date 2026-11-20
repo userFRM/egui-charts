@@ -1958,6 +1958,53 @@ mod tests {
                 assert!(alerts(&host).is_empty(), "{name}: rebuilt five-minute bars");
             }
         }
+        // A closed bar skipped while disabled or after retention ends every active zone.
+        // Disabling and enabling inside a bar still reads its close and keeps unbroken zones.
+        for name in [
+            "disabled across close",
+            "first retained bar",
+            "disabled inside bar",
+        ] {
+            let host = Host::new(None);
+            let mut configured = DetectorSettings::default();
+            configured.footprint.enabled = true;
+            configured.footprint.alert = true;
+            configured.footprint.rule.buy_zone_rejection = true;
+            configured.footprint.rule.sell_zone_rejection = true;
+            host.detectors.set_settings(configured.clone());
+            let push = |second, price, size, side, expected: &[&str]| {
+                let trade = MarketEvent::Trade(fill(second, price, size, side, None));
+                host.detectors.push("ES", time(second), &trade);
+                assert_eq!(alerts(&host), expected, "{name}, second {second}");
+            };
+            for &(second, price, size, side, expected) in &stacked(&[])[..7] {
+                push(second, price, size, side, expected);
+            }
+            push(120, 100.5, 1.0, Sell, &[]);
+            if name != "first retained bar" {
+                configured.footprint.enabled = false;
+                host.detectors.set_settings(configured.clone());
+            }
+            if name == "disabled inside bar" {
+                push(121, 100.75, 1.0, Buy, &[]);
+                configured.footprint.enabled = true;
+                host.detectors.set_settings(configured);
+                let rejected = &["Buy zone rejection: Buy zone rejection at 100.25 to 100.75"];
+                push(180, 100.5, 1.0, Sell, rejected);
+                push(181, 100.75, 1.0, Buy, &[]);
+                push(240, 101.0, 1.0, Buy, rejected);
+            } else {
+                let fills = if name == "first retained bar" { 100_010 } else { 1 };
+                for _ in 0..fills {
+                    push(121, 99.0, 1.0, Sell, &[]);
+                }
+                push(180, 99.0, 1.0, Sell, &[]);
+                configured.footprint.enabled = true;
+                host.detectors.set_settings(configured);
+                push(181, 100.25, 1.0, Buy, &[]);
+                push(240, 100.5, 1.0, Buy, &[]);
+            }
+        }
         // Loaded history, with 101 sold on its own row: marked, never alerted, also when the first
         // live event closes the last history bar.
         let host = Host::new(Some(1_000.0));

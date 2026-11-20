@@ -19,6 +19,9 @@ use crate::services::SignalEvent;
 /// zone or above the highest row of a sell zone. A later closed bar that trades into an active
 /// zone without such a close is a zone rejection; the bar that closes beyond it ends the zone
 /// and fires nothing. Zones come from bars closed while footprint conditions are enabled.
+/// A closed bar skipped because conditions are disabled or its retained footprint is incomplete
+/// or missing ends all active zones. Disabling and enabling inside one bar keeps them if its
+/// close is read.
 /// Volume and delta levels are read on the forming bar after each sided execution: a level
 /// fires on the execution that takes the value past it, by more than the rounding of a sum of
 /// sizes, from the bar's previous value, which starts at zero. Unknown-side executions never
@@ -111,7 +114,7 @@ impl FootprintRule {
 }
 
 /// A stacked imbalance zone of an earlier closed bar, in rows of one tick, active until a later
-/// bar closes beyond its far edge.
+/// bar closes beyond its far edge or a closed bar is skipped.
 pub(super) struct Zone {
     low: i64,
     high: i64,
