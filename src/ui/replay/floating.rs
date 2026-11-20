@@ -7,7 +7,6 @@ use super::start::ReplayStartAction;
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::services::ReplayAccountSettings;
-use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{Button, ButtonSize, ButtonVariant, IconButton};
@@ -479,7 +478,7 @@ impl FloatingReplayControl {
                             if !self.docked {
                                 // The whole frame drags the bar; the grip says so.
                                 ui.add(icons::UI_DRAG_HANDLE.as_image_tinted(
-                                    Vec2::splat(icon_sizes::COMPACT),
+                                    Vec2::splat(DESIGN_TOKENS.sizing.icon_14),
                                     theme.ui.text_muted,
                                 ))
                                 .on_hover_cursor(CursorIcon::Grab)

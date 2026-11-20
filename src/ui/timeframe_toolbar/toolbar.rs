@@ -10,7 +10,7 @@ use crate::localization as l10n;
 use crate::model::DateRange;
 use crate::model::TimezoneId;
 use crate::scales::TimezoneMode;
-use crate::styles::{icons as icon_sizes, stroke};
+use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
@@ -712,7 +712,7 @@ impl TimeframeToolbar {
     /// Render the calendar icon button (Go to date)
     /// Uses the GoToDate SVG icon from the app's icon system
     fn icon_button_calendar(&self, ui: &mut Ui, tooltip: &str) -> Response {
-        let icon_size = icon_sizes::LG;
+        let icon_size = DESIGN_TOKENS.sizing.icon_lg;
         let btn_size = Vec2::new(
             DESIGN_TOKENS.sizing.button_md,
             self.config.panel_height - ui.active_theme().spacing.sm,
