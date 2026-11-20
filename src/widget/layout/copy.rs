@@ -1,7 +1,7 @@
 //! Copies of a chart's studies and settings to the other charts of a layout, undone and redone
 //! together.
 
-use super::ChartLayout;
+use super::{ChartLayout, MAX_CHARTS};
 use crate::chart::overlays::BubbleGrouping;
 use crate::config::ChartConfig;
 use crate::model::{Bar, ChartType, ChartTypeParams, FootprintIntensity, TradeProfileSettings};
@@ -621,7 +621,7 @@ impl ChartLayout {
     }
 
     fn preset_charts(&self, charts: &[&mut Chart]) -> usize {
-        charts.len().min(16).min(self.mode.chart_count())
+        charts.len().min(MAX_CHARTS).min(self.mode.chart_count())
     }
 }
 
