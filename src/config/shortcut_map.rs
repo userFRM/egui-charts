@@ -2,6 +2,7 @@
 
 use super::KeyboardAction;
 use egui::{Context, Event, KeyboardShortcut};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Editable bindings shared by input dispatch, menus and shortcut help.
 ///
@@ -10,7 +11,27 @@ use egui::{Context, Event, KeyboardShortcut};
 /// A binding on a punctuation key also runs when the press differs from it only by Shift and
 /// types that key's character, as some layouts need, unless another binding names that exact
 /// combination.
-#[derive(Clone, Debug)]
+///
+/// Serde writes the bindings in order, as a list of key combinations and actions such as
+/// `{"shortcut": "Ctrl+Shift+Z", "action": "Redo"}`. A combination is spelled with egui's English
+/// key names after `Ctrl`, `Alt` and `Shift`, as the shortcut help reads it out on Linux and
+/// Windows. `Ctrl` is the command key, Cmd on Mac, so a binding on Control alone or on Cmd alone
+/// is saved as one on the command key. Reading leaves out a binding whose key or action this
+/// release does not know and keeps the order of the others.
+///
+/// ```
+/// use egui::{Key, KeyboardShortcut, Modifiers};
+/// use egui_charts::config::KeyboardAction;
+/// use egui_charts::widget::ShortcutMap;
+///
+/// let mut map = ShortcutMap::default();
+/// map.bindings.retain(|(_, action)| *action != KeyboardAction::OpenLayout);
+/// map.bindings.push((KeyboardShortcut::new(Modifiers::ALT, Key::O), KeyboardAction::OpenLayout));
+/// let json = serde_json::to_string(&map).unwrap();
+/// assert!(json.ends_with(r#"{"shortcut":"Alt+O","action":"OpenLayout"}]"#));
+/// assert_eq!(serde_json::from_str::<ShortcutMap>(&json).unwrap(), map);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ShortcutMap {
     /// Key combinations and their actions, in precedence order.
@@ -163,6 +184,65 @@ impl ShortcutMap {
         categories.retain(|(_, actions)| !actions.is_empty());
         categories
     }
+}
+
+/// One binding as saved.
+#[derive(Serialize, Deserialize)]
+struct SavedBinding {
+    shortcut: String,
+    action: KeyboardAction,
+}
+
+impl Serialize for ShortcutMap {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.bindings.iter().map(|(shortcut, action)| SavedBinding {
+            shortcut: canonical(*shortcut).format(&egui::ModifierNames::NAMES, false),
+            action: *action,
+        }))
+    }
+}
+
+impl<'de> Deserialize<'de> for ShortcutMap {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self {
+            bindings: Vec::<serde_json::Value>::deserialize(deserializer)?
+                .into_iter()
+                .filter_map(|item| {
+                    let saved: SavedBinding = serde_json::from_value(item).ok()?;
+                    Some((parse_shortcut(&saved.shortcut)?, saved.action))
+                })
+                .collect(),
+        })
+    }
+}
+
+/// `shortcut` on the command key when it holds Ctrl, Cmd or both, as it is saved.
+pub(crate) fn canonical(shortcut: KeyboardShortcut) -> KeyboardShortcut {
+    let held = shortcut.modifiers;
+    let modifiers = egui::Modifiers {
+        alt: held.alt,
+        shift: held.shift,
+        command: held.command || held.ctrl || held.mac_cmd,
+        ..egui::Modifiers::NONE
+    };
+    KeyboardShortcut::new(modifiers, shortcut.logical_key)
+}
+
+/// Reads a saved combination such as `Ctrl+Shift+Z`; `None` for a key or modifier name this
+/// release does not know.
+fn parse_shortcut(text: &str) -> Option<KeyboardShortcut> {
+    let mut names = text.split('+');
+    let key = egui::Key::from_name(names.next_back()?)?;
+    let mut modifiers = egui::Modifiers::NONE;
+    for name in names {
+        modifiers = modifiers.plus(match name {
+            "Ctrl" => egui::Modifiers::COMMAND,
+            "Alt" => egui::Modifiers::ALT,
+            "Shift" => egui::Modifiers::SHIFT,
+            _ => return None,
+        });
+    }
+    Some(KeyboardShortcut::new(modifiers, key))
 }
 
 pub(crate) fn starts_entry(text: &str) -> bool {

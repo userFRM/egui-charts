@@ -1152,8 +1152,8 @@ mod tests {
         }
         assert_eq!(
             chart.state.price_scale().options().mode,
-            PriceScaleMode::Normal,
-            "Alt+L switched the logarithmic scale back"
+            PriceScaleMode::Logarithmic,
+            "Alt+L switched the logarithmic scale on after cut"
         );
     }
 

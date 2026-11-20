@@ -31,8 +31,11 @@ impl Default for KeyboardOptions {
     }
 }
 
-/// Keyboard actions that can be performed on the chart
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Keyboard actions that can be performed on the chart.
+///
+/// Serde writes and reads the variant name (`"Redo"`), and a drawing tool as
+/// `{"DrawingTool": "TrendLine"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum KeyboardAction {
     /// Pan left by a page.
