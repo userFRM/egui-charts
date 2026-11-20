@@ -32,8 +32,9 @@
 //! # Inputs
 //! Starting year defaults to 2015. Ignored months accepts comma-separated YYYY-MM entries,
 //! excluded from averages, deviations, percentages and projections and shown as Skipped.
-//! The Expected plot colour is the positive colour; Negative colour sets falling cells, line
-//! segments and the remaining-month box. Historical bands keep their own Style tab colours.
+//! Positive colour and Negative colour, `#089981` and `#F23645` by default, set rising and
+//! falling cells, Expected line segments and the remaining-month box. Historical bands keep
+//! their own Style tab colours.
 //! Colour intensity cutoff (%) defaults to 10. Show averages, Show standard deviation and
 //! Show percent positive default to on. Table position defaults to bottom centre; Table
 //! width (%) and Table height (%) default to 0, fitting the cells and rows.
@@ -90,9 +91,10 @@ pub struct Seasonality {
     before_last_year: Option<i32>,
     table: StudyTable,
     projection: Vec<StudyProjection>,
-    /// One per line: Expected, Previous close, Average, Standard deviation, Months. The
-    /// Expected colour is the positive colour of the lines, boxes and cells.
+    /// One per line: Expected, Previous close, Average, Standard deviation, Months.
     colors: [Color32; 5],
+    /// Colour of a rising or unchanged month's line, box and cells.
+    positive_color: Color32,
     /// Colour of a falling month's line, box and cells.
     negative_color: Color32,
     /// The change, in percent, from which a cell or box takes its full colour.
@@ -156,6 +158,7 @@ impl Seasonality {
             },
             projection: Vec::new(),
             colors: [palette::UP, gray, gray, gray, gray],
+            positive_color: palette::UP,
             negative_color: palette::DOWN,
             color_cutoff: 10.0,
             show_averages: true,
@@ -174,10 +177,11 @@ impl Seasonality {
         self
     }
 
-    /// Colours of a month whose average change is positive or zero, and negative, and of the
-    /// heatmap cells.
+    /// Colours of rising or unchanged months and of falling months: their Expected line,
+    /// remaining-month box and cells.
     pub fn with_colors(mut self, positive: Color32, negative: Color32) -> Self {
         self.colors[0] = positive;
+        self.positive_color = positive;
         self.negative_color = negative;
         self
     }
@@ -233,6 +237,7 @@ impl Indicator for Seasonality {
     crate::studies::inputs::study_inputs!(self;
         start_year: integer("Starting year", 0, 9999),
         ignored_months: text("Ignored months"),
+        positive_color: color("Positive colour"),
         negative_color: color("Negative colour"),
         color_cutoff: number("Colour intensity cutoff (%)", 0.01, f64::MAX),
         show_averages: toggle("Show averages"),
@@ -381,7 +386,7 @@ impl Indicator for Seasonality {
             (if value < 0.0 {
                 self.negative_color
             } else {
-                self.colors[0]
+                self.positive_color
             })
             .gamma_multiply((value.abs() / full).min(1.0) as f32)
         };
@@ -532,7 +537,7 @@ impl Indicator for Seasonality {
         (if average < 0.0 {
             self.negative_color
         } else {
-            self.colors[0]
+            self.positive_color
         })
         .gamma_multiply_u8(alpha)
     }
@@ -552,7 +557,14 @@ impl Indicator for Seasonality {
     }
 
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
-        (line == 0 && self.values.value(2, bar)? < 0.0).then_some(self.negative_color)
+        if line != 0 {
+            return None;
+        }
+        Some(if self.values.value(2, bar)? < 0.0 {
+            self.negative_color
+        } else {
+            self.positive_color
+        })
     }
 
     fn fills(&self) -> Vec<crate::studies::StudyFill> {
@@ -561,7 +573,7 @@ impl Indicator for Seasonality {
         vec![crate::studies::StudyFill {
             first: crate::studies::FillBoundary::Plot(0),
             second: crate::studies::FillBoundary::Plot(1),
-            color: tint(self.colors[0]),
+            color: tint(self.positive_color),
             inverted_color: Some(tint(self.negative_color)),
         }]
     }
@@ -660,21 +672,28 @@ mod tests {
             (table.position, table.width, table.height),
             (TablePosition::BottomCenter, None, None)
         );
-        assert_eq!(
-            study
-                .inputs()
-                .iter()
-                .find(|input| input.id == "start_year")
-                .unwrap()
-                .value,
-            InputValue::Integer(2015)
-        );
+        for (id, value) in [
+            ("start_year", InputValue::Integer(2015)),
+            ("positive_color", InputValue::Color(palette::UP)),
+        ] {
+            assert_eq!(
+                study
+                    .inputs()
+                    .iter()
+                    .find(|input| input.id == id)
+                    .map(|input| &input.value),
+                Some(&value),
+                "{id}"
+            );
+        }
 
+        // The Expected plot's Style colour is not the positive colour.
         let mut settings = study.settings();
-        settings.plots[0].color = Color32::GOLD;
+        settings.plots[0].color = Color32::RED;
         study
             .apply_settings(
                 &[
+                    ("positive_color".into(), InputValue::Color(Color32::GOLD)),
                     ("negative_color".into(), InputValue::Color(palette::BLUE)),
                     ("ignored_months".into(), InputValue::Text("2021-01".into())),
                 ],
@@ -686,12 +705,21 @@ mod tests {
         let saved: StudyTemplate = serde_json::from_str(&text).unwrap();
         let mut restored = saved.create().unwrap();
         for study in [&mut study as &mut dyn Indicator, restored.as_mut()] {
+            // Through March 2022, whose one earlier March rose 2%: 18% of the positive colour.
+            study.calculate(&bars[..5]);
+            assert_eq!(
+                study
+                    .projection_fill_color(study.projections().last().unwrap())
+                    .to_array(),
+                [46, 39, 0, 46]
+            );
             study.calculate(&bars);
             let table = study.table().unwrap();
             assert_eq!(table.cell_colors[2][1].to_array(), [12, 29, 77, 77]);
             assert_eq!(table.cell_colors[3][1], Color32::GOLD);
             assert_eq!(table.cell_colors[1][1], empty);
             assert_eq!(table.rows[1][1], StudyCell::Text("Skipped".into()));
+            assert_eq!(study.plot_color(0, 4), Some(Color32::GOLD));
             assert_eq!(study.plot_color(0, 5), Some(palette::BLUE));
             assert_eq!(
                 study
@@ -699,7 +727,7 @@ mod tests {
                     .to_array(),
                 [9, 22, 56, 56]
             );
-            assert_eq!(study.settings().plots[0].color, Color32::GOLD);
+            assert_eq!(study.settings().plots[0].color, Color32::RED);
         }
     }
 

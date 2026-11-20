@@ -102,6 +102,22 @@ pub enum StrategyTesterAction {
     },
     /// Navigation or export intent from the report view.
     Report(StrategyReportAction),
+    /// Start a live run with these inputs and settings on the chart's symbol and interval,
+    /// continue it with [`Backtest::update`], and open the alert dialog on its Strategy fills,
+    /// listing the run in [`AlertDialog::strategy_runs`](crate::ui::dialogs::AlertDialog::strategy_runs).
+    /// The host supplies the instrument currency and exchange rates when the settings need them.
+    AddAlert {
+        /// Strategy name in the tester's factory.
+        strategy: String,
+        /// Inputs by id, as `Strategy::set_input` takes them.
+        inputs: Vec<(String, InputValue)>,
+        /// Account and execution settings of the form.
+        settings: BacktestSettings,
+        /// Instrument of the tester's chart.
+        symbol: String,
+        /// Decision interval of the tester's chart.
+        timeframe: Timeframe,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -636,6 +652,26 @@ impl StrategyTester {
         }
     }
 
+    fn add_alert(
+        &self,
+        symbol: &str,
+        timeframe: Timeframe,
+    ) -> Result<StrategyTesterAction, &'static str> {
+        super::properties::validate(&self.settings)?;
+        self.check_run(false)?;
+        Ok(StrategyTesterAction::AddAlert {
+            strategy: self.name.clone(),
+            inputs: self
+                .inputs
+                .iter()
+                .map(|input| (input.id.clone(), input.value.clone()))
+                .collect(),
+            settings: self.settings.clone(),
+            symbol: symbol.into(),
+            timeframe,
+        })
+    }
+
     /// Draw the form, advance pending execution by one batch and return all host intents.
     /// Bars must belong to `symbol` and `timeframe`; do not include the live, unfinished bar.
     pub fn show(
@@ -679,6 +715,12 @@ impl StrategyTester {
                     egui::Button::new(l10n::text(ui.ctx(), "Run")),
                 )
                 .clicked();
+            if ui.button(l10n::text(ui.ctx(), "Add alert")).clicked() {
+                match self.add_alert(symbol, timeframe) {
+                    Ok(action) => actions.push(action),
+                    Err(error) => self.error = Some(error.into()),
+                }
+            }
             if self.stale && self.report().is_some() {
                 ui.colored_label(
                     ui.active_theme().ui.warning,
