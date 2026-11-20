@@ -349,7 +349,7 @@ pub struct Drawing {
     pub gann: Option<GannConfig>,
     /// Average range and noise, in ticks, and colours of the candles a Ghost Feed projects. New
     /// feeds start from [`GhostFeedConfig::drawing_default`]; `None` uses the defaults, the
-    /// colours of feeds saved before these settings.
+    /// range, noise and colours of feeds saved before these settings.
     #[serde(default)]
     pub ghost_feed: Option<GhostFeedConfig>,
     /// Whether a rectangle or parallel channel draws its halfway line; a channel's takes
