@@ -431,6 +431,8 @@ pub struct DemoApp {
     pub(crate) paper: Arc<egui_charts::services::PaperAccount>,
     broker_picker: egui_charts::ui::trading::BrokerPicker,
     account_panel: AccountPanelSize,
+    /// The height of the account panel the user dragged its top edge to.
+    account_panel_height: f32,
     // The account settings ask whether to reset the paper account.
     paper_reset: bool,
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
@@ -771,6 +773,7 @@ impl DemoApp {
                 picker
             },
             account_panel: AccountPanelSize::Normal,
+            account_panel_height: 320.0,
             paper_reset: false,
             watchlist: WatchlistPanel::new(
                 cc.storage
@@ -3346,24 +3349,45 @@ impl DemoApp {
         if !self.trading.has_broker() || self.account_panel == AccountPanelSize::Closed {
             return;
         }
+        let available = ui.available_height();
         let height = match self.account_panel {
             AccountPanelSize::Minimized => 42.0,
-            AccountPanelSize::Maximized => (ui.available_height() - 160.0).max(320.0),
-            _ => 320.0,
+            AccountPanelSize::Maximized => (available - 160.0).max(self.account_panel_height),
+            _ => self.account_panel_height,
         };
-        let height = height.min((ui.available_height() - 96.0).max(42.0));
+        let height = height.min((available - 96.0).max(42.0));
         let symbol = self.chart.symbol().to_owned();
         let trading = &mut self.trading;
-        let action = egui::Panel::bottom("account_panel")
+        let panel = egui::Panel::bottom("account_panel")
             .exact_size(height)
+            // The dock's own edge below resizes it; the panel's would take the drag.
+            .resizable(false)
             .show_separator_line(false)
             .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
                 top: 4,
                 ..egui::Margin::ZERO
             }))
-            .show(ui, |ui| trading.show_account_panel(ui, &symbol))
-            .inner;
-        match action {
+            .show(ui, |ui| trading.show_account_panel(ui, &symbol));
+        if self.account_panel == AccountPanelSize::Normal {
+            // The 4 point gap over the panel is its top edge; its middle stands for the height.
+            let rect = panel.response.rect;
+            let edge = egui::Rect::from_x_y_ranges(rect.x_range(), rect.top()..=rect.top() + 4.0);
+            let edge = ui
+                .interact(
+                    edge,
+                    ui.scope_id().with("account_panel_edge"),
+                    egui::Sense::drag(),
+                )
+                .on_hover_and_drag_cursor(egui::CursorIcon::ResizeVertical);
+            edge.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Splitter, true, "Resize panel")
+            });
+            if let Some(pointer) = edge.interact_pointer_pos().filter(|_| edge.dragged()) {
+                let most = (available - 96.0).max(42.0);
+                self.account_panel_height = (rect.bottom() + 2.0 - pointer.y).clamp(42.0, most);
+            }
+        }
+        match panel.inner {
             Some(AccountPanelAction::SelectSymbol(symbol)) => self.open_catalog_symbol(&symbol),
             Some(AccountPanelAction::Disconnect) => self.trading.disconnect(),
             Some(AccountPanelAction::ChangeBroker) => self.broker_picker.open(),
@@ -4728,6 +4752,128 @@ mod tests {
                 .to_vec(),
             draw,
         );
+    }
+
+    /// The gap above the account panel resizes it, preserves the chosen height across both
+    /// size toggles, and stops before hiding either the chart or the account header.
+    #[test]
+    fn account_panel_edge_drag_resizes_restores_and_clamps_the_height() {
+        use eframe::App;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.connect_paper();
+        let size = egui::vec2(1440.0, 900.0);
+        let frame = |app: &mut DemoApp, events| {
+            ui_frame(&ctx, size, events, |ui| {
+                app.ui(ui, &mut eframe::Frame::_new_kittest())
+            })
+        };
+        let positions_y = |texts: &[(String, egui::Rect)]| {
+            texts
+                .iter()
+                .find(|(text, rect)| text == "Positions" && rect.top() > 100.0)
+                .expect("account Positions tab")
+                .1
+                .top()
+        };
+        let drag = |app: &mut DemoApp, from: f32, to: f32| {
+            let from = egui::pos2(700.0, from);
+            let to = egui::pos2(700.0, to);
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(app, vec![egui::Event::PointerMoved(from)]);
+            frame(app, vec![button(from, true)]);
+            frame(app, vec![egui::Event::PointerMoved(from.lerp(to, 0.5))]);
+            frame(app, vec![egui::Event::PointerMoved(to)]);
+            frame(app, vec![button(to, false)]);
+            frame(app, vec![])
+        };
+        for _ in 0..3 {
+            frame(&mut app, vec![]);
+        }
+        let before = positions_y(&frame(&mut app, vec![]));
+        // At 320 points high, the middle of the 4 point gap is y = 582.
+        let moved = positions_y(&drag(&mut app, 582.0, 432.0));
+        assert_eq!(before - moved, 150.0);
+        assert_eq!(app.account_panel_height, 470.0);
+
+        for state in [AccountPanelSize::Minimized, AccountPanelSize::Maximized] {
+            app.account_panel = state;
+            frame(&mut app, vec![]);
+            frame(&mut app, vec![]);
+            app.account_panel = AccountPanelSize::Normal;
+            frame(&mut app, vec![]);
+            assert_eq!(positions_y(&frame(&mut app, vec![])), moved, "{state:?}");
+        }
+
+        let upper = size.y - app.top_toolbar.config.height - 4.0 - 96.0;
+        let high = positions_y(&drag(&mut app, 432.0, 0.0));
+        assert_eq!(app.account_panel_height, upper);
+        assert_eq!(before - high, upper - 320.0);
+        let texts = drag(&mut app, size.y + 2.0 - upper, 899.0);
+        assert_eq!(app.account_panel_height, 42.0);
+        let header = texts
+            .iter()
+            .find(|(text, _)| text == "Paper Trading")
+            .expect("account header remains visible")
+            .1;
+        assert!(header.top() >= size.y - 42.0 && header.bottom() <= size.y);
+    }
+
+    /// Changing brokers through the account menu opens the demo's picker while keeping the
+    /// paper account connected until another broker is chosen.
+    #[test]
+    fn account_panel_change_broker_opens_the_picker_without_disconnecting() {
+        use eframe::App;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.connect_paper();
+        let size = egui::vec2(1440.0, 900.0);
+        let draw =
+            |app: &mut DemoApp, ui: &mut egui::Ui| app.ui(ui, &mut eframe::Frame::_new_kittest());
+        for _ in 0..3 {
+            ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        }
+        assert!(!app.broker_picker.is_open());
+        assert!(app.trading.has_broker());
+        let texts = ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        // The broker selector is below the account header's copy of the same name.
+        let broker = texts
+            .iter()
+            .filter(|(text, _)| text == "Paper Trading")
+            .max_by(|(_, a), (_, b)| a.top().total_cmp(&b.top()))
+            .expect("paper broker selector")
+            .1
+            .center();
+        ui_click(&ctx, size, broker, |ui| draw(&mut app, ui));
+        for _ in 0..3 {
+            ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        }
+        let texts = ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        let change = texts
+            .iter()
+            .find(|(text, _)| text == "Change broker")
+            .expect("Change broker menu row")
+            .1
+            .center();
+        ui_click(&ctx, size, change, |ui| draw(&mut app, ui));
+        ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        assert!(app.broker_picker.is_open());
+        assert!(app.trading.has_broker());
     }
 
     /// Bulk removal waits for a lock decision, saves only remembered decisions, and restores
