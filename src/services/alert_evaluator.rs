@@ -633,10 +633,7 @@ mod tests {
         fn metric_history(&self, request: MetricRequest, reply: Reply<MetricPage>) {
             reply.send(if request.symbol == "HELD" {
                 Ok(MetricPage {
-                    points: vec![MetricPoint {
-                        time: bar(0, 0.0).time,
-                        value: 42.0,
-                    }],
+                    points: vec![MetricPoint::new(bar(0, 0.0).time, 42.0)],
                     end_of_history: true,
                 })
             } else {
@@ -1068,10 +1065,12 @@ mod tests {
         factory.register("Metric", || {
             Box::new(crate::studies::MetricStudy::new(
                 crate::data::MetricSeries {
-                    id: "oi".into(),
-                    name: "Open interest".into(),
                     unit: String::new(),
-                    format: crate::scales::StudyFormat::Volume,
+                    ..crate::data::MetricSeries::new(
+                        "oi",
+                        "Open interest",
+                        crate::scales::StudyFormat::Volume,
+                    )
                 },
             ))
         });
