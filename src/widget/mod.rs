@@ -91,6 +91,7 @@ mod targets;
 pub use events::ImageRequest;
 pub use events::{
     ChartEvent, ChartPointer, CursorDataPolicy, DataOperation, PointerKind, PointerTarget,
+    StudyEventKind,
 };
 mod export;
 mod format;
