@@ -186,8 +186,14 @@ mod tests {
                             );
                             let price =
                                 f64::from((body.rect.center().y - 200.0) * direction / 10.0);
-                            // The path is 10..11, displaced by at most 5 ticks of 0.25.
-                            assert!((8.7..=12.3).contains(&price), "tick-scaled body: {price}");
+                            // The path is 10..11, displaced by at most the noise in ticks of
+                            // 0.25, and 0.05 for the 1 px least body.
+                            let reach =
+                                drawing.ghost_feed.unwrap_or_default().noise_ticks * 0.25 + 0.05;
+                            assert!(
+                                (10.0 - reach..=11.0 + reach).contains(&price),
+                                "tick-scaled body: {price}"
+                            );
                             if at == 0 {
                                 up += 1;
                             } else {
