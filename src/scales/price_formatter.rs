@@ -17,7 +17,7 @@ use std::sync::Arc;
 const MAX_PRECISION: usize = 324;
 
 // Inspect the rounded digits so rounding ties follow Rust's formatter.
-pub(super) fn format_decimal(value: f64, precision: usize) -> String {
+pub(crate) fn format_decimal(value: f64, precision: usize) -> String {
     let precision = precision.min(MAX_PRECISION);
     let mut formatted = format!("{value:.precision$}");
     if formatted

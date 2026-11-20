@@ -1403,43 +1403,32 @@ pub(crate) fn rule_form(
             AlertCondition::Crossing(0.0)
         };
     }
-    let level = condition.level().unwrap_or(0.0);
+    // A channel keeps its bounds and a level keeps its value across operators.
+    let (lower, upper) = preset::seeded_bounds(condition).unwrap_or((0.0, 1.0));
     let channel = drawing_channel(source, condition, sources);
     let position = offer_position
         .then(|| drawing_position(source, condition, sources))
         .flatten();
     let choices = [
-        (AlertCondition::Crossing(level), "Crossing"),
-        (AlertCondition::CrossingUp(level), "Crossing up"),
-        (AlertCondition::CrossingDown(level), "Crossing down"),
-        (AlertCondition::Above(level), "Greater than"),
-        (AlertCondition::Below(level), "Less than"),
+        (AlertCondition::Crossing(lower), "Crossing"),
+        (AlertCondition::CrossingUp(lower), "Crossing up"),
+        (AlertCondition::CrossingDown(lower), "Crossing down"),
+        (AlertCondition::Above(lower), "Greater than"),
+        (AlertCondition::Below(lower), "Less than"),
         (
-            AlertCondition::EnteringChannel {
-                lower: level,
-                upper: level + 1.0,
-            },
+            AlertCondition::EnteringChannel { lower, upper },
             "Entering channel",
         ),
         (
-            AlertCondition::ExitingChannel {
-                lower: level,
-                upper: level + 1.0,
-            },
+            AlertCondition::ExitingChannel { lower, upper },
             "Exiting channel",
         ),
         (
-            AlertCondition::InsideChannel {
-                lower: level,
-                upper: level + 1.0,
-            },
+            AlertCondition::InsideChannel { lower, upper },
             "Inside channel",
         ),
         (
-            AlertCondition::OutsideChannel {
-                lower: level,
-                upper: level + 1.0,
-            },
+            AlertCondition::OutsideChannel { lower, upper },
             "Outside channel",
         ),
         (
@@ -1951,6 +1940,61 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The condition menu keeps a channel's bounds across channel operators, gives a single
+    /// level the lower bound and seeds a channel from a level.
+    #[test]
+    fn condition_menu_keeps_channel_bounds() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut dialog = AlertDialog::new();
+        dialog.edit(Alert::new(
+            "SAMPLE",
+            AlertCondition::EnteringChannel {
+                lower: 100.0,
+                upper: 110.0,
+            },
+        ));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(960.0, 900.0))
+            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+        h.run();
+        let (lower, upper) = (100.0, 110.0);
+        let steps = [
+            (
+                "Exiting channel",
+                AlertCondition::ExitingChannel { lower, upper },
+            ),
+            (
+                "Inside channel",
+                AlertCondition::InsideChannel { lower, upper },
+            ),
+            (
+                "Outside channel",
+                AlertCondition::OutsideChannel { lower, upper },
+            ),
+            (
+                "Entering channel",
+                AlertCondition::EnteringChannel { lower, upper },
+            ),
+            ("Crossing", AlertCondition::Crossing(100.0)),
+            (
+                "Entering channel",
+                AlertCondition::EnteringChannel {
+                    lower: 100.0,
+                    upper: 101.0,
+                },
+            ),
+        ];
+        for (label, expected) in steps {
+            h.get_by_label("Condition").click();
+            h.run();
+            h.get_by_label(label).scroll_to_me();
+            h.run();
+            h.get_by_label(label).click();
+            h.run();
+            assert_eq!(h.state().alert.condition, expected, "{label}");
         }
     }
 
