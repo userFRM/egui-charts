@@ -1141,7 +1141,7 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| super::show_editor(ui, &mut manager, Id::new("chart"), pane, false),
+                    |ui| super::show_editor(ui, &mut manager, Id::unique("chart"), pane, false),
                 )
                 .drop_without_applying_deltas();
             }
