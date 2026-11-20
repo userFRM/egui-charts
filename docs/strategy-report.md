@@ -315,7 +315,8 @@ an exit at a bar's open does not include that bar's later range. Time bars end a
 interval, using calendar months for monthly bars. Execution bars end at the next source
 open; the final execution bar is assumed to cover the run's remaining fills.
 Open trades use all remaining source bars.
-At least one held bar is required, and an invalid held bar makes the excursion unavailable.
+At least one held bar is required. An invalid held bar, or an `exchange_rate` that is not
+finite and positive, makes the excursion unavailable.
 OHLC cannot resolve movement on either side of an intrabar fill: these are bar-resolution
 estimates in that case. Use fills at bar boundaries for exact spans, or finer source data
 in host analytics when exact intrabar excursions are required.

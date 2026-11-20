@@ -612,10 +612,10 @@ struct Lot {
 /// differs from the instrument's, less its allocated fees. Each trade records that rate in
 /// [`StrategyTrade::exchange_rate`], and an open trade the latest rate, so its excursions convert
 /// at it. Without a start time, the equity curve holds the initial capital one interval before
-/// the first bar, then the account value at each
-/// bar's close, stamped with the bar's time. With a start time it begins there and subsequent
-/// marks use chart-bar closing times. Fills use the times of their chart or finer bars.
-/// Close fills on trade-based bars use the last source time, which stays fixed as bars arrive.
+/// the first bar, then the account value at each bar's close, stamped with the bar's time. With a
+/// start time it begins there and subsequent marks use chart-bar closing times. Fills use the
+/// times of their chart or finer bars. Close fills on trade-based bars use the last source time,
+/// which stays fixed as bars arrive.
 ///
 /// Bars are oldest first, in strictly increasing time order. A bar without finite prices, or
 /// whose high and low do not contain its open and close, fills no orders and has no equity value.
