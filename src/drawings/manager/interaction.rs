@@ -4,8 +4,9 @@ use super::{DrawingEventKind, DrawingManager, DrawingSyncAction, sync_id};
 use crate::drawings::domain::{
     ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType, HandlePos,
 };
-use crate::drawings::services::{DrawingCommand, HandleService, point_to_line_distance};
+use crate::drawings::services::{DrawingCommand, HandleService};
 use crate::model::PostLink;
+use crate::painting::point_to_segment_distance;
 use egui::{Pos2, Rect};
 
 /// What one Ctrl or Command eraser drag has changed so far.
@@ -31,7 +32,7 @@ fn erased_span(a: Pos2, b: Pos2, e0: Pos2, e1: Pos2, reach: f32) -> Option<(f32,
     {
         return None;
     }
-    let gap = |t: f32| point_to_line_distance(a.lerp(b, t), e0, e1);
+    let gap = |t: f32| point_to_segment_distance(a.lerp(b, t), e0, e1);
     let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
     for _ in 0..40 {
         let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
@@ -90,7 +91,7 @@ fn finish_stroke_piece(
 fn cut_stroke(drawing: &Drawing, from: Pos2, to: Pos2) -> Option<Vec<Drawing>> {
     const ERASER_REACH: f32 = 5.0;
     let reach = ERASER_REACH.max(drawing.stroke_width / 2.0);
-    let outside = |p| point_to_line_distance(p, from, to) > reach;
+    let outside = |p| point_to_segment_distance(p, from, to) > reach;
     let mut piece = Vec::new();
     let mut pieces = Vec::new();
     let mut cut = false;

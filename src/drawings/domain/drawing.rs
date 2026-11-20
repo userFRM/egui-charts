@@ -424,8 +424,10 @@ pub struct Drawing {
     /// draws it over all of them, as drawings were drawn before this setting, and so does a
     /// count of at least the number of series and studies in the pane. Drawings with the same
     /// count are layered by [`z_order`](Self::z_order). The chart updates the count when a series
-    /// or study is removed, moved out of the pane or moved in its order, so the drawing stays
-    /// over and under the same other items.
+    /// or study is removed, moved out of the pane or moved in its order, and, in a user action,
+    /// when one joins the pane or the drawing moves to another pane with the main series or its
+    /// study, so the drawing stays over and under the same other items. An item new to the
+    /// drawing goes under it where its place leaves the choice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub series_layer: Option<usize>,
 }
