@@ -1,6 +1,7 @@
 //! Retained history and a shared, exclusive replay cutoff.
 
 use super::events::same_bar;
+use super::layout::MAX_CHARTS;
 use super::series::PriceSeries;
 use super::{Chart, ChartLayout, SeriesId};
 use crate::data::ReplayDriver;
@@ -708,10 +709,10 @@ impl ChartLayout {
         source: usize,
         time: Option<DateTime<Utc>>,
     ) {
-        if source >= charts.len().min(16) {
+        if source >= charts.len().min(MAX_CHARTS) {
             return;
         }
-        for (index, chart) in charts.iter_mut().take(16).enumerate() {
+        for (index, chart) in charts.iter_mut().take(MAX_CHARTS).enumerate() {
             if self.sync_group(index) == self.sync_group(source) {
                 chart.set_replay_time(time);
             }
