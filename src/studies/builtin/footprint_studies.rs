@@ -76,6 +76,10 @@ pub struct FootprintStudy {
     pub kind: FootprintStudyKind,
     /// Whether later trading ended it, and how.
     pub state: FootprintStudyState,
+    /// Bars that traded into a zone that ends only when broken without closing beyond its far
+    /// edge, in time order, including those before it broke or expired. Empty for every other
+    /// level, zone and marker. [`FootprintStudyState::Rejected`] counts them while it is active.
+    pub rejections: Vec<DateTime<Utc>>,
 }
 
 /// What [`footprint_studies`] marks, and how. The default marks stacks of three diagonal
@@ -210,7 +214,7 @@ pub(crate) fn footprint_studies_on_rows(
         let mut add = |low: i64, high: i64, kind: FootprintStudyKind, extended| {
             let low = low.saturating_mul(group);
             let high = high.saturating_mul(group).saturating_add(group - 1);
-            let (end, state) = if extended {
+            let (end, state, rejections) = if extended {
                 let later = bars[index + 1..]
                     .iter()
                     .take(config.extend_bars.unwrap_or(usize::MAX));
@@ -227,7 +231,7 @@ pub(crate) fn footprint_studies_on_rows(
                         close > high
                     }
                 };
-                let mut rejections = 0;
+                let mut rejections = Vec::new();
                 let ended = later.clone().find_map(|(next, next_group, close)| {
                     if until_broken && close.is_some_and(beyond) {
                         return Some((next.time, FootprintStudyState::Broken));
@@ -244,22 +248,25 @@ pub(crate) fn footprint_studies_on_rows(
                                     >= low
                         });
                     if touched && until_broken && close.is_some() {
-                        rejections += 1;
+                        rejections.push(next.time);
                         return None;
                     }
                     touched.then_some((next.time, FootprintStudyState::Revisited))
                 });
-                match (ended, config.extend_bars) {
+                let outcome = match (ended, config.extend_bars) {
                     (Some((time, state)), _) => (Some(time), state),
                     (None, Some(n)) if later.count() == n => (
                         bars.get(index + n).map(|(last, ..)| last.time),
                         FootprintStudyState::Expired,
                     ),
-                    _ if rejections > 0 => (None, FootprintStudyState::Rejected(rejections)),
+                    _ if !rejections.is_empty() => {
+                        (None, FootprintStudyState::Rejected(rejections.len()))
+                    }
                     _ => (None, FootprintStudyState::Unvisited),
-                }
+                };
+                (outcome.0, outcome.1, rejections)
             } else {
-                (Some(bar.time), FootprintStudyState::Local)
+                (Some(bar.time), FootprintStudyState::Local, Vec::new())
             };
             result.push(FootprintStudy {
                 start: bar.time,
@@ -268,6 +275,7 @@ pub(crate) fn footprint_studies_on_rows(
                 high,
                 kind,
                 state,
+                rejections,
             });
         };
         let (Some((&first, first_row)), Some((&last, last_row))) =
@@ -537,7 +545,7 @@ mod tests {
     /// does the reverse, a close in the far edge's own row is a rejection, and a close beyond
     /// the far edge breaks a zone the bar never traded in. By default, or without closes, each
     /// zone ends at its first revisit as before. A missing join from minute 2 to 4 withholds
-    /// the outcomes that span it.
+    /// the outcomes that span it, and each zone lists the bars that rejected it.
     #[cfg(feature = "widget")]
     #[test]
     fn zones_until_broken_count_rejections_until_a_close_beyond_the_far_edge() {
@@ -579,13 +587,13 @@ mod tests {
         #[rustfmt::skip]
         let rows = [
             // Zone, later bars by minute, missing join, outcome by default and until broken.
-            (StackedAsk, &[(1, up)][..], false, Some((Some(1), Revisited)), Some((None, Rejected(1)))),
-            (StackedAsk, &[(1, up), (2, down)][..], false, Some((Some(1), Revisited)), Some((Some(2), Broken))),
-            (StackedAsk, &[(1, down)][..], false, Some((Some(1), Revisited)), Some((Some(1), Broken))),
-            (StackedAsk, &[(1, up), (2, low_row)][..], false, Some((Some(1), Revisited)), Some((None, Rejected(2)))),
-            (StackedAsk, &[(1, below)][..], false, Some((None, Unvisited)), Some((Some(1), Broken))),
-            (StackedBid, &[(1, down), (2, up)][..], false, Some((Some(1), Revisited)), Some((Some(2), Broken))),
-            (StackedBid, &[(1, down), (2, high_row)][..], false, Some((Some(1), Revisited)), Some((None, Rejected(2)))),
+            (StackedAsk, &[(1, up)][..], false, Some((Some(1), Revisited)), Some((None, Rejected(1), &[1][..]))),
+            (StackedAsk, &[(1, up), (2, down)][..], false, Some((Some(1), Revisited)), Some((Some(2), Broken, &[1][..]))),
+            (StackedAsk, &[(1, down)][..], false, Some((Some(1), Revisited)), Some((Some(1), Broken, &[][..]))),
+            (StackedAsk, &[(1, up), (2, low_row)][..], false, Some((Some(1), Revisited)), Some((None, Rejected(2), &[1, 2][..]))),
+            (StackedAsk, &[(1, below)][..], false, Some((None, Unvisited)), Some((Some(1), Broken, &[][..]))),
+            (StackedBid, &[(1, down), (2, up)][..], false, Some((Some(1), Revisited)), Some((Some(2), Broken, &[1][..]))),
+            (StackedBid, &[(1, down), (2, high_row)][..], false, Some((Some(1), Revisited)), Some((None, Rejected(2), &[1, 2][..]))),
             (StackedAsk, &[(1, up), (4, down)][..], true, Some((Some(1), Revisited)), None),
             (StackedAsk, &[(1, up), (4, away)][..], true, Some((Some(1), Revisited)), None),
         ];
@@ -619,24 +627,30 @@ mod tests {
                             s.high,
                             s.end.map(|end| (end - start).num_minutes()),
                             s.state,
+                            s.rejections
+                                .iter()
+                                .map(|time| (*time - start).num_minutes())
+                                .collect::<Vec<_>>(),
                         )
                     })
                     .collect()
             };
-            let zone = |expected: Option<(Option<i64>, FootprintStudyState)>| -> Vec<_> {
+            let zone = |expected: Option<(Option<i64>, FootprintStudyState, &[i64])>| -> Vec<_> {
                 expected
                     .into_iter()
-                    .map(|(end, state)| (101, 103, end, state))
+                    .map(|(end, state, rejections)| (101, 103, end, state, rejections.to_vec()))
                     .collect()
             };
+            // By default and without closes no bar rejects.
+            let touched = first_touch.map(|(end, state)| (end, state, &[][..]));
             let until = FootprintStudyConfig {
                 zones_until_broken: true,
                 ..Default::default()
             };
             for (config, expected) in [
-                (FootprintStudyConfig::default(), first_touch),
+                (FootprintStudyConfig::default(), touched),
                 // Default config serialized before zones_until_broken existed.
-                (serde_json::from_str(r#"{"stacked_imbalances":true,"naked_poc":true,"delta_poc":true,"unfinished_auctions":true,"imbalance_ratio":3.0,"imbalance_min_volume":0.0,"stack":3,"diagonal":true,"extend_bars":null,"cluster_share":null,"single_print_max":null,"delta_percent":null,"ratio":null,"min_delta":0.0}"#).unwrap(), first_touch),
+                (serde_json::from_str(r#"{"stacked_imbalances":true,"naked_poc":true,"delta_poc":true,"unfinished_auctions":true,"imbalance_ratio":3.0,"imbalance_min_volume":0.0,"stack":3,"diagonal":true,"extend_bars":null,"cluster_share":null,"single_print_max":null,"delta_percent":null,"ratio":null,"min_delta":0.0}"#).unwrap(), touched),
                 (until, until_broken),
             ] {
                 let context = format!(
@@ -651,7 +665,7 @@ mod tests {
                 // Without closes a revisit ends the zone, as by default.
                 assert_eq!(
                     outcome(footprint_studies(&flow, &config)),
-                    zone(first_touch),
+                    zone(touched),
                     "{context}, no closes"
                 );
             }
