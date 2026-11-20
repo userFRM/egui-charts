@@ -3241,14 +3241,10 @@ mod tests {
         let breadth = ConfiguredStudy::new(Box::new(super::super::AdvanceDeclineRatio::default()));
         assert!(!ids(&breadth).contains(&"calculation_timeframe".to_owned()));
         let factory = super::super::IndicatorFactory::new();
-        let mut excluded: Vec<_> = [
-            "Correlation Coefficient",
-            "Ratio",
-            "Spread",
-        ]
-        .into_iter()
-        .map(|name| factory.create_registered(name).unwrap())
-        .collect();
+        let mut excluded: Vec<_> = ["Correlation Coefficient", "Ratio", "Spread", "Performance"]
+            .into_iter()
+            .map(|name| factory.create_registered(name).unwrap())
+            .collect();
         excluded.push(Box::new(super::super::MetricStudy::new(
             crate::data::MetricSeries::new(
                 "oi",
@@ -3310,22 +3306,17 @@ mod tests {
     }
 
     /// Requests added after another symbol's bars arrive follow that symbol, including when a
-    /// chart interval change makes the study need bars of a stated interval. Studies that already
-    /// request their own data stay excluded by the same rule as the Symbol input.
+    /// chart interval change makes Volume24h, Performance without comparisons and daily pivots
+    /// need bars of a stated interval. Each must accept the symbol and request its own bars.
     #[test]
     fn bar_study_on_another_symbol_reads_its_own_bars_on_that_symbol() {
-        use super::super::{Performance, PivotPoints, StudyData, StudyDataRequest, Volume24h};
+        use super::super::{PivotPoints, StudyData, StudyDataRequest, Volume24h};
         use crate::model::BarClock;
-        let cases: [(Box<dyn Indicator>, Timeframe, Timeframe); 4] = [
+        let cases: [(Box<dyn Indicator>, Timeframe, Timeframe); 3] = [
             (
                 Box::new(Volume24h::new()),
                 Timeframe::Week1,
                 Timeframe::Hour1,
-            ),
-            (
-                Box::new(Performance::new()),
-                Timeframe::Min5,
-                Timeframe::Day1,
             ),
             (
                 Box::new(performance_alone()),
@@ -3347,24 +3338,6 @@ mod tests {
             let mut study = ConfiguredStudy::new(inner);
             study.set_timeframe(Timeframe::Day1);
             study.set_bar_clock(&BarClock::new(Timeframe::Day1));
-            if !study.runs_on_other_symbol(&study.study.inputs()) {
-                assert!(
-                    !study
-                        .inputs()
-                        .iter()
-                        .any(|input| input.id == "calculation_symbol"),
-                    "{}",
-                    study.name()
-                );
-                assert!(
-                    study
-                        .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
-                        .is_err(),
-                    "{}",
-                    study.name()
-                );
-                continue;
-            }
             assert!(study.data_requests().is_empty(), "{}", study.name());
             study
                 .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
