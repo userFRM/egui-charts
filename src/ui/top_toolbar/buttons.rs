@@ -6,7 +6,7 @@ use crate::localization as l10n;
 use std::sync::Arc;
 
 use crate::icons::Icon;
-use crate::styles::{icons as icon_sizes, stroke};
+use crate::styles::stroke;
 use egui::{Color32, Galley, Pos2, Rect, Response, Role, Sense, Ui, Vec2, WidgetInfo};
 
 use super::TopToolbarConfig;
@@ -300,7 +300,10 @@ impl TextButton {
 pub fn separator(ui: &mut Ui) {
     ui.space_lg();
     let rect = ui
-        .allocate_exact_size(Vec2::new(stroke::HAIRLINE, icon_sizes::MD), Sense::hover())
+        .allocate_exact_size(
+            Vec2::new(stroke::HAIRLINE, DESIGN_TOKENS.sizing.icon_md),
+            Sense::hover(),
+        )
         .0;
     ui.painter().rect_filled(
         rect,
@@ -341,7 +344,7 @@ impl<'a> TextIconButton<'a> {
 
     pub(crate) fn width(&self, ui: &Ui) -> f32 {
         if self.text.is_empty() {
-            return self.config.padding * 3.0 + icon_sizes::XS;
+            return self.config.padding * 3.0 + DESIGN_TOKENS.sizing.icon_xs;
         }
         let font_id = egui::FontId::proportional(ui.active_theme().text.title);
         let galley = ui.painter().layout_no_wrap(
@@ -349,13 +352,13 @@ impl<'a> TextIconButton<'a> {
             font_id,
             Color32::PLACEHOLDER,
         );
-        galley.rect.width() + self.config.padding * 3.0 + icon_sizes::XS
+        galley.rect.width() + self.config.padding * 3.0 + DESIGN_TOKENS.sizing.icon_xs
     }
 
     /// Show the component and return its response.
     pub fn show(self, ui: &mut Ui) -> Response {
         let padding = self.config.padding;
-        let icon_size = icon_sizes::XS;
+        let icon_size = DESIGN_TOKENS.sizing.icon_xs;
         let font_id = egui::FontId::proportional(ui.active_theme().text.title);
         let size = Vec2::new(self.width(ui), self.config.btn_size);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
@@ -528,7 +531,7 @@ impl Trigger<'_> {
     }
 
     fn width_for(&self, theme: &Theme, label_width: f32) -> f32 {
-        let icon = self.icon.map_or(0.0, |_| icon_sizes::LG);
+        let icon = self.icon.map_or(0.0, |_| DESIGN_TOKENS.sizing.icon_lg);
         let gap = if icon > 0.0 && !self.label.is_empty() {
             theme.spacing.sm
         } else {
@@ -593,7 +596,7 @@ impl Trigger<'_> {
                     .paint_at(ui, Rect::from_min_size(min, Vec2::splat(size)));
             };
             let content_width = galley.size().x
-                + self.icon.map_or(0.0, |_| icon_sizes::LG)
+                + self.icon.map_or(0.0, |_| DESIGN_TOKENS.sizing.icon_lg)
                 + if self.icon.is_some() && !self.label.is_empty() {
                     theme.spacing.sm
                 } else {
@@ -604,11 +607,13 @@ impl Trigger<'_> {
             } else {
                 rect.center().x - content_width / 2.0
             };
-            let label_x = x + self.icon.map_or(0.0, |_| icon_sizes::LG + theme.spacing.sm);
+            let label_x = x + self
+                .icon
+                .map_or(0.0, |_| DESIGN_TOKENS.sizing.icon_lg + theme.spacing.sm);
             let label_pos = Pos2::new(label_x, rect.center().y - galley.size().y / 2.0);
             ui.painter().galley(label_pos, galley, theme.ui.text);
             if let Some(icon) = self.icon {
-                paint_icon(icon, x, icon_sizes::LG);
+                paint_icon(icon, x, DESIGN_TOKENS.sizing.icon_lg);
             }
         }
 

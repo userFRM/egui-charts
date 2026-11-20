@@ -219,6 +219,10 @@ impl Indicator for VolatilityIndex {
     fn line_names(&self) -> Vec<String> {
         vec!["Volatility Index".into()]
     }
+
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

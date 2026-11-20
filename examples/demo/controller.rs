@@ -1082,9 +1082,7 @@ impl DemoApp {
         self.regenerate_bars();
         self.timeframe_toolbar.state.timeframe = tf;
         self.refresh_interval_control();
-        // Source playback stays on its own interval when the display interval changes.
-        self.configure_replay_intervals();
-        self.push_replay_window_to_chart();
+        self.follow_replay_timeframe();
     }
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
@@ -1316,6 +1314,10 @@ impl DemoApp {
         self.settings_state = self.chart_settings_state();
         self.settings_dialog
             .offer_apply_to_all(self.layout_has_other_charts());
+        // Only the synthetic contracts have futures history to reload.
+        self.settings_dialog.offer_futures_data(
+            self.own_data.is_none() && DemoSymbol::find(self.chart.symbol()).exchange == "Futures",
+        );
         self.settings_dialog.set_depth_history_config(
             self.chart
                 .depth_history(SeriesId::MAIN)
@@ -1504,6 +1506,11 @@ impl DemoApp {
     }
 
     fn apply_chart_settings(&mut self, state: ChartSettingsState) {
+        let futures = |chart: &Chart| {
+            let settings = ChartSettingsState::from_chart(chart);
+            (settings.back_adjust_futures, settings.settlement_as_close)
+        };
+        let futures_before = futures(&self.chart);
         let news_changed = state.events.show_news_notifications
             != self.chart.event_visibility().show_news_notifications;
         self.chart.begin_user_action();
@@ -1529,7 +1536,10 @@ impl DemoApp {
         let dividends_changed =
             state.adjust_for_dividends != self.timeframe_toolbar.state.adjust_for_dividends;
         self.timeframe_toolbar.state.adjust_for_dividends = state.adjust_for_dividends;
-        self.follow_chart_session(dividends_changed);
+        let futures_changed = futures(&self.chart) != futures_before;
+        // shortcut: the synthetic contracts have no settlement prices or rolls, so the reload
+        // serves the same bars; model both if the demo gains a continuous contract.
+        self.follow_chart_session(dividends_changed || futures_changed);
     }
 
     /// Whether the current preset shows other charts to copy to.
@@ -2446,9 +2456,7 @@ impl DemoApp {
     }
 
     fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
-        if self.chart.zoom_was_applied() {
-            self.drawing_toolbar.state.zoom_mode_active = false;
-        }
+        self.drawing_toolbar.state.zoom_mode_active = self.chart.is_zoom_mode_active();
         self.drawing_toolbar.state.has_zoom_history = self.chart.state().has_zoom_history();
         use egui_charts::config::CrosshairStyle;
         use egui_charts::ui::drawing_toolbar::{
@@ -2637,6 +2645,7 @@ impl DemoApp {
                 self.chart
                     .drawings_mut()
                     .set_eraser_mode(cursor == CursorType::Eraser);
+                self.chart.set_zoom_mode(false);
                 return;
             }
             DrawingToolbarAction::ToggleValuesTooltip => {
@@ -7764,6 +7773,89 @@ mod tests {
         );
     }
 
+    /// The settings offer the futures data choices on the demo's futures contracts only;
+    /// a changed choice reloads the bars, while Ok without a change keeps them.
+    #[test]
+    fn futures_data_choices_show_for_futures_and_reload_the_bars() {
+        const ROWS: [&str; 2] = ["Back-adjust continuous futures", "Settlement as close"];
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        let size = egui::vec2(1440.0, 900.0);
+        // Search from the top even when an earlier opening left the tab scrolled down.
+        let scroll_to = |app: &mut DemoApp, label: &str| -> Option<egui::Pos2> {
+            let wheel = |dy: f32| {
+                vec![egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    source: egui::MouseWheelSource::Wheel,
+                    phase: egui::TouchPhase::Move,
+                    delta: egui::vec2(0.0, dy),
+                    modifiers: Default::default(),
+                }]
+            };
+            let show = |app: &mut DemoApp, events| {
+                ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+            };
+            show(
+                app,
+                vec![egui::Event::PointerMoved(egui::pos2(900.0, 450.0))],
+            );
+            show(app, wheel(5000.0));
+            for _ in 0..20 {
+                for _ in 0..10 {
+                    show(app, vec![]);
+                }
+                if let Some((_, rect)) = show(app, vec![])
+                    .into_iter()
+                    .find(|(text, _)| text == label)
+                {
+                    return Some(rect.center());
+                }
+                show(app, wheel(-150.0));
+            }
+            None
+        };
+        for (symbol, offered) in [("STOCKA", false), (live::ORDER_LEVEL_SYMBOL, true)] {
+            app.switch_symbol(symbol);
+            app.open_chart_settings_dialog();
+            assert!(
+                scroll_to(&mut app, "Adjust data for dividends").is_some(),
+                "{symbol}"
+            );
+            for row in ROWS {
+                app.open_chart_settings_dialog();
+                assert_eq!(
+                    scroll_to(&mut app, row).is_some(),
+                    offered,
+                    "{symbol}: {row}"
+                );
+            }
+            app.settings_dialog.close();
+        }
+        // One bar makes a reload observable without inspecting the feed's internals.
+        for (row, reloaded) in [(None, false), (Some(ROWS[1]), true)] {
+            let last = app.chart.bars(SeriesId::MAIN).last().unwrap().clone();
+            app.chart.set_data(SeriesId::MAIN, vec![last]);
+            app.open_chart_settings_dialog();
+            if let Some(row) = row {
+                let at = scroll_to(&mut app, row).expect(row);
+                ui_click(&ctx, size, at, |ui| app.show_dialogs(ui.ctx()));
+            }
+            let ok = scroll_to(&mut app, "Ok").expect("Ok");
+            ui_click(&ctx, size, ok, |ui| app.show_dialogs(ui.ctx()));
+            assert!(!app.settings_dialog.is_open, "{row:?}");
+            assert_eq!(
+                app.chart.bars(SeriesId::MAIN).len() > 1,
+                reloaded,
+                "{row:?}"
+            );
+        }
+        assert!(!ChartSettingsState::from_chart(&app.chart).settlement_as_close);
+    }
+
     /// Bars outside regular hours are shaded only in the extended session, and a saved layout
     /// returns in the session it was saved in. A layout saved before the session was recorded
     /// returns its extended hours choice as the 24/7 session.
@@ -9522,6 +9614,22 @@ mod tests {
         assert!(!app.chart.state().has_zoom_history());
         assert!(app.chart.drawings().drawings.is_empty());
         assert!(app.chart.can_redo());
+    }
+
+    /// A cursor pick ends Zoom in, in the chart as in the toolbar.
+    #[test]
+    fn cursor_pick_ends_box_zoom_mode() {
+        use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(
+            egui::Context::default(),
+        ));
+        app.drawing_toolbar.state.zoom_mode_active = true;
+        app.handle_drawing_toolbar(DrawingToolbarAction::ZoomIn);
+        assert!(app.chart.is_zoom_mode_active());
+        // What the toolbar does to its own state on a cursor pick.
+        app.drawing_toolbar.state.clear_selection();
+        app.handle_drawing_toolbar(DrawingToolbarAction::SetCursorType(CursorType::Dot));
+        assert!(!app.chart.is_zoom_mode_active());
     }
 
     #[test]

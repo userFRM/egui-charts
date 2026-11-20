@@ -100,6 +100,10 @@ impl Indicator for VolatilityStop {
         }
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
         self.values.value(0, bar)?;
         let up = *self.uptrend.get(bar)?;
