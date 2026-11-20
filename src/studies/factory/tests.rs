@@ -361,7 +361,7 @@ fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
 /// The study browser opens these studies with the lengths and switches most often used for them.
 #[test]
 fn catalogue_studies_open_with_their_usual_lengths() {
-    use crate::studies::InputValue::{Length, Toggle};
+    use crate::studies::InputValue::{Choice, Length, Number, Toggle};
     let rows = [
         ("SMA", "period", Length(9)),
         ("EMA", "period", Length(9)),
@@ -384,6 +384,10 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("Knoxville Divergence", "rsi_period", Length(21)),
         ("Knoxville Divergence", "lookback", Length(150)),
         ("Advance/Decline", "period", Length(10)),
+        ("Missed Pivot Levels", "period", Choice(4)),
+        ("Missed Pivot Levels", "days_back", Length(180)),
+        ("Missed Pivot Levels", "show_touched", Toggle(false)),
+        ("Missed Pivot Levels", "tolerance", Number(0.0)),
         ("Booker Reversal", "fast_period", Length(12)),
         ("Booker Reversal", "slow_period", Length(26)),
         ("Booker Reversal", "k_period", Length(70)),
@@ -788,6 +792,12 @@ fn catalogue_choices_read_in_words_and_restore() {
         ("Missed Pivot Levels", "period", 1, "Daily"),
         ("Missed Pivot Levels", "period", 2, "Weekly"),
         ("Missed Pivot Levels", "period", 3, "Monthly"),
+        (
+            "Missed Pivot Levels",
+            "period",
+            4,
+            "Daily, weekly and monthly",
+        ),
     ];
     let got: Vec<_> = saved
         .iter()
