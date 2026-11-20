@@ -840,7 +840,7 @@ mod tests {
             );
         harness.run();
         harness
-            .get_by(By::new().role(egui::Role::TextInput).value("e"))
+            .get(By::new().role(egui::Role::TextInput).value("e"))
             .click();
         harness.run();
         for button in ["Insert row below", "Delete column", "Right"] {
