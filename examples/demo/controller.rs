@@ -4965,12 +4965,11 @@ mod tests {
         app.trading.display.instant_orders = true;
         app.trading.trade(symbol.clone(), OrderSide::Buy);
         app.trading.poll(&ctx, &mut app.toasts);
-        let (_answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
-        egui_charts::services::Broker::place(
-            &*app.paper,
-            OrderRequest::new(&symbol, OrderSide::Buy, 1.0, OrderType::Limit(limit)),
-            reply,
-        );
+        let mut request = OrderRequest::new(&symbol, OrderSide::Buy, 1.0, OrderType::Limit(limit));
+        request.time_in_force = egui_charts::model::TimeInForce::GoodTillCancelled;
+        let (answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
+        egui_charts::services::Broker::place(&*app.paper, request, reply);
+        answer.take().expect("limit reply").expect("working limit");
         app.trading.poll(&ctx, &mut app.toasts);
         // Settle the pane mapping before checking the rendered labels.
         for _ in 0..3 {
