@@ -444,7 +444,27 @@ impl Chart {
     /// series to another pane with [`move_series_to_pane`](Self::move_series_to_pane).
     /// Without the original price pane, it joins the surviving main series, or the first
     /// remaining pane when the main series is absent.
+    /// In a [`user_action`](Self::user_action), drawings of the pane it joins stay over and
+    /// under the same series and studies, and the series goes under a drawing where its place
+    /// leaves the choice, as under a drawing placed there. Outside one, as when the host adds
+    /// its series again after restoring a layout that left them out, drawings keep their stored
+    /// count of items under them, which already includes the series.
     pub fn add_series(&mut self, options: SeriesOptions) -> SeriesId {
+        #[cfg(feature = "drawings")]
+        let stack = self.pane_stack(SeriesId(self.next_series));
+        let id = self.add_series_keeping_layers(options);
+        #[cfg(feature = "drawings")]
+        if let Some(stack) = stack {
+            self.keep_stack(stack);
+        }
+        id
+    }
+
+    /// Adds like [`Self::add_series`] without restacking drawings, for a restore.
+    pub(in crate::widget) fn add_series_keeping_layers(
+        &mut self,
+        options: SeriesOptions,
+    ) -> SeriesId {
         let options = options.sanitized();
         let id = SeriesId(self.next_series);
         self.next_series += 1;

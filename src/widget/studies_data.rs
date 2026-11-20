@@ -167,6 +167,10 @@ impl StudyDataCache {
         self.series.retain(|series| series.stream.is_none());
         self.generation += 1;
     }
+    /// Auxiliary series still connected to a feed, including ones the next pump will detach.
+    pub(super) fn has_feed_stream(&self) -> bool {
+        self.series.iter().any(|series| series.stream.is_some())
+    }
     pub(super) fn generation(&self) -> u64 {
         self.generation
     }
@@ -852,11 +856,20 @@ pub(super) mod tests {
             .collect()
     }
 
-    /// Counts the heap allocations of each thread, so a test can bound its own.
+    /// Counts allocation requests and their sizes on the calling thread.
     struct Counting;
 
     thread_local! {
-        static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static TOTALS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    }
+
+    impl Counting {
+        fn record(bytes: usize) {
+            let _ = TOTALS.try_with(|totals| {
+                let (count, requested) = totals.get();
+                totals.set((count + 1, requested.wrapping_add(bytes)));
+            });
+        }
     }
 
     #[global_allocator]
@@ -865,7 +878,7 @@ pub(super) mod tests {
     // SAFETY: every call forwards to `System` with the caller's arguments; the counter only observes.
     unsafe impl std::alloc::GlobalAlloc for Counting {
         unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
+            Self::record(layout.size());
             // SAFETY: forwarded unchanged.
             unsafe { std::alloc::System.alloc(layout) }
         }
@@ -881,7 +894,7 @@ pub(super) mod tests {
             layout: std::alloc::Layout,
             new_size: usize,
         ) -> *mut u8 {
-            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
+            Self::record(new_size);
             // SAFETY: forwarded unchanged.
             unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
         }
@@ -889,9 +902,17 @@ pub(super) mod tests {
 
     /// The heap allocations `run` makes on this thread, not counting the drop of its result.
     pub(in crate::widget) fn allocations<T>(run: impl FnOnce() -> T) -> (usize, T) {
-        let before = ALLOCATIONS.with(std::cell::Cell::get);
+        let before = TOTALS.with(std::cell::Cell::get).0;
         let result = run();
-        (ALLOCATIONS.with(std::cell::Cell::get) - before, result)
+        (TOTALS.with(std::cell::Cell::get).0 - before, result)
+    }
+
+    /// Total bytes requested on this thread, charging reallocations at their full new size.
+    pub(in crate::widget) fn requested_bytes<T>(run: impl FnOnce() -> T) -> (usize, T) {
+        let before = TOTALS.with(std::cell::Cell::get).1;
+        let result = run();
+        let after = TOTALS.with(std::cell::Cell::get).1;
+        (after.wrapping_sub(before), result)
     }
 
     /// The chart rebuilds its session profiles on every frame, so grouping rows must not copy
@@ -2105,7 +2126,7 @@ pub(super) mod tests {
         let dropped = FeedError::Network("stream dropped".into());
         for (shared, error) in [(false, None), (true, None), (false, Some(dropped))] {
             let (mut chart, daily) = minute_chart(|day| Bar::new(day, 50.0, 50.0, 50.0, 50.0, 1.0));
-            let id = chart.add_indicator(Box::new(crate::studies::Performance::new()));
+            let id = chart.add_indicator(chart_performance());
             if shared {
                 let mut average = crate::studies::ConfiguredStudy::new(Box::new(SMA::new(2)));
                 average
@@ -2177,6 +2198,17 @@ pub(super) mod tests {
         pages
     }
 
+    /// Performance of the chart symbol alone over the six standard periods, whose daily history
+    /// reaches one year back.
+    fn chart_performance() -> Box<dyn crate::studies::Indicator> {
+        use crate::studies::Indicator;
+        let mut study = crate::studies::Performance::new();
+        for (id, text) in [("symbols", ""), ("periods", "1W, 1M, 3M, 6M, YTD, 1Y")] {
+            study.set_input(id, InputValue::Text(text.into())).unwrap();
+        }
+        Box::new(study)
+    }
+
     /// 390 one-minute bars of 2024-03-15 at 100 on MAIN, and daily bars at 00:00 UTC on every
     /// weekday of the two years before, from `bar`.
     fn minute_chart(bar: impl Fn(DateTime<chrono::Utc>) -> Bar) -> (Chart, Vec<Bar>) {
@@ -2212,9 +2244,7 @@ pub(super) mod tests {
     /// of Projected Pivot Points are the same levels.
     #[test]
     fn yearly_pivots_read_the_whole_previous_year_of_paged_daily_bars() {
-        use crate::studies::{
-            Indicator, Performance, PivotPoints, PivotTimeframe, ProjectedPivotPoints,
-        };
+        use crate::studies::{Indicator, PivotPoints, PivotTimeframe, ProjectedPivotPoints};
         let spike: DateTime<chrono::Utc> = "2023-01-10T00:00:00Z".parse().unwrap();
         let pivots = || -> Box<dyn Indicator> {
             Box::new(
@@ -2248,7 +2278,7 @@ pub(super) mod tests {
                 Bar::new(day, 100.0, high, low, 100.0, 1.0)
             });
             if after_performance {
-                chart.add_indicator(Box::new(Performance::new()));
+                chart.add_indicator(chart_performance());
             }
             let id = chart.add_indicator(study);
             let feed = Arc::new(RetryFeed::default());
@@ -2309,7 +2339,7 @@ pub(super) mod tests {
         ] {
             let (mut chart, daily) = minute_chart(|day| Bar::new(day, 50.0, 50.0, 50.0, 50.0, 1.0));
             chart.set_chart_type(chart_type);
-            let id = chart.add_indicator(Box::new(crate::studies::Performance::new()));
+            let id = chart.add_indicator(chart_performance());
             let pages = page_daily(&mut chart, &daily, None);
             let study = chart.indicators().find(|(at, _)| *at == id).unwrap().1;
             let changes: Vec<_> = (0..6).map(|line| study.values().value(line, 389)).collect();
@@ -2444,7 +2474,7 @@ pub(super) mod tests {
     #[test]
     fn live_daily_bars_refresh_only_their_studies_and_keep_them_drawn() {
         use crate::model::ChartType;
-        use crate::studies::{Indicator, IndicatorValues, Performance};
+        use crate::studies::{Indicator, IndicatorValues};
         use std::sync::atomic::{AtomicUsize, Ordering};
         /// A study counting its calculations from the first bar.
         struct Counted(Box<dyn Indicator>, Arc<AtomicUsize>);
@@ -2513,7 +2543,7 @@ pub(super) mod tests {
             chart.set_chart_type(chart_type);
             let counts = [(); 2].map(|_| Arc::new(AtomicUsize::new(0)));
             let mut studies = [
-                Counted(Box::new(Performance::new()), counts[0].clone()),
+                Counted(chart_performance(), counts[0].clone()),
                 Counted(Box::new(SMA::new(3)), counts[1].clone()),
             ]
             .map(Some);
@@ -2923,6 +2953,68 @@ pub(super) mod tests {
                 expected,
             );
         }
+    }
+
+    /// A bar-only study requests the chosen symbol and matches a chart of that symbol.
+    #[test]
+    fn a_study_without_a_source_reads_another_symbol() {
+        use crate::studies::{Indicator, ParabolicSAR};
+        let main = bars(&[1.0; 10], 60);
+        let other = bars(
+            &[10.0, 11.0, 12.5, 12.0, 13.5, 13.0, 15.0, 14.0, 16.5, 18.0],
+            60,
+        );
+        let mut chart = Chart::new(crate::model::BarData::from_bars(main.clone()));
+        chart.set_symbol("MAIN");
+        chart.set_timeframe(Timeframe::Hour1);
+        let id = chart.add_indicator(Box::new(ParabolicSAR::default()));
+        chart
+            .indicator_mut(id)
+            .unwrap()
+            .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
+            .unwrap();
+        let request = StudyDataRequest {
+            symbol: "OTHER".into(),
+            timeframe: Some(Timeframe::Hour1),
+            metric: None,
+        };
+        assert_eq!(chart.study_data_requests(), std::slice::from_ref(&request));
+        chart.set_study_data(request, other.clone(), None);
+        let mut reference = Chart::new(crate::model::BarData::from_bars(other));
+        reference.set_symbol("OTHER");
+        reference.set_timeframe(Timeframe::Hour1);
+        let reference_id = reference.add_indicator(Box::new(ParabolicSAR::default()));
+        let ctx = egui::Context::default();
+        let reference_ctx = egui::Context::default();
+        for frame in 0..10 {
+            shapes(&ctx, &mut chart, frame as f64, Vec::new());
+            shapes(&reference_ctx, &mut reference, frame as f64, Vec::new());
+        }
+        let study = chart
+            .indicators()
+            .find(|(candidate, _)| *candidate == id)
+            .unwrap()
+            .1;
+        let expected = reference
+            .indicators()
+            .find(|(candidate, _)| *candidate == reference_id)
+            .unwrap()
+            .1;
+        for line in 0..study.line_count() {
+            for bar in 0..10 {
+                assert_eq!(
+                    study.values().value(line, bar),
+                    expected.values().value(line, bar),
+                    "{line} {bar}"
+                );
+            }
+        }
+        let mut chart_symbol = ParabolicSAR::default();
+        chart_symbol.calculate(&main);
+        assert_ne!(
+            study.values().value(0, 9),
+            chart_symbol.values().value(0, 9)
+        );
     }
 
     /// A study calculated on another interval reads the other symbol its input names on that

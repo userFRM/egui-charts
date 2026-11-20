@@ -100,9 +100,17 @@ pub struct FootprintConfig {
     pub value_area_low: Option<Stroke>,
     /// Trade profiles: how volume nodes are chosen.
     pub node_sensitivity: NodeSensitivity,
-    /// Prefer 1.2K for 1,200 and 3.4M for 3,400,000, even when every digit would fit.
-    /// Otherwise compact units are only a width-fitting fallback.
+    /// Prefer 1.2K for 1,200 and 3.4M for 3,400,000, even when every digit would fit, at the
+    /// [`volume_decimals`](Self::volume_decimals) when they are set. Otherwise compact units are
+    /// only a width-fitting fallback.
     pub abbreviate: bool,
+    /// Decimals of volumes, abbreviated K, M and B values included, as
+    /// [`Instrument::volume_decimals`](crate::model::Instrument::volume_decimals) sets them for
+    /// the chart's other volume readouts. `None`, the default, keeps the footprint's own rule:
+    /// up to three decimals below 100, none from 100 up, scientific notation below 0.001 and one
+    /// decimal in compact units. Trade counts and open interest keep that rule either way. The
+    /// chart takes its instrument's decimals when this is `None`.
+    pub volume_decimals: Option<u8>,
     /// Write zero volumes as 0. Otherwise they are left blank, so a one-sided row shows only
     /// the side that traded.
     pub show_zero: bool,
@@ -165,6 +173,7 @@ impl Default for FootprintConfig {
             value_area_low: Some(Stroke::new(1.0, Color32::GRAY)),
             node_sensitivity: NodeSensitivity::default(),
             abbreviate: true,
+            volume_decimals: None,
             show_zero: true,
             font_size: [10.0, 10.0],
             extreme_ratio: false,
@@ -233,6 +242,7 @@ impl FootprintConfig {
             .then_some(crate::studies::FootprintStudyConfig {
                 stacked_imbalances: params.footprint_stacked_imbalances,
                 stack: params.footprint_stack,
+                zones_until_broken: params.footprint_zones_until_broken,
                 naked_poc: params.footprint_naked_poc,
                 delta_poc: params.footprint_delta_poc,
                 unfinished_auctions: params.footprint_unfinished_auctions,
@@ -303,8 +313,9 @@ pub(crate) fn footprint_column_width(bar_spacing: f32, config: &FootprintConfig)
 /// footprint's clock and grouping anchor; trade-based bars keep their exact allocated opens.
 /// Text layout uses egui's galley cache; rows below the minimum height never request a layout.
 /// Row bands extend half an instrument tick below their first tick and above their last tick,
-/// including grouped rows. Fractional volumes below 100 retain
-/// up to three decimals; nonzero magnitudes below 0.001 use scientific notation. Only display
+/// including grouped rows. Volumes take [`FootprintConfig::volume_decimals`]; without them,
+/// fractional volumes below 100 retain up to three decimals and nonzero magnitudes below 0.001
+/// use scientific notation. Only display
 /// grouping runs during painting. Cells under a point wide are too narrow to read and are skipped
 /// before looking up executions. Unless a [`FootprintMode::Ladder`] column draws its candle, a
 /// price spine occupies a separate gutter to the left of each bar: the opening tick points left,
@@ -507,7 +518,13 @@ pub(crate) fn render_footprint_read(
                     }
                 } else {
                     let text = |row: &FootprintLevel, compact| {
-                        cell_text(*mode, row, config.abbreviate || compact, config.show_zero)
+                        cell_text(
+                            *mode,
+                            row,
+                            config.abbreviate || compact,
+                            config.show_zero,
+                            config.volume_decimals,
+                        )
                     };
                     [fit(width - 2.5, &text), None]
                 }
@@ -1001,20 +1018,24 @@ fn column_galleys(
 }
 
 /// The text of one cell in `mode`; empty when every number in it is a hidden zero.
-fn cell_text(
+pub(super) fn cell_text(
     mode: FootprintMode,
     row: &FootprintLevel,
     abbreviate: bool,
     show_zero: bool,
+    decimals: Option<u8>,
 ) -> String {
     let hidden = |value: f64| value == 0.0 && !show_zero;
-    let number = |value: f64| {
+    let text = |value: f64, decimals| {
         if hidden(value) {
             String::new()
         } else {
-            volume_text(value, abbreviate)
+            volume_text(value, abbreviate, decimals)
         }
     };
+    let number = |value: f64| text(value, decimals);
+    // Trade counts are whole numbers, not volumes.
+    let count = |value: f64| text(value, None);
     let signed = |value: f64| match number(value) {
         text if text.is_empty() || value < 0.0 => text,
         text => format!("+{text}"),
@@ -1040,10 +1061,10 @@ fn cell_text(
         }
         FootprintMode::BidAskTrades => format!(
             "{} × {}",
-            number(row.bid_trades as f64),
-            number(row.ask_trades as f64)
+            count(row.bid_trades as f64),
+            count(row.ask_trades as f64)
         ),
-        FootprintMode::Trades => number(row.trades() as f64),
+        FootprintMode::Trades => count(row.trades() as f64),
         FootprintMode::AverageSize => row.average_size().map_or_else(String::new, number),
     }
 }
@@ -1053,7 +1074,7 @@ fn ladder_text(value: f64, config: &FootprintConfig, compact: bool) -> String {
     if value == 0.0 && !config.show_zero {
         return String::new();
     }
-    if config.abbreviate && !compact && value.abs() >= 1000.0 {
+    if config.abbreviate && !compact && value.abs() >= 1000.0 && config.volume_decimals.is_none() {
         // 999,995 and above round to 1000.00K, so they take the next unit.
         let (scaled, unit) = if value.abs() >= 999_995.0 {
             (value / 1e6, 'M')
@@ -1065,10 +1086,24 @@ fn ladder_text(value: f64, config: &FootprintConfig, compact: bool) -> String {
             egui::emath::format_with_decimals_in_range(scaled, 0..=2)
         );
     }
-    volume_text(value, config.abbreviate || compact)
+    volume_text(value, config.abbreviate || compact, config.volume_decimals)
 }
 
-fn volume_text(value: f64, abbreviate: bool) -> String {
+/// A volume as cells, ladders and statistics write it: with `decimals`, as the chart's other
+/// volume readouts write it, else by the footprint's own rule, see
+/// [`FootprintConfig::volume_decimals`].
+fn volume_text(value: f64, abbreviate: bool, decimals: Option<u8>) -> String {
+    if let Some(decimals) = decimals {
+        let precision = usize::from(decimals);
+        return if abbreviate {
+            crate::scales::PriceFormatter::format(
+                &crate::scales::VolumeFormatter { precision },
+                value,
+            )
+        } else {
+            crate::scales::format_decimal(value, precision)
+        };
+    }
     if abbreviate && value.abs() >= 1000.0 {
         // 999,950 and above round to 1000.0K at one decimal, so they take the next unit.
         let (scaled, unit) = if value.abs() >= 999_950.0 {
@@ -1794,7 +1829,15 @@ pub(crate) fn render_footprint_statistics_rows_read(
                                             | FootprintStatistic::PointOfControl,
                                             Some(value),
                                         ) => format!("{value:.decimals$}"),
-                                        (_, Some(value)) => volume_text(value, abbreviate),
+                                        (
+                                            FootprintStatistic::Trades
+                                            | FootprintStatistic::OpenInterestHigh
+                                            | FootprintStatistic::OpenInterestLow,
+                                            Some(value),
+                                        ) => volume_text(value, abbreviate, None),
+                                        (_, Some(value)) => {
+                                            volume_text(value, abbreviate, config.volume_decimals)
+                                        }
                                     };
                                     painter.layout_no_wrap(
                                         text,
@@ -1937,6 +1980,8 @@ pub(crate) fn render_footprint_annotations(
 /// Stacks, naked POCs and unfinished levels extend to their first revisit, or a stack that ends
 /// only when broken to its break, to their expiry or the last displayed bar, in full colour while
 /// unvisited or rejected and dimmed once revisited, broken or expired;
+/// each bar that rejected a stack that ends only when broken is marked
+/// by a triangle on the stack's near edge, pointing away from it;
 /// stacks take the imbalance colour of their side;
 /// local annotations stay anchored to their originating bar. Delta percentage and ratio markers
 /// are triangles outside the bar: buy markers above it, sell markers below, the delta marker
@@ -2045,6 +2090,33 @@ pub(crate) fn render_footprint_studies_read(
             | FootprintStudyState::Broken => color.gamma_multiply(0.45),
             _ => color,
         };
+        // The near edge follows the price even on an inverted scale.
+        let radius = (mapping.bar_spacing * 0.2).min(4.0);
+        let edge = if study.kind == FootprintStudyKind::StackedBid {
+            y1
+        } else {
+            y2
+        };
+        let away = if edge < rect.center().y { -1.0 } else { 1.0 };
+        for time in &study.rejections {
+            let Some(&index) = indices.get(time) else {
+                continue;
+            };
+            let x = mapping.idx_to_x(index);
+            painter.add(Shape::convex_polygon(
+                vec![
+                    pos2(x, edge + away * radius * 1.5),
+                    pos2(x - radius, edge),
+                    pos2(x + radius, edge),
+                ],
+                if detail {
+                    color
+                } else {
+                    color.gamma_multiply(0.5)
+                },
+                Stroke::NONE,
+            ));
+        }
         let label = match study.kind {
             FootprintStudyKind::StackedBid => "Bid stack",
             FootprintStudyKind::StackedAsk => "Ask stack",
@@ -2463,6 +2535,49 @@ mod tests {
                 .studies
                 .is_none()
         );
+
+        // The chart type's persistence setting reaches the cached annotations: a buy stack
+        // at 100.25..100.75 is rejected by the next bar, which trades inside and closes at 100.75.
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for (price, size, side) in [
+            (100.0, 1.0, OrderSide::Sell),
+            (100.25, 1.0, OrderSide::Sell),
+            (100.5, 1.0, OrderSide::Sell),
+            (100.25, 12.0, OrderSide::Buy),
+            (100.5, 9.0, OrderSide::Buy),
+            (100.75, 15.0, OrderSide::Buy),
+        ] {
+            flow.push(&Tick::new(time, price, size, Some(side)))
+                .unwrap();
+        }
+        let next = time + chrono::TimeDelta::minutes(1);
+        for (price, side) in [(100.5, OrderSide::Sell), (100.75, OrderSide::Buy)] {
+            flow.push(&Tick::new(next, price, 1.0, Some(side))).unwrap();
+        }
+        let bars = [
+            Bar::new(time, 100.0, 100.75, 100.0, 100.75, 39.0),
+            Bar::new(next, 100.5, 100.75, 100.5, 100.75, 2.0),
+        ];
+        for until_broken in [true, false] {
+            let params = ChartTypeParams {
+                footprint_stacked_imbalances: true,
+                footprint_zones_until_broken: until_broken,
+                ..Default::default()
+            };
+            let config = FootprintConfig::from_chart_params(&params, [Color32::WHITE; 4], 1);
+            let studies = cached_annotations(&ctx, &annotation_mapping(), &bars, &flow, &config);
+            let zones: Vec<_> = studies
+                .iter()
+                .filter(|s| s.start == time && s.kind == FootprintStudyKind::StackedAsk)
+                .map(|s| (s.low, s.high, s.end, s.state, s.rejections.clone()))
+                .collect();
+            let expected = if until_broken {
+                (401, 403, None, FootprintStudyState::Rejected(1), vec![next])
+            } else {
+                (401, 403, Some(next), FootprintStudyState::Revisited, vec![])
+            };
+            assert_eq!(zones, [expected], "zones until broken: {until_broken}");
+        }
     }
 
     /// Volumes fall into equal quarters of their side's range, whatever the other side traded, and
@@ -4342,6 +4457,11 @@ mod tests {
             show_zero,
             ..Default::default()
         };
+        let decimals = |abbreviate, decimals| FootprintConfig {
+            abbreviate,
+            volume_decimals: Some(decimals),
+            ..Default::default()
+        };
         let counted = FootprintLevel {
             bid: 4.0,
             ask: 8.0,
@@ -4369,15 +4489,30 @@ mod tests {
             (FootprintMode::DominantSide, row(2.0, 3.0, 9.0), config(false, true), "3"),
             (FootprintMode::BidAskTrades, counted.clone(), config(false, true), "1 × 2"),
             (FootprintMode::Trades, counted.clone(), config(false, true), "4"),
-            (FootprintMode::AverageSize, counted, config(false, true), "5"),
+            (FootprintMode::AverageSize, counted.clone(), config(false, true), "5"),
             (FootprintMode::BidAskTrades, row(0.0, 0.0, 0.0), config(false, false), ""),
             (FootprintMode::BidAskTrades, row(0.0, 0.0, 0.0), config(false, true), "0 × 0"),
             (FootprintMode::Trades, row(0.0, 0.0, 0.0), config(false, true), "0"),
             (FootprintMode::AverageSize, row(0.0, 0.0, 0.0), config(false, true), ""),
+            (FootprintMode::Volume, row(0.0, 1234.56, 0.0), decimals(true, 3), "1.235K"),
+            (FootprintMode::Volume, row(0.0, 1234.56, 0.0), decimals(false, 3), "1234.560"),
+            (FootprintMode::Volume, row(0.0, 1234.0, 0.0), decimals(true, 0), "1K"),
+            (FootprintMode::Delta, row(0.0004, 0.0, 0.0), decimals(false, 3), "0.000"),
+            (FootprintMode::BidAskTrades, counted.clone(), decimals(false, 3), "1 × 2"),
+            (FootprintMode::Trades, counted.clone(), decimals(false, 3), "4"),
+            (FootprintMode::AverageSize, counted, decimals(false, 3), "5.000"),
         ];
+        // A ladder keeps its own two-decimal units only without volume decimals.
+        assert_eq!(ladder_text(1234.56, &decimals(true, 3), false), "1.235K");
         for (mode, row, config, expected) in texts {
             assert_eq!(
-                cell_text(mode, &row, config.abbreviate, config.show_zero),
+                cell_text(
+                    mode,
+                    &row,
+                    config.abbreviate,
+                    config.show_zero,
+                    config.volume_decimals
+                ),
                 expected,
                 "{mode:?} {row:?}"
             );
@@ -4477,6 +4612,7 @@ mod tests {
             high: 106,
             kind,
             state: FootprintStudyState::Local,
+            rejections: Vec::new(),
         });
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(480.0, 320.0));
         let ctx = egui::Context::default();
@@ -4574,8 +4710,8 @@ mod tests {
     }
 
     /// Guards that the painted study annotations follow their public state: an unvisited or
-    /// rejected zone keeps its colour, a revisited, expired or broken one is dimmed, and a buy
-    /// marker is a triangle above the bar's top row.
+    /// rejected zone keeps its colour, a revisited, expired or broken one is dimmed, each rejection
+    /// is a triangle on the zone's near edge, and a buy marker is above the bar's top row.
     #[cfg(feature = "studies")]
     #[test]
     fn studies_are_painted_as_their_state_and_kind_say() {
@@ -4607,8 +4743,9 @@ mod tests {
             high: low,
             kind,
             state,
+            rejections: Vec::new(),
         };
-        let studies = [
+        let mut studies = [
             study(
                 FootprintStudyKind::StackedAsk,
                 FootprintStudyState::Unvisited,
@@ -4639,7 +4776,14 @@ mod tests {
                 FootprintStudyState::Broken,
                 404,
             ),
+            study(
+                FootprintStudyKind::StackedBid,
+                FootprintStudyState::Rejected(1),
+                405,
+            ),
         ];
+        studies[4].rejections = vec![time];
+        studies[6].rejections = vec![time];
         let config = bid_ask_config();
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(
@@ -4661,8 +4805,33 @@ mod tests {
         let dimmed = config.ask_color.gamma_multiply(0.45);
         assert_eq!(
             strokes,
-            [config.ask_color, dimmed, dimmed, config.ask_color, dimmed]
+            [
+                config.ask_color,
+                dimmed,
+                dimmed,
+                config.ask_color,
+                dimmed,
+                config.bid_color
+            ]
         );
+        // Radius 4, height 6: up from the high of buy row 403, down from the low of sell row 405.
+        let x = map.idx_to_x(0);
+        let (top, bottom) = (map.price_to_y(100.875), map.price_to_y(101.125));
+        let paths: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Path(path) => Some((path.fill, path.points.clone())),
+                _ => None,
+            })
+            .collect();
+        for (fill, tip, edge) in [
+            (config.ask_color, top - 6.0, top),
+            (config.bid_color, bottom + 6.0, bottom),
+        ] {
+            let mark = vec![pos2(x, tip), pos2(x - 4.0, edge), pos2(x + 4.0, edge)];
+            assert!(paths.contains(&(fill, mark)), "{fill:?} rejection mark");
+        }
         let top = map.price_to_y(100.125);
         let triangle = output.shapes.iter().find_map(|shape| match &shape.shape {
             Shape::Path(path) if path.fill == config.ask_color => Some(path.points.clone()),
@@ -4687,6 +4856,7 @@ mod tests {
             high: 400,
             kind: FootprintStudyKind::SinglePrint,
             state: FootprintStudyState::Local,
+            rejections: Vec::new(),
         };
         // At 120 a default ladder bar has room for its summary below, and captions avoid that too.
         let ladder = FootprintConfig::default();

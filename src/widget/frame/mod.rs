@@ -231,6 +231,8 @@ impl Chart {
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
+        #[cfg(feature = "studies")]
+        self.sync_price_target_studies();
         #[cfg(feature = "drawings")]
         self.sync_stored_drawings(ui.ctx());
         self.frame_clock = Some(super::change_marks::FrameClock::shown_in(ui.ctx()));
@@ -295,6 +297,9 @@ impl Chart {
             }
             response
         };
+        // After every pane, so that a mark is one stroke above all of them.
+        #[cfg(feature = "drawings")]
+        self.cursor_modes.render(ui);
         self.menu_open = false;
         if !self.chart_type.is_time_independent() {
             let source_marks = self.mark_source.as_ref().map(|source| &source.page);
@@ -699,12 +704,28 @@ impl Chart {
         // A Ctrl or Command press on empty space arms a selection area, which only a drag starts.
         #[cfg(feature = "drawings")]
         let box_selection = self.drawings.box_selection_input(ui);
-        // A mark owns its gesture, so a drag paints rather than pans or moves a drawing.
+        // The plot column of every pane, where the pointer drives their shared crosshair and marks.
+        let hover_rect = Rect::from_min_max(
+            Pos2::new(
+                chart_rect.left(),
+                self.pane_layout
+                    .panes
+                    .iter()
+                    .map(|pane| pane.rect.top())
+                    .fold(chart_rect.top(), f32::min),
+            ),
+            Pos2::new(chart_rect.right(), time_axis_top),
+        );
+        // A mark owns its gesture, so a drag paints rather than pans or moves a drawing. A press
+        // on another pane reaches that pane's plot, which time navigation reads below as well.
+        #[cfg(feature = "drawings")]
+        let mark_response =
+            shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
         #[cfg(feature = "drawings")]
         let marking = self.cursor_modes.marks(
             ui,
-            &response,
-            chart_rect,
+            &mark_response,
+            hover_rect,
             !eraser_mode
                 && matches!(
                     self.chart_options.crosshair.style,
@@ -720,6 +741,18 @@ impl Chart {
                 && !navigation_interaction
                 && !realtime_interaction,
         );
+        // Before the empty-chart return below, so that a trail keeps fading on every frame.
+        #[cfg(feature = "drawings")]
+        {
+            self.cursor_modes.update(ui.input(|input| input.stable_dt));
+            self.cursor_modes.follow(
+                (!eraser_mode).then_some(self.chart_options.crosshair.style),
+                mark_response
+                    .interact_pointer_pos()
+                    .filter(|pos| marking && hover_rect.contains(*pos)),
+                marking && ui.input(|input| input.pointer.primary_down()),
+            );
+        }
         // The gestures that own the pointer wherever they began.
         #[cfg(feature = "drawings")]
         let edit_gesture = marking
@@ -779,17 +812,6 @@ impl Chart {
                                 .or(input.pointer.hover_pos())
                                 .is_some_and(|pos| axis_corner.contains(pos))
                     })));
-        let hover_rect = Rect::from_min_max(
-            Pos2::new(
-                chart_rect.left(),
-                self.pane_layout
-                    .panes
-                    .iter()
-                    .map(|pane| pane.rect.top())
-                    .fold(chart_rect.top(), f32::min),
-            ),
-            Pos2::new(chart_rect.right(), time_axis_top),
-        );
         let touch_readout_interaction = self.handle_touch_crosshair(
             ui,
             shown.id,
@@ -1009,6 +1031,7 @@ impl Chart {
             self.last_rendered_price_rect = layout.price_rect;
             self.last_rendered_volume_rect = Rect::NOTHING;
             self.last_vertical_grid_x.clear();
+            self.last_session_break_x.clear();
             let scale = self.state.price_scale();
             self.last_price_map = scale
                 .map(scale.transform(), chart_rect.top(), chart_rect.bottom())
@@ -1678,24 +1701,21 @@ impl Chart {
         // horizontal scales and from daily and longer bars.
         let intraday = host_scale.is_none()
             && session_tf.duration_ms() < crate::model::Timeframe::Day1.duration_ms();
-        if self.config.show_session_breaks && intraday {
+        self.last_session_break_x = if self.config.show_session_breaks && intraday {
             let provider = self
                 .session_provider
                 .as_deref()
                 .unwrap_or(&exchange_session);
-            rendering::SessionBreakRenderer::new(rendering::SessionBreakRenderConfig {
-                line_color: self.config.session_break_color,
-                line_width: self.config.session_break_width,
-                style: self.config.session_break_style,
-            })
-            .render(
+            self.session_break_renderer().render(
                 &session_ctx,
                 time_data,
                 provider,
                 &time_coords,
                 time_coords.start_idx,
-            );
-        }
+            )
+        } else {
+            Vec::new()
+        };
         let extended_hours = if time_based && intraday && self.config.show_extended_hours {
             let accent = ui.active_theme().ui.accent;
             let shade = |color: egui::Color32, opacity| {
@@ -1852,10 +1872,14 @@ impl Chart {
 
         // Both paint paths and the summary box mix their shades with what the chart paints.
         let plot_background = self.plot_background(rect, rect.center());
+        let volume_decimals = self
+            .instrument()
+            .and_then(|instrument| instrument.volume_decimals);
         let host_config = footprint
             .filter(|_| time_based)
             .map(|(_, config)| FootprintConfig {
                 background: config.background.or(plot_background),
+                volume_decimals: config.volume_decimals.or(volume_decimals),
                 ..config.clone()
             });
         let host = footprint.map(|(flow, _)| flow).zip(host_config.as_ref());
@@ -1873,6 +1897,7 @@ impl Chart {
             });
         let feed_config = feed.map(|_| FootprintConfig {
             background: plot_background,
+            volume_decimals,
             ..FootprintConfig::from_chart_params(
                 &self.chart_type_params,
                 [colors.bullish, colors.bearish, colors.text, colors.text],
@@ -2460,6 +2485,7 @@ impl Chart {
                             profiles,
                             flow,
                             self.trade_profile_settings(),
+                            volume_decimals,
                         );
                     }
                 }
@@ -2802,6 +2828,29 @@ impl Chart {
                     (value, colors, outlined)
                 }),
         );
+
+        // The newest TPO profile's captioned levels use their caption colours on the axis.
+        if self.main_series_visible
+            && footprint.is_none()
+            && self.chart_type == ChartType::TimePriceOpportunity
+            && self.chart_type_params.tpo_level_tags
+        {
+            let tick = render_ctx.tick_size;
+            let config = self.chart_type_params.tpo_config(tick);
+            pending_values.extend(
+                rendering::candles::tpo::latest_level_tags(
+                    &self.state.data().bars,
+                    start_idx..start_idx + visible_data.len(),
+                    self.state.revision(),
+                    (&config, tick),
+                    &bar_clock,
+                    (&price_map, price_rect, |i| coords.idx_to_x(i)),
+                    (&ui.active_theme().chart, colors.bullish, colors.bearish),
+                )
+                .into_iter()
+                .map(|(price, fill)| (price, (rendering::axes::tag_text_color(fill), fill), false)),
+            );
+        }
 
         // The close of the last bar with a value before the trading date of `time`.
         let previous_session_close = |time| {
@@ -3358,6 +3407,39 @@ impl Chart {
                     ));
                 }
             }
+            for (_, study) in self
+                .study_ids
+                .iter()
+                .zip(self.rendered_studies().indicators())
+                .filter(|(id, study)| {
+                    self.shows_study(study.as_ref()) && self.series_pane(**id) == Some(main_pane)
+                })
+            {
+                for plot in study.volume_profiles(rendering::volume_profile::profile_range(&coords))
+                {
+                    let Some((date, [r, g, b, a])) = plot.profile.expiry_tag else {
+                        continue;
+                    };
+                    let index = if plot.right_aligned {
+                        plot.bars.end.saturating_sub(1)
+                    } else {
+                        plot.bars.start
+                    };
+                    let Some(time) = date.and_hms_opt(0, 0, 0).map(|time| time.and_utc()) else {
+                        continue;
+                    };
+                    time_tags.push(rendering::axes::render_primitive_time_label(
+                        &painter,
+                        axis,
+                        coords.idx_to_x(index),
+                        super::TimeAxisLabel::new(
+                            time,
+                            date.to_string(),
+                            egui::Color32::from_rgba_unmultiplied(r, g, b, a),
+                        ),
+                    ));
+                }
+            }
         }
 
         // Handle drawing tools
@@ -3373,18 +3455,7 @@ impl Chart {
 
             // A mark owns the primary gesture: the drawings see the hover but no press, click or
             // drag.
-            let mut drawing_response = response.clone();
-            if marking {
-                use egui::response::Flags;
-                drawing_response.flags.remove(
-                    Flags::CLICKED
-                        | Flags::FAKE_PRIMARY_CLICKED
-                        | Flags::DRAG_STARTED
-                        | Flags::DRAGGED
-                        | Flags::DRAG_STOPPED
-                        | Flags::IS_POINTER_BUTTON_DOWN_ON,
-                );
-            }
+            let drawing_response = cursor_modes.drawing_response(&response);
             self.handle_drawings(
                 ui,
                 &mut drawings,
@@ -3546,18 +3617,6 @@ impl Chart {
         let menu_open = self.menu_open || response.secondary_clicked();
         self.menu_open = menu_open;
         let mut crosshair_tags = [None; 2];
-        #[cfg(feature = "drawings")]
-        {
-            self.cursor_modes.update(ui.input(|input| input.stable_dt));
-            self.cursor_modes.follow(
-                (!eraser_mode).then_some(self.chart_options.crosshair.style),
-                response
-                    .interact_pointer_pos()
-                    .filter(|pos| marking && price_rect.contains(*pos)),
-                marking && ui.input(|input| input.pointer.primary_down()),
-            );
-            self.cursor_modes.render(ui, price_rect);
-        }
         let mut table_rect = price_rect;
         for (id, study) in self
             .study_ids
@@ -3665,6 +3724,7 @@ impl Chart {
                 let raw_price_formatter = self.series_price_formatter(super::SeriesId::MAIN);
                 legend.formatters = self.value_formatters(raw_price_formatter.as_deref());
                 legend.study_formatters = &study_formatters;
+                legend.study_ids = &self.study_ids;
                 legend.thousands_sep = price_map.thousands_sep();
                 legend.price_decimals = self.readout_price_decimals();
                 legend.instrument = self.instrument();

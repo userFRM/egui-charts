@@ -523,6 +523,11 @@ impl SymbolTab {
                 ui.add(egui::DragValue::new(&mut params.footprint_stack).range(1..=1000))
                     .labelled_by(label.id);
                 ui.end_row();
+                Self::switch(
+                    ui,
+                    "Zones end only when broken",
+                    &mut params.footprint_zones_until_broken,
+                );
             }
             if params.footprint_stacked_imbalances
                 || params.footprint_naked_poc
@@ -672,6 +677,28 @@ impl SymbolTab {
                 );
             });
             ui.end_row();
+            let label = ui.label(l10n::text(ui.ctx(), "Placement"));
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select(
+                    "profile_placement",
+                    &mut profile.right_aligned,
+                    [false, true],
+                    |right| if *right { "Right" } else { "Left" }.to_owned(),
+                );
+            });
+            ui.end_row();
+            let label = ui.label(l10n::text(ui.ctx(), "Width"));
+            let mut percent = profile.width * 100.0;
+            ui.add(
+                egui::DragValue::new(&mut percent)
+                    .range(1.0..=100.0)
+                    .suffix("%"),
+            )
+            .labelled_by(label.id);
+            if percent != profile.width * 100.0 {
+                profile.width = percent / 100.0;
+            }
+            ui.end_row();
             Self::profile_session(ui, &mut profile.session);
             Self::profile_rows(ui, &mut profile.rows);
             Self::value_area(ui, &mut profile.value_area);
@@ -723,6 +750,22 @@ impl SymbolTab {
             ] {
                 Self::followed_color(ui, name, None, color, default, "Auto");
             }
+            Self::followed_color(
+                ui,
+                "Volume values",
+                Some(&mut profile.values),
+                &mut profile.values_color,
+                colors.values,
+                "Auto",
+            );
+            Self::followed_color(
+                ui,
+                "Session box",
+                Some(&mut profile.session_box),
+                &mut profile.session_box_color,
+                colors.session_box,
+                "Auto",
+            );
             Self::switch(ui, "Developing POC", &mut profile.developing_poc);
             Self::switch(
                 ui,
@@ -1121,6 +1164,39 @@ impl SymbolTab {
                 ui.checkbox(&mut params.tpo_statistics, "")
                     .labelled_by(label.id);
                 ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Labels"));
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        let labels = &mut params.tpo_labels;
+                        for (caption, name, shown) in [
+                            ("POC", "Point of control", &mut labels.poc),
+                            ("VAH", "Value area high", &mut labels.value_area_high),
+                            ("VAL", "Value area low", &mut labels.value_area_low),
+                            ("Mid", "Midpoint", &mut labels.midpoint),
+                            (
+                                "IBH",
+                                "Initial balance high",
+                                &mut labels.initial_balance_high,
+                            ),
+                            (
+                                "IBL",
+                                "Initial balance low",
+                                &mut labels.initial_balance_low,
+                            ),
+                            ("Open", "Opening price", &mut labels.opening_price),
+                            ("Close", "Closing price", &mut labels.closing_price),
+                            ("PH", "Poor high", &mut labels.poor_high),
+                            ("PL", "Poor low", &mut labels.poor_low),
+                            ("SP", "Single prints", &mut labels.single_prints),
+                        ] {
+                            ui.checkbox(shown, l10n::text(ui.ctx(), caption))
+                                .on_hover_text(l10n::text(ui.ctx(), name));
+                        }
+                    })
+                });
+                ui.end_row();
+                Self::switch(ui, "Label prices", &mut params.tpo_labels.prices);
+                Self::switch(ui, "Price scale tags", &mut params.tpo_level_tags);
             }
             ChartType::Baseline => {
                 let label = ui.label(l10n::text(ui.ctx(), "Base level"));

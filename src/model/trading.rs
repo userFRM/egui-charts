@@ -187,6 +187,9 @@ pub struct OrderRequest {
     pub stop_loss: Option<f64>,
     /// How long the order stays working.
     pub time_in_force: TimeInForce,
+    /// When a [`GoodTillDate`](TimeInForce::GoodTillDate) order expires, in UTC. `None` for
+    /// every other time in force.
+    pub expires: Option<DateTime<Utc>>,
     /// Explicit link to the net position in this symbol. Ordinary opposite-side orders are
     /// not brackets. Brokers should preserve this role on updates.
     pub position_bracket: Option<PositionBracket>,
@@ -209,6 +212,7 @@ impl OrderRequest {
             take_profit_levels: Vec::new(),
             stop_loss: None,
             time_in_force: TimeInForce::Day,
+            expires: None,
             position_bracket: None,
         }
     }
@@ -229,6 +233,8 @@ pub enum TimeInForce {
     Month,
     /// Until it fills or is cancelled.
     GoodTillCancelled,
+    /// Until it fills, is cancelled or reaches [`OrderRequest::expires`].
+    GoodTillDate,
     /// Fills what it can at once and cancels the rest.
     ImmediateOrCancel,
     /// Fills in full at once, or not at all.
@@ -243,6 +249,7 @@ impl TimeInForce {
             Self::Week => "WEEK",
             Self::Month => "MONTH",
             Self::GoodTillCancelled => "GTC",
+            Self::GoodTillDate => "GTD",
             Self::ImmediateOrCancel => "IOC",
             Self::FillOrKill => "FOK",
         }
@@ -414,6 +421,11 @@ pub struct ClosedPosition {
     /// Realised profit or loss in the account's currency, as reported by the broker. The
     /// [paper account](crate::services::PaperAccount) excludes commissions, booked separately.
     pub realized_pnl: f64,
+    /// The commissions of the position's fills in the account's currency, when the broker
+    /// reports them: its opening, adding and closing fills, with a reversing fill's commission
+    /// shared in proportion to the quantity it closes and opens. `realized_pnl` excludes them.
+    #[serde(default)]
+    pub commission: Option<f64>,
     /// The opening fill's time, when the broker reports it.
     pub opened: Option<DateTime<Utc>>,
     /// The time of the fill that flattened or reversed the position.
@@ -422,7 +434,7 @@ pub struct ClosedPosition {
 
 impl ClosedPosition {
     /// A completed position with its side, total quantity, average entry and exit prices,
-    /// realised profit or loss and closing time, without a reported opening time.
+    /// realised profit or loss and closing time, without a reported opening time or commission.
     pub fn new(
         symbol: impl Into<String>,
         side: OrderSide,
@@ -439,6 +451,7 @@ impl ClosedPosition {
             average_price,
             exit_price,
             realized_pnl,
+            commission: None,
             opened: None,
             closed,
         }
@@ -637,6 +650,8 @@ pub struct TradingRules {
     /// [`point_value`](Self::point_value), and shows no pip value for an instrument without pips.
     pub pip_value: Option<f64>,
     /// The times in force the broker accepts for the symbol, the default first. Never empty.
+    /// The first is never [`GoodTillDate`](TimeInForce::GoodTillDate), which needs an entered
+    /// expiry: orders sent without the ticket, such as Buy and Sell, take the first.
     pub time_in_force: Vec<TimeInForce>,
     /// The trade value per unit of margin, such as 20 for 20:1, if the broker trades the symbol
     /// on margin. The order ticket estimates the margin an order needs from it.

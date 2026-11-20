@@ -106,8 +106,9 @@ pub struct SavedPane {
 
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
 /// the host's feed. Take one with [`Chart::snapshot`] and apply it with [`Chart::restore`].
-/// The trading and alert settings and futures data choices of the settings dialog belong to
-/// the host and are not part of it.
+/// The trading and alert settings of the settings dialog belong to the host and are not part of
+/// it. Its settings hold the futures data choices, which [`Chart::restore`] records on the chart;
+/// the host reloads its history for them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ChartSnapshot {
@@ -554,6 +555,7 @@ impl Chart {
         } else {
             self.leave_panes(super::SeriesId::MAIN);
         }
+        let outer = self.begin_study_batch();
         let mut replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
         if snapshot.series.is_some() {
             replaced.extend(self.series().map(|(id, _)| id));
@@ -651,11 +653,12 @@ impl Chart {
             .collect();
         self.study_column_ids.extend(column_ids);
         for saved in snapshot.series.iter().flatten() {
-            let id = if saved.fed {
-                self.add_feed_series(saved.options.clone())
-            } else {
-                self.add_series(saved.options.clone())
-            };
+            // The restored drawings already count the restored series.
+            let id = self.add_series_keeping_layers(saved.options.clone());
+            if saved.fed {
+                self.price_series.last_mut().expect("added series").fed = self.feed_link.is_some();
+                self.fill_fed_series();
+            }
             self.set_series_visible(id, saved.visible);
             self.restore_annotations(id, &saved.annotations);
             self.restored_studies.insert(saved.id, id.0);
@@ -695,6 +698,7 @@ impl Chart {
             }
         }
         self.recalculate_studies();
+        self.end_study_batch(outer);
         for (at, saved) in snapshot.panes.iter().enumerate() {
             let id = panes[&at];
             self.move_pane(id, at);
@@ -762,9 +766,20 @@ impl Chart {
             None => Vec::new(),
         };
         self.restore_aside_drawings(&snapshot.other_symbol_drawings);
+        // Restores stay uncapped, including the targets-setting migration below.
+        self.history.clear();
+        // Layouts saved before the forecast study existed hold only the targets setting, and a
+        // saved study keeps it on; the next frame gives the study the restored colours.
+        #[cfg(feature = "studies")]
+        {
+            let held = self
+                .indicators()
+                .any(|(_, study)| super::studies::is_price_target_study(study));
+            self.set_price_targets_visible(snapshot.settings.show_price_targets || held);
+            self.price_target_colors = None;
+        }
         // A layout without the original pane has just left it: the main bars are live again.
         self.follow_feed_pause();
-        self.history.clear();
         // Undone or redone before the restore, they belong to the state it replaced.
         self.history.size_steps.clear();
         self.history.link_steps.clear();
@@ -2585,6 +2600,46 @@ mod tests {
             labels(&restored),
             ["2024-03-13 14:30", "2024-03-13", "14:30"]
         );
+    }
+
+    /// The futures data choices applied with the settings read back and survive layouts;
+    /// layouts saved without them restore settlement closes without back adjustment.
+    #[test]
+    fn layouts_keep_the_futures_data_choices() {
+        use crate::widget::settings::ChartSettingsState;
+        use crate::widget::{ChartLayoutMode, SavedLayout, test_frames::chart};
+        let choices = |chart: &Chart| {
+            let settings = ChartSettingsState::from_chart(chart);
+            (settings.back_adjust_futures, settings.settlement_as_close)
+        };
+        let mut source = chart(&[100.0], &[110.0]);
+        let mut settings = ChartSettingsState::from_chart(&source);
+        settings.back_adjust_futures = true;
+        settings.settlement_as_close = false;
+        settings.apply_to_chart(&mut source).unwrap();
+        assert_eq!(choices(&source), (true, false));
+        let json = SavedLayout::new(ChartLayoutMode::Single, vec![source.snapshot().unwrap()])
+            .to_json()
+            .unwrap();
+        let mut restored = chart(&[100.0], &[110.0]);
+        restored
+            .restore(&SavedLayout::from_json(&json).unwrap().charts[0])
+            .unwrap();
+        assert_eq!(choices(&restored), (true, false));
+
+        // Saved before the chart kept them: the defaults replace the restoring chart's choices.
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let saved = older
+            .pointer_mut("/charts/0/settings")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        for choice in ["back_adjust_futures", "settlement_as_close"] {
+            saved.remove(choice).expect(choice);
+        }
+        let older = SavedLayout::from_json(&older.to_string()).unwrap();
+        restored.restore(&older.charts[0]).unwrap();
+        assert_eq!(choices(&restored), (false, true));
     }
 
     /// An HLC area layout or template saved before the style held each line and fill restores as
