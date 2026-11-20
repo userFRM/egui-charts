@@ -386,7 +386,6 @@ impl TextTab {
                     | DrawingToolType::HorizontalRay
                     | DrawingToolType::VerticalLine
                     | DrawingToolType::CrossLine
-                    | DrawingToolType::Arrow
                     | DrawingToolType::ParallelChannel
                     | DrawingToolType::FlatTopBottom
                     | DrawingToolType::DisjointChannel
@@ -467,6 +466,7 @@ impl TextTab {
                         | DrawingToolType::ExtendedLine
                         | DrawingToolType::InfoLine
                         | DrawingToolType::TrendAngle
+                        | DrawingToolType::Arrow
                         | DrawingToolType::Rect
                         | DrawingToolType::Circle
                         | DrawingToolType::Ellipse
