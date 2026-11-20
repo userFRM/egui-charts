@@ -748,7 +748,9 @@ pub trait Indicator: Send {
     }
 
     /// Candle bodies and wicks, rendered in place of line plots when nonempty.
-    /// Source ranges and OHLCV remain available to hosts for per-bar readouts.
+    /// Each candle takes its plot's colour, or [`plot_color`](Self::plot_color) of that plot
+    /// at the candle's first source bar when that returns one. Source ranges and OHLCV remain
+    /// available to hosts for per-bar readouts.
     fn candles(&self) -> &[super::StudyCandle] {
         &[]
     }

@@ -1232,6 +1232,25 @@ pub(crate) mod test_frames {
         run(ctx, chart, time, events).0
     }
 
+    /// The fill and stroke colours of `shapes`, mesh vertices included.
+    #[cfg(feature = "ui")]
+    pub(crate) fn painted_colors(shapes: &[Shape]) -> Vec<egui::Color32> {
+        shapes
+            .iter()
+            .flat_map(|shape| match shape {
+                Shape::Vec(shapes) => painted_colors(shapes),
+                Shape::Rect(rect) => vec![rect.fill, rect.stroke.color],
+                Shape::LineSegment { stroke, .. } => vec![stroke.color],
+                Shape::Path(path) => match path.stroke.color {
+                    egui::epaint::ColorMode::Solid(color) => vec![path.fill, color],
+                    _ => vec![path.fill],
+                },
+                Shape::Mesh(mesh) => mesh.vertices.iter().map(|vertex| vertex.color).collect(),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
     /// The heights of the candles in `color` among `shapes`.
     pub(crate) fn candle_ys(shapes: &[Shape], color: egui::Color32) -> Vec<f32> {
         shapes
