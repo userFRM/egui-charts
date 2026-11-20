@@ -485,6 +485,9 @@ pub struct Chart {
     /// X positions of the vertical grid lines of the last rendered price pane, which the study
     /// panes below it repeat; empty when the chart hides its vertical grid.
     pub(crate) last_vertical_grid_x: Vec<f32>,
+    /// X positions of the session breaks of the last rendered price pane, which the other panes
+    /// repeat; empty when the chart draws none.
+    pub(crate) last_session_break_x: Vec<f32>,
     /// Last rendered indicator pane info for hit testing
     /// Each entry: (indicator_index, panel_rect, chart_rect, y_min, y_max, coords)
     pub(crate) last_rendered_indicator_panes: Vec<RenderedIndicatorPane>,
