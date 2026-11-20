@@ -1274,7 +1274,12 @@ impl<'a> Run<'a> {
     /// Absolute position market value times the funding fraction of its side, zero while flat.
     fn margin_used(&self, price: f64) -> f64 {
         self.lots.first().map_or(0.0, |lot| {
-            self.convert(self.position().abs() * price.abs() * self.settings.funding(lot.side))
+            let fraction = self.settings.funding(lot.side);
+            // An unfunded side uses no margin, so it needs no exchange rate between its marks.
+            if fraction == 0.0 {
+                return 0.0;
+            }
+            self.convert(self.position().abs() * price.abs() * fraction)
         })
     }
 
@@ -4533,6 +4538,25 @@ mod tests {
                 );
             }
         }
+
+        // A side funded at zero needs rates at its fills and marks only: a rate unusable at one
+        // finer bar of a held bar leaves the report available, with no margin used.
+        let quarter = |part: i64| hour(2) + TimeDelta::minutes(15 * part);
+        let point = |time, value: f64| Bar::new(time, value, value, value, value, 0.0);
+        let held: Vec<_> = (0..3).map(|bar| point(hour(bar), 100.0)).collect();
+        let finer: Vec<_> = (0..4).map(|part| point(quarter(part), 100.0)).collect();
+        let mut engine = Backtest::new("Terms", "TEST", Timeframe::Hour1, 1000.0);
+        engine.settings = BacktestSettings {
+            currency: Some("EUR".into()),
+            long_funding: Some(0.0),
+            ..terms.clone()
+        };
+        engine.instrument_currency = Some("USD".into());
+        engine.exchange_rates = vec![rate(0, 0.9), point(quarter(1), 0.0), point(quarter(2), 0.8)];
+        let report = engine.run(&mut Script(hold), &held, &finer);
+        assert_eq!(report.unavailable, None);
+        let margin: Vec<_> = report.margin.iter().map(|mark| mark.1).collect();
+        assert_eq!(margin, [0.0; 4]);
 
         let [whole, partial] = [
             "leverage alone closes the whole position at the margin crossing",
