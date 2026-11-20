@@ -34,7 +34,8 @@ const MAX_TAKE_PROFIT_LEVELS: usize = 4;
 ///
 /// Feed it the last price of every symbol it trades with [`set_price`](Self::set_price), live or
 /// replayed. During replay, call [`set_replay_time`](Self::set_replay_time) before each price so
-/// fills and history use the source bar's time. Good-till-cancelled orders work until they fill or
+/// fills and history use the source bar's time; it refuses times before the account's last change.
+/// Good-till-cancelled orders work until they fill or
 /// are cancelled. Immediate-or-cancel and fill-or-kill orders fill at placement where a marketable
 /// order would, and are cancelled at once otherwise; since every fill is complete, the two behave
 /// alike. Day, week and month orders are refused, since the account has no trading-session
@@ -334,9 +335,26 @@ impl PaperAccount {
 
     /// Uses `time` for orders, executions, balance changes and journal entries during replay.
     /// Set it to the revealed source bar's time before feeding its price. `None` restores the
-    /// live UTC clock.
-    pub fn set_replay_time(&self, time: Option<DateTime<Utc>>) {
-        self.lock().replay_time = time;
+    /// live UTC clock. Returns `false`, and keeps the clock, when `time` is before the account's
+    /// [`last_change`](Self::last_change), so its history never runs backwards: before moving
+    /// the replay cursor back past the account's orders or fills, or starting again from an
+    /// earlier bar, [`reset`](Self::reset) the account or build a new one. Feed no prices of
+    /// earlier bars to an account that refused their time.
+    pub fn set_replay_time(&self, time: Option<DateTime<Utc>>) -> bool {
+        let mut state = self.lock();
+        if time.is_some_and(|time| state.last_change().is_some_and(|last| time < last)) {
+            return false;
+        }
+        state.replay_time = time;
+        true
+    }
+
+    /// The time of the account's newest change: the last order placed, changed, filled,
+    /// cancelled or rejected. `None` for an account without history, as after
+    /// [`reset`](Self::reset). During replay, [`set_replay_time`](Self::set_replay_time) refuses
+    /// earlier times.
+    pub fn last_change(&self) -> Option<DateTime<Utc>> {
+        self.lock().last_change()
     }
 
     /// The account as [`restore`](Self::restore) reads it back.
@@ -517,6 +535,11 @@ impl State {
 
     fn now(&self) -> DateTime<Utc> {
         self.replay_time.unwrap_or_else(Utc::now)
+    }
+
+    fn last_change(&self) -> Option<DateTime<Utc>> {
+        // Every stamped change writes a journal entry at the same time.
+        self.journal.last().map(|entry| entry.time)
     }
 
     fn push(&self, event: AccountEvent) {
@@ -2027,6 +2050,64 @@ mod tests {
         saved.closed_positions = vec![saved.closed_positions[0].clone(); HISTORY + 3];
         let restored = PaperAccount::restore(saved).unwrap();
         assert_eq!(restored.save().closed_positions.len(), HISTORY);
+    }
+
+    /// Replay time cannot move before the account's last change, so fills stay in time order;
+    /// after a reset, the account trades from the earlier bar alone.
+    #[test]
+    fn replay_history_stays_in_time_order_and_a_new_account_trades_from_the_earlier_bar() {
+        use OrderSide::{Buy, Sell};
+        let paper = PaperAccount::new("USD", 10_000.0);
+        let bar = |n: i64| DateTime::from_timestamp(1_704_067_200 + n * 60, 0).unwrap();
+        let trade = |side, price| {
+            paper.set_price("SYM", price);
+            place(
+                &paper,
+                OrderRequest::new("SYM", side, 1.0, OrderType::Market),
+            )
+            .unwrap();
+        };
+        let executions = || {
+            snapshot(&paper)
+                .into_iter()
+                .filter_map(|event| match event {
+                    AccountEvent::Execution(fill) => Some((fill.time, fill.side, fill.price)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(paper.set_replay_time(Some(bar(100))));
+        trade(Buy, 100.0);
+        assert!(paper.set_replay_time(Some(bar(120))));
+        trade(Sell, 110.0);
+        assert_eq!(paper.last_change(), Some(bar(120)));
+        assert!(!paper.set_replay_time(Some(bar(90))));
+        // A host that feeds the earlier bar anyway fills at the clock the account kept.
+        trade(Buy, 95.0);
+        assert_eq!(
+            executions(),
+            [
+                (bar(100), Buy, 100.0),
+                (bar(120), Sell, 110.0),
+                (bar(120), Buy, 95.0)
+            ]
+        );
+        assert!(paper.set_replay_time(Some(bar(120))));
+
+        paper.reset();
+        assert_eq!(paper.last_change(), None);
+        assert!(paper.set_replay_time(Some(bar(90))));
+        trade(Buy, 95.0);
+        assert_eq!(executions(), [(bar(90), Buy, 95.0)]);
+        let saved = paper.save();
+        let held: Vec<_> = saved
+            .positions
+            .iter()
+            .map(|position| (position.quantity, position.average_price))
+            .collect();
+        assert_eq!(held, [(1.0, 95.0)]);
+        assert!(saved.closed_positions.is_empty());
+        assert!(saved.journal.iter().all(|entry| entry.time == bar(90)));
     }
 
     #[test]
