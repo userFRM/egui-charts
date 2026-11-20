@@ -841,9 +841,28 @@ pub(super) fn boxed_label(
     color: Color32,
     bg: Color32,
 ) -> Rect {
+    framed_label(painter, align, pos, text, color, bg, Stroke::NONE)
+}
+
+/// [`boxed_label`] framed by `border`, drawn inside its edge so the box keeps its size.
+pub(super) fn framed_label(
+    painter: &egui::Painter,
+    align: egui::Align2,
+    pos: Pos2,
+    text: String,
+    color: Color32,
+    bg: Color32,
+    border: Stroke,
+) -> Rect {
     let galley = painter.layout_no_wrap(text, egui::FontId::proportional(typography::XS), color);
     let rect = align.anchor_size(pos, galley.size() + egui::vec2(8.0, 2.0));
-    painter.rect_filled(rect, DESIGN_TOKENS.rounding.sm, bg);
+    painter.rect(
+        rect,
+        DESIGN_TOKENS.rounding.sm,
+        bg,
+        border,
+        egui::StrokeKind::Inside,
+    );
     painter.galley(rect.center() - galley.size() / 2.0, galley, color);
     rect
 }
