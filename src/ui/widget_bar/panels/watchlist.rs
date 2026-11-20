@@ -122,13 +122,19 @@ pub enum WatchlistAction {
 struct RowDrag(egui::Id, usize);
 
 /// An edit of the list at `list` that undo reverts while the list still holds `after`, so undo
-/// never discards a later change. Undo also restores the section states before the edit.
+/// never discards a later change. Section moves carry current collapse states back, while
+/// clearing restores the removed sections' states.
 struct ListEdit {
     list: usize,
     before: Vec<WatchlistItem>,
     after: Vec<WatchlistItem>,
-    /// The list's section states before the edit.
-    collapsed: Vec<bool>,
+    sections: SectionUndo,
+}
+
+/// Only clearing removes section states; moves undo their swap of the current states.
+enum SectionUndo {
+    Clear(Vec<bool>),
+    Move { at: usize, down: bool },
 }
 
 /// Watchlists fed by host quotes.
@@ -609,7 +615,7 @@ impl WatchlistPanel {
                 record(
                     undo,
                     lists,
-                    collapsed_sections.get(*active).map_or(&[], Vec::as_slice),
+                    SectionUndo::Clear(collapsed_sections.get(*active).cloned().unwrap_or_default()),
                     *active,
                     |list| {
                         list.items.clear();
@@ -628,7 +634,13 @@ impl WatchlistPanel {
                 && let Some(edit) = undo.pop()
             {
                 lists[edit.list].items = edit.before;
-                *section_states(collapsed_sections, edit.list) = edit.collapsed;
+                let states = section_states(collapsed_sections, edit.list);
+                match edit.sections {
+                    SectionUndo::Clear(collapsed) => *states = collapsed,
+                    SectionUndo::Move { at, down } => {
+                        states.swap(at, if down { at + 1 } else { at - 1 });
+                    }
+                }
                 (*active, *flag_filter) = (edit.list, None);
             }
             if ui
@@ -1288,10 +1300,14 @@ impl WatchlistPanel {
             apply_flag_view(lists, filter, &view.items, removed);
         }
         if let Some((index, down)) = section_move
-            && record(undo, lists, states, *active, |list| {
-                list.move_section(index, down)
-            })
             && let Some(at) = sections.iter().position(|&section| section == index)
+            && record(
+                undo,
+                lists,
+                SectionUndo::Move { at, down },
+                *active,
+                |list| list.move_section(index, down),
+            )
         {
             states.swap(at, if down { at + 1 } else { at - 1 });
         }
@@ -1312,7 +1328,7 @@ fn section_states(all: &mut Vec<Vec<bool>>, list: usize) -> &mut Vec<bool> {
 fn record(
     undo: &mut Vec<ListEdit>,
     lists: &mut [Watchlist],
-    collapsed: &[bool],
+    sections: SectionUndo,
     list: usize,
     edit: impl FnOnce(&mut Watchlist) -> bool,
 ) -> bool {
@@ -1325,7 +1341,7 @@ fn record(
             list,
             before,
             after: lists[list].items.clone(),
-            collapsed: collapsed.to_vec(),
+            sections,
         });
         true
     } else {
@@ -1920,11 +1936,22 @@ mod tests {
             "A,###New section,C,###Renamed,B"
         );
         assert_eq!(shown(&h), ["A", "C"]);
+        h.get_by_label("New section").click();
+        h.run();
+        assert_eq!(shown(&h), ["A"]);
+        h.get_by_label("Renamed").click();
+        h.run();
+        assert_eq!(shown(&h), ["A", "B"]);
         press(&mut h, "Main", "Undo");
         assert_eq!(
             h.state().lists()[0].to_text(),
             "A,###Renamed,B,###New section,C"
         );
+        assert_eq!(shown(&h), ["A", "B"], "the later toggles survive undo");
+        h.get_by_label("Renamed").click();
+        h.run();
+        h.get_by_label("New section").click();
+        h.run();
         assert_eq!(shown(&h), ["A", "C"]);
         let from = h.get_by_label("New section").rect().center();
         h.drag_at(from);
