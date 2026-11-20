@@ -17,6 +17,7 @@ pub use broker_picker::{BrokerFact, BrokerPicker, BrokerPickerAction, BrokerTile
 pub use dom::DepthPanel;
 pub use format::TradingFormatter;
 pub use ticket::{Bracket, BracketMode, OrderPreset, PresetLevel};
+pub(crate) use widgets::grouped;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

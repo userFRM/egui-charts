@@ -15,7 +15,7 @@ use egui::{
 
 use super::market_details::WatchlistDetails;
 use super::symbol_details::detail_section;
-use super::{HEADER_HEIGHT, grouped, price_decimals, signed, weighted};
+use super::{HEADER_HEIGHT, price_decimals, weighted};
 use crate::data::inbox::Inbox;
 use crate::data::{CalendarEvent, NewsStory};
 use crate::icons::icons;
@@ -25,6 +25,7 @@ use crate::scales::StudyFormat;
 use crate::services::{Listener, Quotes, ShareKind, Sharing};
 use crate::theme::ThemeExt;
 use crate::ui::share_controls::ShareControls;
+use crate::ui::trading::grouped;
 use crate::ui_kit::buttons::ButtonSize;
 use crate::ui_kit::{EmptyState, IconButton};
 
@@ -1139,13 +1140,13 @@ impl WatchlistPanel {
                                             }
                                             WatchlistColumn::ChangePercent
                                             | WatchlistColumn::ExtendedChangePercent => {
-                                                format!("{}%", signed(value, 2))
+                                                format!("{}%", grouped(value, 2, true))
                                             }
                                             WatchlistColumn::Change
                                             | WatchlistColumn::ExtendedChange => {
-                                                signed(value, usize::from(decimals))
+                                                grouped(value, usize::from(decimals), true)
                                             }
-                                            _ => grouped(value, usize::from(decimals)),
+                                            _ => grouped(value, usize::from(decimals), false),
                                         },
                                     };
                                     let color = match column {

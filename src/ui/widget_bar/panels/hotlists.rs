@@ -5,13 +5,14 @@ use std::sync::Arc;
 
 use egui::{Sense, Ui, vec2};
 
+use super::ROW_HEIGHT;
 use super::controls::{cell, dropdown, row};
-use super::{ROW_HEIGHT, signed};
 use super::{format_price, price_decimals};
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, HotlistEntry, HotlistQuery};
 use crate::icons::icons;
 use crate::theme::ThemeExt;
+use crate::ui::trading::grouped;
 use crate::ui_kit::status_message::{MessageKind, status_message, translated_status_message};
 use crate::ui_kit::{EmptyState, LoadingIndicator, PanelHeader};
 
@@ -218,7 +219,7 @@ impl HotlistsPanel {
                     cell(
                         ui,
                         cells[2],
-                        &format!("{}%", signed(entry.change_percent, 2)),
+                        &format!("{}%", grouped(entry.change_percent, 2, true)),
                         true,
                         color,
                     );

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::market_details::{MarketDetail, MarketDetailRequest, PeriodReturn, Seasonality};
 use super::price_decimals;
-use super::{HEADER_HEIGHT, grouped, signed, weighted};
+use super::{HEADER_HEIGHT, weighted};
 use crate::data::inbox::Inbox;
 use crate::data::{CompanyFinancials, Datafeed, FeedError, SymbolDetails};
 use crate::icons::icons;
@@ -22,6 +22,7 @@ use crate::scales::StudyFormat;
 use crate::services::revisions::{Revisions, Settled, Written};
 use crate::services::{ConflictChoice, Storage, StoreKind};
 use crate::theme::ThemeExt;
+use crate::ui::trading::grouped;
 use crate::ui_kit::IconButton;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 
@@ -972,7 +973,7 @@ impl SymbolDetailsPanel {
 fn percent_text(percent: Option<f64>, theme: &crate::theme::Theme) -> (String, Color32) {
     match percent.filter(|percent| percent.is_finite()) {
         Some(percent) => (
-            format!("{}%", signed(percent, 2)),
+            format!("{}%", grouped(percent, 2, true)),
             if percent > 0.0 {
                 theme.chart.candle_up
             } else if percent < 0.0 {
@@ -1030,7 +1031,7 @@ fn price_line(
     };
     // One text, so the figures of different sizes share a baseline.
     let mut job = LayoutJob::single_section(
-        l10n::text(ui.ctx(), grouped(price, usize::from(decimals))),
+        l10n::text(ui.ctx(), grouped(price, usize::from(decimals), false)),
         weighted(size, 700.0, theme.ui.text),
     );
     if let Some(currency) = currency {
@@ -1042,8 +1043,8 @@ fn price_line(
     }
     let change_size = (size * 2.0 / 3.0).max(theme.text.body);
     for text in [
-        signed(change, usize::from(decimals)),
-        format!("{}%", signed(percent, 2)),
+        grouped(change, usize::from(decimals), true),
+        format!("{}%", grouped(percent, 2, true)),
     ] {
         job.append(&text, theme.spacing.sm, weighted(change_size, 600.0, color));
     }
