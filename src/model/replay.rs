@@ -1,4 +1,5 @@
-//! A replay checkpoint as plain data, for the settings store and the host's storage.
+//! A replay checkpoint and the charts a replay covers, as plain data, for the settings store and
+//! the host's storage.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -14,4 +15,15 @@ pub struct ReplaySession {
     pub time: DateTime<Utc>,
     /// Playback speed multiplier, validated when restoring.
     pub speed: f32,
+}
+
+/// The charts of a layout that a replay covers, whatever their link groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ReplayScope {
+    /// The chart that starts the replay, alone.
+    #[default]
+    ThisChart,
+    /// Every chart of the layout, hidden ones included.
+    AllCharts,
 }

@@ -6,7 +6,7 @@ use egui_charts::data::{MarketEvent, RecordingWriter, ReplayDriver, ReplayEvent}
 use egui_charts::model::{Bar, BarClock, Timeframe};
 use egui_charts::ui::floating_replay_control::ReplayControlAction;
 use egui_charts::ui::replay::{
-    ReplayAction, ReplayController, ReplayStartAction, paint_start_line,
+    ReplayAction, ReplayController, ReplayScope, ReplayStartAction, paint_start_line,
 };
 use egui_charts::ui::timeframe_toolbar::SessionType;
 use egui_charts::widget::{ChartLinkGroups, SeriesId};
@@ -928,14 +928,14 @@ impl DemoApp {
             }
         }
         let source = self.layout_slot;
+        // A recording replays on its own chart; otherwise the replay covers every chart.
+        let scope = if self.recording_files.opened {
+            ReplayScope::ThisChart
+        } else {
+            ReplayScope::AllCharts
+        };
         let slots: Vec<_> = (0..self.extra_charts.len() + 1)
-            .filter(|&slot| {
-                if self.recording_files.opened {
-                    slot == source
-                } else {
-                    self.layout.sync_group(slot) == self.layout.sync_group(source)
-                }
-            })
+            .filter(|&slot| scope == ReplayScope::AllCharts || slot == source)
             .collect();
         for (index, extra) in self.extra_charts.iter_mut().enumerate() {
             let slot = if index >= source { index + 1 } else { index };
@@ -958,18 +958,8 @@ impl DemoApp {
             .map(|extra| &mut extra.chart)
             .collect();
         charts.insert(source, &mut self.chart);
-        for &slot in &self.replay_slots {
-            if !slots.contains(&slot)
-                && let Some(chart) = charts.get_mut(slot)
-            {
-                chart.set_replay_time(None);
-            }
-        }
-        if self.recording_files.opened {
-            charts[source].set_replay_time(Some(time));
-        } else {
-            self.layout.set_replay_time(&mut charts, source, Some(time));
-        }
+        self.layout
+            .set_replay_time(&mut charts, source, scope, Some(time));
         self.replay_slots = slots;
         if let Some(bar) = replay.visible_bars().last() {
             self.paper.set_replay_time(Some(bar.time));

@@ -6,6 +6,7 @@
 use super::start::ReplayStartAction;
 use crate::icons::icons;
 use crate::localization as l10n;
+use crate::model::ReplayScope;
 use crate::services::ReplayAccountSettings;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -136,6 +137,10 @@ pub enum ReplayControlAction {
     Close,
     /// Start, or restart, the replay from this choice of the start control.
     Start(ReplayStartAction),
+    /// Cover these charts with the replay; the host passes the scope to
+    /// [`ChartLayout::set_replay_time`](crate::widget::ChartLayout::set_replay_time) and back to
+    /// [`FloatingReplayControl::set_scope`].
+    SetScope(ReplayScope),
 }
 
 /// Floating replay control widget
@@ -153,6 +158,8 @@ pub struct FloatingReplayControl {
     selecting: bool,
     /// The start control offers the host's saved session
     can_resume: bool,
+    /// Charts the replay covers, offered in the start menu when set
+    scope: Option<ReplayScope>,
     /// Whether control is visible
     visible: bool,
     /// User explicitly dismissed the control (prevents auto-show until replay restarts)
@@ -190,6 +197,7 @@ impl FloatingReplayControl {
             docked: false,
             selecting: false,
             can_resume: false,
+            scope: None,
             visible: false,
             user_dismissed: false,
             at_end: false,
@@ -231,6 +239,13 @@ impl FloatingReplayControl {
     /// Say whether the start control offers [`ReplayStartAction::Resume`].
     pub fn set_can_resume(&mut self, can_resume: bool) {
         self.can_resume = can_resume;
+    }
+
+    /// Say which charts the replay covers, offered as This chart and All charts in the start
+    /// menu, which emits [`ReplayControlAction::SetScope`]. `None`, the default, hides the
+    /// choice, for a host with one chart.
+    pub fn set_scope(&mut self, scope: Option<ReplayScope>) {
+        self.scope = scope;
     }
 
     /// Supplies source intervals the host can serve. An empty list hides the selector.
@@ -487,8 +502,8 @@ impl FloatingReplayControl {
                                 ui.separator();
                             }
 
-                            if let Some(start) = self.show_start_control(ui) {
-                                action = ReplayControlAction::Start(start);
+                            if let Some(chosen) = self.show_start_control(ui) {
+                                action = chosen;
                             }
 
                             ui.separator();
@@ -672,10 +687,10 @@ impl FloatingReplayControl {
         action
     }
 
-    /// The start control: a button that selects a bar, and a menu of every start and the replay
-    /// account's terms.
-    fn show_start_control(&mut self, ui: &mut Ui) -> Option<ReplayStartAction> {
-        let mut start = None;
+    /// The start control: a button to select a bar, every start, the charts covered and the
+    /// replay account's terms.
+    fn show_start_control(&mut self, ui: &mut Ui) -> Option<ReplayControlAction> {
+        let mut chosen = None;
         if Button::icon_and_text(&icons::REPLAY_SELECT_BAR, "Select bar")
             .variant(if self.selecting {
                 ButtonVariant::Secondary
@@ -686,7 +701,7 @@ impl FloatingReplayControl {
             .show(ui)
             .clicked()
         {
-            start = Some(ReplayStartAction::SelectBar);
+            chosen = Some(ReplayControlAction::Start(ReplayStartAction::SelectBar));
         }
         let menu = IconButton::new(&icons::CHEVRON_DOWN)
             .tooltip("Replay start")
@@ -732,7 +747,7 @@ impl FloatingReplayControl {
                 .chain(resume)
                 {
                     if ListItem::new().show_with_icon(ui, label, icon).clicked() {
-                        start = Some(choice);
+                        chosen = Some(ReplayControlAction::Start(choice));
                         ui.close();
                     }
                 }
@@ -773,8 +788,34 @@ impl FloatingReplayControl {
                     }
                     ui.end_row();
                 });
+                let Some(current) = self.scope else {
+                    return;
+                };
+                ui.separator();
+                ui.label(
+                    RichText::new(l10n::text(ui.ctx(), "Charts").to_uppercase())
+                        .size(theme.text.small)
+                        .color(crate::ui_kit::section::menu_heading_color(&theme)),
+                );
+                for (icon, label, scope) in [
+                    (&icons::LAYOUT_SINGLE, "This chart", ReplayScope::ThisChart),
+                    (&icons::LAYOUT_GRID, "All charts", ReplayScope::AllCharts),
+                ] {
+                    let item = ListItem::new()
+                        .selected(scope == current)
+                        .show_with_icon(ui, label, icon);
+                    // One of two choices, so assistive technology hears which one is on.
+                    ui.ctx().accesskit_node_builder(item.id, |node| {
+                        node.set_role(egui::Role::MenuItemRadio);
+                        node.set_toggled((scope == current).into());
+                    });
+                    // The menu stays open, so a start can follow.
+                    if item.clicked() && scope != current {
+                        chosen = Some(ReplayControlAction::SetScope(scope));
+                    }
+                }
             });
-        start
+        chosen
     }
 }
 
@@ -900,20 +941,46 @@ mod tests {
         }
     }
 
-    /// Every start other than a click on a bar stays one menu away on the bar, in the strip.
+    /// Every start other than a click on a bar stays one menu away on the bar, in the strip,
+    /// and so does the choice of charts when the host offers it.
     #[test]
     fn start_control_offers_every_start_and_selection_takes_the_transport_keys() {
+        use ReplayControlAction::{SetScope, Start};
+        use ReplayScope::{AllCharts, ThisChart};
         use egui_kittest::{Harness, kittest::Queryable};
-        for (can_resume, label, start) in [
-            (false, "Select bar", ReplayStartAction::SelectBar),
-            (false, "Select date…", ReplayStartAction::SelectDate),
-            (false, "First available bar", ReplayStartAction::First),
-            (false, "Random bar", ReplayStartAction::Random),
-            (true, "Resume saved session", ReplayStartAction::Resume),
+        for (can_resume, scope, label, expected) in [
+            (
+                false,
+                None,
+                "Select bar",
+                Start(ReplayStartAction::SelectBar),
+            ),
+            (
+                false,
+                None,
+                "Select date…",
+                Start(ReplayStartAction::SelectDate),
+            ),
+            (
+                false,
+                None,
+                "First available bar",
+                Start(ReplayStartAction::First),
+            ),
+            (false, None, "Random bar", Start(ReplayStartAction::Random)),
+            (
+                true,
+                None,
+                "Resume saved session",
+                Start(ReplayStartAction::Resume),
+            ),
+            (false, Some(ThisChart), "All charts", SetScope(AllCharts)),
+            (false, Some(AllCharts), "This chart", SetScope(ThisChart)),
         ] {
             let mut bar = FloatingReplayControl::new();
             bar.show_control();
             bar.set_can_resume(can_resume);
+            bar.set_scope(scope);
             let strip = Rect::from_min_size(pos2(0.0, 500.0), Vec2::new(900.0, 48.0));
             bar.set_dock_strip(strip);
             let mut harness = Harness::builder()
@@ -939,11 +1006,17 @@ mod tests {
                 harness.query_by_label("Resume saved session").is_some(),
                 can_resume
             );
-            harness
-                .get_by_role_and_label(egui::Role::MenuItem, label)
-                .click();
+            assert_eq!(
+                harness.query_by_label("This chart").is_some(),
+                scope.is_some()
+            );
+            let role = match expected {
+                SetScope(_) => egui::Role::MenuItemRadio,
+                _ => egui::Role::MenuItem,
+            };
+            harness.get_by_role_and_label(role, label).click();
             harness.run();
-            assert_eq!(harness.state().1, ReplayControlAction::Start(start));
+            assert_eq!(harness.state().1, expected);
         }
 
         // Waiting for the click leaves the transport off and its keys to the chart.

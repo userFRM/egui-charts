@@ -3,6 +3,7 @@
 //! Mutable state for replay mode UI and playback control.
 
 use super::actions::ReplaySpeed;
+use crate::model::ReplayScope;
 use chrono::{DateTime, Utc};
 use web_time::Instant;
 
@@ -82,6 +83,9 @@ pub struct ReplayState {
     pub playback_state: PlaybackState,
     /// Current playback speed
     pub speed: ReplaySpeed,
+    /// Charts of a layout the replay covers; pass it to
+    /// [`ChartLayout::set_replay_time`](crate::widget::ChartLayout::set_replay_time).
+    pub scope: ReplayScope,
 
     // Pos tracking
     /// Current bar index (0-based)
@@ -130,6 +134,7 @@ impl ReplayState {
         Self {
             playback_state: PlaybackState::Inactive,
             speed: ReplaySpeed::Normal,
+            scope: ReplayScope::ThisChart,
             curr_bar: 0,
             total_bars: 0,
             visible_bars: 100,
