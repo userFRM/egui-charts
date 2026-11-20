@@ -30,12 +30,14 @@ pub struct Alert {
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
     /// Most recent firing time, including firings while the application was closed.
-    /// Hosts retain it on every trigger, even for alerts that remain active.
+    /// Hosts retain it on every trigger, even for alerts that remain active. `AlertEngine`
+    /// counts it as a restored alert's last firing.
     #[serde(default)]
     pub last_triggered_at: Option<DateTime<Utc>>,
     /// Most recent firing time of each member of [`watchlist`](Self::watchlist) that fired, by
     /// symbol; empty for an alert on one symbol. Hosts keep it with the alert, as they keep
-    /// `last_triggered_at`. `AlertEngine` fills it: with frequency [`Once`](AlertFrequency::Once)
+    /// `last_triggered_at`. `AlertEngine` fills it, and after a restart does not fire a member
+    /// again in the bar or minute of its time: with frequency [`Once`](AlertFrequency::Once)
     /// a member it holds never fires again, and the alert becomes
     /// [`Triggered`](AlertStatus::Triggered) once it holds every member of the list. The engine
     /// clears it when a save changes what the alert watches or its status.

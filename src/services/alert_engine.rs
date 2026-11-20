@@ -21,10 +21,11 @@ use crate::model::{
 ///
 /// The host keeps the alerts: [`alerts`](Self::alerts) returns them with their status for
 /// storage, and [`with_alerts`](Self::with_alerts) restores them. Evaluation state lives in
-/// memory only, so after a restart an alert that fires on every occurrence may fire again while
-/// its condition still holds; an alert with frequency [`Once`](AlertFrequency::Once) that fired
-/// stays [`Triggered`](AlertStatus::Triggered). A [`Position`](AlertCondition::Position) keeps
-/// its progress in its condition, so it resumes waiting for the entry or for an exit.
+/// memory; a restored alert counts its [`last_triggered_at`](Alert::last_triggered_at), or on a
+/// watchlist each member's time in [`member_triggered_at`](Alert::member_triggered_at), as its
+/// last firing (see *Restarts*). An alert with frequency [`Once`](AlertFrequency::Once) that
+/// fired stays [`Triggered`](AlertStatus::Triggered). A [`Position`](AlertCondition::Position)
+/// keeps its progress in its condition, so it resumes waiting for the entry or for an exit.
 ///
 /// # Rules
 ///
@@ -57,12 +58,13 @@ use crate::model::{
 /// alert again.
 ///
 /// *Crossings.* On every interval the previous value is the value at the alert's previous
-/// evaluation, within a bar and across bars, and on the first evaluation the value one bar earlier.
-/// A crossing on a longer interval therefore fires once whatever the shorter interval does, and
-/// one between two closes of the shorter interval is caught at the later close. Crossing up needs
-/// a previous value strictly below the level and a current value at or above it, crossing down the
-/// reverse; a value that touches the level and stays there fires once. Moving by and volume
-/// above average read the bars before the evaluated one, as [`AlertCondition`] documents.
+/// evaluation, within a bar and across bars, and on the first evaluation the value one bar earlier
+/// (for a restored alert, see *Restarts*). A crossing on a longer interval therefore fires once
+/// whatever the shorter interval does, and one between two closes of the shorter interval is
+/// caught at the later close. Crossing up needs a previous value strictly below the level and a
+/// current value at or above it, crossing down the reverse; a value that touches the level and
+/// stays there fires once. Moving by and volume above average read the bars before the evaluated
+/// one, as [`AlertCondition`] documents.
 /// Moving channels resolve the preceding bar again when a new bar arrives, so edits and
 /// skipped updates use that bar's current geometry. Within a bar they use the previous evaluation.
 ///
@@ -75,6 +77,14 @@ use crate::model::{
 /// [`OncePerBarClose`](AlertFrequency::OncePerBarClose) evaluates each completed bar once.
 /// [`OncePerMinute`](AlertFrequency::OncePerMinute) fires at most once per minute of the update
 /// time `now`; moving the clock backwards does not repeat a minute.
+///
+/// *Restarts.* The first evaluation on a symbol of an alert restored by
+/// [`with_alerts`](Self::with_alerts), or saved under an id the engine did not hold, takes its
+/// saved last firing as the last firing there. A per-minute alert does not fire again in that
+/// minute. When the evaluated bar opened at or before that time, or for an alert at bar close
+/// the bar after it did, a once-per-bar or once-per-bar-close alert does not fire on that bar,
+/// and a crossing, entering or exiting rule needs a new transition, since this evaluation only
+/// records the values. Saving the alert again ends this, so it starts afresh.
 ///
 /// *Schedule.* An alert's `schedule` restricts notifications. Outside it the engine keeps
 /// observing values for crossings and records each trigger as a silent
@@ -139,6 +149,9 @@ struct State {
     runs: HashMap<(AlertId, String), Run>,
     /// The custom event sources the host connected.
     routes: std::collections::HashSet<String>,
+    /// Alerts restored by `with_alerts`, or saved under an id the engine did not hold, and not
+    /// saved since: a run's first evaluation counts their saved last firing.
+    restored: std::collections::HashSet<AlertId>,
 }
 
 /// What the engine remembers of one alert on one symbol.
@@ -183,6 +196,9 @@ struct Observation {
     clock: BarClock,
     event: DateTime<Utc>,
     bar: Bar,
+    /// The time of the bar after this one in the update that observed it, if any: for an alert
+    /// at bar close, the bar whose arrival completed this one.
+    next: Option<DateTime<Utc>>,
     /// What the message of the first condition's interval reads on this bar. An update of another
     /// interval, which may fire the alert, cannot read it.
     values: Vec<(AlertSource, Option<f64>)>,
@@ -233,7 +249,8 @@ impl AlertEngine {
     }
 
     /// Starts with `alerts` as [`alerts`](Self::alerts) returned them, giving those without an
-    /// id one after the others.
+    /// id one after the others. Their saved last firings count on their first evaluation, as
+    /// the *Restarts* rule describes.
     pub fn with_alerts(self, alerts: Vec<Alert>) -> Self {
         {
             let mut state = self.lock();
@@ -383,6 +400,7 @@ impl AlertEngine {
             events,
             watchlists,
             runs,
+            restored,
             ..
         } = &mut *state;
         for alert in alerts.iter_mut().filter(|alert| {
@@ -445,7 +463,14 @@ impl AlertEngine {
             if !matched || !ready {
                 continue;
             }
-            let Some((bar, messages, silent)) = evaluate(alert, run, symbol, exchange, now) else {
+            // A watchlist member reads its own time: another member may have set the alert's.
+            let last = match &alert.watchlist {
+                _ if !restored.contains(&id) => None,
+                Some(_) => alert.member_triggered_at.get(symbol).copied(),
+                None => alert.last_triggered_at,
+            };
+            let Some((bar, messages, silent)) = evaluate(alert, run, symbol, exchange, now, last)
+            else {
                 continue;
             };
             let price = bar.close.is_finite().then_some(bar.close);
@@ -826,6 +851,7 @@ impl AlertEngine {
 impl State {
     /// Adds `alert` or replaces the one with its id, giving it an id if it has none.
     fn insert(&mut self, mut alert: Alert) -> Alert {
+        let restoring = alert.id.is_some();
         // A position alert made active again after its exit waits for the entry again.
         if alert.status == AlertStatus::Active
             && let AlertCondition::Position { progress, .. } = &mut alert.condition
@@ -850,6 +876,13 @@ impl State {
             }
         }
         let existing = self.alerts.iter().find(|old| old.id == alert.id);
+        if let Some(id) = &alert.id {
+            if existing.is_some() {
+                self.restored.remove(id);
+            } else if restoring {
+                self.restored.insert(id.clone());
+            }
+        }
         if let Some(old) = existing {
             alert.created_at = old.created_at;
             alert.last_triggered_at = old.last_triggered_at;
@@ -949,6 +982,7 @@ impl Alerts for AlertEngine {
     fn remove(&self, id: AlertId, reply: Reply<()>) {
         let mut state = self.lock();
         state.runs.retain(|(kept, _), _| *kept != id);
+        state.restored.remove(&id);
         state.alerts.retain(|a| a.id.as_ref() != Some(&id));
         state.push(AlertEvent::Remove(id));
         reply.send(Ok(()));
@@ -1062,6 +1096,7 @@ fn observe(
             clock: clock.clone(),
             event,
             bar: bars[at].clone(),
+            next: bars.get(at + 1).map(|bar| bar.time),
             values: values.into_inner(),
             earlier,
         }
@@ -1099,13 +1134,15 @@ fn observe(
 
 /// Test one coherent set of interval observations and consume its occurrence. Returns the bar
 /// and messages to fire, one per trigger (a position can enter and exit on one evaluation), and
-/// whether they fall outside the schedule and are only logged.
+/// whether they fall outside the schedule and are only logged. `last` is the saved last firing
+/// of a restored alert on this symbol, which its first evaluation counts.
 fn evaluate(
     alert: &mut Alert,
     run: &mut Run,
     symbol: &str,
     exchange: Option<&str>,
     now: DateTime<Utc>,
+    last: Option<DateTime<Utc>>,
 ) -> Option<(Bar, Vec<String>, bool)> {
     let intervals = alert.timeframes();
     let anchor = run.intervals.get(&intervals[0])?;
@@ -1138,6 +1175,32 @@ fn evaluate(
         .eq(&run.joined)
     {
         return None;
+    }
+    // A restored alert takes its saved last firing on its first evaluation.
+    if run.joined.is_empty()
+        && let Some(last) = last
+    {
+        if alert.frequency == AlertFrequency::OncePerMinute {
+            run.fired = Some(occurrence(alert.frequency, &anchor.bar, last));
+        }
+        // The evaluated bar held the firing, or for an alert at bar close, completed before it.
+        let covered = match alert.frequency {
+            AlertFrequency::OncePerBarClose => anchor.next.is_some_and(|next| next <= last),
+            _ => anchor.bar.time <= last,
+        };
+        if covered {
+            // Rules that compare two evaluations need a transition seen after the restart.
+            run.joined = joined
+                .iter()
+                .map(|observation| observation.seen.clone())
+                .collect();
+            if matches!(
+                alert.frequency,
+                AlertFrequency::OncePerBar | AlertFrequency::OncePerBarClose
+            ) {
+                run.fired = Some(occurrence(alert.frequency, &anchor.bar, now));
+            }
+        }
     }
     let holds =
         joined
@@ -1847,6 +1910,124 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// An hourly alert fired at 10:05 in the 10:00 bar, was saved and is restored at 10:20. Each
+    /// step is the first hour of an update, its closes, the update time and the closes that fire.
+    #[test]
+    fn a_restored_alert_counts_its_last_firing() {
+        use AlertCondition::{Above, CrossingUp};
+        use AlertFrequency::{EveryTime, OncePerBar, OncePerBarClose, OncePerMinute};
+        let restored = |condition, frequency| {
+            let mut saved = alert(condition, frequency);
+            saved.timeframe = Some(Timeframe::Hour1);
+            saved.id = Some(AlertId("1".into()));
+            saved.last_triggered_at = Some(time(36_300));
+            saved
+        };
+        let hourly = |first: i64, closes: &[f64]| -> Vec<Bar> {
+            (first..)
+                .zip(closes)
+                .map(|(hour, &close)| Bar::new(time(hour * 3_600), close, close, close, close, 1.0))
+                .collect()
+        };
+        let update = |host: &Host, symbol: &str, (first, closes): (i64, &[f64]), now: i64| {
+            host.engine.update(
+                symbol,
+                None,
+                Timeframe::Hour1,
+                &hourly(first, closes),
+                time(now),
+                |_, _| None,
+            );
+        };
+        let rows = [
+            // No firing before the 11:00 bar.
+            (
+                Above(100.0),
+                OncePerBar,
+                vec![
+                    (9, vec![99.0, 101.0], 37_200, vec![]),
+                    (9, vec![99.0, 102.0], 38_400, vec![]),
+                    (9, vec![99.0, 102.0, 103.0], 39_660, vec![103.0]),
+                ],
+            ),
+            // The 09:00 bar fired when the 10:00 bar arrived; the 10:00 bar fires at its close.
+            (
+                Above(100.0),
+                OncePerBarClose,
+                vec![
+                    (8, vec![99.0, 101.0, 101.0], 37_200, vec![]),
+                    (8, vec![99.0, 101.0, 102.0, 103.0], 39_660, vec![102.0]),
+                ],
+            ),
+            // Not again before 10:06.
+            (
+                Above(100.0),
+                OncePerMinute,
+                vec![
+                    (9, vec![99.0, 101.0], 36_330, vec![]),
+                    (9, vec![99.0, 102.0], 36_360, vec![102.0]),
+                ],
+            ),
+            // The crossing that fired needs a new one.
+            (
+                CrossingUp(100.0),
+                EveryTime,
+                vec![
+                    (9, vec![99.0, 101.0], 37_200, vec![]),
+                    (9, vec![99.0, 99.0], 37_260, vec![]),
+                    (9, vec![99.0, 101.0], 37_320, vec![101.0]),
+                ],
+            ),
+            // In a later bar the alert evaluates as a new one.
+            (
+                Above(100.0),
+                OncePerBar,
+                vec![(10, vec![101.0, 101.0], 40_800, vec![101.0])],
+            ),
+            (
+                CrossingUp(100.0),
+                EveryTime,
+                vec![(10, vec![99.0, 101.0], 40_800, vec![101.0])],
+            ),
+        ];
+        for (row, (condition, frequency, steps)) in rows.into_iter().enumerate() {
+            let host = Host::new(vec![restored(condition, frequency)]);
+            for (step, (first, closes, now, fired)) in steps.into_iter().enumerate() {
+                update(&host, "SYM", (first, &closes), now);
+                assert_eq!(host.fired(), fired, "row {row}, step {step}");
+            }
+        }
+        // Saving the alert again starts it afresh.
+        let host = Host::new(vec![restored(Above(100.0), OncePerBar)]);
+        update(&host, "SYM", (9, &[99.0, 101.0]), 37_200);
+        assert!(host.fired().is_empty());
+        let mut edited = host.engine.alerts().remove(0);
+        edited.condition = Above(100.5);
+        assert_eq!(host.save(edited), Ok(()));
+        update(&host, "SYM", (9, &[99.0, 101.0]), 37_260);
+        assert_eq!(host.fired(), [101.0]);
+        // A watchlist member counts its own firing, not one of another member.
+        let mut list = restored(Above(100.0), OncePerBar);
+        list.symbol = String::new();
+        list.watchlist = Some("tech".into());
+        list.member_triggered_at.insert("SYM".into(), time(36_300));
+        let host = Host::new(vec![list]);
+        host.engine
+            .set_watchlist("tech", vec!["SYM".into(), "OTHER".into()]);
+        for symbol in ["SYM", "OTHER"] {
+            update(&host, symbol, (9, &[99.0, 101.0]), 37_200);
+        }
+        let symbols: Vec<_> = host
+            .events()
+            .into_iter()
+            .filter_map(|event| match event {
+                AlertEvent::TriggeredForSymbol { symbol, .. } => Some(symbol),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(symbols, ["OTHER"]);
     }
 
     #[test]
