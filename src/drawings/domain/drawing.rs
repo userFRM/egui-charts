@@ -761,7 +761,7 @@ impl Drawing {
             price_axis_label: true,
             time_axis_label: true,
             line_measurements: LineMeasurements::for_tool(tool_type),
-            range_settings: RangeSettings::default(),
+            range_settings: RangeSettings::for_tool(tool_type),
             position_size: matches!(
                 tool_type,
                 DrawingToolType::LongPos | DrawingToolType::ShortPos
@@ -1724,6 +1724,20 @@ mod tests {
             );
         }
         assert_eq!(Drawing::new(1, T::PriceLabel).font_weight, FontWeight::Bold);
+        let placed = Drawing::new(1, T::DateAndPriceRange);
+        assert_eq!(
+            (
+                placed.range_settings.border,
+                placed.range_settings.border_width
+            ),
+            (false, Some(1.0))
+        );
+        assert_eq!(placed.range_settings.border_color, None);
+        let mut saved = serde_json::to_value(&placed).unwrap();
+        saved.as_object_mut().unwrap().remove("range_settings");
+        let read: Drawing = serde_json::from_value(saved).unwrap();
+        assert!(read.range_settings.border);
+        assert_eq!(read.range_settings.border_width, None);
         // Channels write their text from the left end of their first line; a channel saved
         // without line measurements keeps it in the middle.
         use crate::drawings::LineTextHorizontalAlign as H;

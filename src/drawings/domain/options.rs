@@ -1475,9 +1475,9 @@ thread_local! {
 }
 
 /// Readouts, readout card, box border and vertical reach of a date range and a date and price
-/// range; other tools ignore these settings. A new drawing shows every readout on a card in the
-/// theme's tooltip colours, draws its box edges in its line colour, width and pattern and keeps
-/// its time edges to its box.
+/// range; other tools ignore these settings. Missing saved fields keep the readouts on a card
+/// in the theme's tooltip colours and the box edges in the drawing's line colour, width and
+/// pattern. New drawings start from [`Self::for_tool`].
 ///
 /// ```
 /// use egui_charts::drawings::RangeSettings;
@@ -1552,6 +1552,20 @@ impl Default for RangeSettings {
 }
 
 impl RangeSettings {
+    /// Settings for a new range. A date and price range starts without box edges; enabling
+    /// them draws a 1 px border in the line colour.
+    pub fn for_tool(tool: super::DrawingToolType) -> Self {
+        if tool == super::DrawingToolType::DateAndPriceRange {
+            Self {
+                border: false,
+                border_width: Some(1.0),
+                ..Self::default()
+            }
+        } else {
+            Self::default()
+        }
+    }
+
     /// Whether the font size lies in 1 to 256 points and a set border width above 0 and at
     /// most 100 points.
     pub fn is_valid(&self) -> bool {

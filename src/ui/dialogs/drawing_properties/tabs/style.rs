@@ -1557,6 +1557,7 @@ mod tests {
                 DrawingToolType::DateRange | DrawingToolType::DateAndPriceRange
             );
             if range {
+                drawing.range_settings.border = true;
                 drawing.range_settings.border_color = Some([10, 20, 30, 128]);
             } else {
                 drawing.border_color = Some([10, 20, 30, 128]);

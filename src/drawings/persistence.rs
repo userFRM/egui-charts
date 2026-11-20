@@ -1201,7 +1201,10 @@ mod v1 {
         };
         drawing.font_weight = FontWeight::Normal;
         // Released measuring readouts used the fixed size above.
-        drawing.range_settings.font_size = drawing.font_size;
+        drawing.range_settings = crate::drawings::RangeSettings {
+            font_size: drawing.font_size,
+            ..Default::default()
+        };
         drawing.text_color = None;
         drawing.background = true;
         drawing.border = true;
@@ -2578,6 +2581,11 @@ mod tests {
             }
             for storage in [&once, &twice] {
                 let drawing = &storage.drawings[0].drawing;
+                if matches!(tool, T::DateRange | T::DateAndPriceRange) {
+                    assert!(drawing.range_settings.border, "{tool:?}");
+                    assert_eq!(drawing.range_settings.border_width, None, "{tool:?}");
+                    assert_eq!(drawing.range_settings.border_color, None, "{tool:?}");
+                }
                 let tint = if prices[1] < prices[0] {
                     [242, 54, 69]
                 } else {
