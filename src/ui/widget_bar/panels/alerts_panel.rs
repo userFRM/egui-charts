@@ -33,7 +33,7 @@ impl Default for AlertsPanelConfig {
     }
 }
 
-/// An action the host handles using its shared alert dialog or file export.
+/// An action the host handles using its shared alert dialog, file export or chart.
 #[derive(Clone, Debug, PartialEq, Default)]
 #[non_exhaustive]
 pub enum AlertPanelAction {
@@ -51,6 +51,9 @@ pub enum AlertPanelAction {
     DuplicateAlert(Box<Alert>),
     /// Save this CSV text to a file chosen by the host.
     ExportLog(String),
+    /// Show this symbol on the chart: Open chart on a trigger popup, with the symbol that fired,
+    /// a watchlist member for an alert on a watchlist.
+    SelectSymbol(String),
 }
 
 /// The property the alert list is ordered by.
@@ -182,6 +185,10 @@ pub struct AlertsPanel {
     desktop: Option<Arc<dyn Notifications>>,
     desktop_inbox: Arc<Inbox>,
     desktop_toast: Option<u64>,
+    popup_actions: bool,
+    /// Each trigger popup that offers actions: its toast, its alert and the symbol to show.
+    popups: Vec<(u64, AlertId, Option<String>)>,
+    popup_action: AlertPanelAction,
 }
 
 impl std::fmt::Debug for AlertsPanel {
@@ -252,6 +259,9 @@ impl AlertsPanel {
             desktop: None,
             desktop_inbox: Arc::default(),
             desktop_toast: None,
+            popup_actions: false,
+            popups: Vec::new(),
+            popup_action: AlertPanelAction::None,
         }
     }
 
@@ -428,6 +438,22 @@ impl AlertsPanel {
         self.sound.take()
     }
 
+    /// Offer Open chart and Edit alert on trigger popups, returned by
+    /// [`take_popup_action`](Self::take_popup_action). Off by default, so a host that does not
+    /// read them shows no buttons.
+    pub fn set_popup_actions(&mut self, offered: bool) {
+        self.popup_actions = offered;
+    }
+
+    /// The action the user chose on a trigger popup since the last call:
+    /// [`AlertPanelAction::SelectSymbol`] with the symbol that fired for Open chart, or
+    /// [`AlertPanelAction::EditAlert`] with the alert as the host last pushed it for Edit alert;
+    /// [`None`](AlertPanelAction::None) otherwise, also when the alert was removed meanwhile.
+    /// Call it after [`poll`](Self::poll), which also runs while the panel is hidden.
+    pub fn take_popup_action(&mut self) -> AlertPanelAction {
+        std::mem::take(&mut self.popup_action)
+    }
+
     /// Attach a host service, clearing the previous account's alerts and log.
     pub fn set_service(&mut self, service: Arc<dyn Alerts>) {
         self.sound = None;
@@ -438,6 +464,8 @@ impl AlertsPanel {
         self.log_alert = None;
         self.log_symbol = None;
         self.clearing = false;
+        self.popups.clear();
+        self.popup_action = AlertPanelAction::None;
         self.marks.clear();
         self.undo.clear();
         self.redo.clear();
@@ -600,6 +628,23 @@ impl AlertsPanel {
     pub fn poll(&mut self, ctx: &egui::Context, toasts: &mut Toasts) {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
+        if !self.popups.is_empty() {
+            for (toast, id, symbol) in &self.popups {
+                let Some(index) = toasts.take_pressed(*toast) else {
+                    continue;
+                };
+                // Open chart comes first when the popup offers it.
+                let alert = self.alerts.iter().find(|a| a.id.as_ref() == Some(id));
+                self.popup_action = match (index, symbol, alert) {
+                    (0, Some(symbol), _) => AlertPanelAction::SelectSymbol(symbol.clone()),
+                    (_, _, Some(alert)) => AlertPanelAction::EditAlert(Box::new(alert.clone())),
+                    _ => AlertPanelAction::None,
+                };
+            }
+            let live: std::collections::HashSet<u64> =
+                toasts.toasts().iter().map(|t| t.id).collect();
+            self.popups.retain(|(toast, ..)| live.contains(toast));
+        }
         if self.listener.as_ref().is_some_and(|l| !l.is_active()) {
             self.listener = None;
             self.alerts.clear();
@@ -829,22 +874,26 @@ impl AlertsPanel {
     ) {
         let AlertTrigger {
             id,
+            name,
             symbol,
             message,
             ..
         } = &trigger;
-        let title = l10n::format_text(
-            ctx,
-            "Alert triggered: {subject}",
-            &[(
-                "subject",
-                if symbol.is_empty() {
-                    id.0.as_str()
-                } else {
-                    symbol.as_str()
-                },
-            )],
-        );
+        let alert = if name.is_empty() { &id.0 } else { name };
+        let title = if symbol.is_empty() {
+            alert.clone()
+        } else {
+            l10n::format_text(
+                ctx,
+                "{alert} on {symbol}",
+                &[("alert", alert), ("symbol", symbol)],
+            )
+        };
+        let body = if message.is_empty() {
+            l10n::text(ctx, "Alert triggered")
+        } else {
+            message.clone()
+        };
         // A firing of an alert removed meanwhile keeps the default delivery.
         let delivery = self
             .alerts
@@ -854,7 +903,7 @@ impl AlertsPanel {
         if delivery.is_none_or(|d| d.popup) {
             if let Some(desktop) = &self.desktop {
                 let mut notification = Notification::new(trigger.time, title.clone());
-                notification.body.clone_from(message);
+                notification.body.clone_from(&body);
                 notification.symbol = (!symbol.is_empty()).then(|| symbol.clone());
                 desktop.deliver(notification, self.desktop_inbox.reply(0));
             }
@@ -868,14 +917,23 @@ impl AlertsPanel {
             });
             let extra = toasts.len().saturating_sub(LOG_BOUND - 1);
             toasts.toasts_mut().drain(..extra);
-            toasts.add(
-                Toast::info(if message.is_empty() {
-                    title
-                } else {
-                    format!("{title}\n{message}")
-                })
-                .duration(self.notification_seconds),
-            );
+            let mut toast = Toast::info(body)
+                .with_title(title)
+                .duration(self.notification_seconds);
+            if self.popup_actions {
+                let open = (!symbol.is_empty()).then(|| symbol.clone());
+                if open.is_some() {
+                    toast = toast.with_action("Open chart");
+                }
+                // Editing needs the alert as the host pushed it.
+                if delivery.is_some() {
+                    toast = toast.with_action("Edit alert");
+                }
+                if !toast.actions.is_empty() {
+                    self.popups.push((toast.id, id.clone(), open));
+                }
+            }
+            toasts.add(toast);
         }
         if delivery.is_none_or(|d| d.sound) {
             self.sound = self.sound_choice.clone();
@@ -1682,10 +1740,10 @@ mod tests {
             &mut toasts,
         );
         assert!(toasts.toasts().iter().all(|toast| toast.duration == 12.0));
-        assert_eq!(
-            toasts.toasts().last().unwrap().message,
-            "Alert triggered: AAPL\nAAPL closed at \"123\""
-        );
+        // The alert was never pushed, so the popup names it by its id.
+        let toast = toasts.toasts().last().unwrap();
+        assert_eq!(toast.title.as_deref(), Some("watchlist on AAPL"));
+        assert_eq!(toast.message, "AAPL closed at \"123\"");
         assert_eq!(panel.log().back().unwrap().symbol, "AAPL");
         assert_eq!(
             panel.log().back().unwrap().message,
@@ -2396,7 +2454,7 @@ mod tests {
         panel.set_notification_seconds(20.0);
         panel.record_trigger(&ctx, trigger(6), &mut toasts);
         assert_eq!(toasts.len(), 7);
-        assert_eq!(toasts.toasts()[6].message, "Alert triggered: S6");
+        assert_eq!(toasts.toasts()[6].title.as_deref(), Some("6 on S6"));
         panel.set_notification_seconds(0.0);
         while toasts.len() < 10_000 {
             toasts.add(Toast::info("kept").permanent());
@@ -2405,8 +2463,70 @@ mod tests {
             panel.record_trigger(&ctx, trigger(n), &mut toasts);
         }
         assert_eq!(toasts.len(), 10_000);
-        assert_eq!(toasts.toasts()[0].message, "Alert triggered: S1");
-        assert_eq!(toasts.toasts()[9_999].message, "Alert triggered: S8");
+        assert_eq!(toasts.toasts()[0].title.as_deref(), Some("1 on S1"));
+        assert_eq!(toasts.toasts()[9_999].title.as_deref(), Some("8 on S8"));
+    }
+
+    /// A popup names the alert and its symbol, and once the host offers them, Open chart and Edit
+    /// alert close it and return their actions.
+    #[test]
+    fn popup_actions_open_the_chart_and_edit_the_alert() {
+        use crate::ui_kit::notifications::NotificationPanel;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let host = Arc::new(Host::default());
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        let events = host.events.lock().unwrap().clone().unwrap();
+        let mut alert = Alert::new("AAPL", AlertCondition::Above(100.0));
+        alert.id = Some(AlertId("1".into()));
+        alert.name = "Breakout".into();
+        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+        let time = "2026-10-23T12:00:00Z".parse().unwrap();
+        let fire = || {
+            events.push(AlertEvent::Triggered {
+                id: AlertId("1".into()),
+                time,
+                price: Some(101.0),
+            });
+        };
+        fire();
+        type State = (AlertsPanel, Toasts, Vec<AlertPanelAction>);
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(800.0, 600.0))
+            .build_ui_state(
+                |ui, (panel, toasts, actions): &mut State| {
+                    panel.poll(ui.ctx(), toasts);
+                    let action = panel.take_popup_action();
+                    if action != AlertPanelAction::None {
+                        actions.push(action);
+                    }
+                    NotificationPanel::new().show_with_toasts(ui.ctx(), toasts);
+                },
+                (panel, Toasts::new(), Vec::new()),
+            );
+        h.run_steps(3);
+        let toast = &h.state().1.toasts()[0];
+        assert_eq!(toast.title.as_deref(), Some("Breakout on AAPL"));
+        assert_eq!(toast.message, "Alert triggered");
+        assert!(h.query_by_label("Open chart").is_none());
+        h.state_mut().1.clear();
+        h.state_mut().0.set_popup_actions(true);
+        for action in ["Open chart", "Edit alert"] {
+            fire();
+            h.run_steps(3);
+            h.get_by_label(action).click();
+            h.run_steps(3);
+            assert!(h.state().1.is_empty(), "{action} closes the popup");
+        }
+        alert.last_triggered_at = Some(time);
+        assert_eq!(
+            h.state().2,
+            [
+                AlertPanelAction::SelectSymbol("AAPL".into()),
+                AlertPanelAction::EditAlert(Box::new(alert))
+            ]
+        );
     }
 
     /// Each trigger popup also goes to the desktop when the host routes it there, and a refused
@@ -2448,7 +2568,8 @@ mod tests {
             frame(&mut panel, &mut toasts);
             let sent = desktop.0.lock().unwrap();
             assert_eq!(sent.len(), delivered);
-            assert_eq!(sent[0].title, "Alert triggered: SYM");
+            assert_eq!(sent[0].title, "Greater than 1 on SYM");
+            assert_eq!(sent[0].body, "Alert triggered");
             assert_eq!(sent[0].symbol.as_deref(), Some("SYM"));
             errors.push(
                 toasts

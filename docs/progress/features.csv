@@ -17,7 +17,7 @@ Alerts,Alerts,Inline alert creation forms in the alerts panel,unverified,library
 Alerts,Alerts,Moving up / moving down operators,unverified,library,src/ui/dialogs/alert_dialog/dialog.rs,
 Alerts,Alerts,Multi-condition alerts,unverified,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs,2064;2163;2164;2165
 Alerts,Alerts,Notification: email and plain-text email,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,1134
-Alerts,Alerts,Notification: in-app popup when an alert fires,incomplete,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
+Alerts,Alerts,Notification: in-app popup when an alert fires,unverified,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;src/ui_kit/notifications/toast.rs;src/ui_kit/notifications/toasts.rs;src/ui_kit/notifications/panel.rs;terminal/src/alerts.rs,3584
 Alerts,Alerts,Notification: mobile app push,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,1134
 Alerts,Alerts,Notification: webhook,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,1134
 Alerts,Alerts,"Price operators: crossing, crossing up, crossing down, greater than, less than",unverified,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
