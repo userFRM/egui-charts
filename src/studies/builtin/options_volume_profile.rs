@@ -4381,6 +4381,20 @@ mod tests {
                     output.drop_without_applying_deltas();
                     assert_eq!(labelled, shown, "the wall follows its plot's visibility");
                 }
+                let color = Color32::from_rgb(210, 80, 40);
+                let mut settings = configured.settings();
+                assert_ne!(settings.plots[3].color, color);
+                settings.plots[3].color = color;
+                configured.apply_settings(&[], settings).unwrap();
+                let recolored = configured.volume_profiles(visible.clone());
+                assert_eq!(recolored.len(), plots.len());
+                for plot in recolored {
+                    assert_eq!(
+                        plot.profile.walls.as_ref().unwrap().colors[0],
+                        color.to_srgba_unmultiplied(),
+                        "dated walls follow the edited call wall colour"
+                    );
+                }
             }
             assert_eq!(study.plot_value(3, 0), None);
             assert!(!study.legend_visible(3));
