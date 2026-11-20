@@ -331,7 +331,7 @@ impl Trading {
             AccountEvent::Execution(fill) if announce => {
                 let order = self.account_panel.fills.orders.get(&fill.order);
                 // The order's symbol, or the fill's own when the order is unknown.
-                let symbol = self.account_panel.fills.symbol(fill);
+                let symbol = self.account_panel.fills.symbol(&fill);
                 let chart = (self.chart_logo.as_ref()).map_or("", |(chart, _)| chart.as_str());
                 let numbers = self.numbers(symbol.unwrap_or(""), chart);
                 let side = l10n::text(ctx, side_name(fill.side));
