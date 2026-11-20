@@ -19,9 +19,9 @@ pub enum MarketDetail<T> {
 }
 
 /// A request for the symbol details panel's market detail, from
-/// [`SymbolDetailsPanel::take_market_requests`](super::SymbolDetailsPanel::take_market_requests).
-/// Answer with [`set_period_returns`](super::SymbolDetailsPanel::set_period_returns) or
-/// [`set_seasonality`](super::SymbolDetailsPanel::set_seasonality) for the same symbol.
+/// [`SymbolDetailsPanel::take_market_requests`](crate::ui::widget_bar::SymbolDetailsPanel::take_market_requests).
+/// Answer with [`set_period_returns`](crate::ui::widget_bar::SymbolDetailsPanel::set_period_returns) or
+/// [`set_seasonality`](crate::ui::widget_bar::SymbolDetailsPanel::set_seasonality) for the same symbol.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MarketDetailRequest {
