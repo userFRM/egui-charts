@@ -30,14 +30,6 @@ impl DemoApp {
         let applied = self.user_action(|app| {
             app.chart
                 .apply_chosen_study_template_set_with(template, app.indicator_dialog.factory())?;
-            let captions: Vec<_> = app
-                .chart
-                .indicators()
-                .map(|(id, study)| (id, super::study_input_summary(study)))
-                .collect();
-            for (id, caption) in captions {
-                app.chart.set_indicator_inputs(id, caption);
-            }
             app.follow_chart_symbol(false);
             Ok::<_, String>(())
         });
