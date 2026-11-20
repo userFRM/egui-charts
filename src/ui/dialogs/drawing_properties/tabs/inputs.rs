@@ -1385,6 +1385,7 @@ pub(crate) fn pitchfork_shown(drawing: &Drawing) -> PitchforkConfig {
         let mut config = PitchforkConfig::legacy();
         for level in &mut config.levels {
             level.color = drawing.color;
+            level.line_style = drawing.line_style;
             level.width = Some(if level.value == 1.0 {
                 crate::styles::stroke::HAIRLINE
             } else {
@@ -1442,10 +1443,7 @@ fn projection(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerS
     let mut config = drawing.projection_config().into_owned();
     let original = config.clone();
     ui.strong(l10n::text(ui.ctx(), "Projection levels"));
-    ui.label(l10n::text(
-        ui.ctx(),
-        "Multiples of the measured move, from the third point",
-    ));
+    ui.label(l10n::text(ui.ctx(), "Multiples of the sector's radius"));
     level_grid(
         ui,
         "Level",
