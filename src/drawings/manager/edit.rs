@@ -2,10 +2,16 @@
 
 use super::{DrawingEventKind, DrawingManager, DrawingSyncAction, queue_sync, sync_id};
 use crate::drawings::domain::{Drawing, DrawingToolType, FolderSync};
-use crate::drawings::services::{ZOrderService, in_z_order};
+use crate::drawings::services::{HistoryService, ZOrderService, in_z_order};
 use crate::model::PostContent;
 use egui::Rect;
 use std::collections::HashSet;
+
+/// Original drawings and history while a series removal changes their owner and layer.
+pub(crate) struct DrawingRemoval {
+    before: Vec<Drawing>,
+    history: HistoryService,
+}
 
 impl DrawingManager {
     // === Drawing CRUD ===
@@ -186,9 +192,40 @@ impl DrawingManager {
         }
         for (_, old) in &before {
             self.queue_update(old.id);
+            self.report(old.id, DrawingEventKind::PropertiesChanged);
         }
         if record {
             self.history.push_snapshot(before);
+        }
+    }
+
+    /// Holds the intermediate owner, layer and deletion changes of one series removal.
+    pub(crate) fn begin_removal(&mut self) -> DrawingRemoval {
+        debug_assert!(self.removal.is_none(), "series removals do not nest");
+        self.removal = Some(Vec::new());
+        DrawingRemoval {
+            before: self.drawings.clone(),
+            history: std::mem::replace(&mut self.history, HistoryService::with_max_size(0)),
+        }
+    }
+
+    /// Reports each changed drawing once and keeps its original state in one undo snapshot.
+    pub(crate) fn finish_removal(&mut self, removal: DrawingRemoval) {
+        let changed = self.removal.take().unwrap_or_default();
+        for &id in &changed {
+            self.report_change(id, removal.before.iter().find(|d| d.id == id), false);
+        }
+        let record = self.history.can_undo();
+        self.history = removal.history;
+        if record {
+            self.history.push_snapshot(
+                removal
+                    .before
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, drawing)| changed.contains(&drawing.id))
+                    .collect(),
+            );
         }
     }
 
