@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 
 use super::Events;
 use crate::data::{MaybeSend, Reply};
-use crate::model::{Alert, AlertId};
+use crate::model::{Alert, AlertId, AlertTrigger};
 
 /// The host's alerts. The host stores and evaluates them, on its own prices or on a server; the
 /// library shows what the host pushes and sends every change the user makes through
@@ -119,8 +119,10 @@ pub trait Alerts: MaybeSend + 'static {
     /// Pushes the host's alerts, then every change and trigger. Called when the terminal starts and
     /// again after a lagged stream, each time with a new stream that starts from no alerts: push
     /// the current list first, then keep pushing until `events` is inactive. On the first call,
-    /// also push the triggers that fired while the application was closed; do not push them again
-    /// on a later call.
+    /// also push the triggers that fired while the application was closed: as
+    /// [`AlertEvent::Logged`] to add them to the log without popups, or as triggers to show a popup
+    /// for each. Do not push them again on a later call. `AlertEngine` pushes the history its host
+    /// restored this way.
     ///
     /// The stream takes at most 10,000 pushes between two frames, the current list and the missed
     /// triggers included: send at most that many at once (for example only the most recent
@@ -191,6 +193,10 @@ pub enum AlertEvent {
         /// The alert's message with its placeholders filled in, empty if the alert has none.
         message: String,
     },
+    /// A trigger from the service's history, such as one that fired before a restart. The panel
+    /// adds it to the log as it is, silent or not, without a popup, sound or delivery, and leaves
+    /// the alert's status and firing time as they are.
+    Logged(AlertTrigger),
 }
 
 /// What a host sends for one trigger by email, plain-text email, mobile push or webhook, built

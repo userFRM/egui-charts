@@ -690,7 +690,7 @@ pub fn render_live_tpo(
                 continue;
             }
             let mark = |shown: bool, poor: bool, price| {
-                let y = price_map.price_to_y(price);
+                let y = row_center_y(price_map, profile, price);
                 (shown
                     && poor
                     && y.is_finite()
@@ -1055,6 +1055,13 @@ fn row_reach(
     )
 }
 
+/// Pixel y of the centre of the row holding `price`, where the row's marks and lines sit.
+/// A row of several ticks spans from half a tick below its price, so its centre is not its price.
+fn row_center_y(coords: &PriceMap, profile: &TPOProfile, price: f64) -> f32 {
+    let (low, high) = profile.row_span(price);
+    coords.price_to_y((low + high) * 0.5)
+}
+
 /// Draw one session's profile anchored at pixel x `anchor_x`, growing rightward in columns of
 /// `column_width` pixels, with its level labels in the left `label_room` and its
 /// statistics below when they fit the `room` of its session.
@@ -1080,11 +1087,7 @@ fn draw_session_profile(
     let chart = painter.ctx().active_theme().chart;
     let tick_size = profile.tick_size;
     let measured_height = profile_row_height(profile, coords);
-    // A row of several ticks spans from half a tick below its price, so its centre is not its price.
-    let row_y = |price: f64| {
-        let (low, high) = profile.row_span(price);
-        coords.price_to_y((low + high) * 0.5)
-    };
+    let row_y = |price: f64| row_center_y(coords, profile, price);
     let readable = column_width.min(measured_height) >= LETTER_MIN_COLUMN_PX;
     // `Both` paints the cells of `Blocks` and adds the letters while they stay readable.
     let use_letters = readable && config.display_mode == TPODisplayMode::Letters;
@@ -2299,9 +2302,10 @@ mod tests {
                 )
             })
             .collect();
-        for (extend, high, low, start, latest, expected) in [
-            (false, true, true, 0, false, vec![]),
+        for (ticks, extend, high, low, start, latest, expected) in [
+            (1, false, true, true, 0, false, vec![]),
             (
+                1,
                 true,
                 true,
                 true,
@@ -2315,6 +2319,7 @@ mod tests {
                 ],
             ),
             (
+                1,
                 true,
                 true,
                 false,
@@ -2324,6 +2329,7 @@ mod tests {
             ),
             // The first profile is offscreen; its high still ends at bar 9 and its low at the edge.
             (
+                1,
                 true,
                 true,
                 true,
@@ -2337,6 +2343,7 @@ mod tests {
                 ],
             ),
             (
+                1,
                 true,
                 true,
                 true,
@@ -2346,6 +2353,7 @@ mod tests {
             ),
             // Both highs were repaired before this crop; the lows remain unrepaired.
             (
+                1,
                 true,
                 true,
                 true,
@@ -2353,9 +2361,65 @@ mod tests {
                 false,
                 vec![(100.0, 400.0), (101.0, 400.0)],
             ),
-            (true, true, true, 8, true, vec![]),
+            (1, true, true, true, 8, true, vec![]),
+            // Rows of two ticks: each line keeps its row's centre once its profile is offscreen.
+            (
+                2,
+                true,
+                true,
+                true,
+                0,
+                false,
+                vec![
+                    (104.5, 270.0),
+                    (100.5, 400.0),
+                    (102.5, 270.0),
+                    (100.5, 400.0),
+                ],
+            ),
+            (
+                2,
+                true,
+                true,
+                false,
+                0,
+                false,
+                vec![(104.5, 270.0), (102.5, 270.0)],
+            ),
+            (
+                2,
+                true,
+                true,
+                true,
+                4,
+                false,
+                vec![
+                    (102.5, 150.0),
+                    (100.5, 400.0),
+                    (104.5, 150.0),
+                    (100.5, 400.0),
+                ],
+            ),
+            (
+                2,
+                true,
+                true,
+                true,
+                8,
+                false,
+                vec![(104.5, 30.0), (100.5, 400.0), (102.5, 30.0), (100.5, 400.0)],
+            ),
+            (
+                2,
+                true,
+                true,
+                true,
+                10,
+                false,
+                vec![(100.5, 400.0), (100.5, 400.0)],
+            ),
         ] {
-            let params: crate::model::ChartTypeParams = serde_json::from_value(serde_json::json!({"tpo_row_ticks":1,"tpo_extend_poor":extend,"tpo_poor_high":high,"tpo_poor_low":low})).unwrap();
+            let params: crate::model::ChartTypeParams = serde_json::from_value(serde_json::json!({"tpo_row_ticks":ticks,"tpo_extend_poor":extend,"tpo_poor_high":high,"tpo_poor_low":low})).unwrap();
             let mut config = params.tpo_config(Some(1.0));
             config.latest_session_only = latest;
             let ctx = egui::Context::default();
@@ -2397,7 +2461,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 lines, expected,
-                "extend {extend}, high {high}, low {low}, start {start}, latest {latest}"
+                "ticks {ticks}, extend {extend}, high {high}, low {low}, start {start}, latest {latest}"
             );
         }
     }

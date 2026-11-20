@@ -40,7 +40,8 @@ pub enum LayoutCopy {
     /// instrument unless the source was given another one. A chart without a feed has no order
     /// flow to give: from it, each chart keeps its order-flow layers and settings. A chart that
     /// has not been drawn yet fits its bars on its first frame, and a lock in the settings then
-    /// locks that view.
+    /// locks that view. Each other chart keeps its futures data choices, since only its host can
+    /// reload its history for them.
     Settings(Box<ChartSettingsState>),
 }
 
@@ -356,6 +357,9 @@ fn apply_to_other_chart(
             flow.volume_bubbles.grouping = own.volume_bubbles.grouping;
         }
     }
+    // Only each chart's host can reload its history for the futures data choices.
+    settings.back_adjust_futures = chart.back_adjust_futures;
+    settings.settlement_as_close = chart.settlement_as_close;
     let own_ratio = chart.state().price_scale().bar_ratio();
     // A chart not drawn yet holds the scale's placeholder range, not a view of its own.
     // shortcut: a chart drawn before its bars changed counts as drawn; track a fit since the last
@@ -1083,6 +1087,8 @@ mod tests {
         let mut settings = ChartSettingsState::from_chart(&a);
         settings.chart_basic_styles.background_color = egui::Color32::KHAKI;
         settings.candle_colors.body_up = egui::Color32::GOLD;
+        settings.back_adjust_futures = true;
+        settings.settlement_as_close = false;
         let factory = IndicatorFactory::new();
         let mut layout = ChartLayout {
             mode: ChartLayoutMode::TwoHorizontal,
@@ -1204,6 +1210,16 @@ mod tests {
         let precision = |chart: &Chart| chart.state().price_scale().price_precision();
         assert_eq!(precision(charts[0]), Some(2));
         assert_eq!(precision(charts[1]), Some(4));
+
+        // Only the source takes the futures data choices; the other chart keeps its own.
+        let futures = |chart: &Chart| {
+            let settings = ChartSettingsState::from_chart(chart);
+            (settings.back_adjust_futures, settings.settlement_as_close)
+        };
+        assert_eq!(
+            (futures(charts[0]), futures(charts[1])),
+            ((true, false), (false, true))
+        );
 
         assert!(charts[0].undo());
         show(&mut layout, &mut charts);
