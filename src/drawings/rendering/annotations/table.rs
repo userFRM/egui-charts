@@ -813,7 +813,10 @@ mod tests {
     /// cells, and styles the cell that keeps the focus.
     #[test]
     fn editor_inserts_and_deletes_at_the_focused_cell() {
-        use egui_kittest::{Harness, kittest::Queryable};
+        use egui_kittest::{
+            Harness,
+            kittest::{By, Queryable},
+        };
         let plain = TableCellStyle::default();
         let red = TableCellStyle {
             background: Some([255, 0, 0, 255]),
@@ -836,7 +839,9 @@ mod tests {
                 ("a\tb\tc\nd\te\tf\ng\th\ti".to_owned(), table),
             );
         harness.run();
-        harness.get_by_value("e").click();
+        harness
+            .get_by(By::new().role(egui::Role::TextInput).value("e"))
+            .click();
         harness.run();
         for button in ["Insert row below", "Delete column", "Right"] {
             harness.get_by_label(button).click();
