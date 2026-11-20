@@ -499,7 +499,8 @@ pub struct DemoApp {
     // holds that move until the answer.
     replay_prompt: egui_charts::ui::replay::ReplayTradingPrompt,
     replay_move: Option<replay::ReplayMove>,
-    pub(crate) replay_results: egui_charts::ui::replay::ReplayResults,
+    // Keep the report data off the controller's construction stack.
+    pub(crate) replay_results: Box<egui_charts::ui::replay::ReplayResults>,
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
     watchlist: WatchlistPanel,
     quotes: Arc<feeds::DemoQuotes>,
