@@ -64,13 +64,20 @@ impl Fills {
         if !repeated {
             *self.filled.entry(fill.order.clone()).or_default() += fill.quantity;
         }
-        if let Some(order) = self.orders.get(&fill.order) {
-            let symbol = order.symbol.clone();
+        if let Some(symbol) = self.symbol(fill).map(str::to_owned) {
             self.remember(&symbol, fill);
         }
         if let Some(old) = dropped {
             self.forget(&old.order);
         }
+    }
+
+    /// The order's symbol when known, otherwise the fill's own.
+    pub(super) fn symbol<'a>(&'a self, fill: &'a Execution) -> Option<&'a str> {
+        self.orders
+            .get(&fill.order)
+            .map(|order| order.symbol.as_str())
+            .or(fill.symbol.as_deref())
     }
 
     pub(super) fn forget(&mut self, id: &OrderId) {
@@ -1153,6 +1160,9 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
         let now = chrono::Utc::now();
         let mut fill = Execution::new(order.id.clone(), now, OrderSide::Buy, 100.0, 1.0);
         fills.execution(&fill);
+        fill.symbol = Some("CL".into());
+        assert_eq!(fills.symbol(&fill), Some("ES"));
+        fill.symbol = None;
         fill.time -= chrono::Duration::seconds(1);
         fill.price = 99.0;
         fills.execution(&fill);
@@ -1160,6 +1170,11 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
         fills.execution(&fill);
         assert_eq!(fills.price("ES"), Some(100.0));
         assert_eq!(fills.price("NQ"), None);
+        let mut cl = fill.clone();
+        cl.order = OrderId::new("unknown-cl");
+        cl.symbol = Some("CL".into());
+        fills.execution(&cl);
+        assert_eq!(fills.price("CL"), Some(99.0));
         let mut delayed = order.clone();
         delayed.id = fill.order.clone();
         delayed.request.symbol = "NQ".into();

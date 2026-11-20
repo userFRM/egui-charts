@@ -226,6 +226,7 @@ impl DemoApp {
         if slot == self.layout_slot {
             return;
         }
+        self.range_fit = None;
         self.stop_replay();
         // `chart` always holds the active slot so every existing toolbar and dialog acts on it.
         let other = if slot < self.layout_slot {
@@ -254,6 +255,7 @@ impl DemoApp {
     }
 
     pub(super) fn refresh_active_chart(&mut self) {
+        self.range_fit = None;
         self.comparison_settings = None;
         self.refresh_strategy_signals();
         self.last_chart_click = None;
@@ -1393,8 +1395,16 @@ mod tests {
         app.activate_chart_slot(0);
         app.sync_comparisons();
         assert!(app.compare_dialog.compared_symbols.is_empty());
+        app.handle_timeframe_toolbar(super::super::TimeframeToolbarAction::DateRangeChanged(
+            egui_charts::model::DateRange::Year5,
+        ));
+        assert!(app.range_fit.is_some());
         let before = app.chart.get_time_scale_state();
         app.new_layout(Some("Saved".into()));
+        assert!(
+            app.range_fit.is_none(),
+            "a pending fit belongs to its original chart"
+        );
         assert_eq!(app.layout.mode, ChartLayoutMode::Four);
         assert_eq!(app.chart.get_time_scale_state(), before);
         frame(&mut app);
