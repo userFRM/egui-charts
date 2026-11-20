@@ -7046,6 +7046,8 @@ fn scroll_to_time_shows_the_nearest_bar_and_loads_older_history() {
         frames.run(&mut chart);
         let spacing = chart.state.time_scale().bar_spacing();
         chart.enable_tracking_mode();
+        // An explicit instant replaces local navigation's following-bar rule.
+        chart.go_to_local_time(all[0].time.date_naive(), None);
         chart.scroll_to_time(all[0].time + TimeDelta::seconds(seconds));
         frames.run(&mut chart);
         let range = chart.state.time_scale().visible_logical_range();
@@ -7166,6 +7168,164 @@ fn scroll_to_time_shows_the_nearest_bar_and_loads_older_history() {
         let range = chart.state.time_scale().visible_logical_range();
         assert!((range.left + range.right) / 2.0 > 25.0, "{row}: {range:?}");
     }
+}
+
+/// Local navigation keeps the zoom and selects the following bar, including after paging.
+/// New York is UTC-5 in November and UTC-4 after the March clock jump.
+#[cfg(feature = "timezones")]
+#[test]
+fn go_to_local_time_centres_the_first_bar_at_or_after_the_local_time() {
+    use crate::model::TimezoneId;
+    use crate::scales::TimezoneMode;
+    use chrono::{NaiveDate, NaiveTime};
+
+    let ny = TimezoneId::named("America/New_York").unwrap();
+    let series = |start: &str, count: i64, minutes: i64| {
+        let start: DateTime<Utc> = start.parse().unwrap();
+        (0..count)
+            .map(|i| {
+                Bar::new(
+                    start + TimeDelta::minutes(i * minutes),
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    1.0,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let sessions = [
+        series("2026-11-16T14:30:00Z", 13, 30),
+        series("2026-11-17T14:30:00Z", 13, 30),
+    ]
+    .concat();
+    let skipped = series("2026-03-08T04:00:00Z", 12, 30);
+    let repeated = series("2026-11-01T04:00:00Z", 12, 30);
+    let daily = series("2026-11-16T00:00:00Z", 5, 1440);
+    // Midnight EST is 05:00Z, nearer the previous session's 20:30Z than today's 14:30Z.
+    // 02:30 in the spring gap resolves to 03:00 EDT = 07:00Z; the first autumn 01:30
+    // is still EDT = 05:30Z. Supplied daily bars retain the UTC trading date on their axis.
+    for (name, bars, interval, date, time, expected) in [
+        (
+            "day in the bars",
+            &sessions,
+            Timeframe::Min30,
+            "2026-11-17",
+            None,
+            "2026-11-17T14:30:00Z",
+        ),
+        (
+            "time on that day",
+            &sessions,
+            Timeframe::Min30,
+            "2026-11-17",
+            Some("14:30"),
+            "2026-11-17T19:30:00Z",
+        ),
+        (
+            "skipped hour",
+            &skipped,
+            Timeframe::Min30,
+            "2026-03-08",
+            Some("02:30"),
+            "2026-03-08T07:00:00Z",
+        ),
+        (
+            "repeated hour",
+            &repeated,
+            Timeframe::Min30,
+            "2026-11-01",
+            Some("01:30"),
+            "2026-11-01T05:30:00Z",
+        ),
+        (
+            "after the last bar",
+            &sessions,
+            Timeframe::Min30,
+            "2026-11-20",
+            None,
+            "2026-11-17T20:30:00Z",
+        ),
+        (
+            "before supplied bars",
+            &sessions,
+            Timeframe::Min30,
+            "2026-11-15",
+            None,
+            "2026-11-16T14:30:00Z",
+        ),
+        (
+            "supplied daily bars",
+            &daily,
+            Timeframe::Day1,
+            "2026-11-17",
+            None,
+            "2026-11-17T00:00:00Z",
+        ),
+    ] {
+        let expected: DateTime<Utc> = expected.parse().unwrap();
+        let expected = bars.iter().position(|bar| bar.time == expected).unwrap();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        chart.set_timeframe(interval);
+        chart.chart_options.time_scale.timezone = TimezoneMode::Timezone(ny.clone());
+        chart.set_visible_bars(4);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        let spacing = chart.state.time_scale().bar_spacing();
+        chart.enable_tracking_mode();
+        let date = NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
+        let time = time.map(|text| NaiveTime::parse_from_str(text, "%H:%M").unwrap());
+        chart.go_to_local_time(date, time);
+        frames.run(&mut chart);
+        let range = chart.state.time_scale().visible_logical_range();
+        assert!(
+            ((range.left + range.right) / 2.0 - expected as f32).abs() < 0.01,
+            "{name}: {range:?}"
+        );
+        assert_eq!(chart.state.time_scale().bar_spacing(), spacing, "{name}");
+        assert!(!chart.is_tracking_mode_active(), "{name}");
+    }
+
+    let all = bars(3000);
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.chart_options.time_scale.timezone = TimezoneMode::Timezone(ny.clone());
+    chart.set_visible_bars(4);
+    let mut frames = Frames::new();
+    // Before even the first page arrives the target remains pending. 10:00 EDT is 14:00Z,
+    // which is 14 * 60 = 840 minutes from the fixture's midnight on 15 March 2024.
+    chart.go_to_local_time(
+        NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
+        NaiveTime::from_hms_opt(10, 0, 0),
+    );
+    frames.run(&mut chart);
+    feed.calls();
+    feed.page().send(page(all[2000..].to_vec(), false));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    let ranged = |before| {
+        let Call::History(mut request) = history("A", Timeframe::Min1, Some(before)) else {
+            unreachable!()
+        };
+        request.clock = request.clock.with_timezone(ny.clone());
+        request.since = Some(all[840].time);
+        Call::History(request)
+    };
+    assert_eq!(feed.calls(), [ranged(all[2000].time)]);
+    feed.page().send(page(all[1000..2000].to_vec(), false));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    assert_eq!(feed.calls(), [ranged(all[1000].time)]);
+    feed.page().send(page(all[..1000].to_vec(), false));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    let range = chart.state.time_scale().visible_logical_range();
+    assert!(
+        ((range.left + range.right) / 2.0 - 840.0).abs() < 0.01,
+        "history: {range:?}"
+    );
+    assert!(feed.calls().is_empty());
 }
 
 #[test]
