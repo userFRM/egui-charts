@@ -52,6 +52,7 @@ pub(super) fn time_in_force_name(time_in_force: TimeInForce) -> &'static str {
         TimeInForce::Week => "Week",
         TimeInForce::Month => "Month",
         TimeInForce::GoodTillCancelled => "Good till cancelled",
+        TimeInForce::GoodTillDate => "Good till date",
         TimeInForce::ImmediateOrCancel => "Immediate or cancel",
         TimeInForce::FillOrKill => "Fill or kill",
     }
@@ -269,6 +270,43 @@ pub(super) fn number(
             .ok()
             .filter(|value| value.is_finite())
             .unwrap_or(f64::NAN);
+    }
+    if response.has_focus() {
+        ui.data_mut(|data| data.insert_temp(id, text));
+    }
+    response
+}
+
+/// A date and time field, `YYYY-MM-DD HH:MM` in `zone`, for an instant kept in UTC. Invalid
+/// text clears the instant so the ticket cannot send the previous value.
+pub(super) fn date_time(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut Option<chrono::DateTime<chrono::Utc>>,
+    zone: &crate::scales::TimezoneMode,
+) -> Response {
+    let id = ui.make_persistent_id(id);
+    let editing = ui.memory(|memory| memory.has_focus(id));
+    let mut text = match ui.data(|data| data.get_temp::<String>(id)) {
+        Some(text) if editing => text,
+        _ => value
+            .map(|time| zone.wall_time(time).format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_default(),
+    };
+    let response = ui
+        .add(
+            egui::TextEdit::singleline(&mut text)
+                .id(id)
+                .frame(egui::Frame::NONE)
+                .desired_width(ui.available_width())
+                .hint_text("YYYY-MM-DD HH:MM")
+                .font(FontId::proportional(ui.active_theme().text.title)),
+        )
+        .accessible_name(l10n::text(ui.ctx(), "Expiry"));
+    if response.changed() {
+        *value = chrono::NaiveDateTime::parse_from_str(text.trim(), "%Y-%m-%d %H:%M")
+            .ok()
+            .and_then(|wall| zone.instant(wall));
     }
     if response.has_focus() {
         ui.data_mut(|data| data.insert_temp(id, text));

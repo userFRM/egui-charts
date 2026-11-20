@@ -98,7 +98,7 @@ enum Request {
 ///
 /// Keep it on the chart's symbol with [`set_instrument`](Self::set_instrument), its latest quote
 /// with [`set_quote`](Self::set_quote), such as the one
-/// [`WatchlistPanel::quote`](super::WatchlistPanel::quote) holds, and its average volume with
+/// [`WatchlistPanel::quote`](crate::ui::widget_bar::WatchlistPanel::quote) holds, and its average volume with
 /// [`set_average_volume`](Self::set_average_volume). The quote's last price, change, update time,
 /// extended-hours trade and session volume are shown, the extended-hours change measured from the
 /// regular last price; update times are shown in the time zone set with

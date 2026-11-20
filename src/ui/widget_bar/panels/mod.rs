@@ -6,41 +6,23 @@
 use egui::text::TextFormat;
 use egui::{Color32, FontId};
 
-pub mod alerts_panel;
-pub mod calendar;
-pub mod chats;
+pub(crate) mod alerts_panel;
+pub(crate) mod calendar;
+pub(crate) mod chats;
 mod controls;
-pub mod hotlists;
-pub mod market_details;
-pub mod market_heatmap;
-pub mod news;
-pub mod notifications;
-pub mod object_tree;
+pub(crate) mod hotlists;
+pub(crate) mod market_details;
+pub(crate) mod market_heatmap;
+pub(crate) mod news;
+pub(crate) mod notifications;
+pub(crate) mod object_tree;
 #[cfg(feature = "detectors")]
-pub mod order_flow;
-pub mod products;
-pub mod screener;
-pub mod symbol_details;
-pub mod time_and_sales;
-pub mod watchlist;
-
-pub use crate::ui::trading::DepthPanel;
-pub use alerts_panel::*;
-pub use calendar::*;
-pub use chats::*;
-pub use hotlists::*;
-pub use market_details::*;
-pub use market_heatmap::*;
-pub use news::*;
-pub use notifications::*;
-pub use object_tree::*;
-#[cfg(feature = "detectors")]
-pub use order_flow::*;
-pub use products::*;
-pub use screener::*;
-pub use symbol_details::*;
-pub use time_and_sales::*;
-pub use watchlist::*;
+pub(crate) mod order_flow;
+pub(crate) mod products;
+pub(crate) mod screener;
+pub(crate) mod symbol_details;
+pub(crate) mod time_and_sales;
+pub(crate) mod watchlist;
 
 /// Height shared by market data rows.
 const ROW_HEIGHT: f32 = 26.0;
@@ -84,8 +66,12 @@ mod tests {
         Datafeed, FeedError, HistoryPage, HistoryRequest, HotlistEntry, HotlistQuery, Reply,
         ScreenerColumn, ScreenerColumnSet, ScreenerQuery, ScreenerRow, SymbolDetails,
     };
-    use crate::model::{Instrument, OrderSide, Quote, Tick};
+    use crate::model::{Instrument, OrderSide, Quote, Tick, Watchlist};
     use crate::theme::{Theme, apply_to_egui};
+    use crate::ui::widget_bar::{
+        HotlistsPanel, NewsPanel, ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel,
+        TradeSizeFilter, WatchlistPanel,
+    };
 
     struct Feed;
     impl Datafeed for Feed {
