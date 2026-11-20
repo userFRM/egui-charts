@@ -733,6 +733,7 @@ pub struct OrderFlowSettings {
 /// settings.status_line.show_logo = false;
 /// settings.trading.instant_orders = true;
 /// settings.alerts.play_sound = false;
+/// settings.session_background = Some(egui_charts::widget::settings::SessionBackgroundSettings::default());
 /// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
