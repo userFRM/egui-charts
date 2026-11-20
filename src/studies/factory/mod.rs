@@ -350,6 +350,7 @@ impl IndicatorFactory {
                 WeightedClose,
                 OHLC4,
                 VisibleAveragePrice,
+                AnalystPriceForecast,
             ],
             "Market structure" => [
                 Week52HighLow,

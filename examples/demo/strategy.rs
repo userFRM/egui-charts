@@ -249,7 +249,8 @@ impl DemoApp {
                     StrategyTesterAction::Report(action) => self.handle_strategy_action(action),
                     StrategyTesterAction::Signals { .. } => {
                         self.strategy_session = self.timeframe_toolbar.state.session_type;
-                        self.strategy_trade = None;
+                        // A continued run keeps the report's selected entry; a new run clears it.
+                        self.strategy_trade = self.strategy_report.selected_trade();
                         self.refresh_strategy_signals();
                     }
                     StrategyTesterAction::RequestHistory(request) => {
@@ -524,6 +525,22 @@ mod tests {
         assert_eq!(report.equity.first().unwrap().0, start);
         assert_eq!(report.equity.len(), 49);
         assert_eq!(report.equity.last().unwrap().0, now);
+        click(&mut app, "List of trades");
+        click(&mut app, "1");
+        assert_eq!(app.strategy_report.selected_trade(), Some(0));
+        assert_eq!(app.strategy_trade, Some(0));
+        // Appending a forming bar closes the previous one and continues the tester report.
+        let mut next = app.chart.bars(SeriesId::MAIN).last().unwrap().clone();
+        next.time += chrono::TimeDelta::hours(1);
+        assert!(app.chart.update(SeriesId::MAIN, next));
+        for _ in 0..3 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
+        assert!(!app.strategy_report.is_stale());
+        assert_eq!(app.strategy_report.report().unwrap().equity.len(), 50);
+        assert_eq!(app.strategy_report.selected_trade(), Some(0));
+        assert_eq!(app.strategy_trade, Some(0));
+        let report = app.strategy_report.report().unwrap().clone();
         // The finer sample is the same minute source aggregated into decision-hour OHLCV.
         let mut actions = Vec::new();
         let output = ctx.run_ui(RawInput::default(), |ui| {
