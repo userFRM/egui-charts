@@ -813,6 +813,7 @@ mod tests {
         }
         for &tool in DrawingToolType::all() {
             let mut drawing = Drawing::new(7, tool);
+            drawing.range_settings.border = true;
             drawing.points = [
                 (100., 100.),
                 (300., 300.),
