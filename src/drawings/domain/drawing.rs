@@ -574,7 +574,11 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             width: 1.0,
             ..LINE
         },
-        T::AnchoredVWAP => DefaultStyle { width: 1.0, ..LINE },
+        T::AnchoredVWAP => DefaultStyle {
+            color: [30, 136, 229, 255],
+            width: 1.0,
+            ..LINE
+        },
         // The colour of the range tint, the same cyan as the rows of rising volume.
         T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile => colored([83, 196, 216, 255]),
         T::XABCDPattern | T::CypherPattern => DefaultStyle {
@@ -960,6 +964,7 @@ impl Drawing {
     pub(crate) fn former_default_color(tool: DrawingToolType) -> Option<[u8; 4]> {
         use DrawingToolType as T;
         match tool {
+            T::AnchoredVWAP => Some(BLUE),
             T::Circle | T::RegressionTrend => Some(RED),
             T::SineLine => Some(TEAL),
             T::ElliottTriangle | T::ElliottDoubleCombo | T::ElliottTripleCombo => {
