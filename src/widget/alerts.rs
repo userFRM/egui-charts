@@ -319,7 +319,7 @@ impl Chart {
 mod tests {
     use super::*;
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
-    use crate::model::{Bar, BarData};
+    use crate::model::{Bar, BarData, Timeframe};
     use chrono::DateTime;
 
     /// Hand-calculated flips, crosses and changes of histogram direction, read through the
@@ -488,6 +488,77 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn study_conditions_follow_calculation_bars_and_eviction() {
+        use crate::studies::{
+            ConfiguredStudy, Indicator, InputValue, StudyDataRequest, SuperTrend,
+        };
+        let bar = |minute, close| {
+            Bar::new(
+                DateTime::from_timestamp(minute * 60, 0).unwrap(),
+                close,
+                close + 1.0,
+                close - 1.0,
+                close,
+                1.0,
+            )
+        };
+        let mut chart = Chart::new(BarData::from_bars(
+            (0..16).map(|minute| bar(minute, 100.0)).collect(),
+        ));
+        chart.set_timeframe(Timeframe::Min1);
+        let mut study = ConfiguredStudy::new(Box::new(SuperTrend::new(1, 1.0)));
+        study
+            .set_input(
+                "calculation_timeframe",
+                InputValue::Timeframe(Some(Timeframe::Min5)),
+            )
+            .unwrap();
+        chart.set_study_data(
+            StudyDataRequest {
+                symbol: String::new(),
+                timeframe: Some(Timeframe::Min5),
+                metric: None,
+            },
+            [100.0, 101.0, 105.0, 106.0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, close)| bar(i as i64 * 5, close))
+                .collect(),
+            None,
+        );
+        let id = chart.add_indicator(Box::new(study));
+        let source = AlertSource::StudyCondition {
+            id: id.0.to_string(),
+            condition: 2,
+        };
+        // Five-minute trends are down, down, up, up. Closed results reach minute bars
+        // 4, 9 and 14; the change therefore holds at 14 and the forming minute 15.
+        let expected = [None, Some(0.0), Some(1.0)];
+        for removed in [0, 2] {
+            assert_eq!(
+                chart.remove_oldest_bars(SeriesId::MAIN, removed).len(),
+                removed
+            );
+            for at in 0..16 - removed {
+                let minute = at + removed;
+                let value = expected[if minute < 9 {
+                    0
+                } else if minute < 14 {
+                    1
+                } else {
+                    2
+                }];
+                assert_eq!(
+                    chart.alert_value(&source, at),
+                    value,
+                    "minute {minute}, removed {removed}"
+                );
+            }
+            assert_eq!(chart.alert_value(&source, 16 - removed), None);
         }
     }
 
