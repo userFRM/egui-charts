@@ -16,6 +16,11 @@ use crate::config::CrosshairStyle;
 
 pub use eraser::EraserMode;
 
+/// Seconds a released Demonstration or Alt (Option) mark takes to fade out.
+const MARK_FADE: f32 = 3.0;
+/// Seconds each point of a Magic trail takes to fade out behind the pointer.
+const TRAIL_FADE: f32 = 0.5;
+
 /// Aggregate state for all cursor modes.
 ///
 /// Holds the state for each cursor mode variant (eraser).
@@ -60,7 +65,17 @@ impl CursorModeState {
         for (_, age, _) in &mut self.trail[..fading] {
             *age += dt.max(0.0);
         }
-        self.trail.retain(|(_, age, _)| *age < 0.5);
+        let fade = self.fade();
+        self.trail.retain(|(_, age, _)| *age < fade);
+    }
+
+    /// Seconds a point takes to fade out once it ages: a Magic trail's, or a released mark's.
+    fn fade(&self) -> f32 {
+        if self.cursor == Some(CrosshairStyle::Magic) {
+            TRAIL_FADE
+        } else {
+            MARK_FADE
+        }
     }
 
     /// Paint the trail over the plot column of every pane, above their content, and keep
@@ -71,6 +86,7 @@ impl CursorModeState {
             return;
         };
         let painter = ui.painter().with_clip_rect(plot);
+        let fade = self.fade();
         for pair in self.trail.windows(2).filter(|pair| pair[1].2) {
             painter.line_segment(
                 [pair[0].0, pair[1].0],
@@ -79,7 +95,7 @@ impl CursorModeState {
                     ui.active_theme()
                         .ui
                         .accent
-                        .gamma_multiply((1.0 - pair[0].1 / 0.5) * 0.65),
+                        .gamma_multiply((1.0 - pair[0].1 / fade) * 0.65),
                 ),
             );
         }
@@ -90,7 +106,7 @@ impl CursorModeState {
                 ui.active_theme()
                     .ui
                     .accent
-                    .gamma_multiply((1.0 - age / 0.5) * 0.65),
+                    .gamma_multiply((1.0 - age / fade) * 0.65),
             );
         }
         if !self.trail.is_empty() {
@@ -207,6 +223,7 @@ mod tests {
     #[test]
     fn held_trail_expires_without_restarting() {
         let mut modes = CursorModeState::new();
+        modes.follow(Some(CrosshairStyle::Magic), None, false);
         for (dt, x, expected) in [
             (0.0, 10.0, 1),
             (0.1, 20.0, 2),
@@ -243,7 +260,7 @@ mod tests {
             (0.4, Some(Demonstration), Some(30.0), F, &[F, T, T]),
             (0.1, Some(Demonstration), Some(40.0), T, &[F, T, T, F]),
             (0.1, Some(Demonstration), Some(40.0), F, &[F, T, T, F]),
-            (0.35, Some(Demonstration), None, F, &[F]),
+            (2.85, Some(Demonstration), None, F, &[F]),
             (0.2, Some(Demonstration), None, F, &[]),
             (0.0, Some(Magic), Some(10.0), T, &[F]),
             (0.4, Some(Magic), Some(20.0), T, &[F, T]),
@@ -257,6 +274,39 @@ mod tests {
             modes.follow(cursor, x.map(|x| egui::pos2(x, 10.0)), held);
             let joined: Vec<_> = modes.trail.iter().map(|point| point.2).collect();
             assert_eq!(joined, expected, "row {}", row + 1);
+        }
+    }
+
+    /// A released Demonstration or Alt mark is painted for three seconds and fades linearly: a
+    /// third of its opacity is gone after one second and nothing is left after three.
+    #[test]
+    fn released_marks_fade_over_three_seconds() {
+        use CrosshairStyle::{Demonstration, Full};
+        let at = egui::pos2(100.0, 100.0);
+        for style in [Demonstration, Full] {
+            let ctx = egui::Context::default();
+            let mut modes = CursorModeState::new();
+            modes.plot = Some(egui::Rect::from_center_size(at, egui::vec2(200.0, 200.0)));
+            modes.follow(Some(style), Some(at), true);
+            modes.follow(Some(style), Some(at), false);
+            let mut alphas = Vec::new();
+            for dt in [0.0, 1.0, 2.0] {
+                modes.update(dt);
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| modes.render(ui));
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                alphas.push(shapes.into_iter().find_map(|clipped| match clipped.shape {
+                    egui::Shape::Circle(circle) if circle.center == at => Some(circle.fill.a()),
+                    _ => None,
+                }));
+            }
+            let &[Some(released), Some(one), None] = alphas.as_slice() else {
+                panic!("{style:?}: {alphas:?}");
+            };
+            assert!(
+                released > 0 && (f32::from(one) - f32::from(released) * 2.0 / 3.0).abs() <= 1.0,
+                "{style:?}: {alphas:?}"
+            );
         }
     }
 
