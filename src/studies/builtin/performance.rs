@@ -908,7 +908,7 @@ mod tests {
                     table.cell_tooltips[0],
                     if supplied.is_empty() { [""; 7] } else { dates }
                 );
-                assert_eq!(study.data_requests(), [request.clone()]);
+                assert_eq!(study.data_requests(), std::slice::from_ref(&request));
                 if timeframe == Timeframe::Month1 && !supplied.is_empty() {
                     // January closes at 120; all three starts use December's daily close, 100.
                     for line in [0, 1, 4] {
