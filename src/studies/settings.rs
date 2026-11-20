@@ -2075,13 +2075,9 @@ impl Indicator for ConfiguredStudy {
         self.study.value_format()
     }
     fn scale(&self) -> super::StudyScale {
-        // Plots kept on the price chart are prices: the price scale there, none in their own pane.
-        if self.study.plots_on_price() {
-            return if self.is_overlay() {
-                super::StudyScale::Main
-            } else {
-                super::StudyScale::None
-            };
+        // A pane whose plots stay on the price chart has no value scale of its own.
+        if self.study.plots_on_price() && !self.is_overlay() {
+            return super::StudyScale::None;
         }
         self.scale.unwrap_or_else(|| self.study.scale())
     }
@@ -2296,7 +2292,7 @@ impl Indicator for ConfiguredStudy {
         true
     }
     fn set_scale(&mut self, scale: super::StudyScale) -> bool {
-        if self.study.plots_on_price() {
+        if self.study.plots_on_price() && !self.is_overlay() {
             return false;
         }
         self.scale_mapping = None;
