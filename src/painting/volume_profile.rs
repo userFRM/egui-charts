@@ -27,6 +27,8 @@ pub(crate) enum ProfileStyle {
         strip: bool,
         /// Share of the span that the row with the most volume takes.
         width: f32,
+        /// Visibility of the option profile's call and put wall plots.
+        walls_visible: [bool; 2],
         /// Decimals of the row values, two without.
         volume_decimals: Option<u8>,
     },
@@ -90,35 +92,56 @@ pub(crate) fn paint_profile(
         return;
     }
     let options = profile.source() == ProfileSource::Options;
-    let (drawing, right_aligned, strip, share, poc_width, volume_decimals) = match style {
-        ProfileStyle::Study {
-            right_aligned,
-            strip,
-            width,
-            volume_decimals,
-        } => (
-            false,
-            right_aligned,
-            strip,
-            width,
-            if options {
-                stroke::HAIRLINE
-            } else {
-                stroke::THICK
-            },
-            volume_decimals,
-        ),
-        #[cfg(feature = "drawings")]
-        ProfileStyle::Drawing {
-            anchored,
-            poc_width,
-        } => (true, anchored, false, 0.3, poc_width, None),
-    };
+    let (drawing, right_aligned, strip, share, poc_width, walls_visible, volume_decimals) =
+        match style {
+            ProfileStyle::Study {
+                right_aligned,
+                strip,
+                width,
+                walls_visible,
+                volume_decimals,
+            } => (
+                false,
+                right_aligned,
+                strip,
+                width,
+                if options {
+                    stroke::HAIRLINE
+                } else {
+                    stroke::THICK
+                },
+                walls_visible,
+                volume_decimals,
+            ),
+            #[cfg(feature = "drawings")]
+            ProfileStyle::Drawing {
+                anchored,
+                poc_width,
+            } => (true, anchored, false, 0.3, poc_width, [true; 2], None),
+        };
     if profile.exposure.is_some() {
-        paint_exposure(painter, profile, config, span, share, price_to_y);
+        paint_exposure(painter, profile, config, span.clone(), share, price_to_y);
+        paint_option_walls(
+            painter,
+            profile,
+            span,
+            right_aligned,
+            price_to_y,
+            walls_visible,
+        );
         return;
     }
     let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(config.value_area()) else {
+        if !drawing {
+            paint_option_walls(
+                painter,
+                profile,
+                span,
+                right_aligned,
+                price_to_y,
+                walls_visible,
+            );
+        }
         return;
     };
     let y_at_row = |row: usize| (price_to_y)(profile.low + row as f64 * profile.row_height);
@@ -296,7 +319,7 @@ pub(crate) fn paint_profile(
         }
     }
 
-    if config.show_values && !drawing && !options {
+    if config.show_values && !drawing {
         use crate::scales::PriceFormatter;
         let formatter = crate::scales::VolumeFormatter {
             precision: volume_decimals.map_or(2, usize::from),
@@ -310,21 +333,32 @@ pub(crate) fn paint_profile(
             } else {
                 volume
             };
-            if amount <= 0.0 {
+            // A strike's figures show while it has any, also where its calls and puts net out.
+            if (if options { volume } else { amount }) <= 0.0 {
                 continue;
             }
-            let text = match config.display {
-                ProfileDisplay::Total => formatter.format(volume),
-                ProfileDisplay::UpDown => format!(
-                    "{} / {}",
+            let text = if options && profile.ratio_rows {
+                format!("{:.2}", profile.up[row])
+            } else if options {
+                format!(
+                    "{} × {}",
                     formatter.format(profile.up[row]),
                     formatter.format(profile.down[row])
-                ),
-                ProfileDisplay::Delta => format!(
-                    "{}{}",
-                    if delta > 0.0 { "+" } else { "" },
-                    formatter.format(delta)
-                ),
+                )
+            } else {
+                match config.display {
+                    ProfileDisplay::Total => formatter.format(volume),
+                    ProfileDisplay::UpDown => format!(
+                        "{} / {}",
+                        formatter.format(profile.up[row]),
+                        formatter.format(profile.down[row])
+                    ),
+                    ProfileDisplay::Delta => format!(
+                        "{}{}",
+                        if delta > 0.0 { "+" } else { "" },
+                        formatter.format(delta)
+                    ),
+                }
             };
             let galley = painter.layout_no_wrap(text, font.clone(), text_color);
             let (a, b) = (y_at_row(row), y_at_row(row + 1));
@@ -351,6 +385,14 @@ pub(crate) fn paint_profile(
 
     if !drawing {
         draw_lines();
+        paint_option_walls(
+            painter,
+            profile,
+            span,
+            right_aligned,
+            price_to_y,
+            walls_visible,
+        );
     }
     if let Some(parts) = &profile.expiry_parts {
         paint_expiry_key(painter, &parts.labels, rect, !right_aligned);
@@ -365,6 +407,40 @@ pub(crate) fn paint_profile(
         color
     };
     paint_source_note(painter, profile.source(), rect, note_right, note_color);
+}
+
+fn paint_option_walls(
+    painter: &egui::Painter,
+    profile: &VolumeProfile,
+    span: Range<f32>,
+    right_aligned: bool,
+    price_to_y: &dyn Fn(f64) -> f32,
+    visible: [bool; 2],
+) {
+    let Some(walls) = &profile.walls else {
+        return;
+    };
+    for (side, label) in ["Call wall", "Put wall"].into_iter().enumerate() {
+        let Some(strike) = walls.strikes[side].filter(|_| visible[side]) else {
+            continue;
+        };
+        let [r, g, b, a] = walls.colors[side];
+        let color = Color32::from_rgba_unmultiplied(r, g, b, a);
+        let y = price_to_y(strike);
+        painter.hline(span.start..=span.end, y, Stroke::new(1.0, color));
+        let (x, align) = if right_aligned {
+            (span.end - 2.0, egui::Align2::RIGHT_BOTTOM)
+        } else {
+            (span.start + 2.0, egui::Align2::LEFT_BOTTOM)
+        };
+        painter.text(
+            Pos2::new(x, y - 2.0),
+            align,
+            crate::localization::text(painter.ctx(), label),
+            egui::FontId::proportional(typography::XS),
+            color,
+        );
+    }
 }
 
 // Both painting and selection use these signed rectangles, including inverted price scales.
@@ -741,6 +817,7 @@ mod tests {
                         ProfileStyle::Study {
                             right_aligned: false,
                             strip: false,
+                            walls_visible: [true; 2],
                             width: 0.9,
                             volume_decimals: None,
                         }
@@ -837,6 +914,7 @@ mod tests {
                     ProfileStyle::Study {
                         right_aligned,
                         strip: right_aligned,
+                        walls_visible: [true; 2],
                         width: if right_aligned { 1.0 } else { 0.9 },
                         volume_decimals: None,
                     },

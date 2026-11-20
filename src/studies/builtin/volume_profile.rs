@@ -275,9 +275,9 @@ enum Anchor {
 /// then the chart events.
 const ANCHORS: [(Anchor, &str); 14] = [
     (Anchor::Bars(AutoAnchor::Auto), "Auto"),
-    (Anchor::Bars(AutoAnchor::HighestHigh), "Highest High"),
-    (Anchor::Bars(AutoAnchor::LowestLow), "Lowest Low"),
-    (Anchor::Bars(AutoAnchor::HighestVolume), "Highest Volume"),
+    (Anchor::Bars(AutoAnchor::HighestHigh), "Highest high"),
+    (Anchor::Bars(AutoAnchor::LowestLow), "Lowest low"),
+    (Anchor::Bars(AutoAnchor::HighestVolume), "Highest volume"),
     (Anchor::Bars(AutoAnchor::Session), "Session"),
     (Anchor::Bars(AutoAnchor::Week), "Week"),
     (Anchor::Bars(AutoAnchor::Month), "Month"),
