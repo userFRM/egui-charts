@@ -394,7 +394,9 @@ pub struct ChartConfig {
     pub show_horizontal_grid: bool,
     /// Whether to show vertical grid lines
     pub show_vertical_grid: bool,
-    /// Whether to show volume bars
+    /// Whether to show volume bars. With the `studies` feature it adds a Volume study on the next
+    /// frame unless one is on the chart, and a user action that turns it on at the chart's study
+    /// cap without one leaves it off.
     pub show_volume: bool,
     /// Volume height as a fraction of the price pane above `volume_baseline_inset`
     pub volume_height_fraction: f32,
