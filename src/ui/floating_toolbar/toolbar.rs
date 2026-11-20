@@ -94,8 +94,6 @@ pub struct FloatingSelectionToolbar {
     user_edit_enabled: bool,
     /// Whether object is visible
     is_visible: bool,
-    /// Whether to offer an alert on the object
-    alert_available: bool,
     /// Last rendered rect (for hit testing)
     last_rect: Rect,
 }
@@ -127,7 +125,6 @@ impl FloatingSelectionToolbar {
             is_locked: false,
             user_edit_enabled: true,
             is_visible: true,
-            alert_available: false,
             last_rect: Rect::NOTHING,
         }
     }
@@ -184,19 +181,20 @@ impl FloatingSelectionToolbar {
         self.is_visible = visible;
     }
 
-    /// Show the Add alert button, for an object an alert can follow, such as a drawing with
-    /// [`alert_levels`](crate::drawings::Drawing::alert_levels). Hidden by default. `false` also
-    /// leaves the More menu's alert row and its separator out, as hiding `Control::Alerts` does
+    /// Show or hide a control the toolbar offers. Only [`Control::Alerts`] applies here: hiding it
+    /// leaves the Add alert button and the More menu's alert row and its separator out, as it does
     /// in the drawing context menu.
-    pub fn set_alert_available(&mut self, available: bool) {
-        self.alert_available = available;
-        set_control_visible(&mut self.menu.hidden, Control::Alerts, available);
+    pub fn set_control_visible(&mut self, control: Control, visible: bool) {
+        set_control_visible(&mut self.menu.hidden, control, visible);
     }
 
     /// Follow the selected drawing, applying quick style edits as undoable chart actions. Colour,
     /// fill, width and style edits reach every selected drawing that is unlocked, accepts user edits
     /// and draws the property, in one undo step; a palette colour keeps each drawing's opacity.
     /// Width and style read Mixed while the selected drawings differ.
+    /// It offers Add alert when the drawing has an alert level on a chart with a symbol, as the
+    /// drawing context menu does, unless [`Control::Alerts`] is hidden through
+    /// [`Self::set_control_visible`].
     /// Returns menu actions for the host's dialogs, clipboard and drawing commands.
     /// Call each frame, including after deselection, to finish a continuous colour edit.
     pub fn show_and_apply(
@@ -556,7 +554,8 @@ impl FloatingSelectionToolbar {
                                     DrawingContextMenuAction::ReversePosition,
                                 ));
                             }
-                            if self.alert_available
+                            if self.menu.alert.is_some()
+                                && !self.menu.hidden.contains(&Control::Alerts)
                                 && IconButton::new(&icons::ALERTS)
                                     .size(ButtonSize::SM)
                                     .tooltip("Add alert")
@@ -824,7 +823,9 @@ mod tests {
             toolbar.set_locked(locked);
             toolbar.set_user_edit_enabled(user_edit);
             toolbar.set_object_visible(!locked);
-            toolbar.set_alert_available(locked);
+            toolbar.menu.alert = locked.then(|| {
+                crate::model::Alert::new("SYNTH", crate::model::AlertCondition::Crossing(1.0))
+            });
             let mut frame = |tab| {
                 ctx.run_ui(
                     egui::RawInput {
@@ -1109,6 +1110,104 @@ mod tests {
             }
             assert!(chart.undo(), "{property}");
             assert_eq!(styles(&chart), original, "{property}");
+        }
+    }
+
+    /// Alert availability comes from the drawing and chart, and honours the shared control.
+    #[test]
+    fn add_alert_follows_drawing_levels_and_the_alerts_control() {
+        use crate::drawings::Drawing;
+        use crate::model::{AlertComparison, AlertCondition, AlertSource};
+        for (tool, symbol, alerts_visible, offered) in [
+            (DrawingToolType::TrendLine, "SYNTH", true, true),
+            (DrawingToolType::TrendLine, "SYNTH", false, false),
+            (DrawingToolType::VerticalLine, "SYNTH", true, false),
+            (DrawingToolType::TrendLine, "", true, false),
+        ] {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            chart.symbol = symbol.into();
+            let mut drawing = Drawing::new(7, tool);
+            drawing.completed = true;
+            drawing.points = vec![Pos2::new(100.0, 100.0)];
+            drawing.chart_points = vec![ChartPoint::new(10.0, 105.0)];
+            if tool == DrawingToolType::TrendLine {
+                drawing.chart_points.push(ChartPoint::new(50.0, 108.0));
+            }
+            chart.drawings_mut().drawings = vec![drawing];
+            chart.drawings_mut().select(7);
+            let mut toolbar = FloatingSelectionToolbar::new();
+            toolbar.set_control_visible(Control::Alerts, alerts_visible);
+            let mut action = None;
+            let mut frame = |events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        action = toolbar.show_and_apply(ui, &mut chart);
+                    },
+                )
+            };
+            frame(vec![]).drop_without_applying_deltas();
+            let output = frame(vec![]);
+            let pos = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find_map(|(_, node)| {
+                    if node.label() != Some("Add alert")
+                        || node.role() == egui::accesskit::Role::Label
+                    {
+                        return None;
+                    }
+                    let rect = node.bounds()?;
+                    Some(egui::pos2(
+                        (rect.x0 + rect.x1) as f32 / 2.0,
+                        (rect.y0 + rect.y1) as f32 / 2.0,
+                    ))
+                });
+            output.drop_without_applying_deltas();
+            assert_eq!(
+                pos.is_some(),
+                offered,
+                "{tool:?}, {symbol}, visible={alerts_visible}"
+            );
+            if let Some(pos) = pos {
+                for pressed in [true, false] {
+                    frame(vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            pressed,
+                            button: egui::PointerButton::Primary,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ])
+                    .drop_without_applying_deltas();
+                }
+                let Some(DrawingContextMenuAction::AddAlert(alert)) = action else {
+                    panic!("missing alert: {action:?}");
+                };
+                assert_eq!(alert.symbol, "SYNTH");
+                assert_eq!(alert.source, AlertSource::Price);
+                assert_eq!(
+                    alert.condition,
+                    AlertCondition::Compare {
+                        other: AlertSource::Drawing("7".into()),
+                        comparison: AlertComparison::Crossing
+                    }
+                );
+            }
         }
     }
 
