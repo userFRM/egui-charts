@@ -417,8 +417,20 @@ impl AlertsPanel {
                 | AlertCondition::Above(level)
                 | AlertCondition::Below(level) => {
                     *level = price.unwrap_or(f64::NAN);
-                    self.draft_level_text =
-                        price.map(|price| price.to_string()).unwrap_or_default();
+                    // Keep two decimals without rounding away a finer suggested price.
+                    self.draft_level_text = price
+                        .map(|price| {
+                            let text = price.to_string();
+                            if text
+                                .split_once('.')
+                                .is_none_or(|(_, fraction)| fraction.len() < 2)
+                            {
+                                format!("{price:.2}")
+                            } else {
+                                text
+                            }
+                        })
+                        .unwrap_or_default();
                 }
                 _ => {}
             }
@@ -2229,7 +2241,7 @@ mod tests {
         let mut panel = AlertsPanel::default();
         panel.set_symbol("SIM");
         let mut h = Harness::builder()
-            .with_size(egui::vec2(400.0, 400.0))
+            .with_size(egui::vec2(300.0, 400.0))
             .build_ui_state(|ui, panel: &mut AlertsPanel| panel.draft_form(ui), panel);
         h.get_by_label("Quick alert").click();
         h.run();
@@ -2238,14 +2250,33 @@ mod tests {
                 .accesskit_node()
                 .is_disabled()
         );
+        let level = h
+            .get_by_role_and_label(egui::Role::TextInput, "Level")
+            .rect();
+        let label = h.get_by_role_and_label(egui::Role::Label, "Level").rect();
+        assert!(
+            level.y_range().contains(label.center().y),
+            "the numeric field keeps its row"
+        );
         assert!(
             h.get_by_role_and_label(egui::Role::TextInput, "Level")
                 .value()
                 .is_none_or(|value| value.is_empty())
         );
-        h.state_mut().set_price("SIM", Some(98.9137), Some(0.25));
-        h.run();
-        assert_eq!(h.state().draft.condition, AlertCondition::Crossing(99.0));
+        for (quote, tick, price, text) in [
+            (98.9137, 0.25, 99.0, "99.00"),
+            (1.084537, 0.00001, 1.08454, "1.08454"),
+        ] {
+            h.state_mut().set_price("SIM", Some(quote), Some(tick));
+            h.run();
+            assert_eq!(h.state().draft.condition, AlertCondition::Crossing(price));
+            assert_eq!(
+                h.get_by_role_and_label(egui::Role::TextInput, "Level")
+                    .value()
+                    .as_deref(),
+                Some(text),
+            );
+        }
         h.state_mut().set_price("SIM", None, Some(0.25));
         h.run();
         assert!(

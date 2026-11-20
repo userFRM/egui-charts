@@ -1563,7 +1563,12 @@ pub(crate) fn rule_form(
             ui.label(l10n::text(ui.ctx(), "Level"));
             if let Some(text) = level_text {
                 level_edited = ui
-                    .text_edit_singleline(text)
+                    .add(
+                        egui::TextEdit::singleline(text)
+                            .desired_width(0.0)
+                            .clip_text(false)
+                            .min_size(ui.spacing().interact_size),
+                    )
                     .accessible_name(l10n::text(ui.ctx(), "Level"))
                     .changed();
                 *v = text.trim().parse().unwrap_or(f64::NAN);
