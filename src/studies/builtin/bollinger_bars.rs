@@ -148,6 +148,11 @@ impl Indicator for BollingerBars {
     fn line_names(&self) -> Vec<String> {
         vec!["Wicks".into(), "Up".into(), "Down".into()]
     }
+
+    // Wicks only colours the candle blocks and holds no values.
+    fn alert_outputs(&self) -> Vec<(usize, String)> {
+        self.line_names().into_iter().enumerate().skip(1).collect()
+    }
 }
 
 #[cfg(test)]
