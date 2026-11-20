@@ -3405,48 +3405,26 @@ impl DemoApp {
         if !self.trading.has_broker() || self.account_panel == AccountPanelSize::Closed {
             return;
         }
-        let available = ui.available_height();
         let height = match self.account_panel {
             AccountPanelSize::Minimized => 42.0,
-            AccountPanelSize::Maximized => (available - 160.0).max(self.account_panel_height),
-            _ => self.account_panel_height,
+            AccountPanelSize::Maximized => (ui.available_height() - 160.0).max(320.0),
+            _ => 320.0,
         };
-        let height = height.min((available - 96.0).max(42.0));
+        let height = height.min((ui.available_height() - 96.0).max(42.0));
         let symbol = self.chart.symbol().to_owned();
         let trading = &mut self.trading;
-        let panel = egui::Panel::bottom("account_panel")
+        let action = egui::Panel::bottom("account_panel")
             .exact_size(height)
-            // The dock's own edge below resizes it; the panel's would take the drag.
-            .resizable(false)
             .show_separator_line(false)
             .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
                 top: 4,
                 ..egui::Margin::ZERO
             }))
-            .show(ui, |ui| trading.show_account_panel(ui, &symbol));
-        if self.account_panel == AccountPanelSize::Normal {
-            // The 4 point gap over the panel is its top edge; its middle stands for the height.
-            let rect = panel.response.rect;
-            let edge = egui::Rect::from_x_y_ranges(rect.x_range(), rect.top()..=rect.top() + 4.0);
-            let edge = ui
-                .interact(
-                    edge,
-                    ui.scope_id().with("account_panel_edge"),
-                    egui::Sense::drag(),
-                )
-                .on_hover_and_drag_cursor(egui::CursorIcon::ResizeVertical);
-            edge.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::Splitter, true, "Resize panel")
-            });
-            if let Some(pointer) = edge.interact_pointer_pos().filter(|_| edge.dragged()) {
-                let most = (available - 96.0).max(42.0);
-                self.account_panel_height = (rect.bottom() + 2.0 - pointer.y).clamp(42.0, most);
-            }
-        }
-        match panel.inner {
+            .show(ui, |ui| trading.show_account_panel(ui, &symbol))
+            .inner;
+        match action {
             Some(AccountPanelAction::SelectSymbol(symbol)) => self.open_catalog_symbol(&symbol),
             Some(AccountPanelAction::Disconnect) => self.trading.disconnect(),
-            Some(AccountPanelAction::ChangeBroker) => self.broker_picker.open(),
             Some(AccountPanelAction::Settings) => self.paper_reset = true,
             Some(AccountPanelAction::Minimize) => {
                 self.account_panel = if self.account_panel == AccountPanelSize::Minimized {
