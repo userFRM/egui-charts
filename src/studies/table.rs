@@ -344,11 +344,7 @@ pub(crate) fn paint(
                                     egui::Color32::from_rgb(242, 55, 69)
                                 };
                                 let tint = color.gamma_multiply(
-                                    0.1 + if table.title == "Seasonality" {
-                                        0.4
-                                    } else {
-                                        0.2
-                                    } * (value.abs() / 10.0).min(1.0) as f32,
+                                    0.1 + 0.2 * (value.abs() / 10.0).min(1.0) as f32,
                                 );
                                 painter.rect_filled(cell_rect, 0.0, tint);
                                 crate::theme::readable_color(
@@ -357,23 +353,6 @@ pub(crate) fn paint(
                                     &[theme.ui.panel_bg_floating.blend(tint)],
                                     4.5,
                                 )
-                            }
-                            _ if matches!(table.title.as_str(), "Performance" | "Seasonality") => {
-                                let alpha = if matches!(cell, StudyCell::Percent(None)) {
-                                    if table.title == "Seasonality" {
-                                        128
-                                    } else {
-                                        26
-                                    }
-                                } else {
-                                    51
-                                };
-                                painter.rect_filled(
-                                    cell_rect,
-                                    0.0,
-                                    egui::Color32::from_rgba_unmultiplied(120, 123, 134, alpha),
-                                );
-                                theme.ui.text
                             }
                             _ => theme.ui.text,
                         }
