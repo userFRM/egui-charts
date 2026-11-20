@@ -843,6 +843,7 @@ impl SymbolSearchDialog {
             || !matches!(self.category.0, None | Some(SymbolType::Spread))
             || self.filtered_symbols.iter().any(|symbol| {
                 symbol.symbol.eq_ignore_ascii_case(text)
+                    || query.matched_identifier(symbol).is_some()
                     || symbol
                         .symbol
                         .rsplit(':')
@@ -956,6 +957,7 @@ fn group_key(symbol: &Instrument) -> Option<(String, Option<SymbolType>, Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::IdentifierKind;
     use egui::Pos2;
 
     pub(super) fn create_test_symbols() -> Vec<Instrument> {
@@ -1310,6 +1312,120 @@ mod tests {
                 assert_eq!(highlights, marked);
                 assert!(elided);
                 output.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    /// An identifier query shows its code after the description, even a long one, and names it
+    /// accessibly in both choosers. A symbol query shows no identifier.
+    #[test]
+    fn result_rows_show_the_identifier_the_query_names() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for compare in [false, true] {
+                for (query, shown, long) in [
+                    ("us 0378 3310 05", Some("ISIN US0378331005"), false),
+                    ("037833100", Some("CUSIP 037833100"), false),
+                    ("xx-12", Some("WKN XX-12"), false),
+                    ("aapl", None, false),
+                    ("US0378331005", Some("ISIN US0378331005"), true),
+                ] {
+                    let description = if long {
+                        "Apple Inc. ".repeat(80)
+                    } else {
+                        "Apple Inc.".into()
+                    };
+                    let symbols = vec![
+                        Instrument::new("AAPL")
+                            .with_description(&description)
+                            .with_exchange("NASDAQ")
+                            .with_identifier(IdentifierKind::Isin, "US0378331005")
+                            .with_identifier(IdentifierKind::Cusip, "037833100")
+                            .with_identifier(IdentifierKind::Other("WKN".into()), "XX-12"),
+                    ];
+                    let mut search = SymbolSearchDialog::new();
+                    search.open_with_query(query.into());
+                    let mut comparison = CompareSymbolsDialog::new();
+                    comparison.open();
+                    comparison.search_query = query.into();
+                    let applied_theme = theme.clone();
+                    let mut harness = Harness::builder()
+                        .with_size(Vec2::new(1440.0, 900.0))
+                        .with_context_setup(move |ctx| {
+                            egui_extras::install_image_loaders(ctx);
+                            crate::theme::apply_to_egui(ctx, &applied_theme);
+                        })
+                        .build_ui_state(
+                            |ui, (search, comparison)| {
+                                if compare {
+                                    let _ = comparison.show(ui.ctx(), &symbols);
+                                } else {
+                                    let _ = search.show(ui.ctx(), &symbols);
+                                }
+                            },
+                            (search, comparison),
+                        );
+                    harness.run();
+                    assert!(harness.state().0.expression_status.is_none());
+                    let row = harness.get_by_role_and_label(egui::Role::ListBoxOption, "AAPL");
+                    let expected = match (compare, shown) {
+                        (false, Some("ISIN US0378331005")) => Some("NASDAQ, ISIN US0378331005"),
+                        (false, Some("CUSIP 037833100")) => Some("NASDAQ, CUSIP 037833100"),
+                        (false, Some("WKN XX-12")) => Some("NASDAQ, WKN XX-12"),
+                        (false, None) => Some("NASDAQ"),
+                        (true, shown) => shown,
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(row.accesskit_node().data().description(), expected);
+                    let texts: Vec<_> = harness
+                        .output()
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape {
+                                Some(text)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if let Some(shown) = shown {
+                        let description = texts
+                            .iter()
+                            .find(|text| text.galley.text() == description)
+                            .unwrap();
+                        let identifier = texts
+                            .iter()
+                            .find(|text| text.galley.text() == shown)
+                            .unwrap();
+                        assert!(!identifier.galley.elided);
+                        assert_eq!(description.galley.elided, long);
+                        assert!(row.rect().contains_rect(egui::Rect::from_min_size(
+                            identifier.pos,
+                            identifier.galley.size()
+                        )));
+                        assert!(
+                            identifier.pos.x >= description.pos.x + description.galley.size().x
+                        );
+                        assert!((identifier.pos.y - description.pos.y).abs() < 0.5);
+                        assert_eq!(
+                            identifier.galley.job.sections.last().unwrap().format.color,
+                            theme.ui.accent
+                        );
+                    } else {
+                        assert!(
+                            !texts
+                                .iter()
+                                .any(|text| text.galley.text().starts_with("ISIN")
+                                    || text.galley.text().starts_with("CUSIP")
+                                    || text.galley.text().starts_with("WKN"))
+                        );
+                    }
+                }
             }
         }
     }
