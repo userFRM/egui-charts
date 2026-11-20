@@ -513,6 +513,15 @@ impl StyleTab {
                     ui.checkbox(&mut props.extend_left, l10n::text(ui.ctx(), "Left"));
                     ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
                     ui.checkbox(&mut props.extend_right, l10n::text(ui.ctx(), "Right"));
+                    if let Some(template) = &mut props.tool_settings
+                        && template.settings.tool_type == DrawingToolType::DateAndPriceRange
+                    {
+                        let settings = &mut template.settings.range_settings;
+                        ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
+                        ui.checkbox(&mut settings.extend_top, l10n::text(ui.ctx(), "Top"));
+                        ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
+                        ui.checkbox(&mut settings.extend_bottom, l10n::text(ui.ctx(), "Bottom"));
+                    }
                 });
                 ui.end_row();
             }
@@ -1874,8 +1883,10 @@ mod tests {
                     "Volume",
                     "Left",
                     "Right",
+                    "Top",
+                    "Bottom",
                 ][..],
-                &["Top", "Bottom"][..],
+                &[][..],
             ),
         ] {
             let ctx = Context::default();
@@ -1943,7 +1954,28 @@ mod tests {
                 })
                 .expect("the palette shows the swatch");
             frame(click(well));
+            if range {
+                // Close the palette before clicking the extension row beneath it.
+                frame(click(Pos2::new(1300.0, 850.0)));
+                let shapes = frame(vec![]);
+                let top = shapes
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.job.text == "Top" => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    })
+                    .expect("the range offers Top");
+                frame(click(top));
+            }
             let settings = &props.tool_settings.as_ref().unwrap().settings;
+            if range {
+                assert!(
+                    settings.range_settings.extend_top,
+                    "{tool:?} extends at the top"
+                );
+            }
             assert_eq!(
                 if range {
                     settings.range_settings.border_color
