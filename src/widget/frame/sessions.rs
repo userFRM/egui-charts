@@ -777,11 +777,7 @@ mod tests {
                 .iter()
                 .map(|index| (map.idx_to_x(*index), Stroke::new(2.0, Color32::RED)))
                 .collect();
-            for (pane, plot) in [
-                ("price", chart.last_rendered_price_rect),
-                #[cfg(feature = "studies")]
-                ("study", chart.last_rendered_indicator_panes[0].chart_rect),
-            ] {
+            let check_breaks = |pane, plot: egui::Rect| {
                 assert!(plot.height() > 20.0, "{timeframe:?} {pane} {plot:?}");
                 let breaks: Vec<_> = painted
                     .iter()
@@ -797,7 +793,10 @@ mod tests {
                     })
                     .collect();
                 assert_eq!(breaks, expected, "{timeframe:?} {pane}");
-            }
+            };
+            check_breaks("price", chart.last_rendered_price_rect);
+            #[cfg(feature = "studies")]
+            check_breaks("study", chart.last_rendered_indicator_panes[0].chart_rect);
             let shading = chart.config.background_color.gamma_multiply(0.94);
             assert!(
                 !painted
