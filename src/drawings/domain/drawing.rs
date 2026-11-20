@@ -1147,14 +1147,20 @@ impl Drawing {
     /// level number, name and price: a line's price extended through its two anchors, the base and
     /// second lines of parallel or disjoint channels, the trend and flat lines of a flat
     /// top/bottom, a horizontal level, a rectangle's top and bottom, a position's entry, target
-    /// and stop, and each visible Fibonacci retracement or extension level, numbered by its place
-    /// in the level settings. Sloping lines are straight on the price axis `scale` paints, so
-    /// they are linear in price except on a logarithmic scale.
+    /// and stop, each visible Fibonacci retracement, extension or channel level, numbered by its
+    /// place in the level settings and named by its ratio as the drawing labels it, each ray of a
+    /// Fibonacci speed resistance fan, the price level at place `n` numbered `2n` and the time level
+    /// at place `n` numbered `2n + 1`, and each Gann fan line, numbered by its place in the fan
+    /// ratios and named by its ratio, such as `2×1`. Sloping lines are straight on the price axis
+    /// `scale` paints, so they are linear in price except on a logarithmic scale; channel lines run
+    /// on through their anchors, and fan rays have a price only from their first anchor on, on the
+    /// side they are drawn.
     /// Fork levels use two stable slots per configured level (first and second line), with
     /// only the first slot used by a median. Regression and anchored VWAP levels require
     /// [`Self::alert_levels_with_bars`]. Empty for other drawings and for
-    /// geometry with no price at `bar`, such as a vertical line or a sloping line through a
-    /// non-positive price on a logarithmic scale.
+    /// geometry with no price at `bar`, such as a vertical line, a Fibonacci channel with two
+    /// anchors, a vertical fan ray or a sloping line through a non-positive price on a
+    /// logarithmic scale.
     pub fn alert_levels(&self, bar: f64, scale: PriceScaleMode) -> Vec<(usize, String, f64)> {
         use DrawingToolType as T;
         let named = |names: &[&str], prices: &[f64]| {
@@ -1167,7 +1173,14 @@ impl Drawing {
         };
         let log = scale == PriceScaleMode::Logarithmic;
         let to_axis = |price: f64| if log { price.ln() } else { price };
-        let from_axis = |value: f64| if log { value.exp() } else { value };
+        // A vertical line or one through a non-positive price is minus infinity here, not zero.
+        let from_axis = |value: f64| {
+            if log && value.is_finite() {
+                value.exp()
+            } else {
+                value
+            }
+        };
         // The line through `a` and `b` at `bar`, in axis coordinates.
         let along = |a: &ChartPoint, b: &ChartPoint, bar: f64| {
             let (from, to) = (to_axis(a.price), to_axis(b.price));
@@ -1223,6 +1236,28 @@ impl Drawing {
                         .map_or(2.0 * entry.price - target.price, |stop| stop.price),
                 ],
             ),
+            // Each line is the base translated by its ratio times the third anchor's offset.
+            (T::FibonacciChannel, [start, end, through, ..]) => {
+                let config = self.fibonacci_config();
+                let shift = to_axis(through.price) - along(start, end, f64::from(through.bar_idx));
+                let base = along(start, end, bar);
+                config
+                    .levels
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, level)| level.visible)
+                    .map(|(index, level)| {
+                        (
+                            index,
+                            level.label(config.levels_as_percent),
+                            from_axis(base + f64::from(level.value) * shift),
+                        )
+                    })
+                    .filter(|(.., price)| price.is_finite())
+                    .collect()
+            }
+            (T::FibonacciSpeedFan, _) => self.speed_fan_alert_levels(bar, scale),
+            (T::GannFan, _) => self.gann_fan_alert_levels(bar, scale),
             _ => self
                 .fib_levels()
                 .map(|(config, prices)| {
@@ -1787,6 +1822,7 @@ mod tests {
     /// names the same level once the drawing is stored.
     #[test]
     fn alert_levels_follow_the_drawing_geometry() {
+        use super::super::{FibonacciLevel, GannLevel};
         use DrawingToolType as T;
         use PriceScaleMode::{Logarithmic, Normal as Linear};
         let drawing = |tool, points: &[(f32, f64)]| {
@@ -1803,8 +1839,240 @@ mod tests {
         config.levels[2].label = "100%".into();
         config.levels[3].label.clear();
         fib.fib_config = Some(config);
+        let channel = |points: &[(f32, f64)]| {
+            let mut d = drawing(T::FibonacciChannel, points);
+            let mut config = FibonacciConfig::legacy();
+            config.levels[1].visible = false;
+            d.fib_config = Some(config);
+            d
+        };
+        let fan = |points: &[(f32, f64)], time: Option<Vec<f32>>, reverse| {
+            let mut d = drawing(T::FibonacciSpeedFan, points);
+            let levels = |values: Vec<f32>| {
+                values
+                    .into_iter()
+                    .map(|value| FibonacciLevel::new(value, "", [0; 4]))
+                    .collect()
+            };
+            d.fib_config = Some(FibonacciConfig {
+                levels: levels(vec![0.0, 0.5, 1.0]),
+                time_levels: time.map(levels),
+                levels_as_percent: true,
+                reverse,
+                ..FibonacciConfig::legacy()
+            });
+            d
+        };
+        let gann = |points: &[(f32, f64)]| {
+            let mut d = drawing(T::GannFan, points);
+            let mut config = GannConfig::for_tool(T::GannFan);
+            config.fan_ratios = [2.0, 1.0, 0.5, 0.0]
+                .map(|v| GannLevel::new(v, [0; 4]))
+                .to_vec();
+            config.fan_ratios[1].visible = false;
+            d.gann = Some(config);
+            d
+        };
         // (drawing, bar) -> (level, name, price); prices by hand.
         for (drawing, bar, scale, expected) in [
+            (
+                channel(&[(10.0, 100.0), (20.0, 120.0), (14.0, 130.0)]),
+                15.0,
+                Linear,
+                vec![
+                    (0, "0", 110.0),
+                    (2, "0.382", 118.404),
+                    (3, "0.5", 121.0),
+                    (4, "0.618", 123.596),
+                    (5, "0.786", 127.292),
+                    (6, "1", 132.0),
+                ],
+            ),
+            (
+                channel(&[(10.0, 100.0), (20.0, 120.0), (14.0, 130.0)]),
+                18.0,
+                Linear,
+                vec![
+                    (0, "0", 116.0),
+                    (2, "0.382", 124.404),
+                    (3, "0.5", 127.0),
+                    (4, "0.618", 129.596),
+                    (5, "0.786", 133.292),
+                    (6, "1", 138.0),
+                ],
+            ),
+            (
+                channel(&[(10.0, 100.0), (20.0, 400.0), (10.0, 200.0)]),
+                15.0,
+                Logarithmic,
+                vec![
+                    (0, "0", 200.0 * 2f64.powf(0.0)),
+                    (2, "0.382", 200.0 * 2f64.powf(0.382)),
+                    (3, "0.5", 200.0 * 2f64.powf(0.5)),
+                    (4, "0.618", 200.0 * 2f64.powf(0.618)),
+                    (5, "0.786", 200.0 * 2f64.powf(0.786)),
+                    (6, "1", 200.0 * 2f64.powf(1.0)),
+                ],
+            ),
+            (
+                channel(&[(10.0, 100.0), (20.0, 400.0), (10.0, 200.0)]),
+                18.0,
+                Logarithmic,
+                vec![
+                    (0, "0", 100.0 * 4f64.powf(0.8) * 2f64.powf(0.0)),
+                    (2, "0.382", 100.0 * 4f64.powf(0.8) * 2f64.powf(0.382)),
+                    (3, "0.5", 100.0 * 4f64.powf(0.8) * 2f64.powf(0.5)),
+                    (4, "0.618", 100.0 * 4f64.powf(0.8) * 2f64.powf(0.618)),
+                    (5, "0.786", 100.0 * 4f64.powf(0.8) * 2f64.powf(0.786)),
+                    (6, "1", 100.0 * 4f64.powf(0.8) * 2f64.powf(1.0)),
+                ],
+            ),
+            (
+                channel(&[(10.0, 100.0), (20.0, 400.0), (10.0, 200.0)]),
+                15.0,
+                Linear,
+                vec![
+                    (0, "0", 250.0),
+                    (2, "0.382", 288.2),
+                    (3, "0.5", 300.0),
+                    (4, "0.618", 311.8),
+                    (5, "0.786", 328.6),
+                    (6, "1", 350.0),
+                ],
+            ),
+            (
+                channel(&[(10.0, 100.0), (20.0, 120.0)]),
+                15.0,
+                Linear,
+                vec![],
+            ),
+            (
+                channel(&[(10.0, 100.0), (10.0, 120.0), (14.0, 130.0)]),
+                15.0,
+                Linear,
+                vec![],
+            ),
+            (
+                fan(&[(10.0, 100.0), (20.0, 200.0)], None, false),
+                15.0,
+                Linear,
+                vec![
+                    (0, "0%: price level", 150.0),
+                    (2, "50%: price level", 125.0),
+                    (3, "50%: time level", 200.0),
+                    (4, "100%: price level", 100.0),
+                ],
+            ),
+            (
+                fan(&[(10.0, 100.0), (20.0, 200.0)], None, false),
+                20.0,
+                Linear,
+                vec![
+                    (0, "0%: price level", 200.0),
+                    (2, "50%: price level", 150.0),
+                    (3, "50%: time level", 300.0),
+                    (4, "100%: price level", 100.0),
+                ],
+            ),
+            (
+                fan(&[(10.0, 100.0), (20.0, 200.0)], None, false),
+                5.0,
+                Linear,
+                vec![],
+            ),
+            (
+                fan(&[(10.0, 100.0), (20.0, 400.0)], None, false),
+                15.0,
+                Logarithmic,
+                vec![
+                    (0, "0%: price level", 200.0),
+                    (2, "50%: price level", 100.0 * 2f64.sqrt()),
+                    (3, "50%: time level", 400.0),
+                    (4, "100%: price level", 100.0),
+                ],
+            ),
+            (
+                fan(&[(10.0, 100.0), (20.0, 400.0)], None, false),
+                20.0,
+                Logarithmic,
+                vec![
+                    (0, "0%: price level", 400.0),
+                    (2, "50%: price level", 200.0),
+                    (3, "50%: time level", 1600.0),
+                    (4, "100%: price level", 100.0),
+                ],
+            ),
+            (
+                fan(
+                    &[(10.0, 100.0), (20.0, 200.0)],
+                    Some(vec![0.0, 0.5, 2.0]),
+                    true,
+                ),
+                15.0,
+                Linear,
+                vec![
+                    (0, "0%: price level", 150.0),
+                    (1, "0%: time level", 150.0),
+                    (2, "50%: price level", 175.0),
+                    (3, "50%: time level", 100.0),
+                    (4, "100%: price level", 200.0),
+                ],
+            ),
+            (
+                fan(
+                    &[(10.0, 100.0), (20.0, 200.0)],
+                    Some(vec![0.0, 0.5, 2.0]),
+                    true,
+                ),
+                5.0,
+                Linear,
+                vec![(5, "200%: time level", 150.0)],
+            ),
+            (
+                fan(&[(10.0, 100.0), (10.0, 200.0)], None, false),
+                15.0,
+                Linear,
+                vec![(4, "100%: price level", 100.0)],
+            ),
+            (
+                gann(&[(10.0, 100.0), (20.0, 120.0)]),
+                15.0,
+                Linear,
+                vec![(0, "2×1", 120.0), (2, "1×2", 105.0)],
+            ),
+            (
+                gann(&[(10.0, 100.0), (20.0, 120.0)]),
+                20.0,
+                Linear,
+                vec![(0, "2×1", 140.0), (2, "1×2", 110.0)],
+            ),
+            (gann(&[(10.0, 100.0), (20.0, 120.0)]), 5.0, Linear, vec![]),
+            (
+                gann(&[(20.0, 100.0), (10.0, 120.0)]),
+                15.0,
+                Linear,
+                vec![(0, "2×1", 120.0), (2, "1×2", 105.0)],
+            ),
+            (gann(&[(20.0, 100.0), (10.0, 120.0)]), 25.0, Linear, vec![]),
+            (
+                gann(&[(10.0, 100.0), (20.0, 400.0)]),
+                15.0,
+                Logarithmic,
+                vec![(0, "2×1", 400.0), (2, "1×2", 100.0 * 2f64.sqrt())],
+            ),
+            (
+                gann(&[(10.0, 100.0), (20.0, 400.0)]),
+                20.0,
+                Logarithmic,
+                vec![(0, "2×1", 1600.0), (2, "1×2", 200.0)],
+            ),
+            (gann(&[(10.0, 100.0), (10.0, 120.0)]), 15.0, Linear, vec![]),
+            (
+                gann(&[(10.0, 0.0), (20.0, 10.0)]),
+                15.0,
+                Logarithmic,
+                vec![],
+            ),
             // 100 + (25 - 10) * (120 - 100) / (20 - 10).
             (
                 drawing(T::TrendLine, &[(10.0, 100.0), (20.0, 120.0)]),
@@ -1872,6 +2140,19 @@ mod tests {
             (
                 drawing(T::TrendLine, &[(10.0, 0.0), (20.0, 10.0)]),
                 15.0,
+                Logarithmic,
+                vec![],
+            ),
+            // Before the anchor at zero, and beside a vertical base, the log line has no price.
+            (
+                drawing(T::TrendLine, &[(10.0, 0.0), (20.0, 10.0)]),
+                5.0,
+                Logarithmic,
+                vec![],
+            ),
+            (
+                channel(&[(10.0, 100.0), (10.0, 120.0), (14.0, 130.0)]),
+                5.0,
                 Logarithmic,
                 vec![],
             ),
@@ -1945,6 +2226,45 @@ mod tests {
             ),
         ] {
             let levels = drawing.alert_levels(bar, scale);
+            // Compare the hand prices with the same screen segments the renderer paints.
+            if !expected.is_empty()
+                && matches!(
+                    drawing.tool_type,
+                    T::FibonacciChannel | T::FibonacciSpeedFan | T::GannFan
+                )
+            {
+                let mut painted = drawing.clone();
+                let x = |bar: f32| 100.0 + 10.0 * bar;
+                let y = |price: f64| {
+                    (1000.0
+                        - if scale == Logarithmic {
+                            100.0 * price.ln()
+                        } else {
+                            price
+                        }) as f32
+                };
+                painted.update_screen_coords(x, y);
+                let rect = egui::Rect::from_min_max(egui::pos2(-1e4, -1e4), egui::pos2(1e4, 1e4));
+                let lines = if painted.tool_type == T::FibonacciChannel {
+                    painted.fib_channel_level_lines(rect).unwrap().1
+                } else {
+                    painted.outline(rect).unwrap().lines
+                };
+                for (_, name, price) in &levels {
+                    let px = x(bar as f32);
+                    assert!(
+                        lines.iter().any(|[a, b]| {
+                            a.x != b.x
+                                && px >= a.x.min(b.x)
+                                && px <= a.x.max(b.x)
+                                && (a.y + (px - a.x) * (b.y - a.y) / (b.x - a.x) - y(*price)).abs()
+                                    < 0.01
+                        }),
+                        "{:?} {name} at {bar} is off its painted line",
+                        drawing.tool_type
+                    );
+                }
+            }
             assert_eq!(levels.len(), expected.len(), "{:?}", drawing.tool_type);
             for ((level, name, price), (want_level, want_name, want_price)) in
                 levels.into_iter().zip(expected)
