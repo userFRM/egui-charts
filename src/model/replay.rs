@@ -4,8 +4,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// A resumable position in host-supplied history. Store it with the symbol's source interval
-/// and fetch that same source before restoring it. Restoring always pauses playback.
+/// A resumable position in host-supplied history and the charts it covers. Store it with the
+/// symbol's source interval and fetch that source before restoring it. Restoring always pauses
+/// playback.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ReplaySession {
@@ -15,6 +16,10 @@ pub struct ReplaySession {
     pub time: DateTime<Utc>,
     /// Playback speed multiplier, validated when restoring.
     pub speed: f32,
+    /// Charts of a layout the replay covers. Sessions saved without it cover the chart that
+    /// saved them.
+    #[serde(default)]
+    pub scope: ReplayScope,
 }
 
 /// The charts of a layout that a replay covers, whatever their link groups.
