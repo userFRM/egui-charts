@@ -1296,7 +1296,7 @@ impl AlertsPanel {
                     self.clearing = true;
                 }
             });
-            let rows = ui.id().with("alert_log_rows");
+            let rows = ui.scope_id().with("alert_log_rows");
             let order: Vec<_> = self
                 .log
                 .iter()
@@ -1450,7 +1450,7 @@ impl AlertsPanel {
             let mut toggle = None;
             let mut duplicate = None;
             let mut presentation = None;
-            let rows = ui.id().with("alert_rows");
+            let rows = ui.scope_id().with("alert_rows");
             let order: Vec<_> = self
                 .sorted()
                 .iter()
