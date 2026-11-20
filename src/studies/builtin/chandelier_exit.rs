@@ -159,6 +159,10 @@ impl Indicator for ChandelierExit {
         2
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn line_names(&self) -> Vec<String> {
         let lengths = if self.atr_period == self.period {
             self.period.to_string()
