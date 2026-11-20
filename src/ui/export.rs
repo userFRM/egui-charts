@@ -1,9 +1,9 @@
 //! Chart export functionality for screenshots and saving charts
 //!
 //! This module provides widgets and traits for exporting charts to multiple formats:
-//! - PNG images
+//! - PNG and SVG images
 //! - CSV of the bar data and visible study plots
-//! - Clipboard copy
+//! - Clipboard copy of the image
 //!
 //! # Example
 //!
@@ -115,9 +115,9 @@ pub enum ExportResponse {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ExportConfig {
-    /// Export format (PNG, CSV or Clipboard)
+    /// Export format: PNG, SVG, CSV or Clipboard
     pub format: ExportFormat,
-    /// Size, header and background options for PNG and clipboard exports.
+    /// Size, header and background options for image exports (PNG, SVG and clipboard).
     pub image: crate::widget::ImageExportOptions,
 }
 
@@ -133,8 +133,8 @@ impl Default for ExportConfig {
 /// Export dialog for configuring and executing chart exports
 ///
 /// The dialog offers:
-/// - Format selection (PNG, CSV, Clipboard)
-/// - Image dimensions, title, timestamp and transparent background
+/// - Format selection among the formats the host offers: PNG, SVG, CSV and Clipboard
+/// - Image size, title, timestamp, watermark, crosshair and transparent background
 /// - File save path entry
 ///
 /// The dialog only collects the request; the host performs the export. Use
