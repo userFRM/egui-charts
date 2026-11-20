@@ -25,6 +25,15 @@ use crate::ui_kit::status_message::{MessageKind, status_message};
 /// The name of the presets document.
 const PRESETS: &str = "presets";
 
+/// Ready notification schedules, derived from the staged days and windows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScheduleChoice {
+    Always,
+    Weekdays,
+    WorkingHours,
+    Custom,
+}
+
 /// A dialog that creates or edits the same alert type the host stores and evaluates.
 pub struct AlertDialog {
     /// Layout dimensions.
@@ -354,6 +363,28 @@ impl AlertDialog {
                 .map(|w| [text(w.start), text(w.end)])
                 .collect()
         });
+    }
+
+    fn schedule_choice(&self) -> ScheduleChoice {
+        if !self.scheduled {
+            return ScheduleChoice::Always;
+        }
+        if self.schedule_days == [true, true, true, true, true, false, false]
+            && let [[start, end]] = self.schedule_windows.as_slice()
+        {
+            let time = |text: &str| NaiveTime::parse_from_str(text.trim(), "%H:%M").ok();
+            let hours = |hour| NaiveTime::from_hms_opt(hour, 0, 0);
+            match (time(start), time(end)) {
+                (Some(start), Some(end)) if Some(start) == hours(0) && Some(end) == hours(0) => {
+                    return ScheduleChoice::Weekdays;
+                }
+                (Some(start), Some(end)) if Some(start) == hours(9) && Some(end) == hours(18) => {
+                    return ScheduleChoice::WorkingHours;
+                }
+                _ => {}
+            }
+        }
+        ScheduleChoice::Custom
     }
 
     /// The staged schedule: none when notifications go out at any time, otherwise the entered
@@ -869,12 +900,41 @@ impl AlertDialog {
                 ui.end_row();
             }
             ui.label(l10n::text(ui.ctx(), "Notifications"));
-            let mut any_time = !self.scheduled;
-            if ui
-                .checkbox(&mut any_time, l10n::text(ui.ctx(), "Any time"))
-                .changed()
-            {
-                self.scheduled = !any_time;
+            let before = self.schedule_choice();
+            let mut choice = before;
+            let choices = [
+                (ScheduleChoice::Always, "Always"),
+                (ScheduleChoice::Weekdays, "Weekdays"),
+                (ScheduleChoice::WorkingHours, "Working hours"),
+                (ScheduleChoice::Custom, "Custom"),
+            ];
+            let label = choices
+                .iter()
+                .find(|(value, _)| *value == choice)
+                .unwrap()
+                .1;
+            egui::ComboBox::from_id_salt("alert_schedule")
+                .selected_text(l10n::text(ui.ctx(), label))
+                .show_ui(ui, |ui| {
+                    for (value, label) in choices {
+                        ui.selectable_value(&mut choice, value, l10n::text(ui.ctx(), label));
+                    }
+                })
+                .response
+                .accessible_name(l10n::text(ui.ctx(), "Notifications"));
+            if choice != before {
+                self.scheduled = choice != ScheduleChoice::Always;
+                if matches!(
+                    choice,
+                    ScheduleChoice::Weekdays | ScheduleChoice::WorkingHours
+                ) {
+                    self.schedule_days = [true, true, true, true, true, false, false];
+                    self.schedule_windows = vec![if choice == ScheduleChoice::Weekdays {
+                        ["00:00".into(), "00:00".into()]
+                    } else {
+                        ["09:00".into(), "18:00".into()]
+                    }];
+                }
             }
             ui.end_row();
             if self.scheduled {
@@ -1875,6 +1935,78 @@ mod tests {
             Some("Moving down")
         );
         assert!(!h.state().alert.condition.is_valid());
+    }
+
+    #[test]
+    fn ready_schedules_fill_days_and_windows_and_reopen_selected() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut dialog = AlertDialog::new();
+        dialog.account_timezone = TimezoneId::named("America/New_York");
+        dialog.edit(Alert::new("SAMPLE", AlertCondition::Above(100.0)));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(960.0, 1100.0))
+            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+        h.run();
+        let mut schedules = Vec::new();
+        for (label, start, end, inside, outside) in [
+            ("Weekdays", 0, 0, (18, 17), (21, 17)),
+            ("Working hours", 9, 18, (18, 14), (18, 23)),
+        ] {
+            h.get_by_label("Notifications").click();
+            h.run();
+            h.get_by_label(label).click();
+            h.run();
+            let expected = NotificationSchedule::new(
+                TimezoneId::named("America/New_York").unwrap(),
+                vec![
+                    Weekday::Mon,
+                    Weekday::Tue,
+                    Weekday::Wed,
+                    Weekday::Thu,
+                    Weekday::Fri,
+                ],
+                vec![NotificationWindow::new(
+                    NaiveTime::from_hms_opt(start, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(end, 0, 0).unwrap(),
+                )],
+            );
+            assert_eq!(h.state().schedule(), Ok(Some(expected.clone())), "{label}");
+            // In November New York is UTC-5: 14:00 UTC is 09:00, 23:00 is 18:00.
+            let at = |(day, hour)| Utc.with_ymd_and_hms(2026, 11, day, hour, 0, 0).unwrap();
+            assert!(expected.allows(at(inside)), "{label}");
+            assert!(!expected.allows(at(outside)), "{label}");
+            schedules.push((label, expected));
+        }
+        h.get_by_label("Sat").click();
+        h.run();
+        assert_eq!(
+            h.get_by_label("Notifications").value().as_deref(),
+            Some("Custom")
+        );
+        for (label, schedule) in &schedules {
+            let mut alert = Alert::new("SAMPLE", AlertCondition::Above(100.0));
+            alert.schedule = Some(Box::new(schedule.clone()));
+            h.state_mut().edit(alert);
+            h.run();
+            assert_eq!(
+                h.get_by_label("Notifications").value().as_deref(),
+                Some(*label)
+            );
+        }
+        h.state_mut()
+            .edit(Alert::new("SAMPLE", AlertCondition::Above(100.0)));
+        h.run();
+        assert_eq!(
+            h.get_by_label("Notifications").value().as_deref(),
+            Some("Always")
+        );
+        h.state_mut().last_schedule = Some(schedules[0].1.clone());
+        h.state_mut().open("SAMPLE".into(), 100.0);
+        h.run();
+        assert_eq!(
+            h.get_by_label("Notifications").value().as_deref(),
+            Some("Weekdays")
+        );
     }
 
     /// The limits count characters, not bytes, and apply where the user edits the text. A
