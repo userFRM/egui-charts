@@ -1,5 +1,6 @@
 //! A replaceable strategy report, independent of chart navigation and host storage.
 
+mod analysis;
 pub(crate) mod inputs;
 #[cfg(feature = "strategies")]
 mod optimisation;
@@ -15,8 +16,8 @@ mod tests;
 
 use crate::localization as l10n;
 use crate::model::{
-    Bar, OrderSide, StrategyComparison, StrategyPerformance, StrategyReport, SummaryUnit,
-    Timeframe, run_figures, trade_figures,
+    Bar, OrderSide, StrategyAnalysis, StrategyComparison, StrategyPerformance, StrategyReport,
+    SummaryUnit, Timeframe, run_figures, trade_figures,
 };
 use crate::theme::ThemeExt;
 use crate::ui_kit::{
@@ -24,9 +25,10 @@ use crate::ui_kit::{
     buttons::Button,
     tab_bar::{TabBar, TabLabel},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use egui::{RichText, Ui};
 use egui_extras::{Column, TableBuilder};
+use std::ops::Range;
 
 /// A trade to reveal on the chart. The host switches symbol and interval, scrolls to the entry and
 /// highlights the span; an open trade has no exit boundary.
@@ -57,7 +59,7 @@ pub enum StrategyReportAction {
     /// Save these valid trades as CSV, written by [`StrategyReport::trades_csv_with_excursions`]
     /// with the excursions the list of trades shows.
     ExportCsv(String),
-    /// Save the summary metrics and run properties shown, as [`StrategyReport::summary_csv`]
+    /// Save the whole-run summary metrics and run properties, as [`StrategyReport::summary_csv`]
     /// writes them, under the suggested file name.
     ExportSummaryCsv {
         /// File name derived from the run's name and symbol, ending in `.csv`.
@@ -72,6 +74,9 @@ enum Tab {
     #[default]
     Summary,
     Trades,
+    Periods,
+    Distribution,
+    TradeTimes,
     Properties,
 }
 
@@ -80,6 +85,9 @@ impl TabLabel for Tab {
         match self {
             Self::Summary => "Summary",
             Self::Trades => "List of trades",
+            Self::Periods => "Periods",
+            Self::Distribution => "Distribution",
+            Self::TradeTimes => "Trade times",
             Self::Properties => "Properties",
         }
     }
@@ -88,10 +96,18 @@ impl TabLabel for Tab {
 #[derive(Debug)]
 struct ReportData {
     report: StrategyReport,
+    bars: Vec<Bar>,
+    /// Whole-run figures for exports, skipped-input warnings and trade excursions.
     performance: StrategyPerformance,
     comparison: StrategyComparison,
+    range: Option<Range<DateTime<Utc>>>,
+    /// Figures of the range, or of the whole run without one.
+    shown: StrategyPerformance,
+    shown_comparison: StrategyComparison,
+    analysis: StrategyAnalysis,
     equity: Vec<(DateTime<Utc>, f64)>,
     drawdown: Vec<(DateTime<Utc>, f64)>,
+    /// Original indices of valid trades in the range, sorted by entry.
     trades: Vec<usize>,
 }
 
@@ -99,9 +115,47 @@ impl ReportData {
     fn new(report: StrategyReport, bars: &[Bar]) -> Self {
         let performance = report.performance();
         let comparison = report.comparison(bars);
-        let equity = report.equity_curve();
-        let mut peak = equity.first().map_or(0.0, |p| p.1);
-        let drawdown = equity
+        let analysis = report.analysis(bars);
+        let mut data = Self {
+            report,
+            bars: bars.to_vec(),
+            shown: performance.clone(),
+            performance,
+            shown_comparison: StrategyComparison::default(),
+            comparison,
+            range: None,
+            analysis,
+            equity: Vec::new(),
+            drawdown: Vec::new(),
+            trades: Vec::new(),
+        };
+        data.select(None);
+        data
+    }
+
+    fn select(&mut self, range: Option<Range<DateTime<Utc>>>) {
+        let part = range.clone().map(|r| self.report.within(r));
+        let run = part.as_ref().unwrap_or(&self.report);
+        let bars: Vec<_> = self
+            .bars
+            .iter()
+            .filter(|b| range.as_ref().is_none_or(|r| r.contains(&b.time)))
+            .cloned()
+            .collect();
+        self.shown = run.performance();
+        self.shown_comparison = run.comparison(&bars);
+        if range.is_some() {
+            // A trade entered before the range holds bars from its entry, as in the whole run.
+            let whole = run.comparison(&self.bars);
+            self.shown_comparison.all = whole.all;
+            self.shown_comparison.long = whole.long;
+            self.shown_comparison.short = whole.short;
+        }
+        self.analysis = run.analysis(&bars);
+        self.equity = run.equity_curve();
+        let mut peak = self.equity.first().map_or(0.0, |p| p.1);
+        self.drawdown = self
+            .equity
             .iter()
             .map(|&(t, e)| {
                 peak = peak.max(e);
@@ -109,26 +163,42 @@ impl ReportData {
             })
             .filter(|(_, d)| d.is_finite())
             .collect();
-        let mut trades: Vec<_> = report
+        self.trades = self
+            .report
             .trades
             .iter()
             .enumerate()
-            .filter(|(_, t)| t.is_valid())
+            .filter(|(_, t)| t.is_valid() && range.as_ref().is_none_or(|r| t.in_range(r)))
             .map(|(i, _)| i)
             .collect();
-        trades.sort_by_key(|&i| report.trades[i].entry_time);
-        Self {
-            report,
-            performance,
-            comparison,
-            equity,
-            drawdown,
-            trades,
-        }
+        self.trades
+            .sort_by_key(|&i| self.report.trades[i].entry_time);
+        self.range = range;
+    }
+
+    fn dates(&self) -> [String; 2] {
+        let times: Vec<_> = self
+            .equity
+            .iter()
+            .map(|p| p.0)
+            .chain(
+                self.report
+                    .trades
+                    .iter()
+                    .filter(|t| t.is_valid())
+                    .flat_map(|t| {
+                        std::iter::once(t.entry_time).chain(t.exit.as_ref().map(|e| e.time))
+                    }),
+            )
+            .collect();
+        [times.iter().min(), times.iter().max()]
+            .map(|t| t.map_or_else(String::new, |t| t.format("%Y-%m-%d").to_string()))
     }
 }
 
-/// Standalone summary, equity/drawdown charts, trade list and run properties.
+/// Standalone summary, equity and drawdown charts, trade list, period, distribution and trade
+/// time pages and run properties, for the whole run or a chosen date range. Exports always
+/// cover the whole run.
 ///
 /// Call [`Self::set_report`] once when the host supplies or replaces a run. Metrics and display
 /// ordering are cached there. Mount [`Self::show`] in the host's panel below the chart; without a
@@ -139,16 +209,24 @@ pub struct StrategyReportPanel {
     tab: Tab,
     selected: Option<usize>,
     compare: bool,
+    range_text: [String; 2],
+    range_error: bool,
 }
 
 impl StrategyReportPanel {
-    /// Replace or clear the report in one call, resetting its tab and selection. `bars` must be the
-    /// complete source bars for this run's symbol and interval; pass an empty slice if unavailable.
+    /// Replace or clear the report in one call, resetting its tab and selection and the date
+    /// range to the whole run. `bars` must be the complete source bars for this run's symbol and
+    /// interval; pass an empty slice if unavailable.
     pub fn set_report(&mut self, report: Option<StrategyReport>, bars: &[Bar]) {
         self.tab = Tab::Summary;
         self.selected = None;
         self.compare = false;
+        self.range_error = false;
         self.data = report.map(|report| ReportData::new(report, bars));
+        self.range_text = self
+            .data
+            .as_ref()
+            .map_or_else(Default::default, ReportData::dates);
     }
 
     /// Keep the report controls and the selected entry as its trades grow or rebuild.
@@ -170,7 +248,14 @@ impl StrategyReportPanel {
                                 .is_some_and(|exit| exit.starts_with(" / "))))
             })
         });
-        self.data = Some(ReportData::new(report, bars));
+        let range = self.data.as_ref().and_then(|data| data.range.clone());
+        let mut data = ReportData::new(report, bars);
+        if range.is_some() {
+            data.select(range);
+        } else if !self.range_error {
+            self.range_text = data.dates();
+        }
+        self.data = Some(data);
     }
 
     /// The currently supplied report, or `None` when cleared.
@@ -181,12 +266,12 @@ impl StrategyReportPanel {
     /// Draw the report and return this frame's host intent. No report draws nothing.
     /// A report with [`StrategyReport::unavailable`] shows that reason instead of its summary and exports.
     pub fn show(&mut self, ui: &mut Ui) -> StrategyReportAction {
-        let Some(data) = &self.data else {
+        let Some(data) = &mut self.data else {
             return StrategyReportAction::None;
         };
         let mut action = StrategyReportAction::None;
         let theme = ui.active_theme();
-        let unavailable = data.report.unavailable.as_deref();
+        let available = data.report.unavailable.is_none();
         ui.horizontal_wrapped(|ui| {
             ui.label(
                 RichText::new(l10n::text(ui.ctx(), "Strategy report"))
@@ -198,7 +283,7 @@ impl StrategyReportPanel {
                 "{} · {}",
                 data.report.symbol, data.report.timeframe
             ));
-            if unavailable.is_none() {
+            if available {
                 if Button::new("Export trades CSV").show(ui).clicked() {
                     action = StrategyReportAction::ExportCsv(
                         data.report.trades_csv_with_excursions(&data.comparison),
@@ -212,8 +297,24 @@ impl StrategyReportPanel {
                 }
             }
         });
-        TabBar::new(&[Tab::Summary, Tab::Trades, Tab::Properties], &mut self.tab).show(ui);
-        if let Some(reason) = unavailable {
+        egui::ScrollArea::horizontal()
+            .id_salt("report_tabs")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                TabBar::new(
+                    &[
+                        Tab::Summary,
+                        Tab::Trades,
+                        Tab::Periods,
+                        Tab::Distribution,
+                        Tab::TradeTimes,
+                        Tab::Properties,
+                    ],
+                    &mut self.tab,
+                )
+                .show(ui);
+            });
+        if let Some(reason) = &data.report.unavailable {
             ui.colored_label(theme.ui.warning, l10n::text(ui.ctx(), reason));
         } else if data.performance.skipped_trades
             + data.performance.skipped_equity_points
@@ -233,9 +334,60 @@ impl StrategyReportPanel {
                 ),
             );
         }
+        if self.tab != Tab::Properties && available {
+            let mut changed = false;
+            ui.horizontal_wrapped(|ui| {
+                for (label, value) in ["From (UTC)", "To (UTC)"]
+                    .into_iter()
+                    .zip(&mut self.range_text)
+                {
+                    let label = ui.label(l10n::text(ui.ctx(), label));
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(value)
+                                .desired_width(90.0)
+                                .hint_text("YYYY-MM-DD"),
+                        )
+                        .labelled_by(label.id)
+                        .changed();
+                }
+                if Button::new("Whole run").show(ui).clicked() {
+                    data.select(None);
+                    self.range_text = data.dates();
+                    self.range_error = false;
+                    changed = false;
+                }
+            });
+            if changed {
+                let dates = self
+                    .range_text
+                    .each_ref()
+                    .map(|text| NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d"));
+                let range = match dates {
+                    [Ok(from), Ok(to)] if from <= to => to.succ_opt().map(|end| {
+                        from.and_hms_opt(0, 0, 0).unwrap().and_utc()
+                            ..end.and_hms_opt(0, 0, 0).unwrap().and_utc()
+                    }),
+                    _ => None,
+                };
+                self.range_error = range.is_none();
+                if let Some(range) = range {
+                    data.select(Some(range));
+                }
+            }
+            if self.range_error {
+                ui.colored_label(
+                    theme.ui.warning,
+                    l10n::text(
+                        ui.ctx(),
+                        "Enter dates as YYYY-MM-DD, the start not after the end",
+                    ),
+                );
+            }
+        }
         match self.tab {
             Tab::Summary => {
-                if unavailable.is_none() {
+                if available {
                     egui::ScrollArea::vertical()
                         .id_salt("summary")
                         .show(ui, |ui| {
@@ -253,6 +405,21 @@ impl StrategyReportPanel {
                         entry_time: trade.entry_time,
                         exit_time: trade.exit.as_ref().map(|e| e.time),
                     });
+                }
+            }
+            Tab::Periods => {
+                if available {
+                    analysis::periods(ui, data);
+                }
+            }
+            Tab::Distribution => {
+                if available {
+                    analysis::distribution(ui, data);
+                }
+            }
+            Tab::TradeTimes => {
+                if available {
+                    analysis::times(ui, data);
                 }
             }
             Tab::Properties => {
@@ -335,6 +502,29 @@ fn property(ui: &mut Ui, label: &str, value: &str) {
 fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
     let report = &data.report;
     let theme = ui.active_theme();
+    let range_label = data.range.as_ref().map_or_else(
+        || l10n::text(ui.ctx(), "Range: whole run").to_string(),
+        |r| {
+            l10n::format_text(
+                ui.ctx(),
+                "Range (UTC): {from} to {to}",
+                &[
+                    ("from", r.start.format("%Y-%m-%d").to_string()),
+                    (
+                        "to",
+                        (r.end - TimeDelta::nanoseconds(1))
+                            .format("%Y-%m-%d")
+                            .to_string(),
+                    ),
+                ],
+            )
+        },
+    );
+    ui.label(
+        RichText::new(range_label)
+            .small()
+            .color(theme.ui.text_muted),
+    );
     let cell = |value: Option<f64>, unit: SummaryUnit| match unit {
         SummaryUnit::Money => money(value, report),
         SummaryUnit::Percent => percent(value),
@@ -356,7 +546,7 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
                         ui.label(RichText::new(l10n::text(ui.ctx(), side)).strong());
                     }
                     ui.end_row();
-                    for (label, unit, values) in trade_figures(&data.performance, &data.comparison)
+                    for (label, unit, values) in trade_figures(&data.shown, &data.shown_comparison)
                     {
                         ui.label(
                             RichText::new(l10n::text(ui.ctx(), label))
@@ -369,7 +559,7 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
                     }
                 });
             ui.add_space(theme.spacing.md);
-            let metrics = run_figures(&data.performance, &data.comparison);
+            let metrics = run_figures(&data.shown, &data.shown_comparison);
             egui::Grid::new("performance")
                 .striped(true)
                 .spacing([theme.spacing.xxl, theme.spacing.sm])
@@ -397,7 +587,7 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
     ui.add_space(theme.spacing.md);
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(l10n::text(ui.ctx(), "Equity")).strong());
-        if !data.comparison.buy_and_hold_equity.is_empty() {
+        if !data.shown_comparison.buy_and_hold_equity.is_empty() {
             ui.checkbox(compare, l10n::text(ui.ctx(), "Compare buy-and-hold"));
             if *compare {
                 ui.colored_label(theme.ui.warning, l10n::text(ui.ctx(), "Buy-and-hold"));
@@ -411,7 +601,7 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
         ui,
         &data.equity,
         if *compare {
-            &data.comparison.buy_and_hold_equity
+            &data.shown_comparison.buy_and_hold_equity
         } else {
             &[]
         },

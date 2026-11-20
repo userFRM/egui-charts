@@ -194,7 +194,7 @@ fn render(ui: &mut egui::Ui, panel: &mut StrategyReportPanel) {
 ```
 
 Call [`set_report`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyReportPanel.html#method.set_report) when a finished report or its source bars change. It computes and caches
-metrics, clears selection and opens Summary. Mount [`show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyReportPanel.html#method.show) in your panel below the chart,
+metrics, clears selection, resets the date range to the whole run and opens Summary. Mount [`show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyReportPanel.html#method.show) in your panel below the chart,
 with a separate egui id scope for each report component. [`set_report(None, &[])`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyReportPanel.html#method.set_report) clears
 it; [`show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyReportPanel.html#method.show) then takes no space and shows no controls. [`report()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyReportPanel.html#method.report) reads the current run.
 Selecting a trade returns its symbol, interval, original index and entry/exit timestamps.
@@ -202,22 +202,24 @@ An open trade has no exit boundary. The host owns navigation, highlighting, repo
 placement, data loading and CSV storage. Chart entry/exit markers use the signals service.
 The assembled terminal and its demo mounting remain separate integration work.
 
-The Summary tab shows trade figures in All, Long and Short columns, followed by the drawdown,
-ratio, growth and buy-and-hold figures for the whole run, equity and drawdown in account units,
-and an optional fee-free buy-and-hold comparison on the same equity scale. Curve positions
-and hover values retain submillisecond timestamps. Hover a curve
-for timestamped values. The virtualized trade list uses entry-time order, keeps equal-time
-trades in input order, and shows fill prices, net profit, fees, labels and excursions.
+The Summary tab shows the selected range and its trade figures in All, Long and Short columns,
+followed by the drawdown, ratio, growth and buy-and-hold figures for the selected range, equity
+and drawdown in account units, and an optional fee-free buy-and-hold comparison on the same
+equity scale. Curve positions and hover values retain submillisecond timestamps. Time labels
+along the axis follow its span. Hover a curve for timestamped values. The virtualized trade
+list uses entry-time order, keeps equal-time trades in input order, filters to the range's
+trades and shows fill prices, net profit, fees, labels and excursions.
 Fill prices retain their precision and fill times retain fractional seconds.
 Properties includes run metadata and the host's ordered settings. Invalid inputs are
 counted visibly. An undefined or non-finite metric displays as `N/A`, including when
 converting a fraction to a displayed percentage overflows.
+Both exports cover the whole run whatever date range is selected.
 Export trades CSV writes valid trades using
 [`StrategyReport::trades_csv_with_excursions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv_with_excursions): the columns of
 [`StrategyReport::trades_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv) with the displayed excursions in the final `mae` and `mfe` cells,
 empty when unavailable, and the same quoting and UTC timestamps. Export summary CSV returns
-[`StrategyReportAction::ExportSummaryCsv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyReportAction.html#variant.ExportSummaryCsv) with a suggested file name and the metrics and
-properties shown, as [`StrategyReport::summary_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.summary_csv) writes them: a dot as the decimal
+[`StrategyReportAction::ExportSummaryCsv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyReportAction.html#variant.ExportSummaryCsv) with a suggested file name and the whole-run metrics and
+properties, as [`StrategyReport::summary_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.summary_csv) writes them: a dot as the decimal
 separator, no thousands separator, and an empty cell for an unavailable value. Percent
 values keep 15 significant decimal digits, so a rate of `0.07` reads `7`, and a zero is
 always `0`. Both exports prefix a text cell that starts with `=`, `+`, `-`, `@`, a tab or a
@@ -231,7 +233,7 @@ With `ui` and `strategies`, [`StrategyTester`](https://userfrm.github.io/egui-ch
 keeps the engine and strategy of a completed Run. As `show` receives new closed bars, it
 continues the report to the same result as a fresh Run over the longer history and returns
 [`StrategyTesterAction::Signals`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyTesterAction.html#variant.Signals) to replace the chart's fill markers. The report keeps its
-open tab, buy-and-hold toggle and selected entry when that entry remains;
+open tab, buy-and-hold toggle, date range and selected entry when that entry remains;
 [`selected_trade`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyTester.html#method.selected_trade) returns its index in the report's trades, so a chart highlight can
 follow it. A corrected processed chart bar rebuilds the run; a shorter history ends
 continuation and marks the report stale. For a run on host history, a changed or missing
@@ -253,6 +255,91 @@ A host running its own engine uses [`Backtest::update`](https://userfrm.github.i
 while the final bar is forming, or [`Backtest::update_closed_async`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.update_closed_async)
 when every bar is closed. Closed-bar updates respect the historical end date and do not
 make forming-bar decisions, even when live recalculation is enabled.
+
+## Date ranges and analysis
+
+From (UTC) and To (UTC) select whole days in `YYYY-MM-DD` format, including the To day.
+Invalid dates leave the last valid range displayed. Whole run clears the filter; supplying
+another report also resets it. The summary, charts, trade list and the Periods, Distribution
+and Trade times pages all follow this range. The chart span changes with the range.
+A report whose figures are unavailable shows its reason instead of date controls, summary,
+analysis pages and exports; `within` retains that reason.
+
+[`StrategyReport::within(range)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.within)
+provides the same calculations without UI, including intraday ranges. Its start is included
+and its end excluded. It keeps valid trades closed in that interval, including trades entered
+earlier, and trades entered before the end that are still open there, with their exits removed.
+The panel's trade list retains their original fills and original indices for chart selection.
+Only usable equity points inside the range remain. Drawdown and ratios start at its first
+point. If the range starts after the curve's first point, its first included equity becomes
+initial capital; without a point capital is NaN and the net return is unavailable. Otherwise
+capital stays as supplied. Empty or reversed ranges contain no trades or equity. Invalid
+inputs are omitted, leaving skipped counts at zero; the panel keeps the whole-run warning.
+Holding times use the whole run's source bars, including bars before the range for a trade
+entered earlier and closed inside it.
+
+[`StrategyReport::analysis(bars)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.analysis)
+returns [`StrategyAnalysis`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyAnalysis.html), usable without egui.
+Its period, histogram and time-group records are [`StrategyPeriod`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyPeriod.html),
+[`StrategyResultBin`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyResultBin.html) and
+[`StrategyTradeGroup`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyTradeGroup.html). Combine it with `within` for a period.
+Pass the source bars for that range, or an empty slice without a benchmark. Months and years
+use UTC boundaries and include periods with equity points or closed-trade exits. Each lists
+net profit and trade count by exit time. The equity return is the last point in the period
+divided by the last point before it, minus one; without an earlier point, its own first point
+is the base. Buy-and-hold uses valid closes the same way, with the first valid open as its
+initial base. Missing periods do not reset either base. A period without a point or bar,
+without a positive base or with a non-finite return shows N/A. Source validation is the same
+as `comparison`. Successive period returns compound to last equity / first equity - 1, or
+last close / first open - 1 for buy-and-hold.
+
+The distribution uses each closed trade's net profit divided by quantity times absolute
+entry price. Non-finite results, including zero entry value, do not enter the histogram.
+Entry value stays in the instrument's currency, so the results of a run
+converted into another account currency also carry the exchange rate.
+Bin widths follow 0.001, 0.002, 0.005, 0.01, 0.02, 0.05 and so on, choosing the first width
+that fits every result in at most 20 consecutive bins. Lower edges are included, upper edges
+excluded. Results within a billionth of an edge (of the width at zero) snap to it to remove
+binary rounding noise; a loss stays below zero. Winners, losers and breakevens have their
+own colours and hover counts. Run counts use exit order, with ties in input order and
+breakevens breaking both runs: `win_runs[n - 1]` counts winning runs of exactly `n` trades,
+and `loss_runs` counts losing runs. Open and invalid trades do not participate.
+
+Trade times group closed valid trades by entry hour, weekday (Monday first) and month,
+all in UTC, with count, net profit and win rate. Breakevens count in the win-rate denominator.
+Empty groups have zero trades and profit and an unavailable win rate.
+
+```rust
+use chrono::{TimeZone, Utc};
+use egui_charts::model::{OrderSide, StrategyExit, StrategyReport, StrategyTrade, Timeframe};
+
+let day = |m, d| Utc.with_ymd_and_hms(2024, m, d, 0, 0, 0).unwrap();
+let mut report = StrategyReport::new("Swing", "SAMPLE", Timeframe::Day1, 1_000.0);
+for (entry, exit, profit) in [(day(1, 2), day(1, 9), 50.0), (day(2, 1), day(2, 8), -30.0)] {
+    let mut trade = StrategyTrade::new(OrderSide::Buy, 10.0, entry, 100.0);
+    trade.exit = Some(StrategyExit::new(exit, 100.0 + profit / 10.0, profit));
+    report.trades.push(trade);
+}
+report.equity = vec![
+    (day(1, 1), 1_000.0),
+    (day(1, 31), 1_050.0),
+    (day(2, 1), 1_050.0),
+    (day(2, 15), 1_000.0),
+    (day(2, 29), 1_020.0),
+];
+
+// February starts from the account value on 1 February.
+let february = report.within(day(2, 1)..day(3, 1)).performance();
+assert_eq!(february.all.closed_trades, 1);
+assert_eq!(february.all.net_profit, -30.0);
+assert_eq!(february.max_drawdown, Some(50.0));
+
+let analysis = report.analysis(&[]);
+assert_eq!(analysis.months.len(), 2);
+assert_eq!(analysis.months[0].trades.net_profit, 50.0);
+// 2 January 2024 is a Tuesday, the second weekday group.
+assert_eq!(analysis.by_weekday[1].closed_trades, 1);
+```
 
 ## Metric definitions
 
