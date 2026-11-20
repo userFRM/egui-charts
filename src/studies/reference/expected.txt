@@ -331,12 +331,12 @@ RVOL-week-daily 0 - - - - - 0.75 1 1.2
 Seasonality-hand 0 - - - - - 132 132 113.4 113.4 141.9 136.333333333
 Seasonality-hand 1 - - - - - 120 120 126 126 132 140
 Seasonality-hand 2 - - - - - 10 10 -10 -10 7.5 -2.61904761905
-Seasonality-hand 3 - - - - - 0 0 0 0 2.5 7.38095238095
+Seasonality-hand 3 - - - - - - - - - 3.53553390593 10.4382429604
 Seasonality-hand 4 - - - - - 1 1 1 1 2 2
 Seasonality-2023 0 - - - - - - - - - 138.6 146.666666667
 Seasonality-2023 1 - - - - - - - - - 132 140
 Seasonality-2023 2 - - - - - - - - - 5 4.76190476190
-Seasonality-2023 3 - - - - - - - - - 0 0
+Seasonality-2023 3 - - - - - - - - - - -
 Seasonality-2023 4 - - - - - - - - - 1 1
 Sessions-default 0 - - 1 1 - - - - - - - - - -
 Sessions-default 1 - - - - - 1 1 1 1 - 1 - - 1
