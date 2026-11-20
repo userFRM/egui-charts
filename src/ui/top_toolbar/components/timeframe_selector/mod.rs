@@ -7,7 +7,6 @@ use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
 use crate::model::Timeframe;
 use crate::styles::focus::focus_ring_color;
-use crate::styles::icons as icon_sizes;
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::top_toolbar::buttons::Trigger;
@@ -701,7 +700,10 @@ pub(super) fn favorite_star(
 ) -> bool {
     let rect = context.rect;
     let star_rect = Rect::from_center_size(
-        pos2(rect.right() - icon_sizes::SM / 2.0, rect.center().y),
+        pos2(
+            rect.right() - DESIGN_TOKENS.sizing.icon_sm / 2.0,
+            rect.center().y,
+        ),
         vec2(STAR_SLOT_W, rect.height()),
     );
     let star = ui.interact(
@@ -729,11 +731,17 @@ pub(super) fn favorite_star(
         } else {
             &embedded_icons::STAR_EMPTY
         };
-        icon.as_image_tinted(vec2(icon_sizes::SM, icon_sizes::SM), color)
-            .paint_at(
-                ui,
-                Rect::from_center_size(star_rect.center(), vec2(icon_sizes::SM, icon_sizes::SM)),
-            );
+        icon.as_image_tinted(
+            vec2(DESIGN_TOKENS.sizing.icon_sm, DESIGN_TOKENS.sizing.icon_sm),
+            color,
+        )
+        .paint_at(
+            ui,
+            Rect::from_center_size(
+                star_rect.center(),
+                vec2(DESIGN_TOKENS.sizing.icon_sm, DESIGN_TOKENS.sizing.icon_sm),
+            ),
+        );
     }
     menu_row_focus(ui, &star);
     let clicked = star.clicked();
@@ -825,7 +833,10 @@ impl ListItemContent for TimeframeRow<'_> {
         });
 
         let hide_rect = Rect::from_center_size(
-            pos2(rect.right() - icon_sizes::SM / 2.0 - 28.0, rect.center().y),
+            pos2(
+                rect.right() - DESIGN_TOKENS.sizing.icon_sm / 2.0 - 28.0,
+                rect.center().y,
+            ),
             vec2(28.0, ROW_H),
         );
         let hide = ui.interact(
@@ -843,12 +854,15 @@ impl ListItemContent for TimeframeRow<'_> {
             || ui.memory(|m| m.has_focus(context.response.id.with("favorite")));
         if shown {
             embedded_icons::CLOSE
-                .as_image_tinted(vec2(icon_sizes::SM, icon_sizes::SM), text)
+                .as_image_tinted(
+                    vec2(DESIGN_TOKENS.sizing.icon_sm, DESIGN_TOKENS.sizing.icon_sm),
+                    text,
+                )
                 .paint_at(
                     ui,
                     Rect::from_center_size(
                         hide_rect.center(),
-                        vec2(icon_sizes::SM, icon_sizes::SM),
+                        vec2(DESIGN_TOKENS.sizing.icon_sm, DESIGN_TOKENS.sizing.icon_sm),
                     ),
                 );
         }
@@ -996,7 +1010,10 @@ mod tests {
                 assert_eq!(
                     click(
                         &mut selector,
-                        pos2(row.right() - icon_sizes::SM / 2.0, row.center().y)
+                        pos2(
+                            row.right() - DESIGN_TOKENS.sizing.icon_sm / 2.0,
+                            row.center().y
+                        )
                     ),
                     TimeframeAction::ToggleFavorite(tf)
                 );
@@ -1144,7 +1161,10 @@ mod tests {
                         .y;
                     let action = click(
                         &mut selector,
-                        pos2(right - theme.spacing.lg - icon_sizes::SM / 2.0, y),
+                        pos2(
+                            right - theme.spacing.lg - DESIGN_TOKENS.sizing.icon_sm / 2.0,
+                            y,
+                        ),
                     );
                     assert_eq!(action, TimeframeAction::ToggleFavorite(custom));
                     assert_eq!(selector.favorites.contains(&custom), favorite);
@@ -1162,7 +1182,13 @@ mod tests {
                     assert_eq!(
                         click(
                             &mut selector,
-                            pos2(right - theme.spacing.lg - icon_sizes::SM / 2.0 - 28.0, y)
+                            pos2(
+                                right
+                                    - theme.spacing.lg
+                                    - DESIGN_TOKENS.sizing.icon_sm / 2.0
+                                    - 28.0,
+                                y
+                            )
                         ),
                         TimeframeAction::Hide(tf)
                     );

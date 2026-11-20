@@ -25,7 +25,7 @@ pub struct StudyTemplate {
     /// was kept do.
     #[serde(default)]
     pub scale: Option<StudyScale>,
-    /// A scalar metric's host key, display name, unit and format. Restored without requiring a
+    /// A metric's host key, display name, unit, format and declared plot and colours. Restored without requiring a
     /// catalogue entry; its history is requested again from the host. Absent in older saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric: Option<crate::data::MetricSeries>,
@@ -375,6 +375,15 @@ impl StudyTemplate {
     pub(crate) fn upgraded(&self, study: &str, own: &[StudyInput]) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
         let declares = |id: &str| own.iter().any(|input| input.id == id);
+        let out_of_range = |id: &str| {
+            self.inputs.iter().any(|(saved, value)| {
+                saved == id
+                    && matches!(value, InputValue::Number(_))
+                    && own
+                        .iter()
+                        .any(|input| input.id == id && !input.accepts(value))
+            })
+        };
         // Profile endpoints saved in Unix milliseconds that the study does not take as numbers.
         let millis = |id: &str, value: &InputValue| match (id, value) {
             ("start_time" | "end_time", InputValue::Number(ms))
@@ -407,6 +416,17 @@ impl StudyTemplate {
                 .collect();
             settings.fill_between_levels = false;
             settings.level_fill_color = color;
+        };
+        let hidden_fills = |declared: &dyn Indicator| {
+            declared
+                .fills()
+                .iter()
+                .map(|fill| crate::studies::FillStyle {
+                    inverted_color: fill.inverted_color,
+                    visible: false,
+                    ..crate::studies::FillStyle::new(fill.color)
+                })
+                .collect()
         };
         let value = |id: &str| {
             self.inputs
@@ -650,6 +670,22 @@ impl StudyTemplate {
                     })
                     .collect();
             }
+            // Older oscillators keep their unshaded appearance until their new fills are shown.
+            "Aroon Oscillator" if self.settings.fills.is_empty() => {
+                template.settings.fills = hidden_fills(&crate::studies::AroonOscillator::default());
+            }
+            "%B" if self.settings.fills.is_empty() || out_of_range("multiplier") => {
+                if self.settings.fills.is_empty() {
+                    template.settings.fills = hidden_fills(&crate::studies::PercentB::default());
+                }
+                if out_of_range("multiplier") {
+                    for (id, value) in &mut template.inputs {
+                        if let ("multiplier", InputValue::Number(v)) = (id.as_str(), value) {
+                            *v = v.clamp(0.001, 50.0);
+                        }
+                    }
+                }
+            }
             // A VWAP opened without bands, and no band was filled, before it opened with a filled
             // one.
             "VWAP" if !has("band_count") || (self.settings.fills.is_empty() && bands > 0) => {
@@ -673,6 +709,12 @@ impl StudyTemplate {
                         )
                     })
                     .collect();
+            }
+            // A CCI drew no average before it opened with one.
+            "CCI" if !has("smoothing") => {
+                template
+                    .inputs
+                    .push(("smoothing".to_owned(), InputValue::Choice(0)));
             }
             // A Rank Correlation had no average, and drew no levels, before it opened with an
             // average, three levels and the band between them filled.
@@ -724,6 +766,54 @@ impl StudyTemplate {
                     ("show_developing", InputValue::Toggle(true)),
                     ("projections", InputValue::Toggle(false)),
                     ("as_drawings", InputValue::Toggle(false)),
+                ] {
+                    if !has(id) {
+                        template.inputs.push((id.to_owned(), value));
+                    }
+                }
+            }
+            // Seasonality saved before its Positive colour input coloured rising months with its
+            // Expected plot. One saved before placement inputs also counted from 1900, sat at the
+            // lower right and drew falling months in their original red.
+            "Seasonality" if !has("positive_color") => {
+                let positive = self
+                    .settings
+                    .plots
+                    .first()
+                    .map_or(crate::studies::palette::UP, |plot| plot.color);
+                let mut added = vec![("positive_color", InputValue::Color(positive))];
+                if !has("table_position") {
+                    added.extend([
+                        ("start_year", InputValue::Integer(1900)),
+                        ("table_position", InputValue::Choice(8)),
+                        (
+                            "negative_color",
+                            InputValue::Color(egui::Color32::from_rgb(242, 55, 69)),
+                        ),
+                    ]);
+                }
+                for (id, value) in added {
+                    if !has(id) {
+                        template.inputs.push((id.to_owned(), value));
+                    }
+                }
+            }
+            // Performance saved before it took inputs showed the chart symbol alone over the six
+            // standard periods, fitted at the lower right, falling changes in the palette red.
+            "Performance" if !has("periods") => {
+                for (id, value) in [
+                    ("symbols", InputValue::Text(String::new())),
+                    (
+                        "periods",
+                        InputValue::Text("1W, 1M, 3M, 6M, YTD, 1Y".into()),
+                    ),
+                    (
+                        "negative_color",
+                        InputValue::Color(crate::studies::palette::DOWN),
+                    ),
+                    ("table_position", InputValue::Choice(8)),
+                    ("table_width", InputValue::Number(0.0)),
+                    ("table_height", InputValue::Number(0.0)),
                 ] {
                     if !has(id) {
                         template.inputs.push((id.to_owned(), value));
@@ -936,6 +1026,58 @@ impl StudyTemplate {
                 let declared = crate::studies::VolProfileSession::default();
                 template.settings.plots = (0..3).map(|line| declared.plot_style(line)).collect();
                 template.settings.untagged_plots.clear();
+                changed = true;
+            }
+        }
+        // Options profile inputs added since a save, set to draw what it drew: every strike
+        // unless a limit was saved, and no current price line, whose style it lacks.
+        if study == "Options Volume Profile" && declares("current_price") {
+            for (id, value) in [
+                ("strikes_around_price", InputValue::Length(0)),
+                ("current_price", InputValue::Toggle(false)),
+            ] {
+                if !has(id) {
+                    template.inputs.push((id.to_owned(), value));
+                    changed = true;
+                }
+            }
+            if template.settings.plots.len() == 8 {
+                template.settings.plots.push(crate::studies::PlotStyle {
+                    visible: true,
+                    color: crate::studies::palette::GRAY,
+                    width: 1.0,
+                    pattern: crate::model::LineStyle::Dotted,
+                    plot_type: crate::studies::PlotType::Line,
+                });
+                template.settings.untagged_plots.push(8);
+                changed = true;
+            }
+        }
+        // A single candlestick pattern study saved while it drew the bullish, bearish and
+        // neutral lines of All Candlestick Patterns, and took the trend rule whatever its rule
+        // reads, keeps the style of its side's line and drops a rule it now ignores.
+        if let Some(line) = crate::studies::CandlestickPatterns::pattern_line(study) {
+            if has("trend") && !declares("trend") {
+                template.inputs.retain(|(id, _)| id != "trend");
+                changed = true;
+            }
+            if self.settings.plots.len() == 3 {
+                let settings = &mut template.settings;
+                settings.plots = vec![self.settings.plots[line]];
+                settings.plot_variants = vec![
+                    self.settings
+                        .plot_variants
+                        .get(line)
+                        .cloned()
+                        .unwrap_or_default(),
+                ];
+                for flagged in [&mut settings.untagged_plots, &mut settings.price_line_plots] {
+                    *flagged = if flagged.contains(&line) {
+                        vec![0]
+                    } else {
+                        Vec::new()
+                    };
+                }
                 changed = true;
             }
         }
@@ -1186,6 +1328,7 @@ mod tests {
             show_single_prints: false,
             show_statistics: false,
             show_opening_range: true,
+            labels: crate::model::TPOLabels::default(),
             show_closing_price: false,
             show_volume_profile: false,
             split_sessions: false,
@@ -1411,13 +1554,143 @@ mod tests {
         }
     }
 
+    /// Main templates without Symbol or Offset keep every saved input, style and value.
+    #[test]
+    fn templates_saved_before_symbol_and_offset_restore_unchanged() {
+        let factory = IndicatorFactory::new();
+        // Two bars per session over more than 52 weeks warm up every saved study.
+        let bars: Vec<_> = (0..800)
+            .map(|i: i64| {
+                let x = i as f64;
+                let close = 100.0
+                    + (x * 0.13).sin() * 8.0
+                    + (x * 0.029).cos() * 5.0
+                    + (i / 160) as f64 * 6.0;
+                let open = close - (x * 0.7).sin() * 1.5;
+                crate::model::Bar::new(
+                    chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(i / 2 * 48 + i % 2),
+                    open,
+                    close.max(open) + 0.5 + (x * 0.3).sin().abs(),
+                    close.min(open) - 0.5 - (x * 0.5).cos().abs(),
+                    close,
+                    1_000.0 + ((i * 37) % 211) as f64 * 9.0,
+                )
+            })
+            .collect();
+        // Literal saves captured on origin/main 1b270ce51, each with one edited input.
+        for text in [
+            r#"{"name":"PSAR","inputs":[["initial_af",{"Number":0.03}],["af_step",{"Number":0.02}],["max_af",{"Number":0.2}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ParabolicSAR.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            r#"{"name":"MA Cross","inputs":[["cross_first",{"Choice":0}],["cross_second",{"Choice":2}],["period_0",{"Length":9}],["kind_0",{"Choice":0}],["source_0",{"Choice":3}],["period_1",{"Length":21}],["kind_1",{"Choice":0}],["source_1",{"Choice":3}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MACross.html","plots":[{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[67,160,71,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,7,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            r#"{"name":"VWAP Auto Anchored","inputs":[["anchor",{"Choice":0}],["length",{"Length":5}],["source",{"Choice":5}],["percentage_bands",{"Toggle":false}],["band_multiplier",{"Number":1.0}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VwapAutoAnchored.html","plots":[{"color":[30,136,229,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[128,128,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[128,128,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[0,137,123,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[0,137,123,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,9,14,16],"untagged_plots":[3,4,5,6],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[4,9,4,13],"inverted_color":null,"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            r#"{"name":"Multi MA","inputs":[["cross_first",{"Choice":0}],["cross_second",{"Choice":0}],["period_0",{"Length":10}],["kind_0",{"Choice":0}],["source_0",{"Choice":3}],["period_1",{"Length":50}],["kind_1",{"Choice":0}],["source_1",{"Choice":3}],["period_2",{"Length":100}],["kind_2",{"Choice":0}],["source_2",{"Choice":3}],["period_3",{"Length":200}],["kind_3",{"Choice":0}],["source_3",{"Choice":3}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MultipleMA.html","plots":[{"color":[246,195,9,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[251,152,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[251,101,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[246,12,12,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,12,1,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            r#"{"name":"ZigZag","inputs":[["deviation_percent",{"Number":5.0}],["depth",{"Length":11}],["mode",{"Choice":0}],["price_labels",{"Toggle":false}],["change_labels",{"Toggle":false}],["change_mode",{"Choice":1}],["volume_labels",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ZigZag.html","plots":[{"color":[41,98,255,255],"width":2.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            #[cfg(feature = "timezones")]
+            r#"{"name":"Trading Sessions","inputs":[["show [0]",{"Toggle":false}],["name [0]",{"Text":"Tokyo"}],["start [0]",{"Length":540}],["end [0]",{"Length":900}],["zone [0]",{"Text":"Asia/Tokyo"}],["show [1]",{"Toggle":true}],["name [1]",{"Text":"London"}],["start [1]",{"Length":510}],["end [1]",{"Length":990}],["zone [1]",{"Text":"Europe/London"}],["show [2]",{"Toggle":true}],["name [2]",{"Text":"New York"}],["start [2]",{"Length":570}],["end [2]",{"Length":960}],["zone [2]",{"Text":"America/New_York"}],["boxes",{"Toggle":true}],["name_labels",{"Toggle":true}],["range_labels",{"Toggle":false}],["average_labels",{"Toggle":false}],["open_lines",{"Toggle":false}],["close_lines",{"Toggle":false}],["average_lines",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradingSessions.html","plots":[{"color":[6,15,38,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true},{"color":[38,23,0,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true},{"color":[1,23,19,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true}],"precision":0,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[0,1,2,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            #[cfg(not(feature = "timezones"))]
+            r#"{"name":"Trading Sessions","inputs":[["show [0]",{"Toggle":false}],["name [0]",{"Text":"Tokyo"}],["start [0]",{"Length":540}],["end [0]",{"Length":900}],["zone [0]",{"Text":"+09:00"}],["show [1]",{"Toggle":true}],["name [1]",{"Text":"London"}],["start [1]",{"Length":510}],["end [1]",{"Length":990}],["zone [1]",{"Text":"+00:00"}],["show [2]",{"Toggle":true}],["name [2]",{"Text":"New York"}],["start [2]",{"Length":570}],["end [2]",{"Length":960}],["zone [2]",{"Text":"-05:00"}],["boxes",{"Toggle":true}],["name_labels",{"Toggle":true}],["range_labels",{"Toggle":false}],["average_labels",{"Toggle":false}],["open_lines",{"Toggle":false}],["close_lines",{"Toggle":false}],["average_lines",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradingSessions.html","plots":[{"color":[6,15,38,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true},{"color":[38,23,0,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true},{"color":[1,23,19,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true}],"precision":0,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[0,1,2,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(text).unwrap();
+            let mut restored = saved.create().unwrap();
+            let inputs = restored.inputs();
+            for (id, value) in &saved.inputs {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == *id)
+                        .map(|input| &input.value),
+                    Some(value),
+                    "{} {id}",
+                    saved.name
+                );
+            }
+            assert_eq!(
+                inputs
+                    .iter()
+                    .find(|input| input.id == "calculation_symbol")
+                    .unwrap()
+                    .value,
+                InputValue::Symbol(String::new()),
+                "{}",
+                saved.name
+            );
+            if let Some(offset) = inputs.iter().find(|input| input.id == "plot_offset") {
+                assert_eq!(offset.value, InputValue::Integer(0), "{}", saved.name);
+            }
+            assert_eq!(restored.settings(), saved.settings, "{}", saved.name);
+            assert_eq!(restored.is_visible(), saved.visible, "{}", saved.name);
+            assert_eq!(Some(restored.scale()), saved.scale, "{}", saved.name);
+            let mut fresh = ConfiguredStudy::new(factory.create(&saved.name).unwrap());
+            for (id, value) in &saved.inputs {
+                if fresh
+                    .inputs()
+                    .iter()
+                    .any(|input| input.id == *id && input.value != *value)
+                {
+                    fresh.set_input(id, value.clone()).unwrap();
+                }
+            }
+            // Zig Zag saves from before its extension and labels retain the former drawing.
+            if saved.name == "ZigZag" {
+                for (id, value) in [
+                    ("extend_to_last_bar", InputValue::Toggle(false)),
+                    ("price_labels", InputValue::Toggle(false)),
+                    ("change_labels", InputValue::Toggle(false)),
+                    ("change_mode", InputValue::Choice(1)),
+                    ("volume_labels", InputValue::Toggle(false)),
+                ] {
+                    fresh.set_input(id, value).unwrap();
+                }
+            }
+            restored.calculate(&bars);
+            fresh.calculate(&bars);
+            for line in 0..restored.line_count() {
+                for bar in 0..bars.len() {
+                    assert_eq!(
+                        restored.values().value(line, bar),
+                        fresh.values().value(line, bar),
+                        "{} {line} {bar}",
+                        saved.name
+                    );
+                }
+            }
+            if saved.name == "MA Cross" {
+                let zero = StudyTemplate::from_study(restored.as_ref())
+                    .create()
+                    .unwrap();
+                assert_eq!(zero.plot_offset(0), 0);
+                restored
+                    .set_input("plot_offset", InputValue::Integer(2))
+                    .unwrap();
+                let again = StudyTemplate::from_study(restored.as_ref())
+                    .create()
+                    .unwrap();
+                assert_eq!(again.plot_offset(0), 2);
+            }
+        }
+    }
+
     /// A template restores the inputs it holds whatever the study's default has become, with every
     /// line it showed, and an input it lacks takes the value the saved inputs had before the
-    /// study offered it.
+    /// study offered it. Values outside a narrowed input range load clamped to that range.
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
         use InputValue::{Choice, Length, Number, Text, Toggle};
         let rows = [
+            (
+                "CCI",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("smoothing", Choice(0))],
+            ),
+            (
+                "%B",
+                vec![("multiplier", Number(0.0))],
+                vec![("multiplier", Number(0.001))],
+            ),
+            (
+                "%B",
+                vec![("multiplier", Number(80.0))],
+                vec![("multiplier", Number(50.0))],
+            ),
             (
                 "Vol Profile Session",
                 vec![
@@ -1788,6 +2061,63 @@ mod tests {
             }
         }
 
+        // Literal Seasonality saves keep their year, colours and table position: one from before
+        // its display inputs at the lower right, one from before its Positive colour input, whose
+        // Expected plot coloured rising months.
+        for (text, year, positive, negative, position) in [
+            (
+                r#"{"name":"Seasonality","inputs":[["start_year",{"Integer":1900}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Seasonality.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[1,10,8,16],"untagged_plots":[0,1,2,3,4],"price_line_plots":[],"plot_variants":[[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,31,26,51],"inverted_color":[48,11,14,51],"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                1900,
+                Color32::from_rgb(41, 98, 255),
+                Color32::from_rgb(242, 55, 69),
+                crate::studies::TablePosition::BottomRight,
+            ),
+            (
+                r#"{"name":"Seasonality","inputs":[["start_year",{"Integer":2015}],["ignored_months",{"Text":""}],["negative_color",{"Color":[242,54,69,255]}],["color_cutoff",{"Number":10.0}],["show_averages",{"Toggle":true}],["show_std_dev",{"Toggle":true}],["show_positive",{"Toggle":true}],["table_position",{"Choice":7}],["table_width",{"Number":0.0}],["table_height",{"Number":0.0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Seasonality.html","plots":[{"color":[255,0,255,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[1,10,8,16],"untagged_plots":[0,1,2,3,4],"price_line_plots":[],"plot_variants":[[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,31,26,51],"inverted_color":[48,11,14,51],"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                2015,
+                Color32::from_rgb(255, 0, 255),
+                Color32::from_rgb(242, 54, 69),
+                crate::studies::TablePosition::BottomCenter,
+            ),
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(text).unwrap();
+            let mut study = saved.create().unwrap();
+            let inputs = study.inputs();
+            for (id, value) in [
+                ("start_year", InputValue::Integer(year)),
+                ("positive_color", InputValue::Color(positive)),
+                ("negative_color", InputValue::Color(negative)),
+            ] {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == id)
+                        .map(|input| &input.value),
+                    Some(&value),
+                    "Seasonality from {year} {id}"
+                );
+            }
+            assert_eq!(study.settings(), saved.settings);
+            // January 2021 rises 12%, past the cutoff: the full positive colour.
+            let bars = [(2020, 12, 100.0), (2021, 1, 112.0)].map(|(year, month, close)| {
+                Bar::new(
+                    Utc.with_ymd_and_hms(year, month, 28, 0, 0, 0).unwrap(),
+                    close,
+                    close,
+                    close,
+                    close,
+                    1.0,
+                )
+            });
+            study.calculate(&bars);
+            let table = study.table().unwrap();
+            assert_eq!(
+                (table.position, table.width, table.height),
+                (position, None, None)
+            );
+            assert_eq!(table.cell_colors[1][1], positive);
+        }
+
         let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Periodic","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["period_count",{"Length":1}],["period",{"Choice":1}],["restart_yearly",{"Toggle":false}],["width",{"Number":30.0}],["extend_poc",{"Toggle":false}],["extend_vah",{"Toggle":false}],["extend_val",{"Toggle":false}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfilePeriodic.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
         for legacy in [
             saved.clone(),
@@ -1948,6 +2278,31 @@ mod tests {
     /// input labels retain the ids, values and styles of the saved studies.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
+        // A metric descriptor saved before plot declarations and the Symbol input keeps its look.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Open interest","inputs":[],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":null,"plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent","metric":{"id":"oi","name":"Open interest","unit":"","format":"Volume"}}"#,
+        ).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.settings(), saved.settings);
+        assert_eq!(Some(restored.scale()), saved.scale);
+        assert_eq!(
+            restored.metric().unwrap().plot,
+            crate::data::MetricPlot::StepLine
+        );
+        assert_eq!(restored.metric().unwrap().colors, None);
+        assert_eq!(restored.data_requests()[0].symbol, "");
+        let symbol = restored
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == "symbol")
+            .unwrap();
+        assert_eq!(symbol.value, InputValue::Symbol(String::new()));
+        assert_eq!(symbol.default, symbol.value);
+        let again = StudyTemplate::from_study(restored.as_ref())
+            .create()
+            .unwrap();
+        assert_eq!(again.settings(), saved.settings);
+
         // This Knoxville template was saved before price lines and before the window rule. It
         // keeps its inputs and styles, without pivot sides and on the price scale, with lines
         // off; enabling them and saving again retains that choice.

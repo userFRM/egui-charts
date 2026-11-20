@@ -227,6 +227,7 @@ impl Chart {
         if let Some(interval) = set.interval {
             self.set_timeframe(interval);
         }
+        let outer = self.begin_study_batch();
         if keep != Keep::All {
             let replaced: Vec<_> = self
                 .indicators()
@@ -310,6 +311,7 @@ impl Chart {
             self.config.show_volume = self.volume_setting;
         }
         self.recalculate_studies();
+        self.end_study_batch(outer);
         Ok(ids)
     }
 

@@ -410,6 +410,26 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             [8., 10., 8., 10.],
         ]
     };
+    let keltner = || {
+        vec![
+            [10.; 4],
+            [8.; 4],
+            [10.; 4],
+            [9., 12., 9., 12.],
+            [10.; 4],
+            [11., 11., 8., 8.],
+            [10.; 4],
+            [9., 11., 9., 10.],
+        ]
+    };
+    let keltner_inputs = || {
+        vec![
+            ("ema_period", Length(2)),
+            ("atr_period", Length(1)),
+            ("multiplier", Number(0.25)),
+            ("average", Choice(1)),
+        ]
+    };
     let cases = [
         // SMA(2) +/- 0.5 population deviations gives bands 8.5/9.5 at bars 1,2;
         // 10.5/11.5 at bars 3,4; 8.5/9.5 at bars 5,6.
@@ -464,30 +484,17 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             ],
             expected: vec![],
         },
-        // Simple basis(2), ATR(1), multiplier 1/4: upper[2]=9.5, lower[4]=10.5,
-        // upper[6]=9.5. Each following bar starts before the stop and reaches it.
+        // Simple basis(2), ATR(1), multiplier 1/4: the close crosses upper[2]=9.5, lower[4]=10.5
+        // and upper[6]=9.5. The stops wait one quarter increment beyond those bars, at 10.25,
+        // 9.75 and 10.25; each following bar starts before its stop and reaches it.
         Case {
             name: "Keltner Channels",
-            prices: vec![
-                [10.; 4],
-                [8.; 4],
-                [10.; 4],
-                [9., 12., 9., 12.],
-                [10.; 4],
-                [11., 11., 8., 8.],
-                [10.; 4],
-                [9., 10., 9., 10.],
-            ],
-            inputs: vec![
-                ("ema_period", Length(2)),
-                ("atr_period", Length(1)),
-                ("multiplier", Number(0.25)),
-                ("average", Choice(1)),
-            ],
-            expected: vec![(3, Buy, 9.5), (5, Sell, 10.5), (7, Buy, 9.5)],
+            prices: keltner(),
+            inputs: keltner_inputs(),
+            expected: vec![(3, Buy, 10.25), (5, Sell, 9.75), (7, Buy, 10.25)],
         },
-        // The close 10 crosses the upper band 9.5 at bar 2. Bar 3 misses the stop with a high
-        // of 9.45 and closes at 9.4, under the basis 9.7; bar 4 would reach 9.5.
+        // The close 10 crosses the upper band 9.5 at bar 2. Bar 3 misses the stop 10.25 with a
+        // high of 9.45 and closes at 9.4, under the basis 9.7; bar 4 would reach the stop.
         Case {
             name: "Keltner Channels",
             prices: vec![
@@ -495,18 +502,13 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
                 [8.; 4],
                 [10.; 4],
                 [9.4, 9.45, 8., 9.4],
-                [9.4, 9.6, 9.3, 9.5],
+                [9.4, 10.5, 9.3, 9.5],
             ],
-            inputs: vec![
-                ("ema_period", Length(2)),
-                ("atr_period", Length(1)),
-                ("multiplier", Number(0.25)),
-                ("average", Choice(1)),
-            ],
+            inputs: keltner_inputs(),
             expected: vec![],
         },
         // Simple basis(3), ATR(1), multiplier 1/4: close 10 crosses the upper band
-        // 26/3 + 0.5 at bar 3. Bar 4 misses the stop with high 9.15 and closes at 9.1,
+        // 26/3 + 0.5 at bar 3, so the stop waits at 10.25. Bar 4 misses it and closes at 9.1,
         // above its basis 27.1/3; bar 5 reaches the original stop.
         Case {
             name: "Keltner Channels",
@@ -516,7 +518,7 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
                 [8.; 4],
                 [10.; 4],
                 [9.1, 9.15, 9.05, 9.1],
-                [9.1, 9.3, 9.1, 9.2],
+                [9.1, 10.5, 9.1, 9.2],
             ],
             inputs: vec![
                 ("ema_period", Length(3)),
@@ -524,7 +526,26 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
                 ("multiplier", Number(0.25)),
                 ("average", Choice(1)),
             ],
-            expected: vec![(5, Buy, 26. / 3. + 0.5)],
+            expected: vec![(5, Buy, 10.25)],
+        },
+        // Source Open: the basis averages the opens. Bar 2 opens at 10 above its upper band
+        // 9.5 and closes at 9 below it, so its stop waits at 10.25. Bar 3 opens at 9.6, under
+        // its basis 9.8, and cancels the stop while its close 10 stays above; bar 4 would
+        // reach it. Bar 5 opens at 10.5 above its upper band 10.3375 and closes at 10 below
+        // it; bar 6 reaches its stop 10.75.
+        Case {
+            name: "Keltner Channels",
+            prices: vec![
+                [10.; 4],
+                [8.; 4],
+                [10., 10., 9., 9.],
+                [9.6, 10., 9.6, 10.],
+                [9.8, 10.5, 9.7, 9.8],
+                [10.5, 10.5, 9.75, 10.],
+                [10.25, 11., 10.25, 11.],
+            ],
+            inputs: [keltner_inputs(), vec![("source", Choice(0))]].concat(),
+            expected: vec![(6, Buy, 10.75)],
         },
         // SMA(1)-SMA(2), SMA signal(2): histogram[2..=7] = -0.5,1,0,-1,0,1.
         Case {
@@ -631,6 +652,14 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             inputs: vec![],
             expected: vec![(2, Sell, 10.), (3, Buy, 12.), (5, Sell, 8.), (7, Buy, 10.)],
         },
+        // Higher closes 10, 8, 10, 12 rate 0, -1, +1, +1. Each slot first becomes
+        // readable at chart bars 4, 9, 14, 19; its order fills on the following bar.
+        Case {
+            name: "Technical Ratings",
+            prices: points(&[vec![10.; 5], vec![8.; 5], vec![10.; 5], vec![12.; 6]].concat()),
+            inputs: vec![("timeframe", InputValue::Timeframe(Some(Timeframe::Min5)))],
+            expected: vec![(10, Sell, 10.), (15, Buy, 12.)],
+        },
         // Each EMA votes by the close against its previous value: summaries 0, -1, 1/3, 2/3,
         // -2/3, -2/3. Only -1, 2/3 and -2/3 are strong; each fills at the next open.
         Case {
@@ -643,6 +672,8 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
     for case in cases {
         let bars = bars(&case.prices);
         let mut backtest = Backtest::new(case.name, "TEST", Timeframe::Min1, 10_000.);
+        // Only the Keltner stops read the increment; a quarter keeps their prices exact.
+        backtest.settings.price_increment = 0.25;
         let mut strategy = configured(case.name, &case.inputs);
         let report = backtest.run(strategy.as_mut(), &bars, &[]);
         assert_eq!(entries(&report), case.expected, "{}", case.name);
@@ -650,6 +681,40 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
         backtest.settings.recalculate_after_fills = true;
         let rerun = backtest.run(strategy.as_mut(), &bars, &[]);
         assert_eq!(entries(&rerun), case.expected, "{} reused", case.name);
+    }
+    // Without a usable increment the stops wait at the crossing bar's high or low. At 0.01, the
+    // stops one tick beyond the high 1.12 and the low 1.13 are 1.13 and 1.12 exactly, which the
+    // next bars reach.
+    for (increment, prices, expected) in [
+        (
+            f64::INFINITY,
+            keltner(),
+            vec![(3, Buy, 10.), (5, Sell, 10.), (7, Buy, 10.)],
+        ),
+        (
+            -0.25,
+            keltner(),
+            vec![(3, Buy, 10.), (5, Sell, 10.), (7, Buy, 10.)],
+        ),
+        (
+            0.01,
+            vec![
+                [1.1; 4],
+                [1.08; 4],
+                [1.1, 1.12, 1.1, 1.12],
+                [1.12, 1.13, 1.12, 1.13],
+                [1.15; 4],
+                [1.15, 1.15, 1.13, 1.13],
+                [1.13, 1.13, 1.12, 1.12],
+            ],
+            vec![(3, Buy, 1.13), (6, Sell, 1.12)],
+        ),
+    ] {
+        let mut backtest = Backtest::new("Keltner Channels", "TEST", Timeframe::Min1, 10_000.);
+        backtest.settings.price_increment = increment;
+        let mut strategy = configured("Keltner Channels", &keltner_inputs());
+        let report = backtest.run(strategy.as_mut(), &bars(&prices), &[]);
+        assert_eq!(entries(&report), expected, "increment {increment}");
     }
     // The RSI signals read only the RSI line, so its smoothing and divergence are not inputs.
     let ids: Vec<_> = StrategyFactory::new()
@@ -660,6 +725,107 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
         .map(|input| input.id)
         .collect();
     assert_eq!(ids, ["period", "oversold", "overbought"]);
+    let tick = Timeframe::Ticks(std::num::NonZeroU64::new(1).unwrap());
+    let seconds = |count| Timeframe::Custom(std::num::NonZeroU64::new(count).unwrap());
+    for (chart, interval, valid) in [
+        // A 3-minute bar from 00:03 spans 00:05, and weeks do not nest in months.
+        (seconds(180), Timeframe::Min5, false),
+        (Timeframe::Week1, Timeframe::Month1, false),
+        // The last 7-minute bar of a day ends early, at midnight.
+        (seconds(420), Timeframe::Day1, true),
+        (Timeframe::Day1, Timeframe::Week1, true),
+        (Timeframe::Min1, Timeframe::Sec30, false),
+        (Timeframe::Min1, Timeframe::Min5, true),
+        (Timeframe::Min1, Timeframe::Min1, true),
+        (tick, Timeframe::Min1, false),
+        (Timeframe::Min1, tick, false),
+        (tick, tick, true),
+    ] {
+        let mut strategy = configured(
+            "Technical Ratings",
+            &[("timeframe", InputValue::Timeframe(Some(interval)))],
+        );
+        strategy.set_timeframe(chart);
+        assert_eq!(
+            strategy.validate_inputs(),
+            if valid {
+                Ok(())
+            } else {
+                Err(
+                    "indicator timeframe must be the chart interval or a longer time interval made of whole chart bars",
+                )
+            },
+            "{chart} into {interval}",
+        );
+    }
+}
+
+/// ATR(14) is 2 from bar 13: true ranges are all 2, so the distances are 6, 10 and 4.
+/// Mirroring prices around 100 gives the same protection for a short position.
+#[cfg(feature = "studies")]
+#[test]
+fn technical_ratings_exits_at_atr_stops() {
+    let rising = |count: usize| -> Vec<[f64; 4]> {
+        (0..count)
+            .map(|i| {
+                let close = 100. + 0.5 * i as f64;
+                [close - 0.5, close + 1., close - 1., close]
+            })
+            .collect()
+    };
+    let backtest = Backtest::new("Technical Ratings", "TEST", Timeframe::Min1, 10_000.);
+    for (count, last, exit_price, profit) in [
+        // Entry at bar 2's open 100.5; fixed stop 100.5 - 6 = 94.5.
+        (14, [106.5, 106.5, 94., 95.], 94.5, -6.),
+        // Bar 19 reaches activation 110.5 exactly. Best 111 at bar 20 gives stop 107.
+        (21, [110., 110., 100., 101.], 107., 6.5),
+    ] {
+        for short in [false, true] {
+            let mut prices = rising(count);
+            prices.push(last);
+            if short {
+                for bar in &mut prices {
+                    let [open, high, low, close] = *bar;
+                    *bar = [200. - open, 200. - low, 200. - high, 200. - close];
+                }
+            }
+            let bars = bars(&prices);
+            let report = backtest.run(configured("Technical Ratings", &[]).as_mut(), &bars, &[]);
+            let first = &report.trades[0];
+            assert_eq!(
+                first.side,
+                if short {
+                    OrderSide::Sell
+                } else {
+                    OrderSide::Buy
+                }
+            );
+            assert_eq!(first.quantity, 1.);
+            assert_eq!(first.entry_time, time(2));
+            assert_eq!(first.entry_price, if short { 99.5 } else { 100.5 });
+            let exit = first.exit.as_ref().expect("protective exit");
+            assert_eq!(exit.time, time(count));
+            assert_eq!(
+                exit.price,
+                if short { 200. - exit_price } else { exit_price }
+            );
+            assert_eq!(exit.profit, profit);
+            assert_eq!(
+                first.label.as_deref(),
+                Some(if short {
+                    "Short / Short stop"
+                } else {
+                    "Long / Long stop"
+                })
+            );
+            assert!(
+                report
+                    .properties
+                    .contains(&("Input: Indicator timeframe".into(), "Chart interval".into()))
+            );
+            assert_prefixes("Technical Ratings", &[], &bars, &backtest);
+        }
+    }
 }
 
 #[cfg(feature = "studies")]

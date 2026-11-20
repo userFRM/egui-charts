@@ -137,6 +137,7 @@ impl Chart {
         self.attach_feed(driver.clone(), 1);
         self.set_liquidity_heatmap_config(heatmap_config);
         if let (Some(live), Some(replay)) = (&feed, &mut self.feed_link) {
+            replay.depth_retention = live.depth_retention;
             replay.heatmap = live.heatmap.as_ref().map(|_| Default::default());
             replay.book_visible = live.book_visible;
             replay.bubbles_config = live.bubbles_config.clone();
@@ -554,9 +555,9 @@ pub(super) fn completed<'a>(bars: &'a [Bar], clock: &BarClock, time: DateTime<Ut
 }
 
 /// When the bar of `clock` opening at `open` closes in bar replay: at its next open, or for a
-/// daily, weekly or monthly bar of a clock with an exchange session when its last trading window
-/// closes. A bar without a trading window closes at its next open. `ReplayController::cutoff`
-/// and `seek_cutoff` close bars here too.
+/// daily, multi-day, weekly or monthly bar of a clock with an exchange session when its last
+/// trading window closes. A bar without a trading window closes at its next open.
+/// `ReplayController::cutoff` and `seek_cutoff` close bars here too.
 pub(crate) fn bar_close(clock: &BarClock, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
     (clock.timeframe())
         .filter(|timeframe| {
