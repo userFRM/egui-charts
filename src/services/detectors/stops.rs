@@ -679,7 +679,11 @@ mod tests {
                 if let Some(signal) = signals.first() {
                     assert_eq!(signal.tooltip.as_deref(), expected, "{name} {side:?}");
                     let alert = &host.detectors.take_alerts()[0];
-                    assert_eq!(alert.notification.body, expected.unwrap(), "{name} {side:?}");
+                    assert_eq!(
+                        alert.notification.body,
+                        expected.unwrap(),
+                        "{name} {side:?}"
+                    );
                     let last = prices[prices.len() - 1];
                     assert_eq!(
                         signal.shape,
