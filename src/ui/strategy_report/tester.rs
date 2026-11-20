@@ -232,7 +232,7 @@ fn skip(skipped: &mut Vec<(&'static str, usize)>, reason: &'static str) {
 /// finer bars and rates are used. Optimisation results do not continue. Form edits, a scope
 /// change, Run and [`Self::set_report`] end continuation; optimisation ranges and requests leave
 /// it running. Continued reports keep the report tab, comparison toggle and selected entry when
-/// it remains.
+/// it remains, as [`Self::selected_trade`] reports.
 ///
 /// An optimisation skips combinations the strategy refuses as a whole, and runs that lack exchange
 /// rates, and shows how many, with the reason. Pass the chart instrument's currency to
@@ -476,6 +476,13 @@ impl StrategyTester {
     /// The last completed or host-supplied report.
     pub fn report(&self) -> Option<&StrategyReport> {
         self.report.report()
+    }
+
+    /// Index into the report's trades of the trade selected in its list. Continued runs keep it
+    /// on the same entry, so a host highlighting that trade reads it again after
+    /// [`StrategyTesterAction::Signals`].
+    pub fn selected_trade(&self) -> Option<usize> {
+        self.report.selected
     }
 
     /// Replace or clear a host report, cancelling pending work. A host report is not a run of the

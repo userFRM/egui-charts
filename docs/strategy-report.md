@@ -231,8 +231,9 @@ With `ui` and `strategies`, [`StrategyTester`](https://userfrm.github.io/egui-ch
 keeps the engine and strategy of a completed Run. As `show` receives new closed bars, it
 continues the report to the same result as a fresh Run over the longer history and returns
 [`StrategyTesterAction::Signals`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyTesterAction.html#variant.Signals) to replace the chart's fill markers. The report keeps its
-open tab, buy-and-hold toggle and selected entry when that entry remains. A corrected
-processed chart bar rebuilds the run; a shorter history ends
+open tab, buy-and-hold toggle and selected entry when that entry remains;
+[`selected_trade`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyTester.html#method.selected_trade) returns its index in the report's trades, so a chart highlight can
+follow it. A corrected processed chart bar rebuilds the run; a shorter history ends
 continuation and marks the report stale. For a run on host history, a changed or missing
 chart bar at or before its last host bar also ends continuation and marks it stale, since
 newer host history is needed. Chart bars that close later within the host history are
