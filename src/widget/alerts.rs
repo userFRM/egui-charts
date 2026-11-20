@@ -601,6 +601,9 @@ mod tests {
         let create = |name: &str| factory.create(name).unwrap();
         // An offered output that holds no value on these bars.
         let offered = |output: usize, name: &str| -> Output { (output, name.to_owned(), vec![]) };
+        // Each bar closes at its open, which counts as up.
+        let closes: Vec<_> = level_bars().iter().map(|bar| Some(bar.close)).collect();
+        let volumes: Vec<_> = level_bars().iter().map(|bar| Some(bar.volume)).collect();
         let rows: Vec<Row> = vec![
             (Box::new(AutoKeyLevels::new()), levels.clone(), 0),
             (Box::new(all), all_outputs, 0),
@@ -627,6 +630,33 @@ mod tests {
                 create("Rectangle"),
                 vec![offered(0, "Bullish"), offered(1, "Bearish")],
                 2,
+            ),
+            // A single candlestick pattern marks only its own side.
+            (
+                create("Engulfing - Bullish"),
+                vec![offered(0, "Bullish")],
+                3,
+            ),
+            (
+                create("All Candlestick Patterns"),
+                vec![
+                    offered(0, "Bullish"),
+                    offered(1, "Bearish"),
+                    offered(2, "Neutral"),
+                ],
+                3,
+            ),
+            // Wicks only colours the candle blocks.
+            (
+                create("Bollinger Bars"),
+                vec![(1, "Up".into(), closes), offered(2, "Down")],
+                2,
+            ),
+            // The moving average is off by default.
+            (
+                create("Volume"),
+                vec![(0, "Up volume".into(), volumes), offered(1, "Down volume")],
+                0,
             ),
         ];
         for (study, outputs, empty_values) in rows {
