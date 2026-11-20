@@ -128,9 +128,9 @@ fn custom_controls_report_names_roles_and_states() {
         (Role::Button, "1M", |ui, selected| {
             let mut ranges = super::timeframe_toolbar::RangeSwitcher::new();
             ranges.set_sel(if selected {
-                super::timeframe_toolbar::DateRange::Month1
+                crate::model::DateRange::Month1
             } else {
-                super::timeframe_toolbar::DateRange::Day1
+                crate::model::DateRange::Day1
             });
             ranges.show(ui);
         }),
@@ -491,6 +491,35 @@ fn dialogs_expose_titles_and_label_their_fields() {
             &[
                 (Role::ComboBox, "Row layout"),
                 (Role::SpinButton, "Price height"),
+                (Role::SpinButton, "Value area (%)"),
+                (Role::ComboBox, "Volume"),
+            ],
+        ),
+        (
+            "Drawing Properties",
+            |ctx| {
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open(
+                    DrawingId(1),
+                    "Volume Profile".into(),
+                    DrawingProps::default(),
+                );
+                let mut drawing = crate::drawings::Drawing::new(
+                    1,
+                    crate::drawings::DrawingToolType::FixedRangeVolumeProfile,
+                );
+                drawing.volume_profile =
+                    crate::data::VolumeProfileConfig::default().with_row_ticks(Some(4));
+                dialog.props.tool_settings = Some(Box::new(
+                    crate::drawings::DrawingTemplate::from_drawing(&drawing),
+                ));
+                dialog.active_tab = PropertiesTab::Inputs;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::ComboBox, "Row layout"),
+                (Role::SpinButton, "Ticks per row"),
+                (Role::SpinButton, "Rows"),
                 (Role::SpinButton, "Value area (%)"),
                 (Role::ComboBox, "Volume"),
             ],

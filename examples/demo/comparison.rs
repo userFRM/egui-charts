@@ -1501,7 +1501,7 @@ mod tests {
     #[test]
     fn comparison_tree_tracks_series_actions_history_and_layouts() {
         use egui_charts::ui::top_toolbar::LayoutAction;
-        use egui_charts::ui::widget_bar::panels::object_tree::ObjectTreeAction as A;
+        use egui_charts::ui::widget_bar::ObjectTreeAction as A;
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.handle_comparison(CompareAction::AddSymbol(
