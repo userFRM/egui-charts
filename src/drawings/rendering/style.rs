@@ -341,7 +341,6 @@ impl Drawing {
                         | DrawingToolType::Image
                         | DrawingToolType::Tweet
                         | DrawingToolType::Idea
-                        | DrawingToolType::Forecast
                 )
                 && let Some(configured) = self.fill_color32()
             {
@@ -395,7 +394,11 @@ impl Drawing {
             }
             Shape::Rect(r) => {
                 fill(&mut r.fill);
-                if dash.is_none() || r.stroke.is_empty() {
+                // A forecast's card frames stay solid; its line takes the pattern.
+                if dash.is_none()
+                    || r.stroke.is_empty()
+                    || self.tool_type == DrawingToolType::Forecast
+                {
                     return;
                 }
                 egui::epaint::tessellator::path::rounded_rectangle(
@@ -509,6 +512,24 @@ impl Drawing {
         }
     }
 
+    /// The size `render_marker` paints an end marker in `style` at.
+    fn end_marker_size(&self, style: ArrowStyle) -> f32 {
+        (self.stroke_width * style.size_multiplier()).max(4.0)
+    }
+
+    /// The radius of the smallest circle about its tip that holds an end marker in `style`:
+    /// an arrowhead's back corners, a square's corners, half the size of the other markers.
+    pub(super) fn end_marker_reach(&self, style: ArrowStyle) -> f32 {
+        let size = self.end_marker_size(style);
+        match style {
+            ArrowStyle::None => 0.0,
+            ArrowStyle::Arrow => size * 5_f32.sqrt() / 2.0,
+            ArrowStyle::OpenArrow => size * 5_f32.sqrt() / 2.0 + self.stroke_width / 2.0,
+            ArrowStyle::Circle | ArrowStyle::Diamond => size / 2.0,
+            ArrowStyle::Square => size * std::f32::consts::FRAC_1_SQRT_2,
+        }
+    }
+
     fn render_marker(
         &self,
         painter: &Painter,
@@ -520,7 +541,7 @@ impl Drawing {
             return;
         }
         let color = self.color32();
-        let size = (self.stroke_width * style.size_multiplier()).max(4.0);
+        let size = self.end_marker_size(style);
         let along = direction.normalized() * size;
         let across = egui::vec2(-along.y, along.x) / 2.0;
         let base = tip - along;
