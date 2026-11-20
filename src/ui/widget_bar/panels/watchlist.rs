@@ -143,15 +143,19 @@ struct ListEdit {
 /// [`WatchlistAction::AddSymbol`], the advanced view button [`WatchlistAction::AdvancedView`],
 /// and the more button opens the actions on the active list. Clicking a symbol, or moving
 /// through the list with the up and down arrow keys after a click, returns
-/// [`WatchlistAction::SelectSymbol`]. Column headers cycle through ascending, descending and
-/// list order; sorting keeps symbols inside their section. Dragging the left edge of a quote
-/// column header resizes the column and a double click restores its width. Clicking a section
-/// collapses or expands its symbols. Unsorted rows are dragged to reorder, and rows are
-/// right-clicked to flag, rename or remove, and sections to move them with their symbols. The
-/// list menu stars lists, which it then shows first, clears the active list and undoes a clear or
-/// a section move; the more menu shows the descriptions given with
-/// [`set_description`](Self::set_description). The host persists [`lists`](Self::lists), with
-/// the stars, descriptions setting and column widths of each, and handles file intents.
+/// [`WatchlistAction::SelectSymbol`]. From the chart, answer
+/// [`KeyboardAction::NextWatchlistSymbol`](crate::config::KeyboardAction::NextWatchlistSymbol) and
+/// `PreviousWatchlistSymbol`, bound to Down or Space and Up or Shift+Space, with
+/// [`select_next_symbol`](Self::select_next_symbol) and
+/// [`select_previous_symbol`](Self::select_previous_symbol), which wrap at the ends. Column headers
+/// cycle through ascending, descending and list order; sorting keeps symbols inside their section.
+/// Dragging the left edge of a quote column header resizes the column and a double click restores
+/// its width. Clicking a section collapses or expands its symbols. Unsorted rows are dragged to
+/// reorder, and rows are right-clicked to flag, rename or remove, and sections to move them with
+/// their symbols. The list menu stars lists, which it then shows first, clears the active list and
+/// undoes a clear or a section move; the more menu shows the descriptions given with
+/// [`set_description`](Self::set_description). The host persists [`lists`](Self::lists), with the
+/// stars, descriptions setting and column widths of each, and handles file intents.
 pub struct WatchlistPanel {
     lists: Vec<Watchlist>,
     active: usize,
@@ -182,6 +186,8 @@ pub struct WatchlistPanel {
     /// What the last import left out and the list it made, shown above that list until
     /// dismissed.
     import_note: Option<(usize, SkippedEntries)>,
+    /// Scrolls the selected row into view on the next draw.
+    reveal: bool,
 }
 
 impl std::fmt::Debug for WatchlistPanel {
@@ -236,6 +242,7 @@ impl WatchlistPanel {
             subscribed: Vec::new(),
             undo: Vec::new(),
             import_note: None,
+            reveal: false,
         }
     }
 
@@ -389,6 +396,70 @@ impl WatchlistPanel {
         self.selected = Some(symbol.to_owned());
     }
 
+    /// Selects the symbol after the selected one in the order the panel shows, wrapping from the
+    /// last to the first, and returns [`WatchlistAction::SelectSymbol`] for the host to chart, or
+    /// [`WatchlistAction::None`] when there is no other symbol to select. Without a shown
+    /// selection it selects the first symbol. Answer
+    /// [`KeyboardAction::NextWatchlistSymbol`](crate::config::KeyboardAction::NextWatchlistSymbol)
+    /// with it.
+    ///
+    /// The order is the shown one: the active list, or the flagged symbols under a
+    /// [flag filter](Self::set_flag_filter), sorted as the table is. Sections are skipped; the
+    /// symbols of a collapsed section are included.
+    ///
+    /// ```
+    /// use egui_charts::model::Watchlist;
+    /// use egui_charts::ui::widget_bar::{WatchlistAction, WatchlistPanel};
+    ///
+    /// let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "AAPL,MSFT")]);
+    /// panel.set_selected("MSFT");
+    /// assert_eq!(panel.select_next_symbol(), WatchlistAction::SelectSymbol("AAPL".into()));
+    /// ```
+    pub fn select_next_symbol(&mut self) -> WatchlistAction {
+        self.step(true)
+    }
+
+    /// Selects the symbol before the selected one, wrapping from the first to the last, as
+    /// [`select_next_symbol`](Self::select_next_symbol) does forward; without a shown selection
+    /// it selects the last symbol. Answer
+    /// [`KeyboardAction::PreviousWatchlistSymbol`](crate::config::KeyboardAction::PreviousWatchlistSymbol)
+    /// with it.
+    pub fn select_previous_symbol(&mut self) -> WatchlistAction {
+        self.step(false)
+    }
+
+    /// Selects the next or previous shown symbol, wrapping at the ends.
+    fn step(&mut self, forward: bool) -> WatchlistAction {
+        let items = match self.flag_filter {
+            Some(flag) => flag_view(&self.lists, flag),
+            None => self.lists[self.active].items.clone(),
+        };
+        let symbols: Vec<&str> = display_order(&items, &self.quotes, self.sort, &HashSet::new())
+            .into_iter()
+            .filter_map(|i| match &items[i] {
+                WatchlistItem::Symbol { symbol, .. } => Some(symbol.as_str()),
+                WatchlistItem::Section(_) => None,
+            })
+            .collect();
+        let count = symbols.len();
+        let at = symbols
+            .iter()
+            .position(|symbol| Some(*symbol) == self.selected.as_deref());
+        let next = match (at, forward) {
+            _ if count == 0 => return WatchlistAction::None,
+            (Some(at), true) => (at + 1) % count,
+            (Some(at), false) => (at + count - 1) % count,
+            (None, true) => 0,
+            (None, false) => count - 1,
+        };
+        if at == Some(next) {
+            return WatchlistAction::None;
+        }
+        let symbol = symbols[next].to_owned();
+        (self.selected, self.reveal) = (Some(symbol.clone()), true);
+        WatchlistAction::SelectSymbol(symbol)
+    }
+
     /// Appends `symbol` to the active list as [`Watchlist::add_symbol`] does, such as the symbol
     /// picked after [`WatchlistAction::AddSymbol`]. Returns false when the list is unchanged.
     pub fn add_symbol(&mut self, symbol: &str) -> bool {
@@ -447,6 +518,7 @@ impl WatchlistPanel {
             selected,
             undo,
             import_note,
+            reveal: reveal_next,
             ..
         } = self;
         let theme = ui.active_theme();
@@ -881,10 +953,7 @@ impl WatchlistPanel {
         // applied to their lists after drawing.
         let mut flagged = flag_filter.map(|flag| {
             let mut view = Watchlist::new("");
-            view.items = flagged_symbols(lists, flag)
-                .into_iter()
-                .map(|(list, item)| lists[list].items[item].clone())
-                .collect();
+            view.items = flag_view(lists, flag);
             view
         });
         // The flag view shows these settings of the active list.
@@ -915,7 +984,7 @@ impl WatchlistPanel {
             vertical_arrows: true,
             ..Default::default()
         };
-        let mut reveal = false;
+        let mut reveal = std::mem::take(reveal_next);
         let focused = ui
             .memory(|m| m.focused())
             .filter(|id| (0..list.items.len()).any(|i| list_id.with(i) == *id));
@@ -1431,6 +1500,14 @@ fn apply_flag_view(
             });
         }
     }
+}
+
+/// Copies of the items the `flag` view shows: each symbol flagged `flag`, once.
+fn flag_view(lists: &[Watchlist], flag: WatchlistFlag) -> Vec<WatchlistItem> {
+    flagged_symbols(lists, flag)
+        .into_iter()
+        .map(|(list, item)| lists[list].items[item].clone())
+        .collect()
 }
 
 /// Where each symbol flagged `flag` first appears: its list and item index, in list order.
@@ -2060,6 +2137,75 @@ mod tests {
             let (action, _) = frame(&mut panel, vec![key(pressed)]);
             assert_eq!(action, WatchlistAction::SelectSymbol(expected.into()));
         }
+    }
+
+    /// The next and previous symbol steps follow the shown order: sorted, without sections and
+    /// under a flag filter. They wrap at the ends and mark the symbol selected.
+    #[test]
+    fn next_and_previous_symbol_follow_the_shown_order_and_wrap() {
+        use egui::accesskit::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        type Step = fn(&mut WatchlistPanel) -> WatchlistAction;
+        let mut panel = WatchlistPanel::new(vec![
+            Watchlist::from_text("List", "B,###Section,A,C"),
+            Watchlist::from_text("Other", "Z,Y"),
+        ]);
+        panel.sort = Some((WatchlistColumn::Symbol, true));
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 600.0))
+            .build_ui_state(
+                |ui, panel: &mut WatchlistPanel| {
+                    panel.show(ui);
+                },
+                panel,
+            );
+        h.run();
+        let (next, previous): (Step, Step) = (
+            WatchlistPanel::select_next_symbol,
+            WatchlistPanel::select_previous_symbol,
+        );
+        // Shown: B, Section, C, A. Without a selection the first symbol comes next.
+        for (step, expected) in [
+            (next, "B"),
+            (next, "C"),
+            (next, "A"),
+            (next, "B"),
+            (previous, "A"),
+            (previous, "C"),
+        ] {
+            assert_eq!(
+                step(h.state_mut()),
+                WatchlistAction::SelectSymbol(expected.into())
+            );
+            h.run();
+        }
+        assert_eq!(
+            h.get_by_role_and_label(Role::ListBoxOption, "C")
+                .accesskit_node()
+                .is_selected(),
+            Some(true)
+        );
+        // The red view shows B and A of the first list and Z of the other, sorted Z, B, A. The
+        // selected C is not shown, so the first symbol comes next.
+        let red = Some(WatchlistFlag::Red);
+        for (list, item) in [(0, 0), (0, 2), (1, 0)] {
+            if let WatchlistItem::Symbol { flag, .. } = &mut h.state_mut().lists[list].items[item] {
+                *flag = red;
+            }
+        }
+        h.state_mut().set_flag_filter(red);
+        for (step, expected) in [(next, "Z"), (previous, "A")] {
+            assert_eq!(
+                step(h.state_mut()),
+                WatchlistAction::SelectSymbol(expected.into())
+            );
+        }
+        h.state_mut().set_flag_filter(Some(WatchlistFlag::Blue));
+        assert_eq!(next(h.state_mut()), WatchlistAction::None);
     }
 
     /// Guards the quote subscription: the panel subscribes to its list and the selected symbol,

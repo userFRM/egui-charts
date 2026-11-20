@@ -171,6 +171,15 @@ pub enum KeyboardAction {
     CycleChartFocus,
     /// Cycle focus to previous chart (Shift+Tab)
     CycleChartFocusBack,
+
+    // Watchlist
+    /// Show the next symbol of the active watchlist (Down or Space). The chart passes it to the
+    /// host as a shortcut request; answer it with `WatchlistPanel::select_next_symbol`. A
+    /// selected drawing takes Down first, and a shown replay bar takes Space.
+    NextWatchlistSymbol,
+    /// Show the previous symbol of the active watchlist (Up or Shift+Space), as
+    /// [`NextWatchlistSymbol`](Self::NextWatchlistSymbol) does the next one.
+    PreviousWatchlistSymbol,
 }
 
 impl KeyboardAction {
@@ -269,6 +278,8 @@ impl KeyboardAction {
             Self::ShowKeyboardHelp => "Keyboard shortcuts",
             Self::CycleChartFocus => "Next chart",
             Self::CycleChartFocusBack => "Previous chart",
+            Self::NextWatchlistSymbol => "Next watchlist symbol",
+            Self::PreviousWatchlistSymbol => "Previous watchlist symbol",
         }
     }
 
@@ -415,6 +426,15 @@ impl KeyboardAction {
                     )]
                 }
             }
+            Self::NextWatchlistSymbol => const { &[key(Key::ArrowDown), key(Key::Space)] },
+            Self::PreviousWatchlistSymbol => {
+                const {
+                    &[
+                        key(Key::ArrowUp),
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::Space),
+                    ]
+                }
+            }
             _ => &[],
         }
     }
@@ -470,6 +490,8 @@ impl KeyboardAction {
             Self::DrawingTool(crate::config::DrawingToolType::HorizontalRay) => "Alt+J",
             Self::DrawingTool(crate::config::DrawingToolType::FibonacciRetracement) => "Alt+F",
             Self::DrawingTool(crate::config::DrawingToolType::Rect) => "Alt+Shift+R",
+            Self::NextWatchlistSymbol => "↓ / Space",
+            Self::PreviousWatchlistSymbol => "↑ / Shift+Space",
             _ => "",
         }
     }
@@ -545,6 +567,10 @@ impl KeyboardAction {
                     Self::CycleChartFocusBack,
                     Self::ShowKeyboardHelp,
                 ],
+            ),
+            (
+                "Watchlist",
+                vec![Self::NextWatchlistSymbol, Self::PreviousWatchlistSymbol],
             ),
         ]
     }

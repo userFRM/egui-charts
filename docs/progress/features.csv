@@ -980,7 +980,7 @@ Workspace,Watchlists and screeners,Advanced watchlist view,incomplete,library,sr
 Workspace,Watchlists and screeners,Colour flags and the flagged list,unverified,library,src/ui/widget_bar/panels/watchlist.rs;src/model/watchlist.rs,
 Workspace,Watchlists and screeners,Company financials in place of the chart,unverified,host,src/data/financials.rs;src/data/mod.rs;src/ui/financials.rs;src/ui/widget_bar/panels/symbol_details.rs;terminal/src/panels.rs;terminal/src/layout.rs,205
 Workspace,Watchlists and screeners,"ETF, bond, crypto coin, CEX pair and DEX pair screeners",unverified,host,src/ui/widget_bar/panels/screener.rs;src/data/market.rs;src/services/storage.rs;src/ui/dialogs/templates/store.rs;terminal/src/panels.rs,
-Workspace,Watchlists and screeners,Flip through list symbols on the chart,incomplete,library,src/ui/widget_bar/panels/watchlist.rs;terminal/src/panels.rs,
+Workspace,Watchlists and screeners,Flip through list symbols on the chart,unverified,library,src/ui/widget_bar/panels/watchlist.rs;terminal/src/panels.rs;src/config/keyboard.rs,3591
 Workspace,Watchlists and screeners,Hotlists,incomplete,host,src/ui/widget_bar/panels/hotlists.rs;terminal/src/panels.rs;examples/demo/feeds.rs;examples/demo/live.rs;examples/demo/controller.rs,
 Workspace,Watchlists and screeners,Import and export a list as a .txt file,unverified,library,src/ui/widget_bar/panels/watchlist.rs;terminal/src/panels.rs;src/model/watchlist.rs,3591
 Workspace,Watchlists and screeners,Market heatmaps,unverified,host,src/ui/widget_bar/panels/market_heatmap.rs;src/services/settings.rs;terminal/src/panels.rs;examples/demo/feeds.rs;examples/demo/live.rs;examples/demo/controller.rs,
