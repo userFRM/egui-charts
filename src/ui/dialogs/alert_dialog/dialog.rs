@@ -1895,6 +1895,58 @@ mod tests {
     }
 
     #[test]
+    fn study_condition_sources_pair_with_holds_and_price_restores_crossing() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let first = AlertSource::StudyCondition {
+            id: "3".into(),
+            condition: 0,
+        };
+        let change = AlertSource::StudyCondition {
+            id: "3".into(),
+            condition: 2,
+        };
+        let mut dialog = AlertDialog::new();
+        dialog.sources = vec![
+            (
+                AlertSource::Study {
+                    id: "3".into(),
+                    output: 0,
+                },
+                "SuperTrend: Trend".into(),
+            ),
+            (first.clone(), "SuperTrend: Trend turns up".into()),
+            (change.clone(), "SuperTrend: Trend change".into()),
+        ];
+        dialog.edit(Alert::new("SAMPLE", AlertCondition::Crossing(1.0)));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(960.0, 900.0))
+            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+        h.run();
+        h.get_by_label("Source").click();
+        h.run();
+        h.get_by_label("SuperTrend: Trend change").click();
+        h.run();
+        assert_eq!(h.state().alert.source, change);
+        assert_eq!(h.state().alert.condition, AlertCondition::Holds);
+        assert!(h.state().alert.is_valid());
+        h.get_by_label("Source").click();
+        h.run();
+        h.get_by_label("Price").click();
+        h.run();
+        assert_eq!(h.state().alert.source, AlertSource::Price);
+        assert_eq!(h.state().alert.condition, AlertCondition::Crossing(0.0));
+        h.get_by_label("Condition").click();
+        h.run();
+        h.get_by_label("Study condition").scroll_to_me();
+        h.run();
+        h.get_by_label("Study condition").click();
+        h.run();
+        assert_eq!(h.state().alert.source, first);
+        assert_eq!(h.state().alert.condition, AlertCondition::Holds);
+        assert!(h.state().alert.is_valid());
+    }
+
+    #[test]
     fn strategy_fills_offer_the_host_runs_by_name() {
         use egui_kittest::{Harness, kittest::Queryable};
         let mut dialog = AlertDialog::new();
