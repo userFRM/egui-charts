@@ -59,6 +59,10 @@ impl Indicator for ElderRay {
         }
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX)
     ; {});
