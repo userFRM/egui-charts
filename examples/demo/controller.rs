@@ -391,7 +391,7 @@ enum RangeFit {
     Interval,
     Bars,
     Fitting,
-    Confirming,
+    Confirming(u64),
 }
 
 /// The full demo application.
@@ -3871,7 +3871,7 @@ impl DemoApp {
         }
         if let Some((range, interval, stage)) = self.range_fit
             && !self.chart.bars(SeriesId::MAIN).is_empty()
-            && (fit || matches!(stage, RangeFit::Fitting | RangeFit::Confirming))
+            && (fit || matches!(stage, RangeFit::Fitting | RangeFit::Confirming(_)))
         {
             let before = self.chart.get_time_scale_state();
             self.fit_date_range(range);
@@ -3879,12 +3879,17 @@ impl DemoApp {
                 self.explain_history_limit(range);
             }
             let unchanged = before == self.chart.get_time_scale_state();
-            if unchanged && matches!(stage, RangeFit::Confirming) {
+            if unchanged
+                && matches!(stage, RangeFit::Confirming(previous) if previous != ctx.cumulative_frame_nr())
+            {
                 self.range_fit = None;
             } else {
                 // Fitting can widen the price-axis gutter on the next frame.
                 let stage = if unchanged {
-                    RangeFit::Confirming
+                    match stage {
+                        RangeFit::Confirming(frame) => RangeFit::Confirming(frame),
+                        _ => RangeFit::Confirming(ctx.cumulative_frame_nr()),
+                    }
                 } else {
                     RangeFit::Fitting
                 };

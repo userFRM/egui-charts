@@ -403,6 +403,7 @@ impl Chart {
         if self.prev_width.is_some() && !ui.ctx().will_discard() {
             self.pending_visible_range = None;
         }
+        self.restore_history_view(ui.ctx());
         self.record_host_events(ui);
         let needs_info = response.clicked()
             || response.double_clicked()

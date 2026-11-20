@@ -17,6 +17,7 @@ pub(super) struct ChartHistory {
     undo: Vec<Action>,
     redo: Vec<Action>,
     pending: Option<Pending>,
+    view_restore: Option<ViewRestore>,
     /// Expires when the press on a divider or its drag ends, or its layout is dropped.
     pub(super) resizing: std::sync::Weak<()>,
     /// Split size and link membership steps undone or redone since a layout last showed the
@@ -28,6 +29,15 @@ pub(super) struct ChartHistory {
     pub(super) edits: u64,
     /// The edits among them that changed drawings.
     pub(super) drawing_edits: u64,
+}
+
+/// An undo keeps its view through axis sizing and, for a changed interval, its history reload.
+struct ViewRestore {
+    symbol: String,
+    interval: Option<Timeframe>,
+    view: (f32, f32),
+    loaded: bool,
+    applied_frame: Option<u64>,
 }
 
 struct Pending {
@@ -249,6 +259,16 @@ struct Study {
 }
 
 impl ChartHistory {
+    pub(super) fn clear_view_restore(&mut self) {
+        self.view_restore = None;
+    }
+
+    pub(super) fn data_loaded(&mut self, bars: usize) {
+        if let Some(restore) = &mut self.view_restore {
+            restore.loaded = bars > 0;
+        }
+    }
+
     fn blocked(&self) -> bool {
         self.pending.is_some() || self.resizing.strong_count() > 0
     }
@@ -347,6 +367,9 @@ impl ChartHistory {
     }
 
     fn push(&mut self, action: Action) {
+        if action.view.is_some() {
+            self.view_restore = None;
+        }
         self.edits += 1;
         #[cfg(feature = "drawings")]
         if action.drawings.can_undo() {
@@ -447,6 +470,39 @@ fn same_scale(a: &crate::scales::PriceScale, b: &crate::scales::PriceScale) -> b
 }
 
 impl Chart {
+    /// Finishes a history view after its bars and price-axis width have settled.
+    pub(super) fn restore_history_view(&mut self, ctx: &egui::Context) {
+        let Some(mut restore) = self.history.view_restore.take() else {
+            return;
+        };
+        if restore.symbol != self.symbol || restore.interval != self.timeframe {
+            return;
+        }
+        if !restore.loaded
+            || self.feed.loading_history
+            || self
+                .feed_link
+                .as_ref()
+                .is_some_and(|link| link.clock.timeframe() != self.timeframe)
+            || ctx.will_discard()
+        {
+            self.history.view_restore = Some(restore);
+            return;
+        }
+        let before = self.get_time_scale_state();
+        self.apply_synced_time_scale(restore.view.0, restore.view.1);
+        let frame = ctx.cumulative_frame_nr();
+        if restore
+            .applied_frame
+            .is_none_or(|previous| previous == frame)
+            || before != self.get_time_scale_state()
+        {
+            restore.applied_frame = Some(frame);
+            self.history.view_restore = Some(restore);
+            ctx.request_repaint();
+        }
+    }
+
     /// Apply one user action from a host toolbar, menu, dialog or intent as one undo step.
     /// Nested actions belong to the outer action. Unchanged chart/study settings add no history.
     ///
@@ -1087,7 +1143,12 @@ impl Chart {
             }
             return false;
         };
-        let current_view = self.get_time_scale_state();
+        let current_view = self
+            .history
+            .view_restore
+            .as_ref()
+            .map_or_else(|| self.get_time_scale_state(), |restore| restore.view);
+        self.history.view_restore = None;
         // Steps of one preset or slot on different charts only restore it in the order taken.
         static ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let order = ORDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1103,6 +1164,9 @@ impl Chart {
             .map(|change| Study::capture(self, change.id))
             .collect();
         let symbol_step = action.symbol.is_some();
+        let interval_changed = action
+            .interval
+            .is_some_and(|interval| interval != self.timeframe);
         if let Some(symbol) = &mut action.symbol {
             let target = std::mem::replace(symbol, self.symbol.clone());
             self.change_symbol(target, true);
@@ -1199,6 +1263,15 @@ impl Chart {
             && (symbol_step || *view != current_view)
         {
             self.apply_synced_time_scale(view.0, view.1);
+            if interval_changed || !symbol_step {
+                self.history.view_restore = Some(ViewRestore {
+                    symbol: self.symbol.clone(),
+                    interval: self.timeframe,
+                    view: *view,
+                    loaded: !interval_changed,
+                    applied_frame: None,
+                });
+            }
             *view = current_view;
             self.pending_scroll_time = None;
             self.tracking_mode_active = false;
