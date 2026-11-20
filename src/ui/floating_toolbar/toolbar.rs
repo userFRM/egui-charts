@@ -272,7 +272,10 @@ impl FloatingSelectionToolbar {
                 Vec::new()
             } else {
                 vec![ColorSlot {
-                    label: if drawing.tool_type.is_text_annotation() {
+                    // A table's colour paints its grid and border; its text keeps its own.
+                    label: if drawing.tool_type.is_text_annotation()
+                        && drawing.tool_type != DrawingToolType::Table
+                    {
                         "Text color"
                     } else {
                         "Line color"
@@ -797,8 +800,9 @@ mod tests {
     }
 
     /// The colour of a text annotation is its text's; a label on a line does not make the line's
-    /// colour a text colour, although the colour paints both. A sticker and a ghost feed keep
-    /// their own colours. Width and style are offered apart, each where the tool draws it.
+    /// colour a text colour, although the colour paints both, and a table's colour paints its
+    /// grid and border, not its text. A sticker and a ghost feed keep their own colours. Width
+    /// and style are offered apart, each where the tool draws it.
     #[test]
     fn colour_slot_names_what_the_colour_paints() {
         use crate::drawings::{Drawing, DrawingToolType as Tool};
@@ -809,6 +813,7 @@ mod tests {
             (Tool::ArrowMarker, Some("Line color"), (false, false)),
             (Tool::Pitchfork, Some("Line color"), (true, false)),
             (Tool::Tweet, Some("Text color"), (false, true)),
+            (Tool::Table, Some("Line color"), (false, false)),
             (Tool::Sticker, None, (false, false)),
             (Tool::GhostFeed, None, (false, false)),
         ] {
