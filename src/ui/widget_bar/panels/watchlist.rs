@@ -610,7 +610,9 @@ impl WatchlistPanel {
                 record(
                     undo,
                     lists,
-                    SectionUndo::Clear(collapsed_sections.get(*active).cloned().unwrap_or_default()),
+                    SectionUndo::Clear(
+                        collapsed_sections.get(*active).cloned().unwrap_or_default(),
+                    ),
                     *active,
                     |list| {
                         list.items.clear();

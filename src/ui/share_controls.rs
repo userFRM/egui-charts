@@ -69,18 +69,16 @@ impl ShareControls {
                             Err(error) => Outcome::Failed(error),
                         },
                     ),
-                Operation::Copy(_) => {
-                    answer.downcast::<Result<String, FeedError>>().map_or_else(
-                        |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
-                        |answer| match *answer {
-                            Ok(copy) => {
-                                copied = Some(copy.clone());
-                                Outcome::Copy(copy)
-                            }
-                            Err(error) => Outcome::Failed(error),
-                        },
-                    )
-                }
+                Operation::Copy(_) => answer.downcast::<Result<String, FeedError>>().map_or_else(
+                    |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
+                    |answer| match *answer {
+                        Ok(copy) => {
+                            copied = Some(copy.clone());
+                            Outcome::Copy(copy)
+                        }
+                        Err(error) => Outcome::Failed(error),
+                    },
+                ),
             };
             self.last = Some((operation, outcome));
         }
