@@ -1874,6 +1874,58 @@ mod tests {
         }
     }
 
+    /// Table widths scale from painted sizes, while editing one column leaves its peers and
+    /// fitted rows alone.
+    #[test]
+    fn table_inputs_anchor_and_size_columns_without_setting_row_heights() {
+        use egui::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{By, Queryable},
+        };
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .build_ui_state(
+                |ui, drawing| {
+                    super::InputsTab::show(
+                        ui,
+                        drawing,
+                        &mut Vec::new(),
+                        &mut Default::default(),
+                        None,
+                        None,
+                    );
+                },
+                Drawing::new(7, Tool::Table),
+            );
+        harness.run();
+        assert_eq!(
+            harness.state().table,
+            None,
+            "opening keeps fitted sizes unset"
+        );
+        harness.get(By::new().role(Role::CheckBox)).click();
+        harness.run();
+        harness
+            .get(By::new().role(Role::SpinButton).value("210 px"))
+            .set_value_accesskit(315.0);
+        harness.run();
+        assert_eq!(
+            harness.state().table.as_ref().unwrap().column_widths,
+            [Some(105.0); 3]
+        );
+        harness
+            .get_all(By::new().role(Role::SpinButton).value("105 px"))
+            .nth(1)
+            .unwrap()
+            .set_value_accesskit(90.0);
+        harness.run();
+        let config = harness.state().table.as_ref().unwrap();
+        assert!(config.screen_anchored);
+        assert_eq!(config.column_widths, [Some(105.0), Some(90.0), Some(105.0)]);
+        assert!(config.row_heights.is_empty());
+    }
+
     /// Over 10 bars a ratio of 1.5 is 15 price units from the first anchor's 100: above it for a
     /// second anchor above or level, below it for one below. A ratio of 0 is level. Entering the
     /// field without typing keeps a ratio of 0.000000003, which the field shows.
