@@ -19,7 +19,7 @@ use crate::theme::ThemeExt;
 use crate::ui::connection_status::{show_connection_status, show_connection_status_with_label};
 use crate::ui::top_toolbar::buttons::rule_color;
 use crate::ui::trading::format::Numbers;
-use crate::ui::trading::ticket::{order_quantity, round_down};
+use crate::ui::trading::ticket::{limit_text, order_quantity, round_down};
 use crate::ui::trading::widgets::{grouped, semibold, side_color};
 use crate::ui_kit::buttons::ButtonSize;
 use crate::ui_kit::{EmptyState, IconButton};
@@ -462,6 +462,9 @@ impl Trading {
             }
             cells.push(plain(status(&ctx, &order.status)));
             cells.push(plain(time(order.placed)));
+            if !finished {
+                cells.push(plain(time(request.expires)));
+            }
             if finished {
                 cells.push(plain(time(order.closed)));
             }
@@ -1084,7 +1087,7 @@ impl Trading {
             ui.add_space(8.0);
             let rules = &self.rules;
             let step_text = || {
-                let step = [("step", step.to_string())];
+                let step = [("step", limit_text(&numbers, step, decimals(step)))];
                 l10n::format_text(ctx, "Enter quantities in steps of {step}", &step)
             };
             let problem = if !rules_ready {
@@ -1094,13 +1097,17 @@ impl Trading {
                     Err(limit) => Some(limit.message(ctx, &numbers, decimals(step))),
                     Ok(quantity) if quantity != request.quantity => Some(step_text()),
                     Ok(_) if request.quantity < order.filled => {
-                        let filled = [("filled", order.filled.to_string())];
+                        let filled =
+                            [("filled", limit_text(&numbers, order.filled, decimals(step)))];
                         let key = "The quantity is below the {filled} already filled";
                         Some(l10n::format_text(ctx, key, &filled))
                     }
                     Ok(_) => request.take_profit_levels.iter().find_map(|level| {
                         if level.quantity < rules.min_quantity {
-                            let minimum = [("minimum", rules.min_quantity.to_string())];
+                            let minimum = [(
+                                "minimum",
+                                limit_text(&numbers, rules.min_quantity, decimals(step)),
+                            )];
                             let key = "Each take-profit level needs at least the minimum \
                                 quantity of {minimum}";
                             Some(l10n::format_text(ctx, key, &minimum))

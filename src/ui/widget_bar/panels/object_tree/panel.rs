@@ -31,7 +31,7 @@ use crate::ui_kit::ext::UiExt;
 /// # Example
 ///
 /// ```no_run
-/// use egui_charts::ui::widget_bar::panels::object_tree::{ObjectTreePanel, SourceItem};
+/// use egui_charts::ui::widget_bar::{ObjectTreePanel, SourceItem};
 ///
 /// # fn side_panel(ui: &mut egui::Ui) {
 /// let mut panel = ObjectTreePanel::new();

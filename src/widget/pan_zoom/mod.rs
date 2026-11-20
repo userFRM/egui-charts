@@ -811,7 +811,9 @@ impl Chart {
         {
             let bars = &self.state.data().bars;
             let next = bars.partition_point(|bar| bar.time < time);
-            let index = if next == 0 {
+            let index = if self.pending_scroll_next {
+                next.min(bars.len() - 1)
+            } else if next == 0 {
                 0
             } else if next == bars.len() || time - bars[next - 1].time <= bars[next].time - time {
                 next - 1
@@ -2134,8 +2136,9 @@ mod tests {
         for left in [false, true] {
             let (one, slow) = (drag_price_axis(1, left), drag_price_axis(20, left));
             let span = one.1 - one.0;
-            // Dragging down zooms out from the autoscaled 93.5..111.5 (95..110 plus 10% margins).
-            assert!(span > 18.0, "1 frame: {one:?}");
+            // A 95..110 fit has span 15 / 0.82, from 93.536585 to 111.829268.
+            // Dragging down widens it beyond the initial 10% top and 8% bottom margins.
+            assert!(span > 15.0 / 0.82, "1 frame: {one:?}");
             assert!(
                 (one.0 - slow.0).abs() < span * 1e-9 && (one.1 - slow.1).abs() < span * 1e-9,
                 "1 frame: {one:?}, 20 frames: {slow:?}"

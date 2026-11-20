@@ -380,7 +380,7 @@ pub enum FootprintMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum FootprintColor {
-    /// Volume relative to the largest row of this bar.
+    /// Volume relative to the largest row of the [`FootprintIntensity`] scale, by default this bar's.
     Volume,
     /// Delta as a fraction of the row's classified volume.
     Delta,
@@ -389,14 +389,42 @@ pub enum FootprintColor {
     /// The neutral colour for every cell, whatever was traded.
     Fixed,
     /// The buy colour for a positive delta and the sell colour for a negative one, with the
-    /// opacity growing with the delta's absolute size relative to the bar's largest. A zero delta
-    /// takes the neutral colour at full opacity.
+    /// opacity growing with the delta's absolute size relative to the largest of the
+    /// [`FootprintIntensity`] scale, by default the bar's. A zero delta takes the neutral colour
+    /// at full opacity.
     DeltaOpacity,
     /// Sell and buy volume shaded separately, each in one of four strengths of its own colour by
     /// the quarter it falls in between the smallest and the largest volume of its side in the
-    /// bar. The POC row takes the text colour, the value area is two dotted lines, and a side
-    /// that dominates under the imbalance settings gets a strip along its outer edge.
+    /// bar, or in the bars in view, or between zero and an entered volume, as
+    /// [`FootprintIntensity`] chooses. The POC row takes the text colour, the value area is two
+    /// dotted lines, and a side that dominates under the imbalance settings gets a strip along its outer edge.
     VolumeSteps,
+}
+
+/// What footprint cell shades and number sizes are measured against: the shades of
+/// [`FootprintColor::Volume`], [`FootprintColor::DeltaOpacity`] and
+/// [`FootprintColor::VolumeSteps`], and each row's size within the font size range.
+///
+/// ```
+/// use egui_charts::model::{ChartTypeParams, FootprintIntensity};
+///
+/// let mut params = ChartTypeParams::default();
+/// params.footprint_intensity = FootprintIntensity::Volume(500.0);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum FootprintIntensity {
+    /// Each bar against its own rows; its busiest row takes the full shade.
+    #[default]
+    Bar,
+    /// Complete bars whose cells are in view share a scale over all their rows. Without such a
+    /// bar, each bar uses its own rows. Vertical panning leaves the scale unchanged.
+    Visible,
+    /// All bars against this volume after row grouping. A row's volume or absolute delta at or
+    /// above it takes the full shade and largest font; smaller rows take their share. Volume
+    /// steps divide zero to this volume into quarters. Non-finite or non-positive values use
+    /// each bar's own rows instead.
+    Volume(f64),
 }
 
 /// How `studies::TradeProfile::nodes` (requires `studies`) chooses volume nodes.
@@ -661,6 +689,22 @@ pub struct TradeProfileSettings {
     pub value_area_up_color: Option<egui::Color32>,
     /// Colour of down volume inside the value area; `None` follows the chart theme.
     pub value_area_down_color: Option<egui::Color32>,
+    /// Grow each histogram from the right edge of its session instead of the left. The edge a
+    /// histogram grows from stays in view while its session runs past the viewport.
+    pub right_aligned: bool,
+    /// Share of the session's width that the longest row spans, from 0.01 to 1. Values outside
+    /// are clamped, and NaN spans the whole session.
+    pub width: f64,
+    /// Write each row's volume beside its bar when the row is at least as tall as the text:
+    /// `bid × ask` for bid/ask stacks, the total for total volume and the signed delta for delta,
+    /// abbreviated as footprint numbers are.
+    pub values: bool,
+    /// Colour of the row values; `None` follows the chart theme.
+    pub values_color: Option<egui::Color32>,
+    /// Draw the box behind each session.
+    pub session_box: bool,
+    /// Colour of the session box, painted with its own opacity; `None` follows the chart theme.
+    pub session_box_color: Option<egui::Color32>,
 }
 
 impl Default for TradeProfileSettings {
@@ -687,6 +731,12 @@ impl Default for TradeProfileSettings {
             down_volume_color: None,
             value_area_up_color: None,
             value_area_down_color: None,
+            right_aligned: false,
+            width: 1.0,
+            values: false,
+            values_color: None,
+            session_box: true,
+            session_box_color: None,
         }
     }
 }
@@ -816,6 +866,8 @@ pub struct ChartTypeParams {
     pub footprint_profile: bool,
     /// Footprint: cell colouring rule.
     pub footprint_color_by: FootprintColor,
+    /// Footprint: what cell shades and number sizes are measured against.
+    pub footprint_intensity: FootprintIntensity,
     /// Footprint: buy, sell, text and neutral colours. None follows the chart theme.
     pub footprint_colors: [Option<egui::Color32>; 4],
     /// Footprint: buy and sell colours of imbalance strips, imbalance colouring and stacked
@@ -832,6 +884,11 @@ pub struct ChartTypeParams {
     /// Footprint: length of the average true range that sizes rows, 1 to 200; with fewer
     /// complete bars the average takes as many as there are.
     pub footprint_row_atr_length: u32,
+    /// Footprint: minimum height of rows grouped by zoom, in points within 10 to 40.
+    pub footprint_auto_row_height: f32,
+    /// Footprint: rows shorter than this, in points within 10 to 40, lose their numbers;
+    /// a column without numbers shows the overview.
+    pub footprint_min_text_height: f32,
     /// Footprint: put a strip along the outer edge of a side that dominates under the imbalance
     /// settings, under [`FootprintColor::VolumeSteps`].
     pub footprint_imbalance: bool,
@@ -850,6 +907,10 @@ pub struct ChartTypeParams {
     pub footprint_stacked_imbalances: bool,
     /// Footprint: adjacent imbalances required for a zone.
     pub footprint_stack: usize,
+    /// Footprint: end stacked imbalance zones only at a bar closing beyond their far edge,
+    /// counting and marking the bars that trade into them without such a close, rather than at
+    /// their first revisit.
+    pub footprint_zones_until_broken: bool,
     /// Footprint: extend volume POCs until revisited.
     pub footprint_naked_poc: bool,
     /// Footprint: mark the largest absolute delta row.
@@ -864,6 +925,10 @@ pub struct ChartTypeParams {
     pub footprint_delta_percent: Option<f64>,
     /// Footprint: minimum buy/sell or sell/buy multiple for a bar marker; None hides it.
     pub footprint_ratio: Option<f64>,
+    /// Footprint: later bars with complete executions an unrevisited POC, stacked imbalance
+    /// zone or unfinished high or low extends over before expiry. `None` extends until a
+    /// revisit or the last bar; `Some(0)` expires at its own bar.
+    pub footprint_extend_bars: Option<usize>,
     /// Footprint: write the ask/bid ratios at the bar extremes.
     pub footprint_extreme_ratio: bool,
     /// Footprint: outline rows between the close and the extreme beyond it.
@@ -990,6 +1055,13 @@ pub struct ChartTypeParams {
     pub tpo_split_periods: bool,
     /// TPO: draw the initial balance marker. On by default; its period and extensions apply either way.
     pub tpo_initial_balance: bool,
+    /// TPO: captions, as in [`TPOConfig::labels`](super::TPOConfig::labels). Settings
+    /// saved without this field keep the point of control, value area and midpoint captions.
+    pub tpo_labels: super::TPOLabels,
+    /// TPO: tag captioned levels of the profile holding the last bar on the price scale,
+    /// in their caption colours, while the profile is drawn. Single prints take no tag.
+    /// Off by default.
+    pub tpo_level_tags: bool,
     /// TPO: colour, underline and caption the point of control. On by default.
     pub tpo_poc: bool,
     /// TPO: draw and caption the value area high and low and dim blocks outside it. On by default.
@@ -1031,11 +1103,14 @@ impl Default for ChartTypeParams {
             footprint_modes: vec![FootprintMode::Ladder],
             footprint_profile: false,
             footprint_color_by: FootprintColor::VolumeSteps,
+            footprint_intensity: FootprintIntensity::Bar,
             footprint_colors: [None; 4],
             footprint_imbalance_colors: [None; 2],
             footprint_row_ticks: 0,
             footprint_row_atr: false,
             footprint_row_atr_length: 14,
+            footprint_auto_row_height: 16.0,
+            footprint_min_text_height: 12.0,
             footprint_imbalance: true,
             footprint_poc: true,
             footprint_value_area: Some(0.7),
@@ -1044,6 +1119,7 @@ impl Default for ChartTypeParams {
             footprint_diagonal: true,
             footprint_stacked_imbalances: false,
             footprint_stack: 3,
+            footprint_zones_until_broken: false,
             footprint_naked_poc: false,
             footprint_delta_poc: false,
             footprint_unfinished_auctions: false,
@@ -1051,6 +1127,7 @@ impl Default for ChartTypeParams {
             footprint_single_print_max: None,
             footprint_delta_percent: None,
             footprint_ratio: None,
+            footprint_extend_bars: None,
             footprint_extreme_ratio: false,
             footprint_pullback: false,
             footprint_abbreviate: true,
@@ -1114,6 +1191,8 @@ impl Default for ChartTypeParams {
             tpo_profile_period: super::TPOProfilePeriod::Session,
             tpo_split_periods: false,
             tpo_initial_balance: true,
+            tpo_labels: super::TPOLabels::default(),
+            tpo_level_tags: false,
             tpo_poc: true,
             tpo_value_area_levels: true,
             tpo_open_price: true,
@@ -1135,6 +1214,7 @@ impl ChartTypeParams {
             period_minutes: self.tpo_period_minutes,
             initial_balance_minutes: self.tpo_initial_balance_minutes,
             show_initial_balance: self.tpo_initial_balance,
+            labels: self.tpo_labels,
             show_poc: self.tpo_poc,
             show_value_area: self.tpo_value_area_levels,
             show_opening_range: self.tpo_open_price,
@@ -1335,12 +1415,19 @@ mod tests {
                 "value_area_low_color": [0, 0, 100, 128], "up_volume_color": [60, 0, 0, 60],
                 "down_volume_color": [0, 60, 0, 60], "value_area_up_color": [0, 0, 120, 120],
                 "value_area_down_color": [120, 120, 0, 120],
+                "right_aligned": true, "width": 0.5, "values": true,
+                "values_color": [1, 2, 3, 255], "session_box": false,
+                "session_box_color": [4, 5, 6, 128],
                 "nodes": {"smoothing": 2, "prominence": 0.1}});
-        let settings = serde_json::json!({
+        let mut settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
+            "footprint_intensity": {"Volume": 2500.0},
+            "footprint_extend_bars": 8,
+            "footprint_auto_row_height": 24.0, "footprint_min_text_height": 10.0,
             "footprint_row_atr": true, "footprint_row_atr_length": 30,
             "footprint_value_area": 0.010003969988090037,
             "footprint_statistics": true,
+            "footprint_zones_until_broken": true,
             "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize", "PointOfControl", "VolumeChange"],
             "footprint_session_cumulative_delta": true,
             "footprint_colors": [[12, 34, 56, 255], null, null, null],
@@ -1363,6 +1450,11 @@ mod tests {
             "tpo_volume_profile": true,
             "profile": profile
         });
+        settings["tpo_labels"] = serde_json::json!({"poc": false, "value_area_high": true, "value_area_low": false,
+                "midpoint": true, "initial_balance_high": true, "initial_balance_low": false,
+                "opening_price": true, "closing_price": true, "poor_high": false, "poor_low": true,
+                "single_prints": true, "prices": true});
+        settings["tpo_level_tags"] = true.into();
         let params: ChartTypeParams = serde_json::from_value(settings.clone()).unwrap();
         let saved = serde_json::to_value(&params).unwrap();
         for (name, expected) in settings.as_object().unwrap() {
@@ -1426,12 +1518,66 @@ mod tests {
             let mut restored = crate::widget::Chart::new(crate::model::BarData::new());
             restored.restore(&saved.charts[0]).unwrap();
             assert_eq!(restored.chart_type_params(), &applied);
+            let mut legacy: serde_json::Value =
+                serde_json::from_str(&layout.to_json().unwrap()).unwrap();
+            for path in [
+                "/charts/0/chart_type_params",
+                "/charts/0/settings/chart_type_params",
+            ] {
+                let fields = legacy.pointer_mut(path).unwrap().as_object_mut().unwrap();
+                for name in [
+                    "footprint_intensity",
+                    "footprint_auto_row_height",
+                    "footprint_min_text_height",
+                    "footprint_extend_bars",
+                ] {
+                    assert!(fields.remove(name).is_some(), "{path}: {name}");
+                }
+            }
+            let mut expected = applied.clone();
+            expected.footprint_intensity = FootprintIntensity::Bar;
+            expected.footprint_auto_row_height = 16.0;
+            expected.footprint_min_text_height = 12.0;
+            expected.footprint_extend_bars = None;
+            // A sparse layout written and restored on main before these settings existed.
+            let older = r#"{"charts":[{"bar_spacing":6.0,"chart_type":"VolumeFootprint","chart_type_params":{"footprint_color_by":"VolumeSteps","footprint_modes":["Ladder"],"footprint_naked_poc":true,"footprint_row_atr":false,"footprint_row_ticks":0},"drawings":{"drawings":[],"metadata":{"app_version":null,"created_at":1795116037269,"modified_at":1795116037269},"saved_by":17567378796323732970,"symbol":"","timeframe":null,"version":10},"extended_hours":false,"interval":null,"main_series_visible":true,"panes":[{"axes":{"hide_unused":true,"side":null},"collapsed":null,"main":true,"members":[0],"preserve":false,"scale":null,"scales":[],"stretch":3.0}],"right_offset":2.5,"settings":{"alerts":{"alert_color":[255,152,0,255],"close_toasts":true,"desktop_notifications":false,"notification_seconds":20,"play_sound":false,"show_active_only":true,"show_alert_labels":true,"show_alerts":true,"sound":"","sound_volume":1.0},"btns":{"navigation":"Hidden","pane":"VisibleOnMouseOver"},"candle_colors":{"body_down":[242,54,69,255],"body_up":[8,153,129,255],"border_down":[242,54,69,255],"border_up":[8,153,129,255],"color_by_previous_close":false,"show_body":true,"show_border":false,"show_wick":true,"wick_down":[242,54,69,255],"wick_up":[8,153,129,255]},"chart_basic_styles":{"background_color":[0,0,0,255],"background_gradient_bottom":[0,0,0,255],"background_gradient_top":[0,0,0,255],"background_type":"Solid"},"crosshair":{"color":[64,254,0,128],"line_style":"Dashed","line_width":1.0},"events":{"show_dividends":true,"show_earnings":false,"show_earnings_breaks":false,"show_economic_events":false,"show_ideas":true,"show_news":true,"show_news_notifications":false,"show_splits":true},"grid_lines":{"horizontal_color":[34,34,34,255],"mode":"Both","vertical_color":[34,34,34,255]},"margins":{"bottom_percent":10.0,"right_bars":2.5,"top_percent":10.0},"precision":"Default","scales_and_lines":{"allow_label_overlap":false,"auto_scale":true,"axis_layout":{"hide_unused":true,"side":null},"currency_unit_on_hover":false,"date_format":"Default","extended_session_price_color":[251,142,1,255],"indexed_to_100":false,"invert_scale":false,"lock_price_to_bar_ratio":false,"log_scale":false,"percentage_scale":false,"prev_close_line":{"color":null,"style":"Dotted","width":1.0},"price_line_source":"LastBar","price_line_style":"Dashed","price_line_width":1.0,"price_scale_left":false,"price_to_bar_ratio":1.0,"show_bid_ask":false,"show_bid_ask_lines":null,"show_countdown":true,"show_currency":true,"show_extended_session_price":true,"show_high_low":false,"show_high_low_lines":null,"show_last_price_change":false,"show_last_price_label":true,"show_plus_button":true,"show_prev_close":false,"show_prev_close_label":false,"show_price_line":true,"show_scale_mode_buttons":true,"show_study_names":false,"show_study_values":true,"show_symbol_name":false,"show_unit":true,"study_value_color":null,"symbol_price_color":null,"thousands_sep":"Comma","use_24_hour":true,"weekday_names":"Default"},"scales_appearance":{"font_family":"Proportional","font_size":12,"lines_color":[0,0,0,0],"text_color":[255,255,255,255]},"status_line":{"indicator_background_opacity":60,"show_change":true,"show_change_percent":true,"show_indicator_inputs":true,"show_indicator_titles":true,"show_indicator_values":true,"show_last_day_change":false,"show_logo":true,"show_market_status":true,"show_ohlc":true,"show_quote_boxes":true,"show_symbol":true,"show_volume":true,"title_as_description":true},"timezone":"UTC","trading":{"bid_ask_labels":false,"bracket_pnl":true,"bracket_pnl_unit":"Money","execution_sound":"","execution_sound_volume":1.0,"extend_lines":true,"include_in_image":false,"instant_orders":false,"label_alignment":"Right","notifications":"All","play_execution_sound":false,"position_pnl":true,"position_pnl_unit":"Money","reverse_button":true,"show_execution_labels":true,"show_executions":true,"show_orders":true,"show_positions":true},"watermark":{"color":[34,34,34,255],"mode":"ReplayMode"}},"studies":[],"symbol":""}],"mode":"Single","version":3}"#;
+            let mut older_expected = ChartTypeParams {
+                footprint_naked_poc: true,
+                tpo_midpoint: true,
+                tpo_letters: false,
+                ..Default::default()
+            };
+            // Omitted style switches keep the defaults of documents saved before they existed.
+            older_expected.styles.heikin.real_price_only = true;
+            older_expected.styles.high_low.labels_visible = false;
+            let placeholder = [egui::Color32::PLACEHOLDER; 2];
+            [
+                older_expected.styles.kagi.up_color,
+                older_expected.styles.kagi.down_color,
+            ] = placeholder;
+            [
+                older_expected.styles.point_figure.up_color,
+                older_expected.styles.point_figure.down_color,
+            ] = placeholder;
+            for (json, expected) in [
+                (legacy.to_string(), expected),
+                (older.to_owned(), older_expected),
+            ] {
+                let saved = crate::widget::SavedLayout::from_json(&json).unwrap();
+                restored.restore(&saved.charts[0]).unwrap();
+                assert_eq!(restored.chart_type_params(), &expected);
+            }
         }
-        // A profile saved before level styles existed, including its enabled guides.
+        // A profile saved before level styles existed, including its enabled guides, and one
+        // saved before histogram placement, width, values and box options existed.
         for (saved, guides) in [
             (r#"{"tpo_row_ticks":2}"#, false),
             (
                 r#"{"tpo_row_ticks":2,"profile":{"session":"Chart","rows":"Feed","mode":"BidAsk","developing_poc":false,"developing_value_area":false,"extend_poc":false,"extend_vah":false,"extend_val":false,"nodes":null,"value_area":0.7,"value_area_guides":true}}"#,
+                true,
+            ),
+            (
+                r#"{"tpo_row_ticks":2,"profile":{"session":"Chart","rows":"Feed","mode":"BidAsk","developing_poc":false,"developing_value_area":false,"extend_poc":false,"extend_vah":false,"extend_val":false,"nodes":null,"value_area":0.7,"value_area_guides":true,"poc":true,"poc_color":null,"value_area_high":true,"value_area_high_color":null,"value_area_low":true,"value_area_low_color":null,"up_volume_color":null,"down_volume_color":null,"value_area_up_color":null,"value_area_down_color":null}}"#,
                 true,
             ),
         ] {
@@ -1444,6 +1590,10 @@ mod tests {
                 }
             );
             let legacy = serde_json::to_value(legacy).unwrap();
+            assert_eq!(legacy["footprint_intensity"], "Bar");
+            assert_eq!(legacy["footprint_extend_bars"], serde_json::Value::Null);
+            assert_eq!(legacy["footprint_auto_row_height"], 16.0);
+            assert_eq!(legacy["footprint_min_text_height"], 12.0);
             assert_eq!(legacy["footprint_statistics"], false);
             assert_eq!(legacy["footprint_row_ticks"], 0);
             assert_eq!(legacy["footprint_row_atr"], false);
@@ -1476,6 +1626,15 @@ mod tests {
             assert_eq!(legacy["tpo_extend_poor"], false);
             assert_eq!(legacy["tpo_volume_profile"], false);
             assert_eq!(
+                legacy["tpo_labels"],
+                serde_json::json!({
+                    "poc": true, "value_area_high": true, "value_area_low": true, "midpoint": true,
+                    "initial_balance_high": false, "initial_balance_low": false, "opening_price": false, "closing_price": false,
+                    "poor_high": false, "poor_low": false, "single_prints": false, "prices": false
+                })
+            );
+            assert_eq!(legacy["tpo_level_tags"], false);
+            assert_eq!(
                 legacy["footprint_colors"],
                 serde_json::json!([null, null, null, null])
             );
@@ -1491,6 +1650,7 @@ mod tests {
                 "footprint_unfinished_auctions",
                 "footprint_extreme_ratio",
                 "footprint_pullback",
+                "footprint_zones_until_broken",
             ] {
                 assert_eq!(legacy[field], false);
             }
@@ -1504,6 +1664,10 @@ mod tests {
                 assert_eq!(legacy["profile"][field], false);
             }
         }
+        let partial: ChartTypeParams =
+            serde_json::from_str(r#"{"tpo_labels":{"prices":true}}"#).unwrap();
+        assert!(partial.tpo_labels.prices);
+        assert!(partial.tpo_labels.poc);
     }
 
     /// Rows from the average true range take the last `footprint_row_atr_length` complete bars,

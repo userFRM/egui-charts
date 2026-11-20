@@ -31,8 +31,11 @@ impl Default for KeyboardOptions {
     }
 }
 
-/// Keyboard actions that can be performed on the chart
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Keyboard actions that can be performed on the chart.
+///
+/// Serde writes and reads the variant name (`"Redo"`), and a drawing tool as
+/// `{"DrawingTool": "TrendLine"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum KeyboardAction {
     /// Pan left by a page.
@@ -55,7 +58,17 @@ pub enum KeyboardAction {
     InvertScale,
     /// Copy the selected drawing.
     CopyDrawing,
-    /// Paste a copied drawing.
+    /// Paste a copied drawing. The chart reports clipboard text as
+    /// [`ShortcutRequest::PasteDrawing`](crate::widget::ShortcutRequest::PasteDrawing), and a
+    /// paste without text as [`ShortcutRequest::Action`](crate::widget::ShortcutRequest::Action)
+    /// with this action: there a host looks for a picture on its clipboard.
+    #[cfg_attr(
+        feature = "drawings",
+        doc = "A picture the platform read comes as \
+               [`ShortcutRequest::PasteImage`](crate::widget::ShortcutRequest::PasteImage) \
+               instead. A host places a picture with \
+               [`Chart::paste_image`](crate::Chart::paste_image)."
+    )]
     PasteDrawing,
     /// Hide or show drawings.
     ToggleDrawings,
@@ -171,6 +184,15 @@ pub enum KeyboardAction {
     CycleChartFocus,
     /// Cycle focus to previous chart (Shift+Tab)
     CycleChartFocusBack,
+
+    // Trading
+    /// A buy limit order at the pointer's price (Alt+Shift+B). `ChartMenus::show` returns the
+    /// order of the chart menu's buy limit row there, and nothing where the menu has no such
+    /// row. Without the `ui` feature the host receives it as a shortcut request.
+    BuyLimitAtPointer,
+    /// A sell limit order at the pointer's price (Alt+Shift+S), as
+    /// [`BuyLimitAtPointer`](Self::BuyLimitAtPointer) is for buying.
+    SellLimitAtPointer,
 }
 
 impl KeyboardAction {
@@ -269,6 +291,8 @@ impl KeyboardAction {
             Self::ShowKeyboardHelp => "Keyboard shortcuts",
             Self::CycleChartFocus => "Next chart",
             Self::CycleChartFocusBack => "Previous chart",
+            Self::BuyLimitAtPointer => "Buy limit at pointer price",
+            Self::SellLimitAtPointer => "Sell limit at pointer price",
         }
     }
 
@@ -415,6 +439,22 @@ impl KeyboardAction {
                     )]
                 }
             }
+            Self::BuyLimitAtPointer => {
+                const {
+                    &[KeyboardShortcut::new(
+                        Modifiers::ALT.plus(Modifiers::SHIFT),
+                        Key::B,
+                    )]
+                }
+            }
+            Self::SellLimitAtPointer => {
+                const {
+                    &[KeyboardShortcut::new(
+                        Modifiers::ALT.plus(Modifiers::SHIFT),
+                        Key::S,
+                    )]
+                }
+            }
             _ => &[],
         }
     }
@@ -463,6 +503,8 @@ impl KeyboardAction {
             Self::ShowKeyboardHelp => "Ctrl+/ / ? / F1",
             Self::CycleChartFocus => "Tab",
             Self::CycleChartFocusBack => "Shift+Tab",
+            Self::BuyLimitAtPointer => "Alt+Shift+B",
+            Self::SellLimitAtPointer => "Alt+Shift+S",
             Self::DrawingTool(crate::config::DrawingToolType::TrendLine) => "Alt+T",
             Self::DrawingTool(crate::config::DrawingToolType::HorizontalLine) => "Alt+H",
             Self::DrawingTool(crate::config::DrawingToolType::VerticalLine) => "Alt+V",
@@ -474,7 +516,8 @@ impl KeyboardAction {
         }
     }
 
-    /// The actions with a bound key, grouped by category (for the shortcuts dialog).
+    /// The actions the shortcuts dialog offers, grouped by category, including those without a
+    /// default key.
     pub fn all_by_category() -> Vec<(&'static str, Vec<KeyboardAction>)> {
         use crate::config::DrawingToolType;
         vec![
@@ -545,6 +588,10 @@ impl KeyboardAction {
                     Self::CycleChartFocusBack,
                     Self::ShowKeyboardHelp,
                 ],
+            ),
+            (
+                "Trading",
+                vec![Self::BuyLimitAtPointer, Self::SellLimitAtPointer],
             ),
         ]
     }

@@ -555,11 +555,7 @@ mod tests {
             assert_eq!(outline.areas.len(), 6);
             let point = Pos2::new(40.0, ys[5]);
             assert_eq!(
-                crate::drawings::services::DrawingInteraction::new().hit_test(
-                    point,
-                    &[drawing.clone()],
-                    "1m"
-                ),
+                crate::drawings::services::hit_test(point, &[drawing.clone()], "1m"),
                 Some(12)
             );
 
@@ -627,11 +623,7 @@ mod tests {
         let mut fan = Drawing::new(13, DrawingToolType::Pitchfan);
         fan.points = vec![Pos2::ZERO, Pos2::new(10.0, -5.0), Pos2::new(-10.0, -5.0)];
         assert_eq!(
-            crate::drawings::services::DrawingInteraction::new().hit_test(
-                Pos2::new(300.0, -1900.0),
-                &[fan],
-                "1m"
-            ),
+            crate::drawings::services::hit_test(Pos2::new(300.0, -1900.0), &[fan], "1m"),
             Some(13)
         );
     }
