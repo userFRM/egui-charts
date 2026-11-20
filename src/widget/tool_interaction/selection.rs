@@ -1700,8 +1700,6 @@ mod tests {
         use crate::widget::test_frames::{chart, frame};
         let ctx = Context::default();
         let mut chart = chart(&[10.0], &[20.0]);
-        // A live update can place the line under the navigation row's input area.
-        chart.config_mut().navigation_buttons = crate::config::NavigationButtons::Never;
         chart.chart_options.crosshair.style = crate::config::CrosshairStyle::Arrow;
         let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
         drawing.completed = true;
