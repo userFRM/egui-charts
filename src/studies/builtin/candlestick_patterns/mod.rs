@@ -86,6 +86,9 @@
 //! reads the trend offers the trend rule as its only input, SMA50 by default; the twelve
 //! without a trend condition, such as Doji or Kicking, offer none.
 //!
+//! Each single study declares "New pattern detected" as an alert condition. The combined study
+//! declares one per pattern in the toggle order; disabled patterns and excluded sides read false.
+//!
 //! # Example
 //! ```
 //! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
@@ -559,6 +562,27 @@ impl Indicator for CandlestickPatterns {
         true
     }
 
+    fn alert_conditions(&self) -> Vec<String> {
+        if self.only.is_some() {
+            vec!["New pattern detected".into()]
+        } else {
+            PATTERNS
+                .iter()
+                .map(|pattern| pattern.label.to_owned())
+                .collect()
+        }
+    }
+
+    fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+        let pattern = match self.only {
+            Some(index) if condition == 0 => index,
+            Some(_) => return None,
+            None => condition,
+        };
+        PATTERNS.get(pattern)?;
+        Some(self.found.get(bar)? >> pattern & 1 == 1)
+    }
+
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
@@ -808,6 +832,44 @@ mod tests {
         let falling = walk((90..150).rev().map(f64::from));
         let rising = walk((40..100).map(f64::from));
         for (label, line, abbr, hit, miss) in cases {
+            let index = PATTERNS
+                .iter()
+                .position(|pattern| pattern.label == label)
+                .unwrap();
+            for (formation, expected) in
+                std::iter::once((hit, true)).chain(miss.iter().map(|bars| (*bars, false)))
+            {
+                let mut data = flat.clone();
+                data.extend(
+                    formation
+                        .iter()
+                        .map(|&(o, h, l, c)| Bar::new(Utc::now(), o, h, l, c, 1.0)),
+                );
+                let last = data.len() - 1;
+                for only in [None, Some(index)] {
+                    let mut study = only
+                        .map_or_else(|| CandlestickPatterns::new(none), CandlestickPatterns::only);
+                    study.trend = none;
+                    study.calculate(&data);
+                    let condition = if only.is_some() { 0 } else { index };
+                    let names = study.alert_conditions();
+                    assert_eq!(
+                        names[condition],
+                        if only.is_some() {
+                            "New pattern detected"
+                        } else {
+                            label
+                        }
+                    );
+                    assert_eq!(
+                        study.alert_condition(condition, last),
+                        Some(expected),
+                        "{label}, {only:?}"
+                    );
+                    assert_eq!(study.alert_condition(names.len(), last), None);
+                    assert_eq!(study.alert_condition(condition, data.len()), None);
+                }
+            }
             assert_eq!(
                 text(none, &flat, hit, label, line).as_deref(),
                 Some(abbr),
