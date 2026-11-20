@@ -157,14 +157,15 @@ struct Continuation {
 }
 
 impl Continuation {
-    /// Chart bars after host history, and whether the chart's part of that history is unchanged.
+    /// Chart bars after host history, and whether the captured chart bars within that history
+    /// are unchanged. Chart bars that close later within it are host bars the run already used.
     fn tail<'a>(&self, bars: &'a [Bar]) -> (&'a [Bar], bool) {
         let split = self.host.checked_sub(1).map(|last| self.bars[last].time);
         let cut = bars.partition_point(|bar| split.is_some_and(|time| bar.time <= time));
-        (
-            &bars[cut..],
-            crate::strategies::same_bars(&bars[..cut], &self.chart),
-        )
+        let kept = bars[..cut]
+            .get(..self.chart.len())
+            .is_some_and(|captured| crate::strategies::same_bars(captured, &self.chart));
+        (&bars[cut..], kept)
     }
 }
 
@@ -223,13 +224,15 @@ fn skip(skipped: &mut Vec<(&'static str, usize)>, reason: &'static str) {
 ///
 /// A completed Run retains its engine and strategy. More closed chart bars continue its report,
 /// returning [`StrategyTesterAction::Signals`] with updated fills; the result equals a fresh Run
-/// over that history. A corrected processed bar rebuilds it. Shorter history, or a changed chart
-/// bar at or before the last host-supplied bar, marks it stale and ends continuation. Runs using
-/// finer fills or exchange rates request those data for new bars and stay stale until answered
-/// through [`Self::set_history`] or [`Self::set_history_with_rates`]. Only the reply's finer bars
-/// and rates are used. Optimisation results do not continue. Form edits, a scope change, Run and
-/// [`Self::set_report`] end continuation; optimisation ranges and requests leave it running.
-/// Continued reports keep the report tab, comparison toggle and selected entry when it remains.
+/// over that history. A corrected processed bar rebuilds it. Shorter history, or a changed or
+/// missing chart bar at or before the last host-supplied bar, marks it stale and ends
+/// continuation; chart bars that close later within host history are already part of the run.
+/// Runs using finer fills or exchange rates request those data for new bars and stay stale until
+/// answered through [`Self::set_history`] or [`Self::set_history_with_rates`]. Only the reply's
+/// finer bars and rates are used. Optimisation results do not continue. Form edits, a scope
+/// change, Run and [`Self::set_report`] end continuation; optimisation ranges and requests leave
+/// it running. Continued reports keep the report tab, comparison toggle and selected entry when
+/// it remains.
 ///
 /// An optimisation skips combinations the strategy refuses as a whole, and runs that lack exchange
 /// rates, and shows how many, with the reason. Pass the chart instrument's currency to

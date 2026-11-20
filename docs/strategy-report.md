@@ -232,9 +232,11 @@ keeps the engine and strategy of a completed Run. As `show` receives new closed 
 continues the report to the same result as a fresh Run over the longer history and returns
 [`StrategyTesterAction::Signals`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyTesterAction.html#variant.Signals) to replace the chart's fill markers. The report keeps its
 open tab, buy-and-hold toggle and selected entry when that entry remains. A corrected
-processed chart bar rebuilds the run; a shorter history ends continuation and marks the
-report stale. For a run on host history, changes to chart bars at or before its last host
-bar also end continuation and mark it stale, since newer host history is needed.
+processed chart bar rebuilds the run; a shorter history ends
+continuation and marks the report stale. For a run on host history, a changed or missing
+chart bar at or before its last host bar also ends continuation and marks it stale, since
+newer host history is needed. Chart bars that close later within the host history are
+already part of the run.
 
 Runs with finer fill bars or currency conversion request the finer bars or exchange rates
 for each new chart bar with [`StrategyTesterAction::RequestHistory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyTesterAction.html#variant.RequestHistory) and stay stale while

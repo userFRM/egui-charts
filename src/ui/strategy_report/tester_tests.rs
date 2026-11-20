@@ -217,10 +217,13 @@ fn continued_runs_request_finer_bars_and_use_host_history() {
         } else {
             vec![]
         };
+        // The dated reply already holds the chart's next bar.
+        let held = if dated { 101 } else { 100 };
+        let from = if dated { 2 } else { 0 };
         tester
             .set_history_with_rates(
                 &r1,
-                source[..100].to_vec(),
+                source[from..held].to_vec(),
                 first_lower.clone(),
                 rates.clone(),
             )
@@ -303,18 +306,23 @@ fn continued_runs_request_finer_bars_and_use_host_history() {
             assert!(!tester.history_failed(r2, "late failure"));
             assert!(frame(&mut tester, &source).is_empty());
         } else {
+            // Closing the bar the host already supplied changes nothing; the next one continues.
+            assert!(actions.is_empty());
+            assert!(!tester.is_stale());
+            assert_eq!(tester.report(), Some(&before));
+            let mut actions = Vec::new();
+            for _ in 0..3 {
+                actions.extend(frame(&mut tester, &source));
+            }
             assert!(
                 actions
                     .iter()
                     .all(|action| !matches!(action, StrategyTesterAction::RequestHistory(_)))
             );
-            for _ in 0..3 {
-                frame(&mut tester, &source[..101]);
-            }
             assert!(!tester.is_stale());
-            assert_eq!(tester.report(), Some(&fresh(&tester, &source[..101], &[])));
+            assert_eq!(tester.report(), Some(&fresh(&tester, &source[2..], &[])));
             let before = tester.report().unwrap().clone();
-            let mut corrected = source[..101].to_vec();
+            let mut corrected = source.clone();
             corrected[50].close = 110.0;
             corrected[50].high = 110.0;
             frame(&mut tester, &corrected);
