@@ -816,7 +816,7 @@ mod tests {
             .build_ui_state(
                 |ui, (text, table): &mut (String, TableConfig)| {
                     let colors = [Color32::WHITE, Color32::BLACK];
-                    Drawing::edit_table(ui, text, table, colors, egui::Id::new("table"));
+                    Drawing::edit_table(ui, text, table, colors, egui::Id::unique("table"));
                 },
                 ("a\tb\tc\nd\te\tf\ng\th\ti".to_owned(), table),
             );
