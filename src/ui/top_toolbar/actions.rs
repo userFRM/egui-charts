@@ -54,9 +54,14 @@ pub enum TopToolbarAction {
     /// Publish the captured image through the host's service and copy its returned URL.
     /// Offered only with [`TopToolbarState::can_publish_image`](super::TopToolbarState::can_publish_image).
     CopyImageLink,
-    /// Ask the host to publish the chart: capture it with
-    /// [`Chart::export_image`](crate::widget::Chart::export_image) and share or post the image
-    /// through the host's own service.
+    /// Post the chart image through the host's service, such as a short post with the image
+    /// attached: capture it with [`Chart::export_image`](crate::widget::Chart::export_image).
+    /// Offered only with [`TopToolbarState::can_publish_image`](super::TopToolbarState::can_publish_image).
+    PostImage,
+    /// Ask the host to publish an idea about the chart, for example by showing an
+    /// [`IdeasPanel`](crate::ui::ideas::IdeasPanel) with its context set to the chart's symbol
+    /// and interval. Offered only with
+    /// [`TopToolbarState::can_publish_ideas`](super::TopToolbarState::can_publish_ideas).
     Publish,
     /// Open or close the order ticket, for example with
     /// [`Trading::toggle_ticket`](crate::ui::trading::Trading::toggle_ticket).

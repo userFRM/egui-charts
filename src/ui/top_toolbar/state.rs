@@ -15,10 +15,13 @@ pub struct TopToolbarState {
     /// Whether there is an undone action to redo; the redo button is disabled while this is `false`.
     pub can_redo: bool,
     /// Whether the host can publish a captured image and return its shareable link.
-    /// Enables the Publish button and Copy link and Post image in the snapshot menu. Handle
+    /// Enables Copy link and Post image in the snapshot menu. Handle
     /// [`TopToolbarAction::CopyImageLink`](super::TopToolbarAction::CopyImageLink) and
-    /// [`TopToolbarAction::Publish`](super::TopToolbarAction::Publish) through that service.
+    /// [`TopToolbarAction::PostImage`](super::TopToolbarAction::PostImage) through that service.
     pub can_publish_image: bool,
+    /// Whether the host publishes ideas; the Publish button is hidden while this is `false`.
+    /// Handle [`TopToolbarAction::Publish`](super::TopToolbarAction::Publish).
+    pub can_publish_ideas: bool,
     /// Whether a broker is attached; the Trade button is hidden while this is `false`.
     pub can_trade: bool,
 }
@@ -31,6 +34,7 @@ impl Default for TopToolbarState {
             can_redo: true,
             can_trade: false,
             can_publish_image: false,
+            can_publish_ideas: false,
         }
     }
 }
