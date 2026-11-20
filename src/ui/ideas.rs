@@ -492,9 +492,9 @@ mod tests {
                     Some(Rect::from_min_size(text.pos, text.galley.size()).center())
                 }
                 _ => None,
-            })
-            .expect(label);
+            });
         output.drop_without_applying_deltas();
+        let pos = pos.expect(label);
         step(vec![Event::PointerMoved(pos)]).drop_without_applying_deltas();
         for pressed in [true, false] {
             step(vec![Event::PointerButton {

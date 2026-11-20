@@ -148,8 +148,9 @@ mod tests {
         let output = ctx.run_ui(Default::default(), |ui| {
             app.ideas.panel.show(ui);
         });
-        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Chart attached"))));
+        let attached = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Chart attached")));
         output.drop_without_applying_deltas();
+        assert!(attached);
         app.publish_idea(&app.ideas.panel.draft().clone());
         assert_eq!(app.ideas.feed[0].kind, IdeaKind::Idea);
         let id = app.ideas.feed[0].id.clone();
