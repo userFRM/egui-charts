@@ -178,9 +178,6 @@ impl DemoApp {
         for (id, indicator) in source.indicators() {
             let copy = chart.add_indicator(indicator.clone_box());
             study_ids.insert(id.0, copy.0);
-            if let Some(inputs) = source.indicator_inputs(id) {
-                chart.set_indicator_inputs(copy, inputs);
-            }
         }
         chart.drawings_mut().drawings = source.drawings().drawings.clone();
         chart.drawings_mut().drawings.retain_mut(|drawing| {
