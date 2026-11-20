@@ -6161,6 +6161,7 @@ mod tests {
     /// The selection toolbar opens the same drawing alert editor as the drawing menu.
     #[test]
     fn selection_toolbar_add_alert_opens_the_dialog_for_the_drawing() {
+        use eframe::App as _;
         use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new_at(
