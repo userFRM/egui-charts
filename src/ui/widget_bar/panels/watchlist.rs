@@ -253,17 +253,12 @@ impl WatchlistPanel {
 
     /// Shows these columns after the symbol, in order; the default is
     /// [`WatchlistColumn::DEFAULT`]. A quote without a column's figure shows a dash, apart from a
-    /// symbol without a quote, which shows nothing. A sort by a column no longer shown is dropped.
+    /// symbol without a quote, which shows nothing.
     pub fn set_columns(&mut self, columns: impl IntoIterator<Item = WatchlistColumn>) {
         self.columns = columns
             .into_iter()
             .filter(|column| *column != WatchlistColumn::Symbol)
             .collect();
-        if self.sort.is_some_and(|(column, _)| {
-            column != WatchlistColumn::Symbol && !self.columns.contains(&column)
-        }) {
-            self.sort = None;
-        }
     }
 
     /// The flag whose symbols the panel shows across every list, if any.
@@ -2206,7 +2201,11 @@ mod tests {
         );
         panel.sort = Some((WatchlistColumn::Volume, false));
         panel.set_columns([WatchlistColumn::Last]);
-        assert_eq!(panel.sort, None, "a sort by a hidden column is dropped");
+        assert_eq!(
+            panel.sort,
+            Some((WatchlistColumn::Volume, false)),
+            "the advanced view keeps its sort when compact columns change"
+        );
     }
 
     #[test]
