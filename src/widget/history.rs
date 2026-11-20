@@ -454,6 +454,7 @@ impl Chart {
     /// navigation step. Consecutive navigation steps are one undo step, which restores the view
     /// from before the first of them, and a navigation step leaves redo available. Any other
     /// action is a step of its own and clears redo.
+    /// A step that changes the symbol or the interval also restores the view from before it.
     ///
     /// Chart-owned drawing interactions and shortcuts record themselves. Ordinary host calls
     /// (including data/feed updates, setters and `drawings_mut`) do not enter chart history;
@@ -578,8 +579,11 @@ impl Chart {
                     .collect();
             }
         }
-        // A symbol's asynchronous history can change its view after this action ends.
-        if action.symbol.is_none() && action.view == Some(self.get_time_scale_state()) {
+        // A new symbol or interval can load and change its view after this action ends.
+        if action.symbol.is_none()
+            && action.interval == Some(self.timeframe)
+            && action.view == Some(self.get_time_scale_state())
+        {
             action.view = None;
         }
         // A theme change during the action is not an edit: the colours recorded before it
@@ -1098,6 +1102,7 @@ impl Chart {
             .iter()
             .map(|change| Study::capture(self, change.id))
             .collect();
+        let symbol_step = action.symbol.is_some();
         if let Some(symbol) = &mut action.symbol {
             let target = std::mem::replace(symbol, self.symbol.clone());
             self.change_symbol(target, true);
@@ -1190,7 +1195,9 @@ impl Chart {
         if let Some(date_format) = &mut action.date_format {
             std::mem::swap(&mut self.date_format, date_format);
         }
-        if let Some(view) = &mut action.view {
+        if let Some(view) = &mut action.view
+            && (symbol_step || *view != current_view)
+        {
             self.apply_synced_time_scale(view.0, view.1);
             *view = current_view;
             self.pending_scroll_time = None;
@@ -2074,6 +2081,35 @@ mod tests {
             assert_eq!(prices(&chart), moved, "{fed}");
             assert!(!chart.can_redo(), "{fed}");
         }
+    }
+
+    #[test]
+    fn undoing_an_interval_change_restores_the_view() {
+        let mut chart = chart(&[10.0], &[20.0]);
+        let bars = chart.bars(SeriesId::MAIN)[..50].to_vec();
+        chart.set_data(SeriesId::MAIN, bars);
+        chart.set_timeframe(Timeframe::Min1);
+        chart.apply_synced_time_scale(8.0, -30.0);
+        chart.user_action(|chart| chart.set_timeframe(Timeframe::Min15));
+        // The new interval's history fits after the action has ended.
+        chart.apply_synced_time_scale(4.0, 0.5);
+        assert!(chart.undo());
+        assert_eq!(chart.timeframe(), Some(Timeframe::Min1));
+        assert_eq!(chart.get_time_scale_state(), (8.0, -30.0));
+        assert!(chart.redo());
+        assert_eq!(chart.timeframe(), Some(Timeframe::Min15));
+        assert_eq!(chart.get_time_scale_state(), (4.0, 0.5));
+
+        chart.set_timeframe(Timeframe::Min1);
+        chart.enable_tracking_mode();
+        let view = chart.get_time_scale_state();
+        chart.user_action(|chart| chart.set_timeframe(Timeframe::Min15));
+        assert!(chart.undo());
+        assert_eq!(chart.timeframe(), Some(Timeframe::Min1));
+        assert_eq!(chart.get_time_scale_state(), view);
+        assert!(chart.is_tracking_mode_active());
+        assert!(chart.redo());
+        assert!(chart.is_tracking_mode_active());
     }
 
     #[test]
