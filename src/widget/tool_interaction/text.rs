@@ -396,8 +396,8 @@ pub(super) fn show_editor(
     let width = 260.0_f32.min(pane.width());
     pos.x = pos.x.min(pane.right() - width).max(pane.left());
     let table = drawing.tool_type == DrawingToolType::Table;
-    // A table editor shows about six rows of cells above its buttons.
-    let height = if table { 240.0_f32 } else { 160.0 }.min(pane.height());
+    // Leave room for a default table and its cell style controls.
+    let height = if table { 320.0_f32 } else { 160.0 }.min(pane.height());
     pos.y = pos.y.min(pane.bottom() - height).max(pane.top());
     // A price note's typed text has a size of its own once set.
     let font_size = crate::styles::typography::font_size(
@@ -1034,6 +1034,7 @@ mod tests {
     fn editor_bounds_and_inside_clicks() {
         use crate::drawings::{Drawing, DrawingManager};
         use egui::{Id, RawInput, Rect, vec2};
+        use egui_kittest::{Harness, kittest::Queryable};
         for dark in [false, true] {
             for (tool, width) in [
                 DrawingToolType::PriceNote,
@@ -1107,6 +1108,45 @@ mod tests {
                 );
                 assert!(!manager.can_undo());
             }
+
+            let pane = Rect::from_min_max(pos2(20.0, 20.0), pos2(620.0, 380.0));
+            let mut manager = DrawingManager::new();
+            let mut drawing = Drawing::new(7, DrawingToolType::Table);
+            drawing.points.push(pane.right_bottom() - vec2(10.0, 10.0));
+            manager.drawings.push(drawing);
+            super::begin_edit(&mut manager, 7, false);
+            let mut harness = Harness::builder()
+                .with_size(vec2(800.0, 600.0))
+                .with_theme(if dark {
+                    egui::Theme::Dark
+                } else {
+                    egui::Theme::Light
+                })
+                .build_ui_state(
+                    |ui, manager| {
+                        super::show_editor(ui, manager, Id::unique("chart"), pane, false);
+                    },
+                    manager,
+                );
+            harness.run();
+            let reset = harness
+                .get_by_role_and_label(egui::Role::Button, "Reset cell")
+                .rect();
+            let clip = harness
+                .output()
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Reset cell" => {
+                        Some(shape.clip_rect)
+                    }
+                    _ => None,
+                })
+                .expect("Reset cell is painted without scrolling");
+            assert!(
+                clip.contains_rect(reset),
+                "dark {dark}: {reset:?}, clip {clip:?}"
+            );
         }
     }
 
