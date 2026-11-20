@@ -3,7 +3,7 @@
 use crate::localization as l10n;
 use std::sync::Arc;
 
-use chrono::{DateTime, Datelike, Days, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveTime, Utc};
 use egui::{RichText, Sense, Ui, vec2};
 
 use super::ROW_HEIGHT;
@@ -11,12 +11,13 @@ use super::controls::{cell, dropdown};
 use crate::data::inbox::Inbox;
 use crate::data::{CalendarEvent, CalendarKind, CalendarQuery, Datafeed, FeedError, Importance};
 use crate::icons::icons;
+use crate::model::{TimezoneId, local_instant, local_time};
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::status_message::{MessageKind, status_message, translated_status_message};
 use crate::ui_kit::{EmptyState, LoadingIndicator, PanelHeader};
 
-/// The days a calendar lists, in UTC.
+/// The days a calendar lists, in the panel's time zone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CalendarRange {
     Yesterday,
@@ -47,9 +48,15 @@ impl CalendarRange {
         }
     }
 
-    /// The start of the first day and the start of the day after the last, around `now`.
-    fn bounds(self, now: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
-        let today = now.date_naive();
+    /// The start of the first day and the start of the day after the last, around `now`, with
+    /// days starting at midnight in `zone`. A midnight the clock
+    /// skips starts its day at the jump.
+    fn bounds(self, now: DateTime<Utc>, zone: &TimezoneId) -> (DateTime<Utc>, DateTime<Utc>) {
+        let today = local_time(zone.clone(), now).date();
+        let start = |day: NaiveDate| {
+            let midnight = day.and_time(NaiveTime::MIN);
+            local_instant(zone.clone(), midnight).unwrap_or_else(|| midnight.and_utc())
+        };
         let monday = today - Days::new(u64::from(today.weekday().num_days_from_monday()));
         let (first, days) = match self {
             CalendarRange::Yesterday => (today - Days::new(1), 1),
@@ -58,7 +65,6 @@ impl CalendarRange {
             CalendarRange::ThisWeek => (monday, 7),
             CalendarRange::NextWeek => (monday + Days::new(7), 7),
         };
-        let start = |day: chrono::NaiveDate| day.and_time(NaiveTime::MIN).and_utc();
         (start(first), start(first + Days::new(days)))
     }
 }
@@ -77,7 +83,8 @@ pub enum CalendarAction {
 /// Calendars fed by the host's [`Datafeed::calendar`], one at a time.
 ///
 /// The user picks the calendar, the days, and for economic events the least importance; with
-/// [`set_countries`](Self::set_countries) also the countries. Every change asks the feed again,
+/// [`set_countries`](Self::set_countries) also the countries. Days start at midnight and times show in the zone given to
+/// [`set_timezone`](Self::set_timezone), UTC until set, and the panel names it. Every change asks the feed again,
 /// which applies the filters, and only the answer to the latest request is shown. Call
 /// [`poll`](Self::poll) each frame, then [`show`](Self::show) while the panel is open.
 pub struct CalendarPanel {
@@ -85,6 +92,7 @@ pub struct CalendarPanel {
     range: CalendarRange,
     importance: Option<Importance>,
     countries: Vec<(String, bool)>,
+    timezone: TimezoneId,
     feed: Option<Arc<dyn Datafeed>>,
     events: Vec<CalendarEvent>,
     error: Option<FeedError>,
@@ -100,6 +108,7 @@ impl std::fmt::Debug for CalendarPanel {
             .field("range", &self.range)
             .field("importance", &self.importance)
             .field("countries", &self.countries)
+            .field("timezone", &self.timezone)
             .field("events", &self.events)
             .field("error", &self.error)
             .field("loading", &self.loading)
@@ -122,6 +131,7 @@ impl CalendarPanel {
             range: CalendarRange::ThisWeek,
             importance: None,
             countries: Vec::new(),
+            timezone: TimezoneId::utc(),
             feed: None,
             events: Vec::new(),
             error: None,
@@ -144,6 +154,15 @@ impl CalendarPanel {
         self.refresh();
     }
 
+    /// Start days at midnight in `timezone` and show event days and times in it, such as the
+    /// chart's. UTC until set. A different zone asks the feed again.
+    pub fn set_timezone(&mut self, timezone: TimezoneId) {
+        if self.timezone != timezone {
+            self.timezone = timezone;
+            self.refresh();
+        }
+    }
+
     /// Ask the feed again, such as when the host learns of new figures.
     pub fn refresh(&mut self) {
         let Some(feed) = &self.feed else {
@@ -151,7 +170,7 @@ impl CalendarPanel {
         };
         self.request += 1;
         self.loading = true;
-        let (from, to) = self.range.bounds(Utc::now());
+        let (from, to) = self.range.bounds(Utc::now(), &self.timezone);
         let query = CalendarQuery {
             kind: self.kind,
             from,
@@ -248,6 +267,15 @@ impl CalendarPanel {
                     },
                 );
             }
+            ui.label(
+                RichText::new(l10n::format_text(
+                    ui.ctx(),
+                    "Times in {zone}",
+                    &[("zone", self.timezone.name())],
+                ))
+                .size(theme.text.small)
+                .color(theme.ui.text_secondary),
+            );
         });
         if !self.countries.is_empty() {
             let chosen = self.countries.iter().filter(|(_, on)| *on).count();
@@ -315,13 +343,14 @@ impl CalendarPanel {
                 };
                 let mut day = None;
                 for event in &self.events {
-                    if day != Some(event.time.date_naive()) {
-                        day = Some(event.time.date_naive());
+                    let local = local_time(self.timezone.clone(), event.time);
+                    if day != Some(local.date()) {
+                        day = Some(local.date());
                         ui.add_space(theme.spacing.sm);
                         ui.label(
                             RichText::new(l10n::text(
                                 ui.ctx(),
-                                event.time.format("%A, %b %-d").to_string(),
+                                local.format("%A, %b %-d").to_string(),
                             ))
                             .size(theme.text.small)
                             .strong()
@@ -363,7 +392,7 @@ impl CalendarPanel {
                     cell(
                         ui,
                         time,
-                        &event.time.format("%H:%M").to_string(),
+                        &local.format("%H:%M").to_string(),
                         false,
                         theme.ui.text_secondary,
                     );
@@ -437,6 +466,37 @@ fn importance_label(importance: Option<Importance>) -> &'static str {
 mod tests {
     use super::*;
 
+    /// The texts one frame of `panel` paints, with their visible bounds.
+    fn texts(panel: &mut CalendarPanel, ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(280.0, 400.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                panel.show(ui);
+            },
+        );
+        let texts = output
+            .shapes
+            .iter()
+            .filter_map(|shape| {
+                let egui::Shape::Text(text) = &shape.shape else {
+                    return None;
+                };
+                Some((
+                    text.galley.text().to_owned(),
+                    text.visual_bounding_rect().intersect(shape.clip_rect),
+                ))
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        texts
+    }
+
     /// Missing figures keep their columns, and event metadata fits on one line.
     #[test]
     fn event_figures_align_under_their_headings() {
@@ -455,32 +515,7 @@ mod tests {
             event.actual = Some("1.2%".into());
             event.prior = Some("10.5%".into());
             panel.events.push(event);
-            let output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(280.0, 400.0),
-                    )),
-                    ..Default::default()
-                },
-                |ui| {
-                    panel.show(ui);
-                },
-            );
-            let texts: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|shape| {
-                    let egui::Shape::Text(text) = &shape.shape else {
-                        return None;
-                    };
-                    Some((
-                        text.galley.text().to_owned(),
-                        text.visual_bounding_rect().intersect(shape.clip_rect),
-                    ))
-                })
-                .collect();
-            output.drop_without_applying_deltas();
+            let texts = texts(&mut panel, &ctx);
             let bounds = |label: &str| {
                 texts
                     .iter()
@@ -504,67 +539,147 @@ mod tests {
         }
     }
 
-    /// Guards the days each range asks for: whole UTC days from midnight, weeks from Monday, so a
-    /// Sunday belongs to the week that ends with it. Worked by hand from a calendar: 2026-10-21 is
-    /// a Wednesday and 2026-10-25 a Sunday.
+    /// Guards the days each range asks for: whole days from midnight in the panel's zone,
+    /// including a midnight the clock skips and a week with a clock change, and weeks from Monday,
+    /// so a Sunday belongs to the week that ends with it. Worked by hand from a calendar and the
+    /// zones' 2026 rules: 2026-10-21 is a Wednesday and 2026-10-25 a Sunday, New York leaves
+    /// daylight saving time on 2026-11-01 and Santiago skips its midnight on 2026-09-06.
     #[test]
-    fn ranges_cover_whole_utc_days_and_monday_weeks() {
+    fn ranges_cover_whole_local_days_and_monday_weeks() {
         let at = |text: &str| text.parse::<DateTime<Utc>>().unwrap();
-        for (now, range, from, to) in [
+        for (zone, now, range, from, to) in [
             (
+                "UTC",
                 "2026-10-21T15:30:00Z",
                 CalendarRange::Yesterday,
                 "2026-10-20T00:00:00Z",
                 "2026-10-21T00:00:00Z",
             ),
             (
+                "UTC",
                 "2026-10-21T15:30:00Z",
                 CalendarRange::Today,
                 "2026-10-21T00:00:00Z",
                 "2026-10-22T00:00:00Z",
             ),
             (
+                "UTC",
                 "2026-10-21T15:30:00Z",
                 CalendarRange::Tomorrow,
                 "2026-10-22T00:00:00Z",
                 "2026-10-23T00:00:00Z",
             ),
             (
+                "UTC",
                 "2026-10-21T15:30:00Z",
                 CalendarRange::ThisWeek,
                 "2026-10-19T00:00:00Z",
                 "2026-10-26T00:00:00Z",
             ),
             (
+                "UTC",
                 "2026-10-21T15:30:00Z",
                 CalendarRange::NextWeek,
                 "2026-10-26T00:00:00Z",
                 "2026-11-02T00:00:00Z",
             ),
             (
+                "UTC",
                 "2026-10-25T23:59:59Z",
                 CalendarRange::ThisWeek,
                 "2026-10-19T00:00:00Z",
                 "2026-10-26T00:00:00Z",
             ),
             (
+                "UTC",
                 "2026-10-26T00:00:00Z",
                 CalendarRange::ThisWeek,
                 "2026-10-26T00:00:00Z",
                 "2026-11-02T00:00:00Z",
             ),
             (
+                "UTC",
                 "2026-12-31T08:00:00Z",
                 CalendarRange::NextWeek,
                 "2027-01-04T00:00:00Z",
                 "2027-01-11T00:00:00Z",
             ),
+            // Wednesday 21:00 in New York is already Thursday in UTC.
+            (
+                "America/New_York",
+                "2026-10-22T01:00:00Z",
+                CalendarRange::Today,
+                "2026-10-21T04:00:00Z",
+                "2026-10-22T04:00:00Z",
+            ),
+            // The week ends an hour later in UTC, after the clocks go back.
+            (
+                "America/New_York",
+                "2026-10-28T12:00:00Z",
+                CalendarRange::ThisWeek,
+                "2026-10-26T04:00:00Z",
+                "2026-11-02T05:00:00Z",
+            ),
+            // The clock jumps from 00:00 to 01:00, so the day starts at 01:00 and lasts 23 hours.
+            (
+                "America/Santiago",
+                "2026-09-05T16:00:00Z",
+                CalendarRange::Tomorrow,
+                "2026-09-06T04:00:00Z",
+                "2026-09-07T03:00:00Z",
+            ),
+            // 01:30 on Thursday at +05:30.
+            (
+                "+05:30",
+                "2026-10-21T20:00:00Z",
+                CalendarRange::Today,
+                "2026-10-21T18:30:00Z",
+                "2026-10-22T18:30:00Z",
+            ),
         ] {
+            let Some(timezone) = TimezoneId::named(zone) else {
+                assert!(!cfg!(feature = "timezones"), "{zone}");
+                continue;
+            };
             assert_eq!(
-                range.bounds(at(now)),
+                range.bounds(at(now), &timezone),
                 (at(from), at(to)),
-                "{range:?} at {now}"
+                "{range:?} at {now} in {zone}"
             );
         }
     }
+
+    /// Guards the zone the list is written in: event times and day headings follow it, so a
+    /// release at 12:30 UTC lists at 08:30 in New York and an evening release stays on its local
+    /// day, and the panel names the zone.
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn new_york_lists_its_local_day_and_local_times() {
+        let ctx = egui::Context::default();
+        let mut panel = CalendarPanel::new();
+        panel.set_timezone("America/New_York".parse().unwrap());
+        for (id, time) in [
+            ("CPI", "2026-10-21T12:30:00Z"),
+            ("Late", "2026-10-22T01:00:00Z"),
+        ] {
+            panel.events.push(CalendarEvent::new(
+                id,
+                CalendarKind::Economic,
+                time.parse().unwrap(),
+                id,
+            ));
+        }
+        let texts = texts(&mut panel, &ctx);
+        let count = |label: &str| texts.iter().filter(|(text, _)| text == label).count();
+        for (label, shown) in [
+            ("08:30", 1),
+            ("21:00", 1),
+            ("Wednesday, Oct 21", 1),
+            ("Thursday, Oct 22", 0),
+            ("Times in America/New_York", 1),
+        ] {
+            assert_eq!(count(label), shown, "{label}: {texts:?}");
+        }
+    }
+
 }
