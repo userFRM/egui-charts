@@ -54,6 +54,20 @@ pub struct OrderFlowStudy {
 }
 
 impl OrderFlowStudy {
+    #[cfg(feature = "widget")]
+    pub(crate) fn replay_rate(&self) -> Option<(bool, usize, usize)> {
+        match self.kind {
+            OrderFlowKind::TradeRate {
+                volume,
+                seconds,
+                instant,
+            } if self.filter == OrderFilter::default() && self.basis == SizeBasis::Fill => {
+                Some((volume, seconds, instant))
+            }
+            _ => None,
+        }
+    }
+
     /// Constructs one of the fixed stream aggregations with an empty source.
     pub fn new(kind: OrderFlowKind) -> Self {
         let kind = kind.normalized();

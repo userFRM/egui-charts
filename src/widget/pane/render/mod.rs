@@ -621,6 +621,13 @@ impl Chart {
                         )
                     }),
                 });
+                // As the grid, once in a pane: beneath every member.
+                if Some(entry) == first {
+                    panel.session_breaks = Some((
+                        self.session_break_renderer(),
+                        self.last_session_break_x.clone(),
+                    ));
+                }
                 panel.axis_options = crate::config::PriceAxisOptions {
                     show_study_values: self.config.price_axis.show_study_values,
                     ..self.config.price_axis
@@ -1061,8 +1068,13 @@ impl Chart {
                                 .min(chart_rect.bottom()),
                         ),
                     );
+                    let toggle_id = ui.scope_id().with((key, "toggle"));
+                    // A maximized pane is drawn alone and expanded: its header has nothing to collapse.
                     let toggle = ui
-                        .interact(header, ui.scope_id().with((key, "toggle")), Sense::click())
+                        .add_enabled_ui(maximized.is_none(), |ui| {
+                            ui.interact(header, toggle_id, Sense::click())
+                        })
+                        .inner
                         .on_hover_text(l10n::text(
                             ui.ctx(),
                             if collapsed {

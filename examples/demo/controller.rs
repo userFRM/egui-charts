@@ -1085,9 +1085,7 @@ impl DemoApp {
         self.regenerate_bars();
         self.timeframe_toolbar.state.timeframe = tf;
         self.refresh_interval_control();
-        // Source playback stays on its own interval when the display interval changes.
-        self.configure_replay_intervals();
-        self.push_replay_window_to_chart();
+        self.follow_replay_timeframe();
     }
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
@@ -2461,9 +2459,7 @@ impl DemoApp {
     }
 
     fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
-        if self.chart.zoom_was_applied() {
-            self.drawing_toolbar.state.zoom_mode_active = false;
-        }
+        self.drawing_toolbar.state.zoom_mode_active = self.chart.is_zoom_mode_active();
         self.drawing_toolbar.state.has_zoom_history = self.chart.state().has_zoom_history();
         use egui_charts::config::CrosshairStyle;
         use egui_charts::ui::drawing_toolbar::{
@@ -2652,6 +2648,7 @@ impl DemoApp {
                 self.chart
                     .drawings_mut()
                     .set_eraser_mode(cursor == CursorType::Eraser);
+                self.chart.set_zoom_mode(false);
                 return;
             }
             DrawingToolbarAction::ToggleValuesTooltip => {
@@ -9620,6 +9617,22 @@ mod tests {
         assert!(!app.chart.state().has_zoom_history());
         assert!(app.chart.drawings().drawings.is_empty());
         assert!(app.chart.can_redo());
+    }
+
+    /// A cursor pick ends Zoom in, in the chart as in the toolbar.
+    #[test]
+    fn cursor_pick_ends_box_zoom_mode() {
+        use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(
+            egui::Context::default(),
+        ));
+        app.drawing_toolbar.state.zoom_mode_active = true;
+        app.handle_drawing_toolbar(DrawingToolbarAction::ZoomIn);
+        assert!(app.chart.is_zoom_mode_active());
+        // What the toolbar does to its own state on a cursor pick.
+        app.drawing_toolbar.state.clear_selection();
+        app.handle_drawing_toolbar(DrawingToolbarAction::SetCursorType(CursorType::Dot));
+        assert!(!app.chart.is_zoom_mode_active());
     }
 
     #[test]
