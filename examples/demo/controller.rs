@@ -1082,9 +1082,7 @@ impl DemoApp {
         self.regenerate_bars();
         self.timeframe_toolbar.state.timeframe = tf;
         self.refresh_interval_control();
-        // Source playback stays on its own interval when the display interval changes.
-        self.configure_replay_intervals();
-        self.push_replay_window_to_chart();
+        self.follow_replay_timeframe();
     }
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
