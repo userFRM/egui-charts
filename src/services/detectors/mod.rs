@@ -1888,6 +1888,43 @@ mod tests {
             (241, 100.75, 1.0, Buy, &[]),
             (300, 100.0, 1.0, Buy, &[]),
         ];
+        // Bar 120 repeats bar 60's stack. Both later rejections name the shared bounds once.
+        let repeated: [Step; 9] = [
+            (
+                120,
+                100.0,
+                1.0,
+                Sell,
+                &[
+                    "Buy imbalance: Buy imbalance on 3 rows",
+                    "Stacked buy imbalance: Stacked buy imbalance of 3 rows",
+                ],
+            ),
+            (121, 100.25, 1.0, Sell, &[]),
+            (122, 100.5, 1.0, Sell, &[]),
+            (123, 100.25, 12.0, Buy, &[]),
+            (124, 100.5, 9.0, Buy, &[]),
+            (125, 100.75, 15.0, Buy, &[]),
+            (
+                180,
+                100.5,
+                1.0,
+                Sell,
+                &[
+                    "Buy imbalance: Buy imbalance on 3 rows",
+                    "Stacked buy imbalance: Stacked buy imbalance of 3 rows",
+                    "Buy zone rejection: Buy zone rejection at 100.25 to 100.75",
+                ],
+            ),
+            (181, 100.75, 1.0, Buy, &[]),
+            (
+                240,
+                101.0,
+                1.0,
+                Buy,
+                &["Buy zone rejection: Buy zone rejection at 100.25 to 100.75"],
+            ),
+        ];
         let settings = |minimum: f64| {
             let mut settings = DetectorSettings::default();
             settings.footprint.enabled = true;
@@ -1935,6 +1972,11 @@ mod tests {
                 "zone rejection",
                 0.0,
                 [&stacked(&[])[..7], &rejection[..]].concat(),
+            ),
+            (
+                "repeated stack",
+                0.0,
+                [&stacked(&[])[..7], &repeated[..]].concat(),
             ),
         ] {
             let mut host = Host::new(Some(1_000.0));
@@ -1994,7 +2036,11 @@ mod tests {
                 push(181, 100.75, 1.0, Buy, &[]);
                 push(240, 101.0, 1.0, Buy, rejected);
             } else {
-                let fills = if name == "first retained bar" { 100_010 } else { 1 };
+                let fills = if name == "first retained bar" {
+                    100_010
+                } else {
+                    1
+                };
                 for _ in 0..fills {
                     push(121, 99.0, 1.0, Sell, &[]);
                 }

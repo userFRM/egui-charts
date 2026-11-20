@@ -115,6 +115,7 @@ impl FootprintRule {
 
 /// A stacked imbalance zone of an earlier closed bar, in rows of one tick, active until a later
 /// bar closes beyond its far edge or a closed bar is skipped.
+#[derive(PartialEq, Eq)]
 pub(super) struct Zone {
     low: i64,
     high: i64,
@@ -268,6 +269,7 @@ pub(super) fn closed(
             out.push(signal(key, at, close, up, label, tooltip));
         }
     }
+    stacks.retain(|zone| !zones.contains(zone));
     zones.extend(stacks);
     if zones.len() > ZONES {
         zones.drain(..zones.len() - ZONES);
