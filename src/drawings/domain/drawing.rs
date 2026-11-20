@@ -10,10 +10,10 @@
 
 use super::{
     AnnotationMarker, ArrowStyle, BarsPatternConfig, BarsPatternMode, ChartPoint, DrawingToolType,
-    ElliottDegree, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig,
-    ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig,
-    PositionReadout, PositionSize, PositionSizing, PositionStyle, ProjectionConfig, RangeSettings,
-    RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    ElliottDegree, FibonacciConfig, FontWeight, ForecastStyle, GANN_SQUARE_UNITS, GannConfig,
+    GhostFeedConfig, ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle,
+    PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
+    ProjectionConfig, RangeSettings, RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -295,9 +295,10 @@ pub struct Drawing {
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
-    /// info line or trend angle, the text placement of a horizontal line or ray, a vertical line,
-    /// a cross line, an arrow, a channel or a regression trend, the prices of a flat top/bottom or
-    /// disjoint channel, and the reach of a vertical line. Other tools ignore these settings.
+    /// info line, trend angle or arrow, the text placement of a horizontal line or ray, a
+    /// vertical line, a cross line, a channel or a regression trend, the prices of a flat
+    /// top/bottom or disjoint channel, and the reach of a vertical line. Other tools ignore
+    /// these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
     /// Readouts, card, box border and vertical reach of a date range or date and price range.
@@ -408,6 +409,12 @@ pub struct Drawing {
     /// colour with a zone in the fill colour and no coefficients. Other tools ignore it.
     #[serde(default)]
     pub projection: Option<ProjectionConfig>,
+    /// Card and badge colours and the background transparency of the forecast tool. New
+    /// forecasts start from [`ForecastStyle::default`]; `None`, as on forecasts saved before
+    /// these settings, draws the theme's colours without borders, with the fill colour, when
+    /// set, as the background of every card and badge. Other tools ignore it.
+    #[serde(default)]
+    pub forecast: Option<ForecastStyle>,
 
     // === Z-Order (rendering layer) ===
     /// Z-order among the drawings of the same `series_layer` (higher = drawn on top).
@@ -441,10 +448,10 @@ pub(super) const PINK: [u8; 4] = [233, 30, 99, 255];
 pub(super) const PURPLE: [u8; 4] = [156, 39, 176, 255];
 pub(super) const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
 pub(super) const GREY: [u8; 4] = [128, 128, 128, 255];
-const WHITE: [u8; 4] = [255, 255, 255, 255];
+pub(super) const WHITE: [u8; 4] = [255, 255, 255, 255];
 
 /// `color` at `alpha` of 255.
-const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
+pub(super) const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
     [color[0], color[1], color[2], alpha]
 }
 
@@ -848,6 +855,7 @@ impl Drawing {
             }),
             projection: (tool_type == DrawingToolType::ProjectionTool)
                 .then(ProjectionConfig::default),
+            forecast: (tool_type == DrawingToolType::Forecast).then(ForecastStyle::default),
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
             series_layer: None,

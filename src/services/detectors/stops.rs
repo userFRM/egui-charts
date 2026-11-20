@@ -205,6 +205,8 @@ pub(super) struct StopSweeps {
     /// The latest bar of each footprint condition counted on the current clock, independent of
     /// chart marker retention.
     pub(super) conditions: HashMap<String, DateTime<Utc>>,
+    /// Footprint stacked imbalance zones still active on the current clock.
+    zones: Vec<footprint::Zone>,
 }
 
 struct Prices {
@@ -231,6 +233,7 @@ impl StopSweeps {
             live: None,
             live_open: None,
             conditions: HashMap::new(),
+            zones: Vec::new(),
         }
     }
 
@@ -254,6 +257,7 @@ impl StopSweeps {
             .zip(self.clock.as_ref())
             .map(|(time, clock)| clock.instant_open(time));
         self.conditions.clear();
+        self.zones.clear();
         self.footprint = self.clock.clone().map(|clock| {
             let mut footprint = Footprint::new(clock, self.tick, 1).unwrap();
             footprint.set_budget(12, 100_000);
@@ -299,6 +303,7 @@ impl StopSweeps {
                     self.footprint = Some(footprint);
                     self.bars.clear();
                     self.volumes.clear();
+                    self.zones.clear();
                 }
             }
         }
@@ -363,15 +368,24 @@ impl StopSweeps {
                 continue;
             }
             self.closed = Some(at);
-            if self.first.is_some_and(|first| at <= first) {
-                continue;
+            let bar = footprint
+                .bar_at(at)
+                .filter(|_| self.first.is_none_or(|first| at > first));
+            if settings.footprint.enabled && bar.is_some() {
+                footprint::closed(
+                    footprint,
+                    at,
+                    prices.close,
+                    &settings.footprint.rule,
+                    &mut self.zones,
+                    out,
+                );
+            } else {
+                self.zones.clear();
             }
-            let Some(bar) = footprint.bar_at(at) else {
+            let Some(bar) = bar else {
                 continue;
             };
-            if settings.footprint.enabled {
-                footprint::closed(bar, at, prices.close, &settings.footprint.rule, out);
-            }
             let volume = bar.volume();
             let buy = prices.close > prices.open;
             let delta = if buy { bar.delta() } else { -bar.delta() };
