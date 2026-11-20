@@ -69,6 +69,13 @@ struct NewsAlert {
     active: bool,
 }
 
+/// Recent publications seen since an alert started or resumed, including late arrivals.
+#[derive(Debug)]
+struct SeenNews {
+    since: DateTime<Utc>,
+    publications: BTreeSet<(DateTime<Utc>, String)>,
+}
+
 /// News or highlights fed by the host's [`Datafeed::news`].
 ///
 /// Keep it on the chart's symbol with [`set_symbol`](Self::set_symbol); the user switches between
@@ -117,8 +124,8 @@ pub struct NewsPanel {
     alert_inbox: Arc<Inbox>,
     alert_request: u64,
     alert_requests: BTreeMap<u64, (String, NewsAlert)>,
-    /// The last notified instant and ids at that instant, to retain simultaneous releases.
-    alert_seen: BTreeMap<String, (DateTime<Utc>, BTreeSet<String>)>,
+    /// At most 10,000 recent publication identities per alert, to suppress repeat answers.
+    alert_seen: BTreeMap<String, SeenNews>,
     alerts_refresh: bool,
     alert_errors: BTreeMap<String, FeedError>,
     notifications: Vec<Notification>,
@@ -337,7 +344,10 @@ impl NewsPanel {
         for (name, alert) in alerts.into_iter().filter(|(_, alert)| alert.active) {
             self.alert_seen
                 .entry(name.clone())
-                .or_insert_with(|| (Utc::now(), BTreeSet::new()));
+                .or_insert_with(|| SeenNews {
+                    since: Utc::now(),
+                    publications: BTreeSet::new(),
+                });
             if self
                 .alert_requests
                 .values()
@@ -479,12 +489,13 @@ impl NewsPanel {
                 Ok(mut stories) => {
                     self.alert_errors.remove(&name);
                     stories.sort_by_key(|story| story.time);
-                    let Some((after, seen)) = self.alert_seen.get_mut(&name) else {
+                    let Some(seen) = self.alert_seen.get_mut(&name) else {
                         continue;
                     };
                     for story in stories {
-                        if story.time < *after
-                            || (story.time == *after && seen.contains(&story.id))
+                        let publication = (story.time, story.id);
+                        if story.time < seen.since
+                            || seen.publications.contains(&publication)
                             || (!requested.view.symbols.is_empty()
                                 && !story.symbols.is_empty()
                                 && !story
@@ -494,11 +505,10 @@ impl NewsPanel {
                         {
                             continue;
                         }
-                        if story.time > *after {
-                            *after = story.time;
-                            seen.clear();
+                        seen.publications.insert(publication);
+                        if seen.publications.len() > 10_000 {
+                            seen.publications.pop_first();
                         }
-                        seen.insert(story.id);
                         let mut notification = Notification::new(story.time, name.clone());
                         notification.body = story.headline;
                         notification.symbol = story
@@ -1481,6 +1491,33 @@ mod tests {
         }
         h.run_steps(3);
         assert!(h.state_mut().take_notifications().is_empty());
+
+        // A fresh publication can arrive after a more recent one, without being history or a
+        // duplicate. Both answers are still ordered newest first by the feed.
+        let published = Utc::now();
+        let mut newest = NewsStory::new(
+            "newest",
+            published + chrono::Duration::seconds(1),
+            "Newest story",
+        );
+        newest.symbols = vec!["AAA".into()];
+        let mut late = NewsStory::new("late", published, "Late story");
+        late.symbols = vec!["AAA".into()];
+        for (answer, expected) in [
+            (vec![newest.clone()], "Newest story"),
+            (vec![newest, late], "Late story"),
+        ] {
+            h.state_mut().refresh();
+            h.run_steps(3);
+            for (_, reply) in std::mem::take(&mut *feed.0.lock().unwrap()) {
+                reply.send(Ok(answer.clone()));
+            }
+            h.run_steps(3);
+            let notifications = h.state_mut().take_notifications();
+            assert_eq!(notifications.len(), 1, "{expected}");
+            assert_eq!(notifications[0].title, "Alpha");
+            assert_eq!(notifications[0].body, expected);
+        }
 
         // One filter's successful reply must not hide another filter's failure.
         h.state_mut().refresh();
