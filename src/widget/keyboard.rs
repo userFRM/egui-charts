@@ -99,7 +99,9 @@ impl ShortcutMap {
                         ..
                     } => (*key, *modifiers),
                     Event::Copy => (egui::Key::C, egui::Modifiers::COMMAND),
-                    Event::Paste(_) => (egui::Key::V, egui::Modifiers::COMMAND),
+                    Event::Paste(_) | Event::PasteImage(_) => {
+                        (egui::Key::V, egui::Modifiers::COMMAND)
+                    }
                     _ => return None,
                 };
                 let typed = pairs[index].and_then(|text| match &input.events[text] {
@@ -220,6 +222,13 @@ pub enum ShortcutRequest {
     Action(KeyboardAction),
     /// Paste clipboard text. The host recognizes its drawing format before inserting anything.
     PasteDrawing(String),
+    /// Paste a picture the platform read from a clipboard that held no text, as desktop
+    /// platforms report Ctrl+V or Command+V on a copied screenshot. The pixels are the host's
+    /// to install under an address its image loaders resolve, for example with an
+    /// [`egui::load::ImageLoader`] that returns this image for that address.
+    #[cfg(feature = "drawings")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+    PasteImage(std::sync::Arc<egui::ColorImage>),
     /// Open symbol search with the typed text.
     SymbolSearch(String),
     /// Open interval entry with the typed digits; a comma opens it empty.
@@ -408,13 +417,17 @@ impl super::Chart {
             {
                 continue;
             }
-            if action == KeyboardAction::PasteDrawing
-                && let Event::Paste(text) = event
-            {
-                self.keyboard
-                    .requests
-                    .push(ShortcutRequest::PasteDrawing(text));
-                continue;
+            if action == KeyboardAction::PasteDrawing {
+                let request = match event {
+                    Event::Paste(text) => Some(ShortcutRequest::PasteDrawing(text)),
+                    #[cfg(feature = "drawings")]
+                    Event::PasteImage(image) => Some(ShortcutRequest::PasteImage(image)),
+                    _ => None,
+                };
+                if let Some(request) = request {
+                    self.keyboard.requests.push(request);
+                    continue;
+                }
             }
             let rect = if self.last_rendered_price_rect.width().is_finite()
                 && self.last_rendered_price_rect.width() > 0.0
@@ -471,7 +484,7 @@ impl super::Chart {
             for (index, event) in input.events.iter().enumerate() {
                 match event {
                     Event::Text(text) if starts_entry(text) => return None,
-                    Event::Copy | Event::Paste(_) => return None,
+                    Event::Copy | Event::Paste(_) | Event::PasteImage(_) => return None,
                     Event::Key {
                         key,
                         modifiers,
@@ -1360,28 +1373,34 @@ mod tests {
     }
 
     /// The desktop reports a paste as the paste event alone, a browser as the key press and
-    /// then the paste event: either way the host gets one request carrying the text.
+    /// then the paste event: either way the host gets one request carrying the text. A picture
+    /// the desktop read from a clipboard without text reaches the host as well.
     #[test]
     fn a_paste_reported_with_its_key_press_is_one_request_with_the_text() {
-        for with_key in [true, false] {
+        let key = Event::Key {
+            key: Key::V,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        };
+        let text = Event::Paste("clip".into());
+        let pasted = ShortcutRequest::PasteDrawing("clip".into());
+        let image = std::sync::Arc::new(egui::ColorImage::filled([2, 1], egui::Color32::RED));
+        #[cfg(feature = "drawings")]
+        let picture = ShortcutRequest::PasteImage(image.clone());
+        #[cfg(not(feature = "drawings"))]
+        let picture = ShortcutRequest::Action(KeyboardAction::PasteDrawing);
+        for (events, expected) in [
+            (vec![text.clone()], pasted.clone()),
+            (vec![key, text], pasted),
+            (vec![Event::PasteImage(image)], picture),
+        ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
-            let mut events = vec![Event::Paste("clip".into())];
-            if with_key {
-                events.insert(
-                    0,
-                    Event::Key {
-                        key: Key::V,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: Modifiers::COMMAND,
-                    },
-                );
-            }
             ctx.run_ui(
                 RawInput {
-                    events,
+                    events: events.clone(),
                     ..Default::default()
                 },
                 |ui| {
@@ -1389,11 +1408,7 @@ mod tests {
                 },
             )
             .drop_without_applying_deltas();
-            assert_eq!(
-                chart.take_shortcut_requests(),
-                vec![ShortcutRequest::PasteDrawing("clip".into())],
-                "key press reported: {with_key}"
-            );
+            assert_eq!(chart.take_shortcut_requests(), vec![expected], "{events:?}");
         }
     }
 
