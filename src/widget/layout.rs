@@ -1035,6 +1035,8 @@ pub struct ChartLayout {
     /// The chart slot shown alone in place of the preset.
     maximized: Option<usize>,
     focus_active: bool,
+    /// A keyboard or maximized-chart selection fits the source's range at the new plot width.
+    focus_range: Option<(usize, usize)>,
     /// The slot whose corner menu is open. It stays shown when a click selects another chart, so
     /// a name being edited in it can still be committed.
     corner_menu: Option<usize>,
@@ -1294,6 +1296,9 @@ impl ChartLayout {
     /// unless it is detached. A slot past the preset is clamped to its last supplied chart.
     pub fn set_active(&mut self, index: usize) {
         if index < 16 {
+            if self.maximized.is_some() && index != self.active {
+                self.focus_range = Some((self.active, index));
+            }
             self.active = index;
             self.focus_active = true;
         }
@@ -1311,8 +1316,8 @@ impl ChartLayout {
     pub fn set_maximized(&mut self, index: Option<usize>) {
         match index {
             Some(index) if index < 16 => {
-                self.maximized = Some(index);
                 self.set_active(index);
+                self.maximized = Some(index);
             }
             Some(_) => {}
             None => self.maximized = None,
@@ -1335,6 +1340,10 @@ impl ChartLayout {
                 *index = a;
             }
         };
+        if let Some((from, to)) = &mut self.focus_range {
+            moved(from);
+            moved(to);
+        }
         for change in &mut self.links.pending {
             moved(&mut change.index);
         }
@@ -1767,6 +1776,9 @@ impl ChartLayout {
                 self.maximized = Some(target);
             }
             self.set_active(target);
+            if target != index {
+                self.focus_range = Some((index, target));
+            }
             ui.ctx().request_repaint();
             moved = true;
         }
@@ -1835,7 +1847,6 @@ impl ChartLayout {
             self.maximized = Some(self.active);
         }
         // A chart supplied or restored in a slot starts a new baseline: nothing changed in it.
-        #[cfg(feature = "drawings")]
         let known = self.previous_charts;
         let mut supplied = false;
         for (index, chart) in charts.iter().enumerate() {
@@ -1852,6 +1863,16 @@ impl ChartLayout {
                 self.previous_ranges[index] = None;
                 self.pending_ranges[index] = None;
             }
+        }
+        if self.focus_range.is_some_and(|(from, to)| {
+            from >= count
+                || to != self.active
+                || !self.sync.sync_time_axis
+                || !self.same_group(from, to)
+                || !known.contains(&charts[from].layout_identity)
+                || !known.contains(&charts[to].layout_identity)
+        }) {
+            self.focus_range = None;
         }
         // A switch turned on aligns the charts that follow it, except in a show that brings a
         // supplied or restored chart: like the charts, the switches are then a new baseline.
@@ -1972,8 +1993,15 @@ impl ChartLayout {
         let before_range = charts[self.active].visible_time_range();
         let before_sync: Vec<_> = charts
             .iter()
-            .map(|c| (c.synced_crosshair_bar_idx, c.get_time_scale_state()))
+            .map(|c| {
+                (
+                    c.synced_crosshair_bar_idx,
+                    c.get_time_scale_state(),
+                    c.visible_time_range(),
+                )
+            })
             .collect();
+        let mut rendered = [false; 16];
         for index in 0..count {
             if self.mode == ChartLayoutMode::Tabs && index != self.active && !self.detached[index] {
                 continue;
@@ -2009,6 +2037,7 @@ impl ChartLayout {
                         egui::CentralPanel::default().show(ui, |ui| {
                             slot_background(ui, ui.max_rect(), chart);
                             let response = render(ui, index, chart);
+                            rendered[index] = true;
                             if focus && !response.has_focus() {
                                 response.request_focus();
                             }
@@ -2057,6 +2086,7 @@ impl ChartLayout {
                         total > 1 && rect.right() - plot_left >= LINK_CONTROLS_MIN_WIDTH;
                     charts[index].layout_link_controls = link_controls;
                     let response = render(ui, index, charts[index]);
+                    rendered[index] = true;
                     charts[index].layout_link_controls = false;
                     charts[index].layout_inactive = false;
                     // Reselecting a focused canvas must keep its arrow-key filter.
@@ -2212,16 +2242,50 @@ impl ChartLayout {
         if count > 1 {
             self.cycle_charts(ui, charts, count);
         }
+        // A hidden follower was fitted at its old tile width. Fit the previous active chart's
+        // UTC span only after the newly selected chart has its final width; otherwise selecting
+        // it would enlarge the synchronized range. A late Tab waits until the next show.
+        let mut fitted_focus = false;
+        if let Some((from, to)) = self.focus_range {
+            if to != self.active || !self.sync.sync_time_axis || !self.same_group(from, to) {
+                self.focus_range = None;
+            } else if rendered[to] {
+                let changed_by_host = self.previous_ranges[to]
+                    .zip(before_sync[to].2)
+                    .is_some_and(|(previous, before)| previous != before);
+                if !changed_by_host {
+                    let range = self.pending_ranges[from]
+                        .map(|pending| pending.range)
+                        .or_else(|| charts[from].visible_time_range());
+                    if let Some(range) = range {
+                        let source = charts[from].sync_source();
+                        match &mut self.pending_ranges[to] {
+                            Some(pending) => {
+                                pending.range = range;
+                                pending.source = source;
+                            }
+                            None => {
+                                fitted_focus =
+                                    charts[to].apply_synced_time_range_from(range, source);
+                            }
+                        }
+                    }
+                }
+                self.focus_range = None;
+            }
+        }
         // Apply gestures from the source after it has handled this frame's input.
-        let sync_range = charts[self.active].visible_time_range() != before_range
-            || self.previous_preset != Some((self.mode, count))
-            || aligned.2;
+        let sync_range = self.focus_range.is_none()
+            && (fitted_focus
+                || charts[self.active].visible_time_range() != before_range
+                || self.previous_preset != Some((self.mode, count))
+                || aligned.2);
         self.sync_view(charts, total, sync_range);
         self.previous_preset = Some((self.mode, count));
         if charts
             .iter()
             .zip(before_sync)
-            .any(|(chart, (crosshair, (spacing, offset)))| {
+            .any(|(chart, (crosshair, (spacing, offset), _))| {
                 chart.synced_crosshair_bar_idx != crosshair
                     || (chart.get_time_scale_state().0 - spacing).abs() > 0.001
                     || (chart.get_time_scale_state().1 - offset).abs() > 0.001
@@ -5073,10 +5137,12 @@ mod tests {
         }
         layout.set_maximized(Some(2));
         frame(&mut layout, &mut charts, false, false);
+        let other_group_spacing = charts[1].get_time_scale_state().0;
         layout.set_active(1);
         frame(&mut layout, &mut charts, false, false);
         frame(&mut layout, &mut charts, false, false);
         assert_eq!((layout.maximized(), layout.active()), (Some(1), 1));
+        assert_eq!(charts[1].get_time_scale_state().0, other_group_spacing);
         assert!(charts[1].get_rendered_price_rect().width() > tiles[1].width() * 1.8);
         layout.mode = ChartLayoutMode::Tabs;
         frame(&mut layout, &mut charts, false, false);
@@ -5100,7 +5166,8 @@ mod tests {
     }
 
     /// Tab follows slot order, wraps, skips detached slots and transfers both maximization and
-    /// canvas focus. A host draining first cannot take layout keys; a lone chart still yields them.
+    /// canvas focus without changing the synchronized UTC span. A host draining first cannot
+    /// take layout keys; a lone chart still yields them.
     #[test]
     fn tab_and_shift_tab_move_between_the_shown_charts() {
         type Row = (
@@ -5252,9 +5319,6 @@ mod tests {
                 layout.set_detached(*slot, true);
             }
             layout.set_active(start);
-            if let Some(slot) = maximized {
-                layout.set_maximized(Some(slot));
-            }
             let modifiers = if forward {
                 egui::Modifiers::NONE
             } else {
@@ -5265,6 +5329,8 @@ mod tests {
             let mut discarded = false;
             let mut frame = |layout: &mut ChartLayout, charts: &mut Vec<Chart>, pressed| {
                 time += 0.1;
+                let source = layout.active();
+                let mut range = charts[source].visible_time_range();
                 ctx.run_ui(
                     RawInput {
                         screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
@@ -5295,13 +5361,30 @@ mod tests {
                             chart.dispatch_shortcuts(ui.ctx());
                             requests.extend(chart.take_shortcut_requests());
                         }
-                        layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                        layout.show_with(
+                            ui,
+                            &mut charts.iter_mut().collect::<Vec<_>>(),
+                            |ui, index, chart| {
+                                let response = chart.show(ui);
+                                if index == source {
+                                    range = chart.visible_time_range();
+                                }
+                                response
+                            },
+                        );
                     },
                 )
                 .drop_without_applying_deltas();
+                range
             };
             for _ in 0..3 {
                 frame(&mut layout, &mut charts, false);
+            }
+            if let Some(slot) = maximized {
+                layout.set_maximized(Some(slot));
+                for _ in 0..3 {
+                    frame(&mut layout, &mut charts, false);
+                }
             }
             if layout.mode != mode {
                 // Hosts keep the active chart when shrinking a preset by moving it to slot zero.
@@ -5311,7 +5394,7 @@ mod tests {
                 layout.set_active(start);
                 layout.mode = mode;
             }
-            frame(&mut layout, &mut charts, true);
+            let range = frame(&mut layout, &mut charts, true).unwrap();
             for _ in 0..2 {
                 frame(&mut layout, &mut charts, false);
             }
@@ -5322,6 +5405,12 @@ mod tests {
             );
             let count = supplied.min(mode.chart_count());
             if count > 1 {
+                let selected = charts[layout.active()].visible_time_range().unwrap();
+                assert!(
+                    (selected.from - range.from).num_milliseconds().abs() <= 1
+                        && (selected.to - range.to).num_milliseconds().abs() <= 1,
+                    "{row}, discard={discard_input}: UTC span changed from {range:?} to {selected:?}"
+                );
                 let focused = ctx.memory(|memory| memory.focused()).and_then(|id| {
                     charts
                         .iter()

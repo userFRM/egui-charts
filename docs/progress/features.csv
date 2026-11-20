@@ -97,7 +97,7 @@ Builder API,Save/load adapter,User settings persistence,verified,host,src/servic
 Builder API,Widget API and customization,Change interval at runtime,verified,library,src/widget/feed/mod.rs;src/widget/events.rs,
 Builder API,Widget API and customization,Change symbol at runtime,verified,library,src/widget/feed/mod.rs;src/scales/pricescale.rs;src/widget/events.rs,
 Builder API,Widget API and customization,Chart events,incomplete,library,src/widget/events.rs;src/widget/crosshair.rs;src/widget/readout.rs;src/widget/feed/mod.rs;src/widget/series/mod.rs;src/widget/replay.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs;src/chart/primitives.rs;src/widget/primitives.rs;src/widget/marks.rs;src/widget/series/paint.rs,1864;1895;1896;1897;1898;1901;1902;2189;2190;2191;2192;2310;2535;2519;2487;2513;2510;2511;2512;3230;3225;3259
-Builder API,Widget API and customization,Chart synchronisation,verified,library,src/widget/sync.rs;src/widget/layout.rs;src/model/timescale.rs;src/widget/frame/mod.rs,2826;2829;2827
+Builder API,Widget API and customization,Chart synchronisation,unverified,library,src/widget/sync.rs;src/widget/layout.rs;src/model/timescale.rs;src/widget/frame/mod.rs,2826;2829;2827;3572
 Builder API,Widget API and customization,Chart type switching,verified,library,src/widget/builder.rs;src/chart/rendering/candles/mod.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Chart without toolbars,verified,library,Cargo.toml;src/lib.rs;src/widget/builder.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Context menu customisation,verified,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/rows.rs;src/ui/context_menu/axis.rs,3241;3536
@@ -227,11 +227,11 @@ Chart,Multi-chart and sync,Grid layout presets,verified,library,src/widget/layou
 Chart,Multi-chart and sync,Multi-chart layout container,unverified,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/mod.rs;src/widget/history.rs;src/chart/rendering/axes/mod.rs;src/chart/rendering/legend/mod.rs;src/widget/frame/mod.rs;examples/demo/layouts.rs;examples/demo/replay.rs,2077;2437;2505;2527;2688;2689;2949;2950;2951;2810;3572
 Chart,Multi-chart and sync,Symbol and interval sync groups,verified,library,src/widget/layout.rs;src/widget/history.rs;src/widget/frame/mod.rs;src/widget/snapshot.rs;examples/demo/replay.rs;examples/demo/storage.rs;examples/demo/layouts.rs,1941;2102;2437;2688;2826;2827;2828;2829;2950;2951
 Chart,Multi-chart and sync,Sync crosshair,verified,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame/mod.rs,2474;2512;2814;2852;2853
-Chart,Multi-chart and sync,Sync date range,unverified,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs;src/ui/top_toolbar/components/chart_grid_selector.rs;src/widget/format.rs,2854;3246;3571
+Chart,Multi-chart and sync,Sync date range,unverified,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs;src/ui/top_toolbar/components/chart_grid_selector.rs;src/widget/format.rs,2854;3246;3571;3572
 Chart,Multi-chart and sync,Sync drawings,verified,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/stored_drawings.rs;src/widget/history.rs;src/drawings/services/history.rs;src/drawings/manager/mod.rs;src/widget/feed/mod.rs;src/widget/anchors.rs;src/drawings/domain/drawing.rs,3286;3436
 Chart,Multi-chart and sync,Sync interval,verified,host,src/widget/layout.rs;src/widget/feed/mod.rs;src/widget/sync.rs;src/model/timescale.rs,2829;3569
 Chart,Multi-chart and sync,Sync symbol,verified,host,src/widget/layout.rs;src/widget/feed/mod.rs,2826;2829;3569
-Chart,Multi-chart and sync,Sync time,unverified,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs,3569
+Chart,Multi-chart and sync,Sync time,unverified,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs,3569;3572
 Chart,Multi-chart and sync,Up to 16 charts per tab,verified,library,src/widget/layout.rs,
 Chart,"News, calendar and social","Earnings, dividends and splits marked on the chart",verified,host,src/model/time_scale_event.rs;src/widget/marks.rs;src/chart/rendering/markers.rs;src/widget/frame/mod.rs;examples/demo/marks.rs;examples/demo/layouts.rs,1931
 Chart,"News, calendar and social",Economic events on the chart,verified,host,src/model/time_scale_event.rs;src/widget/marks.rs;src/chart/rendering/markers.rs;src/widget/frame/mod.rs;examples/demo/marks.rs;examples/demo/layouts.rs,1931
@@ -943,7 +943,7 @@ Workspace,Templates and layouts,Save chart layout,incomplete,library,src/widget/
 Workspace,Templates and layouts,Share a layout by link,incomplete,host,src/services/sharing.rs;src/ui/share_controls.rs;src/ui/top_toolbar/components/layout_menu.rs,3572
 Workspace,Templates and layouts,Snapshot: copy image to clipboard,incomplete,library,src/ui/export.rs;src/ui/top_toolbar/toolbar.rs;src/ui_kit/section/mod.rs,1556;3596
 Workspace,Templates and layouts,Snapshot: download the chart image,incomplete,library,src/widget/export.rs;src/widget/svg.rs;src/ui/top_toolbar/toolbar.rs;Cargo.toml;src/ui_kit/section/mod.rs,1963;1556;2461;3596;3756
-Workspace,Templates and layouts,Sync between charts,verified,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/sync.rs;src/model/timescale.rs;src/widget/frame/mod.rs,2474
+Workspace,Templates and layouts,Sync between charts,unverified,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/sync.rs;src/model/timescale.rs;src/widget/frame/mod.rs,2474;3572
 Workspace,Toolbars and panels,Bottom time bar,incomplete,library,src/ui/timeframe_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs;src/theme/mod.rs;terminal/src/time.rs;src/model/date_range.rs;src/ui/timeframe_toolbar/range_switcher.rs;terminal/src/compare.rs;src/widget/feed/mod.rs;src/data/mod.rs;src/model/instrument.rs;examples/demo/feeds.rs;examples/demo/controller.rs;examples/demo/sampledata.rs;src/ui/timeframe_toolbar/state.rs,1926;3560;3757;3571
 Workspace,Toolbars and panels,Chart settings button and applying the dialog,incomplete,library,src/ui/top_toolbar/toolbar.rs;src/widget/settings/apply.rs,2834
 Workspace,Toolbars and panels,Chart type menu,incomplete,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/chart_type_selector.rs;src/styles/mod.rs;src/services/settings.rs;terminal/src/time.rs,1556
