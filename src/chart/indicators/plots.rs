@@ -452,9 +452,7 @@ pub(crate) fn paint_drawings(
         context.rect.contains(pos) && ctx.layer_id_at(pos) == Some(context.painter.layer_id())
     }) && let Some(label) = drawings.iter().rev().find_map(|drawing| {
         let label = drawing.label.as_deref()?;
-        crate::drawings::services::DrawingInteraction::new()
-            .hit_test(pos, std::slice::from_ref(drawing), "")
-            .map(|_| label)
+        crate::drawings::services::hit_test(pos, std::slice::from_ref(drawing), "").map(|_| label)
     }) {
         // One id per pane, shared with the marks, so egui stacks the tooltips of every study
         // under the pointer instead of painting them over each other.
