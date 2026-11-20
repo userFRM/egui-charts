@@ -760,6 +760,16 @@ impl Chart {
             None => Vec::new(),
         };
         self.restore_aside_drawings(&snapshot.other_symbol_drawings);
+        // Layouts saved before the forecast study existed hold only the targets setting, and a
+        // saved study keeps it on; the next frame gives the study the restored colours.
+        #[cfg(feature = "studies")]
+        {
+            let held = self
+                .indicators()
+                .any(|(_, study)| super::studies::is_price_target_study(study));
+            self.set_price_targets_visible(snapshot.settings.show_price_targets || held);
+            self.price_target_colors = None;
+        }
         // A layout without the original pane has just left it: the main bars are live again.
         self.follow_feed_pause();
         self.history.clear();

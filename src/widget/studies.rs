@@ -194,6 +194,8 @@ impl Chart {
             .flatten();
         let overlay = indicator.is_overlay() && original;
         self.studies.add(indicator);
+        #[cfg(feature = "studies")]
+        self.adopt_price_target_study();
         self.readout_revision = crate::model::next_revision();
         self.study_ids.push(id);
         self.study_autoscale.push(true);
@@ -277,6 +279,18 @@ impl Chart {
             self.volume_setting = false;
         }
         let indicator = self.studies.remove_indicator(at);
+        #[cfg(feature = "studies")]
+        if indicator
+            .as_ref()
+            .is_some_and(|study| is_price_target_study(study.as_ref()))
+            && !self
+                .studies
+                .indicators()
+                .iter()
+                .any(|study| is_price_target_study(study.as_ref()))
+        {
+            self.show_price_targets = false;
+        }
         self.readout_revision = crate::model::next_revision();
         self.study_ids.remove(at);
         self.study_autoscale.remove(at);
@@ -578,6 +592,12 @@ impl Chart {
 /// Whether `study` reads another study's output, which the chained study cap counts.
 pub(crate) fn reads_study(study: &dyn Indicator) -> bool {
     matches!(study.source(), Some(StudySource::Study { .. }))
+}
+
+/// Whether `study` is an Analyst price forecast, which the chart's targets setting follows.
+#[cfg(feature = "studies")]
+pub(super) fn is_price_target_study(study: &dyn Indicator) -> bool {
+    study.name() == crate::studies::AnalystPriceForecast::NAME
 }
 
 /// The typed events studies read, without the mark source page an export froze at their end: a page

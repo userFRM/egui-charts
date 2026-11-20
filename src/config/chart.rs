@@ -816,6 +816,31 @@ impl ChartConfig {
         }
     }
 
+    /// The colour an Analyst price forecast study shows for the choice `color`: the fill
+    /// `PLACEHOLDER` stands for, made from the side's theme candle colour `themed`, or the
+    /// choice itself.
+    #[cfg(feature = "studies")]
+    pub(crate) fn price_target_study_color(color: Color32, themed: Color32) -> Color32 {
+        if color == Color32::PLACEHOLDER {
+            Self::price_target_colors(color, themed).1
+        } else {
+            color
+        }
+    }
+
+    /// The choice a study colour stands for: `PLACEHOLDER` when it is the theme's own fill,
+    /// within the rounding of a colour picker, otherwise the colour itself.
+    #[cfg(feature = "studies")]
+    pub(crate) fn price_target_choice(color: Color32, themed: Color32) -> Color32 {
+        let theme = Self::price_target_study_color(Color32::PLACEHOLDER, themed);
+        let near = color
+            .to_array()
+            .iter()
+            .zip(theme.to_array())
+            .all(|(a, b)| a.abs_diff(b) <= 1);
+        if near { Color32::PLACEHOLDER } else { color }
+    }
+
     /// Apply the theme's background, grid, axis text, candle, session break and watermark
     /// colours to this configuration.
     ///
