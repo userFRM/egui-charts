@@ -414,6 +414,11 @@ pub struct ClosedPosition {
     /// Realised profit or loss in the account's currency, as reported by the broker. The
     /// [paper account](crate::services::PaperAccount) excludes commissions, booked separately.
     pub realized_pnl: f64,
+    /// The commissions of the position's fills in the account's currency, when the broker
+    /// reports them: its opening, adding and closing fills, with a reversing fill's commission
+    /// shared in proportion to the quantity it closes and opens. `realized_pnl` excludes them.
+    #[serde(default)]
+    pub commission: Option<f64>,
     /// The opening fill's time, when the broker reports it.
     pub opened: Option<DateTime<Utc>>,
     /// The time of the fill that flattened or reversed the position.
@@ -422,7 +427,7 @@ pub struct ClosedPosition {
 
 impl ClosedPosition {
     /// A completed position with its side, total quantity, average entry and exit prices,
-    /// realised profit or loss and closing time, without a reported opening time.
+    /// realised profit or loss and closing time, without a reported opening time or commission.
     pub fn new(
         symbol: impl Into<String>,
         side: OrderSide,
@@ -439,6 +444,7 @@ impl ClosedPosition {
             average_price,
             exit_price,
             realized_pnl,
+            commission: None,
             opened: None,
             closed,
         }
