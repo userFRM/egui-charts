@@ -446,6 +446,10 @@ impl Indicator for VwapAutoAnchored {
         7
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn line_names(&self) -> Vec<String> {
         let unit = if self.percentage_bands { "%" } else { "σ" };
         std::iter::once("VWAP".to_string())
