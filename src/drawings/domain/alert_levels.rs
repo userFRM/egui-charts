@@ -1,4 +1,4 @@
-//! Alert levels for drawings whose lines depend on three anchors or a fitted bar range.
+//! Drawing alert levels, ray geometry and names, including levels fitted to a bar range.
 
 use super::{Drawing, DrawingToolType, PitchforkConfig};
 use crate::model::{Bar, math::Moments};
@@ -211,11 +211,139 @@ impl Drawing {
         levels
     }
 
-    /// The alert source name template of fork level `level` of [`Self::alert_levels`] and the
-    /// value of its setting, which fills `{value}`; `None` for a median and other drawings. With
-    /// `{tool}` and `{id}` filled, its English is the drawing's name and the level's name, as
-    /// alerts and presets saved before names kept their parts hold it.
-    pub(crate) fn fork_line(&self, level: usize) -> Option<(&'static str, String)> {
+    /// The rays of a speed resistance fan at `bar`, numbered and named as [`Self::alert_levels`].
+    pub(super) fn speed_fan_alert_levels(
+        &self,
+        bar: f64,
+        scale: PriceScaleMode,
+    ) -> Vec<(usize, String, f64)> {
+        let &[a, b, ..] = self.chart_points.as_slice() else {
+            return Vec::new();
+        };
+        let config = self.fibonacci_config();
+        let shared = config.time_levels.is_none();
+        // Separate price and time settings reverse the fan by mirroring its anchor prices.
+        let (start, end) = if config.reverse && !shared {
+            ((a.bar_idx, b.price), (b.bar_idx, a.price))
+        } else {
+            ((a.bar_idx, a.price), (b.bar_idx, b.price))
+        };
+        let log = scale == PriceScaleMode::Logarithmic;
+        let axis = |price: f64| if log { price.ln() } else { price };
+        let (x0, y0) = (f64::from(start.0), axis(start.1));
+        let (run, rise) = (f64::from(end.0) - x0, axis(end.1) - y0);
+        if !bar.is_finite() || [x0, y0, run, rise].iter().any(|v| !v.is_finite()) {
+            return Vec::new();
+        }
+        let ray = |dx: f64, dy: f64| {
+            if dx == 0.0 || (bar - x0) * dx < 0.0 {
+                return None;
+            }
+            let value = y0 + (bar - x0) * dy / dx;
+            let price = if log { value.exp() } else { value };
+            (price.is_finite() && (!log || price > 0.0)).then_some(price)
+        };
+        let price_rays = config
+            .levels
+            .iter()
+            .enumerate()
+            .filter_map(|(index, level)| {
+                if !level.visible || !level.value.is_finite() {
+                    return None;
+                }
+                let price = if level.value == 1.0 && run == 0.0 {
+                    ray(1.0, 0.0)
+                } else {
+                    ray(run, rise * (1.0 - f64::from(level.value)))
+                }?;
+                Some((
+                    2 * index,
+                    format!("{}: price level", level.label(config.levels_as_percent)),
+                    price,
+                ))
+            });
+        let time_rays = config
+            .fan_time_levels()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, level)| {
+                // The shared table's time ray at zero duplicates its price ray and is not painted.
+                if !level.visible || !level.value.is_finite() || (shared && level.value == 0.0) {
+                    return None;
+                }
+                let price = ray(run * (1.0 - f64::from(level.value)), rise)?;
+                Some((
+                    2 * index + 1,
+                    format!("{}: time level", level.label(config.levels_as_percent)),
+                    price,
+                ))
+            });
+        let mut levels: Vec<_> = price_rays.chain(time_rays).collect();
+        levels.sort_by_key(|(level, ..)| *level);
+        levels
+    }
+
+    /// The Gann fan rays at `bar`, numbered and named as [`Self::alert_levels`].
+    pub(super) fn gann_fan_alert_levels(
+        &self,
+        bar: f64,
+        scale: PriceScaleMode,
+    ) -> Vec<(usize, String, f64)> {
+        let &[a, b, ..] = self.chart_points.as_slice() else {
+            return Vec::new();
+        };
+        let log = scale == PriceScaleMode::Logarithmic;
+        let axis = |price: f64| if log { price.ln() } else { price };
+        let (x0, y0) = (f64::from(a.bar_idx), axis(a.price));
+        let (run, rise) = (f64::from(b.bar_idx) - x0, axis(b.price) - y0);
+        // The renderer's fallback angle for anchors on one bar has no price slope.
+        if !bar.is_finite()
+            || [x0, y0, run, rise].iter().any(|v| !v.is_finite())
+            || run == 0.0
+            || (bar - x0) * run < 0.0
+        {
+            return Vec::new();
+        }
+        self.gann_config()
+            .fan_ratios
+            .iter()
+            .enumerate()
+            .filter(|(_, level)| level.visible && level.value.is_finite() && level.value > 0.0)
+            .filter_map(|(index, level)| {
+                let value = y0 + (bar - x0) * rise / run * f64::from(level.value);
+                let price = if log { value.exp() } else { value };
+                (price.is_finite() && (!log || price > 0.0)).then(|| {
+                    (
+                        index,
+                        crate::drawings::rendering::gann_ratio_label(level.value),
+                        price,
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// The alert source name template of level `level` of [`Self::alert_levels`] and the text
+    /// that fills `{value}`: a fork setting or a speed fan ratio as its drawing labels it.
+    /// `None` for a fork median and other drawings. With `{tool}` and `{id}` filled, its English
+    /// keeps the drawing and level name that earlier alerts and presets saved.
+    pub(crate) fn level_line(&self, level: usize) -> Option<(&'static str, String)> {
+        if self.tool_type == DrawingToolType::FibonacciSpeedFan {
+            let config = self.fibonacci_config();
+            let levels = if level.is_multiple_of(2) {
+                &config.levels[..]
+            } else {
+                config.fan_time_levels()
+            };
+            let label = levels.get(level / 2)?.label(config.levels_as_percent);
+            return Some((
+                [
+                    "{tool} {id}: {value}: price level",
+                    "{tool} {id}: {value}: time level",
+                ][level % 2],
+                label,
+            ));
+        }
         if !is_fork(self.tool_type) {
             return None;
         }
