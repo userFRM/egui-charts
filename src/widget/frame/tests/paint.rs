@@ -2043,12 +2043,15 @@ fn add_rect(
 }
 
 /// Series and study edits preserve the other items' paint and pointer order through undo,
-/// including drawings passed to a surviving study and drawings whose layers merge (#3614).
+/// including drawings passed to a surviving study and drawings whose layers merge (#3614). In a
+/// user action an added series and the main series moving into a pane or back go under the
+/// drawings they meet there, as under a drawing placed there, and a host adding its series again
+/// after a restore keeps the restored places (#3739).
 #[cfg(all(feature = "drawings", feature = "studies"))]
 #[test]
 fn drawings_keep_their_place_when_the_series_and_studies_change() {
     use crate::studies::{RSI, SMA};
-    use crate::widget::{SeriesOptions, VisualOrder};
+    use crate::widget::{PaneId, SeriesId, SeriesOptions, VisualOrder};
     use egui::{Color32, Event};
     const FILL: Color32 = Color32::from_rgb(200, 0, 200);
     const SECOND: Color32 = Color32::from_rgb(0, 180, 200);
@@ -2183,6 +2186,146 @@ fn drawings_keep_their_place_when_the_series_and_studies_change() {
                     failures.push(format!("{case}, step {step}: merged drawings reversed"));
                 }
             }
+        }
+    }
+
+    const UPPER: Color32 = Color32::from_rgb(230, 120, 0);
+    const INTO: &str = "main series into a study pane";
+    const BACK: &str = "main series back";
+    for (case, backward, layers) in [
+        // Over the candles and SMA(2), under SMA(3).
+        ("add series", 1, [Some(2), Some(3)]),
+        // Over the candles, under both SMAs.
+        (INTO, 2, [Some(1), Some(2)]),
+        // Under RSI and the candles, in the RSI pane.
+        (BACK, 2, [Some(0), Some(2)]),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0, 100.0], &[110.0, 104.0]);
+        chart.config.show_volume = false;
+        chart.set_visible_bars(20);
+        // Closes alternate 110 and 104, so SMA(2) is 107 on every bar and SMA(3) 108 on even
+        // bars and 106 on odd ones, where the candles end at 104.
+        let sma = chart.add_indicator(Box::new(SMA::new(2)));
+        chart.add_indicator(Box::new(SMA::new(3).with_color(UPPER)));
+        let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+        let color = |chart: &crate::widget::Chart, id| {
+            let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
+            study.plot_style(0).color
+        };
+        let (sma_color, rsi_color) = (color(&chart, sma), color(&chart, rsi));
+        let pane = chart.series_pane(rsi).unwrap();
+        if case == BACK {
+            assert!(chart.move_series_to_pane(SeriesId::MAIN, pane));
+        }
+        let id = add_rect(&mut chart, None, [109.0, 101.0], FILL);
+        for _ in 0..backward {
+            assert!(chart.reorder_drawing(id, VisualOrder::SendBackward));
+        }
+        for step in 0..3 {
+            match step {
+                0 => chart.user_action(|chart| match case {
+                    INTO => assert!(chart.move_series_to_pane(SeriesId::MAIN, pane)),
+                    BACK => assert!(chart.move_series_to_pane(SeriesId::MAIN, PaneId::MAIN)),
+                    _ => {
+                        chart.add_series(SeriesOptions::default());
+                    }
+                }),
+                1 => assert!(chart.undo()),
+                _ => assert!(chart.redo()),
+            }
+            frame(&ctx, &mut chart, f64::from(step), vec![]);
+            let map = chart.get_chart_mapping();
+            let on = Pos2::new(map.idx_to_x(96), map.price_to_y(105.0));
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                f64::from(step) + 0.1,
+                vec![Event::PointerMoved(on)],
+            );
+            let rect = rect_at(&painted, FILL);
+            let candles: Vec<_> = painted
+                .iter()
+                .enumerate()
+                .filter_map(|(at, shape)| {
+                    matches!(shape, Shape::Rect(r) if r.fill == chart.config().bullish_color
+                    && chart.get_rendered_price_rect().contains_rect(r.rect))
+                    .then_some(at)
+                })
+                .collect();
+            let over_candles = case != BACK;
+            let candle_side = if over_candles {
+                *candles.last().unwrap() < rect
+            } else {
+                rect < candles[0]
+            };
+            // The studies sharing the rectangle's pane, and whether it is drawn over each.
+            let price_pane = chart.series_pane(SeriesId::MAIN) == Some(PaneId::MAIN);
+            let sides = if price_pane {
+                vec![(sma_color, case != INTO), (UPPER, case == BACK)]
+            } else {
+                vec![(rsi_color, case == INTO)]
+            };
+            let study_sides = sides.iter().all(|(color, over)| {
+                let (first, last) = line_at(&painted, *color);
+                if *over { last < rect } else { rect < first }
+            });
+            let hit = chart.drawings().hit_test(on);
+            // On SMA(2) over odd bar 95: no candle there, and SMA(3) passes a price lower.
+            let on_sma = Pos2::new(map.idx_to_x(95), map.price_to_y(107.0));
+            let sma_hit = price_pane.then(|| {
+                shapes(
+                    &ctx,
+                    &mut chart,
+                    f64::from(step) + 0.2,
+                    vec![Event::PointerMoved(on_sma)],
+                );
+                chart.drawings().hit_test(on_sma)
+            });
+            let layer = chart
+                .drawings()
+                .drawings
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap()
+                .series_layer;
+            let expected = (
+                layers[usize::from(step != 1)],
+                true,
+                true,
+                over_candles.then_some(id),
+                price_pane.then_some((case != INTO).then_some(id)),
+            );
+            let actual = (layer, candle_side, study_sides, hit, sma_hit);
+            if actual != expected {
+                failures.push(format!(
+                    "{case}, step {step}: {actual:?}, expected {expected:?}"
+                ));
+            }
+        }
+    }
+
+    #[cfg(feature = "ui")]
+    {
+        // A host that restores a layout without its series adds them again outside a user action,
+        // and the restored drawings already count them.
+        let mut saved = chart(&[100.0, 100.0], &[110.0, 104.0]);
+        saved.add_indicator(Box::new(SMA::new(2)));
+        saved.add_series(SeriesOptions::default());
+        // Over the candles, under the added series and SMA(2).
+        let id = add_rect(&mut saved, None, [109.0, 101.0], FILL);
+        for _ in 0..2 {
+            assert!(saved.reorder_drawing(id, VisualOrder::SendBackward));
+        }
+        let mut snapshot = saved.snapshot().unwrap();
+        snapshot.series = None;
+        let mut restored = chart(&[100.0, 100.0], &[110.0, 104.0]);
+        restored.restore(&snapshot).unwrap();
+        restored.add_series(SeriesOptions::default());
+        let layer = |chart: &crate::widget::Chart| chart.drawings().drawings[0].series_layer;
+        let layers = (layer(&saved), layer(&restored));
+        if layers != (Some(1), Some(1)) {
+            failures.push(format!("series added again after a restore: {layers:?}"));
         }
     }
 
