@@ -193,8 +193,6 @@ locales = ["chrono/unstable-locales"]
 ## IANA time zones and daylight-saving rules from chrono-tz, enabled by default.
 ## Without it, UTC, system local time and explicit fixed offsets remain available.
 timezones = ["dep:chrono-tz"]
-## `Serialize` and `Deserialize` for `theme::Theme`, so an application can load a theme from a file.
-serde = []
 
 # The web builds: `trunk build --release` of `examples/demo`, whose own profile matches this one,
 # and of the bare chart in `scripts/web-size.sh`. Whole-program optimisation for size: at `s` the
