@@ -119,7 +119,7 @@ pub struct NewsPanel {
     /// The last notified instant and ids at that instant, to retain simultaneous releases.
     alert_seen: BTreeMap<String, (DateTime<Utc>, BTreeSet<String>)>,
     alerts_refresh: bool,
-    alert_error: Option<FeedError>,
+    alert_errors: BTreeMap<String, FeedError>,
     notifications: Vec<Notification>,
 }
 
@@ -183,7 +183,7 @@ impl NewsPanel {
             alert_requests: BTreeMap::new(),
             alert_seen: BTreeMap::new(),
             alerts_refresh: false,
-            alert_error: None,
+            alert_errors: BTreeMap::new(),
             notifications: Vec::new(),
         }
     }
@@ -202,6 +202,7 @@ impl NewsPanel {
         self.alert_inbox = Arc::default();
         self.alert_requests.clear();
         self.alert_seen.clear();
+        self.alert_errors.clear();
         self.notifications.clear();
         self.refresh();
     }
@@ -257,6 +258,7 @@ impl NewsPanel {
         self.alert_inbox = Arc::default();
         self.alert_requests.clear();
         self.alert_seen.clear();
+        self.alert_errors.clear();
         self.notifications.clear();
         self.alerts_refresh = true;
     }
@@ -275,6 +277,7 @@ impl NewsPanel {
             self.restore = true;
             self.alert_requests.clear();
             self.alert_seen.clear();
+            self.alert_errors.clear();
             self.alerts_refresh = true;
         }
     }
@@ -326,6 +329,8 @@ impl NewsPanel {
             return;
         };
         let alerts = self.views().alerts;
+        self.alert_errors
+            .retain(|name, _| alerts.get(name).is_some_and(|alert| alert.active));
         self.alert_seen
             .retain(|name, _| alerts.get(name).is_some_and(|alert| alert.active));
         for (name, alert) in alerts.into_iter().filter(|(_, alert)| alert.active) {
@@ -471,7 +476,7 @@ impl NewsPanel {
                 .expect("news alert")
             {
                 Ok(mut stories) => {
-                    self.alert_error = None;
+                    self.alert_errors.remove(&name);
                     stories.sort_by_key(|story| story.time);
                     let Some((after, seen)) = self.alert_seen.get_mut(&name) else {
                         continue;
@@ -499,7 +504,9 @@ impl NewsPanel {
                         self.notifications.push(notification);
                     }
                 }
-                Err(error) => self.alert_error = Some(error),
+                Err(error) => {
+                    self.alert_errors.insert(name, error);
+                }
             }
         }
         let extra = self.notifications.len().saturating_sub(10_000);
@@ -932,6 +939,8 @@ impl NewsPanel {
             let alerts = self.views().alerts;
             self.alert_requests
                 .retain(|_, (name, alert)| alerts.get(name) == Some(alert));
+            self.alert_errors
+                .retain(|name, _| alerts.get(name).is_some_and(|alert| alert.active));
             self.alert_seen.retain(|name, _| {
                 alerts
                     .get(name)
@@ -950,14 +959,14 @@ impl NewsPanel {
                 ),
             );
         }
-        if let Some(error) = &self.alert_error {
+        for (name, error) in &self.alert_errors {
             translated_status_message(
                 ui,
                 MessageKind::Error,
                 l10n::format_text(
                     ui.ctx(),
-                    "News alerts unavailable: {error}",
-                    &[("error", &error.to_string())],
+                    "News alert {name} unavailable: {error}",
+                    &[("name", name), ("error", &error.to_string())],
                 ),
             );
         }
@@ -1354,6 +1363,23 @@ mod tests {
         }
         h.run_steps(3);
         assert!(h.state_mut().take_notifications().is_empty());
+
+        // One filter's successful reply must not hide another filter's failure.
+        h.state_mut().refresh();
+        h.run_steps(3);
+        for (query, reply) in std::mem::take(&mut *feed.0.lock().unwrap()) {
+            if query.symbols == ["AAA"] {
+                reply.send(Err(FeedError::NotSupported));
+            } else {
+                reply.send(Ok(vec![]));
+            }
+        }
+        h.run_steps(3);
+        assert_eq!(
+            h.state().alert_errors.get("Alpha"),
+            Some(&FeedError::NotSupported)
+        );
+        assert!(!h.state().alert_errors.contains_key("Beta"));
 
         h.get_by_label("Alert: Beta").click();
         h.run_steps(3);
