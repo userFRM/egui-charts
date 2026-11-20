@@ -5,7 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use egui::{Color32, RichText, Ui};
+use egui::{Color32, EventFilter, Key, Modifiers, RichText, Sense, Ui};
 use serde::{Deserialize, Serialize};
 
 use crate::data::{FeedError, inbox::Inbox};
@@ -167,6 +167,11 @@ pub struct AlertsPanel {
     generation: u64,
     alerts: Vec<Alert>,
     log: VecDeque<AlertTrigger>,
+    /// Selected alert and log entry; the log index follows eviction of the oldest entry.
+    selected: Option<AlertId>,
+    log_selected: Option<usize>,
+    /// The alert whose removal the Delete key asks to confirm.
+    removing: Option<AlertId>,
     /// The alert and the symbol the Log tab narrows to.
     log_alert: Option<AlertId>,
     log_symbol: Option<String>,
@@ -243,6 +248,9 @@ impl AlertsPanel {
             generation: 0,
             alerts: Vec::new(),
             log: VecDeque::new(),
+            selected: None,
+            log_selected: None,
+            removing: None,
             log_alert: None,
             log_symbol: None,
             clearing: false,
@@ -470,6 +478,9 @@ impl AlertsPanel {
         self.service = Some(service);
         self.alerts.clear();
         self.log.clear();
+        self.selected = None;
+        self.log_selected = None;
+        self.removing = None;
         self.log_alert = None;
         self.log_symbol = None;
         self.clearing = false;
@@ -975,7 +986,32 @@ impl AlertsPanel {
         self.log.push_back(trigger);
         if self.log.len() > LOG_BOUND {
             self.log.pop_front();
+            self.log_selected = self.log_selected.and_then(|index| index.checked_sub(1));
         }
+    }
+
+    /// Apply Pause or Enable, opening an alert past its expiry in the editor first.
+    fn toggled(alert: &Alert) -> (Alert, bool) {
+        let active = alert.status == AlertStatus::Active;
+        let mut changed = alert.clone();
+        changed.status = if active {
+            AlertStatus::Disabled
+        } else {
+            AlertStatus::Active
+        };
+        // Enabled as it is, an alert past its expiry would expire again at the next tick.
+        let edit = !active && alert.expires.is_some_and(|at| at <= Utc::now());
+        (changed, edit)
+    }
+
+    /// The fresh, active copy Duplicate stages in the shared dialog.
+    fn duplicate_of(alert: &Alert) -> Alert {
+        let mut copy = alert.clone();
+        copy.id = None;
+        copy.created_at = None;
+        copy.last_triggered_at = None;
+        copy.status = AlertStatus::Active;
+        copy
     }
 
     /// Export the retained trigger log, times in the panel's time zone. Text fields are quoted and
@@ -1216,6 +1252,11 @@ impl AlertsPanel {
     /// Render the host's alerts or trigger log after `poll`, returning creation or export intents.
     pub fn show(&mut self, ui: &mut Ui) -> AlertPanelAction {
         let mut action = AlertPanelAction::None;
+        let arrows = EventFilter {
+            vertical_arrows: true,
+            ..Default::default()
+        };
+        let theme = ui.active_theme();
         PanelHeader::new("Alerts").show(ui, |ui| {
             if IconButton::new(&icons::PLUS)
                 .tooltip("New alert")
@@ -1255,10 +1296,45 @@ impl AlertsPanel {
                     self.clearing = true;
                 }
             });
+            let rows = ui.id().with("alert_log_rows");
+            let order: Vec<_> = self
+                .log
+                .iter()
+                .enumerate()
+                .rev()
+                .filter(|(_, trigger)| shown(trigger))
+                .map(|(index, _)| index)
+                .collect();
+            let mut reveal = false;
+            if let Some(focused) = ui
+                .memory(|m| m.focused())
+                .filter(|f| order.iter().any(|index| rows.with(index) == *f))
+            {
+                ui.memory_mut(|m| m.set_focus_lock_filter(focused, arrows));
+                let step = ui.input_mut(|i| {
+                    let down = i.consume_key(Modifiers::NONE, Key::ArrowDown)
+                        | i.consume_key(Modifiers::NONE, Key::Space);
+                    down as isize - i.consume_key(Modifiers::NONE, Key::ArrowUp) as isize
+                });
+                if step != 0 && !order.is_empty() {
+                    let next = self
+                        .log_selected
+                        .and_then(|selected| order.iter().position(|i| *i == selected))
+                        .map_or(0, |at| at.saturating_add_signed(step).min(order.len() - 1));
+                    self.log_selected = Some(order[next]);
+                    ui.memory_mut(|m| {
+                        m.request_focus(rows.with(order[next]));
+                        m.set_focus_lock_filter(rows.with(order[next]), arrows);
+                    });
+                    reveal = true;
+                }
+            }
+            let mut select = None;
             egui::ScrollArea::vertical()
                 .max_height(self.config.max_height)
                 .show(ui, |ui| {
-                    for trigger in self.log.iter().rev().filter(|t| shown(t)) {
+                    for &index in &order {
+                        let trigger = &self.log[index];
                         let mut parts = vec![if trigger.name.is_empty() {
                             trigger.id.0.clone()
                         } else {
@@ -1272,18 +1348,63 @@ impl AlertsPanel {
                         if trigger.silent {
                             parts.push(l10n::text(ui.ctx(), "Silent"));
                         }
-                        ui.label(parts.join(" · "));
-                        if self.options.log_price
-                            && let Some(price) = trigger.price
-                        {
-                            ui.label(l10n::text(ui.ctx(), price.to_string()));
+                        let label = parts.join(" · ");
+                        let selected = self.log_selected == Some(index);
+                        let response = ui
+                            .scope_builder(
+                                egui::UiBuilder::new()
+                                    .scope_id(rows.with(index))
+                                    .sense(Sense::click()),
+                                |ui| {
+                                    ui.style_mut().interaction.selectable_labels = false;
+                                    let hovered = ui.response().hovered();
+                                    egui::Frame::new()
+                                        .fill(if selected {
+                                            theme.ui.btn_bg_active
+                                        } else if hovered {
+                                            theme.ui.btn_bg_hover
+                                        } else {
+                                            Color32::TRANSPARENT
+                                        })
+                                        .show(ui, |ui| {
+                                            ui.set_width(ui.available_width());
+                                            ui.label(&label);
+                                            if self.options.log_price
+                                                && let Some(price) = trigger.price
+                                            {
+                                                ui.label(l10n::text(ui.ctx(), price.to_string()));
+                                            }
+                                            if self.options.log_message
+                                                && !trigger.message.is_empty()
+                                            {
+                                                ui.label(&trigger.message);
+                                            }
+                                            ui.separator();
+                                        });
+                                },
+                            )
+                            .response;
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::ListBoxOption, true, &label)
+                        });
+                        ui.ctx().accesskit_node_builder(response.id, |node| {
+                            node.set_selected(selected)
+                        });
+                        if selected && reveal {
+                            response.scroll_to_me(None);
                         }
-                        if self.options.log_message && !trigger.message.is_empty() {
-                            ui.label(&trigger.message);
+                        if response.clicked() {
+                            select = Some(index);
+                            ui.memory_mut(|m| {
+                                m.request_focus(response.id);
+                                m.set_focus_lock_filter(response.id, arrows);
+                            });
                         }
-                        ui.separator();
                     }
                 });
+            if let Some(index) = select {
+                self.log_selected = Some(index);
+            }
             if !any {
                 EmptyState::new("No triggers yet")
                     .icon(&icons::ALERTS)
@@ -1302,6 +1423,7 @@ impl AlertsPanel {
                 .is_confirmed()
             {
                 self.log.retain(|trigger| !shown(trigger));
+                self.log_selected = None;
                 // Otherwise the engine would restore the entries after a restart.
                 #[cfg(feature = "alert-engine")]
                 if let Some(engine) = self.service.as_ref().and_then(|service| service.engine()) {
@@ -1329,180 +1451,334 @@ impl AlertsPanel {
             let mut toggle = None;
             let mut duplicate = None;
             let mut presentation = None;
+            let rows = ui.id().with("alert_rows");
+            let order: Vec<_> = self
+                .sorted()
+                .iter()
+                .filter_map(|alert| alert.id.clone())
+                .collect();
+            let mut reveal = false;
+            if let Some(focused) = ui
+                .memory(|m| m.focused())
+                .filter(|f| order.iter().any(|id| rows.with(&id.0) == *f))
+            {
+                ui.memory_mut(|m| m.set_focus_lock_filter(focused, arrows));
+                let (step, edit, delete) = ui.input_mut(|i| {
+                    let down = i.consume_key(Modifiers::NONE, Key::ArrowDown)
+                        | i.consume_key(Modifiers::NONE, Key::Space);
+                    (
+                        down as isize - i.consume_key(Modifiers::NONE, Key::ArrowUp) as isize,
+                        i.consume_key(Modifiers::NONE, Key::Enter),
+                        i.consume_key(Modifiers::NONE, Key::Delete),
+                    )
+                });
+                if step != 0 && !order.is_empty() {
+                    let next = self
+                        .selected
+                        .as_ref()
+                        .and_then(|selected| order.iter().position(|id| id == selected))
+                        .map_or(0, |at| at.saturating_add_signed(step).min(order.len() - 1));
+                    self.selected = Some(order[next].clone());
+                    ui.memory_mut(|m| {
+                        m.request_focus(rows.with(&order[next].0));
+                        m.set_focus_lock_filter(rows.with(&order[next].0), arrows);
+                    });
+                    reveal = true;
+                }
+                if let Some(alert) = self.alerts.iter().find(|alert| alert.id == self.selected) {
+                    if edit {
+                        action = AlertPanelAction::EditAlert(Box::new(alert.clone()));
+                    }
+                    if delete {
+                        self.removing = alert.id.clone();
+                    }
+                }
+            }
+            let mut select = None;
             egui::ScrollArea::vertical()
                 .max_height(self.config.max_height)
                 .show(ui, |ui| {
                     for alert in self.sorted() {
                         let Some(id) = &alert.id else { continue };
-                        ui.push_id(&id.0, |ui| {
-                            let subject = alert.watchlist.as_ref().map_or_else(
-                                || alert.symbol.clone(),
-                                |id| {
-                                    l10n::format_text(
-                                        ui.ctx(),
-                                        "Watchlist: {name}",
-                                        &[("name", id.as_str())],
-                                    )
+                        let subject = alert.watchlist.as_ref().map_or_else(
+                            || alert.symbol.clone(),
+                            |id| {
+                                l10n::format_text(
+                                    ui.ctx(),
+                                    "Watchlist: {name}",
+                                    &[("name", id.as_str())],
+                                )
+                            },
+                        );
+                        let selected = self.selected.as_ref() == Some(id);
+                        let response = ui
+                            .scope_builder(
+                                egui::UiBuilder::new()
+                                    .scope_id(rows.with(&id.0))
+                                    .sense(Sense::click()),
+                                |ui| {
+                                    ui.style_mut().interaction.selectable_labels = false;
+                                    let hovered = ui.response().hovered();
+                                    egui::Frame::new()
+                                        .fill(if selected {
+                                            theme.ui.btn_bg_active
+                                        } else if hovered {
+                                            theme.ui.btn_bg_hover
+                                        } else {
+                                            Color32::TRANSPARENT
+                                        })
+                                        .show(ui, |ui| {
+                                            ui.set_width(ui.available_width());
+                                            ui.horizontal(|ui| {
+                                                if self.options.symbol_icon {
+                                                    let (rect, _) = ui.allocate_exact_size(
+                                                        egui::Vec2::splat(18.0),
+                                                        egui::Sense::hover(),
+                                                    );
+                                                    crate::painting::symbol_mark::paint_symbol_mark(
+                                                        ui.painter(),
+                                                        rect,
+                                                        &alert.symbol,
+                                                        self.marks.get(&alert.symbol).cloned(),
+                                                    );
+                                                }
+                                                if self.options.source_icon {
+                                                    let icon = match alert.source {
+                                                        AlertSource::Price => &icons::CHART_LINE,
+                                                        AlertSource::Volume => {
+                                                            &icons::CHART_COLUMNS
+                                                        }
+                                                        AlertSource::Study { .. }
+                                                        | AlertSource::StudyCondition { .. } => {
+                                                            &icons::INDICATORS
+                                                        }
+                                                        AlertSource::Drawing(_) => {
+                                                            &icons::TREND_LINE
+                                                        }
+                                                    };
+                                                    ui.add(icon.as_image_tinted(
+                                                        egui::Vec2::splat(16.0),
+                                                        ui.visuals().text_color(),
+                                                    ))
+                                                    .on_hover_text(l10n::text(
+                                                        ui.ctx(),
+                                                        "Alert source",
+                                                    ));
+                                                }
+                                                ui.label(RichText::new(&subject).strong());
+                                            });
+                                            ui.label(l10n::text(
+                                                ui.ctx(),
+                                                alert.condition.to_string(),
+                                            ));
+                                            if !alert.additional_conditions.is_empty() {
+                                                ui.label(l10n::format_text(
+                                                    ui.ctx(),
+                                                    "{0} additional conditions",
+                                                    &[(
+                                                        "0",
+                                                        format!(
+                                                            "{}",
+                                                            alert.additional_conditions.len()
+                                                        ),
+                                                    )],
+                                                ));
+                                            }
+                                            if self.options.name && !alert.name.is_empty() {
+                                                ui.label(&alert.name);
+                                            }
+                                            let color = self.status_color(ui, alert.status);
+                                            ui.horizontal(|ui| {
+                                                ui.colored_label(
+                                                    color,
+                                                    l10n::text(
+                                                        ui.ctx(),
+                                                        match alert.status {
+                                                            AlertStatus::Active => "Active",
+                                                            AlertStatus::Triggered => "Triggered",
+                                                            AlertStatus::Disabled => "Disabled",
+                                                            AlertStatus::Expired => "Expired",
+                                                        },
+                                                    ),
+                                                );
+                                                if let Some(schedule) = &alert.schedule {
+                                                    ui.add(
+                                                        icons::WIDGET_BAR_CALENDAR.as_image_tinted(
+                                                            egui::Vec2::splat(16.0),
+                                                            ui.visuals().text_color(),
+                                                        ),
+                                                    )
+                                                    .on_hover_ui(|ui| {
+                                                        schedule_tooltip(ui, schedule)
+                                                    });
+                                                }
+                                            });
+                                            if self.options.message && !alert.message.is_empty() {
+                                                ui.label(&alert.message);
+                                            }
+                                            if self.options.last_firing
+                                                && let Some(time) = alert.last_triggered_at
+                                            {
+                                                let zone = alert
+                                                    .schedule
+                                                    .as_ref()
+                                                    .map(|s| &s.timezone)
+                                                    .or_else(|| {
+                                                        alert
+                                                            .inputs
+                                                            .as_ref()
+                                                            .and_then(|i| i.timezone.as_ref())
+                                                    });
+                                                let zone = zone
+                                                    .cloned()
+                                                    .unwrap_or_else(crate::model::TimezoneId::utc);
+                                                ui.label(l10n::format_text(
+                                                    ui.ctx(),
+                                                    "Last firing: {time}",
+                                                    &[(
+                                                        "time",
+                                                        time.with_timezone(&zone)
+                                                            .format("%Y-%m-%d %H:%M:%S %:z")
+                                                            .to_string(),
+                                                    )],
+                                                ));
+                                            }
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.spacing_mut().item_spacing.x = 4.0;
+                                                if Button::new("Edit").show(ui).clicked() {
+                                                    action = AlertPanelAction::EditAlert(Box::new(
+                                                        alert.clone(),
+                                                    ));
+                                                }
+                                                let active = alert.status == AlertStatus::Active;
+                                                if Button::new(if active {
+                                                    "Pause"
+                                                } else {
+                                                    "Enable"
+                                                })
+                                                .show(ui)
+                                                .clicked()
+                                                {
+                                                    let (changed, edit) = Self::toggled(alert);
+                                                    if edit {
+                                                        action = AlertPanelAction::EditAlert(
+                                                            Box::new(changed),
+                                                        );
+                                                    } else {
+                                                        toggle = Some(changed);
+                                                    }
+                                                }
+                                                ui.add_enabled_ui(self.pending == 0, |ui| {
+                                                    ui.menu_button("...", |ui| {
+                                                        let mut updated = alert.clone();
+                                                        let line = ui
+                                                            .checkbox(
+                                                                &mut updated.extend_line,
+                                                                l10n::text(
+                                                                    ui.ctx(),
+                                                                    "Line across chart",
+                                                                ),
+                                                            )
+                                                            .changed();
+                                                        let blink = ui
+                                                            .checkbox(
+                                                                &mut updated.blink_on_trigger,
+                                                                l10n::text(
+                                                                    ui.ctx(),
+                                                                    "Blink after firing",
+                                                                ),
+                                                            )
+                                                            .changed();
+                                                        if line || blink {
+                                                            presentation = Some(updated);
+                                                        }
+                                                    })
+                                                    .response
+                                                    .accessible_name(l10n::text(ui.ctx(), "Marker"))
+                                                    .on_hover_text(l10n::text(
+                                                        ui.ctx(),
+                                                        "Marker options",
+                                                    ));
+                                                });
+                                                if Button::new("Duplicate").show(ui).clicked() {
+                                                    duplicate = Some(Self::duplicate_of(alert));
+                                                }
+                                                if IconButton::new(&icons::TRASH)
+                                                    .tooltip("Remove alert")
+                                                    .show(ui)
+                                                    .clicked()
+                                                {
+                                                    remove = Some(id.clone());
+                                                }
+                                            });
+                                            ui.separator();
+                                        });
                                 },
-                            );
-                            ui.horizontal(|ui| {
-                                if self.options.symbol_icon {
-                                    let (rect, _) = ui.allocate_exact_size(
-                                        egui::Vec2::splat(18.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    crate::painting::symbol_mark::paint_symbol_mark(
-                                        ui.painter(),
-                                        rect,
-                                        &alert.symbol,
-                                        self.marks.get(&alert.symbol).cloned(),
-                                    );
-                                }
-                                if self.options.source_icon {
-                                    let icon = match alert.source {
-                                        AlertSource::Price => &icons::CHART_LINE,
-                                        AlertSource::Volume => &icons::CHART_COLUMNS,
-                                        AlertSource::Study { .. }
-                                        | AlertSource::StudyCondition { .. } => &icons::INDICATORS,
-                                        AlertSource::Drawing(_) => &icons::TREND_LINE,
-                                    };
-                                    ui.add(icon.as_image_tinted(
-                                        egui::Vec2::splat(16.0),
-                                        ui.visuals().text_color(),
-                                    ))
-                                    .on_hover_text(l10n::text(ui.ctx(), "Alert source"));
-                                }
-                                ui.label(RichText::new(&subject).strong());
+                            )
+                            .response;
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::Role::ListBoxOption,
+                                true,
+                                format!("{subject}: {}", alert.display_name()),
+                            )
+                        });
+                        ui.ctx().accesskit_node_builder(response.id, |node| {
+                            node.set_selected(selected)
+                        });
+                        if selected && reveal {
+                            response.scroll_to_me(None);
+                        }
+                        if response.clicked() {
+                            select = Some(id.clone());
+                            ui.memory_mut(|m| {
+                                m.request_focus(response.id);
+                                m.set_focus_lock_filter(response.id, arrows);
                             });
-                            ui.label(l10n::text(ui.ctx(), alert.condition.to_string()));
-                            if !alert.additional_conditions.is_empty() {
-                                ui.label(l10n::format_text(
+                        }
+                        if response.double_clicked() {
+                            action = AlertPanelAction::EditAlert(Box::new(alert.clone()));
+                        }
+                        response.context_menu(|ui| {
+                            if ui.button(l10n::text(ui.ctx(), "Edit")).clicked() {
+                                action = AlertPanelAction::EditAlert(Box::new(alert.clone()));
+                                ui.close();
+                            }
+                            let active = alert.status == AlertStatus::Active;
+                            if ui
+                                .button(l10n::text(
                                     ui.ctx(),
-                                    "{0} additional conditions",
-                                    &[("0", format!("{}", alert.additional_conditions.len()))],
-                                ));
-                            }
-                            if self.options.name && !alert.name.is_empty() {
-                                ui.label(&alert.name);
-                            }
-                            let color = self.status_color(ui, alert.status);
-                            ui.horizontal(|ui| {
-                                ui.colored_label(
-                                    color,
-                                    l10n::text(
-                                        ui.ctx(),
-                                        match alert.status {
-                                            AlertStatus::Active => "Active",
-                                            AlertStatus::Triggered => "Triggered",
-                                            AlertStatus::Disabled => "Disabled",
-                                            AlertStatus::Expired => "Expired",
-                                        },
-                                    ),
-                                );
-                                if let Some(schedule) = &alert.schedule {
-                                    ui.add(icons::WIDGET_BAR_CALENDAR.as_image_tinted(
-                                        egui::Vec2::splat(16.0),
-                                        ui.visuals().text_color(),
-                                    ))
-                                    .on_hover_ui(|ui| schedule_tooltip(ui, schedule));
-                                }
-                            });
-                            if self.options.message && !alert.message.is_empty() {
-                                ui.label(&alert.message);
-                            }
-                            if self.options.last_firing
-                                && let Some(time) = alert.last_triggered_at
+                                    if active { "Pause" } else { "Enable" },
+                                ))
+                                .clicked()
                             {
-                                let zone =
-                                    alert.schedule.as_ref().map(|s| &s.timezone).or_else(|| {
-                                        alert.inputs.as_ref().and_then(|i| i.timezone.as_ref())
-                                    });
-                                let zone =
-                                    zone.cloned().unwrap_or_else(crate::model::TimezoneId::utc);
-                                ui.label(l10n::format_text(
-                                    ui.ctx(),
-                                    "Last firing: {time}",
-                                    &[(
-                                        "time",
-                                        time.with_timezone(&zone)
-                                            .format("%Y-%m-%d %H:%M:%S %:z")
-                                            .to_string(),
-                                    )],
-                                ));
+                                let (changed, edit) = Self::toggled(alert);
+                                if edit {
+                                    action = AlertPanelAction::EditAlert(Box::new(changed));
+                                } else {
+                                    toggle = Some(changed);
+                                }
+                                ui.close();
                             }
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                if Button::new("Edit").show(ui).clicked() {
-                                    action = AlertPanelAction::EditAlert(Box::new(alert.clone()));
-                                }
-                                let active = alert.status == AlertStatus::Active;
-                                if Button::new(if active { "Pause" } else { "Enable" })
-                                    .show(ui)
-                                    .clicked()
-                                {
-                                    let mut changed = alert.clone();
-                                    changed.status = if active {
-                                        AlertStatus::Disabled
-                                    } else {
-                                        AlertStatus::Active
-                                    };
-                                    // Enabled as it is, an alert past its expiry would expire
-                                    // again at the next tick.
-                                    if !active && alert.expires.is_some_and(|at| at <= Utc::now()) {
-                                        action = AlertPanelAction::EditAlert(Box::new(changed));
-                                    } else {
-                                        toggle = Some(changed);
-                                    }
-                                }
-                                ui.add_enabled_ui(self.pending == 0, |ui| {
-                                    ui.menu_button("...", |ui| {
-                                        let mut updated = alert.clone();
-                                        let line = ui
-                                            .checkbox(
-                                                &mut updated.extend_line,
-                                                l10n::text(ui.ctx(), "Line across chart"),
-                                            )
-                                            .changed();
-                                        let blink = ui
-                                            .checkbox(
-                                                &mut updated.blink_on_trigger,
-                                                l10n::text(ui.ctx(), "Blink after firing"),
-                                            )
-                                            .changed();
-                                        if line || blink {
-                                            presentation = Some(updated);
-                                        }
-                                    })
-                                    .response
-                                    .accessible_name(l10n::text(ui.ctx(), "Marker"))
-                                    .on_hover_text(l10n::text(ui.ctx(), "Marker options"));
-                                });
-                                if Button::new("Duplicate").show(ui).clicked() {
-                                    let mut copy = alert.clone();
-                                    copy.id = None;
-                                    copy.created_at = None;
-                                    copy.last_triggered_at = None;
-                                    copy.status = AlertStatus::Active;
-                                    duplicate = Some(copy);
-                                }
-                                if IconButton::new(&icons::TRASH)
-                                    .tooltip("Remove alert")
-                                    .show(ui)
-                                    .clicked()
-                                {
-                                    remove = Some(id.clone());
-                                }
-                            });
-                            ui.separator();
-                        })
-                        .response
-                        .on_hover_ui(|ui| {
+                            if ui.button(l10n::text(ui.ctx(), "Duplicate")).clicked() {
+                                duplicate = Some(Self::duplicate_of(alert));
+                                ui.close();
+                            }
+                            if ui.button(l10n::text(ui.ctx(), "Remove")).clicked() {
+                                remove = Some(id.clone());
+                                ui.close();
+                            }
+                        });
+                        response.on_hover_ui(|ui| {
                             if let Some(schedule) = &alert.schedule {
                                 schedule_tooltip(ui, schedule);
                             }
                         });
                     }
                 });
+            if let Some(id) = select {
+                self.selected = Some(id);
+            }
             if let Some(alert) = presentation {
                 self.save(alert);
             }
@@ -1517,6 +1793,27 @@ impl AlertsPanel {
             }
             if let Some(alert) = duplicate {
                 action = AlertPanelAction::DuplicateAlert(Box::new(alert));
+            }
+        }
+        if self.removing.is_some() {
+            let mut open = true;
+            if ConfirmDialog::new(
+                "alert_remove",
+                "Remove alert",
+                "Remove the selected alert? This cannot be undone.",
+            )
+            .confirm_text("Remove")
+            .danger()
+            .show(ui.ctx(), &mut open)
+            .is_confirmed()
+                && let Some(id) = self.removing.take()
+                && let Some(service) = &self.service
+            {
+                self.pending += 1;
+                service.remove(id, self.inbox.reply(0));
+            }
+            if !open {
+                self.removing = None;
             }
         }
         action
@@ -2447,6 +2744,181 @@ mod tests {
         }
         assert_eq!(*h.state().log(), std::slice::from_ref(&dip));
         assert_eq!(engine.triggers(), [dip]);
+    }
+
+    #[cfg(feature = "alert-engine")]
+    #[test]
+    fn a_row_opens_on_double_click_and_its_menu_acts_like_the_buttons() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut first = Alert::new("AAPL", AlertCondition::Above(100.0));
+        first.id = Some(AlertId("1".into()));
+        first.name = "First".into();
+        let mut second = first.clone();
+        second.id = Some(AlertId("2".into()));
+        second.name = "Second".into();
+        second.status = AlertStatus::Expired;
+        second.expires = Some(Utc::now() - chrono::TimeDelta::days(1));
+        let engine = Arc::new(
+            crate::services::AlertEngine::new().with_alerts(vec![first.clone(), second.clone()]),
+        );
+        let mut panel = AlertsPanel::new(AlertsPanelConfig { max_height: 800.0 });
+        panel.set_service(engine.clone());
+        let mut toasts = Toasts::new();
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(400.0, 1000.0))
+            .build_ui_state(
+                move |ui, (panel, actions): &mut (AlertsPanel, Vec<AlertPanelAction>)| {
+                    panel.poll(ui.ctx(), &mut toasts);
+                    let action = panel.show(ui);
+                    if action != AlertPanelAction::None {
+                        actions.push(action);
+                    }
+                },
+                (panel, Vec::new()),
+            );
+        h.run();
+        for _ in 0..2 {
+            h.get_by_role_and_label(Role::ListBoxOption, "AAPL: First")
+                .click();
+            h.run_steps(1);
+        }
+        assert_eq!(
+            h.state().1,
+            [AlertPanelAction::EditAlert(Box::new(first.clone()))]
+        );
+        h.get_by_role_and_label(Role::ListBoxOption, "AAPL: First")
+            .click_secondary();
+        h.run();
+        h.get_by_role_and_label(Role::MenuItem, "Pause").click();
+        h.run();
+        assert_eq!(engine.alerts()[0].status, AlertStatus::Disabled);
+        h.get_by_role_and_label(Role::ListBoxOption, "AAPL: Second")
+            .click_secondary();
+        h.run();
+        h.get_by_role_and_label(Role::MenuItem, "Enable").click();
+        h.run();
+        second.status = AlertStatus::Active;
+        assert_eq!(
+            h.state().1.last(),
+            Some(&AlertPanelAction::EditAlert(Box::new(second)))
+        );
+        assert_eq!(engine.alerts()[1].status, AlertStatus::Expired);
+        h.get_by_role_and_label(Role::ListBoxOption, "AAPL: First")
+            .click_secondary();
+        h.run();
+        h.get_by_role_and_label(Role::MenuItem, "Duplicate").click();
+        h.run();
+        first.id = None;
+        first.created_at = None;
+        first.last_triggered_at = None;
+        assert_eq!(
+            h.state().1.last(),
+            Some(&AlertPanelAction::DuplicateAlert(Box::new(first)))
+        );
+        h.get_by_role_and_label(Role::ListBoxOption, "AAPL: Second")
+            .click_secondary();
+        h.run();
+        h.get_by_role_and_label(Role::MenuItem, "Remove").click();
+        h.run();
+        assert_eq!(engine.alerts().len(), 1);
+    }
+
+    #[cfg(feature = "alert-engine")]
+    #[test]
+    fn the_keys_move_the_selection_and_enter_edits_the_alert() {
+        use egui::{Key, accesskit::Role};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let alerts: Vec<_> = ["First", "Second", "Third"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let mut alert = Alert::new("AAPL", AlertCondition::Above(100.0));
+                alert.id = Some(AlertId(i.to_string()));
+                alert.name = name.into();
+                alert
+            })
+            .collect();
+        let triggers = alerts
+            .iter()
+            .map(|alert| {
+                let mut trigger = AlertTrigger::new(
+                    alert.id.clone().unwrap(),
+                    "AAPL",
+                    "2026-11-20T12:00:00Z".parse().unwrap(),
+                );
+                trigger.name = alert.name.clone();
+                trigger
+            })
+            .collect();
+        let engine = Arc::new(
+            crate::services::AlertEngine::new()
+                .with_alerts(alerts.clone())
+                .with_triggers(triggers),
+        );
+        let mut panel = AlertsPanel::new(AlertsPanelConfig { max_height: 800.0 });
+        panel.set_service(engine.clone());
+        let mut toasts = Toasts::new();
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(400.0, 1000.0))
+            .build_ui_state(
+                move |ui, (panel, actions): &mut (AlertsPanel, Vec<AlertPanelAction>)| {
+                    panel.poll(ui.ctx(), &mut toasts);
+                    let action = panel.show(ui);
+                    if action != AlertPanelAction::None {
+                        actions.push(action);
+                    }
+                },
+                (panel, Vec::new()),
+            );
+        h.run();
+        h.get_by_role_and_label(Role::ListBoxOption, "AAPL: First")
+            .click();
+        h.run();
+        h.key_press(Key::ArrowDown);
+        h.run();
+        h.key_press(Key::Enter);
+        h.run();
+        assert_eq!(
+            h.state().1,
+            [AlertPanelAction::EditAlert(Box::new(alerts[1].clone()))]
+        );
+        assert_eq!(
+            h.get_by_role_and_label(Role::ListBoxOption, "AAPL: Second")
+                .accesskit_node()
+                .is_selected(),
+            Some(true)
+        );
+        h.key_press(Key::Delete);
+        h.run();
+        h.get_by_label("Cancel").click();
+        h.run();
+        assert_eq!(engine.alerts().len(), 3);
+        h.get_by_label("Log").click();
+        h.run();
+        h.get_all_by_role(Role::ListBoxOption)
+            .next()
+            .unwrap()
+            .click();
+        h.run();
+        for (key, selected) in [(Key::ArrowDown, 1), (Key::Space, 2), (Key::ArrowUp, 1)] {
+            h.key_press(key);
+            h.run();
+            let states: Vec<_> = h
+                .get_all_by_role(Role::ListBoxOption)
+                .map(|row| row.accesskit_node().is_selected())
+                .collect();
+            assert_eq!(
+                states,
+                (0..3).map(|i| Some(i == selected)).collect::<Vec<_>>(),
+                "{key:?}"
+            );
+        }
     }
 
     #[test]
