@@ -645,13 +645,16 @@ impl Chart {
         let navigation_interaction = navigation_rect.is_some_and(|nav| {
             self.config.navigation_buttons != crate::config::NavigationButtons::Never
                 && !self.state.data().is_empty()
-                && ui.input(|i| {
-                    (i.pointer.any_down() || i.pointer.any_released())
-                        && i.pointer
+                && ui
+                    .input(|i| {
+                        i.pointer
                             .press_origin()
                             .or_else(|| i.pointer.hover_pos())
-                            .is_some_and(|p| nav.contains(p))
-                })
+                            .filter(|_| i.pointer.any_down() || i.pointer.any_released())
+                    })
+                    .is_some_and(|p| {
+                        (0..8).any(|index| self.navigation_button_rect(ui, nav, index).contains(p))
+                    })
         });
         // A button owns the whole gesture, including a drag that leaves the row. The chart's
         // own response goes back to the caller; the gesture handlers see a hover-only one.
@@ -3789,7 +3792,9 @@ impl Chart {
                 legend.extended_hours = &extended_hours;
                 let background = |pos: Pos2| self.background_at(rect, pos);
                 legend.background = Some(&background);
-                let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
+                let inputs: Vec<_> = (0..self.study_ids.len())
+                    .map(|at| self.study_caption(at))
+                    .collect();
                 legend.study_inputs = &inputs;
                 legend.previous_close = previous_close;
                 legend.bar_index = selected;

@@ -1475,6 +1475,7 @@ mod tests {
         ]) {
             let ctx = Context::default();
             let mut chart = chart(&[0.0, 10.0, 10.0], &[30.0, 20.0, 20.0]);
+            chart.config_mut().navigation_buttons = crate::config::NavigationButtons::Never;
             let overlay = CustomIndicator::new("Two levels", move |bars| {
                 bars.iter()
                     .enumerate()

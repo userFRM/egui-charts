@@ -121,7 +121,8 @@ pub struct StatusLineOptions {
     pub quote_panel: bool,
     /// Display study names.
     pub show_indicator_titles: bool,
-    /// Display host-supplied study inputs.
+    /// Display study inputs after their names: the host's caption, else one built from the
+    /// study's inputs.
     pub show_indicator_inputs: bool,
     /// Display historical study output values.
     pub show_indicator_values: bool,
@@ -311,7 +312,7 @@ impl Default for ScalesAppearanceSettings {
     }
 }
 
-/// Canvas tab: Buttons visibility settings
+/// Canvas tab: Buttons visibility settings. Both groups show on mouse over by default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ButtonsSettings {
     /// Visibility of chart navigation controls.
@@ -323,7 +324,7 @@ pub struct ButtonsSettings {
 impl Default for ButtonsSettings {
     fn default() -> Self {
         Self {
-            navigation: ButtonVisibility::Hidden,
+            navigation: ButtonVisibility::VisibleOnMouseOver,
             pane: ButtonVisibility::VisibleOnMouseOver,
         }
     }
