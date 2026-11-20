@@ -7,8 +7,8 @@
 //! AO = SMA(median_price, 5) - SMA(median_price, 34)
 //! Where median_price = (high + low) / 2
 //!
-//! Drawn as a histogram: a bar at or below the one before it takes the falling colour and
-//! width, the others the rising ones. Columns remain available as a plot type.
+//! Drawn as columns: a bar at or below the one before it takes the falling colour, the others
+//! the rising one. Histogram remains available with its own falling width.
 //!
 //! # Interpretation
 //! - AO > 0: Bullish momentum
@@ -133,7 +133,7 @@ impl Indicator for AwesomeOscillator {
             color: self.positive_color,
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
-            plot_type: crate::studies::PlotType::Histogram,
+            plot_type: crate::studies::PlotType::Columns,
             visible: true,
         }
     }
@@ -229,11 +229,11 @@ impl Indicator for AwesomeOscillator {
     }
 
     fn is_overlay(&self) -> bool {
-        false // AO is a separate histogram pane
+        false // AO is a separate column pane
     }
 
     fn line_count(&self) -> usize {
-        1 // Single histogram
+        1 // Single series
     }
 
     fn is_visible(&self) -> bool {
