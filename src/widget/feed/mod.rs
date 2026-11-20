@@ -1027,6 +1027,22 @@ impl Chart {
             .map(|link| link.trades.generation)
     }
 
+    /// The last history page revision and the index in [`Self::trades`] where newly streamed
+    /// executions begin. If the revision changed, refresh older rows without alerting on them.
+    /// Start `live_cursor` at zero for each [`Self::trade_generation`]; this call advances it
+    /// through the current stream, even when history and live executions arrived together.
+    /// Returns `None` without a feed or for a series other than [`SeriesId::MAIN`].
+    pub fn trade_progress(
+        &self,
+        series: SeriesId,
+        live_cursor: &mut usize,
+    ) -> Option<(u64, usize)> {
+        self.feed_link
+            .as_ref()
+            .filter(|_| series == SeriesId::MAIN)
+            .map(|link| link.trades.progress(live_cursor))
+    }
+
     /// Combines the retained fills with explicit aggressor ids, in first-fill order. At most
     /// 100,000 entries; fills without an id stay separate. Rebuilds the view on request, including
     /// fills arriving in separate pages or frames. Per-price consumers keep using `trades`.
