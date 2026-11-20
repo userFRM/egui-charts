@@ -14,19 +14,14 @@ type Reply = (usize, usize, Result<(String, Vec<u8>), &'static str>);
 pub(super) struct Images {
     tx: Sender<Reply>,
     rx: Receiver<Reply>,
-    #[cfg(target_arch = "wasm32")]
+    /// Numbers the addresses of pictures held in memory.
     next: u64,
 }
 
 impl Default for Images {
     fn default() -> Self {
         let (tx, rx) = mpsc::channel();
-        Self {
-            tx,
-            rx,
-            #[cfg(target_arch = "wasm32")]
-            next: 0,
-        }
+        Self { tx, rx, next: 0 }
     }
 }
 
@@ -124,6 +119,49 @@ impl Images {
             })
             .collect()
     }
+
+    /// Places a picture pasted over `chart` as a selected image drawing, after the checks a
+    /// chosen picture passes. A refused picture changes nothing and returns the reason.
+    pub(super) fn paste(
+        &mut self,
+        ctx: &egui::Context,
+        chart: &mut Chart,
+        picture: &egui::ColorImage,
+    ) -> Result<(), String> {
+        let [width, height] = picture.size;
+        let max_side = ctx.input(|i| i.max_texture_side);
+        // Refuse an oversized picture before encoding it.
+        checked_size(width as u64, height as u64, max_side)?;
+        if picture.pixels.len() != width * height {
+            return Err("Could not encode picture".into());
+        }
+        let rgba: Vec<u8> = (picture.pixels.iter())
+            .flat_map(|pixel| pixel.to_srgba_unmultiplied())
+            .collect();
+        let mut bytes = Vec::new();
+        image::write_buffer_with_format(
+            &mut Cursor::new(&mut bytes),
+            &rgba,
+            width as u32,
+            height as u32,
+            image::ExtendedColorType::Rgba8,
+            image::ImageFormat::Png,
+        )
+        .map_err(|_| "Could not encode picture")?;
+        let size = checked_picture(&bytes, max_side)?;
+        let uri = format!(
+            "bytes://egui-charts-demo/image/{}/pasted.png",
+            self.next + 1
+        );
+        chart
+            .paste_image(uri.clone(), egui::vec2(size[0] as f32, size[1] as f32))
+            .map_err(|error| error.to_string())?;
+        self.next += 1;
+        // shortcut: a pasted picture lives in memory and is gone after a restart; store its
+        // bytes in host storage when the demo gains persistent picture attachments.
+        ctx.include_bytes(uri, bytes);
+        Ok(())
+    }
 }
 
 /// Check the header before decoding or asking egui to allocate a texture.
@@ -144,15 +182,7 @@ fn checked_picture(bytes: &[u8], max_side: usize) -> Result<[u32; 2], &'static s
     let (width, height) = reader
         .into_dimensions()
         .map_err(|_| "Could not read picture dimensions")?;
-    let max_side = max_side.min(MAX_IMAGE_SIDE) as u64;
-    if width == 0
-        || height == 0
-        || u64::from(width) > max_side
-        || u64::from(height) > max_side
-        || u64::from(width) * u64::from(height) > MAX_PIXELS
-    {
-        return Err("Picture dimensions exceed the texture limits");
-    }
+    checked_size(u64::from(width), u64::from(height), max_side)?;
     let mut reader = image::ImageReader::new(Cursor::new(bytes));
     reader.set_format(format.ok_or("Could not read picture format")?);
     let mut limits = image::Limits::default();
@@ -162,6 +192,21 @@ fn checked_picture(bytes: &[u8], max_side: usize) -> Result<[u32; 2], &'static s
     reader.limits(limits);
     reader.decode().map_err(|_| "Could not decode picture")?;
     Ok([width, height])
+}
+
+/// Refuses a pixel size that is empty or beyond the side and pixel limits.
+fn checked_size(width: u64, height: u64, max_side: usize) -> Result<(), &'static str> {
+    let max_side = max_side.min(MAX_IMAGE_SIDE) as u64;
+    // Both sides are within `max_side` before they are multiplied.
+    if width == 0
+        || height == 0
+        || width > max_side
+        || height > max_side
+        || width * height > MAX_PIXELS
+    {
+        return Err("Picture dimensions exceed the texture limits");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
