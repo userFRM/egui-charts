@@ -19,7 +19,7 @@ pub struct SavedStudy {
     pub id: usize,
     /// Its name, inputs, styles and visibility.
     pub study: StudyTemplate,
-    /// The caption after its title in the legend.
+    /// The host's caption after its title in the legend, empty where the chart derives one.
     pub caption: String,
     /// Whether it widens the automatic range of the price scale.
     pub autoscale: bool,
