@@ -462,6 +462,9 @@ impl Trading {
             }
             cells.push(plain(status(&ctx, &order.status)));
             cells.push(plain(time(order.placed)));
+            if !finished {
+                cells.push(plain(time(request.expires)));
+            }
             if finished {
                 cells.push(plain(time(order.closed)));
             }
