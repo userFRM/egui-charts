@@ -395,28 +395,68 @@ pub(super) mod tests {
     }
 
     /// The selected fill follows price-axis scaling/reset and series settings on the next frame,
-    /// and the row shows while hovering the main pane (volume included) per the visibility setting.
+    /// and the row shows while hovering the main pane (volume included) per the visibility setting:
+    /// on hover by default, in the configuration and in the default Canvas settings, and not
+    /// without a pointer.
     #[test]
     fn navigation_buttons_show_visibility_and_scale_state() {
         use crate::config::NavigationButtons::{Always, Never, OnHover};
         use crate::scales::PriceScaleMode::{Logarithmic, Normal, Percentage};
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[200.0]);
-        assert_eq!(chart.config.navigation_buttons, Never);
-        #[cfg(feature = "ui")]
-        assert_eq!(
-            crate::widget::settings::ButtonsSettings::default().navigation,
-            crate::widget::settings::ButtonVisibility::Hidden,
-        );
         frame(&ctx, &mut chart, 0.0, Vec::new());
         for (i, (manual, mode, visibility, hover, selected)) in [
-            (false, Normal, OnHover, true, [true, false, false]),
-            (true, Normal, OnHover, true, [false, false, false]),
-            (false, Logarithmic, OnHover, true, [true, true, false]),
-            (false, Percentage, OnHover, true, [true, false, true]),
-            (false, Normal, OnHover, false, [false, false, false]),
-            (false, Normal, Always, false, [true, false, false]),
-            (false, Normal, Never, true, [false, false, false]),
+            (false, Normal, None, Some(true), [true, false, false]),
+            (false, Normal, None, None, [false, false, false]),
+            (
+                false,
+                Normal,
+                Some(OnHover),
+                Some(true),
+                [true, false, false],
+            ),
+            (
+                true,
+                Normal,
+                Some(OnHover),
+                Some(true),
+                [false, false, false],
+            ),
+            (
+                false,
+                Logarithmic,
+                Some(OnHover),
+                Some(true),
+                [true, true, false],
+            ),
+            (
+                false,
+                Percentage,
+                Some(OnHover),
+                Some(true),
+                [true, false, true],
+            ),
+            (
+                false,
+                Normal,
+                Some(OnHover),
+                Some(false),
+                [false, false, false],
+            ),
+            (
+                false,
+                Normal,
+                Some(Always),
+                Some(false),
+                [true, false, false],
+            ),
+            (
+                false,
+                Normal,
+                Some(Never),
+                Some(true),
+                [false, false, false],
+            ),
         ]
         .into_iter()
         .enumerate()
@@ -430,27 +470,50 @@ pub(super) mod tests {
             } else {
                 chart.state.price_scale_mut().reset();
             }
-            chart.config.navigation_buttons = visibility;
-            let pointer = if hover {
-                chart.last_rendered_volume_rect.center()
-            } else {
-                chart.last_rendered_price_rect.right_top() + egui::vec2(20.0, 20.0)
+            chart.config.navigation_buttons =
+                visibility.unwrap_or(crate::config::ChartConfig::default().navigation_buttons);
+            let events = match hover {
+                Some(true) => vec![Event::PointerMoved(
+                    chart.last_rendered_volume_rect.center(),
+                )],
+                Some(false) => vec![Event::PointerMoved(
+                    chart.last_rendered_price_rect.right_top() + egui::vec2(20.0, 20.0),
+                )],
+                None => vec![Event::PointerGone],
             };
-            let painted = shapes(
-                &ctx,
-                &mut chart,
-                0.1 + i as f64,
-                vec![Event::PointerMoved(pointer)],
-            );
+            let painted = shapes(&ctx, &mut chart, 0.1 + i as f64, events);
             for (toggle, expected) in selected.into_iter().enumerate() {
                 let center = navigation_pos(&chart, toggle + 5);
                 let active = painted.iter().any(|shape| matches!(shape, Shape::Rect(r)
                     if r.rect.center().distance(center) < 0.1 && r.fill == ctx.global_style().visuals.selection.bg_fill));
                 assert_eq!(
                     active, expected,
-                    "manual {manual}, mode {mode:?}, toggle {toggle}"
+                    "row {i}: manual {manual}, mode {mode:?}, toggle {toggle}"
                 );
             }
+        }
+        // Default Canvas settings show the row on hover too, replacing a hidden one.
+        let ctx_settings = egui::Context::default();
+        let mut from_settings = crate::widget::test_frames::chart(&[100.0], &[200.0]);
+        from_settings.config.navigation_buttons = Never;
+        crate::widget::settings::ChartSettingsState::default()
+            .apply_to_chart(&mut from_settings)
+            .unwrap();
+        frame(&ctx_settings, &mut from_settings, 0.0, Vec::new());
+        for (time, hover, shown) in [(0.1, true, true), (0.2, false, false)] {
+            let events = if hover {
+                vec![Event::PointerMoved(
+                    from_settings.last_rendered_volume_rect.center(),
+                )]
+            } else {
+                vec![Event::PointerGone]
+            };
+            let painted = shapes(&ctx_settings, &mut from_settings, time, events);
+            // The row's logarithmic toggle is the only "log" the chart paints.
+            let drawn = painted
+                .iter()
+                .any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "log"));
+            assert_eq!(drawn, shown, "hover {hover}");
         }
         chart.config.show_scale_mode_buttons = false;
         chart.config.navigation_buttons = Always;

@@ -605,8 +605,6 @@ impl DemoApp {
         chart.config_mut().candle_width = 0.75;
         chart.config_mut().right_axis_width = 59.0;
         chart.config_mut().skip_background = true;
-        // The library hides the navigation row by default; the demo shows where it is.
-        chart.config_mut().navigation_buttons = egui_charts::config::NavigationButtons::OnHover;
         size_by_atr(&mut chart);
         chart.set_event_visibility(
             cc.storage
