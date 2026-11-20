@@ -1,6 +1,6 @@
 //! An alert service that evaluates alerts on the bars the host feeds it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
@@ -9,8 +9,11 @@ use super::{AlertEvent, Alerts, Events};
 use crate::data::{FeedError, MaybeSend, Reply};
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency, AlertId,
-    AlertPositionProgress, AlertSource, AlertStatus, Bar, BarClock, Timeframe,
+    AlertPositionProgress, AlertSource, AlertStatus, AlertTrigger, Bar, BarClock, Timeframe,
 };
+
+/// Triggers the engine keeps for [`AlertEngine::triggers`], silent entries included.
+const TRIGGER_HISTORY: usize = 5_000;
 
 /// An [`Alerts`] service that keeps alerts in memory and evaluates them on the bars the host
 /// feeds it with [`update`](Self::update), as [`PaperAccount`](super::PaperAccount) fills orders
@@ -20,7 +23,10 @@ use crate::model::{
 /// supplies these evaluations without constructing a chart.
 ///
 /// The host keeps the alerts: [`alerts`](Self::alerts) returns them with their status for
-/// storage, and [`with_alerts`](Self::with_alerts) restores them. Evaluation state lives in
+/// storage, and [`with_alerts`](Self::with_alerts) restores them. In the same way
+/// [`triggers`](Self::triggers) returns the newest 5,000 triggers, silent ones included, and
+/// [`with_triggers`](Self::with_triggers) restores them; the first `watch` pushes them as
+/// [`AlertEvent::Logged`], so the alert log survives a restart. Evaluation state lives in
 /// memory; a restored alert counts its [`last_triggered_at`](Alert::last_triggered_at), or on a
 /// watchlist each member's time in [`member_triggered_at`](Alert::member_triggered_at), as its
 /// last firing (see *Restarts*). An alert with frequency [`Once`](AlertFrequency::Once) that
@@ -107,17 +113,61 @@ use crate::model::{
 /// member record.
 ///
 /// ```
+/// use std::sync::{Arc, Mutex};
+///
 /// use chrono::{DateTime, Utc};
 /// use egui_charts::model::{Alert, AlertCondition, Bar, Timeframe};
-/// use egui_charts::services::AlertEngine;
+/// use egui_charts::services::{AlertEngine, AlertNotice};
 ///
 /// let mut alert = Alert::new("AAPL", AlertCondition::CrossingUp(100.0));
 /// alert.timeframe = Some(Timeframe::Min1);
-/// let engine = AlertEngine::new().with_alerts(vec![alert]);
+/// alert.message = r#"{"symbol": "{{symbol}}", "close": {{close}}}"#.into();
+/// alert.delivery.email = true;
+/// alert.delivery.plain_text = true;
+/// alert.delivery.plain_text_address = "pager@example.com".into();
+/// alert.delivery.push = true;
+/// alert.delivery.webhook = true;
+/// alert.delivery.webhook_url = "https://example.com/hook".into();
+/// // What the host hands to its mail, push and web clients, which must not block the callback.
+/// let sent = Arc::new(Mutex::new(Vec::new()));
+/// let outbox = Arc::clone(&sent);
+/// let engine = AlertEngine::new()
+///     .with_alerts(vec![alert])
+///     .on_trigger(move |alert, event| {
+///         let Some(notice) = AlertNotice::new(alert, event) else {
+///             return;
+///         };
+///         let delivery = &alert.delivery;
+///         let mut outbox = outbox.lock().unwrap();
+///         if delivery.email {
+///             outbox.push(format!("email: {}", notice.subject));
+///         }
+///         if delivery.plain_text {
+///             // An empty address sends to the account's alternative address.
+///             let to = delivery.plain_text_address.trim();
+///             outbox.push(format!("plain text to {to}: {}", notice.subject));
+///         }
+///         if delivery.push {
+///             outbox.push(format!("push: {}", notice.push_title));
+///         }
+///         if delivery.webhook {
+///             let url = delivery.webhook_url.trim();
+///             outbox.push(format!("POST {url} {}: {}", notice.content_type, notice.body));
+///         }
+///     });
 /// let time = |seconds| DateTime::<Utc>::from_timestamp(seconds, 0).unwrap();
 /// let bar = |seconds, close| Bar::new(time(seconds), close, close, close, close, 1.0);
 /// // The close rises through 100 on the second bar; `update` also takes the chart's source values.
 /// engine.update("AAPL", None, Timeframe::Min1, &[bar(0, 99.0), bar(60, 101.0)], time(61), |_, _| None);
+/// assert_eq!(
+///     *sent.lock().unwrap(),
+///     [
+///         "email: AAPL: Crossing up 100",
+///         "plain text to pager@example.com: AAPL: Crossing up 100",
+///         "push: AAPL: Crossing up 100",
+///         r#"POST https://example.com/hook application/json: {"symbol": "AAPL", "close": 101}"#,
+///     ]
+/// );
 /// ```
 pub struct AlertEngine {
     state: Mutex<State>,
@@ -153,6 +203,10 @@ struct State {
     /// Alerts restored by `with_alerts`, or saved under an id the engine did not hold, whose
     /// monitoring has not changed since: a run's first evaluation counts their saved last firing.
     restored: std::collections::HashSet<AlertId>,
+    /// The newest triggers, oldest first.
+    triggers: VecDeque<AlertTrigger>,
+    /// A stream was watched, so the history was pushed.
+    watched: bool,
 }
 
 /// What the engine remembers of one alert on one symbol.
@@ -241,8 +295,8 @@ impl AlertEngine {
 
     /// Calls `deliver` with the alert and its [`AlertEvent::TriggeredForSymbol`] on every trigger,
     /// after the event is pushed, so the host can send email, push notifications or web requests.
-    /// The call comes from the thread that fed the engine and must return at once; it may use
-    /// the engine.
+    /// [`AlertNotice::new`](super::AlertNotice::new) builds what each of them sends. The call
+    /// comes from the thread that fed the engine and must return at once; it may use the engine.
     pub fn on_trigger(
         mut self,
         deliver: impl Fn(&Alert, &AlertEvent) + MaybeSend + 'static,
@@ -275,6 +329,37 @@ impl AlertEngine {
     /// The alerts with their current status, for the host to keep.
     pub fn alerts(&self) -> Vec<Alert> {
         self.lock().alerts.clone()
+    }
+
+    /// The newest 5,000 triggers, oldest first, silent entries included, for the host to keep
+    /// beside [`alerts`](Self::alerts).
+    pub fn triggers(&self) -> Vec<AlertTrigger> {
+        self.lock().triggers.iter().cloned().collect()
+    }
+
+    /// Starts with `triggers` as [`triggers`](Self::triggers) returned them, oldest first,
+    /// keeping the newest 5,000. The first [`watch`](Alerts::watch) pushes them as
+    /// [`AlertEvent::Logged`], so the alert log survives a restart; later calls do not.
+    pub fn with_triggers(self, triggers: Vec<AlertTrigger>) -> Self {
+        {
+            let mut state = self.lock();
+            let skip = triggers.len().saturating_sub(TRIGGER_HISTORY);
+            state.triggers = triggers
+                .into_iter()
+                .skip(skip)
+                .map(|mut trigger| {
+                    trigger.price = trigger.price.filter(|p| p.is_finite());
+                    trigger
+                })
+                .collect();
+        }
+        self
+    }
+
+    /// Keeps only the triggers of the history for which `keep` returns true, as the alerts
+    /// panel does when the user clears its log.
+    pub fn retain_triggers(&self, keep: impl FnMut(&AlertTrigger) -> bool) {
+        self.lock().triggers.retain(keep);
     }
 
     /// Active symbols still armed for `id`, including watchlist members. A once-per-member
@@ -404,6 +489,7 @@ impl AlertEngine {
             watchlists,
             runs,
             restored,
+            triggers,
             ..
         } = &mut *state;
         for alert in alerts.iter_mut().filter(|alert| {
@@ -479,15 +565,17 @@ impl AlertEngine {
             let price = bar.close.is_finite().then_some(bar.close);
             let position = matches!(alert.condition, AlertCondition::Position { .. });
             if silent {
-                if let Some(events) = events {
-                    for message in &messages {
-                        events.push(AlertEvent::SilentTriggered {
-                            id: id.clone(),
-                            symbol: symbol.to_owned(),
-                            time: now,
-                            price,
-                            message: message.clone(),
-                        });
+                for message in &messages {
+                    let event = AlertEvent::SilentTriggered {
+                        id: id.clone(),
+                        symbol: symbol.to_owned(),
+                        time: now,
+                        price,
+                        message: message.clone(),
+                    };
+                    remember(triggers, alert, &event);
+                    if let Some(events) = events {
+                        events.push(event);
                     }
                 }
                 // A position alert moves on outside its schedule too.
@@ -534,6 +622,7 @@ impl AlertEngine {
                     price,
                     message,
                 };
+                remember(triggers, alert, &event);
                 if let Some(events) = events {
                     events.push(event.clone());
                 }
@@ -762,6 +851,7 @@ impl AlertEngine {
             runs,
             events,
             watchlists,
+            triggers,
             ..
         } = &mut *state;
         for alert in alerts.iter_mut().filter(|alert| {
@@ -821,14 +911,16 @@ impl AlertEngine {
                     .as_ref()
                     .is_some_and(|schedule| !schedule.allows(now))
                 {
+                    let event = AlertEvent::SilentTriggered {
+                        id: id.clone(),
+                        symbol: symbol.to_owned(),
+                        time,
+                        price,
+                        message,
+                    };
+                    remember(triggers, alert, &event);
                     if let Some(events) = events {
-                        events.push(AlertEvent::SilentTriggered {
-                            id: id.clone(),
-                            symbol: symbol.to_owned(),
-                            time,
-                            price,
-                            message,
-                        });
+                        events.push(event);
                     }
                     continue;
                 }
@@ -851,6 +943,7 @@ impl AlertEngine {
                     price,
                     message,
                 };
+                remember(triggers, alert, &event);
                 if let Some(events) = events {
                     events.push(event.clone());
                 }
@@ -977,6 +1070,15 @@ impl Alerts for AlertEngine {
         let mut state = self.lock();
         for alert in &state.alerts {
             events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+        }
+        if !std::mem::replace(&mut state.watched, true) {
+            // The alerts and the history share the stream's 10,000 pushes per frame; 1,000 stay
+            // free for the frame's other pushes.
+            let room = 9_000usize.saturating_sub(state.alerts.len());
+            let skip = state.triggers.len().saturating_sub(room);
+            for trigger in state.triggers.iter().skip(skip) {
+                events.push(AlertEvent::Logged(trigger.clone()));
+            }
         }
         state.events = Some(events);
     }
@@ -1397,6 +1499,40 @@ fn record_member(alert: &mut Alert, symbol: &str, time: DateTime<Utc>) {
             .or_insert(time);
         *at = (*at).max(time);
     }
+}
+
+/// Keeps the trigger `event` of `alert` as the newest of `history`, dropping the oldest beyond
+/// the bound.
+fn remember(history: &mut VecDeque<AlertTrigger>, alert: &Alert, event: &AlertEvent) {
+    let (AlertEvent::TriggeredForSymbol {
+        id,
+        symbol,
+        time,
+        price,
+        message,
+    }
+    | AlertEvent::SilentTriggered {
+        id,
+        symbol,
+        time,
+        price,
+        message,
+    }) = event
+    else {
+        return;
+    };
+    if history.len() == TRIGGER_HISTORY {
+        history.pop_front();
+    }
+    history.push_back(AlertTrigger {
+        id: id.clone(),
+        name: alert.display_name(),
+        symbol: symbol.clone(),
+        time: *time,
+        price: price.filter(|p| p.is_finite()),
+        message: message.clone(),
+        silent: matches!(event, AlertEvent::SilentTriggered { .. }),
+    });
 }
 
 /// What a frequency fires at most once per: the bar, or for a per-minute alert the minute of `now`.
@@ -1916,6 +2052,17 @@ mod tests {
                     })
                     .collect();
                 assert_eq!(fired, triggers, "row {index}, silent {silent}");
+                // The history keeps every trigger pushed, silent ones marked.
+                let history = host.engine.triggers();
+                let kept: Vec<_> = history
+                    .iter()
+                    .filter_map(|t| Some((t.message.as_str(), t.price?)))
+                    .collect();
+                assert_eq!(kept, triggers, "row {index}, silent {silent}");
+                assert!(
+                    history.iter().all(|t| t.silent == silent),
+                    "row {index}, silent {silent}"
+                );
                 assert_eq!(reported, progress, "row {index}, silent {silent}");
                 assert_eq!(
                     host.delivered.lock().unwrap().len(),
@@ -2793,6 +2940,65 @@ mod tests {
         assert!(host.events().is_empty());
     }
 
+    /// Saved trigger history survives restoration and is pushed once, including silent entries,
+    /// while the retained history stays bounded.
+    #[test]
+    fn restored_triggers_are_pushed_on_the_first_watch_only() {
+        let mut watched = alert(AlertCondition::Above(100.0), AlertFrequency::EveryTime);
+        watched.id = Some(AlertId("1".into()));
+        watched.name = "Breakout".into();
+        let host = Host::new(vec![watched]);
+        host.events();
+        let bars = [bar(0, 99.0, 1.0), bar(1, 101.0, 1.0), bar(2, 103.0, 1.0)];
+        feed(&host, &bars, &[], 1_000);
+        let mut fired = AlertTrigger::new(AlertId("1".into()), "SYM", time(1_000));
+        fired.name = "Breakout".into();
+        fired.price = Some(103.0);
+        assert_eq!(host.engine.triggers(), [fired]);
+        // The host keeps the history as text beside the alerts.
+        let mut quiet = AlertTrigger::new(AlertId("1".into()), "SYM", time(2_000));
+        quiet.silent = true;
+        let mut saved = host.engine.triggers();
+        saved.push(quiet);
+        let saved: Vec<AlertTrigger> =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let restored = AlertEngine::new()
+            .with_alerts(host.engine.alerts())
+            .with_triggers(saved.clone());
+        let inbox = Arc::new(Inbox::default());
+        let (_first, events) = Listener::new(&inbox, 1);
+        restored.watch(events);
+        let (_second, events) = Listener::new(&inbox, 2);
+        restored.watch(events);
+        let answers = inbox.drain().answers;
+        let pushed = |key| {
+            answers
+                .iter()
+                .filter(|(k, _)| *k == key)
+                .map(|(_, event)| event.downcast_ref::<AlertEvent>().unwrap().clone())
+                .collect::<Vec<_>>()
+        };
+        let upsert = AlertEvent::Upsert(Box::new(restored.alerts()[0].clone()));
+        assert_eq!(
+            pushed(1),
+            [
+                upsert.clone(),
+                AlertEvent::Logged(saved[0].clone()),
+                AlertEvent::Logged(saved[1].clone())
+            ]
+        );
+        assert_eq!(pushed(2), [upsert]);
+        // The history keeps the newest triggers.
+        let many = (0..5_001)
+            .map(|n| AlertTrigger::new(AlertId(n.to_string()), "SYM", time(n)))
+            .collect();
+        let kept = AlertEngine::new().with_triggers(many).triggers();
+        assert_eq!(
+            (kept.len(), kept[0].id.0.as_str(), kept[4_999].id.0.as_str()),
+            (5_000, "1", "5000")
+        );
+    }
+
     /// An alert stored before names and messages had limits, here with a 4001-character
     /// message, loads with `with_alerts` and keeps working.
     #[test]
@@ -3534,6 +3740,16 @@ mod tests {
         };
         assert_eq!(
             triggers(&host),
+            [at(100, Some(101.0), "Turn 1"), at(160, None, "Turn 2")]
+        );
+        let kept: Vec<_> = host
+            .engine
+            .triggers()
+            .into_iter()
+            .map(|t| (t.symbol, t.time, t.price, t.message))
+            .collect();
+        assert_eq!(
+            kept,
             [at(100, Some(101.0), "Turn 1"), at(160, None, "Turn 2")]
         );
         // Paused while other alerts evaluate bars, then resumed, it fires no event again.

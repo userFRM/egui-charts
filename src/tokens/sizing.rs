@@ -21,6 +21,8 @@
 pub struct SizingTokens {
     /// Target minimum, in egui logical points.
     pub target_min: f32,
+    /// Icon double extra small, in egui logical points.
+    pub icon_xxs: f32,
     /// Icon extra small, in egui logical points.
     pub icon_xs: f32,
     /// Icon 14, in egui logical points.
@@ -33,6 +35,8 @@ pub struct SizingTokens {
     pub icon_btn: f32,
     /// Icon large, in egui logical points.
     pub icon_lg: f32,
+    /// Icon extra large, in egui logical points.
+    pub icon_xl: f32,
     /// Icon double extra large, in egui logical points.
     pub icon_xxl: f32,
     /// Button small, in egui logical points.

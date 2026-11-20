@@ -195,14 +195,22 @@ pub enum VwapPlotType {
     /// Connected values.
     #[default]
     Line,
+    /// Connected values, restarting after a bar without a value.
+    LineWithBreaks,
     /// Horizontal segments followed by a vertical change at the next bar.
     StepLine,
+    /// Step segments, restarting after a bar without a value.
+    StepLineWithBreaks,
+    /// Step segments with a diamond at the first value and each change of value.
+    StepLineWithDiamonds,
     /// Bars of the line's width from zero to each value.
     Histogram,
     /// Columns from zero to each value, at 80% of the bar pitch.
     Columns,
     /// Filled area between the values and zero.
     Area,
+    /// Filled area and its line, restarting after a bar without a value.
+    AreaWithBreaks,
     /// A circle at each value.
     Circles,
     /// A plus at each value.
@@ -211,12 +219,16 @@ pub enum VwapPlotType {
 
 impl VwapPlotType {
     /// Every plot type, in the order the Inputs tab lists them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 11] = [
         Self::Line,
+        Self::LineWithBreaks,
         Self::StepLine,
+        Self::StepLineWithBreaks,
+        Self::StepLineWithDiamonds,
         Self::Histogram,
         Self::Columns,
         Self::Area,
+        Self::AreaWithBreaks,
         Self::Circles,
         Self::Crosses,
     ];
@@ -225,13 +237,24 @@ impl VwapPlotType {
     pub fn name(self) -> &'static str {
         match self {
             Self::Line => "Line",
+            Self::LineWithBreaks => "Line with breaks",
             Self::StepLine => "Step line",
+            Self::StepLineWithBreaks => "Step line with breaks",
+            Self::StepLineWithDiamonds => "Step line with diamonds",
             Self::Histogram => "Histogram",
             Self::Columns => "Columns",
             Self::Area => "Area",
+            Self::AreaWithBreaks => "Area with breaks",
             Self::Circles => "Circles",
             Self::Crosses => "Crosses",
         }
+    }
+
+    pub(crate) fn has_breaks(self) -> bool {
+        matches!(
+            self,
+            Self::LineWithBreaks | Self::StepLineWithBreaks | Self::AreaWithBreaks
+        )
     }
 }
 

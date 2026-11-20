@@ -22,7 +22,7 @@ mod legend;
 mod markers;
 mod session_breaks;
 mod trading_lines;
-pub(in crate::chart) mod volume_profile;
+pub(crate) mod volume_profile;
 mod watermark;
 
 // Re-export rendering functions
