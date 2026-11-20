@@ -33,6 +33,8 @@ pub struct DrawingProps {
     pub save_as_default: bool,
     /// Primary color
     pub color: Color32,
+    /// Most recent Text colour picked in the Style tab's Color row.
+    pub color_row_text_pick: Option<[u8; 4]>,
     /// Line width (1-10)
     pub line_width: f32,
     /// Line style
@@ -63,6 +65,7 @@ impl Default for DrawingProps {
             coordinates: CoordinatesState::default(),
             save_as_default: false,
             color: crate::theme::Theme::default().ui.accent,
+            color_row_text_pick: None,
             line_width: 1.0,
             line_style: LineStyle::Solid,
             fill_color: None,
@@ -232,13 +235,13 @@ impl DrawingProps {
             })
         });
         let [r, g, b, a] = self.color_rgba();
-        // A Text colour pick also stages text_color; compare with the colour the row showed.
+        // Only a recorded Color-row pick propagates text colour through the whole selection.
         let text_pick = self
             .tool_settings
             .as_ref()
             .and_then(|template| template.settings.text_color_override())
             .zip(target.text_color_override())
-            .filter(|(picked, _)| picked[..3] == [r, g, b]);
+            .filter(|(picked, _)| self.color_row_text_pick == Some(*picked));
         let hue_edited = if let Some((picked, shown)) = text_pick {
             picked[..3] != shown[..3]
         } else {

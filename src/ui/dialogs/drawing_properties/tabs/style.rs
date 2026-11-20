@@ -117,6 +117,7 @@ impl StyleTab {
                         if let Some(text) = text {
                             template.settings.text_color =
                                 Some([r, g, b, if custom { a } else { text[3] }]);
+                            props.color_row_text_pick = template.settings.text_color;
                         }
                     }
                 }
@@ -1479,52 +1480,44 @@ mod tests {
     /// selected drawing and leaves each at its own opacity: a trend line stays opaque and a
     /// highlighter stays at 51. Text with its own colour also propagates a pick equal to its
     /// drawing RGB, while accepting unchanged properties leaves every colour alone. Only an
-    /// opacity edited in the custom editor changes the other Texts' text opacity.
+    /// opacity edited in the custom editor changes the other Texts' text opacity. Text-tab picks
+    /// reach only same-tool texts, including a pick equal to the drawing RGB.
     #[test]
     fn palette_colour_on_a_selection_keeps_each_line_opacity() {
         use DrawingToolType::{AnchoredText, TextLabel};
 
         let green = Some([8, 153, 129, 200]);
+        let green_pick = Some(MAIN_COLORS[3]);
+        let blue_pick = Some(MAIN_COLORS[6]);
         let mut observed = Vec::new();
-        for (opened, alpha, text_tool, (peer_tool, peer_text), swatch) in [
-            (1, 51, TextLabel, (TextLabel, green), Some(MAIN_COLORS[3])),
-            (2, 51, TextLabel, (TextLabel, green), Some(MAIN_COLORS[3])),
-            (1, 0, TextLabel, (TextLabel, green), Some(MAIN_COLORS[3])),
-            (2, 0, TextLabel, (TextLabel, green), Some(MAIN_COLORS[3])),
-            (3, 51, TextLabel, (TextLabel, green), Some(MAIN_COLORS[6])),
+        for (opened, alpha, text_tool, (peer_tool, peer_text), swatch, text_tab) in [
+            (1, 51, TextLabel, (TextLabel, green), green_pick, false),
+            (2, 51, TextLabel, (TextLabel, green), green_pick, false),
+            (1, 0, TextLabel, (TextLabel, green), green_pick, false),
+            (2, 0, TextLabel, (TextLabel, green), green_pick, false),
+            (3, 51, TextLabel, (TextLabel, green), blue_pick, false),
+            (3, 51, AnchoredText, (AnchoredText, green), blue_pick, false),
+            (3, 51, TextLabel, (TextLabel, green), green_pick, false),
+            (3, 51, TextLabel, (AnchoredText, green), green_pick, false),
+            (3, 51, AnchoredText, (TextLabel, green), green_pick, false),
             (
                 3,
                 51,
                 AnchoredText,
                 (AnchoredText, green),
-                Some(MAIN_COLORS[6]),
+                green_pick,
+                false,
             ),
-            (3, 51, TextLabel, (TextLabel, green), Some(MAIN_COLORS[3])),
-            (
-                3,
-                51,
-                TextLabel,
-                (AnchoredText, green),
-                Some(MAIN_COLORS[3]),
-            ),
-            (
-                3,
-                51,
-                AnchoredText,
-                (TextLabel, green),
-                Some(MAIN_COLORS[3]),
-            ),
-            (
-                3,
-                51,
-                AnchoredText,
-                (AnchoredText, green),
-                Some(MAIN_COLORS[3]),
-            ),
-            (3, 51, TextLabel, (AnchoredText, green), None),
-            (3, 51, AnchoredText, (TextLabel, green), None),
-            (3, 51, TextLabel, (TextLabel, None), Some(MAIN_COLORS[3])),
-            (3, 51, TextLabel, (TextLabel, None), None),
+            (3, 51, TextLabel, (AnchoredText, green), None, false),
+            (3, 51, AnchoredText, (TextLabel, green), None, false),
+            (3, 51, TextLabel, (TextLabel, None), green_pick, false),
+            (3, 51, TextLabel, (TextLabel, None), None, false),
+            (3, 51, TextLabel, (TextLabel, green), blue_pick, true),
+            (3, 51, TextLabel, (TextLabel, green), green_pick, true),
+            (3, 51, AnchoredText, (AnchoredText, green), blue_pick, true),
+            (3, 51, AnchoredText, (AnchoredText, green), green_pick, true),
+            (3, 51, TextLabel, (AnchoredText, green), blue_pick, true),
+            (3, 51, TextLabel, (TextLabel, None), blue_pick, true),
         ] {
             let ctx = Context::default();
             ctx.global_style_mut(|style| style.animation_time = 0.0);
@@ -1579,14 +1572,18 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        StyleTab::show(
-                            ui,
-                            &mut props,
-                            &mut pickers,
-                            &mut Default::default(),
-                            &mut Default::default(),
-                            None,
-                        )
+                        if text_tab {
+                            super::super::TextTab::show(ui, &mut props, &mut pickers);
+                        } else {
+                            StyleTab::show(
+                                ui,
+                                &mut props,
+                                &mut pickers,
+                                &mut Default::default(),
+                                &mut Default::default(),
+                                None,
+                            );
+                        }
                     },
                 );
                 let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
@@ -1618,12 +1615,25 @@ mod tests {
                 .unwrap();
             let want = if let Some(swatch) = swatch {
                 let [r, g, b, _] = swatch.to_srgba_unmultiplied();
-                vec![
-                    [r, g, b, alpha],
-                    [r, g, b, 255],
-                    [r, g, b, 128],
-                    [r, g, b, peer_text.map_or(255, |color| color[3])],
-                ]
+                if text_tab {
+                    vec![
+                        original[0].0,
+                        original[1].0,
+                        [r, g, b, 128],
+                        if peer_tool == text_tool {
+                            [r, g, b, 128]
+                        } else {
+                            peer_text.unwrap_or(original[3].0)
+                        },
+                    ]
+                } else {
+                    vec![
+                        [r, g, b, alpha],
+                        [r, g, b, 255],
+                        [r, g, b, 128],
+                        [r, g, b, peer_text.map_or(255, |color| color[3])],
+                    ]
+                }
             } else {
                 let [r, g, b, _] = peer_text.unwrap_or([41, 98, 255, 255]);
                 vec![
