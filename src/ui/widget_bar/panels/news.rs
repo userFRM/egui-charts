@@ -2,7 +2,7 @@
 //! market, narrowed by topic, provider and country, with named views of the selection.
 
 use crate::localization as l10n;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Offset, Utc};
@@ -13,7 +13,7 @@ use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, NewsQuery, NewsStory};
 use crate::icons::icons;
 use crate::model::TimezoneId;
-use crate::services::{ConflictChoice, Storage, StoreKind};
+use crate::services::{ConflictChoice, Notification, Storage, StoreKind};
 use crate::theme::ThemeExt;
 use crate::ui::dialogs::templates::TemplateStore;
 use crate::ui_kit::buttons::Button;
@@ -58,6 +58,15 @@ struct NewsView {
 struct NewsViews {
     current: Option<String>,
     views: BTreeMap<String, NewsView>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    alerts: BTreeMap<String, NewsAlert>,
+}
+
+/// An alert fixes the followed symbol at creation, so later chart changes cannot retarget it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct NewsAlert {
+    view: NewsView,
+    active: bool,
 }
 
 /// News or highlights fed by the host's [`Datafeed::news`].
@@ -75,6 +84,10 @@ struct NewsViews {
 /// [`poll`](Self::poll) each frame, then [`show`](Self::show) while the panel is open.
 /// With the keyboard, Up and Down move between stories, Enter opens one and Escape returns to
 /// the list.
+/// Named alerts keep the current filter, including its symbols, through storage. Call
+/// [`refresh`](Self::refresh) when the host learns of new stories, even while hidden, and drain
+/// [`take_notifications`](Self::take_notifications) after polling for host delivery. Historical
+/// stories from before an alert starts or resumes do not notify.
 pub struct NewsPanel {
     highlights: bool,
     feed: Option<Arc<dyn Datafeed>>,
@@ -100,6 +113,14 @@ pub struct NewsPanel {
     loading: bool,
     inbox: Arc<Inbox>,
     request: u64,
+    alert_inbox: Arc<Inbox>,
+    alert_request: u64,
+    alert_requests: BTreeMap<u64, (String, NewsAlert)>,
+    /// The last notified instant and ids at that instant, to retain simultaneous releases.
+    alert_seen: BTreeMap<String, (DateTime<Utc>, BTreeSet<String>)>,
+    alerts_refresh: bool,
+    alert_error: Option<FeedError>,
+    notifications: Vec<Notification>,
 }
 
 impl std::fmt::Debug for NewsPanel {
@@ -157,6 +178,13 @@ impl NewsPanel {
             loading: false,
             inbox: Arc::default(),
             request: 0,
+            alert_inbox: Arc::default(),
+            alert_request: 0,
+            alert_requests: BTreeMap::new(),
+            alert_seen: BTreeMap::new(),
+            alerts_refresh: false,
+            alert_error: None,
+            notifications: Vec::new(),
         }
     }
 
@@ -171,6 +199,10 @@ impl NewsPanel {
     /// Ask `feed` for stories from now on, starting at once.
     pub fn set_feed(&mut self, feed: Arc<dyn Datafeed>) {
         self.feed = Some(feed);
+        self.alert_inbox = Arc::default();
+        self.alert_requests.clear();
+        self.alert_seen.clear();
+        self.notifications.clear();
         self.refresh();
     }
 
@@ -222,6 +254,11 @@ impl NewsPanel {
         self.stored = true;
         self.restore = true;
         self.saved.set_storage(storage);
+        self.alert_inbox = Arc::default();
+        self.alert_requests.clear();
+        self.alert_seen.clear();
+        self.notifications.clear();
+        self.alerts_refresh = true;
     }
 
     /// The views document whose write the host refused because another client changed or created
@@ -234,6 +271,12 @@ impl NewsPanel {
     /// [`TemplateStore::resolve_storage_conflict`].
     pub fn resolve_storage_conflict(&mut self, name: &str, choice: ConflictChoice) {
         self.saved.resolve_storage_conflict(name, choice);
+        if choice == ConflictChoice::ReloadRemote {
+            self.restore = true;
+            self.alert_requests.clear();
+            self.alert_seen.clear();
+            self.alerts_refresh = true;
+        }
     }
 
     /// Show publication times in `timezone`, such as the chart's. UTC until set.
@@ -243,6 +286,8 @@ impl NewsPanel {
 
     /// Ask the feed again, such as when the host learns of new stories.
     pub fn refresh(&mut self) {
+        self.alerts_refresh = true;
+        self.alert_requests.clear();
         let Some(feed) = &self.feed else {
             return;
         };
@@ -266,6 +311,45 @@ impl NewsPanel {
             limit: LIMIT,
         };
         feed.news(query, self.inbox.reply(self.request));
+    }
+
+    /// New stories matching active named alerts, each naming its alert in the title and its
+    /// headline in the body. The host delivers or logs them. Drain after each `poll`; at most
+    /// 10,000 notifications are retained, dropping the oldest if the host stops draining.
+    pub fn take_notifications(&mut self) -> Vec<Notification> {
+        std::mem::take(&mut self.notifications)
+    }
+
+    /// Query each active filter independently; the feed applies topics, providers and countries.
+    fn refresh_alerts(&mut self) {
+        let Some(feed) = &self.feed else {
+            return;
+        };
+        let alerts = self.views().alerts;
+        self.alert_seen
+            .retain(|name, _| alerts.get(name).is_some_and(|alert| alert.active));
+        for (name, alert) in alerts.into_iter().filter(|(_, alert)| alert.active) {
+            self.alert_seen
+                .entry(name.clone())
+                .or_insert_with(|| (Utc::now(), BTreeSet::new()));
+            if self
+                .alert_requests
+                .values()
+                .any(|(pending, _)| pending == &name)
+            {
+                continue;
+            }
+            let mut query = NewsQuery::new(LIMIT);
+            query.symbols.clone_from(&alert.view.symbols);
+            query.topics.clone_from(&alert.view.topics);
+            query.providers.clone_from(&alert.view.providers);
+            query.countries.clone_from(&alert.view.countries);
+            query.highlights = self.highlights;
+            self.alert_request += 1;
+            self.alert_requests
+                .insert(self.alert_request, (name, alert));
+            feed.news(query, self.alert_inbox.reply(self.alert_request));
+        }
     }
 
     /// The name of this panel's views document.
@@ -328,6 +412,9 @@ impl NewsPanel {
     pub fn poll(&mut self, ctx: &egui::Context) {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
+        let repaint = ctx.clone();
+        self.alert_inbox
+            .set_waker(move || repaint.request_repaint());
         self.saved.poll(ctx);
         if self.restore && self.saved.ready() {
             self.restore = false;
@@ -367,6 +454,56 @@ impl NewsPanel {
                 }
             }
         }
+        if self.alerts_refresh && self.saved.ready() {
+            self.alerts_refresh = false;
+            self.refresh_alerts();
+        }
+        let alerts = self.views().alerts;
+        for (key, answer) in self.alert_inbox.drain().answers {
+            let Some((name, requested)) = self.alert_requests.remove(&key) else {
+                continue;
+            };
+            if alerts.get(&name) != Some(&requested) || !requested.active {
+                continue;
+            }
+            match *answer
+                .downcast::<Result<Vec<NewsStory>, FeedError>>()
+                .expect("news alert")
+            {
+                Ok(mut stories) => {
+                    self.alert_error = None;
+                    stories.sort_by_key(|story| story.time);
+                    let Some((after, seen)) = self.alert_seen.get_mut(&name) else {
+                        continue;
+                    };
+                    for story in stories {
+                        if story.time < *after
+                            || (story.time == *after && seen.contains(&story.id))
+                            || (!requested.view.symbols.is_empty()
+                                && !story.symbols.is_empty()
+                                && !story
+                                    .symbols
+                                    .iter()
+                                    .any(|symbol| requested.view.symbols.contains(symbol)))
+                        {
+                            continue;
+                        }
+                        if story.time > *after {
+                            *after = story.time;
+                            seen.clear();
+                        }
+                        seen.insert(story.id);
+                        let mut notification = Notification::new(story.time, name.clone());
+                        notification.body = story.headline;
+                        notification.symbol = story.symbols.first().cloned();
+                        self.notifications.push(notification);
+                    }
+                }
+                Err(error) => self.alert_error = Some(error),
+            }
+        }
+        let extra = self.notifications.len().saturating_sub(10_000);
+        self.notifications.drain(..extra);
     }
 
     /// Render the stories, or the open story, after [`poll`](Self::poll).
@@ -531,7 +668,7 @@ impl NewsPanel {
             });
         }
         if self.stored {
-            self.show_views(ui);
+            refresh |= self.show_views(ui);
         }
         if refresh
             || market != self.market
@@ -664,46 +801,55 @@ impl NewsPanel {
     }
 
     /// The views row: switch to a view, and save, rename or delete one under the written name.
-    fn show_views(&mut self, ui: &mut Ui) {
+    fn show_views(&mut self, ui: &mut Ui) -> bool {
         let mut views = self.views();
+        let old_alerts = views.alerts.clone();
         let ready = self.saved.ready();
         let mut switch = None;
-        let (mut save, mut rename, mut delete) = (false, false, false);
-        ui.horizontal_wrapped(|ui| {
-            if !views.views.is_empty() {
-                dropdown(
-                    ui,
-                    "news_views",
-                    views.current.as_deref().unwrap_or("Views"),
-                    |ui| {
-                        for name in views.views.keys() {
-                            let on = views.current.as_ref() == Some(name);
-                            if ui
-                                .selectable_label(on, l10n::text(ui.ctx(), name))
-                                .clicked()
-                                && ready
-                            {
-                                switch = Some(name.clone());
+        let (mut save, mut rename, mut delete, mut alert) = (false, false, false, false);
+        let mut changed = false;
+        ui.add_enabled_ui(ready, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if !views.views.is_empty() {
+                    dropdown(
+                        ui,
+                        "news_views",
+                        views.current.as_deref().unwrap_or("Views"),
+                        |ui| {
+                            for name in views.views.keys() {
+                                let on = views.current.as_ref() == Some(name);
+                                if ui
+                                    .selectable_label(on, l10n::text(ui.ctx(), name))
+                                    .clicked()
+                                    && ready
+                                {
+                                    switch = Some(name.clone());
+                                }
                             }
-                        }
-                    },
-                );
-            }
-            ui.allocate_ui(egui::vec2(128.0, 28.0), |ui| {
-                self.name.show(ui);
+                        },
+                    );
+                }
+                ui.allocate_ui(egui::vec2(128.0, 28.0), |ui| {
+                    self.name.show(ui);
+                });
+                let named = ready && !self.name.query().trim().is_empty();
+                save = Button::new("Save").enabled(named).show(ui).clicked();
+                rename = Button::new("Rename")
+                    .enabled(named && views.current.is_some())
+                    .show(ui)
+                    .clicked();
+                delete = Button::new("Delete")
+                    .enabled(ready && views.current.is_some())
+                    .show(ui)
+                    .clicked();
+                alert = Button::new("Create alert")
+                    .enabled(named)
+                    .show(ui)
+                    .clicked();
             });
-            let named = ready && !self.name.query().trim().is_empty();
-            save = Button::new("Save").enabled(named).show(ui).clicked();
-            rename = Button::new("Rename")
-                .enabled(named && views.current.is_some())
-                .show(ui)
-                .clicked();
-            delete = Button::new("Delete")
-                .enabled(ready && views.current.is_some())
-                .show(ui)
-                .clicked();
         });
         let name = self.name.query().trim().to_owned();
+        let switched = switch.is_some();
         if let Some(target) = switch
             && let Some(view) = views.views.get(&target).cloned()
         {
@@ -711,8 +857,26 @@ impl NewsPanel {
             *self.name.query_mut() = target.clone();
             views.current = Some(target);
             self.write(views);
-        } else if save {
+        } else if save || alert {
             views.views.insert(name.clone(), self.view());
+            if alert || views.alerts.contains_key(&name) {
+                let mut view = self.view();
+                if !view.market {
+                    view.symbols = self
+                        .symbol
+                        .iter()
+                        .chain(chosen(&self.more_symbols))
+                        .cloned()
+                        .collect();
+                } else {
+                    view.symbols.clear();
+                }
+                let active = alert || views.alerts.get(&name).is_some_and(|alert| alert.active);
+                views
+                    .alerts
+                    .insert(name.clone(), NewsAlert { view, active });
+                changed = true;
+            }
             views.current = Some(name);
             self.write(views);
         } else if rename
@@ -722,11 +886,58 @@ impl NewsPanel {
             if let Some(view) = views.views.remove(&old) {
                 views.views.insert(name.clone(), view);
             }
+            if let Some(alert) = views.alerts.remove(&old) {
+                views.alerts.insert(name.clone(), alert);
+                changed = true;
+            }
             views.current = Some(name);
             self.write(views);
         } else if delete && let Some(old) = views.current.take() {
             views.views.remove(&old);
+            changed = views.alerts.remove(&old).is_some();
             self.write(views);
+        }
+        let mut views = self.views();
+        let ready = self.saved.ready();
+        let mut remove = None;
+        let mut toggled = false;
+        for (name, alert) in &mut views.alerts {
+            ui.push_id(("news_alert", name), |ui| {
+                ui.horizontal(|ui| {
+                    let label = l10n::format_text(ui.ctx(), "Alert: {name}", &[("name", name)]);
+                    toggled |= ui
+                        .add_enabled(ready, egui::Checkbox::new(&mut alert.active, label))
+                        .changed();
+                    let delete =
+                        l10n::format_text(ui.ctx(), "Delete alert {name}", &[("name", name)]);
+                    if Button::new(&delete)
+                        .small()
+                        .enabled(ready)
+                        .show(ui)
+                        .clicked()
+                    {
+                        remove = Some(name.clone());
+                    }
+                });
+            });
+        }
+        if let Some(name) = &remove {
+            views.alerts.remove(name);
+        }
+        if toggled || remove.is_some() {
+            self.write(views);
+            changed = true;
+        }
+        if changed {
+            let alerts = self.views().alerts;
+            self.alert_requests
+                .retain(|_, (name, alert)| alerts.get(name) == Some(alert));
+            self.alert_seen.retain(|name, _| {
+                alerts
+                    .get(name)
+                    .is_some_and(|alert| alert.active && old_alerts.get(name) == Some(alert))
+            });
+            self.alerts_refresh = true;
         }
         if let Some(error) = &self.saved.error {
             translated_status_message(
@@ -739,6 +950,18 @@ impl NewsPanel {
                 ),
             );
         }
+        if let Some(error) = &self.alert_error {
+            translated_status_message(
+                ui,
+                MessageKind::Error,
+                l10n::format_text(
+                    ui.ctx(),
+                    "News alerts unavailable: {error}",
+                    &[("error", &error.to_string())],
+                ),
+            );
+        }
+        switched
     }
 }
 
@@ -1030,7 +1253,7 @@ mod tests {
         h.key_press(egui::Key::Enter);
         h.run();
         assert_eq!(h.state().open.as_deref(), Some("Second"));
-        h.get_by_value("Text of Second");
+        assert!(h.query_all_by_value("Text of Second").next().is_some());
         h.key_press(egui::Key::Escape);
         h.run();
         assert!(h.state().open.is_none());
@@ -1038,5 +1261,138 @@ mod tests {
             h.get_by_role_and_label(egui::Role::Button, "Second")
                 .is_focused()
         );
+    }
+
+    /// Independent saved alerts retain their symbols and filters, deliver simultaneous stories
+    /// once, and remain silent while paused or after deletion, including replies already pending.
+    #[test]
+    fn named_alerts_keep_their_filters_and_pause_delete_and_restore() {
+        let feed = Arc::new(Feed::default());
+        let documents = Arc::new(Documents::default());
+        let mut panel = NewsPanel::new();
+        panel.set_symbol("AAA");
+        panel.set_topics(["fx".into(), "oil".into()]);
+        panel.set_providers(["wire".into(), "other".into()]);
+        panel.set_countries(["US".into(), "DE".into()]);
+        panel.set_storage(documents.clone());
+        panel.set_feed(feed.clone());
+        let mut h = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, panel: &mut NewsPanel| {
+                    panel.poll(ui.ctx());
+                    panel.show(ui);
+                },
+                panel,
+            );
+        h.run_steps(3);
+        for (name, symbol, choice) in [("Alpha", "AAA", 0), ("Beta", "BBB", 1)] {
+            let panel = h.state_mut();
+            panel.set_symbol(symbol);
+            for choices in [
+                &mut panel.topics,
+                &mut panel.providers,
+                &mut panel.countries,
+            ] {
+                for (at, (_, selected)) in choices.iter_mut().enumerate() {
+                    *selected = at == choice;
+                }
+            }
+            *panel.name.query_mut() = name.into();
+            h.run_steps(3);
+            h.get_by_label("Create alert").click();
+            h.run_steps(3);
+        }
+        let requests = std::mem::take(&mut *feed.0.lock().unwrap());
+        for (symbol, topic, provider, country) in
+            [("AAA", "fx", "wire", "US"), ("BBB", "oil", "other", "DE")]
+        {
+            assert!(requests.iter().any(|(query, _)| query.symbols == [symbol]
+                && query.topics == [topic]
+                && query.providers == [provider]
+                && query.countries == [country]));
+        }
+        let time = Utc::now();
+        let stories: Vec<_> = [("a1", "AAA"), ("a2", "AAA"), ("b1", "BBB")]
+            .into_iter()
+            .map(|(id, symbol)| {
+                let mut story = NewsStory::new(id, time, id);
+                story.symbols = vec![symbol.into()];
+                story
+            })
+            .collect();
+        for (_, reply) in requests {
+            reply.send(Ok(stories.clone()));
+        }
+        h.run_steps(3);
+        let notifications = h.state_mut().take_notifications();
+        let mut titles: Vec<_> = notifications
+            .iter()
+            .map(|notification| {
+                (
+                    notification.title.as_str(),
+                    notification.body.as_str(),
+                    notification.symbol.as_deref().unwrap(),
+                )
+            })
+            .collect();
+        titles.sort_unstable();
+        assert_eq!(
+            titles,
+            [
+                ("Alpha", "a1", "AAA"),
+                ("Alpha", "a2", "AAA"),
+                ("Beta", "b1", "BBB")
+            ]
+        );
+
+        // Re-reading the same answer does not deliver it again.
+        h.state_mut().refresh();
+        h.run_steps(3);
+        for (_, reply) in std::mem::take(&mut *feed.0.lock().unwrap()) {
+            reply.send(Ok(stories.clone()));
+        }
+        h.run_steps(3);
+        assert!(h.state_mut().take_notifications().is_empty());
+
+        h.get_by_label("Alert: Beta").click();
+        h.run_steps(3);
+        assert!(!h.state().views().alerts["Beta"].active);
+        h.state_mut().refresh();
+        h.run_steps(3);
+        let mut story = NewsStory::new("b2", Utc::now(), "Paused story");
+        story.symbols = vec!["BBB".into()];
+        for (query, reply) in std::mem::take(&mut *feed.0.lock().unwrap()) {
+            // The visible list may still ask for BBB; only AAA's alert is pending.
+            if query.symbols == ["AAA"] {
+                reply.send(Ok(vec![story.clone()]));
+            } else {
+                reply.send(Ok(vec![]));
+            }
+        }
+        h.run_steps(3);
+        assert!(h.state_mut().take_notifications().is_empty());
+
+        let mut restored = NewsPanel::new();
+        restored.set_storage(documents.clone());
+        restored.poll(&egui::Context::default());
+        assert_eq!(restored.views().alerts, h.state().views().alerts);
+        assert_eq!(restored.views().alerts["Alpha"].view.symbols, ["AAA"]);
+        h.state_mut().refresh();
+        h.run_steps(3);
+        let pending = std::mem::take(&mut *feed.0.lock().unwrap());
+        h.get_by_label("Delete alert Alpha").click();
+        h.run_steps(3);
+        for (_, reply) in pending {
+            reply.send(Ok(stories.clone()));
+        }
+        h.run_steps(3);
+        assert!(h.state_mut().take_notifications().is_empty());
+        assert!(!h.state().views().alerts.contains_key("Alpha"));
+        let mut restored = NewsPanel::new();
+        restored.set_storage(documents);
+        restored.poll(&egui::Context::default());
+        assert_eq!(restored.views().alerts.len(), 1);
+        assert!(!restored.views().alerts["Beta"].active);
     }
 }

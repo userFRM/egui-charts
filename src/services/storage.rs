@@ -32,7 +32,8 @@ pub enum StoreKind {
     /// Named screener screens: the universe, column set, filters, sort order and description.
     Screens,
     /// The news panel's named views: the scope, symbols, topics, providers and countries of
-    /// each, and the view shown last. One document per panel, named `news` or `highlights`.
+    /// each, the view shown last and its named news alerts. One document per panel, named `news`
+    /// or `highlights`.
     NewsViews,
 }
 
