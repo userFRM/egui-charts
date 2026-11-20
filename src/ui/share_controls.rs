@@ -90,15 +90,17 @@ impl ShareControls {
 
     /// Shows the rows the service offers for the document `name`, then the progress or result of
     /// the last operation on it. Shows nothing when the service offers nothing for `kind`.
-    pub(crate) fn show(&mut self, ui: &mut Ui, kind: ShareKind, name: &str) {
+    /// Returns true when Save a copy was chosen, so the caller can keep the document as it was.
+    pub(crate) fn show(&mut self, ui: &mut Ui, kind: ShareKind, name: &str) -> bool {
         let Some(sharing) = self.sharing.clone() else {
-            return;
+            return false;
         };
         let offer = sharing.offers(kind);
         if !offer.link && !offer.copy {
-            return;
+            return false;
         }
         ui.separator();
+        let mut copy = false;
         let idle = self.pending.is_none();
         if offer.link
             && ui
@@ -119,6 +121,7 @@ impl ShareControls {
         {
             self.pending = Some(Operation::Copy(name.to_owned()));
             sharing.copy(kind, name, self.inbox.reply(0));
+            copy = true;
             ui.ctx().request_repaint();
         }
         let status = if let Some(pending) = &self.pending {
@@ -170,6 +173,7 @@ impl ShareControls {
                 ui.weak(text);
             }
         }
+        copy
     }
 }
 
