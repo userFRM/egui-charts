@@ -810,7 +810,11 @@ mod tests {
                         "Color",
                         !matches!(
                             tool,
-                            Tool::FibonacciChannel | Tool::Sticker | Tool::GhostFeed
+                            Tool::FibonacciChannel
+                                | Tool::Pitchfork
+                                | Tool::Tweet
+                                | Tool::Sticker
+                                | Tool::GhostFeed
                         ),
                     ),
                     ("Line width", width),

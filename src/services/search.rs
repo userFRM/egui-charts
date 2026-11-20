@@ -5,7 +5,7 @@ mod expression;
 pub use expression::{ExpressionError, SymbolExpression};
 
 use crate::data::{MaybeSend, Reply};
-use crate::model::{Instrument, SymbolType};
+use crate::model::{IdentifierKind, Instrument, SymbolType};
 use std::collections::HashSet;
 
 /// Finds instruments for the symbol search dialog, from a source that need not be the feed's.
@@ -173,6 +173,31 @@ impl SymbolQuery {
             && matches(self.source.as_deref(), instrument.source.as_deref())
     }
 
+    /// The first of `instrument`'s identifiers equal to the typed symbol text, ignoring case and
+    /// whitespace. The venue of a `VENUE:SYMBOL` query is left out; empty text matches none.
+    pub(crate) fn matched_identifier<'a>(
+        &self,
+        instrument: &'a Instrument,
+    ) -> Option<&'a (IdentifierKind, String)> {
+        let squeeze = |text: &str| -> String {
+            text.chars()
+                .filter(|c| !c.is_whitespace())
+                .flat_map(char::to_lowercase)
+                .collect()
+        };
+        let text = squeeze(
+            self.qualified()
+                .map_or(self.text.as_str(), |(_, symbol)| symbol),
+        );
+        if text.is_empty() {
+            return None;
+        }
+        instrument
+            .identifiers
+            .iter()
+            .find(|(_, value)| squeeze(value) == text)
+    }
+
     /// Match and rank one listing before pagination.
     pub(crate) fn rank(&self, instrument: &Instrument) -> Option<u8> {
         if !self.matches_filters(instrument) {
@@ -188,7 +213,7 @@ impl SymbolQuery {
             .map_or(symbol.as_str(), |(_, ticker)| ticker);
         // Without a typed venue, the text may also spell the venue of a prefixed feed key.
         let whole = if qualified.is_some() { ticker } else { &symbol };
-        if ticker == text || whole == text {
+        if ticker == text || whole == text || self.matched_identifier(instrument).is_some() {
             Some(0)
         } else if ticker.starts_with(&text) || whole.starts_with(&text) {
             Some(1)
@@ -245,11 +270,12 @@ impl SymbolSearch for crate::data::http::HttpDatafeed {
 }
 
 /// A fixed list, answered inline: the instruments whose symbol or description contains the text,
-/// ignoring case, and whose metadata passes every chosen filter. Qualified queries also constrain
-/// the listing venue without replacing the explicit exchange filter. An instrument whose
-/// symbol equals the text comes first, then those whose symbol starts with it, then the rest, each
-/// group in list order. Eligible members of a matching root follow direct matches, so an exact
-/// continuous-contract query still offers its dated contracts.
+/// ignoring case, or one of whose [`identifiers`](Instrument::identifiers) equals it, ignoring
+/// case and whitespace, and whose metadata passes every chosen filter. Qualified queries also
+/// constrain the listing venue without replacing the explicit exchange filter. An instrument whose
+/// symbol or identifier equals the text comes first, then those whose symbol starts with it, then
+/// the rest, each group in list order. Eligible members of a matching root follow direct matches,
+/// so an exact continuous-contract query still offers its dated contracts.
 impl SymbolSearch for Vec<Instrument> {
     fn search(&self, query: SymbolQuery, reply: Reply<Vec<Instrument>>) {
         let mut found = query.ranked(self);
@@ -271,7 +297,9 @@ mod tests {
     /// Guards the fallback's contract with the dialog: matching ignores case and reaches the
     /// description, each filter excludes what it should (also an instrument without the field),
     /// an exact symbol outranks a longer one listed first, a prefix outranks a match elsewhere
-    /// listed first, and pagination cuts after ranking.
+    /// listed first, and pagination cuts after ranking. An identifier equal to the text, ignoring
+    /// case and spaces, ranks with an exact symbol and a prefix of one matches nothing, and a
+    /// blank identifier never matches.
     #[test]
     fn list_search_matches_and_filters() {
         let list = vec![
@@ -289,13 +317,18 @@ mod tests {
                 .with_description("SPDR S&P 500 ETF Trust")
                 .with_symbol_type(SymbolType::Fund)
                 .with_exchange("NYSE"),
+            Instrument::new("ADR").with_description("Depositary receipt on US0378331005"),
             Instrument::new("AAPL")
                 .with_description("Apple Inc.")
                 .with_symbol_type(SymbolType::Stock)
                 .with_exchange("NASDAQ")
                 .with_country("US")
                 .with_sector("Technology")
-                .with_source("Primary"),
+                .with_source("Primary")
+                .with_identifier(IdentifierKind::Isin, "US0378331005")
+                .with_identifier(IdentifierKind::Cusip, "037833100")
+                .with_identifier(IdentifierKind::Figi, " bBg000 B9XRY4 ")
+                .with_identifier(IdentifierKind::Other("WKN".into()), " "),
         ];
         let query = |text: &str, symbol_type, exchange: Option<&str>, offset, limit| SymbolQuery {
             text: text.into(),
@@ -329,8 +362,24 @@ mod tests {
                 &["BTCUSD"],
             ),
             (query("", None, Some("NASDAQ"), 0, 10), &["AAPL"]),
-            (query("s", None, None, 0, 10), &["SPYG", "SPY", "BTCUSD"]),
+            (
+                query("s", None, None, 0, 10),
+                &["SPYG", "SPY", "BTCUSD", "ADR"],
+            ),
             (query("xyz", None, None, 0, 10), &[]),
+            (query("US0378331005", None, None, 0, 10), &["AAPL", "ADR"]),
+            (query("us 0378 3310 05", None, None, 0, 10), &["AAPL"]),
+            (
+                query("us\u{a0}0378\t3310\n05", None, None, 0, 10),
+                &["AAPL"],
+            ),
+            (query("037833100", None, None, 0, 10), &["AAPL", "ADR"]),
+            (query("BBG000B9XRY4", None, None, 0, 10), &["AAPL"]),
+            (query("US-0378331005", None, None, 0, 10), &[]),
+            (query("nasdaq:US0378331005", None, None, 0, 10), &["AAPL"]),
+            (query("US0378331005", None, Some("NYSE"), 0, 10), &[]),
+            (query("US0378331005", None, None, 1, 10), &["ADR"]),
+            (query("US03783", None, None, 0, 10), &["ADR"]),
         ];
         for (country, sector, source, expected) in [
             (Some("us"), None, None, &["SPYG", "AAPL"][..]),
