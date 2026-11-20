@@ -193,7 +193,12 @@ impl DrawingToolType {
     pub fn supports_line_measurements(&self) -> bool {
         matches!(
             self,
-            Self::TrendLine | Self::Ray | Self::ExtendedLine | Self::InfoLine | Self::TrendAngle
+            Self::TrendLine
+                | Self::Ray
+                | Self::ExtendedLine
+                | Self::InfoLine
+                | Self::TrendAngle
+                | Self::Arrow
         )
     }
 
