@@ -346,7 +346,8 @@ mod tests {
     /// Each card and badge paints its own background, text and border, the transparency fades
     /// the backgrounds alone, a dashed line keeps the borders solid and a forecast's own colours
     /// replace its fill. A new forecast paints blue cards with a blue border and white text and a
-    /// green badge, faded by 10%; one saved before these settings reads back and paints as it
+    /// green badge at 90% background opacity, which its colour editor can make opaque; one saved
+    /// before these settings reads back and paints as it
     /// did: in the theme's colours, or with its fill as every background.
     #[test]
     fn forecast_cards_and_badges_take_their_own_colours() {
@@ -382,6 +383,8 @@ mod tests {
         };
         let fill = Some([12, 34, 56, 80]);
         let blue = rgb(41, 98, 255);
+        let mut opaque_start = Drawing::new(1, DrawingToolType::Forecast);
+        opaque_start.forecast.as_mut().unwrap().start_background = Some([10, 20, 30, 255]);
         let mut bars = sample_bars();
         for (i, bar) in bars.iter_mut().enumerate() {
             bar.time = chrono::DateTime::from_timestamp(i as i64 * 86_400, 0).unwrap();
@@ -458,6 +461,18 @@ mod tests {
                     LineStyle::Solid,
                     [
                         (rgba(41, 98, 255, 230), Color32::WHITE, Some(blue)),
+                        (rgba(41, 98, 255, 230), Color32::WHITE, Some(blue)),
+                        (rgba(76, 175, 80, 230), Color32::WHITE, None),
+                    ],
+                ),
+                (
+                    "default background can be made opaque",
+                    true,
+                    opaque_start.clone(),
+                    None,
+                    LineStyle::Solid,
+                    [
+                        (rgb(10, 20, 30), Color32::WHITE, Some(blue)),
                         (rgba(41, 98, 255, 230), Color32::WHITE, Some(blue)),
                         (rgba(76, 175, 80, 230), Color32::WHITE, None),
                     ],

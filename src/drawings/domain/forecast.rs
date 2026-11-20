@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Colours of a forecast's start and target cards and of its SUCCESS and FAILED badges, as
 /// unmultiplied RGBA, and how far their backgrounds fade. The default is the look of a new
 /// forecast: blue cards with a blue border and white text, a green SUCCESS and a red FAILED
-/// badge with white text, and backgrounds faded by 10%. An unset colour takes the active
+/// badge with white text, and backgrounds at 90% opacity. An unset colour takes the active
 /// theme's: the cards write in the axis text colour, the success badge in the rising candle
 /// colour and the failure badge in the falling candle colour, all on the axis background. A
 /// card has a border only while its border colour is set. The forecast's line keeps the
@@ -57,21 +57,21 @@ pub struct ForecastStyle {
 
 impl Default for ForecastStyle {
     /// Blue cards with a blue border and white text, a green SUCCESS and a red FAILED badge
-    /// with white text, and backgrounds faded by 10%.
+    /// with white text, and backgrounds at 90% opacity.
     fn default() -> Self {
-        use super::drawing::{BLUE, GREEN, RED, WHITE};
+        use super::drawing::{BLUE, GREEN, RED, WHITE, tint};
         Self {
-            start_background: Some(BLUE),
+            start_background: Some(tint(BLUE, 230)),
             start_text: Some(WHITE),
             start_border: Some(BLUE),
-            target_background: Some(BLUE),
+            target_background: Some(tint(BLUE, 230)),
             target_text: Some(WHITE),
             target_border: Some(BLUE),
-            success_background: Some(GREEN),
+            success_background: Some(tint(GREEN, 230)),
             success_text: Some(WHITE),
-            failure_background: Some(RED),
+            failure_background: Some(tint(RED, 230)),
             failure_text: Some(WHITE),
-            transparency: 10,
+            transparency: 0,
         }
     }
 }

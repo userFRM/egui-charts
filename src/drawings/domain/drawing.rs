@@ -449,7 +449,7 @@ pub(super) const GREY: [u8; 4] = [128, 128, 128, 255];
 pub(super) const WHITE: [u8; 4] = [255, 255, 255, 255];
 
 /// `color` at `alpha` of 255.
-const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
+pub(super) const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
     [color[0], color[1], color[2], alpha]
 }
 
