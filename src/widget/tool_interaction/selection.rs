@@ -2092,7 +2092,7 @@ mod tests {
             let mut chart = chart(&[10.0], &[20.0]);
             let mut table = Drawing::new(7, DrawingToolType::Table);
             table.completed = true;
-            table.chart_points.push(ChartPoint::new(50.0, 15.0));
+            table.chart_points.push(ChartPoint::new(45.0, 15.0));
             chart.drawings_mut().drawings.push(table);
             chart.drawings_mut().select(7);
             frame(&ctx, &mut chart, 0.0, vec![]);
@@ -2107,6 +2107,10 @@ mod tests {
                 modifiers: Modifiers::NONE,
             };
             let to = press + delta;
+            assert!(
+                chart.get_chart_mapping().rect.contains(to),
+                "{case}: drag stays in the pane"
+            );
             for (time, events) in [
                 vec![Event::PointerMoved(press)],
                 vec![button(press, true)],
