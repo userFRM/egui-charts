@@ -398,6 +398,44 @@ pub trait Indicator: Send {
     /// The alert dialog lists them after the outputs as `"{study}: {condition}"`, translating
     /// the condition when shown. Keep indices stable across settings changes and releases.
     /// None by default.
+    ///
+    /// A host study can declare a condition and construct an alert on it:
+    ///
+    /// ```
+    /// use egui_charts::model::{Alert, AlertCondition, AlertSource, Bar};
+    /// use egui_charts::studies::{Indicator, IndicatorValues};
+    ///
+    /// #[derive(Clone, Default)]
+    /// struct PositiveClose { values: IndicatorValues }
+    /// impl Indicator for PositiveClose {
+    ///     fn name(&self) -> &str { "Positive close" }
+    ///     fn calculate(&mut self, bars: &[Bar]) {
+    ///         self.values = IndicatorValues::new();
+    ///         for bar in bars {
+    ///             self.values.push_lines(&[bar.close]);
+    ///         }
+    ///     }
+    ///     fn values(&self) -> &IndicatorValues { &self.values }
+    ///     fn alert_conditions(&self) -> Vec<String> { vec!["Close above zero".into()] }
+    ///     fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+    ///         match condition {
+    ///             0 => self.values.value(0, bar).map(|v| v > 0.0),
+    ///             _ => None,
+    ///         }
+    ///     }
+    /// #   fn colors(&self) -> Vec<ecolor::Color32> { vec![ecolor::Color32::YELLOW] }
+    /// #   fn set_colors(&mut self, _: Vec<ecolor::Color32>) {}
+    /// #   fn set_visible(&mut self, _: bool) {}
+    /// #   fn clone_box(&self) -> Box<dyn Indicator> { Box::new(self.clone()) }
+    /// }
+    /// let mut study = PositiveClose::default();
+    /// study.calculate(&[Bar::new(chrono::DateTime::UNIX_EPOCH, 1.0, 1.0, 1.0, 1.0, 1.0)]);
+    /// assert_eq!(study.alert_conditions(), ["Close above zero"]);
+    /// assert_eq!(study.alert_condition(0, 0), Some(true));
+    /// let mut alert = Alert::new("SAMPLE", AlertCondition::Holds);
+    /// alert.source = AlertSource::StudyCondition { id: "3".into(), condition: 0 };
+    /// assert!(alert.is_valid());
+    /// ```
     fn alert_conditions(&self) -> Vec<String> {
         Vec::new()
     }

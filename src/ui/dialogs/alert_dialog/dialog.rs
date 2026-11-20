@@ -42,6 +42,14 @@ pub struct AlertDialog {
     /// Live strategy run ids accepted by `AlertEngine::strategy_fills` and their display names.
     /// Strategy fills is offered only when this list has a run; an existing alert on an absent
     /// run displays its id.
+    ///
+    /// ```
+    /// use egui_charts::ui::dialogs::AlertDialog;
+    ///
+    /// let mut dialog = AlertDialog::new();
+    /// dialog.strategy_runs = vec![("run-7".into(), "Momentum live".into())];
+    /// assert_eq!(dialog.strategy_runs[0].0, "run-7");
+    /// ```
     pub strategy_runs: Vec<(String, String)>,
     /// The zone the expiry date and time are entered in, UTC by default. Set it before
     /// [`open`](Self::open) or [`edit`](Self::edit), usually to the chart's time zone.
