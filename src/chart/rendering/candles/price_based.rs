@@ -840,7 +840,9 @@ mod tests {
     /// at 103.5 after a close at 100 completes the bars 100 to 101, 101 to 102 and 102 to 103 in
     /// one jump: only the first held a price, so phantom bars outline the second and third. A bar
     /// that trades from 100 to 103.5 completes them along its path, and none is a gap. Bricks of
-    /// 1 from 100 to 102 take the border and wick colours set for rising bricks.
+    /// 1 from 100 to 102 take the border and wick colours set for rising bricks, a translucent
+    /// border as set. Shown Line Break borders take the colour set for rising lines, or else the
+    /// rising body colour at full opacity.
     #[test]
     fn range_and_renko_styles_reach_the_painter() {
         use crate::model::BarData;
@@ -956,7 +958,10 @@ mod tests {
             );
         }
 
-        let (border, wick) = (Color32::from_rgb(1, 2, 3), Color32::from_rgb(4, 5, 6));
+        let (border, wick) = (
+            Color32::from_rgba_unmultiplied(1, 2, 3, 128),
+            Color32::from_rgb(4, 5, 6),
+        );
         let mut params = ChartTypeParams {
             renko_wicks: true,
             ..Default::default()
@@ -1001,11 +1006,7 @@ mod tests {
                 bars(0, &[100.0, 101.0, 102.0], None),
             );
             let plot = chart.get_rendered_price_rect();
-            let expected = own.unwrap_or_else(|| {
-                crate::chart::rendering::candles::helpers::brick_border(
-                    chart.config().bullish_color,
-                )
-            });
+            let expected = own.unwrap_or(chart.config().bullish_color);
             let borders = painted
                 .iter()
                 .filter(|shape| {
