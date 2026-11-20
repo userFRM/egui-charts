@@ -374,8 +374,15 @@ impl HotlistsPanel {
                 texts
             })
             .collect();
-        // Each value column is as wide as its widest text, up to 96 px, so four fit a narrow panel.
+        // Value columns size to their text, with the figure yielding room for the symbol heading.
         let font = egui::TextStyle::Body.resolve(ui.style());
+        let symbol_width = ui
+            .painter()
+            .layout_no_wrap(l10n::text(ui.ctx(), "Symbol"), font.clone(), theme.ui.text)
+            .size()
+            .x
+            .ceil()
+            + 5.0;
         let widths: Vec<f32> = (1..headings.len())
             .map(|column| {
                 std::iter::once(&headings[column])
@@ -400,9 +407,16 @@ impl HotlistsPanel {
                 let columns = |rect: egui::Rect| {
                     let symbol_left = rect.left() + 10.0;
                     let mut right = rect.right() - 8.0;
+                    let values_left = (symbol_left + symbol_width).min(right);
+                    let figure_width = (right - values_left - widths[0] - widths[1]).max(0.0);
                     let mut cells = Vec::with_capacity(widths.len() + 1);
-                    for width in widths.iter().rev() {
-                        let left = (right - width).max(symbol_left);
+                    for (index, &width) in widths.iter().enumerate().rev() {
+                        let width = if index == 2 {
+                            width.min(figure_width)
+                        } else {
+                            width
+                        };
+                        let left = (right - width).max(values_left);
                         cells.push(egui::Rect::from_min_max(
                             egui::pos2(left, rect.top()),
                             egui::pos2((right - 4.0).max(left), rect.bottom()),

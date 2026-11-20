@@ -100,7 +100,9 @@ mod tests {
         fn hotlist(&self, _: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
             let mut first = HotlistEntry::new("AAA", 123.45, 12.34);
             first.figure = Some(("Volume".into(), "123.4M".into()));
-            reply.send(Ok(vec![first, HotlistEntry::new("B", 10.0, 0.0)]));
+            let mut wide = HotlistEntry::new("C", 10.0, 0.0);
+            wide.figure = Some(("Volume".into(), "1,234,567,890.00".into()));
+            reply.send(Ok(vec![first, HotlistEntry::new("B", 10.0, 0.0), wide]));
         }
         fn screen(&self, _: ScreenerQuery, reply: Reply<Vec<ScreenerRow>>) {
             reply.send(Ok(vec![
@@ -297,6 +299,7 @@ mod tests {
                             assert!(!bounds("+12.34%").intersects(bounds("123.4M")), "{texts:?}");
                             for label in [
                                 "Symbol",
+                                "AAA",
                                 "Chg%",
                                 "Volume",
                                 "+12.34%",
