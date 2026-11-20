@@ -150,7 +150,7 @@ struct Trial {
 }
 
 enum JobOutput {
-    Report(StrategyReport, Box<Continuation>),
+    Report(Box<StrategyReport>, Box<Continuation>),
     Trials(Vec<Trial>, Vec<(&'static str, usize)>),
 }
 
@@ -218,7 +218,7 @@ fn continue_job(
         follow.bars = bars;
         follow.lower = lower;
         completed.set(1);
-        Ok(JobOutput::Report(report, follow))
+        Ok(JobOutput::Report(Box::new(report), follow))
     })
 }
 
@@ -1086,6 +1086,7 @@ impl StrategyTester {
                     self.job = None;
                     match result {
                         Ok(JobOutput::Report(report, mut follow)) => {
+                            let report = *report;
                             actions.push(StrategyTesterAction::Signals {
                                 symbol: report.symbol.clone(),
                                 timeframe: report.timeframe,
@@ -1129,6 +1130,7 @@ impl StrategyTester {
                     self.follow_job = None;
                     match result {
                         Ok(JobOutput::Report(report, follow)) => {
+                            let report = *report;
                             actions.push(StrategyTesterAction::Signals {
                                 symbol: report.symbol.clone(),
                                 timeframe: report.timeframe,

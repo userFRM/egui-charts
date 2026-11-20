@@ -39,6 +39,8 @@ pub(super) struct LiveState {
     realized: f64,
     rejected: usize,
     tick: u64,
+    margin_calls: Vec<(DateTime<Utc>, f64)>,
+    peak_margin: f64,
     instrument_currency: Option<String>,
     exchange_rates: Vec<Bar>,
     rate: f64,
@@ -206,6 +208,8 @@ impl Backtest {
                 realized: 0.0,
                 rejected: 0,
                 tick: 0,
+                margin_calls: Vec::new(),
+                peak_margin: 0.0,
                 instrument_currency: self.instrument_currency.clone(),
                 exchange_rates: self.exchange_rates.clone(),
                 rate: if self.conversion().is_some() {
@@ -268,6 +272,8 @@ impl Backtest {
             open_tick: 0,
             fills: Some(&mut fills),
             forming: false,
+            margin_calls: std::mem::take(&mut live.margin_calls),
+            peak_margin: live.peak_margin,
             rates: self.rates(),
             rate: live.rate,
             unconverted: Cell::new(live.unconverted),
@@ -283,6 +289,12 @@ impl Backtest {
             && let Some(mark) = live.report.equity.last_mut()
         {
             mark.0 = bars[live.processed].time;
+            if let Some(mark) = live.report.margin.last_mut() {
+                mark.0 = bars[live.processed].time;
+            }
+            if let Some(mark) = live.report.peak_margin.last_mut() {
+                mark.0 = bars[live.processed].time;
+            }
         }
         if live.report.equity.is_empty() {
             run.start_equity(self.timeframe, &bars[..closed], &mut live.report);
@@ -362,6 +374,8 @@ impl Backtest {
         live.realized = run.realized;
         live.rejected = run.rejected;
         live.tick = run.tick;
+        live.margin_calls = run.margin_calls;
+        live.peak_margin = run.peak_margin;
         live.rate = run.rate;
         live.unconverted = run.unconverted.get();
         if live.unconverted {
@@ -789,6 +803,13 @@ mod tests {
                 .profit,
             4.
         );
+        // Two units reached the target at 110 during bar 1, using 220 at full funding,
+        // before it closed flat in a later update.
+        bars.push(bar(2, 112.));
+        engine.update(&mut strategy, &bars, &[]);
+        let report = engine.report().unwrap();
+        assert_eq!(report.margin.last(), Some(&(bars[1].time, 0.)));
+        assert_eq!(report.peak_margin.last(), Some(&(bars[1].time, 220.)));
         // A historical rebuild must not announce the observed forming-bar executions again.
         bars[0].high = 121.;
         assert!(engine.update(&mut strategy, &bars, &[]).is_empty());
