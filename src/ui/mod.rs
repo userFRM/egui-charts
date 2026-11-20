@@ -28,9 +28,6 @@ pub use replay::{floating as floating_replay_control, status as replay_status};
 // Dialogs
 pub mod dialogs;
 
-// Icons
-pub mod icons;
-
 // Standalone components
 pub mod connection_status;
 pub mod context_menu;

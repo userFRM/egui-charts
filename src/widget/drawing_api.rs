@@ -852,13 +852,15 @@ mod tests {
         frame(&ctx, &mut chart, 0.0, vec![]);
         let map = chart.get_chart_mapping();
         let plot = chart.last_rendered_price_rect;
+        // Unequal scale margins put the pane centre away from the data's midpoint.
+        let centre_price = map.y_to_price(plot.center().y);
         let over = pos2(map.idx_to_x(30), map.price_to_y(16.0));
         let study = &chart.last_rendered_indicator_panes[0];
         let study = pos2(study.mapping.idx_to_x(30), study.chart_rect.center().y);
         for (time, pointer, at, expected) in [
             (0.1, Event::PointerMoved(over), over, 16.0),
-            (0.2, Event::PointerMoved(study), plot.center(), 15.0),
-            (0.3, Event::PointerGone, plot.center(), 15.0),
+            (0.2, Event::PointerMoved(study), plot.center(), centre_price),
+            (0.3, Event::PointerGone, plot.center(), centre_price),
         ] {
             frame(&ctx, &mut chart, time, vec![pointer]);
             chart.drain_events().for_each(drop);

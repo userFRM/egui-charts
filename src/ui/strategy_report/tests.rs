@@ -464,6 +464,54 @@ fn range_limits_summary_charts_and_trades() {
     }
 }
 
+#[cfg(feature = "strategies")]
+#[test]
+fn continuation_keeps_the_range_and_refreshes_its_figures() {
+    let day = |d| DateTime::UNIX_EPOCH + TimeDelta::days(d);
+    let bars: Vec<_> = (0..5)
+        .map(|d| Bar::new(day(d), 100.0, 100.0, 100.0, 100.0, 1.0))
+        .collect();
+    let mut report = StrategyReport::new("Continued", "TEST", Timeframe::Day1, 1000.0);
+    report.trades = vec![StrategyTrade::new(OrderSide::Buy, 1.0, day(1), 100.0)];
+    report.equity = vec![(day(0), 1000.0), (day(1), 1000.0)];
+    let mut panel = StrategyReportPanel::default();
+    panel.set_report(Some(report.clone()), &bars[..2]);
+    let range = day(1)..day(3);
+    panel.data.as_mut().unwrap().select(Some(range.clone()));
+    panel.range_text = ["1970-01-02".into(), "1970-01-03".into()];
+    panel.tab = Tab::Periods;
+    panel.compare = true;
+    panel.selected = Some(0);
+
+    report.trades[0].exit = Some(StrategyExit::new(day(2), 110.0, 10.0));
+    report
+        .trades
+        .push(StrategyTrade::new(OrderSide::Sell, 1.0, day(3), 100.0));
+    report
+        .equity
+        .extend([(day(2), 1010.0), (day(3), 1020.0), (day(4), 1030.0)]);
+    panel.continue_report(report.clone(), &bars);
+
+    assert_eq!(panel.report(), Some(&report));
+    assert_eq!(panel.tab, Tab::Periods);
+    assert!(panel.compare);
+    assert_eq!(panel.selected, Some(0));
+    assert_eq!(panel.range_text, ["1970-01-02", "1970-01-03"]);
+    let data = panel.data.as_ref().unwrap();
+    assert_eq!(data.range, Some(range));
+    assert_eq!(data.equity, [(day(1), 1000.0), (day(2), 1010.0)]);
+    assert_eq!(data.trades, [0]);
+    assert_eq!(data.shown.all.net_profit, 10.0);
+    assert_eq!(data.analysis.months[0].trades.closed_trades, 1);
+    assert_eq!(data.shown_comparison.buy_and_hold_equity.len(), 2);
+
+    panel.set_report(Some(report), &bars);
+    assert!(panel.data.as_ref().unwrap().range.is_none());
+    assert_eq!(panel.range_text, ["1970-01-01", "1970-01-05"]);
+    assert_eq!(panel.tab, Tab::Summary);
+    assert!(panel.selected.is_none());
+}
+
 #[test]
 fn distribution_zero_edge_stays_centred_for_extreme_finite_returns() {
     let mut report = StrategyReport::new("Extremes", "TEST", Timeframe::Min1, 1000.0);
