@@ -909,7 +909,7 @@ impl QuantityLimit {
 
 /// A quantity limit in the host's quantity text, or at `decimals`, the quantity decimals the
 /// panel shows, and as many more as the limit needs to read exactly.
-fn limit_text(numbers: &Numbers<'_>, limit: f64, decimals: usize) -> String {
+pub(super) fn limit_text(numbers: &Numbers<'_>, limit: f64, decimals: usize) -> String {
     numbers.quantity(limit, decimals.max(crate::scales::decimals(limit)))
 }
 
