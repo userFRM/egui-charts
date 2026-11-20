@@ -205,8 +205,8 @@ Chart,Keyboard shortcuts,Hide all drawings,verified,library,src/config/keyboard.
 Chart,Keyboard shortcuts,Jump to latest bar,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/time_scale.rs,
 Chart,Keyboard shortcuts,Keyboard zoom,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/model/timescale.rs,
 Chart,Keyboard shortcuts,Left/Right arrows move the chart or selected drawings,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/interaction.rs,
-Chart,Keyboard shortcuts,Maximize chart,incomplete,library,src/config/keyboard.rs;src/widget/layout.rs;src/widget/keyboard.rs,;3572
-Chart,Keyboard shortcuts,Next and previous chart,incomplete,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/layout.rs;terminal/src/layouts.rs,
+Chart,Keyboard shortcuts,Maximize chart,incomplete,library,src/config/keyboard.rs;src/widget/layout.rs;src/widget/keyboard.rs,3572
+Chart,Keyboard shortcuts,Next and previous chart,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/layout.rs,3572
 Chart,Keyboard shortcuts,Open indicators,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;terminal/src/commands.rs,2798;2800
 Chart,Keyboard shortcuts,Quick search,incomplete,library,src/config/keyboard.rs;src/ui_kit/command_palette/palette.rs;src/ui_kit/command_palette/fuzzy.rs;terminal/src/commands.rs;examples/demo/commands.rs,
 Chart,Keyboard shortcuts,Reset chart,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/time_scale.rs,

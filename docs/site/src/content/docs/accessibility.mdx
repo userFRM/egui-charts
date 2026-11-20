@@ -19,6 +19,9 @@ the next and previous chart instead, wrapping at the ends. A host that needs the
 to leave the layout removes the `CycleChartFocus` and `CycleChartFocusBack`
 bindings through
 [`shortcuts_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.shortcuts_mut).
+If the host supplies a map through
+[`ChartLayout::set_shortcuts`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartLayout.html#method.set_shortcuts),
+remove the bindings from that map instead.
 
 The [presentation scene](theming.mdx#try-presentation-changes) has egui controls
 before the chart in the native example. In the web guide, tab from **Open full
