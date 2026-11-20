@@ -249,6 +249,25 @@ impl Indicator for MACD {
         true
     }
 
+    fn alert_conditions(&self) -> Vec<String> {
+        ["Crosses above signal line", "Crosses below signal line"]
+            .map(str::to_owned)
+            .into()
+    }
+
+    fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+        let previous = bar.checked_sub(1)?;
+        let macd = self.values.value(0, bar)?;
+        let signal = self.values.value(1, bar)?;
+        let before = self.values.value(0, previous)?;
+        let before_signal = self.values.value(1, previous)?;
+        match condition {
+            0 => Some(before < before_signal && macd >= signal),
+            1 => Some(before > before_signal && macd <= signal),
+            _ => None,
+        }
+    }
+
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
