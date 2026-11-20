@@ -1941,7 +1941,7 @@ mod tests {
     /// Every footprint edit is staged until Ok; Cancel leaves the opening settings intact.
     #[test]
     fn footprint_symbol_settings_apply_only_when_accepted() {
-        use crate::model::{ChartTypeParams, FootprintIntensity};
+        use crate::model::{ChartTypeParams, FootprintColor, FootprintIntensity};
         use egui::accesskit::Role;
         use egui_kittest::{Harness, kittest::Queryable};
 
@@ -1963,8 +1963,14 @@ mod tests {
                 "Fixed volume default",
                 "Expiry on",
                 "Zones end only when broken",
+                "Larger side",
+                "Side colours",
+                "Shade wells",
             ] {
                 let mut seeded = seeded.clone();
+                if edit == "Shade wells" {
+                    seeded.footprint_step_colors[1][0] = Some(Color32::from_rgb(4, 5, 6));
+                }
                 if edit == "Fixed volume default" {
                     seeded.footprint_intensity = FootprintIntensity::Bar;
                 }
@@ -2006,6 +2012,32 @@ mod tests {
                 harness.run();
                 let mut expected = seeded.clone();
                 match edit {
+                    "Larger side" | "Side colours" => {
+                        harness
+                            .get_by_role_and_label(Role::ComboBox, "Colouring")
+                            .scroll_to_me();
+                        harness.run();
+                        harness
+                            .get_by_role_and_label(Role::ComboBox, "Colouring")
+                            .click();
+                        harness.run();
+                        harness.get_by_role_and_label(Role::Button, edit).click();
+                        harness.run();
+                        expected.footprint_color_by = if edit == "Larger side" {
+                            FootprintColor::LargerSide
+                        } else {
+                            FootprintColor::Side
+                        };
+                        assert!(
+                            harness
+                                .query_by_role_and_label(Role::ColorWell, "#045144")
+                                .is_none()
+                        );
+                    }
+                    "Shade wells" => {
+                        harness.get_by_role_and_label(Role::ColorWell, "#040506");
+                        harness.get_by_role_and_label(Role::ColorWell, "#045144");
+                    }
                     "Shading scale" | "Fixed volume default" => {
                         let label = "Shading scale";
                         harness

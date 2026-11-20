@@ -319,6 +319,7 @@ fn apply_to_other_chart(
             },
             footprint_colors: source.footprint_colors,
             footprint_imbalance_colors: source.footprint_imbalance_colors,
+            footprint_step_colors: source.footprint_step_colors,
             footprint_auto_row_height: source.footprint_auto_row_height,
             footprint_min_text_height: source.footprint_min_text_height,
             footprint_imbalance: source.footprint_imbalance,

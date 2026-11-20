@@ -55,6 +55,12 @@ pub struct FootprintConfig {
     /// Sell colour of imbalance strips, imbalance colouring and stacked imbalance zones, or
     /// `None`, the default, for `bid_color`.
     pub imbalance_bid_color: Option<Color32>,
+    /// Buy shades of [`FootprintColor::VolumeSteps`], weakest first, or `None`, the default, for
+    /// a shade mixed from `ask_color` and the background.
+    pub ask_step_colors: [Option<Color32>; 4],
+    /// Sell shades of [`FootprintColor::VolumeSteps`], weakest first, or `None`, the default, for
+    /// a shade mixed from `bid_color` and the background.
+    pub bid_step_colors: [Option<Color32>; 4],
     /// Text colour and POC outline, or POC fill under [`FootprintColor::VolumeSteps`], which
     /// picks black or white numbers for each cell, or each half of a split cell, instead. The
     /// default suits a dark chart; set the theme's text colour on a light one, or the fill, lines
@@ -157,6 +163,8 @@ impl Default for FootprintConfig {
             bid_color: crate::tokens::DESIGN_TOKENS.semantic.chart.bearish,
             imbalance_ask_color: None,
             imbalance_bid_color: None,
+            ask_step_colors: [None; 4],
+            bid_step_colors: [None; 4],
             text_color: Color32::WHITE,
             neutral_color: Color32::GRAY,
             background: None,
@@ -209,6 +217,8 @@ impl FootprintConfig {
             bid_color,
             imbalance_ask_color: params.footprint_imbalance_colors[0],
             imbalance_bid_color: params.footprint_imbalance_colors[1],
+            ask_step_colors: params.footprint_step_colors[0],
+            bid_step_colors: params.footprint_step_colors[1],
             text_color,
             neutral_color,
             auto_row_height: (row_ticks == 0)
@@ -560,20 +570,17 @@ pub(crate) fn render_footprint_read(
                     (false, false)
                 };
                 let shades = [
-                    (row.bid, config.bid_color, 0),
-                    (row.ask, config.ask_color, 1),
+                    (row.bid, config.bid_color, config.bid_step_colors, 0),
+                    (row.ask, config.ask_color, config.ask_step_colors, 1),
                 ]
-                .map(|(volume, color, side)| {
+                .map(|(volume, color, chosen, side)| {
                     if poc_row {
                         config.text_color
                     } else if row.bid + row.ask == 0.0 && row.unknown > 0.0 {
                         step_color(config.neutral_color, 0, text_background)
                     } else {
-                        step_color(
-                            color,
-                            volume_step(volume, scale.sides[side]),
-                            text_background,
-                        )
+                        let step = volume_step(volume, scale.sides[side]);
+                        chosen[step].unwrap_or_else(|| step_color(color, step, text_background))
                     }
                 });
                 if steps {
@@ -663,6 +670,26 @@ pub(crate) fn render_footprint_read(
                         let (bid, ask) = fill.split_left_right_at_x(fill.center().x);
                         fills[1] = Some((bid, shades[0]));
                         fills[2] = Some((ask, shades[1]));
+                    } else if matches!(
+                        config.color_by,
+                        FootprintColor::LargerSide | FootprintColor::Side
+                    ) {
+                        // Sell first, as a ladder's cells and a one-cell column's halves are.
+                        let every = config.color_by == FootprintColor::Side;
+                        let [sell, buy] = [
+                            (row.bid > row.ask, config.bid_color),
+                            (row.ask > row.bid, config.ask_color),
+                        ]
+                        .map(|(larger, color)| {
+                            (every || larger).then(|| color.gamma_multiply(0.5))
+                        });
+                        if ladder {
+                            fills[1] = [sell, buy][side].map(|color| (fill, color));
+                        } else {
+                            let (bid, ask) = fill.split_left_right_at_x(fill.center().x);
+                            fills[1] = sell.map(|color| (bid, color));
+                            fills[2] = buy.map(|color| (ask, color));
+                        }
                     } else if config.color_by == FootprintColor::Imbalance
                         && !partial
                         && shown.imbalance(
@@ -1354,7 +1381,7 @@ fn volume_step(volume: f64, [smallest, largest]: [f64; 2]) -> usize {
 /// background to the one that stands out most: on a light background the colour itself is
 /// second and the strongest two darken it, on a dark one it is never reached so numbers stay
 /// readable.
-fn step_color(color: Color32, step: usize, background: Color32) -> Color32 {
+pub(crate) fn step_color(color: Color32, step: usize, background: Color32) -> Color32 {
     if background.intensity() > 0.5 {
         match step {
             0 => background.lerp_to_gamma(color, 0.5),
@@ -1494,7 +1521,10 @@ fn cell_color(
     config: &FootprintConfig,
 ) -> Color32 {
     match config.color_by {
-        FootprintColor::Fixed | FootprintColor::VolumeSteps => config.neutral_color,
+        FootprintColor::Fixed
+        | FootprintColor::VolumeSteps
+        | FootprintColor::LargerSide
+        | FootprintColor::Side => config.neutral_color,
         FootprintColor::DeltaOpacity if row.delta() == 0.0 => config.neutral_color,
         FootprintColor::DeltaOpacity => {
             let side = if row.delta() > 0.0 {
@@ -2916,6 +2946,66 @@ mod tests {
         for (y, price) in dotted.iter().zip([104.5, 101.5]) {
             assert!((y - map.price_to_y(price)).abs() <= 1.0, "{y} at {price}");
         }
+        let chosen = FootprintConfig {
+            min_text_height: 100.0,
+            ..FootprintConfig::from_chart_params(
+                &ChartTypeParams {
+                    footprint_step_colors: [
+                        [
+                            None,
+                            Some(Color32::from_rgb(11, 12, 13)),
+                            None,
+                            Some(Color32::from_rgb(21, 22, 23)),
+                        ],
+                        [Some(Color32::from_rgb(31, 32, 33)), None, None, None],
+                    ],
+                    ..Default::default()
+                },
+                [
+                    config.ask_color,
+                    config.bid_color,
+                    config.text_color,
+                    config.neutral_color,
+                ],
+                1,
+            )
+        };
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| render_footprint(ui.painter(), &map, &bars, &flow, &chosen),
+        );
+        output.textures_delta.clear();
+        let chosen_quads = self::quads(&output.shapes);
+        for (price, sell_shade, buy_shade) in [
+            (
+                104.0,
+                Some(Color32::from_rgb(31, 32, 33)),
+                Some(Color32::from_rgb(21, 22, 23)),
+            ),
+            (
+                103.0,
+                Some(Color32::from_rgb(31, 32, 33)),
+                Some(Color32::from_rgb(11, 12, 13)),
+            ),
+            (102.0, poc, poc),
+            (101.0, sell(1), buy(0)),
+            (100.0, sell(2), buy(0)),
+        ] {
+            for (x, shade) in [(sell_x, sell_shade), (buy_x, buy_shade)] {
+                assert_eq!(
+                    color_at(&chosen_quads, pos2(x, map.price_to_y(price))),
+                    shade,
+                    "chosen shade at {price}, x {x}"
+                );
+            }
+        }
+        assert_eq!(
+            color_at(&chosen_quads, pos2(buy_strip, map.price_to_y(104.0))),
+            Some(config.ask_color)
+        );
         // In the profile display a number wider than its bar takes the text colour, because a
         // colour picked for the fill can vanish on the background; 50 fills its cell.
         let profile = FootprintConfig {
@@ -5207,5 +5297,66 @@ mod tests {
             unreadable.is_empty(),
             "numbers under 3:1 on their half: {unreadable:?}"
         );
+    }
+
+    /// Only the larger side is filled, or both sides use flat colours, without hiding numbers.
+    #[test]
+    fn larger_side_and_side_colourings_fill_their_cells() {
+        let rows = [(103.0, 30.0, 10.0), (102.0, 5.0, 20.0), (101.0, 10.0, 10.0)];
+        // Half opacity: (200, 0, 0, 255) / 2 and (0, 160, 80, 255) / 2, rounded.
+        let sell = Color32::from_rgba_premultiplied(100, 0, 0, 128);
+        let buy = Color32::from_rgba_premultiplied(0, 80, 40, 128);
+        for theme in [crate::theme::Theme::dark(), crate::theme::Theme::light()] {
+            for mode in [FootprintMode::Ladder, FootprintMode::BidAsk] {
+                for color_by in [FootprintColor::LargerSide, FootprintColor::Side] {
+                    let config = FootprintConfig {
+                        modes: vec![mode],
+                        color_by,
+                        auto_row_height: None,
+                        show_poc: false,
+                        value_area: None,
+                        info_box: false,
+                        text_color: theme.chart.axis_text,
+                        bid_color: Color32::from_rgb(200, 0, 0),
+                        ask_color: Color32::from_rgb(0, 160, 80),
+                        ..Default::default()
+                    };
+                    let (shapes, map) = paint_themed(&rows, 120.0, &theme, &config);
+                    let fills = quads(&shapes);
+                    let left = map.idx_to_x(0) - 120.0 * 0.46;
+                    for (price, sells, buys) in rows {
+                        let every = color_by == FootprintColor::Side;
+                        for (x, expected) in [
+                            (left + 3.0, (every || sells > buys).then_some(sell)),
+                            (
+                                left + 120.0 * 0.92 - 0.5 - 3.0,
+                                (every || buys > sells).then_some(buy),
+                            ),
+                        ] {
+                            assert_eq!(
+                                color_at(&fills, pos2(x, map.price_to_y(price))),
+                                expected,
+                                "{color_by:?} {mode:?} at {price}, x {x}"
+                            );
+                        }
+                    }
+                    let texts: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|s| match &s.shape {
+                            Shape::Text(t) => Some(t.galley.text()),
+                            _ => None,
+                        })
+                        .collect();
+                    let expected = if mode == FootprintMode::Ladder {
+                        vec!["30", "10", "5", "20"]
+                    } else {
+                        vec!["30 × 10", "5 × 20", "10 × 10"]
+                    };
+                    for number in expected {
+                        assert!(texts.contains(&number), "{color_by:?} {mode:?}: {number}");
+                    }
+                }
+            }
+        }
     }
 }
