@@ -99,6 +99,7 @@ impl ShortcutMap {
                         ..
                     } => (*key, *modifiers),
                     Event::Copy => (egui::Key::C, egui::Modifiers::COMMAND),
+                    Event::Cut => (egui::Key::X, egui::Modifiers::COMMAND),
                     Event::Paste(_) => (egui::Key::V, egui::Modifiers::COMMAND),
                     _ => return None,
                 };
@@ -471,7 +472,7 @@ impl super::Chart {
             for (index, event) in input.events.iter().enumerate() {
                 match event {
                     Event::Text(text) if starts_entry(text) => return None,
-                    Event::Copy | Event::Paste(_) => return None,
+                    Event::Copy | Event::Cut | Event::Paste(_) => return None,
                     Event::Key {
                         key,
                         modifiers,
@@ -1235,6 +1236,11 @@ mod tests {
             KeyboardShortcut::new(Modifiers::NONE, Key::F2),
             KeyboardAction::ToggleLogScale,
         ));
+        // The desktop reports Ctrl+X as a cut command, not as the key.
+        chart.shortcuts_mut().bindings.push((
+            KeyboardShortcut::new(Modifiers::COMMAND, Key::X),
+            KeyboardAction::ToggleLogScale,
+        ));
         for (event, expected) in [
             (
                 Event::Key {
@@ -1259,6 +1265,7 @@ mod tests {
             (Event::Text("IBM".into()), PriceScaleMode::Logarithmic),
             (Event::Text("15".into()), PriceScaleMode::Logarithmic),
             (Event::Text(",".into()), PriceScaleMode::Logarithmic),
+            (Event::Cut, PriceScaleMode::Normal),
         ] {
             let before = chart.state.time_scale().right_offset();
             ctx.run_ui(
