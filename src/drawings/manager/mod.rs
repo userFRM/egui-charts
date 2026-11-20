@@ -367,6 +367,8 @@ pub struct DrawingManager {
     pub(crate) events: std::collections::VecDeque<(usize, DrawingEventKind)>,
     /// Changes left out of `events` once it held 1024.
     pub(crate) events_dropped: usize,
+    /// Drawings changed by a series removal, reported once after their owner and layer settle.
+    removal: Option<Vec<usize>>,
     /// Tells this manager from one that replaced it, such as `Chart::load_drawings` makes, whose
     /// drawing ids start again: unique to each manager, and kept when the manager moves or reads
     /// its drawings from storage again.
@@ -452,6 +454,7 @@ impl DrawingManager {
             sync_enabled: true,
             events: std::collections::VecDeque::new(),
             events_dropped: 0,
+            removal: None,
             identity: crate::model::next_revision(),
             mapped_bars: None,
             mapped_key: None,
@@ -721,6 +724,12 @@ impl DrawingManager {
 
     /// Records a change of drawing `id` for the chart to report.
     fn report(&mut self, id: usize, kind: DrawingEventKind) {
+        if let Some(removal) = &mut self.removal {
+            if !removal.contains(&id) {
+                removal.push(id);
+            }
+            return;
+        }
         if self.events.len() == 1024 {
             self.events.pop_front();
             self.events_dropped = self.events_dropped.saturating_add(1);
