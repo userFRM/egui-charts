@@ -542,6 +542,7 @@ impl Chart {
 
         self.legend_instrument = None;
         self.currency_choice = None;
+        self.unit_choice = None;
         self.bar_close_time = None;
         self.server_time_offset = None;
         self.set_quote(None);
@@ -809,6 +810,7 @@ impl Chart {
             self.pending_scroll_time = None;
             self.legend_instrument = None;
             self.currency_choice = None;
+            self.unit_choice = None;
             self.bar_close_time = None;
             self.server_time_offset = None;
             self.legend_badge = None;
