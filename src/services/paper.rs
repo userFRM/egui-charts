@@ -113,6 +113,67 @@ pub struct SavedPaperAccount {
     closed_positions: Vec<ClosedPosition>,
 }
 
+/// The account a replay trading session starts with, as the replay start menu offers it: its
+/// currency, initial capital and commission rate. [`account`](Self::account) builds a
+/// [`PaperAccount`] for it, separate from any live account.
+///
+/// ```
+/// use egui_charts::services::ReplayAccountSettings;
+///
+/// let settings = ReplayAccountSettings::new("EUR", 10_000.0, 0.001);
+/// assert!(settings.is_valid());
+/// let account = settings.account().expect("valid settings");
+/// account.set_price("AAPL", 187.5);
+/// ```
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct ReplayAccountSettings {
+    /// The account's currency, such as "USD".
+    pub currency: String,
+    /// The starting balance in `currency`: positive and finite.
+    pub initial_capital: f64,
+    /// The commission each fill pays, as a fraction of its value: 0.001 for 0.1%.
+    pub commission: f64,
+}
+
+impl Default for ReplayAccountSettings {
+    /// 100,000 USD without commission.
+    fn default() -> Self {
+        Self::new("USD", 100_000.0, 0.0)
+    }
+}
+
+impl ReplayAccountSettings {
+    /// Settings with `currency`, `initial_capital` and the commission rate `commission`.
+    pub fn new(currency: impl Into<String>, initial_capital: f64, commission: f64) -> Self {
+        Self {
+            currency: currency.into(),
+            initial_capital,
+            commission,
+        }
+    }
+
+    /// Whether the currency is not blank, the initial capital is positive and finite and the
+    /// commission is finite and not negative.
+    pub fn is_valid(&self) -> bool {
+        !self.currency.trim().is_empty()
+            && self.initial_capital.is_finite()
+            && self.initial_capital > 0.0
+            && self.commission.is_finite()
+            && self.commission >= 0.0
+    }
+
+    /// A new account with these settings, its currency trimmed, without leverage or other
+    /// commissions, or `None` when the settings are not [valid](Self::is_valid).
+    pub fn account(&self) -> Option<PaperAccount> {
+        self.is_valid().then(|| {
+            PaperAccount::new(self.currency.trim(), self.initial_capital)
+                .commission(self.commission)
+        })
+    }
+}
+
 impl std::fmt::Debug for PaperAccount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PaperAccount")
@@ -348,8 +409,9 @@ impl PaperAccount {
     /// live UTC clock. Returns `false`, and keeps the clock, when `time` is before the account's
     /// [`last_change`](Self::last_change), so its history never runs backwards: before moving
     /// the replay cursor back past the account's orders or fills, or starting again from an
-    /// earlier bar, [`reset`](Self::reset) the account or build a new one. Feed no prices of
-    /// earlier bars to an account that refused their time.
+    /// earlier bar, [`reset`](Self::reset) the account or build a new one, or ask the user, as
+    /// the replay trading prompt of `ui::replay` does. Feed no prices of earlier bars to an
+    /// account that refused their time.
     pub fn set_replay_time(&self, time: Option<DateTime<Utc>>) -> bool {
         let mut state = self.lock();
         if time.is_some_and(|time| state.last_change().is_some_and(|last| time < last)) {
@@ -2514,6 +2576,72 @@ mod tests {
                 near(row[column("profit")].parse().unwrap(), profit);
             }
         }
+    }
+
+    /// A replay account books its own settings and leaves the live account untouched; invalid
+    /// settings cannot reach the account constructor, which rejects non-finite capital.
+    #[test]
+    fn replay_account_settings_build_a_separate_account_that_books_and_reports_them() {
+        let live = PaperAccount::new("USD", 100_000.0);
+        live.set_price("SYM", 100.0);
+        let before = live.save();
+        let session = ReplayAccountSettings::new("EUR", 10_000.0, 0.001)
+            .account()
+            .unwrap();
+        let bar = |n: i64| DateTime::from_timestamp(1_704_067_200 + n * 60, 0).unwrap();
+        for (n, price, side) in [(1, 100.0, OrderSide::Buy), (2, 110.0, OrderSide::Sell)] {
+            assert!(session.set_replay_time(Some(bar(n))));
+            session.set_price("SYM", price);
+            place(
+                &session,
+                OrderRequest::new("SYM", side, 10.0, OrderType::Market),
+            )
+            .unwrap();
+        }
+        let near = |actual: f64, expected: f64| {
+            assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+        };
+        let saved = session.save();
+        near(saved.balance, 10_097.9);
+        assert_eq!(saved.balance_history.len(), 3);
+        for (change, expected) in saved.balance_history.iter().zip([-1.0, 100.0, -1.1]) {
+            near(change.amount, expected);
+        }
+        let report = session.report("Replay trading", "SYM", Timeframe::Min1);
+        assert_eq!(report.currency.as_deref(), Some("EUR"));
+        assert_eq!(report.initial_capital, 10_000.0);
+        assert_eq!(report.trades.len(), 1);
+        let trade = &report.trades[0];
+        assert_eq!(
+            (
+                trade.side,
+                trade.quantity,
+                trade.entry_time,
+                trade.entry_price
+            ),
+            (OrderSide::Buy, 10.0, bar(1), 100.0)
+        );
+        near(trade.fees, 2.1);
+        let exit = trade.exit.as_ref().unwrap();
+        assert_eq!((exit.time, exit.price), (bar(2), 110.0));
+        near(exit.profit, 97.9);
+        near(report.performance().all.net_profit, 97.9);
+        assert_eq!(live.save(), before);
+        for (currency, capital, commission) in [
+            ("  ", 10_000.0, 0.001),
+            ("USD", f64::NAN, 0.001),
+            ("USD", f64::INFINITY, 0.001),
+            ("USD", 0.0, 0.001),
+            ("USD", -1.0, 0.001),
+            ("USD", 10_000.0, -0.001),
+            ("USD", 10_000.0, f64::NAN),
+        ] {
+            let settings = ReplayAccountSettings::new(currency, capital, commission);
+            assert!(!settings.is_valid(), "{settings:?}");
+            assert!(settings.account().is_none(), "{settings:?}");
+        }
+        let settings = ReplayAccountSettings::new(" usd ", 10_000.0, 0.0);
+        assert_eq!(settings.account().unwrap().save().currency, "usd");
     }
 
     #[test]
