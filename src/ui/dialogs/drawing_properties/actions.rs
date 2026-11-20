@@ -536,6 +536,15 @@ impl DrawingProps {
                 {
                     return Err("Gann fan and arc ratios must be positive and finite");
                 }
+                if c.price_levels
+                    .iter()
+                    .chain(&c.time_levels)
+                    .chain(&c.fan_ratios)
+                    .chain(&c.arc_ratios)
+                    .any(|l| l.width.is_some_and(|w| !(w > 0.0 && w <= MAX_STROKE_WIDTH)))
+                {
+                    return Err("Gann widths must be above 0 and at most 100");
+                }
             }
             if settings.ghost_feed.is_some_and(|c| !c.is_valid()) {
                 return Err(
