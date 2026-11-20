@@ -99,7 +99,9 @@ impl ShortcutMap {
                         ..
                     } => (*key, *modifiers),
                     Event::Copy => (egui::Key::C, egui::Modifiers::COMMAND),
-                    Event::Paste(_) => (egui::Key::V, egui::Modifiers::COMMAND),
+                    Event::Paste(_) | Event::PasteImage(_) => {
+                        (egui::Key::V, egui::Modifiers::COMMAND)
+                    }
                     _ => return None,
                 };
                 let typed = pairs[index].and_then(|text| match &input.events[text] {
@@ -213,6 +215,17 @@ fn typed_pairs(events: &[Event]) -> Vec<Option<usize>> {
 }
 
 /// A shortcut that needs the host's dialogs, layout or clipboard.
+///
+/// Ctrl+V or Command+V comes as [`PasteDrawing`](Self::PasteDrawing) with clipboard text,
+/// and a paste the platform reports with neither text nor a picture as
+/// [`Action`](Self::Action) with
+/// [`KeyboardAction::PasteDrawing`](crate::config::KeyboardAction::PasteDrawing). A paste
+/// without drawing text is where a host looks for a picture on its clipboard.
+#[cfg_attr(
+    feature = "drawings",
+    doc = "A picture the platform read comes as [`PasteImage`](Self::PasteImage). \
+           Place a picture with [`Chart::paste_image`](crate::Chart::paste_image)."
+)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ShortcutRequest {
@@ -220,6 +233,14 @@ pub enum ShortcutRequest {
     Action(KeyboardAction),
     /// Paste clipboard text. The host recognizes its drawing format before inserting anything.
     PasteDrawing(String),
+    /// Paste a picture the platform read from a clipboard that held no text, as desktop
+    /// platforms report Ctrl+V or Command+V on a copied screenshot. The pixels are the host's
+    /// to install under an address its image loaders resolve, for example with an
+    /// [`egui::load::ImageLoader`] that returns this image for that address. Place it with
+    /// [`Chart::paste_image`](crate::Chart::paste_image), passing its pixel size.
+    #[cfg(feature = "drawings")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+    PasteImage(std::sync::Arc<egui::ColorImage>),
     /// Open symbol search with the typed text.
     SymbolSearch(String),
     /// Open interval entry with the typed digits; a comma opens it empty.
@@ -235,6 +256,12 @@ pub(crate) struct KeyboardState {
     pub focus_elsewhere: bool,
     /// The pass in which a layout last showed this chart, and the actions it handles.
     pub layout_keys: Option<(u64, &'static [KeyboardAction])>,
+    /// A limit-order key pressed this pass, for [`ChartMenus::show`] to turn into the chart
+    /// menu's limit row at the pointer.
+    ///
+    /// [`ChartMenus::show`]: crate::ui::context_menu::ChartMenus::show
+    #[cfg(feature = "ui")]
+    pub order_key: Option<KeyboardAction>,
 }
 
 pub(crate) fn shortcuts_suppressed(ctx: &Context) -> bool {
@@ -342,6 +369,11 @@ impl super::Chart {
         {
             self.drawings.place_at_pointer = false;
         }
+        // A limit-order key applies only in the pass of its press.
+        #[cfg(feature = "ui")]
+        {
+            self.keyboard.order_key = None;
+        }
         // A drawing or eraser drag released while the chart was not shown ends once the pointer
         // is up, so undo and the drawing keys do not wait for a release the chart never sees.
         #[cfg(feature = "drawings")]
@@ -425,13 +457,17 @@ impl super::Chart {
             {
                 continue;
             }
-            if action == KeyboardAction::PasteDrawing
-                && let Event::Paste(text) = event
-            {
-                self.keyboard
-                    .requests
-                    .push(ShortcutRequest::PasteDrawing(text));
-                continue;
+            if action == KeyboardAction::PasteDrawing {
+                let request = match event {
+                    Event::Paste(text) => Some(ShortcutRequest::PasteDrawing(text)),
+                    #[cfg(feature = "drawings")]
+                    Event::PasteImage(image) => Some(ShortcutRequest::PasteImage(image)),
+                    _ => None,
+                };
+                if let Some(request) = request {
+                    self.keyboard.requests.push(request);
+                    continue;
+                }
             }
             let rect = if self.last_rendered_price_rect.width().is_finite()
                 && self.last_rendered_price_rect.width() > 0.0
@@ -488,7 +524,7 @@ impl super::Chart {
             for (index, event) in input.events.iter().enumerate() {
                 match event {
                     Event::Text(text) if starts_entry(text) => return None,
-                    Event::Copy | Event::Paste(_) => return None,
+                    Event::Copy | Event::Paste(_) | Event::PasteImage(_) => return None,
                     Event::Key {
                         key,
                         modifiers,
@@ -581,6 +617,10 @@ impl super::Chart {
             }
             KeyboardAction::Redo => {
                 self.redo();
+            }
+            #[cfg(feature = "ui")]
+            KeyboardAction::BuyLimitAtPointer | KeyboardAction::SellLimitAtPointer => {
+                self.keyboard.order_key = Some(action);
             }
             _ => self.user_action(|chart| chart.apply_keyboard_edit(action, chart_rect)),
         }
@@ -1024,6 +1064,52 @@ mod tests {
         }
     }
 
+    /// The Toggle volume shortcut adds a study, so at the study cap it leaves the setting off and
+    /// the chart and its history unchanged, while a volume study already on the chart still
+    /// serves the setting.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn volume_shortcut_stays_off_at_the_study_cap() {
+        use crate::studies::{SMA, Volume};
+        use crate::widget::test_frames::frame;
+        let mut failures = Vec::new();
+        for (cap, with_volume, shown, count) in [
+            (Some(2), false, false, 2),
+            (Some(3), false, true, 3),
+            (None, false, true, 3),
+            (Some(2), true, true, 2),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[200.0]);
+            chart.config_mut().show_volume = false;
+            chart.add_indicator(Box::new(SMA::new(2)));
+            if with_volume {
+                chart.add_indicator(Box::new(Volume::default()));
+            } else {
+                chart.add_indicator(Box::new(SMA::new(5)));
+            }
+            chart.set_study_limit(cap);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.apply_keyboard_action(
+                KeyboardAction::ToggleVolume,
+                chart.get_rendered_price_rect(),
+            );
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let observed = (
+                chart.config().show_volume,
+                chart.indicators().count(),
+                chart.indicators().any(|(_, study)| study.is_volume()),
+                chart.can_undo(),
+            );
+            if observed != (shown, count, shown, shown) {
+                failures.push(format!(
+                    "cap {cap:?}, volume study {with_volume}: {observed:?}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
     #[test]
     fn reset_chart_restores_time_and_every_price_scale() {
         use crate::model::SeriesScale;
@@ -1377,28 +1463,34 @@ mod tests {
     }
 
     /// The desktop reports a paste as the paste event alone, a browser as the key press and
-    /// then the paste event: either way the host gets one request carrying the text.
+    /// then the paste event: either way the host gets one request carrying the text. A picture
+    /// the desktop read from a clipboard without text reaches the host as well.
     #[test]
     fn a_paste_reported_with_its_key_press_is_one_request_with_the_text() {
-        for with_key in [true, false] {
+        let key = Event::Key {
+            key: Key::V,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        };
+        let text = Event::Paste("clip".into());
+        let pasted = ShortcutRequest::PasteDrawing("clip".into());
+        let image = std::sync::Arc::new(egui::ColorImage::filled([2, 1], egui::Color32::RED));
+        #[cfg(feature = "drawings")]
+        let picture = ShortcutRequest::PasteImage(image.clone());
+        #[cfg(not(feature = "drawings"))]
+        let picture = ShortcutRequest::Action(KeyboardAction::PasteDrawing);
+        for (events, expected) in [
+            (vec![text.clone()], pasted.clone()),
+            (vec![key, text], pasted),
+            (vec![Event::PasteImage(image)], picture),
+        ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
-            let mut events = vec![Event::Paste("clip".into())];
-            if with_key {
-                events.insert(
-                    0,
-                    Event::Key {
-                        key: Key::V,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: Modifiers::COMMAND,
-                    },
-                );
-            }
             ctx.run_ui(
                 RawInput {
-                    events,
+                    events: events.clone(),
                     ..Default::default()
                 },
                 |ui| {
@@ -1406,11 +1498,7 @@ mod tests {
                 },
             )
             .drop_without_applying_deltas();
-            assert_eq!(
-                chart.take_shortcut_requests(),
-                vec![ShortcutRequest::PasteDrawing("clip".into())],
-                "key press reported: {with_key}"
-            );
+            assert_eq!(chart.take_shortcut_requests(), vec![expected], "{events:?}");
         }
     }
 
