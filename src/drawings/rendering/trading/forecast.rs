@@ -582,8 +582,15 @@ mod tests {
             for (case, up, mut drawing, fill, line_style, cards) in cases {
                 drawing.fill_color = fill;
                 drawing.line_style = line_style;
-                let target = if up { 1.10055 } else { 1.09945 };
                 let pending = case == "pending, faded background";
+                // The pending target stays above bar 2's high of 1.1006.
+                let target = if pending {
+                    1.10075
+                } else if up {
+                    1.10055
+                } else {
+                    1.09945
+                };
                 drawing.chart_points = vec![
                     ChartPoint::new(0.0, 1.1),
                     ChartPoint::new(if pending { 9.0 } else { 3.0 }, target),
@@ -639,7 +646,7 @@ mod tests {
                 let labels = [
                     "1.10000\n1970-01-01 00:00",
                     if pending {
-                        "+0.00055 (+0.05%) in 9d\n1.10055\n1970-01-10 00:00"
+                        "+0.00075 (+0.07%) in 9d\n1.10075\n1970-01-10 00:00"
                     } else if up {
                         "+0.00055 (+0.05%) in 3d\n1.10055\n1970-01-04 00:00"
                     } else {
@@ -681,16 +688,30 @@ mod tests {
                 } else {
                     rgb(7, 8, 9)
                 };
-                let dots: Vec<_> = output
-                    .shapes
-                    .iter()
-                    .filter_map(|s| match &s.shape {
-                        Shape::Circle(circle) if drawing.points.contains(&circle.center) => {
-                            Some(circle.fill)
+                // The common style pass nests dashed shapes and turns stroked circles into polygons.
+                let mut shapes: Vec<_> = output.shapes.iter().map(|s| &s.shape).collect();
+                let mut dots = Vec::new();
+                while let Some(shape) = shapes.pop() {
+                    let (center, fill) = match shape {
+                        Shape::Vec(children) => {
+                            shapes.extend(children);
+                            continue;
                         }
-                        _ => None,
-                    })
-                    .collect();
+                        Shape::Circle(circle) => (circle.center, circle.fill),
+                        Shape::Path(path) if path.closed && !path.points.is_empty() => {
+                            let center = path
+                                .points
+                                .iter()
+                                .fold(egui::Vec2::ZERO, |sum, p| sum + p.to_vec2())
+                                / path.points.len() as f32;
+                            (center.to_pos2(), path.fill)
+                        }
+                        _ => continue,
+                    };
+                    if drawing.points.iter().any(|p| p.distance(center) < 0.01) {
+                        dots.push(fill);
+                    }
+                }
                 assert_eq!(dots, [anchor; 2], "{case}: anchor fills");
                 output.drop_without_applying_deltas();
             }

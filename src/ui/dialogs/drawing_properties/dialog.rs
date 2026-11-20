@@ -945,6 +945,9 @@ mod tests {
                 dialog.props.color = Color32::GREEN;
                 let forecast = crate::drawings::ForecastStyle {
                     start_border: Some([4, 5, 6, 255]),
+                    pending_background: Some([11, 12, 13, 128]),
+                    pending_text: Some([14, 15, 16, 255]),
+                    anchor_color: Some([7, 8, 9, 255]),
                     ..Default::default()
                 };
                 let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;
