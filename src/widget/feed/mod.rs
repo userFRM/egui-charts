@@ -542,6 +542,7 @@ impl Chart {
 
         self.legend_instrument = None;
         self.currency_choice = None;
+        self.unit_choice = None;
         self.bar_close_time = None;
         self.server_time_offset = None;
         self.set_quote(None);
@@ -809,6 +810,7 @@ impl Chart {
             self.pending_scroll_time = None;
             self.legend_instrument = None;
             self.currency_choice = None;
+            self.unit_choice = None;
             self.bar_close_time = None;
             self.server_time_offset = None;
             self.legend_badge = None;
@@ -1025,6 +1027,22 @@ impl Chart {
             .as_ref()
             .filter(|_| series == SeriesId::MAIN)
             .map(|link| link.trades.generation)
+    }
+
+    /// The last history page revision and the index in [`Self::trades`] where newly streamed
+    /// executions begin. If the revision changed, refresh older rows without alerting on them.
+    /// Start `live_cursor` at zero for each [`Self::trade_generation`]; this call advances it
+    /// through the current stream, even when history and live executions arrived together.
+    /// Returns `None` without a feed or for a series other than [`SeriesId::MAIN`].
+    pub fn trade_progress(
+        &self,
+        series: SeriesId,
+        live_cursor: &mut usize,
+    ) -> Option<(u64, usize)> {
+        self.feed_link
+            .as_ref()
+            .filter(|_| series == SeriesId::MAIN)
+            .map(|link| link.trades.progress(live_cursor))
     }
 
     /// Combines the retained fills with explicit aggressor ids, in first-fill order. At most
