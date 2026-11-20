@@ -70,10 +70,12 @@ pub struct FloatingSelectionToolbar {
     color_slots: Vec<ColorSlot>,
     /// Palette state per colour slot
     pickers: Vec<ColorPickerState>,
-    /// Line width of the selected drawing, when its tool draws it
-    width: Option<f32>,
-    /// Line style of the selected drawing, when its tool draws it
-    line_style: Option<LineStyle>,
+    /// Shared line width, mixed when the inner value is `None`; hidden when the followed tool
+    /// draws no width
+    width: Option<Option<f32>>,
+    /// Shared line style, mixed when the inner value is `None`; hidden when the followed tool
+    /// draws no style
+    line_style: Option<Option<LineStyle>>,
     /// Symbol and id of the drawing the toolbar follows
     selected: Option<(String, usize)>,
     /// What the toolbar last stayed clear of the drawing's label or readout card for: the
@@ -81,6 +83,9 @@ pub struct FloatingSelectionToolbar {
     placed_for: Option<(LineMeasurements, Vec<ChartPoint>, Vec2, Option<Vec2>)>,
     /// Whether a custom colour gesture is still open as one undo step
     colour_drag: bool,
+    /// Last palette or custom pick before taking the followed drawing's opacity, and whether
+    /// the custom editor set the opacity
+    last_pick: Option<(Color32, bool)>,
     /// The "More" menu
     menu: DrawingContextMenu,
     /// Whether object is locked
@@ -117,6 +122,7 @@ impl FloatingSelectionToolbar {
             selected: None,
             placed_for: None,
             colour_drag: false,
+            last_pick: None,
             menu: DrawingContextMenu::new(),
             is_locked: false,
             user_edit_enabled: true,
@@ -187,7 +193,10 @@ impl FloatingSelectionToolbar {
         set_control_visible(&mut self.menu.hidden, Control::Alerts, available);
     }
 
-    /// Follow the selected drawing, applying quick style edits as undoable chart actions.
+    /// Follow the selected drawing, applying quick style edits as undoable chart actions. Colour,
+    /// fill, width and style edits reach every selected drawing that is unlocked, accepts user edits
+    /// and draws the property, in one undo step; a palette colour keeps each drawing's opacity.
+    /// Width and style read Mixed while the selected drawings differ.
     /// Returns menu actions for the host's dialogs, clipboard and drawing commands.
     /// Call each frame, including after deselection, to finish a continuous colour edit.
     pub fn show_and_apply(
@@ -292,49 +301,87 @@ impl FloatingSelectionToolbar {
                 color: drawing.fill_color32().unwrap_or(Color32::TRANSPARENT),
             });
         }
-        self.width = drawing
-            .tool_type
-            .supports_line_width()
-            .then_some(drawing.stroke_width);
-        self.line_style = drawing
-            .tool_type
-            .supports_line_style()
-            .then_some(drawing.line_style);
+        self.width = drawing.tool_type.supports_line_width().then(|| {
+            shared(chart, DrawingToolType::supports_line_width, |d| {
+                d.stroke_width
+            })
+        });
+        self.line_style = drawing.tool_type.supports_line_style().then(|| {
+            shared(chart, DrawingToolType::supports_line_style, |d| {
+                d.line_style
+            })
+        });
         // Refresh context without reopening the menu or resetting its dismiss state.
         if !self.menu.is_open() {
             self.menu.open_on(ui.ctx(), chart, self.position, id);
             self.menu.close();
         }
         let action = self.show_with_shortcuts(ui, chart.shortcuts())?;
+        // Only editable selected drawings that draw the property take its edit.
+        let targets = |chart: &Chart, draws: fn(&DrawingToolType) -> bool| -> Vec<usize> {
+            let drawings = chart.drawings();
+            drawings
+                .drawings
+                .iter()
+                .filter(|d| {
+                    drawings.is_selected(d.id) && d.accepts_user_edits() && draws(&d.tool_type)
+                })
+                .map(|d| d.id)
+                .collect()
+        };
         match action {
             FloatingToolbarAction::ChangeColor(slot, color) if editable => {
+                let fill = slot == fill_slot;
+                let (picked, custom) = self.last_pick.take().unwrap_or((color, true));
+                let [r, g, b, _] = picked.to_srgba_unmultiplied();
+                let ids = targets(
+                    chart,
+                    if fill {
+                        DrawingToolType::supports_fill
+                    } else {
+                        DrawingToolType::supports_color
+                    },
+                );
+                let edit = |d: &mut crate::drawings::Drawing| {
+                    let own = if fill {
+                        d.fill_color32().unwrap_or(Color32::TRANSPARENT)
+                    } else {
+                        d.color32()
+                    };
+                    // A swatch keeps each drawing's opacity; custom opacity reaches them all.
+                    let rgba = [r, g, b, keep_opacity(picked, own, custom).a()];
+                    if fill {
+                        d.fill_color = Some(rgba)
+                    } else {
+                        d.recolor(rgba)
+                    }
+                };
                 let down = ui.input(|i| i.pointer.any_down());
                 chart.user_action(|chart| {
-                    let edit = |drawing: &mut crate::drawings::Drawing| {
-                        if slot == fill_slot {
-                            drawing.fill_color = Some(color.to_srgba_unmultiplied());
-                        } else {
-                            drawing.recolor(color.to_srgba_unmultiplied());
-                        }
-                    };
                     let _ = if down {
-                        chart.drawings_mut().drag_edit_drawing(id, edit)
+                        chart.drawings_mut().drag_edit_drawings(&ids, edit)
                     } else {
-                        chart.drawings_mut().edit_drawing(id, edit)
+                        chart.drawings_mut().edit_drawings(&ids, edit)
                     };
                 });
                 self.colour_drag = down;
             }
-            FloatingToolbarAction::ChangeWidth(width) if editable => chart.user_action(|chart| {
-                let _ = chart
-                    .drawings_mut()
-                    .edit_drawing(id, |d| d.stroke_width = width);
-            }),
-            FloatingToolbarAction::ChangeStyle(style) if editable => chart.user_action(|chart| {
-                let _ = chart
-                    .drawings_mut()
-                    .edit_drawing(id, |d| d.line_style = style);
-            }),
+            FloatingToolbarAction::ChangeWidth(width) if editable => {
+                let ids = targets(chart, DrawingToolType::supports_line_width);
+                chart.user_action(|chart| {
+                    let _ = chart
+                        .drawings_mut()
+                        .edit_drawings(&ids, |d| d.stroke_width = width);
+                });
+            }
+            FloatingToolbarAction::ChangeStyle(style) if editable => {
+                let ids = targets(chart, DrawingToolType::supports_line_style);
+                chart.user_action(|chart| {
+                    let _ = chart
+                        .drawings_mut()
+                        .edit_drawings(&ids, |d| d.line_style = style);
+                });
+            }
             FloatingToolbarAction::OpenSettings => return Some(DrawingContextMenuAction::Edit),
             FloatingToolbarAction::Duplicate => return Some(DrawingContextMenuAction::Clone),
             FloatingToolbarAction::ToggleLock if unprotected => {
@@ -441,6 +488,8 @@ impl FloatingSelectionToolbar {
                                             .response
                                             .on_hover_text(l10n::text(ui.ctx(), slot.label));
                                         if let Some(color) = picked.inner {
+                                            self.last_pick =
+                                                Some((color, custom || picker.custom_mode));
                                             let color = keep_opacity(
                                                 color,
                                                 slot.color,
@@ -458,24 +507,31 @@ impl FloatingSelectionToolbar {
                                         && ui.combo_select_width(
                                             "selection_width",
                                             width,
-                                            [1.0, 2.0, 3.0, 4.0],
-                                            |v| format!("{v} px"),
+                                            [1.0, 2.0, 3.0, 4.0].map(Some),
+                                            |v| {
+                                                v.map_or_else(
+                                                    || "Mixed".to_owned(),
+                                                    |v| format!("{v} px"),
+                                                )
+                                            },
                                             48.0,
                                         )
+                                        && let Some(width) = *width
                                     {
-                                        action = Some(FloatingToolbarAction::ChangeWidth(*width));
+                                        action = Some(FloatingToolbarAction::ChangeWidth(width));
                                     }
                                     let ctx = ui.ctx().clone();
                                     if let Some(style) = &mut self.line_style
                                         && ui.combo_select_width(
                                             "selection_style",
                                             style,
-                                            LineStyle::all().iter().copied(),
-                                            |v| l10n::text(&ctx, v.name()),
+                                            LineStyle::all().iter().copied().map(Some),
+                                            |v| l10n::text(&ctx, v.map_or("Mixed", |v| v.name())),
                                             72.0,
                                         )
+                                        && let Some(style) = *style
                                     {
-                                        action = Some(FloatingToolbarAction::ChangeStyle(*style));
+                                        action = Some(FloatingToolbarAction::ChangeStyle(style));
                                     }
                                 });
                             });
@@ -618,6 +674,22 @@ impl FloatingSelectionToolbar {
         );
         ui.space_xs();
     }
+}
+
+/// The value of every selected drawing whose tool draws it, or `None` when they differ.
+fn shared<T: PartialEq>(
+    chart: &Chart,
+    draws: fn(&DrawingToolType) -> bool,
+    value: impl Fn(&crate::drawings::Drawing) -> T,
+) -> Option<T> {
+    let drawings = chart.drawings();
+    let mut values = drawings
+        .drawings
+        .iter()
+        .filter(|d| drawings.is_selected(d.id) && draws(&d.tool_type))
+        .map(value);
+    let first = values.next()?;
+    values.all(|v| v == first).then_some(first)
 }
 
 /// Where a toolbar of `size` at `position` goes so that it does not cover a drawing's label or
@@ -919,6 +991,127 @@ mod tests {
         }
     }
 
+    /// Quick styles reach the editable selection together, keep each opacity and undo together.
+    #[test]
+    fn style_edits_reach_every_editable_selected_drawing() {
+        use crate::drawings::Drawing;
+        use crate::ui_kit::color_picker::{MAIN_COLORS, tests::click};
+        let ctx = egui::Context::default();
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+        let mut chart = Chart::new(crate::model::BarData::new());
+        for id in 1..=3 {
+            let mut line = Drawing::new(id, DrawingToolType::TrendLine);
+            line.completed = true;
+            line.points = vec![
+                Pos2::new(100.0, 100.0 + id as f32 * 50.0),
+                Pos2::new(300.0, 200.0 + id as f32 * 50.0),
+            ];
+            line.chart_points = vec![ChartPoint::new(1.0, 105.0), ChartPoint::new(2.0, 106.0)];
+            line.color = if id == 1 {
+                [242, 54, 69, 51]
+            } else {
+                [41, 98, 255, 255]
+            };
+            line.stroke_width = 2.0;
+            line.line_style = LineStyle::Solid;
+            line.locked = id == 3;
+            chart.drawings_mut().drawings.push(line);
+        }
+        let styles = |chart: &Chart| {
+            chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| (d.color, d.stroke_width, d.line_style))
+                .collect::<Vec<_>>()
+        };
+        let original = styles(&chart);
+        let mut toolbar = FloatingSelectionToolbar::new();
+        let frame = |chart: &mut Chart, toolbar: &mut FloatingSelectionToolbar, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    toolbar.show_and_apply(ui, chart);
+                },
+            )
+        };
+        let text_pos = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() / 2.0)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing control: {label}"))
+        };
+        for property in ["colour", "width", "style"] {
+            chart.drawings_mut().select_drawings([1, 2, 3]);
+            for _ in 0..2 {
+                frame(&mut chart, &mut toolbar, vec![]).drop_without_applying_deltas();
+            }
+            assert_eq!(toolbar.width, Some(Some(2.0)));
+            if property == "colour" {
+                toolbar.pickers[0].is_open = true;
+                frame(&mut chart, &mut toolbar, vec![]).drop_without_applying_deltas();
+                let output = frame(&mut chart, &mut toolbar, vec![]);
+                let pos = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Rect(r) if r.fill == MAIN_COLORS[3] => Some(r.rect.center()),
+                        _ => None,
+                    })
+                    .expect("the palette shows the swatch");
+                output.drop_without_applying_deltas();
+                frame(&mut chart, &mut toolbar, click(pos)).drop_without_applying_deltas();
+                assert_eq!(chart.drawings().drawings[0].color, [76, 175, 80, 51]);
+                assert_eq!(chart.drawings().drawings[1].color, [76, 175, 80, 255]);
+                assert_eq!(chart.drawings().drawings[2].color, [41, 98, 255, 255]);
+            } else {
+                let (current, chosen) = if property == "width" {
+                    ("2 px", "4 px")
+                } else {
+                    ("Solid", "Dashed")
+                };
+                let output = frame(&mut chart, &mut toolbar, vec![]);
+                let pos = text_pos(&output, current);
+                output.drop_without_applying_deltas();
+                frame(&mut chart, &mut toolbar, click(pos)).drop_without_applying_deltas();
+                let output = frame(&mut chart, &mut toolbar, vec![]);
+                let pos = text_pos(&output, chosen);
+                output.drop_without_applying_deltas();
+                frame(&mut chart, &mut toolbar, click(pos)).drop_without_applying_deltas();
+                let drawings = &chart.drawings().drawings;
+                if property == "width" {
+                    assert_eq!(
+                        drawings.iter().map(|d| d.stroke_width).collect::<Vec<_>>(),
+                        [4.0, 4.0, 2.0]
+                    );
+                } else {
+                    assert_eq!(
+                        drawings.iter().map(|d| d.line_style).collect::<Vec<_>>(),
+                        [LineStyle::Dashed, LineStyle::Dashed, LineStyle::Solid]
+                    );
+                }
+                frame(&mut chart, &mut toolbar, vec![]).drop_without_applying_deltas();
+                if property == "width" {
+                    assert_eq!(toolbar.width, Some(None));
+                } else {
+                    assert_eq!(toolbar.line_style, Some(None));
+                }
+            }
+            assert!(chart.undo(), "{property}");
+            assert_eq!(styles(&chart), original, "{property}");
+        }
+    }
+
     /// Floating surfaces and group rules follow each preset's popup and separator visuals.
     #[test]
     fn surface_and_separators_follow_the_popup_theme() {
@@ -1012,8 +1205,8 @@ mod tests {
                 false,
                 true,
             );
-            toolbar.width = Some(2.0);
-            toolbar.line_style = Some(LineStyle::Solid);
+            toolbar.width = Some(Some(2.0));
+            toolbar.line_style = Some(Some(LineStyle::Solid));
             toolbar.set_colors(vec![ColorSlot {
                 label: "Line color",
                 color: Color32::BLUE,
