@@ -2028,12 +2028,14 @@ mod tests {
         );
     }
 
-    /// Every line control a tool offers changes its drawing: 2 and 7 px, and solid, dashed and
-    /// dotted, each paint differently. The bars span the anchors, at prices inside the pane, so
-    /// the tools that measure bars draw.
+    /// Every style control a tool offers changes its drawing: 2 and 7 px, solid, dashed and
+    /// dotted, two colours, and 10 and 24 px text each paint differently. The bars span the
+    /// anchors, at prices inside the pane, so the tools that measure bars draw, and a Gann box
+    /// shows the angles its colour paints.
     #[test]
-    fn offered_line_width_changes_the_drawing() {
+    fn offered_style_controls_change_the_drawing() {
         use crate::model::LineStyle;
+        use DrawingToolType as T;
         let bars: Vec<_> = (0..60)
             .map(|i| {
                 let time = chrono::DateTime::from_timestamp(i * 60, 0).unwrap();
@@ -2070,11 +2072,19 @@ mod tests {
             if drawing.text.is_none() {
                 drawing.text = Some("Label".into());
             }
-            let painted = |edit: &dyn Fn(&mut Drawing)| {
+            if tool == T::GannBox {
+                drawing.gann = Some(crate::drawings::GannConfig {
+                    show_angles: true,
+                    ..drawing.gann_config().clone()
+                });
+            }
+            // A pin shows its text only while selected.
+            let painted_as = |selected: bool, edit: &dyn Fn(&mut Drawing)| {
                 let mut edited = drawing.clone();
                 edit(&mut edited);
-                format!("{:?}", paint_on(&edited, false, &bars))
+                format!("{:?}", paint_on(&edited, selected, &bars))
             };
+            let painted = |edit: &dyn Fn(&mut Drawing)| painted_as(false, edit);
             if tool.supports_line_width()
                 && painted(&|d| d.stroke_width = 2.0) == painted(&|d| d.stroke_width = 7.0)
             {
@@ -2087,6 +2097,32 @@ mod tests {
                 if solid == dashed || solid == dotted || dashed == dotted {
                     inert.push((tool, "style"));
                 }
+            }
+            if tool.supports_color()
+                && painted(&|d| d.color = [10, 20, 30, 255])
+                    == painted(&|d| d.color = [200, 100, 50, 255])
+            {
+                inert.push((tool, "colour"));
+            }
+            // The Text tab offers this size for text, trend angles and chart patterns;
+            // the Style tab offers it for a price label.
+            let sized = tool.supports_text()
+                || matches!(
+                    tool,
+                    T::TrendAngle
+                        | T::PriceLabel
+                        | T::XABCDPattern
+                        | T::CypherPattern
+                        | T::HeadAndShoulders
+                        | T::ABCDPattern
+                        | T::TrianglePattern
+                        | T::ThreeDrivesPattern
+                );
+            if sized
+                && painted_as(true, &|d| d.font_size = 10.0)
+                    == painted_as(true, &|d| d.font_size = 24.0)
+            {
+                inert.push((tool, "font size"));
             }
         }
         assert_eq!(inert, []);
