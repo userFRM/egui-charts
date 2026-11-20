@@ -8,6 +8,28 @@ use crate::model::Bar;
 use crate::studies::IndicatorValues;
 use egui::Color32;
 
+// All existing Indicator implementations (including borrowed and unsized ones) receive
+// this private supertrait. Only chart-owned 'static instances are inspected. Erasing the
+// *conversion function*, rather than coercing an arbitrary ?Sized self into dyn Any, keeps
+// that blanket implementation unconstrained. No study can override its concrete identity.
+pub(crate) trait ConcreteStudy {
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    fn concrete_study(&self, cast: &dyn std::any::Any) -> Option<&dyn std::any::Any>
+    where
+        Self: 'static;
+}
+
+impl<T: ?Sized> ConcreteStudy for T {
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    fn concrete_study(&self, cast: &dyn std::any::Any) -> Option<&dyn std::any::Any>
+    where
+        Self: 'static,
+    {
+        cast.downcast_ref::<fn(&T) -> &dyn std::any::Any>()
+            .map(|cast| cast(self))
+    }
+}
+
 /// The output value of an indicator at a single bar position.
 ///
 /// An owned row for constructing or exporting [`IndicatorValues`](super::IndicatorValues).
@@ -177,7 +199,11 @@ pub struct StudyPane {
 ///     inverted_color: None,
 /// };
 /// ```
-pub trait Indicator: Send {
+#[expect(
+    private_bounds,
+    reason = "blanket-implemented for every type; not a host extension point"
+)]
+pub trait Indicator: Send + ConcreteStudy {
     /// Sparse projected price bands, with fractional endpoints in future whitespace.
     fn projections(&self) -> &[super::StudyProjection] {
         &[]
@@ -1076,6 +1102,14 @@ pub trait Indicator: Send {
     /// continue to use `clone_box`.
     fn clone_for_export(&self) -> Box<dyn Indicator> {
         self.clone_box()
+    }
+}
+
+#[cfg(all(feature = "widget", feature = "studies"))]
+impl dyn Indicator {
+    pub(crate) fn concrete<T: 'static>(&self) -> Option<&T> {
+        let cast: fn(&T) -> &dyn std::any::Any = |value| value;
+        ConcreteStudy::concrete_study(self, &cast)?.downcast_ref()
     }
 }
 
