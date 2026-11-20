@@ -295,6 +295,9 @@ impl Chart {
             }
             response
         };
+        // After every pane, so that a mark is one stroke above all of them.
+        #[cfg(feature = "drawings")]
+        self.cursor_modes.render(ui);
         self.menu_open = false;
         if !self.chart_type.is_time_independent() {
             let source_marks = self.mark_source.as_ref().map(|source| &source.page);
@@ -699,12 +702,28 @@ impl Chart {
         // A Ctrl or Command press on empty space arms a selection area, which only a drag starts.
         #[cfg(feature = "drawings")]
         let box_selection = self.drawings.box_selection_input(ui);
-        // A mark owns its gesture, so a drag paints rather than pans or moves a drawing.
+        // The plot column of every pane, where the pointer drives their shared crosshair and marks.
+        let hover_rect = Rect::from_min_max(
+            Pos2::new(
+                chart_rect.left(),
+                self.pane_layout
+                    .panes
+                    .iter()
+                    .map(|pane| pane.rect.top())
+                    .fold(chart_rect.top(), f32::min),
+            ),
+            Pos2::new(chart_rect.right(), time_axis_top),
+        );
+        // A mark owns its gesture, so a drag paints rather than pans or moves a drawing. A press
+        // on another pane reaches that pane's plot, which time navigation reads below as well.
+        #[cfg(feature = "drawings")]
+        let mark_response =
+            shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
         #[cfg(feature = "drawings")]
         let marking = self.cursor_modes.marks(
             ui,
-            &response,
-            chart_rect,
+            &mark_response,
+            hover_rect,
             !eraser_mode
                 && matches!(
                     self.chart_options.crosshair.style,
@@ -720,6 +739,18 @@ impl Chart {
                 && !navigation_interaction
                 && !realtime_interaction,
         );
+        // Before the empty-chart return below, so that a trail keeps fading on every frame.
+        #[cfg(feature = "drawings")]
+        {
+            self.cursor_modes.update(ui.input(|input| input.stable_dt));
+            self.cursor_modes.follow(
+                (!eraser_mode).then_some(self.chart_options.crosshair.style),
+                mark_response
+                    .interact_pointer_pos()
+                    .filter(|pos| marking && hover_rect.contains(*pos)),
+                marking && ui.input(|input| input.pointer.primary_down()),
+            );
+        }
         // The gestures that own the pointer wherever they began.
         #[cfg(feature = "drawings")]
         let edit_gesture = marking
@@ -779,17 +810,6 @@ impl Chart {
                                 .or(input.pointer.hover_pos())
                                 .is_some_and(|pos| axis_corner.contains(pos))
                     })));
-        let hover_rect = Rect::from_min_max(
-            Pos2::new(
-                chart_rect.left(),
-                self.pane_layout
-                    .panes
-                    .iter()
-                    .map(|pane| pane.rect.top())
-                    .fold(chart_rect.top(), f32::min),
-            ),
-            Pos2::new(chart_rect.right(), time_axis_top),
-        );
         let touch_readout_interaction = self.handle_touch_crosshair(
             ui,
             shown.id,
@@ -2803,6 +2823,29 @@ impl Chart {
                 }),
         );
 
+        // The newest TPO profile's captioned levels use their caption colours on the axis.
+        if self.main_series_visible
+            && footprint.is_none()
+            && self.chart_type == ChartType::TimePriceOpportunity
+            && self.chart_type_params.tpo_level_tags
+        {
+            let tick = render_ctx.tick_size;
+            let config = self.chart_type_params.tpo_config(tick);
+            pending_values.extend(
+                rendering::candles::tpo::latest_level_tags(
+                    &self.state.data().bars,
+                    start_idx..start_idx + visible_data.len(),
+                    self.state.revision(),
+                    (&config, tick),
+                    &bar_clock,
+                    (&price_map, price_rect, |i| coords.idx_to_x(i)),
+                    (&ui.active_theme().chart, colors.bullish, colors.bearish),
+                )
+                .into_iter()
+                .map(|(price, fill)| (price, (rendering::axes::tag_text_color(fill), fill), false)),
+            );
+        }
+
         // The close of the last bar with a value before the trading date of `time`.
         let previous_session_close = |time| {
             let bars = &self.state.data().bars;
@@ -3373,18 +3416,7 @@ impl Chart {
 
             // A mark owns the primary gesture: the drawings see the hover but no press, click or
             // drag.
-            let mut drawing_response = response.clone();
-            if marking {
-                use egui::response::Flags;
-                drawing_response.flags.remove(
-                    Flags::CLICKED
-                        | Flags::FAKE_PRIMARY_CLICKED
-                        | Flags::DRAG_STARTED
-                        | Flags::DRAGGED
-                        | Flags::DRAG_STOPPED
-                        | Flags::IS_POINTER_BUTTON_DOWN_ON,
-                );
-            }
+            let drawing_response = cursor_modes.drawing_response(&response);
             self.handle_drawings(
                 ui,
                 &mut drawings,
@@ -3546,18 +3578,6 @@ impl Chart {
         let menu_open = self.menu_open || response.secondary_clicked();
         self.menu_open = menu_open;
         let mut crosshair_tags = [None; 2];
-        #[cfg(feature = "drawings")]
-        {
-            self.cursor_modes.update(ui.input(|input| input.stable_dt));
-            self.cursor_modes.follow(
-                (!eraser_mode).then_some(self.chart_options.crosshair.style),
-                response
-                    .interact_pointer_pos()
-                    .filter(|pos| marking && price_rect.contains(*pos)),
-                marking && ui.input(|input| input.pointer.primary_down()),
-            );
-            self.cursor_modes.render(ui, price_rect);
-        }
         let mut table_rect = price_rect;
         for (id, study) in self
             .study_ids

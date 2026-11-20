@@ -1821,6 +1821,67 @@ mod tests {
         }
     }
 
+    /// An arrow's Style tab lists the trend line's statistics, and its Middle point, switched on
+    /// there, gives the selected arrow a middle handle halfway between its anchors.
+    #[test]
+    fn arrow_offers_statistics_and_a_middle_handle() {
+        use crate::drawings::services::HandleService;
+        use crate::drawings::{ChartPoint, HandlePos};
+        use crate::ui::dialogs::{DrawingId, DrawingPropertiesDialog, PropertiesTab};
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+        let mut drawing = Drawing::new(7, DrawingToolType::Arrow);
+        drawing.completed = true;
+        drawing.chart_points = vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(8.0, 200.0)];
+        drawing.points = vec![Pos2::new(100.0, 300.0), Pos2::new(300.0, 100.0)];
+        chart.drawings_mut().drawings.push(drawing);
+        chart.drawings_mut().select_drawings([7]);
+        let mut dialog = DrawingPropertiesDialog::new();
+        // Tall enough to show the statistics rows, which come last, without scrolling.
+        dialog.config.height = 1300.0;
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 1400.0))
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, (chart, dialog): &mut (Chart, DrawingPropertiesDialog)| {
+                    dialog.show_and_apply(ui.ctx(), chart);
+                },
+                (chart, dialog),
+            );
+        let (chart, dialog) = h.state_mut();
+        dialog.open_for_chart(chart, DrawingId(7));
+        dialog.active_tab = PropertiesTab::Style;
+        h.run();
+        for label in [
+            "Price labels",
+            "Keep statistics visible",
+            "Price change",
+            "Percentage change",
+            "Pip change",
+            "Bar count",
+            "Elapsed time",
+            "Length in periods",
+            "Inclination",
+        ] {
+            h.get_by_role_and_label(Role::CheckBox, label);
+        }
+        h.get_by_label("Statistics placement");
+        let handles = |h: &Harness<'_, (Chart, DrawingPropertiesDialog)>| {
+            HandleService::get_handles(&h.state().0.drawings().drawings[0])
+        };
+        assert_eq!(handles(&h).len(), 2);
+        h.get_by_role_and_label(Role::CheckBox, "Middle point")
+            .click();
+        h.run();
+        h.get_by_role_and_label(Role::Button, "Ok").click();
+        h.run();
+        assert_eq!(
+            handles(&h).last(),
+            Some(&(HandlePos::Middle, Pos2::new(200.0, 200.0)))
+        );
+    }
+
     /// Each switch of the regression trend's Style tab turns off its own line or the correlation
     /// and leaves the others shown.
     #[test]
