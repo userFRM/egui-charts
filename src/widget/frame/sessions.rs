@@ -1,6 +1,19 @@
 use super::Chart;
 
 impl Chart {
+    /// The session break dividers in the chart's colour, width and pattern.
+    pub(in crate::widget) fn session_break_renderer(
+        &self,
+    ) -> crate::chart::rendering::SessionBreakRenderer {
+        crate::chart::rendering::SessionBreakRenderer::new(
+            crate::chart::rendering::SessionBreakRenderConfig {
+                line_color: self.config.session_break_color,
+                line_width: self.config.session_break_width,
+                style: self.config.session_break_style,
+            },
+        )
+    }
+
     /// Resolve the timeframe used to pick a session-break granularity.
     ///
     /// The chart's timeframe is the primary source. Without one, the cadence
@@ -730,7 +743,8 @@ mod tests {
     }
 
     /// Session breaks paint their colour and width as set at each new session of an hourly
-    /// chart, none on daily, weekly and monthly charts, and shade no session.
+    /// chart, in the price pane and in a study pane, none on daily, weekly and monthly charts,
+    /// and shade no session.
     #[test]
     fn session_breaks_paint_as_configured_without_shading() {
         use crate::model::{Bar, BarData, LineStyle, Timeframe};
@@ -755,27 +769,34 @@ mod tests {
             chart.config.session_break_style = LineStyle::Solid;
             chart.config.session_break_color = Color32::RED;
             chart.config.session_break_width = 2.0;
+            #[cfg(feature = "studies")]
+            chart.add_indicator(Box::new(crate::studies::RSI::default()));
             let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
-            let plot = chart.last_rendered_price_rect;
             let map = chart.get_chart_mapping();
-            let breaks: Vec<_> = painted
-                .iter()
-                .filter_map(|shape| match shape {
-                    Shape::LineSegment { points, stroke }
-                        if points[0].x == points[1].x
-                            && points[0].y == plot.top()
-                            && points[1].y == plot.bottom() =>
-                    {
-                        Some((points[0].x, *stroke))
-                    }
-                    _ => None,
-                })
-                .collect();
             let expected: Vec<_> = expected
                 .iter()
                 .map(|index| (map.idx_to_x(*index), Stroke::new(2.0, Color32::RED)))
                 .collect();
-            assert_eq!(breaks, expected, "{timeframe:?}");
+            let check_breaks = |pane, plot: egui::Rect| {
+                assert!(plot.height() > 20.0, "{timeframe:?} {pane} {plot:?}");
+                let breaks: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::LineSegment { points, stroke }
+                            if points[0].x == points[1].x
+                                && points[0].y == plot.top()
+                                && points[1].y == plot.bottom() =>
+                        {
+                            Some((points[0].x, *stroke))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(breaks, expected, "{timeframe:?} {pane}");
+            };
+            check_breaks("price", chart.last_rendered_price_rect);
+            #[cfg(feature = "studies")]
+            check_breaks("study", chart.last_rendered_indicator_panes[0].chart_rect);
             let shading = chart.config.background_color.gamma_multiply(0.94);
             assert!(
                 !painted
