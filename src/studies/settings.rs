@@ -1518,6 +1518,14 @@ impl Indicator for ConfiguredStudy {
             .plot_offset(line)
             .saturating_add(self.offset as isize)
     }
+    fn alert_conditions(&self) -> Vec<String> {
+        self.study.alert_conditions()
+    }
+
+    fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+        self.study.alert_condition(condition, self.inner_bar(bar)?)
+    }
+
     fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
         let kept = self.kept.as_ref().map(|kept| &kept.values);
         if let Some(values) = kept.or(self.aligned.as_ref()) {
