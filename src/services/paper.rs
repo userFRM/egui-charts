@@ -1027,13 +1027,14 @@ impl State {
 
         order.filled = request.quantity;
         order.fill_price = Some(price);
-        let execution = Execution::new(
+        let mut execution = Execution::new(
             order.id.clone(),
             self.now(),
             request.side,
             price,
             request.quantity,
         );
+        execution.symbol = Some(request.symbol.clone());
         let id = order.id.clone();
         self.finish(order, OrderStatus::Filled);
         self.push(AccountEvent::Execution(execution.clone()));
