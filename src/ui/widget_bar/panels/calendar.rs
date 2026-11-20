@@ -4,7 +4,7 @@ use crate::localization as l10n;
 use std::sync::Arc;
 
 use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveTime, Utc};
-use egui::{RichText, Sense, Ui, vec2};
+use egui::{Label, RichText, Sense, Ui, vec2};
 
 use super::ROW_HEIGHT;
 use super::controls::{cell, dropdown};
@@ -27,15 +27,18 @@ enum CalendarRange {
     ThisWeek,
     /// Monday to Sunday of the following week.
     NextWeek,
+    /// From now through the next four weeks.
+    Upcoming,
 }
 
 impl CalendarRange {
-    const ALL: [CalendarRange; 5] = [
+    const ALL: [CalendarRange; 6] = [
         CalendarRange::Yesterday,
         CalendarRange::Today,
         CalendarRange::Tomorrow,
         CalendarRange::ThisWeek,
         CalendarRange::NextWeek,
+        CalendarRange::Upcoming,
     ];
 
     fn label(self) -> &'static str {
@@ -45,11 +48,12 @@ impl CalendarRange {
             CalendarRange::Tomorrow => "Tomorrow",
             CalendarRange::ThisWeek => "This week",
             CalendarRange::NextWeek => "Next week",
+            CalendarRange::Upcoming => "Upcoming",
         }
     }
 
     /// The start of the first day and the start of the day after the last, around `now`, with
-    /// days starting at midnight in `zone`. A midnight the clock
+    /// days starting at midnight in `zone`; upcoming events start at `now`. A midnight the clock
     /// skips starts its day at the jump.
     fn bounds(self, now: DateTime<Utc>, zone: &TimezoneId) -> (DateTime<Utc>, DateTime<Utc>) {
         let today = local_time(zone.clone(), now).date();
@@ -64,6 +68,7 @@ impl CalendarRange {
             CalendarRange::Tomorrow => (today + Days::new(1), 1),
             CalendarRange::ThisWeek => (monday, 7),
             CalendarRange::NextWeek => (monday + Days::new(7), 7),
+            CalendarRange::Upcoming => return (now, start(today + Days::new(29))),
         };
         (start(first), start(first + Days::new(days)))
     }
@@ -83,18 +88,23 @@ pub enum CalendarAction {
 /// Calendars fed by the host's [`Datafeed::calendar`], one at a time.
 ///
 /// The user picks the calendar, the days, and for economic events the least importance; with
-/// [`set_countries`](Self::set_countries) also the countries. Days start at midnight and times show in the zone given to
-/// [`set_timezone`](Self::set_timezone), UTC until set, and the panel names it. Every change asks the feed again,
-/// which applies the filters, and only the answer to the latest request is shown. Call
-/// [`poll`](Self::poll) each frame, then [`show`](Self::show) while the panel is open.
+/// [`set_countries`](Self::set_countries) also the countries, and with
+/// [`set_categories`](Self::set_categories) the categories of economic events. An event with a
+/// description opens to it. Days start at midnight and times show in the zone given to
+/// [`set_timezone`](Self::set_timezone), UTC until set, and the panel names it. Every change asks
+/// the feed again, which applies the filters, and only the answer to the latest request is shown.
+/// Call [`poll`](Self::poll) each frame, then [`show`](Self::show) while the panel is open.
 pub struct CalendarPanel {
     kind: CalendarKind,
     range: CalendarRange,
     importance: Option<Importance>,
     countries: Vec<(String, bool)>,
+    categories: Vec<(String, bool)>,
     timezone: TimezoneId,
     feed: Option<Arc<dyn Datafeed>>,
     events: Vec<CalendarEvent>,
+    /// The event whose description shows.
+    open: Option<String>,
     error: Option<FeedError>,
     loading: bool,
     inbox: Arc<Inbox>,
@@ -108,8 +118,10 @@ impl std::fmt::Debug for CalendarPanel {
             .field("range", &self.range)
             .field("importance", &self.importance)
             .field("countries", &self.countries)
+            .field("categories", &self.categories)
             .field("timezone", &self.timezone)
             .field("events", &self.events)
+            .field("open", &self.open)
             .field("error", &self.error)
             .field("loading", &self.loading)
             .field("request", &self.request)
@@ -131,9 +143,11 @@ impl CalendarPanel {
             range: CalendarRange::ThisWeek,
             importance: None,
             countries: Vec::new(),
+            categories: Vec::new(),
             timezone: TimezoneId::utc(),
             feed: None,
             events: Vec::new(),
+            open: None,
             error: None,
             loading: false,
             inbox: Arc::default(),
@@ -154,6 +168,16 @@ impl CalendarPanel {
         self.refresh();
     }
 
+    /// Offer `categories` of economic events, in the values the feed uses, as a filter. None is
+    /// selected at first, which lists every category.
+    pub fn set_categories(&mut self, categories: impl IntoIterator<Item = String>) {
+        self.categories = categories
+            .into_iter()
+            .map(|category| (category, false))
+            .collect();
+        self.refresh();
+    }
+
     /// Start days at midnight in `timezone` and show event days and times in it, such as the
     /// chart's. UTC until set. A different zone asks the feed again.
     pub fn set_timezone(&mut self, timezone: TimezoneId) {
@@ -171,19 +195,25 @@ impl CalendarPanel {
         self.request += 1;
         self.loading = true;
         let (from, to) = self.range.bounds(Utc::now(), &self.timezone);
+        let chosen = |choices: &[(String, bool)]| -> Vec<String> {
+            choices
+                .iter()
+                .filter(|(_, on)| *on)
+                .map(|(value, _)| value.clone())
+                .collect()
+        };
+        let economic = self.kind == CalendarKind::Economic;
         let query = CalendarQuery {
             kind: self.kind,
             from,
             to,
-            countries: self
-                .countries
-                .iter()
-                .filter(|(_, on)| *on)
-                .map(|(code, _)| code.clone())
-                .collect(),
-            importance: self
-                .importance
-                .filter(|_| self.kind == CalendarKind::Economic),
+            countries: chosen(&self.countries),
+            categories: if economic {
+                chosen(&self.categories)
+            } else {
+                Vec::new()
+            },
+            importance: self.importance.filter(|_| economic),
         };
         feed.calendar(query, self.inbox.reply(self.request));
     }
@@ -204,9 +234,17 @@ impl CalendarPanel {
                 Ok(events) => {
                     self.events = events;
                     self.error = None;
+                    if self
+                        .open
+                        .as_ref()
+                        .is_some_and(|id| !self.events.iter().any(|event| event.id == *id))
+                    {
+                        self.open = None;
+                    }
                 }
                 Err(error) => {
                     self.events.clear();
+                    self.open = None;
                     self.error = Some(error);
                 }
             }
@@ -223,6 +261,7 @@ impl CalendarPanel {
             self.range,
             self.importance,
             self.countries.clone(),
+            self.categories.clone(),
         );
         ui.horizontal_wrapped(|ui| {
             for (kind, label) in [
@@ -266,6 +305,23 @@ impl CalendarPanel {
                         }
                     },
                 );
+                if !self.categories.is_empty() {
+                    let chosen = self.categories.iter().filter(|(_, on)| *on).count();
+                    let text = if chosen == 0 {
+                        "All categories".to_owned()
+                    } else {
+                        l10n::format_text(
+                            ui.ctx(),
+                            "{count} categories",
+                            &[("count", chosen.to_string().as_str())],
+                        )
+                    };
+                    dropdown(ui, "calendar_categories", &text, |ui| {
+                        for (category, on) in &mut self.categories {
+                            ui.checkbox(on, l10n::text(ui.ctx(), category.as_str()));
+                        }
+                    });
+                }
             }
             ui.label(
                 RichText::new(l10n::format_text(
@@ -300,6 +356,7 @@ impl CalendarPanel {
                 self.range,
                 self.importance,
                 self.countries.clone(),
+                self.categories.clone(),
             )
         {
             self.refresh();
@@ -330,6 +387,7 @@ impl CalendarPanel {
             }
             None => {}
         }
+        let mut toggled = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -368,7 +426,9 @@ impl CalendarPanel {
                             cell(ui, rect, title, true, theme.ui.text_secondary);
                         }
                     }
-                    let sense = if event.symbol.is_some() {
+                    let opens = event.description.is_some();
+                    let clickable = opens || event.symbol.is_some();
+                    let sense = if clickable {
                         Sense::click()
                     } else {
                         Sense::hover()
@@ -436,20 +496,61 @@ impl CalendarPanel {
                             theme.ui.text,
                         );
                     }
-                    if let Some(symbol) = &event.symbol {
+                    let open = opens && self.open.as_ref() == Some(&event.id);
+                    if clickable {
                         let translated_label = l10n::text(ui.ctx(), &title);
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
                         });
+                        if opens {
+                            ui.ctx().accesskit_node_builder(response.id, |node| {
+                                node.set_expanded(open)
+                            });
+                        }
                         if response
                             .on_hover_cursor(egui::CursorIcon::PointingHand)
                             .clicked()
                         {
-                            action = CalendarAction::SelectSymbol(symbol.clone());
+                            if opens {
+                                toggled = Some(event.id.clone());
+                            } else if let Some(symbol) = &event.symbol {
+                                action = CalendarAction::SelectSymbol(symbol.clone());
+                            }
                         }
+                    }
+                    if open && let Some(description) = &event.description {
+                        egui::Frame::new()
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing.y = theme.spacing.xs;
+                                if let Some(category) = &event.category {
+                                    ui.label(
+                                        RichText::new(l10n::text(ui.ctx(), category))
+                                            .size(theme.text.small)
+                                            .strong()
+                                            .color(theme.ui.text_secondary),
+                                    );
+                                }
+                                ui.add(
+                                    Label::new(
+                                        RichText::new(l10n::text(ui.ctx(), description))
+                                            .size(theme.text.small)
+                                            .color(theme.ui.text_secondary),
+                                    )
+                                    .wrap(),
+                                );
+                                if let Some(symbol) = &event.symbol
+                                    && Button::new("Show symbol").small().show(ui).clicked()
+                                {
+                                    action = CalendarAction::SelectSymbol(symbol.clone());
+                                }
+                            });
                     }
                 }
             });
+        if let Some(id) = toggled {
+            self.open = (self.open.as_ref() != Some(&id)).then_some(id);
+        }
         action
     }
 }
@@ -465,6 +566,21 @@ fn importance_label(importance: Option<Importance>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::{HistoryPage, HistoryRequest, Reply};
+    use egui_kittest::{Harness, kittest::Queryable};
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Feed(Mutex<Vec<(CalendarQuery, Reply<Vec<CalendarEvent>>)>>);
+
+    impl Datafeed for Feed {
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            reply.send(Err(FeedError::NotSupported));
+        }
+        fn calendar(&self, query: CalendarQuery, reply: Reply<Vec<CalendarEvent>>) {
+            self.0.lock().unwrap().push((query, reply));
+        }
+    }
 
     /// The texts one frame of `panel` paints, with their visible bounds.
     fn texts(panel: &mut CalendarPanel, ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
@@ -636,6 +752,22 @@ mod tests {
                 "2026-10-21T18:30:00Z",
                 "2026-10-22T18:30:00Z",
             ),
+            // From now until the end of the 28th day after today: October 21 plus 29 days is
+            // November 19, when New York is five hours behind UTC.
+            (
+                "UTC",
+                "2026-10-21T15:30:00Z",
+                CalendarRange::Upcoming,
+                "2026-10-21T15:30:00Z",
+                "2026-11-19T00:00:00Z",
+            ),
+            (
+                "America/New_York",
+                "2026-10-22T01:00:00Z",
+                CalendarRange::Upcoming,
+                "2026-10-22T01:00:00Z",
+                "2026-11-19T05:00:00Z",
+            ),
         ] {
             let Some(timezone) = TimezoneId::named(zone) else {
                 assert!(!cfg!(feature = "timezones"), "{zone}");
@@ -682,4 +814,73 @@ mod tests {
         }
     }
 
+    /// Guards what the user narrows and opens: a ticked category goes out with economic requests
+    /// only, Upcoming asks from now through the next four weeks, and an event with a description
+    /// opens to it and its category and closes again.
+    #[test]
+    fn categories_upcoming_and_descriptions_reach_the_query_and_show() {
+        let feed = Arc::new(Feed::default());
+        let mut panel = CalendarPanel::new();
+        panel.set_categories(["Inflation".to_owned(), "Employment".to_owned()]);
+        panel.set_feed(feed.clone());
+        let latest = || feed.0.lock().unwrap().last().unwrap().0.clone();
+        assert!(latest().categories.is_empty());
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(320.0, 560.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, panel: &mut CalendarPanel| {
+                    panel.poll(ui.ctx());
+                    panel.show(ui);
+                },
+                panel,
+            );
+        // The loading spinner asks for a frame after every frame, so step a few at a time.
+        h.run_steps(3);
+        for label in ["All categories", "Inflation"] {
+            h.get_by_label(label).click();
+            h.run_steps(3);
+        }
+        let query = latest();
+        assert_eq!(query.kind, CalendarKind::Economic);
+        assert_eq!(query.categories, ["Inflation"]);
+        h.get_by_label("1 categories");
+
+        for label in ["This week", "Upcoming"] {
+            h.get_by_label(label).click();
+            h.run_steps(3);
+        }
+        let query = latest();
+        let span = query.to - query.from;
+        assert!(query.from <= Utc::now(), "{query:?}");
+        assert!(span > chrono::Duration::days(28) && span <= chrono::Duration::days(29));
+
+        let description = "Prices paid by consumers, without food and energy.";
+        let mut event = CalendarEvent::new(
+            "cpi",
+            CalendarKind::Economic,
+            query.from + chrono::Duration::hours(1),
+            "Core CPI",
+        );
+        event.category = Some("Inflation".into());
+        event.description = Some(description.into());
+        let (_, reply) = feed.0.lock().unwrap().pop().unwrap();
+        reply.send(Ok(vec![event]));
+        h.run_steps(3);
+        assert!(h.query_by_value(description).is_none());
+        for shown in [true, false] {
+            h.get_by_label("Core CPI").click();
+            h.run_steps(3);
+            for value in [description, "Inflation"] {
+                assert_eq!(h.query_by_value(value).is_some(), shown, "{value}");
+            }
+        }
+
+        h.get_by_label("Earnings").click();
+        h.run_steps(3);
+        let query = latest();
+        assert_eq!(query.kind, CalendarKind::Earnings);
+        assert!(query.categories.is_empty());
+        assert!(h.query_by_label("1 categories").is_none());
+    }
 }

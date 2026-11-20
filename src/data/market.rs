@@ -120,6 +120,9 @@ pub struct CalendarQuery {
     pub to: DateTime<Utc>,
     /// Only events of these countries, in the codes the feed uses, or of every country when empty.
     pub countries: Vec<String>,
+    /// Only economic events of these categories, in the values the feed uses, such as
+    /// `"Inflation"`, or of every category when empty. Set for economic events only.
+    pub categories: Vec<String>,
     /// Only events at least this important, when set. Set for economic events only.
     pub importance: Option<Importance>,
 }
@@ -127,7 +130,7 @@ pub struct CalendarQuery {
 impl CalendarQuery {
     /// The events of the `kind` calendar from `from` until before `to`, of every country and
     /// importance. Assign [`countries`](Self::countries) and, for economic events,
-    /// [`importance`](Self::importance) to narrow it.
+    /// [`categories`](Self::categories) and [`importance`](Self::importance) to narrow it.
     ///
     /// ```
     /// use egui_charts::data::{CalendarKind, CalendarQuery, Importance};
@@ -139,6 +142,7 @@ impl CalendarQuery {
     /// );
     /// query.importance = Some(Importance::High);
     /// assert!(query.countries.is_empty());
+    /// assert!(query.categories.is_empty());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn new(kind: CalendarKind, from: DateTime<Utc>, to: DateTime<Utc>) -> Self {
@@ -147,6 +151,7 @@ impl CalendarQuery {
             from,
             to,
             countries: Vec::new(),
+            categories: Vec::new(),
             importance: None,
         }
     }
@@ -175,6 +180,11 @@ pub struct CalendarEvent {
     pub symbol: Option<String>,
     /// Importance assigned by the host, when applicable.
     pub importance: Option<Importance>,
+    /// The economic event's category, in the values the feed uses, such as `"Inflation"`, shown
+    /// above its description, when known.
+    pub category: Option<String>,
+    /// What the release measures, shown when the user opens the event, when known.
+    pub description: Option<String>,
     /// Published figure, formatted by the host, when available.
     pub actual: Option<String>,
     /// Expected figure, formatted by the host, when available.
@@ -199,6 +209,8 @@ impl CalendarEvent {
             title: title.into(),
             symbol: None,
             importance: None,
+            category: None,
+            description: None,
             actual: None,
             forecast: None,
             prior: None,
