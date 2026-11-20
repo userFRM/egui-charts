@@ -1070,6 +1070,16 @@ impl Alert {
                 .zip(self.expires)
                 .is_none_or(|(starts, expires)| starts < expires)
     }
+
+    /// The alert's name, or its condition when the name is blank, as the alert log and trigger
+    /// popups name it.
+    pub fn display_name(&self) -> String {
+        if self.name.trim().is_empty() {
+            self.condition.to_string()
+        } else {
+            self.name.clone()
+        }
+    }
 }
 
 /// When an alert's notifications may be delivered: on the selected weekdays, inside the time

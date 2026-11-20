@@ -137,6 +137,9 @@ struct PresentationRestore {
 pub struct AlertTrigger {
     /// Host alert identifier.
     pub id: AlertId,
+    /// The alert's [`display_name`](Alert::display_name) when the trigger arrived, empty if its
+    /// alert was not yet supplied.
+    pub name: String,
     /// Symbol as known when the trigger arrived, empty if its alert was not yet supplied.
     pub symbol: String,
     /// Host trigger time, including triggers missed while the application was closed.
@@ -172,6 +175,7 @@ pub struct AlertsPanel {
     error: Option<FeedError>,
     show_log: bool,
     notification_seconds: f32,
+    timezone: crate::model::TimezoneId,
     options: AlertListOptions,
     marks: HashMap<String, egui::ImageSource<'static>>,
     undo: Vec<PresentationEdit>,
@@ -202,6 +206,7 @@ impl std::fmt::Debug for AlertsPanel {
             .field("error", &self.error)
             .field("show_log", &self.show_log)
             .field("notification_seconds", &self.notification_seconds)
+            .field("timezone", &self.timezone)
             .field("options", &self.options)
             .field("marks", &self.marks)
             .field("next_reply", &self.next_reply)
@@ -237,6 +242,7 @@ impl AlertsPanel {
             error: None,
             show_log: false,
             notification_seconds: 20.0,
+            timezone: crate::model::TimezoneId::utc(),
             options: AlertListOptions::default(),
             marks: HashMap::new(),
             undo: Vec::new(),
@@ -402,6 +408,12 @@ impl AlertsPanel {
         } else {
             20.0
         };
+    }
+
+    /// Write log times, in the Log tab and the CSV export, in `timezone`, such as the chart's;
+    /// UTC until set.
+    pub fn set_timezone(&mut self, timezone: crate::model::TimezoneId) {
+        self.timezone = timezone;
     }
 
     /// Also show each trigger popup as a desktop notification through
@@ -749,10 +761,12 @@ impl AlertsPanel {
                 price,
                 message,
             } => {
+                let name = self.name_of(&id);
                 self.record_trigger(
                     ctx,
                     AlertTrigger {
                         id,
+                        name,
                         symbol,
                         time,
                         price,
@@ -770,8 +784,10 @@ impl AlertsPanel {
                 message,
             } => {
                 let price = price.filter(|p| p.is_finite());
+                let name = self.name_of(&id);
                 self.log_trigger(AlertTrigger {
                     id,
+                    name,
                     symbol,
                     time,
                     price,
@@ -786,10 +802,12 @@ impl AlertsPanel {
                     .find(|a| a.id.as_ref() == Some(&id))
                     .map(|a| a.symbol.clone())
                     .unwrap_or_default();
+                let name = self.name_of(&id);
                 self.record_trigger(
                     ctx,
                     AlertTrigger {
                         id,
+                        name,
                         symbol,
                         time,
                         price,
@@ -876,6 +894,15 @@ impl AlertsPanel {
         self.log_trigger(trigger);
     }
 
+    /// The display name of the alert `id` as last pushed, empty when the host has not pushed it.
+    fn name_of(&self, id: &AlertId) -> String {
+        self.alerts
+            .iter()
+            .find(|a| a.id.as_ref() == Some(id))
+            .map(Alert::display_name)
+            .unwrap_or_default()
+    }
+
     fn log_trigger(&mut self, trigger: AlertTrigger) {
         self.log.push_back(trigger);
         if self.log.len() > LOG_BOUND {
@@ -883,17 +910,19 @@ impl AlertsPanel {
         }
     }
 
-    /// Export the retained trigger log. Text fields are quoted and embedded quotes doubled.
+    /// Export the retained trigger log, times in the panel's time zone. Text fields are quoted and
+    /// embedded quotes doubled.
     pub fn log_csv(&self) -> String {
-        let mut csv = String::from("id,symbol,time,price,message,silent\r\n");
+        let mut csv = String::from("id,name,symbol,time,price,message,silent\r\n");
         for trigger in &self.log {
             let id = trigger.id.0.replace('"', "\"\"");
+            let name = trigger.name.replace('"', "\"\"");
             let symbol = trigger.symbol.replace('"', "\"\"");
             let price = trigger.price.map(|p| p.to_string()).unwrap_or_default();
             let message = trigger.message.replace('"', "\"\"");
             csv.push_str(&format!(
-                "\"{id}\",\"{symbol}\",{},{},\"{message}\",{}\r\n",
-                trigger.time.to_rfc3339(),
+                "\"{id}\",\"{name}\",\"{symbol}\",{},{},\"{message}\",{}\r\n",
+                trigger.time.with_timezone(&self.timezone).to_rfc3339(),
                 price,
                 trigger.silent
             ));
@@ -1073,16 +1102,20 @@ impl AlertsPanel {
                 .max_height(self.config.max_height)
                 .show(ui, |ui| {
                     for trigger in self.log.iter().rev() {
-                        ui.label(format!(
-                            "{} · {}{}",
-                            trigger.symbol,
-                            trigger.time.format("%Y-%m-%d %H:%M:%S UTC"),
-                            if trigger.silent {
-                                format!(" · {}", l10n::text(ui.ctx(), "Silent"))
-                            } else {
-                                String::new()
-                            }
-                        ));
+                        let mut parts = vec![if trigger.name.is_empty() {
+                            trigger.id.0.clone()
+                        } else {
+                            l10n::text(ui.ctx(), &trigger.name)
+                        }];
+                        if !trigger.symbol.is_empty() {
+                            parts.push(trigger.symbol.clone());
+                        }
+                        let time = trigger.time.with_timezone(&self.timezone);
+                        parts.push(time.format("%Y-%m-%d %H:%M:%S %:z").to_string());
+                        if trigger.silent {
+                            parts.push(l10n::text(ui.ctx(), "Silent"));
+                        }
+                        ui.label(parts.join(" · "));
                         if let Some(price) = trigger.price {
                             ui.label(l10n::text(ui.ctx(), price.to_string()));
                         }
@@ -1452,24 +1485,38 @@ mod tests {
         };
         let mut alert = Alert::new("S\"IM", AlertCondition::CrossingUp(12.5));
         alert.id = Some(AlertId("host,\"1".into()));
+        // Another alert on the symbol without a name or a message, removed once it has fired.
+        let mut other = Alert::new("S\"IM", AlertCondition::CrossingDown(12.5));
+        other.id = Some(AlertId("2".into()));
         panel.save(alert.clone());
         host.reply.lock().unwrap().take().unwrap().send(Ok(()));
         frame(&mut panel);
         assert!(panel.alerts().is_empty());
         events.push(AlertEvent::Upsert(Box::new(alert.clone())));
-        events.push(AlertEvent::Triggered {
-            id: alert.id.clone().unwrap(),
-            time: "2026-10-23T12:00:00Z".parse().unwrap(),
-            price: Some(12.5),
-        });
+        events.push(AlertEvent::Upsert(Box::new(other.clone())));
+        for id in [&alert.id, &other.id] {
+            events.push(AlertEvent::Triggered {
+                id: id.clone().unwrap(),
+                time: "2026-10-23T12:00:00Z".parse().unwrap(),
+                price: Some(12.5),
+            });
+        }
+        events.push(AlertEvent::Remove(other.id.unwrap()));
         frame(&mut panel);
         alert.last_triggered_at = Some("2026-10-23T12:00:00Z".parse().unwrap());
         assert_eq!(panel.alerts(), &[alert.clone()]);
         assert_eq!(panel.alerts()[0].status, AlertStatus::Active);
-        assert_eq!(panel.log().len(), 1);
+        assert_eq!(panel.log().len(), 2);
+        // Each line names its alert, by its condition without a name, in the panel's time zone.
+        let csv = "id,name,symbol,time,price,message,silent\r\n\"host,\"\"1\",\"Crossing up 12.5\",\"S\"\"IM\",{time},12.5,\"\",false\r\n\"2\",\"Crossing down 12.5\",\"S\"\"IM\",{time},12.5,\"\",false\r\n";
         assert_eq!(
             panel.log_csv(),
-            "id,symbol,time,price,message,silent\r\n\"host,\"\"1\",\"S\"\"IM\",2026-10-23T12:00:00+00:00,12.5,\"\",false\r\n"
+            csv.replace("{time}", "2026-10-23T12:00:00+00:00")
+        );
+        panel.set_timezone("-04:00".parse().unwrap());
+        assert_eq!(
+            panel.log_csv(),
+            csv.replace("{time}", "2026-10-23T08:00:00-04:00")
         );
         alert.status = AlertStatus::Disabled;
         events.push(AlertEvent::Upsert(Box::new(alert.clone())));
@@ -1503,7 +1550,7 @@ mod tests {
         events.push(AlertEvent::Remove(alert.id.clone().unwrap()));
         frame(&mut panel);
         assert!(panel.alerts().is_empty());
-        assert_eq!(panel.log().len(), 1);
+        assert_eq!(panel.log().len(), 2);
         panel.save(alert);
         for _ in 0..10_001 {
             events.push(AlertEvent::Clear);
@@ -1520,7 +1567,7 @@ mod tests {
             .send(Err(FeedError::Unanswered));
         frame(&mut panel);
         assert_eq!(panel.error, Some(FeedError::Unanswered));
-        assert_eq!(panel.log().len(), 1);
+        assert_eq!(panel.log().len(), 2);
         assert_eq!(toasts.toasts()[0].duration, 12.0);
         // The sound the user chose comes with the triggers received, and the message is shown in
         // the popup and kept in the log and the export.
@@ -2156,6 +2203,7 @@ mod tests {
         let mut toasts = Toasts::new();
         let trigger = |n: u32| AlertTrigger {
             id: AlertId(n.to_string()),
+            name: String::new(),
             symbol: format!("S{n}"),
             time: Utc::now(),
             price: None,
