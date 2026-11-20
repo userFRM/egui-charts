@@ -1404,6 +1404,15 @@ pub(crate) fn rule_form(
     let position = offer_position
         .then(|| drawing_position(source, condition, sources))
         .flatten();
+    // Switching direction or units keeps the amount and lookback.
+    let (amount, moving_bars) = match condition {
+        AlertCondition::MovingBy { value, bars }
+        | AlertCondition::MovingByPercent {
+            percent: value,
+            bars,
+        } => (value.abs(), *bars),
+        _ => (1.0, 1),
+    };
     let choices = [
         (AlertCondition::Crossing(lower), "Crossing"),
         (AlertCondition::CrossingUp(lower), "Crossing up"),
@@ -1428,17 +1437,31 @@ pub(crate) fn rule_form(
         ),
         (
             AlertCondition::MovingBy {
-                value: 1.0,
-                bars: 1,
+                value: amount,
+                bars: moving_bars,
             },
-            "Moving by value",
+            "Moving up",
+        ),
+        (
+            AlertCondition::MovingBy {
+                value: -amount,
+                bars: moving_bars,
+            },
+            "Moving down",
         ),
         (
             AlertCondition::MovingByPercent {
-                percent: 1.0,
-                bars: 1,
+                percent: amount,
+                bars: moving_bars,
             },
-            "Moving by percent",
+            "Moving up %",
+        ),
+        (
+            AlertCondition::MovingByPercent {
+                percent: -amount,
+                bars: moving_bars,
+            },
+            "Moving down %",
         ),
         (
             AlertCondition::Compare {
@@ -1469,16 +1492,24 @@ pub(crate) fn rule_form(
             .map(|(id, _)| (AlertCondition::StrategyFills(id.clone()), "Strategy fills")),
     )
     .collect::<Vec<_>>();
-    let selected = choices
-        .iter()
-        .find(|(c, _)| std::mem::discriminant(c) == std::mem::discriminant(condition))
-        .map(|(_, name)| *name)
-        .unwrap_or(match condition {
-            AlertCondition::StrategyFills(_) => "Strategy fills",
-            AlertCondition::DetectorSignals(_) => "Detector signals",
-            AlertCondition::CustomEvents(_) => "Custom events",
-            _ => "Condition",
-        });
+    let selected = match condition {
+        AlertCondition::MovingBy { value, .. } if value.is_sign_negative() => "Moving down",
+        AlertCondition::MovingBy { .. } => "Moving up",
+        AlertCondition::MovingByPercent { percent, .. } if percent.is_sign_negative() => {
+            "Moving down %"
+        }
+        AlertCondition::MovingByPercent { .. } => "Moving up %",
+        _ => choices
+            .iter()
+            .find(|(c, _)| std::mem::discriminant(c) == std::mem::discriminant(condition))
+            .map(|(_, name)| *name)
+            .unwrap_or(match condition {
+                AlertCondition::StrategyFills(_) => "Strategy fills",
+                AlertCondition::DetectorSignals(_) => "Detector signals",
+                AlertCondition::CustomEvents(_) => "Custom events",
+                _ => "Condition",
+            }),
+    };
     egui::ComboBox::from_id_salt("condition")
         .selected_text(l10n::text(ui.ctx(), selected))
         .show_ui(ui, |ui| {
@@ -1563,9 +1594,16 @@ pub(crate) fn rule_form(
             percent: value,
             bars,
         } => {
-            ui.label(l10n::text(ui.ctx(), "Change / bars"));
-            ui.add(egui::DragValue::new(value))
-                .accessible_name(l10n::text(ui.ctx(), "Change"));
+            ui.label(l10n::text(ui.ctx(), "Amount / bars"));
+            let down = value.is_sign_negative();
+            let mut amount = value.abs();
+            if ui
+                .add(egui::DragValue::new(&mut amount).range(0.0..=f64::MAX))
+                .accessible_name(l10n::text(ui.ctx(), "Amount"))
+                .changed()
+            {
+                *value = if down { -amount } else { amount };
+            }
             ui.add(egui::DragValue::new(bars).range(1..=u32::MAX))
                 .accessible_name(l10n::text(ui.ctx(), "Bars"));
         }
@@ -1751,6 +1789,92 @@ mod tests {
         // A span captured on the source chart's interval does not describe another interval.
         let inputs = h.state().alert.inputs.as_ref().unwrap();
         assert_eq!((inputs.start, inputs.visible), (None, None));
+    }
+
+    #[test]
+    fn moving_operators_save_their_direction_as_a_sign() {
+        use egui::accesskit::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let mut dialog = AlertDialog::new();
+        dialog.edit(Alert::new("SAMPLE", AlertCondition::Above(100.0)));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(960.0, 900.0))
+            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+        h.run();
+        for (label, expected, text) in [
+            (
+                "Moving up",
+                AlertCondition::MovingBy {
+                    value: 5.0,
+                    bars: 3,
+                },
+                "Moving up 5 over 3 bars",
+            ),
+            (
+                "Moving down",
+                AlertCondition::MovingBy {
+                    value: -5.0,
+                    bars: 3,
+                },
+                "Moving down 5 over 3 bars",
+            ),
+            (
+                "Moving up %",
+                AlertCondition::MovingByPercent {
+                    percent: 5.0,
+                    bars: 3,
+                },
+                "Moving up 5% over 3 bars",
+            ),
+            (
+                "Moving down %",
+                AlertCondition::MovingByPercent {
+                    percent: -5.0,
+                    bars: 3,
+                },
+                "Moving down 5% over 3 bars",
+            ),
+        ] {
+            h.get_by_label("Condition").click();
+            h.run();
+            h.get_by_label(label).scroll_to_me();
+            h.run();
+            h.get_by_label(label).click();
+            h.run();
+            h.get_by_role_and_label(Role::SpinButton, "Amount")
+                .set_value_accesskit(5.0);
+            h.run();
+            h.get_by_role_and_label(Role::SpinButton, "Bars")
+                .set_value_accesskit(3.0);
+            h.run();
+            assert_eq!(h.state().alert.condition, expected, "{label}");
+            assert_eq!(h.state().alert.condition.to_string(), text);
+        }
+        // The stored representation predates the directional menu.
+        let saved = r#"{"symbol":"SAMPLE","condition":{"MovingBy":{"value":-5.0,"bars":3}}}"#;
+        h.state_mut().edit(serde_json::from_str(saved).unwrap());
+        h.run();
+        assert_eq!(
+            h.get_by_label("Condition").value().as_deref(),
+            Some("Moving down")
+        );
+        assert_eq!(
+            h.get_by_role_and_label(Role::SpinButton, "Amount")
+                .accesskit_node()
+                .numeric_value(),
+            Some(5.0)
+        );
+        h.get_by_role_and_label(Role::SpinButton, "Amount")
+            .set_value_accesskit(0.0);
+        h.run();
+        assert_eq!(
+            h.get_by_label("Condition").value().as_deref(),
+            Some("Moving down")
+        );
+        assert!(!h.state().alert.condition.is_valid());
     }
 
     /// The limits count characters, not bytes, and apply where the user edits the text. A
