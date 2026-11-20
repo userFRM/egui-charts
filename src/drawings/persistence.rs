@@ -1648,7 +1648,12 @@ mod tests {
             };
             for &display in modes {
                 let config = drawing.volume_profile.as_mut().unwrap();
-                *config = config.with_row_size(Some(0.25)).unwrap();
+                *config = if display == UpDown {
+                    config.with_row_ticks(Some(4))
+                } else {
+                    config.with_row_size(Some(0.25))
+                }
+                .unwrap();
                 config.display = display;
                 config.up_color = [1, 2, 3, 240];
                 config.down_color = [4, 5, 6, 200];
@@ -1804,6 +1809,12 @@ mod tests {
                     assert_eq!(style.failure_background, style.start_background);
                     assert_eq!((style.start_border, style.target_border), (None, None));
                     assert_eq!(style.transparency, 0);
+                }
+                // These literal older saves have no tick layout and keep their row count.
+                if let Some(config) = restored.volume_profile {
+                    assert_eq!(config.row_ticks(), None);
+                    assert_eq!((config.rows(), config.value_area()), (50, 0.68));
+                    assert_eq!(config.row_size(), None);
                 }
                 assert!(
                     !serde_json::to_string(&stored.drawing)

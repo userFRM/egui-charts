@@ -496,6 +496,35 @@ fn dialogs_expose_titles_and_label_their_fields() {
             ],
         ),
         (
+            "Drawing Properties",
+            |ctx| {
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open(
+                    DrawingId(1),
+                    "Volume Profile".into(),
+                    DrawingProps::default(),
+                );
+                let mut drawing = crate::drawings::Drawing::new(
+                    1,
+                    crate::drawings::DrawingToolType::FixedRangeVolumeProfile,
+                );
+                drawing.volume_profile =
+                    crate::data::VolumeProfileConfig::default().with_row_ticks(Some(4));
+                dialog.props.tool_settings = Some(Box::new(
+                    crate::drawings::DrawingTemplate::from_drawing(&drawing),
+                ));
+                dialog.active_tab = PropertiesTab::Inputs;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::ComboBox, "Row layout"),
+                (Role::SpinButton, "Ticks per row"),
+                (Role::SpinButton, "Rows"),
+                (Role::SpinButton, "Value area (%)"),
+                (Role::ComboBox, "Volume"),
+            ],
+        ),
+        (
             "Main series · Candles",
             |ctx| {
                 let mut dialog = SeriesSettingsDialog::new();

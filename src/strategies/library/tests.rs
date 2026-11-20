@@ -652,6 +652,14 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             inputs: vec![],
             expected: vec![(2, Sell, 10.), (3, Buy, 12.), (5, Sell, 8.), (7, Buy, 10.)],
         },
+        // Higher closes 10, 8, 10, 12 rate 0, -1, +1, +1. Each slot first becomes
+        // readable at chart bars 4, 9, 14, 19; its order fills on the following bar.
+        Case {
+            name: "Technical Ratings",
+            prices: points(&[vec![10.; 5], vec![8.; 5], vec![10.; 5], vec![12.; 6]].concat()),
+            inputs: vec![("timeframe", InputValue::Timeframe(Some(Timeframe::Min5)))],
+            expected: vec![(10, Sell, 10.), (15, Buy, 12.)],
+        },
         // Each EMA votes by the close against its previous value: summaries 0, -1, 1/3, 2/3,
         // -2/3, -2/3. Only -1, 2/3 and -2/3 are strong; each fills at the next open.
         Case {
@@ -717,6 +725,107 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
         .map(|input| input.id)
         .collect();
     assert_eq!(ids, ["period", "oversold", "overbought"]);
+    let tick = Timeframe::Ticks(std::num::NonZeroU64::new(1).unwrap());
+    let seconds = |count| Timeframe::Custom(std::num::NonZeroU64::new(count).unwrap());
+    for (chart, interval, valid) in [
+        // A 3-minute bar from 00:03 spans 00:05, and weeks do not nest in months.
+        (seconds(180), Timeframe::Min5, false),
+        (Timeframe::Week1, Timeframe::Month1, false),
+        // The last 7-minute bar of a day ends early, at midnight.
+        (seconds(420), Timeframe::Day1, true),
+        (Timeframe::Day1, Timeframe::Week1, true),
+        (Timeframe::Min1, Timeframe::Sec30, false),
+        (Timeframe::Min1, Timeframe::Min5, true),
+        (Timeframe::Min1, Timeframe::Min1, true),
+        (tick, Timeframe::Min1, false),
+        (Timeframe::Min1, tick, false),
+        (tick, tick, true),
+    ] {
+        let mut strategy = configured(
+            "Technical Ratings",
+            &[("timeframe", InputValue::Timeframe(Some(interval)))],
+        );
+        strategy.set_timeframe(chart);
+        assert_eq!(
+            strategy.validate_inputs(),
+            if valid {
+                Ok(())
+            } else {
+                Err(
+                    "indicator timeframe must be the chart interval or a longer time interval made of whole chart bars",
+                )
+            },
+            "{chart} into {interval}",
+        );
+    }
+}
+
+/// ATR(14) is 2 from bar 13: true ranges are all 2, so the distances are 6, 10 and 4.
+/// Mirroring prices around 100 gives the same protection for a short position.
+#[cfg(feature = "studies")]
+#[test]
+fn technical_ratings_exits_at_atr_stops() {
+    let rising = |count: usize| -> Vec<[f64; 4]> {
+        (0..count)
+            .map(|i| {
+                let close = 100. + 0.5 * i as f64;
+                [close - 0.5, close + 1., close - 1., close]
+            })
+            .collect()
+    };
+    let backtest = Backtest::new("Technical Ratings", "TEST", Timeframe::Min1, 10_000.);
+    for (count, last, exit_price, profit) in [
+        // Entry at bar 2's open 100.5; fixed stop 100.5 - 6 = 94.5.
+        (14, [106.5, 106.5, 94., 95.], 94.5, -6.),
+        // Bar 19 reaches activation 110.5 exactly. Best 111 at bar 20 gives stop 107.
+        (21, [110., 110., 100., 101.], 107., 6.5),
+    ] {
+        for short in [false, true] {
+            let mut prices = rising(count);
+            prices.push(last);
+            if short {
+                for bar in &mut prices {
+                    let [open, high, low, close] = *bar;
+                    *bar = [200. - open, 200. - low, 200. - high, 200. - close];
+                }
+            }
+            let bars = bars(&prices);
+            let report = backtest.run(configured("Technical Ratings", &[]).as_mut(), &bars, &[]);
+            let first = &report.trades[0];
+            assert_eq!(
+                first.side,
+                if short {
+                    OrderSide::Sell
+                } else {
+                    OrderSide::Buy
+                }
+            );
+            assert_eq!(first.quantity, 1.);
+            assert_eq!(first.entry_time, time(2));
+            assert_eq!(first.entry_price, if short { 99.5 } else { 100.5 });
+            let exit = first.exit.as_ref().expect("protective exit");
+            assert_eq!(exit.time, time(count));
+            assert_eq!(
+                exit.price,
+                if short { 200. - exit_price } else { exit_price }
+            );
+            assert_eq!(exit.profit, profit);
+            assert_eq!(
+                first.label.as_deref(),
+                Some(if short {
+                    "Short / Short stop"
+                } else {
+                    "Long / Long stop"
+                })
+            );
+            assert!(
+                report
+                    .properties
+                    .contains(&("Input: Indicator timeframe".into(), "Chart interval".into()))
+            );
+            assert_prefixes("Technical Ratings", &[], &bars, &backtest);
+        }
+    }
 }
 
 #[cfg(feature = "studies")]

@@ -98,7 +98,6 @@
 //! | `timezones` | on | IANA zones and daylight-saving rules through chrono-tz; otherwise UTC, system local time and fixed offsets |
 //! | `csv` | on | CSV import/export for bars, strategy reports and chart data; enabled by `ui` |
 //! | `png-export` | on | CPU PNG export and image textures embedded in SVG export; enables `widget`, enabled by `ui` |
-//! | `serde` | off | `Serialize` and `Deserialize` for `theme::Theme` |
 //!
 //! Without default features, enable `csv` to use CSV methods; JSON I/O stays available.
 //! Enable `png-export` for PNG methods and textured SVG output. Without it, SVG
