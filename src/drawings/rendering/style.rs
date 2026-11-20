@@ -758,6 +758,7 @@ pub(super) fn ellipse_point(center: Pos2, radii: egui::Vec2, angle: f64) -> Pos2
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::painting::point_to_segment_distance;
     use egui::epaint::StrokeKind;
 
     fn paint(drawing: &Drawing) -> Vec<Shape> {
@@ -1839,12 +1840,7 @@ mod tests {
                 let point = Pos2::from(expected);
                 let distance = lines
                     .iter()
-                    .map(|&[a, b]| {
-                        let ab = b - a;
-                        point.distance(
-                            a + ab * ((point - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0),
-                        )
-                    })
+                    .map(|&[a, b]| point_to_segment_distance(point, a, b))
                     .fold(f32::INFINITY, f32::min);
                 assert!(distance * ppp <= 0.25, "{tool:?} at {ppp}x: {distance} pt");
                 if matches!(tool, T::Circle | T::Ellipse) {
@@ -1882,12 +1878,10 @@ mod tests {
                     .outline(Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.)))
                     .unwrap();
                 assert!(
-                    outline.lines.iter().any(|&[a, b]| {
-                        let ab = b - a;
-                        point.distance(
-                            a + ab * ((point - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0),
-                        ) <= 0.25
-                    }),
+                    outline
+                        .lines
+                        .iter()
+                        .any(|&[a, b]| point_to_segment_distance(point, a, b) <= 0.25),
                     "{tool:?} hit outline"
                 );
             }

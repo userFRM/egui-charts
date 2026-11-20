@@ -8,6 +8,7 @@
 //! for custom interaction implementations.
 
 use crate::drawings::{Drawing, DrawingOptions, DrawingToolType, HandlePos};
+use crate::painting::{HIT_TOLERANCE, point_to_segment_distance};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
@@ -169,7 +170,7 @@ impl DrawingInteraction {
     /// Uses tool-specific hit testing (line distance, rectangle containment,
     /// Fibonacci level proximity, etc.) with a 5-pixel tolerance.
     pub fn hit_test(&self, point: Pos2, drawings: &[Drawing], timeframe: &str) -> Option<usize> {
-        let hit_distance = 5.0;
+        let hit_distance = HIT_TOLERANCE;
 
         for drawing in super::in_z_order(drawings).into_iter().rev() {
             // Skip hidden drawings
@@ -222,10 +223,9 @@ impl DrawingInteraction {
                                             .max(level.width.unwrap_or(config.level_width) / 2.0)
                                 });
                         let on_trend = config.trend_visible
-                            && drawing
-                                .points
-                                .windows(2)
-                                .any(|p| point_to_line_distance(point, p[0], p[1]) <= hit_distance);
+                            && drawing.points.windows(2).any(|p| {
+                                point_to_segment_distance(point, p[0], p[1]) <= hit_distance
+                            });
                         if on_level || on_trend {
                             return Some(drawing.id);
                         }
@@ -244,7 +244,7 @@ impl DrawingInteraction {
                     });
                     let on_trend = config.trend_visible
                         && drawing.points.windows(2).any(|p| {
-                            point_to_line_distance(point, p[0], p[1])
+                            point_to_segment_distance(point, p[0], p[1])
                                 <= hit_distance.max(drawing.stroke_width / 2.0)
                         });
                     if on_level || on_trend {
@@ -263,7 +263,7 @@ impl DrawingInteraction {
                                 .iter()
                                 .zip(config.visible_levels())
                                 .any(|(&[a, b], level)| {
-                                    point_to_line_distance(point, a, b)
+                                    point_to_segment_distance(point, a, b)
                                         <= hit_distance
                                             .max(level.width.unwrap_or(config.level_width) / 2.0)
                                 })
@@ -283,7 +283,7 @@ impl DrawingInteraction {
                         let on_line = outline
                             .lines
                             .iter()
-                            .any(|&[a, b]| point_to_line_distance(point, a, b) <= tolerance);
+                            .any(|&[a, b]| point_to_segment_distance(point, a, b) <= tolerance);
                         if on_line
                             || outline
                                 .areas
@@ -337,10 +337,15 @@ impl DrawingInteraction {
 /// need no second implementation in the interaction service.
 fn hit_shape(point: Pos2, shape: &egui::Shape) -> bool {
     use egui::Shape;
-    if !shape.visual_bounding_rect().expand(5.0).contains(point) {
+    if !shape
+        .visual_bounding_rect()
+        .expand(HIT_TOLERANCE)
+        .contains(point)
+    {
         return false;
     }
-    let line = |a, b, width: f32| point_to_line_distance(point, a, b) <= 5.0_f32.max(width / 2.0);
+    let line =
+        |a, b, width: f32| point_to_segment_distance(point, a, b) <= HIT_TOLERANCE.max(width / 2.0);
     let path = |points: &[Pos2], closed: bool, fill: bool, width: f32| {
         (fill && polygon_contains(points, point))
             || (width > 0.0
@@ -369,7 +374,7 @@ fn hit_shape(point: Pos2, shape: &egui::Shape) -> bool {
             let distance = point.distance(c.center);
             (c.fill.a() > 0 && distance <= c.radius)
                 || (!c.stroke.is_empty()
-                    && (distance - c.radius).abs() <= 5.0_f32.max(c.stroke.width / 2.0))
+                    && (distance - c.radius).abs() <= HIT_TOLERANCE.max(c.stroke.width / 2.0))
         }
         Shape::Ellipse(e) => {
             let ring: Vec<_> = (0..64)
@@ -458,31 +463,6 @@ fn convex_contains(area: &[Pos2], point: Pos2) -> bool {
     sides >= 3 && (left || right) && !(left && right)
 }
 
-/// Calculates the perpendicular distance from `point` to the closest point on
-/// the line segment `[line_start, line_end]`.
-///
-/// The projection is clamped to the segment endpoints. Returns the Euclidean
-/// distance to `line_start` if the segment is degenerate (zero-length).
-pub fn point_to_line_distance(point: Pos2, line_start: Pos2, line_end: Pos2) -> f32 {
-    let dx = line_end.x - line_start.x;
-    let dy = line_end.y - line_start.y;
-    let len_sq = dx * dx + dy * dy;
-
-    if len_sq < 1e-6 {
-        // Line is a point
-        return ((point.x - line_start.x).powi(2) + (point.y - line_start.y).powi(2)).sqrt();
-    }
-
-    // Project point onto line
-    let t = ((point.x - line_start.x) * dx + (point.y - line_start.y) * dy) / len_sq;
-    let t = t.clamp(0.0, 1.0);
-
-    let proj_x = line_start.x + t * dx;
-    let proj_y = line_start.y + t * dy;
-
-    ((point.x - proj_x).powi(2) + (point.y - proj_y).powi(2)).sqrt()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,25 +504,6 @@ mod tests {
                 assert!(!hits(&upright, past + pos.to_vec2()));
             })
             .drop_without_applying_deltas();
-    }
-
-    #[test]
-    fn test_point_to_line_distance() {
-        // Point on line
-        let dist = point_to_line_distance(
-            Pos2::new(50.0, 50.0),
-            Pos2::new(0.0, 0.0),
-            Pos2::new(100.0, 100.0),
-        );
-        assert!(dist < 0.01);
-
-        // Point perpendicular to line
-        let dist = point_to_line_distance(
-            Pos2::new(50.0, 60.0),
-            Pos2::new(0.0, 50.0),
-            Pos2::new(100.0, 50.0),
-        );
-        assert!((dist - 10.0).abs() < 0.01);
     }
 
     /// Anchors at y 400 then 100: the 23.6% level is at 100 + 300 * 0.236 = 170.8, or at

@@ -1,8 +1,8 @@
 //! Painting drawings against bars and a coordinate mapping.
 //!
 //! [`ChartView`] supplies data and mappings to [`Drawing::render`]; [`traits`]
-//! provides handle drawing and hit-testing helpers for custom
-//! renderers. A chart invokes drawing rendering automatically.
+//! re-exports the [`DrawingRenderer`] trait for custom renderers. A chart invokes drawing
+//! rendering automatically.
 
 mod annotations;
 mod channels;

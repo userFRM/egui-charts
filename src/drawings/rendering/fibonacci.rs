@@ -1404,6 +1404,7 @@ fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f64, counterclockwise: bool
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::painting::point_to_segment_distance;
     use std::f32::consts::FRAC_PI_2;
 
     /// A quarter of A=200 to B=400 is 50 bars, projected from A for zones and C=500
@@ -1912,10 +1913,7 @@ mod tests {
                 let apex = center + egui::vec2(0.0, axes.y * side);
                 if pane.contains(apex) {
                     assert!(pairs.windows(2).any(|w| {
-                        let (a, b) = (w[0][1].pos, w[1][1].pos);
-                        let chord = b - a;
-                        let t = ((apex - a).dot(chord) / chord.length_sq()).clamp(0.0, 1.0);
-                        apex.distance(a + chord * t) <= 0.25
+                        point_to_segment_distance(apex, w[0][1].pos, w[1][1].pos) <= 0.25
                     }));
                 }
                 for pair in pairs {
@@ -3298,11 +3296,12 @@ mod tests {
             );
         }
         let mid = Pos2::new(35.35534, 35.35534);
-        assert!(outline.lines.iter().any(|[a, b]| {
-            let chord = *b - *a;
-            let t = ((mid - *a).dot(chord) / chord.length_sq()).clamp(0.0, 1.0);
-            mid.distance(*a + chord * t) <= 0.25
-        }));
+        assert!(
+            outline
+                .lines
+                .iter()
+                .any(|&[a, b]| point_to_segment_distance(mid, a, b) <= 0.25)
+        );
 
         assert!(
             wedge
