@@ -921,18 +921,21 @@ impl AlertDialog {
                 ui.end_row();
             }
             ui.label(l10n::text(ui.ctx(), "Delivery"));
-            ui.horizontal_wrapped(|ui| {
-                let delivery = &mut self.alert.delivery;
-                for (selected, label) in [
-                    (&mut delivery.popup, "Popup"),
-                    (&mut delivery.sound, "Sound"),
-                    (&mut delivery.email, "Email"),
-                    (&mut delivery.plain_text, "Plain-text email"),
-                    (&mut delivery.push, "Mobile push"),
-                    (&mut delivery.webhook, "Webhook"),
-                ] {
-                    ui.checkbox(selected, l10n::text(ui.ctx(), label));
-                }
+            // Measure every wrapped line as part of the same grid cell.
+            ui.vertical(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let delivery = &mut self.alert.delivery;
+                    for (selected, label) in [
+                        (&mut delivery.popup, "Popup"),
+                        (&mut delivery.sound, "Sound"),
+                        (&mut delivery.email, "Email"),
+                        (&mut delivery.plain_text, "Plain-text email"),
+                        (&mut delivery.push, "Mobile push"),
+                        (&mut delivery.webhook, "Webhook"),
+                    ] {
+                        ui.checkbox(selected, l10n::text(ui.ctx(), label));
+                    }
+                });
             });
             ui.end_row();
             if self.alert.delivery.plain_text {
@@ -1698,6 +1701,7 @@ mod tests {
     /// plain-text email address must be one address, and the saved alert carries it.
     #[test]
     fn save_stops_at_text_limits_and_invalid_plain_text_addresses() {
+        use egui::accesskit::Role;
         use egui_kittest::{
             Harness,
             kittest::{NodeT, Queryable},
@@ -1743,6 +1747,9 @@ mod tests {
             dialog.edit(edited.clone());
             let mut h = Harness::builder()
                 .allow_missing_glyphs()
+                .with_context_setup(|ctx| {
+                    crate::theme::apply_to_egui(ctx, &crate::theme::Theme::light());
+                })
                 .with_size(egui::vec2(1440.0, 900.0))
                 .build_ui_state(
                     |ui, (dialog, saved): &mut (AlertDialog, Option<Alert>)| {
@@ -1753,6 +1760,24 @@ mod tests {
                     (dialog, None),
                 );
             h.run();
+            if edited.delivery.plain_text {
+                let address = h
+                    .get_by_role_and_label(Role::TextInput, "Plain-text address")
+                    .rect();
+                for label in [
+                    "Popup",
+                    "Sound",
+                    "Email",
+                    "Plain-text email",
+                    "Mobile push",
+                    "Webhook",
+                ] {
+                    assert!(
+                        h.get_by_label(label).rect().bottom() <= address.top(),
+                        "{label} overlaps the plain-text address in row {index}"
+                    );
+                }
+            }
             assert_eq!(
                 h.get_by_label("Save alert").accesskit_node().is_disabled(),
                 error.is_some(),
