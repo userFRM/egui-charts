@@ -807,15 +807,15 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
         let mut request = OrderRequest::new(
             "SYM",
             OrderSide::Buy,
-            2.0,
+            4000.0,
             OrderType::StopLimit {
                 stop: 101.0,
                 limit: 100.0,
             },
         );
         request.take_profit_levels = vec![
-            TakeProfitLevel::new(110.0, 1.0),
-            TakeProfitLevel::new(120.0, 1.0),
+            TakeProfitLevel::new(110.0, 2000.0),
+            TakeProfitLevel::new(120.0, 2000.0),
         ];
         request.stop_loss = Some(90.0);
         let order = Order::new(OrderId::new("9"), request, OrderStatus::Working);
@@ -828,10 +828,11 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
         let ctx = egui::Context::default();
         trading.poll(&ctx, &mut Toasts::new());
         trading.load_rules("SYM");
+        // Steps and limits whose grouped text differs from `f64::to_string`.
         let mut rules = TradingRules::new("SYM");
-        rules.quantity_step = 0.5;
-        rules.min_quantity = 0.5;
-        rules.max_quantity = Some(10.0);
+        rules.quantity_step = 1000.0;
+        rules.min_quantity = 1000.0;
+        rules.max_quantity = Some(20000.0);
         for (_, reply) in std::mem::take(&mut *broker.rules.lock().unwrap()) {
             reply.send(Ok(rules.clone()));
         }
@@ -850,29 +851,59 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
                 trading,
             );
         harness.run();
-        for (quantity, total, reason) in [
-            (1.4, 2.5, None),
+        let level = "[Take profit 2 quantity]";
+        // Filled, whether the order has levels, the field, its value, the total and the reason.
+        for (filled, levels, field, value, total, reason) in [
+            (0.0, true, level, 2800.0, 5000.0, None),
             (
-                0.2,
-                1.0,
-                Some("[Each take-profit level needs at least the minimum quantity of 0.5]"),
+                0.0,
+                true,
+                level,
+                400.0,
+                2000.0,
+                Some("[Each take-profit level needs at least the minimum quantity of 1,000]"),
             ),
             (
-                30.0,
-                31.0,
-                Some("[The quantity is above the maximum of 10.0]"),
+                0.0,
+                true,
+                level,
+                60000.0,
+                62000.0,
+                Some("[The quantity is above the maximum of 20,000]"),
+            ),
+            (
+                3000.0,
+                true,
+                level,
+                400.0,
+                2000.0,
+                Some("[The quantity is below the 3,000 already filled]"),
+            ),
+            (
+                0.0,
+                false,
+                "[Quantity]",
+                1500.0,
+                1500.0,
+                Some("[Enter quantities in steps of 1,000]"),
             ),
         ] {
-            harness.state_mut().account_panel.editing =
-                Some((order.clone(), order.request.clone()));
+            let mut edited = order.clone();
+            edited.filled = filled;
+            if !levels {
+                edited.request.take_profit_levels.clear();
+            }
+            harness.state_mut().account_panel.editing = Some((edited.clone(), edited.request));
             harness.run();
             harness
-                .get_by_role_and_label(egui::Role::SpinButton, "[Take profit 2 quantity]")
-                .set_value_accesskit(quantity);
+                .get_by_role_and_label(egui::Role::SpinButton, field)
+                .set_value_accesskit(value);
             harness.run();
             let edited = &harness.state().account_panel.editing.as_ref().unwrap().1;
             assert_eq!(edited.quantity, total);
-            assert_eq!(edited.take_profit_levels[1].quantity, total - 1.0);
+            if levels {
+                assert_eq!(edited.take_profit_levels[1].quantity, total - 2000.0);
+            }
             if let Some(reason) = reason {
                 harness.get_by_label(reason);
             }
@@ -883,8 +914,8 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
             let modified = broker.modified.lock().unwrap();
             assert_eq!(modified.len(), 1);
             let mut expected = order.request.clone();
-            expected.quantity = 2.5;
-            expected.take_profit_levels[1].quantity = 1.5;
+            expected.quantity = 5000.0;
+            expected.take_profit_levels[1].quantity = 3000.0;
             assert_eq!(modified[0], (order.id.clone(), expected));
         }
     }
