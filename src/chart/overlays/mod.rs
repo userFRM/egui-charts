@@ -10,8 +10,8 @@ mod footprint;
 #[cfg(feature = "studies")]
 pub(crate) use footprint::render_footprint_annotations;
 pub use footprint::{
-    FootprintColor, FootprintConfig, FootprintMode, pullback_range, render_footprint,
-    render_footprint_statistics, render_footprint_statistics_rows,
+    FootprintColor, FootprintConfig, FootprintIntensity, FootprintMode, pullback_range,
+    render_footprint, render_footprint_statistics, render_footprint_statistics_rows,
 };
 pub(crate) use footprint::{
     OPEN_INTEREST_ROWS, automatic_row_height, fixed_row_group, footprint_column_width,
