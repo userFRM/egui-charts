@@ -273,6 +273,8 @@ pub struct Chart {
     pub(crate) pending_start_idx: Option<usize>,
     /// Timestamp to centre, retained while older history is loading.
     pub(crate) pending_scroll_time: Option<DateTime<Utc>>,
+    /// Whether local navigation centres the first bar at or after the pending time.
+    pub(crate) pending_scroll_next: bool,
     /// A range set before the first layout and the bar spacing, right offset and tracking mode
     /// its last fit left, fitted again at the plot width until the first laid-out frame is shown.
     pending_visible_range: Option<(time_scale::PendingRange, (f32, f64, bool))>,
@@ -393,6 +395,8 @@ pub struct Chart {
     legend_instrument: Option<crate::model::Instrument>,
     currency_choices: Vec<String>,
     currency_choice: Option<String>,
+    unit_choices: Vec<String>,
+    unit_choice: Option<String>,
     legend_badge: Option<egui::ImageSource<'static>>,
     legend_statuses: Vec<(String, egui::Color32, egui::Color32)>,
     /// Current quote, independent of the historical readout.
@@ -661,6 +665,21 @@ impl Chart {
     /// Takes the selected currency. No prices change until the host supplies converted data.
     pub fn take_currency_choice(&mut self) -> Option<String> {
         self.currency_choice.take()
+    }
+
+    /// Supplies the price units the host can convert the chart into, such as `tonne` for a
+    /// symbol quoted per `barrel`. While
+    /// [`ChartConfig::show_unit`](crate::config::ChartConfig::show_unit) is on, the menu of the
+    /// currency and unit header above the price scale lists them under the currencies. Choosing
+    /// one emits an intent; the host replaces bars and instrument metadata together after
+    /// conversion.
+    pub fn set_unit_choices(&mut self, units: Vec<String>) {
+        self.unit_choices = units;
+    }
+
+    /// Takes the selected unit. No prices change until the host supplies converted data.
+    pub fn take_unit_choice(&mut self) -> Option<String> {
+        self.unit_choice.take()
     }
 
     /// Supplies an image for the legend's symbol mark in place of
@@ -1190,12 +1209,14 @@ pub(crate) mod test_frames {
         Chart::new(BarData::from_bars(bars))
     }
 
-    fn run(
+    /// Runs one frame at `time` seconds with `events` and returns the shapes it painted, each
+    /// with its clip rect, and the cursor it asked for.
+    pub(crate) fn run(
         ctx: &Context,
         chart: &mut Chart,
         time: f64,
         events: Vec<Event>,
-    ) -> (Vec<Shape>, CursorIcon) {
+    ) -> (Vec<(Rect, Shape)>, CursorIcon) {
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
             time: Some(time),
@@ -1207,15 +1228,17 @@ pub(crate) mod test_frames {
                 chart.show(ui);
             });
         });
-        fn flatten(shape: Shape, out: &mut Vec<Shape>) {
+        fn flatten(clip: Rect, shape: Shape, out: &mut Vec<(Rect, Shape)>) {
             match shape {
-                Shape::Vec(shapes) => shapes.into_iter().for_each(|shape| flatten(shape, out)),
-                shape => out.push(shape),
+                Shape::Vec(shapes) => shapes
+                    .into_iter()
+                    .for_each(|shape| flatten(clip, shape, out)),
+                shape => out.push((clip, shape)),
             }
         }
         let mut shapes = Vec::new();
         for clipped in std::mem::take(&mut output.shapes) {
-            flatten(clipped.shape, &mut shapes);
+            flatten(clipped.clip_rect, clipped.shape, &mut shapes);
         }
         let cursor = output.platform_output.cursor_icon;
         output.drop_without_applying_deltas();
@@ -1229,7 +1252,30 @@ pub(crate) mod test_frames {
         time: f64,
         events: Vec<Event>,
     ) -> Vec<Shape> {
-        run(ctx, chart, time, events).0
+        run(ctx, chart, time, events)
+            .0
+            .into_iter()
+            .map(|(_, shape)| shape)
+            .collect()
+    }
+
+    /// The fill and stroke colours of `shapes`, mesh vertices included.
+    #[cfg(feature = "ui")]
+    pub(crate) fn painted_colors(shapes: &[Shape]) -> Vec<egui::Color32> {
+        shapes
+            .iter()
+            .flat_map(|shape| match shape {
+                Shape::Vec(shapes) => painted_colors(shapes),
+                Shape::Rect(rect) => vec![rect.fill, rect.stroke.color],
+                Shape::LineSegment { stroke, .. } => vec![stroke.color],
+                Shape::Path(path) => match path.stroke.color {
+                    egui::epaint::ColorMode::Solid(color) => vec![path.fill, color],
+                    _ => vec![path.fill],
+                },
+                Shape::Mesh(mesh) => mesh.vertices.iter().map(|vertex| vertex.color).collect(),
+                _ => Vec::new(),
+            })
+            .collect()
     }
 
     /// The heights of the candles in `color` among `shapes`.
