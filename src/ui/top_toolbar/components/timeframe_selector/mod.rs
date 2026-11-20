@@ -230,7 +230,7 @@ pub struct TimeframeSelector {
     is_open: bool,
     /// Favorite timeframes
     pub favorites: HashSet<Timeframe>,
-    /// Custom timeframes
+    /// Custom timeframes in menu order. An entry equal to a preset is listed once, as the preset.
     pub custom_timeframes: Vec<Timeframe>,
     /// Configuration
     pub config: TimeframeSelectorConfig,
@@ -340,7 +340,11 @@ impl TimeframeSelector {
             .filter(|tf| self.supports(*tf));
         let favorites: Vec<_> = PRESETS
             .iter()
-            .chain(&self.custom_timeframes)
+            .chain(
+                self.custom_timeframes
+                    .iter()
+                    .filter(|tf| !PRESETS.contains(tf)),
+            )
             .copied()
             .filter(|tf| {
                 self.favorites.contains(tf)
@@ -547,7 +551,11 @@ impl TimeframeSelector {
                     .custom_timeframes
                     .iter()
                     .copied()
-                    .filter(|tf| self.supports(*tf) && !self.hidden_timeframes.contains(tf))
+                    .filter(|tf| {
+                        !PRESETS.contains(tf)
+                            && self.supports(*tf)
+                            && !self.hidden_timeframes.contains(tf)
+                    })
                     .collect();
                 if !custom.is_empty() && section_header(ui, theme, "Custom", !first) {
                     for tf in &custom {
@@ -1272,6 +1280,54 @@ mod tests {
             selector.set_supported_timeframes(symbol_list);
             assert_eq!(selector.supports(Model::Min1), min1);
             assert_eq!(selector.supports(Model::Day1), day1);
+        }
+    }
+
+    /// An interval has one menu row and at most one toolbar button, also when a host writes a
+    /// preset into the custom list itself.
+    #[test]
+    fn an_interval_is_listed_once_however_it_was_stored() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let custom = interval(7, TimeframeUnit::Minute);
+        let mut selector = TimeframeSelector::new(Model::Min1);
+        selector.custom_timeframes = vec![Model::Min5, custom];
+        selector.favorites = HashSet::from([Model::Min5]);
+        selector.set_supported_timeframes(Some(vec![Model::Min1, Model::Min5, custom]));
+        let mut harness = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .with_size(vec2(800.0, 1400.0))
+            .build_ui_state(
+                |ui, selector: &mut TimeframeSelector| {
+                    ui.horizontal(|ui| selector.show(ui));
+                },
+                selector,
+            );
+        harness.run();
+        harness.get_by_label("Chart interval").click();
+        harness.run();
+        let mut top = f32::NEG_INFINITY;
+        // Labels in menu order, with their toolbar buttons and menu rows.
+        for (label, buttons, rows) in [("5 minutes", 1, 1), ("7 minutes", 0, 1)] {
+            assert_eq!(
+                harness
+                    .query_all_by_role_and_label(Role::Button, label)
+                    .count(),
+                buttons,
+                "{label} buttons"
+            );
+            assert_eq!(
+                harness
+                    .query_all_by_role_and_label(Role::MenuItemRadio, label)
+                    .count(),
+                rows,
+                "{label} rows"
+            );
+            let row = harness
+                .get_by_role_and_label(Role::MenuItemRadio, label)
+                .rect()
+                .top();
+            assert!(row > top, "{label} out of order");
+            top = row;
         }
     }
 
