@@ -22,6 +22,9 @@ use crate::theme::ThemeExt;
 /// Height of a price row.
 const ROW: f32 = 20.0;
 
+/// Width of the cancel cross at the right end of a working order's tag.
+const CROSS: f32 = 12.0;
+
 /// What the price column's profile draws from the traded volume at each price.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 enum Profile {
@@ -615,7 +618,7 @@ impl Ladder {
         } else {
             "STP LMT".to_owned()
         };
-        let margin = measure(&widest_tag, 10.0) + 8.0;
+        let margin = measure(&widest_tag, 10.0) + 8.0 + CROSS;
         let margin = if read_only {
             0.0
         } else {
@@ -1096,25 +1099,32 @@ impl Ladder {
                         }
                     }
 
-                    // The working orders in the margin of their side: drag one to move it, right-click it to
-                    // cancel it.
+                    // The working orders in the margin of their side: drag one to move it, click its cross
+                    // or right-click it to cancel it. Each tag shows an order at one of its prices: a
+                    // stop-limit order's limit gets a tag of its own unless it falls in the stop's row.
                     let pointer = ui.input(|input| input.pointer.interact_pos());
-                    let mut groups = BTreeMap::<_, Vec<_>>::new();
+                    let mut groups = BTreeMap::<_, Vec<(&Order, f64, bool)>>::new();
                     for working in &orders {
-                        if let Some(at) = entry_price(&working.request.order_type) {
-                            groups
-                                .entry((row_key(at), working.request.side == OrderSide::Buy))
-                                .or_default()
-                                .push(*working);
+                        let Some(at) = entry_price(&working.request.order_type) else {
+                            continue;
+                        };
+                        let buy = working.request.side == OrderSide::Buy;
+                        groups.entry((row_key(at), buy)).or_default().push((*working, at, false));
+                        if let OrderType::StopLimit { limit, .. } = working.request.order_type
+                            && limit.is_finite()
+                            && row_key(limit) != row_key(at)
+                        {
+                            groups.entry((row_key(limit), buy)).or_default().push((*working, limit, true));
                         }
                     }
+                    let tag_of = |order: &Order, limit: bool| {
+                        if limit { "LMT" } else { tag(&order.request.order_type) }
+                    };
                     for group in groups.values() {
-                        let working = group
+                        let &(working, at, limit_leg) = group
                             .iter()
-                            .find(|order| self.selected.as_ref() == Some(&order.id))
-                            .copied()
-                            .unwrap_or(group[0]);
-                        let at = entry_price(&working.request.order_type).expect("a priced order");
+                            .find(|(order, ..)| self.selected.as_ref() == Some(&order.id))
+                            .unwrap_or(&group[0]);
                         let side = working.request.side;
                         let margin = if side == OrderSide::Buy {
                             buy_margin
@@ -1122,6 +1132,8 @@ impl Ladder {
                             sell_margin
                         };
                         let id = ui.make_persistent_id(("dom_order", &working.id.0));
+                        // The two tags of a stop-limit order drag apart.
+                        let id = if limit_leg { id.with("limit") } else { id };
                         let dragging = ui.ctx().is_being_dragged(id);
                         let row = match pointer.filter(|_| dragging) {
                             Some(pos) => Some(pointer_row(pos)),
@@ -1132,11 +1144,32 @@ impl Ladder {
                         };
                         let cell = row_rect(row, margin).shrink(2.0);
                         let tag_response = ui.interact(cell, id, Sense::click_and_drag());
+                        // On top of the tag, the cross takes its clicks while a drag from it still
+                        // moves the order.
+                        let cross_rect = Rect::from_min_max(pos2(cell.right() - CROSS, cell.top()), cell.max);
+                        let cancel = l10n::text(ui.ctx(), "Cancel order");
+                        let cross = ui
+                            .interact(cross_rect, id.with("cancel"), Sense::click())
+                            .on_hover_text(&cancel);
+                        cross.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &cancel));
+                        if cross.clicked() || cross.secondary_clicked() {
+                            action = Some(Action::Confirm(Box::new(TradingLineAction::Cancel(
+                                working.clone(),
+                            ))));
+                        }
                         let color = side_color(&theme, side);
+                        let color = if limit_leg { color.gamma_multiply(0.5) } else { color };
                         let painter = ui.painter();
                         painter.rect_filled(cell, 2.0, color.gamma_multiply(0.25));
+                        if cross.hovered() {
+                            painter.rect_filled(cross_rect, 2.0, color.gamma_multiply(0.25));
+                        }
                         painter.rect_stroke(cell, 2.0, Stroke::new(1.0, color), egui::StrokeKind::Inside);
-                        let label = tag(&working.request.order_type);
+                        let centre = cross_rect.center();
+                        let stroke = Stroke::new(1.5, color);
+                        painter.line_segment([centre + vec2(-3.0, -3.0), centre + vec2(3.0, 3.0)], stroke);
+                        painter.line_segment([centre + vec2(-3.0, 3.0), centre + vec2(3.0, -3.0)], stroke);
+                        let label = tag_of(working, limit_leg);
                         let shown = if group.len() > 1 {
                             format!("{label} +{}", group.len() - 1)
                         } else {
@@ -1144,7 +1177,7 @@ impl Ladder {
                         };
                         text(
                             ui,
-                            cell.center(),
+                            cell.with_max_x(cross_rect.left()).center(),
                             Align2::CENTER_CENTER,
                             &shown,
                             10.0,
@@ -1154,15 +1187,12 @@ impl Ladder {
                         egui::Popup::menu(&tag_response).id(menu_id).show(|ui| {
                             if group.len() > 1 {
                                 ui.label(l10n::text(ui.ctx(), "Choose an order to drag, edit or cancel"));
-                                for order in group {
+                                for &(order, at, limit) in group {
                                     let label = format!(
                                         "{} {} @ {} · {}",
                                         format_size(order.request.quantity - order.filled),
-                                        l10n::text(ui.ctx(), tag(&order.request.order_type)),
-                                        numbers.price(
-                                            entry_price(&order.request.order_type)
-                                                .expect("a priced order"),
-                                        ),
+                                        l10n::text(ui.ctx(), tag_of(order, limit)),
+                                        numbers.price(at),
                                         order.id.0,
                                     );
                                     if ui
@@ -1217,18 +1247,30 @@ impl Ladder {
                                 changed.order_type = match changed.order_type {
                                     OrderType::Limit(_) => OrderType::Limit(moved),
                                     OrderType::Stop(_) => OrderType::Stop(moved),
+                                    OrderType::StopLimit { stop, .. } if limit_leg => {
+                                        OrderType::StopLimit { stop, limit: moved }
+                                    }
+                                    // A limit in the stop's row shares its tag and moves with it.
                                     OrderType::StopLimit { limit, .. } => OrderType::StopLimit {
                                         stop: moved,
-                                        limit: shift(limit),
+                                        limit: if row_key(limit) == row_key(at) {
+                                            shift(limit)
+                                        } else {
+                                            limit
+                                        },
                                     },
                                     other => other,
                                 };
-                                changed.take_profit = changed.take_profit.map(shift);
-                                for level in &mut changed.take_profit_levels {
-                                    level.price = shift(level.price);
-                                    level.stop_loss = level.stop_loss.map(shift);
+                                // The exits follow the stop, as on the chart, and stay when only the
+                                // limit moves.
+                                if !limit_leg {
+                                    changed.take_profit = changed.take_profit.map(shift);
+                                    for level in &mut changed.take_profit_levels {
+                                        level.price = shift(level.price);
+                                        level.stop_loss = level.stop_loss.map(shift);
+                                    }
+                                    changed.stop_loss = changed.stop_loss.map(shift);
                                 }
-                                changed.stop_loss = changed.stop_loss.map(shift);
                                 let valid = |price: f64| price.is_finite() && price > 0.0;
                                 if changed.take_profit.is_none_or(valid)
                                     && changed.take_profit_levels.iter().all(|l| valid(l.price) && l.stop_loss.is_none_or(valid))
@@ -3114,6 +3156,226 @@ mod tests {
             .collect();
         assert_eq!(tiers, [large]);
     }
+
+    /// A stop-limit order's limit has a dimmer tag of its own unless it falls in the stop's row,
+    /// each tag's drag asks to move only its own price, and the cross on either tag cancels the
+    /// order while a drag from it still moves the order.
+    #[test]
+    fn stop_limit_tags_move_their_own_price_and_crosses_cancel() {
+        use crate::model::{Capabilities, OrderBook, OrderBookLevel, OrderStatus, TradingRules};
+
+        let rules = TradingRules::new("ES");
+        let mut request = OrderRequest::new(
+            "ES",
+            OrderSide::Buy,
+            1.0,
+            OrderType::StopLimit {
+                stop: 100.75,
+                limit: 101.0,
+            },
+        );
+        request.take_profit = Some(102.0);
+        request.stop_loss = Some(100.0);
+        let working = [Order::new(OrderId::new("S"), request, OrderStatus::Working)];
+        let level = |price, size| OrderBookLevel {
+            price,
+            size,
+            order_cnt: Some(1),
+        };
+        let book = OrderBook {
+            ts: Utc::now(),
+            symbol: "ES".into(),
+            bids: vec![level(100.0, 5.0)],
+            asks: vec![level(100.25, 4.0)],
+        };
+        let market = Market {
+            symbol: "ES",
+            formatter: None,
+            pip_value: None,
+            last: Some(100.0),
+            bid: Some(100.0),
+            ask: Some(100.25),
+            tick: 0.25,
+            decimals: 2,
+            currency: "USD",
+            balance: None,
+            capabilities: Capabilities {
+                market: true,
+                limit: true,
+                stop: true,
+                stop_limit: true,
+                modify: true,
+                ..Default::default()
+            },
+            rules: &rules,
+            rules_ready: true,
+            offline: None,
+            ladder: Some(std::borrow::Cow::Borrowed(&book)),
+            ladder_unavailable: None,
+            highlights: Vec::new(),
+            orders: &working,
+            positions: &[],
+            trades: &[],
+            session_open: None,
+            last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
+            logo: None,
+        };
+        // The action, the text labels and the outlines with their stroke colours.
+        let frame = |ctx: &egui::Context, ladder: &mut Ladder, events| {
+            let mut action = None;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 700.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| action = ladder.show(ui, "ES", &market, &mut 1.0, &mut TimeInForce::Day),
+            );
+            let (mut labels, mut outlines) = (Vec::new(), Vec::new());
+            for shape in &output.shapes {
+                match &shape.shape {
+                    egui::Shape::Text(text) => labels.push((
+                        text.galley.text().to_owned(),
+                        text.galley.rect.translate(text.pos.to_vec2()),
+                    )),
+                    egui::Shape::Rect(rect) if !rect.stroke.is_empty() => {
+                        outlines.push((rect.rect, rect.stroke.color));
+                    }
+                    _ => {}
+                }
+            }
+            output.drop_without_applying_deltas();
+            (action, labels, outlines)
+        };
+        let find = |labels: &[(String, Rect)], text: &str| {
+            labels
+                .iter()
+                .find(|(label, _)| label == text)
+                .expect(text)
+                .1
+        };
+        // A buy tag showing `text` in the row labelled `price`, left of the price.
+        let in_row = |labels: &[(String, Rect)], price: &str, text: &str| {
+            let row = find(labels, price);
+            labels.iter().any(|(label, rect)| {
+                label == text
+                    && (rect.center().y - row.center().y).abs() < 0.5
+                    && rect.right() < row.left()
+            })
+        };
+        // The innermost outline around the text of the tag showing `text`.
+        let outline = |labels: &[(String, Rect)], outlines: &[(Rect, Color32)], text: &str| {
+            let centre = find(labels, text).center();
+            outlines
+                .iter()
+                .filter(|(rect, _)| rect.contains(centre))
+                .min_by(|a, b| a.0.area().total_cmp(&b.0.area()))
+                .copied()
+                .expect(text)
+        };
+        let modify = |stop, limit, take_profit, stop_loss| {
+            let mut changed = working[0].request.clone();
+            changed.order_type = OrderType::StopLimit { stop, limit };
+            changed.take_profit = Some(take_profit);
+            changed.stop_loss = Some(stop_loss);
+            let modify = TradingLineAction::Modify(working[0].clone(), changed);
+            Action::Confirm(Box::new(modify))
+        };
+        let cancel = || Action::Confirm(Box::new(TradingLineAction::Cancel(working[0].clone())));
+        let (primary, secondary) = (egui::PointerButton::Primary, egui::PointerButton::Secondary);
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let themed = || {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                ctx
+            };
+            let mut ladder = Ladder::default();
+            let (_, labels, outlines) = frame(&themed(), &mut ladder, vec![]);
+            assert!(in_row(&labels, "100.75", "STP LMT"), "{labels:?}");
+            assert!(in_row(&labels, "101.00", "LMT"), "{labels:?}");
+            let alpha = |text| outline(&labels, &outlines, text).1.a();
+            assert!(alpha("LMT") < alpha("STP LMT"));
+            // At eight ticks a row, 100.00 to 101.75 holds both prices under one tag.
+            let mut ladder = Ladder {
+                ticks_per_row: 8,
+                ..Default::default()
+            };
+            let (_, labels, _) = frame(&themed(), &mut ladder, vec![]);
+            assert!(in_row(&labels, "100.00", "STP LMT"), "{labels:?}");
+            assert!(labels.iter().all(|(label, _)| label != "LMT"), "{labels:?}");
+
+            // A stop dragged one row down takes its exits along, a limit dragged two rows up
+            // moves alone, and a shared tag moves both prices by one 2.00 row. Gestures without
+            // an end row are clicks.
+            for (ticks_per_row, start, on_cross, button, end, expected) in [
+                (
+                    1,
+                    "STP LMT",
+                    false,
+                    primary,
+                    Some("100.50"),
+                    modify(100.5, 101.0, 101.75, 99.75),
+                ),
+                (
+                    1,
+                    "LMT",
+                    false,
+                    primary,
+                    Some("101.50"),
+                    modify(100.75, 101.5, 102.0, 100.0),
+                ),
+                (
+                    8,
+                    "STP LMT",
+                    false,
+                    primary,
+                    Some("98.00"),
+                    modify(98.75, 99.0, 100.0, 98.0),
+                ),
+                (1, "STP LMT", true, primary, None, cancel()),
+                (1, "LMT", true, secondary, None, cancel()),
+                (
+                    1,
+                    "STP LMT",
+                    true,
+                    primary,
+                    Some("100.50"),
+                    modify(100.5, 101.0, 101.75, 99.75),
+                ),
+            ] {
+                let ctx = themed();
+                let mut ladder = Ladder {
+                    ticks_per_row,
+                    ..Default::default()
+                };
+                let (_, labels, outlines) = frame(&ctx, &mut ladder, vec![]);
+                let (cell, _) = outline(&labels, &outlines, start);
+                let from = if on_cross {
+                    pos2(cell.right() - CROSS / 2.0, cell.center().y)
+                } else {
+                    find(&labels, start).center()
+                };
+                let to = end.map_or(from, |row| pos2(from.x, find(&labels, row).center().y));
+                let press = |pos, pressed| egui::Event::PointerButton {
+                    pos,
+                    button,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                frame(&ctx, &mut ladder, vec![egui::Event::PointerMoved(from)]);
+                frame(&ctx, &mut ladder, vec![press(from, true)]);
+                frame(&ctx, &mut ladder, vec![egui::Event::PointerMoved(to)]);
+                let (action, _, _) = frame(&ctx, &mut ladder, vec![press(to, false)]);
+                assert_eq!(
+                    action,
+                    Some(expected),
+                    "{start} at {ticks_per_row} tick(s) a row, from the cross: {on_cross}"
+                );
+            }
+        }
+    }
+
     /// Center keeps the lock and neither steals another area's shortcut nor typed text.
     #[test]
     fn ticket_ladder_centres_on_the_market_and_keeps_its_lock() {
