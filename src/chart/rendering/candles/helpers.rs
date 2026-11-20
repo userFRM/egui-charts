@@ -111,10 +111,10 @@ pub fn draw_brick(
     }
 }
 
-/// The border of a brick in `color` without a border colour of its own: that colour at 70%
-/// opacity.
+/// The border of a brick or line in `color` without a border colour of its own: that colour at
+/// full opacity, so a palette colour picked over it in the Symbol tab is opaque too.
 pub fn brick_border(color: Color32) -> Color32 {
-    color.gamma_multiply(0.7)
+    color.to_opaque()
 }
 
 /// Draw an X symbol (for Point & Figure up columns)

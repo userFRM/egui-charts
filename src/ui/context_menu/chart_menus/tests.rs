@@ -3,6 +3,79 @@ use crate::theme::Theme;
 use egui::{Color32, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
 #[test]
+fn stop_limit_orders_keep_their_requests_and_host_text_through_menu_rows() {
+    use crate::model::{OrderRequest, OrderSide, OrderType};
+
+    struct Lots;
+    impl TradingFormatter for Lots {
+        fn quantity(&self, symbol: &str, quantity: f64) -> Option<String> {
+            (symbol == "AAPL").then(|| format!("{} lots", quantity / 100.0))
+        }
+    }
+
+    let ctx = Context::default();
+    let chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+    for (click, side, stop, limit, label) in [
+        (101.1, OrderSide::Buy, 101.0, 101.25, "Buy"),
+        (98.9, OrderSide::Sell, 99.0, 98.75, "Sell"),
+    ] {
+        for kind in ["chart", "custom", "pointer"] {
+            let mut menus = ChartMenus::default();
+            menus.set_order_entries(
+                1000.0,
+                Capabilities {
+                    limit: false,
+                    stop: false,
+                    stop_limit: true,
+                    ..Default::default()
+                },
+            );
+            menus.set_order_formatter(Some(Arc::new(Lots)));
+            menus.chart.symbol = "AAPL".into();
+            menus.chart.market_price = Some(100.0);
+            menus.chart.tick_size = Some(0.25);
+            menus.chart.open(Pos2::ZERO, click);
+            if kind == "custom" {
+                menus.set_menu_rows(|_, rows| {
+                    assert!(
+                        rows.iter()
+                            .any(|row| row.id() == Some(MenuRowId::StopLimitOrder))
+                    );
+                    vec![MenuRow::BuiltIn(MenuRowId::StopLimitOrder)]
+                });
+            } else if kind == "pointer" {
+                menus.price_menu = true;
+                menus.set_menu_rows(|_, _| panic!("pointer price menus keep their fixed rows"));
+            }
+            let target = RightClickTarget::Background {
+                pos: Pos2::ZERO,
+                price: click,
+            };
+            let orders: Vec<_> = menus
+                .build_menu_items(&ctx, &chart, HostMenuContext::new(target, None, click))
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    MenuEntry::Item(MenuItem {
+                        label,
+                        action: ChartContextAction::Chart(ContextMenuAction::Order(order)),
+                        ..
+                    }) => Some((label, order)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                orders,
+                [(
+                    format!("{label} 10 lots AAPL @ {stop:.2} stop limit {limit:.2}"),
+                    OrderRequest::new("AAPL", side, 1000.0, OrderType::StopLimit { stop, limit }),
+                )],
+                "{kind} at {click}"
+            );
+        }
+    }
+}
+
+#[test]
 fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
     let mut menu = ChartContextMenu::new();
     let submenu = |menu: &ChartContextMenu| {

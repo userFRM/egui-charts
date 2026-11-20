@@ -60,6 +60,8 @@ pub enum MenuRowId {
     LimitOrder,
     /// The stop order row of the chart menu.
     StopOrder,
+    /// The stop-limit order row of the chart menu.
+    StopLimitOrder,
     /// "Object tree" in the chart and study menus.
     ObjectTree,
     /// "Remove indicators" in the chart menu.

@@ -98,6 +98,7 @@ impl IndicatorInfo {
             "Auto Trend Line" => &["Auto Trendlines"],
             "Average Daily Range" => &["ADR"],
             "BBW" => &["Bollinger BandWidth"],
+            "Booker Reversal" => &["Rob Booker Reversal", "Rob Booker - Reversal"],
             "C2C Vol" => &["Volatility Close-to-Close"],
             "Connors RSI" => &["CRSI"],
             "Donchian" => &["DC"],
@@ -137,12 +138,17 @@ impl IndicatorInfo {
             "Vol Profile Auto Anchored" => &["Auto Anchored Volume Profile"],
             "Vol Profile FR" => &["Fixed Range Volume Profile"],
             "Vol Profile Periodic" => &["Periodic Volume Profile"],
-            "Vol Profile Session" => &["Session Volume Profile", "Session Volume Profile HD"],
+            "Vol Profile Session" => &["Session Volume Profile"],
+            "Vol Profile Session HD" => &["Session Volume Profile HD"],
             "Vol Profile VR" => &[
                 "Visible Range Volume Profile",
                 "Volume Profile Visible Range",
             ],
             "Zero-Trend Vol" => &["Volatility Zero Trend Close-to-Close"],
+            "Ziv Ghost Pivots" => &[
+                "Rob Booker Ziv Ghost Pivots",
+                "Rob Booker - Ziv Ghost Pivots",
+            ],
             _ => &[],
         }
     }
