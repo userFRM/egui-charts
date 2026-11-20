@@ -212,19 +212,22 @@ pub(crate) fn paint_candles(
         if !style.visible {
             continue;
         }
+        let color = study
+            .plot_color(candle.plot, candle.bars.start)
+            .unwrap_or(style.color);
         if let Some((body, wick)) =
             candle_geometry(candle, coords, bar_spacing, |p| price.price_to_y(p))
         {
             if solid {
-                painter.rect_filled(body, 0.0, style.color);
+                painter.rect_filled(body, 0.0, color);
                 continue;
             }
-            let stroke = egui::Stroke::new(style.width, style.color);
+            let stroke = egui::Stroke::new(style.width, color);
             painter.line_segment(wick, stroke);
             painter.rect(
                 body,
                 0.0,
-                style.color.gamma_multiply_u8(77),
+                color.gamma_multiply_u8(77),
                 stroke,
                 egui::StrokeKind::Inside,
             );
