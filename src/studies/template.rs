@@ -756,6 +756,28 @@ impl StudyTemplate {
                     }
                 }
             }
+            // Performance saved before it took inputs showed the chart symbol alone over the six
+            // standard periods, fitted at the lower right, falling changes in the palette red.
+            "Performance" if !has("periods") => {
+                for (id, value) in [
+                    ("symbols", InputValue::Text(String::new())),
+                    (
+                        "periods",
+                        InputValue::Text("1W, 1M, 3M, 6M, YTD, 1Y".into()),
+                    ),
+                    (
+                        "negative_color",
+                        InputValue::Color(crate::studies::palette::DOWN),
+                    ),
+                    ("table_position", InputValue::Choice(8)),
+                    ("table_width", InputValue::Number(0.0)),
+                    ("table_height", InputValue::Number(0.0)),
+                ] {
+                    if !has(id) {
+                        template.inputs.push((id.to_owned(), value));
+                    }
+                }
+            }
             // Chart patterns saved before developing boundaries had their own plot drew them
             // in its default style.
             "Continuation Chart Patterns" | "Reversal Chart Patterns"

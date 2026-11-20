@@ -28,7 +28,7 @@ symbol's daily bars in [`data_requests`](https://userfrm.github.io/egui-charts/d
 longer periods fill without scrolling back. Where the chart's own bars hold a later close on or
 before the target, as when the daily bars stop earlier, that close counts. Daily and longer
 charts, and hosts that supply no daily bars, use the chart's loaded bars. A connected feed pages
-the daily bars back to the start of the oldest period's date, one year before the last chart
+the daily bars back to the start of the oldest period's date, five years before the last chart
 bar's trading date with the default periods, and stops there or at the end of its history,
 whatever its page size and the chart's first bar. This also applies on price-based charts such as Renko: a study's stated
 start before the first chart bar is honored, while a later start loads to the first chart bar

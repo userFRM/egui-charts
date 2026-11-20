@@ -7,14 +7,16 @@
 //! follow the instrument's trading calendar, as VWAP does. On an interval shorter than a day the
 //! study requests the symbol's daily bars and takes the later of the daily close and the chart's
 //! own close on or before each date, the daily close on the same date. A connected feed loads
-//! those daily bars back to the oldest period's date, one year before the latest with the
+//! those daily bars back to the oldest period's date, five years before the latest with the
 //! default periods. Missing history and a zero reference close have no value.
 //!
 //! The table has a row for the chart symbol and one for each other symbol of the Symbol list,
 //! whose daily bars the study requests on every interval and measures from that symbol's own
 //! latest close, and a column for each period of the Timeframe list. With Include chart symbol
 //! off, a listed chart symbol has a row of its own. The six plots keep the chart symbol's
-//! standard periods.
+//! standard periods. A new study compares `AAPL, NASDAQ:AMZN, EURUSD, ES1!, BTCUSD` over
+//! `1W, 1M, 3M, 6M, 12M, YTD, 5Y` in a table at the middle centre, 100% of the pane wide and 95%
+//! high, with falling changes in `#F23745`.
 //!
 //! A row is labelled with the description of its symbol's instrument when the host gives one,
 //! and with the ticker otherwise. Each change is written in its sign's colour, the Positive
@@ -34,7 +36,7 @@ use crate::studies::{
 use chrono::{DateTime, Datelike, Days, Months, NaiveDate, NaiveTime, Utc};
 use egui::Color32;
 
-/// The standard periods: the plots, in this order, and the default Timeframe list.
+/// The standard periods: the plots, in this order.
 const PERIODS: [(&str, Period); 6] = [
     ("1W", Period::Days(7)),
     ("1M", Period::Months(1)),
@@ -111,7 +113,7 @@ pub struct Performance {
     chart_symbol: String,
     /// The chart instrument's description, which labels its row when given.
     chart_description: Option<String>,
-    /// Each compared symbol, in list order.
+    /// The compared symbols daily bars were last supplied or found missing for, in list order.
     compared: Vec<Compared>,
 }
 
@@ -152,15 +154,15 @@ impl Performance {
             },
             colors: [palette::BLUE; 6],
             visible: true,
-            symbols: String::new(),
+            symbols: "AAPL, NASDAQ:AMZN, EURUSD, ES1!, BTCUSD".into(),
             include_chart_symbol: true,
-            periods: "1W, 1M, 3M, 6M, YTD, 1Y".into(),
+            periods: "1W, 1M, 3M, 6M, 12M, YTD, 5Y".into(),
             positive_color: palette::UP,
-            negative_color: palette::DOWN,
+            negative_color: Color32::from_rgb(242, 55, 69),
             color_cutoff: 10.0,
-            table_position: TablePosition::BottomRight,
-            table_width: 0.0,
-            table_height: 0.0,
+            table_position: TablePosition::MiddleCenter,
+            table_width: 100.0,
+            table_height: 95.0,
             chart_symbol: String::new(),
             chart_description: None,
             compared: Vec::new(),
@@ -227,14 +229,18 @@ impl Performance {
             let histories = [&self.history[..], &self.daily[..]];
             rows.push((label, changes(self.history.last(), histories)));
         }
-        for compared in &self.compared {
+        for symbol in self.compared_symbols() {
             // The chart symbol's row stands for a listed copy of it.
-            if self.include_chart_symbol && compared.symbol == self.chart_symbol {
+            if self.include_chart_symbol && symbol == self.chart_symbol {
                 continue;
             }
-            let label = compared.description.as_ref().unwrap_or(&compared.symbol);
-            let closes = &compared.closes[..];
-            rows.push((label.clone(), changes(closes.last(), [closes, &[]])));
+            // A listed symbol has its row before any daily bars are supplied for it.
+            let supplied = self.compared.iter().find(|other| other.symbol == symbol);
+            let label = supplied
+                .and_then(|supplied| supplied.description.as_deref())
+                .unwrap_or(symbol);
+            let closes = supplied.map_or(&[][..], |supplied| &supplied.closes[..]);
+            rows.push((label.to_owned(), changes(closes.last(), [closes, &[]])));
         }
         let table = &mut self.table;
         table.rows.clear();
@@ -571,8 +577,8 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     /// Calendar lookbacks use the last close on or before the target date, not bar counts, and
-    /// a study saved before Performance had inputs shows the chart symbol over the six periods at
-    /// the default place and size.
+    /// a study saved before Performance had inputs shows the chart symbol alone over the six
+    /// periods, fitted at the lower right, with falling changes in the red it had.
     #[test]
     fn performance_uses_calendar_dates_and_missing_history() {
         let bars: Vec<_> = [
@@ -637,6 +643,14 @@ mod tests {
         assert_eq!(
             (table.position, table.width, table.height),
             (TablePosition::BottomRight, None, None)
+        );
+        assert_eq!(
+            study
+                .inputs()
+                .iter()
+                .find(|input| input.id == "negative_color")
+                .map(|input| &input.value),
+            Some(&InputValue::Color(palette::DOWN))
         );
         #[cfg(feature = "widget")]
         {
@@ -723,6 +737,9 @@ mod tests {
             (week_before, &reversed[..], without_daily),
         ] {
             let mut study = Performance::new();
+            study
+                .set_input("symbols", InputValue::Text(String::new()))
+                .unwrap();
             study.set_timeframe(Timeframe::Min1);
             assert_eq!(study.data_requests(), vec![request.clone()]);
             let source = StudyData {
@@ -834,9 +851,11 @@ mod tests {
         let mut study = Performance::new();
         study.set_chart_symbol("AAPL");
         study.set_timeframe(Timeframe::Min1);
+        let six = || InputValue::Text("1W, 1M, 3M, 6M, YTD, 1Y".into());
         study
             .set_input("symbols", InputValue::Text("GOOG, MSFT, GOOG".into()))
             .unwrap();
+        study.set_input("periods", six()).unwrap();
         study
             .set_input("color_cutoff", InputValue::Number(40.0))
             .unwrap();
@@ -884,8 +903,13 @@ mod tests {
             (0, 1, tinted(2, 31, 26, 51), Some(palette::UP)),
             // +80%, beyond the cutoff: 30%.
             (0, 3, tinted(2, 46, 39, 77), Some(palette::UP)),
-            // -50%, beyond the cutoff: 30% of the default negative colour (242, 54, 69).
-            (2, 2, tinted(73, 16, 21, 77), Some(palette::DOWN)),
+            // -50%, beyond the cutoff: 30% of the default negative colour (242, 55, 69).
+            (
+                2,
+                2,
+                tinted(73, 17, 21, 77),
+                Some(Color32::from_rgb(242, 55, 69)),
+            ),
             // No change: grey at 10% under the default text.
             (1, 1, grey(26), None),
             // A label: the same grey at 20%.
@@ -1030,11 +1054,46 @@ mod tests {
             study
                 .set_input("symbols", InputValue::Text(symbols.into()))
                 .unwrap();
+            study.set_input("periods", six()).unwrap();
             study
                 .set_input("include_chart_symbol", InputValue::Toggle(include))
                 .unwrap();
             study.update_data(&chart, 0, std::slice::from_ref(&source));
             assert_eq!(rows(&study), expected, "{symbols}, include {include}");
         }
+
+        // A new study compares five symbols over seven periods in a table that fills the pane.
+        // On a daily chart that never moves, every period with a close to start from is a change
+        // of zero on the positive colour at 10%; the bars start on 2023-09-29, after the 12M and
+        // 5Y starts, and no compared symbol is supplied.
+        let flat = chart
+            .clone()
+            .map(|bar| Bar::new(bar.time, 100.0, 100.0, 100.0, 100.0, 1.0));
+        let symbols = ["AAPL", "NASDAQ:AMZN", "EURUSD", "ES1!", "BTCUSD"];
+        let mut study = Performance::new();
+        assert_eq!(study.data_requests(), symbols.map(daily));
+        study.calculate(&flat);
+        assert_eq!(
+            columns(&study),
+            ["Symbol", "1W", "1M", "3M", "6M", "12M", "YTD", "5Y"]
+        );
+        let unchanged = [true, true, true, true, false, true, false].map(|has| has.then_some(0.0));
+        let mut expected = vec![("Chart".to_owned(), unchanged.to_vec())];
+        expected.extend(symbols.map(|symbol| (symbol.to_owned(), vec![None; 7])));
+        assert_eq!(rows(&study), expected);
+        let table = study.table().unwrap();
+        assert_eq!(table.cell_colors[0][1], tinted(1, 15, 13, 26));
+        assert_eq!(
+            (table.position, table.width, table.height),
+            (TablePosition::MiddleCenter, Some(1.0), Some(0.95))
+        );
+        assert_eq!(
+            study
+                .inputs()
+                .iter()
+                .find(|input| input.id == "negative_color")
+                .map(|input| &input.value),
+            Some(&InputValue::Color(Color32::from_rgb(242, 55, 69)))
+        );
     }
 }
