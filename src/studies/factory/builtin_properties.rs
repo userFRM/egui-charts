@@ -315,6 +315,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(HLC3::new()),
         Box::new(OHLC4::new()),
         Box::new(VisibleAveragePrice::new()),
+        Box::new(AnalystPriceForecast::default()),
         Box::new(Week52HighLow::new()),
         Box::new(Week52HighLowLevels::new()),
         Box::new(AcceleratorOscillator::new()),
