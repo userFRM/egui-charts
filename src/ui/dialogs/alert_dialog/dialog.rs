@@ -39,6 +39,18 @@ pub struct AlertDialog {
     pub sources: Vec<(AlertSource, AlertSourceName)>,
     /// Host-provided watchlist identifiers and display names.
     pub watchlists: Vec<(String, String)>,
+    /// Live strategy run ids accepted by `AlertEngine::strategy_fills` and their display names.
+    /// Strategy fills is offered only when this list has a run; an existing alert on an absent
+    /// run displays its id.
+    ///
+    /// ```
+    /// use egui_charts::ui::dialogs::AlertDialog;
+    ///
+    /// let mut dialog = AlertDialog::new();
+    /// dialog.strategy_runs = vec![("run-7".into(), "Momentum live".into())];
+    /// assert_eq!(dialog.strategy_runs[0].0, "run-7");
+    /// ```
+    pub strategy_runs: Vec<(String, String)>,
     /// The zone the expiry date and time are entered in, UTC by default. Set it before
     /// [`open`](Self::open) or [`edit`](Self::edit), usually to the chart's time zone.
     pub timezone: TimezoneId,
@@ -96,6 +108,7 @@ impl std::fmt::Debug for AlertDialog {
             .field("alert", &self.alert)
             .field("sources", &self.sources)
             .field("watchlists", &self.watchlists)
+            .field("strategy_runs", &self.strategy_runs)
             .field("timezone", &self.timezone)
             .field("account_timezone", &self.account_timezone)
             .field("starts", &self.starts)
@@ -137,6 +150,7 @@ impl AlertDialog {
             alert: Alert::new("", AlertCondition::Crossing(0.0)),
             sources: Vec::new(),
             watchlists: Vec::new(),
+            strategy_runs: Vec::new(),
             timezone: TimezoneId::utc(),
             account_timezone: None,
             starts: false,
@@ -996,6 +1010,7 @@ impl AlertDialog {
                     &mut self.alert.source,
                     &mut self.alert.condition,
                     &self.sources,
+                    &self.strategy_runs,
                     true,
                 );
             } else {
@@ -1014,6 +1029,7 @@ impl AlertDialog {
                     &mut rule.source,
                     &mut rule.condition,
                     &self.sources,
+                    &[],
                     false,
                 );
                 if ui
@@ -1025,6 +1041,17 @@ impl AlertDialog {
                 }
             }
         });
+        let events = self.alert.condition.is_event();
+        if events {
+            self.alert.additional_conditions.clear();
+            self.alert.additional_timeframes.clear();
+            if !matches!(
+                self.alert.frequency,
+                AlertFrequency::Once | AlertFrequency::EveryTime
+            ) {
+                self.alert.frequency = AlertFrequency::EveryTime;
+            }
+        }
         let position = matches!(self.alert.condition, AlertCondition::Position { .. });
         if position {
             // A position alert ends at its exit, so it takes frequency Once.
@@ -1246,6 +1273,9 @@ fn source_picker(
                 ui.selectable_value(source, AlertSource::Volume, l10n::text(ui.ctx(), "Volume"));
             }
             for (value, name) in sources {
+                if id != "source" && matches!(value, AlertSource::StudyCondition { .. }) {
+                    continue;
+                }
                 ui.selectable_value(source, value.clone(), name.text(ui.ctx()));
             }
         })
@@ -1346,12 +1376,20 @@ pub(crate) fn rule_form(
     source: &mut AlertSource,
     condition: &mut AlertCondition,
     sources: &[(AlertSource, AlertSourceName)],
+    runs: &[(String, String)],
     offer_position: bool,
 ) {
     ui.add_enabled_ui(
         !matches!(condition, AlertCondition::VolumeAboveAverage { .. }) && !condition.is_event(),
         |ui| source_picker(ui, "source", source, sources),
     );
+    if !condition.pairs_with(source) {
+        *condition = if matches!(source, AlertSource::StudyCondition { .. }) {
+            AlertCondition::Holds
+        } else {
+            AlertCondition::Crossing(0.0)
+        };
+    }
     let level = condition.level().unwrap_or(0.0);
     let channel = drawing_channel(source, condition, sources);
     let position = offer_position
@@ -1421,8 +1459,18 @@ pub(crate) fn rule_form(
         ),
     ]
     .into_iter()
+    .chain(
+        sources
+            .iter()
+            .any(|(source, _)| matches!(source, AlertSource::StudyCondition { .. }))
+            .then_some((AlertCondition::Holds, "Study condition")),
+    )
     .chain(channel.map(|c| (c, "Drawing channel")))
     .chain(position.map(|c| (c, "Position entry and exit")))
+    .chain(
+        runs.first()
+            .map(|(id, _)| (AlertCondition::StrategyFills(id.clone()), "Strategy fills")),
+    )
     .collect::<Vec<_>>();
     let selected = choices
         .iter()
@@ -1445,6 +1493,18 @@ pub(crate) fn rule_form(
                 {
                     if matches!(value, AlertCondition::VolumeAboveAverage { .. }) {
                         *source = AlertSource::Volume;
+                    } else if matches!(value, AlertCondition::Holds) {
+                        if !matches!(source, AlertSource::StudyCondition { .. })
+                            && let Some((first, _)) = sources
+                                .iter()
+                                .find(|(s, _)| matches!(s, AlertSource::StudyCondition { .. }))
+                        {
+                            *source = first.clone();
+                        }
+                    } else if value.is_event()
+                        || matches!(source, AlertSource::StudyCondition { .. })
+                    {
+                        *source = AlertSource::Price;
                     }
                     *condition = value;
                 }
@@ -1453,11 +1513,25 @@ pub(crate) fn rule_form(
         .response
         .accessible_name(l10n::text(ui.ctx(), "Condition"));
     ui.horizontal_wrapped(|ui| match condition {
+        AlertCondition::Holds => {}
         AlertCondition::Position { progress, .. } => {
             ui.label(l10n::text(ui.ctx(), progress.to_string()));
         }
         AlertCondition::StrategyFills(run) => {
-            ui.text_edit_singleline(run)
+            let name = runs
+                .iter()
+                .find(|(id, _)| id == run)
+                .map_or(run.as_str(), |(_, name)| name.as_str());
+            egui::ComboBox::from_id_salt("strategy_run")
+                .width(ui.available_width().min(200.0))
+                .truncate()
+                .selected_text(name)
+                .show_ui(ui, |ui| {
+                    for (id, name) in runs {
+                        ui.selectable_value(run, id.clone(), name);
+                    }
+                })
+                .response
                 .accessible_name(l10n::text(ui.ctx(), "Strategy run"));
         }
         AlertCondition::DetectorSignals(detector) => {
@@ -1828,6 +1902,122 @@ mod tests {
         assert!(h.query_by_label("Add condition").is_none());
     }
 
+    #[test]
+    fn study_condition_sources_pair_with_holds_and_price_restores_crossing() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let first = AlertSource::StudyCondition {
+            id: "3".into(),
+            condition: 0,
+        };
+        let change = AlertSource::StudyCondition {
+            id: "3".into(),
+            condition: 2,
+        };
+        let mut dialog = AlertDialog::new();
+        dialog.sources = vec![
+            (
+                AlertSource::Study {
+                    id: "3".into(),
+                    output: 0,
+                },
+                "SuperTrend: Trend".into(),
+            ),
+            (first.clone(), "SuperTrend: Trend turns up".into()),
+            (change.clone(), "SuperTrend: Trend change".into()),
+        ];
+        dialog.edit(Alert::new("SAMPLE", AlertCondition::Crossing(1.0)));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(960.0, 900.0))
+            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+        h.run();
+        h.get_by_label("Source").click();
+        h.run();
+        h.get_by_label("SuperTrend: Trend change").click();
+        h.run();
+        assert_eq!(h.state().alert.source, change);
+        assert_eq!(h.state().alert.condition, AlertCondition::Holds);
+        assert!(h.state().alert.is_valid());
+        h.get_by_label("Source").click();
+        h.run();
+        h.get_by_label("Price").click();
+        h.run();
+        assert_eq!(h.state().alert.source, AlertSource::Price);
+        assert_eq!(h.state().alert.condition, AlertCondition::Crossing(0.0));
+        h.get_by_label("Condition").click();
+        h.run();
+        h.get_by_label("Study condition").scroll_to_me();
+        h.run();
+        h.get_by_label("Study condition").click();
+        h.run();
+        assert_eq!(h.state().alert.source, first);
+        assert_eq!(h.state().alert.condition, AlertCondition::Holds);
+        assert!(h.state().alert.is_valid());
+    }
+
+    #[test]
+    fn strategy_fills_offer_the_host_runs_by_name() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut dialog = AlertDialog::new();
+        dialog.strategy_runs = vec![
+            ("run-7".into(), "Momentum live".into()),
+            ("run-8".into(), "Breakout live".into()),
+        ];
+        let mut alert = Alert::new("SAMPLE", AlertCondition::Above(1.0));
+        alert.source = AlertSource::Volume;
+        alert.frequency = AlertFrequency::OncePerBar;
+        alert.additional_conditions.push(AlertRule::new(
+            AlertSource::Price,
+            AlertCondition::Above(2.0),
+        ));
+        alert.additional_timeframes.push(Some(Timeframe::Min5));
+        dialog.edit(alert);
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(960.0, 900.0))
+            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+        h.run();
+        h.get_by_label("Condition").click();
+        h.run();
+        h.get_by_label("Strategy fills").scroll_to_me();
+        h.run();
+        h.get_by_label("Strategy fills").click();
+        h.run();
+        assert_eq!(
+            h.state().alert.condition,
+            AlertCondition::StrategyFills("run-7".into())
+        );
+        assert_eq!(h.state().alert.source, AlertSource::Price);
+        assert_eq!(h.state().alert.frequency, AlertFrequency::EveryTime);
+        assert!(h.state().alert.additional_conditions.is_empty());
+        assert!(h.state().alert.additional_timeframes.is_empty());
+        assert!(h.query_by_label("Add condition").is_none());
+        h.get_by_label("Strategy run").click();
+        h.run();
+        h.get_by_label("Breakout live").click();
+        h.run();
+        assert_eq!(
+            h.state().alert.condition,
+            AlertCondition::StrategyFills("run-8".into())
+        );
+        h.state_mut().strategy_runs.clear();
+        h.state_mut()
+            .edit(Alert::new("SAMPLE", AlertCondition::Above(1.0)));
+        h.run();
+        h.get_by_label("Condition").click();
+        h.run();
+        assert!(h.query_by_label("Strategy fills").is_none());
+        h.key_press(egui::Key::Escape);
+        h.state_mut().edit(Alert::new(
+            "SAMPLE",
+            AlertCondition::StrategyFills("gone".into()),
+        ));
+        h.run();
+        assert!(
+            h.get_by_label("Strategy run")
+                .value()
+                .is_some_and(|text| text == "gone")
+        );
+    }
+
     /// Names the chart builds keep their parts through storage, so the source list shows the
     /// study output, drawing tool and level translated around the study name, drawing number and
     /// level value, and an alert saved with finished names restores its source and takes the
@@ -1875,8 +2065,8 @@ mod tests {
         let mut restored = AlertDialog::new();
         restored.edit(saved);
 
-        // Words drop out under `mark_keys` and values stay: MACD's Signal and Histogram, the
-        // median, and the first and second lines at 0.5, of which the restored alert saved one.
+        // Words drop out under `mark_keys` and values stay: MACD's Signal, Histogram and two
+        // conditions, the median and both lines at 0.5, of which the restored alert saved one.
         for dialog in [fresh, restored] {
             let mut h = Harness::builder()
                 .with_size(egui::vec2(600.0, 900.0))
@@ -1886,7 +2076,7 @@ mod tests {
             h.run();
             crate::localization::mark_keys(&h.ctx);
             h.run();
-            for (label, count) in [("~MACD~~~", 2), ("~~~7~~~", 1), ("~~~7~0.5~", 2)] {
+            for (label, count) in [("~MACD~~~", 4), ("~~~7~~~", 1), ("~~~7~0.5~", 2)] {
                 assert_eq!(h.query_all_by_label(label).count(), count, "{label}");
             }
         }
@@ -1914,6 +2104,7 @@ mod tests {
                 let mut dialog = AlertDialog::new();
                 dialog.alert = Alert::new("SAMPLE", condition.clone());
                 dialog.alert.source = source.clone();
+                dialog.strategy_runs = vec![("run".into(), "Momentum live ".repeat(20))];
                 let mut form_width = 0.0;
                 for _ in 0..3 {
                     let output = ctx.run_ui(Default::default(), |ui| {
