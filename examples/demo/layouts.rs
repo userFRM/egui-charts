@@ -177,9 +177,6 @@ impl DemoApp {
         for (id, indicator) in source.indicators() {
             let copy = chart.add_indicator(indicator.clone_box());
             study_ids.insert(id.0, copy.0);
-            if let Some(inputs) = source.indicator_inputs(id) {
-                chart.set_indicator_inputs(copy, inputs);
-            }
         }
         // After the studies, whose forecast study the setting would otherwise add a second time.
         chart.set_price_targets_visible(source.price_targets_visible());
@@ -226,6 +223,7 @@ impl DemoApp {
         if slot == self.layout_slot {
             return;
         }
+        self.range_fit = None;
         self.stop_replay();
         // `chart` always holds the active slot so every existing toolbar and dialog acts on it.
         let other = if slot < self.layout_slot {
@@ -254,6 +252,7 @@ impl DemoApp {
     }
 
     pub(super) fn refresh_active_chart(&mut self) {
+        self.range_fit = None;
         self.comparison_settings = None;
         self.refresh_strategy_signals();
         self.last_chart_click = None;
@@ -755,6 +754,10 @@ impl DemoApp {
         for (saved, snapshot) in comparisons.iter_mut().zip(&mut layout.charts) {
             super::comparison::rename_former(saved);
             DemoSymbol::rename_former(snapshot);
+            // The former demo generated these captions; derive them so they keep following edits.
+            for study in &mut snapshot.studies {
+                study.caption.clear();
+            }
         }
         for (saved, snapshot) in comparisons.iter().zip(&layout.charts) {
             if let Err(error) = super::comparison::validate(saved, snapshot.panes.len()) {
@@ -988,6 +991,82 @@ mod tests {
         groups.symbol = symbol;
         groups.interval = interval;
         groups
+    }
+
+    #[test]
+    fn older_demo_layout_captions_follow_study_edits() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        let saved = SavedLayout::from_json(
+            r#"{
+                "version": 1,
+                "mode": "Single",
+                "charts": [{
+                    "symbol": "STOCKA", "interval": null, "extended_hours": false,
+                    "chart_type": "Candles", "chart_type_params": {},
+                    "main_series_visible": true,
+                    "settings": {
+                        "candle_colors": {}, "precision": "Default", "timezone": "UTC",
+                        "status_line": {}, "scales_and_lines": {},
+                        "chart_basic_styles": {
+                            "background_type": "Solid", "background_color": [0, 0, 0, 255],
+                            "background_gradient_top": [0, 0, 0, 255],
+                            "background_gradient_bottom": [0, 0, 0, 255]
+                        },
+                        "grid_lines": {
+                            "mode": "Both", "horizontal_color": [30, 30, 30, 255],
+                            "vertical_color": [30, 30, 30, 255]
+                        },
+                        "crosshair": {
+                            "color": [128, 128, 128, 255], "line_width": 1.0,
+                            "line_style": "Dashed"
+                        },
+                        "watermark": {"mode": "ReplayMode", "color": [0, 0, 0, 0]},
+                        "scales_appearance": {
+                            "text_color": [128, 128, 128, 255], "font_size": 12,
+                            "lines_color": [0, 0, 0, 0]
+                        },
+                        "btns": {"navigation": "Hidden", "pane": "VisibleOnMouseOver"},
+                        "margins": {"top_percent": 10.0, "bottom_percent": 10.0, "right_bars": 5.0},
+                        "trading": {}, "alerts": {}, "events": {}
+                    },
+                    "studies": [{
+                        "id": 1, "caption": "14 close SMA 14", "autoscale": true, "pane": 1,
+                        "study": {
+                            "name": "RSI", "visible": true,
+                            "inputs": [
+                                ["period", {"Length": 14}], ["smoothing", {"Choice": 1}],
+                                ["smoothing_length", {"Length": 14}]
+                            ],
+                            "settings": {
+                                "plots": [
+                                    {"color": [126, 87, 194, 255], "width": 1.0, "pattern": "Solid", "plot_type": "JoinedLine", "visible": true},
+                                    {"color": [253, 216, 53, 255], "width": 1.0, "pattern": "Solid", "plot_type": "JoinedLine", "visible": true}
+                                ],
+                                "precision": 2, "hidden_intervals": []
+                            }
+                        }
+                    }],
+                    "panes": [{"main": true, "stretch": 1.0}, {"main": false, "stretch": 1.0}],
+                    "bar_spacing": 6.0, "right_offset": 5.0, "drawings": null
+                }]
+            }"#,
+        )
+        .unwrap();
+        assert!(
+            app.restore_layout("Older".into(), saved, Ok(Vec::new())),
+            "{:?}",
+            app.toasts
+        );
+        let id = app.chart.indicators().next().unwrap().0;
+        assert_eq!(app.chart.indicator_inputs(id), Some("14 close SMA 14"));
+        app.chart
+            .indicator_mut(id)
+            .unwrap()
+            .set_input("period", egui_charts::studies::InputValue::Length(5))
+            .unwrap();
+        assert_eq!(app.chart.indicator_inputs(id), Some("5 close SMA 14"));
     }
 
     #[test]
@@ -1393,8 +1472,16 @@ mod tests {
         app.activate_chart_slot(0);
         app.sync_comparisons();
         assert!(app.compare_dialog.compared_symbols.is_empty());
+        app.handle_timeframe_toolbar(super::super::TimeframeToolbarAction::DateRangeChanged(
+            egui_charts::model::DateRange::Year5,
+        ));
+        assert!(app.range_fit.is_some());
         let before = app.chart.get_time_scale_state();
         app.new_layout(Some("Saved".into()));
+        assert!(
+            app.range_fit.is_none(),
+            "a pending fit belongs to its original chart"
+        );
         assert_eq!(app.layout.mode, ChartLayoutMode::Four);
         assert_eq!(app.chart.get_time_scale_state(), before);
         frame(&mut app);
