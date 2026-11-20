@@ -182,6 +182,8 @@ struct Occurrence {
     time: DateTime<Utc>,
     price: Option<f64>,
     message: String,
+    /// Placeholders only this occurrence fills, as a fill's `{{order_id}}`.
+    fields: Vec<(&'static str, String)>,
 }
 
 /// The latest observation for conditions sharing one calculation interval.
@@ -562,7 +564,9 @@ impl AlertEngine {
     /// Custom messages expand the usual placeholders using a flat bar at the fill price, with
     /// its source time and zero volume, and `exchange` as [`Alert::expand_message`] takes it. A
     /// fill carries no study values, so `{{plot_ID_N}}` reads `NaN`. Strategy-fill alerts need no
-    /// price-reader subscription.
+    /// price-reader subscription. `{{order_id}}`, `{{side}}` (`Buy` or `Sell`), `{{quantity}}`
+    /// and `{{position}}`, the signed position after the fill, read the fill; other alerts leave
+    /// them as written.
     /// Delivery callbacks run after unlocking, as they do for price alerts.
     #[cfg(feature = "strategies")]
     pub fn strategy_fills(
@@ -601,6 +605,12 @@ impl AlertEngine {
                     Some(Occurrence {
                         time: fill.time,
                         price: Some(fill.price),
+                        fields: vec![
+                            ("order_id", fill.order_id.clone()),
+                            ("side", side.into()),
+                            ("quantity", fill.quantity.to_string()),
+                            ("position", fill.position.to_string()),
+                        ],
                         message: format!(
                             "{side} {} at {price}, position {}",
                             fill.quantity, fill.position
@@ -623,7 +633,7 @@ impl AlertEngine {
     /// the bar before the newest of each chart it is lent, so a formation confirmed as its bar
     /// closes still fires, while one reported later counts as history. Empty messages are the
     /// detector's name and the signal's tooltip or label; custom messages expand as for
-    /// [`strategy_fills`](Self::strategy_fills).
+    /// `strategy_fills`.
     pub fn detector_signals<'a>(
         &self,
         symbol: &str,
@@ -677,6 +687,7 @@ impl AlertEngine {
                         Some(Occurrence {
                             time,
                             price: price.filter(|price| price.is_finite()),
+                            fields: Vec::new(),
                             message: text.map_or_else(
                                 || detector.clone(),
                                 |text| format!("{detector}: {text}"),
@@ -701,7 +712,7 @@ impl AlertEngine {
     /// Events numbered at or below one an alert already received are ignored, including after
     /// edits or rearming the alert. A trigger reports the event's time and finite price, and the
     /// event's message when the alert has none; custom messages expand as for
-    /// [`strategy_fills`](Self::strategy_fills).
+    /// `strategy_fills`.
     pub fn custom_events(
         &self,
         source: &str,
@@ -724,6 +735,7 @@ impl AlertEngine {
                         time: event.time,
                         price: event.price.filter(|price| price.is_finite()),
                         message: event.message.clone(),
+                        fields: Vec::new(),
                     })
                 })
                 .collect()
@@ -782,15 +794,26 @@ impl AlertEngine {
                 if seen.done {
                     continue;
                 }
-                let Occurrence { time, price, .. } = occurrence;
+                let Occurrence {
+                    time,
+                    price,
+                    message,
+                    fields,
+                } = occurrence;
                 let message = if alert.message.is_empty() {
-                    occurrence.message
+                    message
                 } else {
                     let flat = price.unwrap_or(f64::NAN);
                     let bar = Bar::new(time, flat, flat, flat, flat, 0.0);
-                    alert.expand_message(symbol, exchange, timeframe, &bar, time, |source| {
-                        price.filter(|_| *source == AlertSource::Price)
-                    })
+                    alert.expand_message_with(
+                        symbol,
+                        exchange,
+                        timeframe,
+                        &bar,
+                        time,
+                        |source| price.filter(|_| *source == AlertSource::Price),
+                        &fields,
+                    )
                 };
                 if alert
                     .schedule
@@ -1398,6 +1421,7 @@ fn condition_holds(
 ) -> bool {
     let [previous, previous_other, previous_second, _] = previous;
     match condition {
+        AlertCondition::Holds => value != 0.0,
         AlertCondition::StrategyFills(_)
         | AlertCondition::DetectorSignals(_)
         | AlertCondition::CustomEvents(_) => false,
@@ -1627,6 +1651,87 @@ mod tests {
             let reply = answers.into_iter().find(|(key, _)| *key == 0).unwrap().1;
             *reply.downcast::<Result<(), FeedError>>().unwrap()
         }
+    }
+
+    /// Trend flips fire on bars 2, 4 and 6, including after storing the alert and restarting.
+    #[test]
+    #[cfg(all(feature = "drawings", feature = "studies"))]
+    fn a_study_condition_alert_fires_on_each_trend_flip_and_after_a_restart() {
+        let bars: Vec<_> = [100., 101., 105., 106., 100., 99., 103.]
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| Bar::new(time(i as i64 * 60), c, c + 1., c - 1., c, 1.))
+            .collect();
+        let mut chart = crate::Chart::new(crate::model::BarData::from_bars(bars.clone()));
+        let id = chart.add_indicator(Box::new(crate::studies::SuperTrend::new(1, 1.0)));
+        let trend = chart
+            .indicators()
+            .find(|(study, _)| *study == id)
+            .unwrap()
+            .1;
+        for (bar, (line, value)) in [
+            (1, 102.),
+            (1, 102.),
+            (0, 100.),
+            (0, 104.),
+            (1, 107.),
+            (1, 101.),
+            (0, 98.),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(trend.values().value(line, bar), Some(value));
+            assert_eq!(trend.values().value(1 - line, bar), None);
+        }
+        let mut alert = alert(AlertCondition::Holds, AlertFrequency::EveryTime);
+        alert.source = AlertSource::StudyCondition {
+            id: id.0.to_string(),
+            condition: 2,
+        };
+        chart.prepare_alert(&mut alert);
+        let update = |host: &Host, n| {
+            host.engine.update(
+                "SYM",
+                None,
+                Timeframe::Min1,
+                &bars[..=n],
+                time(60 * n as i64 + 1),
+                |source, at| chart.alert_value(source, at),
+            )
+        };
+        let host = Host::new(vec![alert.clone()]);
+        for n in 0..bars.len() {
+            update(&host, n);
+        }
+        assert_eq!(host.fired(), vec![105., 100., 103.]);
+        let host = Host::new(vec![alert]);
+        for n in 0..=3 {
+            update(&host, n);
+        }
+        assert_eq!(host.fired(), vec![105.]);
+        let saved = host.engine.alerts();
+        let restored: Vec<Alert> =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(restored, saved);
+        assert!(matches!(
+            restored[0].source,
+            AlertSource::StudyCondition { condition: 2, .. }
+        ));
+        assert!(
+            restored[0]
+                .inputs
+                .as_ref()
+                .unwrap()
+                .studies
+                .iter()
+                .any(|study| study.id == id.0 && study.name == "SuperTrend")
+        );
+        let host = Host::new(restored);
+        for n in 4..bars.len() {
+            update(&host, n);
+        }
+        assert_eq!(host.fired(), vec![100., 103.]);
     }
 
     /// Feeds `bars` with the study value `study` of each bar, as one update.

@@ -194,15 +194,22 @@ impl AlertPreset {
                     &self.source_names,
                     sources,
                 ) {
-                    Some(condition) => AlertRule {
-                        source: restored_source(
-                            &rule.source,
-                            &current.source,
-                            &self.source_names,
-                            sources,
-                        ),
-                        condition,
-                    },
+                    Some(condition) => {
+                        let rule = AlertRule {
+                            source: restored_source(
+                                &rule.source,
+                                &current.source,
+                                &self.source_names,
+                                sources,
+                            ),
+                            condition,
+                        };
+                        if rule.condition.pairs_with(&rule.source) {
+                            rule
+                        } else {
+                            current.clone()
+                        }
+                    }
                     None => current.clone(),
                 }
             });
@@ -271,6 +278,7 @@ fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
     use AlertCondition as C;
     let channel = |comparison| channel_condition(comparison, 0.0, 0.0);
     Some(match condition {
+        C::Holds => C::Holds,
         C::StrategyFills(_) | C::DetectorSignals(_) | C::CustomEvents(_) | C::Position { .. } => {
             return None;
         }
@@ -350,6 +358,7 @@ fn restored_condition(
         _ => 1.0,
     };
     Some(match stored {
+        C::Holds => C::Holds,
         C::StrategyFills(_)
         | C::DetectorSignals(_)
         | C::CustomEvents(_)
@@ -420,7 +429,7 @@ fn offered(
 ) -> bool {
     match source {
         AlertSource::Price | AlertSource::Volume => true,
-        AlertSource::Study { .. } => {
+        AlertSource::Study { .. } | AlertSource::StudyCondition { .. } => {
             let mut matching = sources.iter().filter(|(offered, _)| offered == source);
             match names.iter().find(|(named, _)| named == source) {
                 Some(stored) => matching.any(|offered| offered == stored),
@@ -613,7 +622,41 @@ mod tests {
             output: 0,
         };
         let price = AlertSource::Price;
+        let declared = AlertSource::StudyCondition {
+            id: "absent".into(),
+            condition: 0,
+        };
+        let available = AlertSource::StudyCondition {
+            id: "3".into(),
+            condition: 0,
+        };
         let cases = [
+            (
+                available.clone(),
+                C::Holds,
+                price.clone(),
+                C::Above(100.0),
+                available.clone(),
+                C::Holds,
+            ),
+            // A missing declared condition cannot replace a price rule with Holds.
+            (
+                declared.clone(),
+                C::Holds,
+                price.clone(),
+                C::Above(100.0),
+                price.clone(),
+                C::Above(100.0),
+            ),
+            // A price preset cannot leave a declared source paired with a level comparison.
+            (
+                gone.clone(),
+                C::Above(9.0),
+                declared.clone(),
+                C::Holds,
+                declared,
+                C::Holds,
+            ),
             // A level from the opened alert, and a channel seeded the way the menu seeds it.
             (
                 price.clone(),
@@ -848,7 +891,10 @@ mod tests {
                 C::Below(100.0),
             ),
         ];
-        let sources = [(study(), AlertSourceName::from("RSI signal"))];
+        let sources = [
+            (study(), AlertSourceName::from("RSI signal")),
+            (available, AlertSourceName::from("Declared condition")),
+        ];
         for (stored_source, stored, current_source, current, source, condition) in cases {
             let mut saved = Alert::new("OLD", stored.clone());
             saved.source = stored_source;

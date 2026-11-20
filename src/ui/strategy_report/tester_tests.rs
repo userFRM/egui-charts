@@ -86,6 +86,23 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
                 .unwrap();
             assert!(h.state().0.is_stale());
             h.run();
+            h.get_by_role_and_label(Role::Button, "Add alert").click();
+            h.run();
+            let Some(StrategyTesterAction::AddAlert {
+                strategy,
+                inputs,
+                settings,
+                symbol,
+                timeframe,
+            }) = h.state().1.last()
+            else {
+                panic!("missing alert intent");
+            };
+            assert_eq!(strategy, "Consecutive Up/Down");
+            assert_eq!((symbol.as_str(), *timeframe), ("TEST", Timeframe::Min1));
+            assert!(inputs.contains(&("length".into(), InputValue::Length(1))));
+            assert_eq!(settings, h.state().0.settings());
+            assert!(h.state().0.is_stale(), "the intent leaves the run alone");
             h.get_by_role_and_label(Role::Button, "Run").click();
             h.run();
             let report = h.state().0.report().unwrap();
