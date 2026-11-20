@@ -1940,8 +1940,13 @@ mod tests {
     #[test]
     fn ready_schedules_fill_days_and_windows_and_reopen_selected() {
         use egui_kittest::{Harness, kittest::Queryable};
+        let zone = if cfg!(feature = "timezones") {
+            TimezoneId::named("America/New_York").unwrap()
+        } else {
+            TimezoneId::fixed_offset(-5 * 3600).unwrap()
+        };
         let mut dialog = AlertDialog::new();
-        dialog.account_timezone = TimezoneId::named("America/New_York");
+        dialog.account_timezone = Some(zone.clone());
         dialog.edit(Alert::new("SAMPLE", AlertCondition::Above(100.0)));
         let mut h = Harness::builder()
             .with_size(egui::vec2(960.0, 1100.0))
@@ -1957,7 +1962,7 @@ mod tests {
             h.get_by_label(label).click();
             h.run();
             let expected = NotificationSchedule::new(
-                TimezoneId::named("America/New_York").unwrap(),
+                zone.clone(),
                 vec![
                     Weekday::Mon,
                     Weekday::Tue,
