@@ -700,13 +700,14 @@ pub struct ConfiguredStudy {
     aligned: Option<IndicatorValues>,
     aligned_bars: Vec<Option<usize>>,
     /// For each chart bar, the bars of another interval or symbol that share its time, by which
-    /// the study's profiles, zones and markers are placed on chart bars.
+    /// the study's profiles, zones, markers and candles are placed on chart bars.
     spans: Vec<std::ops::Range<usize>>,
     /// The chart bars in view, from `set_visible_range`.
     visible: Option<std::ops::Range<usize>>,
-    /// The study's markers and zones on chart bars while it runs on another interval or symbol.
+    /// The study's geometry on chart bars while it runs on another interval or symbol.
     aligned_markers: Vec<super::IndicatorMarker>,
     aligned_zones: Vec<super::StudyZone>,
+    aligned_candles: Vec<super::StudyCandle>,
     /// The values kept on the bars that remain after the chart evicted the oldest bars, until
     /// the study is calculated again.
     kept: Option<Kept>,
@@ -763,6 +764,7 @@ impl ConfiguredStudy {
             visible: self.visible.clone(),
             aligned_markers: self.aligned_markers.clone(),
             aligned_zones: self.aligned_zones.clone(),
+            aligned_candles: self.aligned_candles.clone(),
             kept: self.kept.clone(),
             input_defaults: self.input_defaults.clone(),
         }
@@ -818,6 +820,7 @@ impl ConfiguredStudy {
             visible: None,
             aligned_markers: Vec::new(),
             aligned_zones: Vec::new(),
+            aligned_candles: Vec::new(),
             kept: None,
             input_defaults: Vec::new(),
         }
@@ -964,7 +967,12 @@ impl ConfiguredStudy {
 
 impl Indicator for ConfiguredStudy {
     fn projections(&self) -> &[super::StudyProjection] {
-        self.study.projections()
+        // Fractional and future source anchors have no chart position in the span map.
+        if self.aligned.is_some() {
+            &[]
+        } else {
+            self.study.projections()
+        }
     }
 
     fn table(&self) -> Option<&super::StudyTable> {
@@ -1245,6 +1253,7 @@ impl Indicator for ConfiguredStudy {
             self.spans.clear();
             self.aligned_markers.clear();
             self.aligned_zones.clear();
+            self.aligned_candles.clear();
             return;
         };
         self.instrument_precision = source
@@ -1336,6 +1345,17 @@ impl Indicator for ConfiguredStudy {
                 Some(super::StudyZone {
                     bars: chart_bars(&self.spans, &zone.bars)?,
                     ..zone.clone()
+                })
+            })
+            .collect();
+        self.aligned_candles = self
+            .study
+            .candles()
+            .iter()
+            .filter_map(|candle| {
+                Some(super::StudyCandle {
+                    bars: chart_bars(&self.spans, &candle.bars)?,
+                    ..candle.clone()
                 })
             })
             .collect();
@@ -1448,7 +1468,12 @@ impl Indicator for ConfiguredStudy {
     }
     #[cfg(feature = "drawings")]
     fn drawings(&self) -> &[crate::drawings::Drawing] {
-        self.study.drawings()
+        // Source bars of a study on another interval or symbol are not chart bars.
+        if self.aligned.is_some() {
+            &[]
+        } else {
+            self.study.drawings()
+        }
     }
     #[cfg(feature = "drawings")]
     fn drawings_use_plot_style(&self) -> bool {
@@ -1459,7 +1484,11 @@ impl Indicator for ConfiguredStudy {
         self.study.drawing_plot(index)
     }
     fn candles(&self) -> &[super::StudyCandle] {
-        self.study.candles()
+        if self.aligned.is_some() {
+            &self.aligned_candles
+        } else {
+            self.study.candles()
+        }
     }
     fn solid_candles(&self) -> bool {
         self.study.solid_candles()
@@ -3243,6 +3272,183 @@ mod tests {
                     "{name}"
                 );
             }
+        }
+    }
+
+    /// Candles use chart bars sharing their time, while projections and drawings with unmapped
+    /// logical anchors are withheld. Withdrawing the history leaves no stale geometry.
+    #[test]
+    fn geometry_of_another_history_never_uses_its_source_indices() {
+        use super::super::{BollingerBars, HigherIntervalCandles, ProjectedPivotPoints, StudyData};
+        use chrono::{TimeDelta, TimeZone, Utc};
+
+        let start = Utc.with_ymd_and_hms(2026, 3, 2, 0, 0, 0).unwrap();
+        // The trend-line fixture has confirmed swings; the other rows need only its first day.
+        let turns = [
+            (0, 100.0),
+            (14, 100.0),
+            (24, 110.0),
+            (34, 100.0),
+            (46, 112.0),
+            (56, 102.0),
+            (70, 116.0),
+            (90, 96.0),
+            (100, 106.0),
+        ];
+        let hourly: Vec<_> = (0..=100)
+            .map(|i| {
+                let pair = turns.windows(2).find(|pair| i <= pair[1].0).unwrap();
+                let [(a, low), (b, high)] = [pair[0], pair[1]];
+                let close = low + (high - low) * f64::from(i - a) / f64::from(b - a);
+                Bar::new(
+                    start + TimeDelta::hours(i.into()),
+                    close,
+                    close + 1.0,
+                    close - 1.0,
+                    close,
+                    1.0,
+                )
+            })
+            .collect();
+        let chart = &hourly[10..20];
+        let four_hourly: Vec<_> = hourly[..20].iter().step_by(4).cloned().collect();
+        let bollinger = (0..10)
+            .flat_map(|i| [(i..i + 1, i as i64 + 10), (i..i + 1, i as i64 + 10)])
+            .collect::<Vec<_>>();
+        let higher = vec![(0..2, 8), (2..6, 12), (6..10, 16)];
+        let higher_bollinger = higher.iter().flat_map(|c| [c.clone(), c.clone()]).collect();
+        for (inner, interval, history, expected) in [
+            (
+                Box::new(BollingerBars::new()) as Box<dyn Indicator>,
+                None,
+                &hourly[..20],
+                bollinger,
+            ),
+            (
+                Box::new(HigherIntervalCandles::new(Timeframe::Hour4)),
+                None,
+                &hourly[..20],
+                higher,
+            ),
+            (
+                Box::new(BollingerBars::new()),
+                Some(Timeframe::Hour4),
+                &four_hourly[..],
+                higher_bollinger,
+            ),
+            (
+                Box::new(ProjectedPivotPoints::new().with_daily_bars(false)),
+                None,
+                &hourly[..20],
+                vec![],
+            ),
+            #[cfg(feature = "drawings")]
+            (
+                Box::new(super::super::AutoTrendLines::new()),
+                None,
+                &hourly[..],
+                vec![],
+            ),
+        ] {
+            let mut study = ConfiguredStudy::new(inner);
+            study.set_timeframe(Timeframe::Hour1);
+            // The unaligned path must still expose the study's original geometry.
+            study.update_data(history, 0, &[]);
+            let name = study.name().to_owned();
+            if name == "Projected Pivot Points" {
+                assert!(!study.projections().is_empty());
+            }
+            #[cfg(feature = "drawings")]
+            if name == "Auto Trend Line" {
+                assert!(!study.drawings().is_empty());
+            }
+            let (id, value, cleared) = if let Some(interval) = interval {
+                (
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(interval)),
+                    InputValue::Timeframe(None),
+                )
+            } else {
+                (
+                    "calculation_symbol",
+                    InputValue::Symbol("X".into()),
+                    InputValue::Symbol(String::new()),
+                )
+            };
+            study.set_input(id, value).unwrap();
+            let source = StudyData {
+                request: study.data_requests().remove(0),
+                bars: history,
+                clock: crate::model::BarClock::new(interval.unwrap_or(Timeframe::Hour1)),
+                instrument: None,
+                timeframe: interval.unwrap_or(Timeframe::Hour1),
+            };
+            study.update_data(chart, 0, std::slice::from_ref(&source));
+            let candles = |study: &ConfiguredStudy| {
+                study
+                    .candles()
+                    .iter()
+                    .map(|c| {
+                        assert!(
+                            c.bars.start < c.bars.end && c.bars.end <= chart.len(),
+                            "{name}: {:?} exceeds {} chart bars",
+                            c.bars,
+                            chart.len()
+                        );
+                        (c.bars.clone(), (c.bar.time - start).num_hours())
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(candles(&study), expected, "{name}");
+            assert_eq!(candles(&study.clone()), expected, "{name} clone");
+            assert!(study.projections().is_empty(), "{name}");
+            #[cfg(feature = "drawings")]
+            assert!(study.drawings().is_empty(), "{name}");
+
+            study.update_data(chart, 0, &[]);
+            assert!(
+                study.candles().is_empty() && study.projections().is_empty(),
+                "{name}"
+            );
+            #[cfg(feature = "drawings")]
+            assert!(study.drawings().is_empty(), "{name}");
+            study.update_data(
+                chart,
+                0,
+                &[StudyData {
+                    bars: &[],
+                    request: source.request.clone(),
+                    clock: source.clock.clone(),
+                    ..source
+                }],
+            );
+            assert!(
+                study.candles().is_empty() && study.projections().is_empty(),
+                "{name} empty history"
+            );
+            #[cfg(feature = "drawings")]
+            assert!(study.drawings().is_empty(), "{name} empty history");
+            study.update_data(chart, 0, &[source]);
+            assert_eq!(candles(&study), expected, "{name} restored history");
+
+            study.set_input(id, cleared).unwrap();
+            study.update_data(history, 0, &[]);
+            assert_eq!(
+                study.candles().len(),
+                study.study.candles().len(),
+                "{name} follows chart"
+            );
+            assert_eq!(
+                study.projections(),
+                study.study.projections(),
+                "{name} follows chart"
+            );
+            #[cfg(feature = "drawings")]
+            assert_eq!(
+                study.drawings().len(),
+                study.study.drawings().len(),
+                "{name} follows chart"
+            );
         }
     }
 
