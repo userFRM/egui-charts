@@ -33,7 +33,10 @@ pub struct DrawingProps {
     pub save_as_default: bool,
     /// Primary color
     pub color: Color32,
-    /// Most recent Text colour picked in the Style tab's Color row.
+    /// The text colour last picked under Color in the Style tab, for a Text or Anchored text with
+    /// a text colour of its own. While it matches the edited text colour, applying gives its hue
+    /// to every selected drawing, as a Color pick does on other tools. Properties assembled by
+    /// hand leave it `None`.
     pub color_row_text_pick: Option<[u8; 4]>,
     /// Line width (1-10)
     pub line_width: f32,
