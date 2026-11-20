@@ -1172,6 +1172,7 @@ impl AlertsPanel {
                     &mut self.draft.source,
                     &mut self.draft.condition,
                     &self.sources,
+                    &[],
                     true,
                 );
                 if self.draft_saving {
@@ -1338,7 +1339,8 @@ impl AlertsPanel {
                                     let icon = match alert.source {
                                         AlertSource::Price => &icons::CHART_LINE,
                                         AlertSource::Volume => &icons::CHART_COLUMNS,
-                                        AlertSource::Study { .. } => &icons::INDICATORS,
+                                        AlertSource::Study { .. }
+                                        | AlertSource::StudyCondition { .. } => &icons::INDICATORS,
                                         AlertSource::Drawing(_) => &icons::TREND_LINE,
                                     };
                                     ui.add(icon.as_image_tinted(
