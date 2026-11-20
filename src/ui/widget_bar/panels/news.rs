@@ -799,7 +799,7 @@ impl NewsPanel {
                             as isize
                             + i.consume_key(egui::Modifiers::NONE, egui::Key::Space) as isize
                             - i.consume_key(egui::Modifiers::NONE, egui::Key::PageUp) as isize
-                            - i.consume_key(egui::Modifiers::SHIFT, egui::Key::Space) as isize;
+                            - back;
                         (
                             step,
                             page,
@@ -1276,23 +1276,32 @@ mod tests {
         h.run();
         h.get_by_role_and_label(egui::Role::Button, "First").focus();
         h.run();
-        for (key, title) in [
-            (egui::Key::ArrowDown, "Second"),
-            (egui::Key::ArrowUp, "First"),
-            (egui::Key::ArrowUp, "First"),
-            (egui::Key::ArrowDown, "Second"),
-            (egui::Key::ArrowDown, "Third"),
-            (egui::Key::ArrowDown, "Third"),
-            (egui::Key::ArrowUp, "Second"),
-            (egui::Key::Home, "First"),
-            (egui::Key::PageDown, "Third"),
-            (egui::Key::PageUp, "First"),
-            (egui::Key::End, "Third"),
-            (egui::Key::Home, "First"),
-            (egui::Key::Space, "Third"),
-            (egui::Key::ArrowUp, "Second"),
+        for (key, shift, title) in [
+            (egui::Key::ArrowDown, false, "Second"),
+            (egui::Key::ArrowUp, false, "First"),
+            (egui::Key::ArrowUp, false, "First"),
+            (egui::Key::ArrowDown, false, "Second"),
+            (egui::Key::ArrowDown, false, "Third"),
+            (egui::Key::ArrowDown, false, "Third"),
+            (egui::Key::ArrowUp, false, "Second"),
+            (egui::Key::Home, false, "First"),
+            (egui::Key::PageDown, false, "Third"),
+            (egui::Key::PageUp, false, "First"),
+            (egui::Key::End, false, "Third"),
+            (egui::Key::Home, false, "First"),
+            (egui::Key::Space, false, "Third"),
+            (egui::Key::ArrowUp, false, "Second"),
+            (egui::Key::Space, true, "First"),
+            (egui::Key::ArrowDown, false, "Second"),
         ] {
-            h.key_press(key);
+            h.key_press_modifiers(
+                if shift {
+                    egui::Modifiers::SHIFT
+                } else {
+                    egui::Modifiers::NONE
+                },
+                key,
+            );
             h.run();
             assert!(
                 h.get_by_role_and_label(egui::Role::Button, title)
