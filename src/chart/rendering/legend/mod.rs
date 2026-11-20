@@ -135,6 +135,10 @@ pub struct Legend<'a> {
     /// Host formatters for the price values of `studies`, in their order. A missing or `None`
     /// entry keeps the built-in decimals and thousands grouping.
     pub study_formatters: &'a [Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>],
+    /// The chart's ids of `studies`, in their order. A study row's held controls, touch
+    /// selection and focus follow its id, so the study that takes a removed study's row draws
+    /// its own buttons. The chart sets it; a row without an entry is keyed by its index.
+    pub(crate) study_ids: &'a [crate::chart::selection::SeriesId],
     /// Global index of `bar` in each study's values.
     pub bar_index: usize,
     /// Whether this series has volume.
@@ -232,6 +236,7 @@ impl<'a> Legend<'a> {
             studies: &[],
             study_inputs: &[],
             study_formatters: &[],
+            study_ids: &[],
             bar_index: 0,
             show_volume: true,
             show_title: true,
@@ -763,7 +768,10 @@ impl<'a> Legend<'a> {
                     continue;
                 }
                 let (row_start, row_end, row_height) = (layout.pos, layout.row_end, layout.height);
-                let controls_id = id.with(("study", index));
+                let controls_id = id.with((
+                    "study",
+                    self.study_ids.get(index).map_or(index, |study| study.0),
+                ));
                 let held = held_study_controls(ui, controls_id, Some(row_start.y)).map(|held| {
                     let width = controls_width(study.as_ref(), self.show_settings);
                     let end = if held.top() >= row_start.y + row_height {

@@ -435,6 +435,9 @@ pub struct Chart {
         std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
     overnight_hours: bool,
+    /// The futures data choices the chart settings applied, which the host's history follows.
+    back_adjust_futures: bool,
+    settlement_as_close: bool,
     conversion: Option<String>,
     pub(crate) measured_axis_width: f32,
     /// Last usable widget width and its first frame, including discarded sizing passes.
