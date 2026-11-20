@@ -88,11 +88,6 @@ impl SuperTrend {
         }
     }
 
-    /// Create with default params (10, 3.0)
-    pub fn default_params() -> Self {
-        Self::new(10, 3.0)
-    }
-
     /// Set colors for bullish and bearish trends
     pub fn with_colors(mut self, bullish: Color32, bearish: Color32) -> Self {
         self.bullish_color = bullish;
@@ -240,6 +235,10 @@ impl Indicator for SuperTrend {
             plot_type: crate::studies::PlotType::LineWithBreaks,
             visible: true,
         }
+    }
+
+    fn draws_only_plots(&self) -> bool {
+        true
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {

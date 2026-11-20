@@ -294,6 +294,7 @@ impl Tab {
                     right("Stop Loss", 80.0),
                     left("Status", 76.0),
                     left("Placing Time", 130.0),
+                    left("Expiry", 130.0),
                     left("Order ID", 60.0),
                 ];
                 COLUMNS

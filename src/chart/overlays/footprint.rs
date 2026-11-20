@@ -1002,7 +1002,7 @@ fn column_galleys(
 }
 
 /// The text of one cell in `mode`; empty when every number in it is a hidden zero.
-fn cell_text(
+pub(super) fn cell_text(
     mode: FootprintMode,
     row: &FootprintLevel,
     abbreviate: bool,

@@ -140,6 +140,10 @@ impl Indicator for ChopZone {
         }
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
         Some(self.colors[self.band(bar)?])
     }
