@@ -1818,17 +1818,17 @@ impl ChartLayout {
         for (index, chart) in charts.iter_mut().enumerate() {
             chart.keyboard.layout_keys = keys.filter(|_| index < count).map(|keys| (pass, keys));
         }
-        // A Tab the host dispatched before `show` moves before the charts are drawn, as a host's
-        // own `set_active` would, so the chart it reaches takes the focus in this pass and egui
-        // does not also move the focus on from the chart that had it.
-        if count > 1 && self.cycle_charts(ui, charts, count) {
-            ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
-        }
         self.active = self.active.min(count - 1);
         // Tabs already show one chart at a time and use their strip to select the others.
         if self.mode == ChartLayoutMode::Tabs || self.maximized.is_some_and(|index| index >= count)
         {
             self.maximized = None;
+        }
+        // A Tab the host dispatched before `show` moves before the charts are drawn, as a host's
+        // own `set_active` would, so the chart it reaches takes the focus in this pass and egui
+        // does not also move the focus on from the chart that had it.
+        if count > 1 && self.cycle_charts(ui, charts, count) {
+            ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
         }
         // Host activation replaces the maximized chart; a detached chart keeps its window.
         if self.maximized.is_some() && !self.detached[self.active] {
@@ -5115,7 +5115,7 @@ mod tests {
             (usize, Option<usize>),
         );
         use ChartLayoutMode::{Four, Single, Tabs};
-        let rows: [Row; 13] = [
+        let rows: [Row; 14] = [
             ("next", Four, 4, &[], None, 1, true, false, (2, None)),
             (
                 "wrap forward",
@@ -5207,6 +5207,17 @@ mod tests {
                 false,
                 (2, None),
             ),
+            (
+                "shrink preset with queued Tab",
+                Four,
+                8,
+                &[],
+                Some(5),
+                0,
+                true,
+                true,
+                (1, None),
+            ),
             ("one chart", Single, 2, &[], None, 0, true, false, (0, None)),
             (
                 "one supplied chart",
@@ -5229,7 +5240,11 @@ mod tests {
         {
             let ctx = egui::Context::default();
             let mut layout = ChartLayout {
-                mode,
+                mode: if maximized.is_some_and(|slot| slot >= mode.chart_count()) {
+                    ChartLayoutMode::Eight
+                } else {
+                    mode
+                },
                 ..Default::default()
             };
             let mut charts: Vec<_> = (0..supplied).map(|_| chart(60)).collect();
@@ -5287,6 +5302,14 @@ mod tests {
             };
             for _ in 0..3 {
                 frame(&mut layout, &mut charts, false);
+            }
+            if layout.mode != mode {
+                // Hosts keep the active chart when shrinking a preset by moving it to slot zero.
+                let from = layout.active();
+                charts.swap(from, start);
+                layout.swap_slots(from, start);
+                layout.set_active(start);
+                layout.mode = mode;
             }
             frame(&mut layout, &mut charts, true);
             for _ in 0..2 {
