@@ -1037,6 +1037,7 @@ impl Chart {
             self.last_rendered_price_rect = layout.price_rect;
             self.last_rendered_volume_rect = Rect::NOTHING;
             self.last_vertical_grid_x.clear();
+            self.last_session_break_x.clear();
             let scale = self.state.price_scale();
             self.last_price_map = scale
                 .map(scale.transform(), chart_rect.top(), chart_rect.bottom())
@@ -1706,24 +1707,21 @@ impl Chart {
         // horizontal scales and from daily and longer bars.
         let intraday = host_scale.is_none()
             && session_tf.duration_ms() < crate::model::Timeframe::Day1.duration_ms();
-        if self.config.show_session_breaks && intraday {
+        self.last_session_break_x = if self.config.show_session_breaks && intraday {
             let provider = self
                 .session_provider
                 .as_deref()
                 .unwrap_or(&exchange_session);
-            rendering::SessionBreakRenderer::new(rendering::SessionBreakRenderConfig {
-                line_color: self.config.session_break_color,
-                line_width: self.config.session_break_width,
-                style: self.config.session_break_style,
-            })
-            .render(
+            self.session_break_renderer().render(
                 &session_ctx,
                 time_data,
                 provider,
                 &time_coords,
                 time_coords.start_idx,
-            );
-        }
+            )
+        } else {
+            Vec::new()
+        };
         let extended_hours = if time_based && intraday && self.config.show_extended_hours {
             let accent = ui.active_theme().ui.accent;
             let shade = |color: egui::Color32, opacity| {
@@ -1880,10 +1878,14 @@ impl Chart {
 
         // Both paint paths and the summary box mix their shades with what the chart paints.
         let plot_background = self.plot_background(rect, rect.center());
+        let volume_decimals = self
+            .instrument()
+            .and_then(|instrument| instrument.volume_decimals);
         let host_config = footprint
             .filter(|_| time_based)
             .map(|(_, config)| FootprintConfig {
                 background: config.background.or(plot_background),
+                volume_decimals: config.volume_decimals.or(volume_decimals),
                 ..config.clone()
             });
         let host = footprint.map(|(flow, _)| flow).zip(host_config.as_ref());
@@ -1901,6 +1903,7 @@ impl Chart {
             });
         let feed_config = feed.map(|_| FootprintConfig {
             background: plot_background,
+            volume_decimals,
             ..FootprintConfig::from_chart_params(
                 &self.chart_type_params,
                 [colors.bullish, colors.bearish, colors.text, colors.text],
@@ -2488,6 +2491,7 @@ impl Chart {
                             profiles,
                             flow,
                             self.trade_profile_settings(),
+                            volume_decimals,
                         );
                     }
                 }
