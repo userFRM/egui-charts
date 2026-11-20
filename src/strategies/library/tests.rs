@@ -679,7 +679,7 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
     // next bars reach.
     for (increment, prices, expected) in [
         (
-            f64::NAN,
+            f64::INFINITY,
             keltner(),
             vec![(3, Buy, 10.), (5, Sell, 10.), (7, Buy, 10.)],
         ),
