@@ -693,14 +693,14 @@ mod tests {
             .unwrap();
         let study = chart.indicators().next().unwrap().1;
         let fill = study.projection_fill_color(study.projections().last().unwrap());
-        let box_bottom = painted
+        let projection = painted
             .iter()
             .find_map(|shape| match shape {
-                egui::Shape::Rect(rect) if rect.fill == fill => Some(rect.rect.bottom()),
+                egui::Shape::Rect(rect) if rect.fill == fill => Some(rect.rect),
                 _ => None,
             })
             .expect("the remaining-month projection is painted");
-        assert!(box_bottom < heading_y);
+        assert!(projection.bottom() < heading_y);
         let previous_close: Vec<_> = painted
             .iter()
             .filter_map(|shape| match shape {
@@ -719,6 +719,27 @@ mod tests {
         // Four years and three summary rows: 22 * (7 + 2) + 40.
         assert!((chart.pane_height(pane).unwrap() - 238.0).abs() < 0.5);
         assert_eq!(study.scale(), StudyScale::None);
+        let mut options = chart.chart_options().clone();
+        options.crosshair.mode = crate::config::CrosshairMode::Magnet;
+        options.crosshair.horz_line_color = Color32::GOLD;
+        options.crosshair.horz_line_style = crate::model::LineStyle::Solid;
+        options.crosshair.vert_line_visible = false;
+        chart.set_chart_options(options);
+        let pointer = egui::pos2(projection.left(), heading_y - 35.0);
+        let hovered = test_frames::shapes(
+            &ctx,
+            &mut chart,
+            0.2,
+            vec![egui::Event::PointerMoved(pointer)],
+        );
+        assert!(
+            hovered.iter().any(|shape| matches!(shape,
+                egui::Shape::LineSegment { points, stroke }
+                if stroke.color == Color32::GOLD
+                    && points.iter().all(|point| (point.y - pointer.y).abs() < 0.5)
+            )),
+            "the heatmap crosshair must not snap to price plots drawn in another pane"
+        );
         assert!(chart.move_series_to_pane(id, PaneId::MAIN));
         assert_eq!(chart.panes().len(), 1);
         let study = chart.indicators().next().unwrap().1;

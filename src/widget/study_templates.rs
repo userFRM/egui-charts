@@ -397,12 +397,15 @@ mod tests {
                 .scale(),
             StudyScale::Main
         );
-        let mut restored = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
-        restored.restore(&chart.snapshot().unwrap()).unwrap();
-        assert_eq!(restored.panes().len(), 1);
-        for (id, study) in restored.indicators() {
-            assert_eq!(restored.series_pane(id), Some(PaneId::MAIN));
-            assert!(study.is_overlay());
+        #[cfg(feature = "ui")]
+        {
+            let mut restored = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+            restored.restore(&chart.snapshot().unwrap()).unwrap();
+            assert_eq!(restored.panes().len(), 1);
+            for (id, study) in restored.indicators() {
+                assert_eq!(restored.series_pane(id), Some(PaneId::MAIN));
+                assert!(study.is_overlay());
+            }
         }
     }
 
