@@ -211,6 +211,8 @@ impl Chart {
             study_formatters: Default::default(),
             extended_hours: false,
             overnight_hours: false,
+            back_adjust_futures: false,
+            settlement_as_close: true,
             conversion: None,
             measured_axis_width: 0.0,
             last_layout: None,
@@ -252,6 +254,7 @@ impl Chart {
             last_rendered_price_rect: egui::Rect::NOTHING,
             last_rendered_volume_rect: egui::Rect::NOTHING,
             last_vertical_grid_x: Vec::new(),
+            last_session_break_x: Vec::new(),
             last_rendered_indicator_panes: Vec::new(),
             // Multi-chart sync
             layout_inactive: false,
