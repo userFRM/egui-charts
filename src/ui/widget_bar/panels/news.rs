@@ -795,6 +795,7 @@ impl NewsPanel {
                         let step = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
                             as isize
                             - i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) as isize;
+                        let back = i.consume_key(egui::Modifiers::SHIFT, egui::Key::Space) as isize;
                         let page = i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown)
                             as isize
                             + i.consume_key(egui::Modifiers::NONE, egui::Key::Space) as isize
