@@ -981,7 +981,9 @@ impl WatchlistPanel {
                             for (choice, label) in GROUPINGS {
                                 ui.selectable_value(grouping, choice, l10n::text(ui.ctx(), label));
                             }
-                        });
+                        })
+                        .response
+                        .accessible_name(l10n::text(ui.ctx(), "Group by"));
                     ui.checkbox(summary, l10n::text(ui.ctx(), "Summary"));
                 }
             });
