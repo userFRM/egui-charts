@@ -59,14 +59,14 @@ mod watchlist;
 pub use alert::{
     Alert, AlertCalendar, AlertChannelComparison, AlertComparison, AlertCondition, AlertDelivery,
     AlertFrequency, AlertId, AlertInputs, AlertPositionProgress, AlertRule, AlertSource,
-    AlertSourceName, AlertStatus, AlertStudy, CustomAlertEvent, NotificationSchedule,
+    AlertSourceName, AlertStatus, AlertStudy, AlertTrigger, CustomAlertEvent, NotificationSchedule,
     NotificationWindow,
 };
+#[cfg(any(feature = "widget", feature = "studies"))]
+pub(crate) use bar::index_at_with_timeframe;
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
-pub(crate) use bar::{
-    index_at, index_at_with_timeframe, numeric_positions, time_at, time_at_with_timeframe,
-};
+pub(crate) use bar::{index_at, numeric_positions, time_at, time_at_with_timeframe};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 #[cfg(feature = "widget")]

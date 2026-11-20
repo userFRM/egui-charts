@@ -82,6 +82,10 @@ impl Indicator for AroonOscillator {
     fn line_count(&self) -> usize {
         1
     }
+
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
     fn plot_variants(&self, _line: usize) -> Vec<crate::studies::PlotVariant> {
         vec![crate::studies::PlotVariant::new(
             "Below zero",
