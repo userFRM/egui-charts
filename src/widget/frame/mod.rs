@@ -2487,6 +2487,7 @@ impl Chart {
                             profiles,
                             flow,
                             self.trade_profile_settings(),
+                            volume_decimals,
                         );
                     }
                 }
