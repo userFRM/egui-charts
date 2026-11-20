@@ -2105,6 +2105,21 @@ mod tests {
             {
                 inert.push((tool, "colour"));
             }
+            // The colour controls also change a drawing whose text has a colour of its own.
+            #[cfg(feature = "ui")]
+            {
+                let recolored = |color| {
+                    painted(&|d| {
+                        d.text_color = Some([0, 200, 0, 255]);
+                        d.recolor(color);
+                    })
+                };
+                if tool.supports_color()
+                    && recolored([10, 20, 30, 255]) == recolored([200, 100, 50, 255])
+                {
+                    inert.push((tool, "colour with a text colour"));
+                }
+            }
             // The Text tab offers this size for text, trend angles and chart patterns;
             // the Style tab offers it for a price label.
             let sized = tool.supports_text()

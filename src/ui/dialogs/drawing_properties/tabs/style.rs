@@ -84,26 +84,40 @@ impl StyleTab {
                 && style.color
             {
                 ui.label(l10n::text(ui.ctx(), "Color"));
-                color_picker.sel_color = props.color;
+                // Text with a colour of its own is painted in it.
+                let text = props
+                    .tool_settings
+                    .as_ref()
+                    .and_then(|template| template.settings.text_color_override());
+                color_picker.sel_color = text.map_or(props.color, |[r, g, b, a]| {
+                    Color32::from_rgba_unmultiplied(r, g, b, a)
+                });
                 let picker = ColorPicker::new(color_picker, "drawing_props_color");
                 // Without tool settings only the paint colour is held, which reads back as
                 // another hue at each opacity: the editor then keeps its own exact colour.
-                let picked = if props.tool_settings.is_some() {
+                let picked = if let Some(text) = text {
+                    picker.show_unmultiplied(ui, text).inner
+                } else if props.tool_settings.is_some() {
                     picker.show_unmultiplied(ui, props.color_rgba()).inner
                 } else {
                     picker.show(ui).inner.map(|c| c.to_srgba_unmultiplied())
                 };
                 if let Some([r, g, b, a]) = picked {
-                    // The custom editor sets the opacity; a palette swatch keeps the line's.
-                    let a = if color_picker.custom_mode {
+                    // The custom editor sets the opacity, of the text where that is what the row
+                    // edits; a palette swatch keeps the current one.
+                    let custom = color_picker.custom_mode;
+                    let line = if custom && text.is_none() {
                         a
                     } else {
                         props.color.a()
                     };
-                    let rgba = [r, g, b, a];
-                    props.color = Color32::from_rgba_unmultiplied(r, g, b, a);
+                    props.color = Color32::from_rgba_unmultiplied(r, g, b, line);
                     if let Some(template) = &mut props.tool_settings {
-                        template.settings.color = rgba;
+                        template.settings.color = [r, g, b, line];
+                        if let Some(text) = text {
+                            template.settings.text_color =
+                                Some([r, g, b, if custom { a } else { text[3] }]);
+                        }
                     }
                 }
                 ui.end_row();
@@ -1350,6 +1364,7 @@ mod tests {
     fn palette_colours_keep_the_line_opacity() {
         for (tool, picker, alpha, fill) in [
             (DrawingToolType::Highlighter, 0, 51, None),
+            (DrawingToolType::TextLabel, 0, 255, None),
             (DrawingToolType::FibonacciRetracement, 1, 255, None),
             (DrawingToolType::FibonacciChannel, 1, 255, None),
             (DrawingToolType::FibonacciWedge, 1, 255, None),
@@ -1365,6 +1380,9 @@ mod tests {
             let chart = Chart::new(BarData::new());
             let mut drawing = Drawing::new(0, tool);
             drawing.fill_color = fill;
+            if tool == DrawingToolType::TextLabel {
+                drawing.text_color = Some([242, 54, 69, 128]);
+            }
             if let Some(config) = &mut drawing.fib_config {
                 for (i, level) in config.levels.iter_mut().enumerate() {
                     level.color[3] = if i % 2 == 0 { 51 } else { 153 };
@@ -1421,6 +1439,12 @@ mod tests {
             ]);
             let [r, g, b, _] = swatch.to_srgba_unmultiplied();
             assert_eq!(props.color, Color32::from_rgba_unmultiplied(r, g, b, alpha));
+            if tool == DrawingToolType::TextLabel {
+                assert_eq!(
+                    props.tool_settings.as_ref().unwrap().settings.text_color,
+                    Some([r, g, b, 128])
+                );
+            }
 
             if matches!(
                 tool,
@@ -1467,8 +1491,10 @@ mod tests {
             let line = Drawing::new(2, DrawingToolType::TrendLine);
             assert_eq!((highlighter.color[3], line.color[3]), (51, 255));
             highlighter.color[3] = alpha;
-            chart.drawings_mut().drawings = vec![highlighter, line];
-            chart.drawings_mut().select_drawings([1, 2]);
+            let mut text = Drawing::new(3, DrawingToolType::TextLabel);
+            text.text_color = Some([242, 54, 69, 200]);
+            chart.drawings_mut().drawings = vec![highlighter, line, text];
+            chart.drawings_mut().select_drawings([1, 2, 3]);
             let target = chart.drawings().drawings[opened - 1].clone();
             let mut props = DrawingProps::from_drawing(&target, &chart);
             let mut pickers: [ColorPickerState; 3] = Default::default();
@@ -1529,9 +1555,15 @@ mod tests {
                     .drawings()
                     .drawings
                     .iter()
-                    .map(|d| d.color)
+                    .map(|d| {
+                        if d.id == 3 {
+                            d.text_color.unwrap()
+                        } else {
+                            d.color
+                        }
+                    })
                     .collect::<Vec<_>>(),
-                vec![[r, g, b, alpha], [r, g, b, 255]],
+                vec![[r, g, b, alpha], [r, g, b, 255], [r, g, b, 200]],
             ));
             let mut custom =
                 DrawingProps::from_drawing(&chart.drawings().drawings[opened - 1], &chart);
@@ -1543,11 +1575,10 @@ mod tests {
                 )
                 .unwrap();
             assert!(
-                chart
-                    .drawings()
-                    .drawings
-                    .iter()
-                    .all(|d| d.color == [255, 255, 255, 128]),
+                chart.drawings().drawings.iter().all(|d| {
+                    d.color == [255, 255, 255, 128]
+                        && (d.id != 3 || d.text_color == Some([255, 255, 255, 128]))
+                }),
                 "an edited opacity applies to the entire selection"
             );
         }

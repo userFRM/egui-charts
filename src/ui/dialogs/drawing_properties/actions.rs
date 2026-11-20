@@ -259,10 +259,14 @@ impl DrawingProps {
             // The dialog opened with the target's values: one that differs from them was edited,
             // and only edited values are written, so each drawing keeps the rest of its own.
             if hue_edited {
-                drawing.recolor([r, g, b, drawing.color[3]]);
+                let [.., opacity] = drawing.text_color_override().unwrap_or(drawing.color);
+                drawing.recolor([r, g, b, opacity]);
             }
             if a != target.color[3] {
                 drawing.color[3] = a;
+                if drawing.text_color_override().is_some() {
+                    drawing.text_color = drawing.text_color.map(|[r, g, b, _]| [r, g, b, a]);
+                }
             }
             if self.line_width != target.stroke_width {
                 drawing.stroke_width = self.line_width;
