@@ -3,8 +3,8 @@
 //! Provide playback controls for market replay functionality including
 //! play/pause/stop buttons, speed selector, progress bar, and time display.
 
-use super::ReplaySpeed;
 use super::model::{ReplayCommand, ReplayProgress, ToolbarReplayState as ReplayState};
+use super::{PlaybackState, ReplayAction, ReplayController, ReplaySpeed};
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
@@ -70,6 +70,40 @@ impl ReplayToolbarState {
     }
 }
 
+/// The toolbar's view of a replay controller: its playback state, speed and position. The
+/// progress counts the bars revealed, the current one included, as the docked controls'
+/// counter does; a controller outside replay mode has none.
+impl From<&ReplayController> for ReplayToolbarState {
+    fn from(controller: &ReplayController) -> Self {
+        let state = &controller.state;
+        let replay_state = match state.playback_state {
+            PlaybackState::Inactive => ReplayState::Stopped,
+            PlaybackState::Paused => ReplayState::Paused,
+            PlaybackState::Playing => ReplayState::Playing,
+            PlaybackState::Finished => ReplayState::Finished,
+        };
+        let progress = state
+            .is_active()
+            .then(|| controller.curr_ts())
+            .flatten()
+            .map(|&current_time| {
+                let bars_played = state.curr_bar + 1;
+                ReplayProgress {
+                    current_time,
+                    bars_played,
+                    total_bars: state.total_bars,
+                    ticks_processed: 0,
+                    progress_pct: bars_played as f32 / state.total_bars.max(1) as f32 * 100.0,
+                }
+            });
+        Self {
+            replay_state,
+            speed: state.speed,
+            progress,
+        }
+    }
+}
+
 /// Action emitted by the replay toolbar
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -88,6 +122,24 @@ pub enum ReplayToolbarAction {
     StepBackward,
     /// Open replay settings dialog
     OpenSettings,
+}
+
+/// The controller action each toolbar action stands for, as the docked
+/// [`ReplayControls`](super::ReplayControls) send it: Play toggles playback, so it plays a
+/// paused replay and restarts a finished one from its first bar; Stop leaves replay, as Exit
+/// replay does; Settings is left to the host and converts to [`ReplayAction::None`].
+impl From<ReplayToolbarAction> for ReplayAction {
+    fn from(action: ReplayToolbarAction) -> Self {
+        match action {
+            ReplayToolbarAction::Play => ReplayAction::TogglePlayPause,
+            ReplayToolbarAction::Pause => ReplayAction::Pause,
+            ReplayToolbarAction::Stop => ReplayAction::Stop,
+            ReplayToolbarAction::SetSpeed(speed) => ReplayAction::SetSpeed(speed.multiplier()),
+            ReplayToolbarAction::StepForward => ReplayAction::StepForward,
+            ReplayToolbarAction::StepBackward => ReplayAction::StepBackward,
+            ReplayToolbarAction::OpenSettings => ReplayAction::None,
+        }
+    }
 }
 
 /// Replay toolbar widget
@@ -220,9 +272,11 @@ impl<'a> ReplayToolbar<'a> {
             ReplayState::Error => (&icons::STATUS_ERROR, "Error", ReplayToolbarAction::Stop),
         };
 
+        // Outside replay mode Play toggles nothing; the docked controls offer no Play there.
         let response = IconButton::new(icon)
             .size(self.button_size())
             .tooltip(tooltip)
+            .enabled(self.state.replay_state != ReplayState::Stopped)
             .show(ui);
 
         if response.clicked() {
@@ -236,7 +290,7 @@ impl<'a> ReplayToolbar<'a> {
         let response = IconButton::new(&icons::MEDIA_STOP)
             .size(self.button_size())
             .tooltip("Stop")
-            .enabled(self.state.replay_state.is_active())
+            .enabled(self.state.replay_state != ReplayState::Stopped)
             .show(ui);
 
         if response.clicked() {
@@ -249,7 +303,7 @@ impl<'a> ReplayToolbar<'a> {
     fn show_step_buttons(&self, ui: &mut Ui) -> Option<ReplayToolbarAction> {
         let can_step = matches!(
             self.state.replay_state,
-            ReplayState::Paused | ReplayState::Stopped | ReplayState::Finished
+            ReplayState::Paused | ReplayState::Finished
         );
 
         let mut action = None;
@@ -405,5 +459,87 @@ mod tests {
             })
             .collect();
         assert_eq!(shown, ["0.25x", "0.5x", "1x", "4x", "10x", "50x", "100x"]);
+    }
+
+    /// Each toolbar action moves the controller as the docked controls' button for it does.
+    #[test]
+    fn toolbar_actions_drive_the_controller_as_the_docked_controls_do() {
+        use PlaybackState::*;
+        let controller = || {
+            let bars = (0..10)
+                .map(|minute| {
+                    crate::model::Bar::new(
+                        chrono::DateTime::from_timestamp(1_704_067_200 + minute * 60, 0).unwrap(),
+                        10.0,
+                        12.0,
+                        9.0,
+                        11.0,
+                        1.0,
+                    )
+                })
+                .collect();
+            let mut replay = ReplayController::new(bars, vec![]);
+            replay.handle_action(ReplayAction::JumpToBar(4));
+            replay
+        };
+        let harness = |replay: ReplayController| {
+            Harness::builder()
+                .allow_missing_glyphs()
+                .with_accessibility_check(false)
+                .build_ui_state(
+                    |ui, replay: &mut ReplayController| {
+                        let state = ReplayToolbarState::from(&*replay);
+                        if let Some(action) = ReplayToolbar::new(&state).show(ui) {
+                            replay.handle_action(action.into());
+                        }
+                    },
+                    replay,
+                )
+        };
+        let rows = [
+            (vec![], "Play", (4, Playing)),
+            (vec![ReplayAction::Play], "Pause", (4, Paused)),
+            (vec![], "Step forward", (5, Paused)),
+            (vec![], "Step backward", (3, Paused)),
+            // Exit replay on the docked controls.
+            (vec![], "Stop", (0, Inactive)),
+            // A finished replay plays again from its first bar.
+            (vec![ReplayAction::JumpToEnd], "Play", (0, Playing)),
+            (vec![], "Settings", (4, Paused)),
+        ];
+        let expected: Vec<_> = rows.iter().map(|row| row.2).collect();
+        let moved: Vec<_> = rows
+            .into_iter()
+            .map(|(setup, label, _)| {
+                let mut replay = controller();
+                for action in setup {
+                    replay.handle_action(action);
+                }
+                let mut harness = harness(replay);
+                harness.run();
+                harness.get_by_label(label).click();
+                harness.run();
+                let state = &harness.state().state;
+                (state.curr_bar, state.playback_state)
+            })
+            .collect();
+        assert_eq!(moved, expected);
+
+        // The speed menu offers the controller's presets, 50x among them.
+        let mut harness = harness(controller());
+        harness.run();
+        harness.get_by_role(egui::Role::ComboBox).click();
+        harness.run();
+        harness.get_by_label("50x").click();
+        harness.run();
+        assert_eq!(harness.state().state.speed, ReplaySpeed::Turbo);
+
+        // Outside replay mode the toolbar offers no button that would do nothing.
+        harness.state_mut().handle_action(ReplayAction::Stop);
+        harness.run();
+        for label in ["Play", "Step forward"] {
+            let node = harness.get_by_label(label);
+            assert!(node.accesskit_node().is_disabled(), "{label}");
+        }
     }
 }

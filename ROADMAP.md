@@ -69,7 +69,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] `ReplayClock` merges timestamped trades, quotes and depth events across symbols, supports speed and seek, and routes through normal sinks. `ReplayDriver` gives each subscription the executions of the session windows it selected. Its seeks and playback at any speed build the same candles, flat candles of quiet slots included, and a seek delivers every bar through the position. Order-flow studies present when a chart enters its replay follow its cursor too. Host-fed replay seeks count each rebuilt execution once in order-flow studies, including when a trade page arrives in the same frame or a study connects before the chart drains the reset.
 - [x] `RecordingWriter` and `RecordingReader` encode/decode versioned trade and depth events through supplied I/O streams. The demo keeps at most five minutes and 8 MiB of recorded events per symbol subscription, with book snapshots at retained boundaries, shows the available market replay range, and hides unrecorded live analytics during market playback. Its menu saves a local recording with instrument metadata and imports it for deterministic playback on the matching chart, where every start chosen on the replay bar stays in the recording; file size, event count and parsing batches are bounded, and invalid files leave the workspace intact.
 - [x] Additional-symbol and additional-interval study histories are windowed to the replay cutoff.
-- [ ] Connect the standalone `ReplayToolbar` actions to the replay controller.
+- [x] The standalone `ReplayToolbar` builds its state from a `ReplayController` and its actions convert to `ReplayAction`, so it drives a replay as the docked replay controls do.
 
 ## Drawing Tools
 
