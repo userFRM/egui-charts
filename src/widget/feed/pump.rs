@@ -1160,6 +1160,14 @@ impl Chart {
             .into_iter()
             .chain(link.depth_cursor)
             .min();
+        // Pages entirely before the retention would be pruned immediately.
+        let since = history.retention_start();
+        if before
+            .zip(since)
+            .is_some_and(|(before, since)| before <= since)
+        {
+            return;
+        }
         if let Some(before) = before
             && (!self.older_bars_drawn
                 || self
@@ -1172,12 +1180,14 @@ impl Chart {
         }
         let mut request = DepthRequest::new(
             self.symbol.clone(),
-            history.config().columns,
+            history.config().page_columns(),
             history.config().clone(),
             tick,
         );
         request.before = before;
-        request.since = before.and_then(|before| self.range_start(before));
+        request.since = before
+            .and_then(|before| self.range_start(before))
+            .max(since);
         request.conversion = self.conversion.clone();
         let reply = link.reply(Request::Depth(request.clone()));
         link.feed.depth_history(request, reply);

@@ -152,6 +152,7 @@ impl FeedDisplay {
             return;
         };
         chart.set_liquidity_heatmap_config(self.settings.heatmap);
+        chart.set_depth_retention(self.settings.heatmap_retention);
         chart.set_liquidity_heatmap(self.settings.show_heatmap);
         chart.set_order_book_view(self.settings.order_book.clone());
         chart.set_volume_bubbles(
@@ -528,6 +529,21 @@ impl Chart {
         {
             // Capture the removed study before the volume setting's action closes.
             self.remove_series(id);
+        }
+        // Turning the volume setting on adds its study on the next frame, so at the study cap the
+        // action leaves the setting off, unless a volume study already on the chart serves it.
+        #[cfg(feature = "studies")]
+        if self.config.show_volume
+            && self
+                .history
+                .pending
+                .as_ref()
+                .and_then(|pending| pending.before.config.as_ref())
+                .is_some_and(|before| !before.show_volume)
+            && self.study_limit_reached()
+            && !self.indicators().any(|(_, study)| study.is_volume())
+        {
+            self.config.show_volume = false;
         }
         let Some(mut pending) = self.history.pending.take() else {
             return;
@@ -2365,6 +2381,7 @@ mod tests {
             chart.attach_feed(std::sync::Arc::new(Feed), 1);
             chart.feed_link.as_mut().unwrap().book_visible = visible;
             chart.user_action(|chart| {
+                chart.set_depth_retention(Some(chrono::TimeDelta::hours(1)));
                 chart.set_liquidity_heatmap(true);
                 let mut view = chart.order_book_view();
                 view.profile = BookProfile::LargestOrder;
@@ -2373,12 +2390,17 @@ mod tests {
             });
             assert!(chart.undo());
             let settings = ChartSettingsState::from_chart(&chart).order_flow;
+            assert_eq!(settings.heatmap_retention, None);
             assert!(!settings.show_heatmap);
             assert!(!settings.show_volume_bubbles);
             assert_eq!(settings.order_book.profile, BookProfile::Total);
             assert_eq!(chart.feed_link.as_ref().unwrap().book_visible, visible);
             assert!(chart.redo());
             let settings = ChartSettingsState::from_chart(&chart).order_flow;
+            assert_eq!(
+                settings.heatmap_retention,
+                Some(chrono::TimeDelta::hours(1))
+            );
             assert!(settings.show_heatmap && settings.show_volume_bubbles);
             assert_eq!(settings.order_book.profile, BookProfile::LargestOrder);
             chart.set_liquidity_heatmap(false);
