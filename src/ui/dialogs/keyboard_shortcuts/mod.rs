@@ -867,6 +867,17 @@ mod tests {
         h.get_by_role_and_label(Role::Button, "Keep").click();
         h.run();
         assert!(h.query_by_label(&question).is_none());
+        let trend_line = A::DrawingTool(DrawingToolType::TrendLine);
+        assert_eq!(
+            h.state()
+                .0
+                .editing
+                .as_ref()
+                .unwrap()
+                .draft
+                .shortcut(trend_line),
+            Some(alt(Key::T))
+        );
         h.get_by_role_and_label(Role::Button, "Change Go to a date")
             .click();
         h.run();
