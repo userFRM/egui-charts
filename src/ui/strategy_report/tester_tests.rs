@@ -595,37 +595,54 @@ fn requested_history_is_scoped_and_superseded_by_edits_and_chart_changes() {
 /// One-minute bars cannot give Technical Ratings a 30-second rating.
 #[test]
 fn single_runs_check_inputs_on_the_chart_interval_before_requesting_history() {
-    let mut tester = StrategyTester::default();
-    tester.select_strategy("Technical Ratings").unwrap();
-    tester
-        .set_input("timeframe", InputValue::Timeframe(Some(Timeframe::Sec30)))
-        .unwrap();
-    let mut settings = tester.settings().clone();
-    settings.start_time = Some(bars()[2].time);
-    tester.set_settings(settings).unwrap();
-    let previous = StrategyReport::new("Previous", "TEST", Timeframe::Min1, 1000.0);
-    tester.set_report(Some(previous.clone()), &bars());
-    let mut h = Harness::builder()
-        .with_size(Vec2::new(1440.0, 900.0))
-        .build_ui_state(
-            |ui, (tester, actions): &mut (StrategyTester, Vec<StrategyTesterAction>)| {
-                actions.extend(tester.show(ui, "TEST", Timeframe::Min1, &bars()));
-            },
-            (tester, Vec::new()),
+    for start_time in [Some(bars()[2].time), None] {
+        let mut tester = StrategyTester::default();
+        tester.select_strategy("Technical Ratings").unwrap();
+        tester
+            .set_input("timeframe", InputValue::Timeframe(Some(Timeframe::Sec30)))
+            .unwrap();
+        let mut settings = tester.settings().clone();
+        settings.start_time = start_time;
+        tester.set_settings(settings).unwrap();
+        let previous = StrategyReport::new("Previous", "TEST", Timeframe::Min1, 1000.0);
+        let mut h = Harness::builder()
+            .with_size(Vec2::new(1440.0, 900.0))
+            .build_ui_state(
+                |ui, (tester, actions): &mut (StrategyTester, Vec<StrategyTesterAction>)| {
+                    actions.extend(tester.show(ui, "TEST", Timeframe::Min1, &bars()));
+                },
+                (tester, Vec::new()),
+            );
+        let tester = &mut h.state_mut().0;
+        tester.set_report(Some(previous.clone()), &bars());
+        tester.stale = false;
+        tester.trials.push(Trial {
+            inputs: Vec::new(),
+            label: "Previous trial".into(),
+            profit: 1.0,
+            drawdown: Some(2.0),
+            trades: 3,
+        });
+        tester.skipped.push(("Previous refusal", 2));
+        assert!(!h.state().0.is_stale());
+        h.get_by_role_and_label(Role::Button, "Run").click();
+        h.run();
+        assert!(
+            !h.state()
+                .1
+                .iter()
+                .any(|action| matches!(action, StrategyTesterAction::RequestHistory(_))),
+            "a refused run requests no history"
         );
-    h.get_by_role_and_label(Role::Button, "Run").click();
-    h.run();
-    assert!(
-        !h.state()
-            .1
-            .iter()
-            .any(|action| matches!(action, StrategyTesterAction::RequestHistory(_))),
-        "a refused run requests no history"
-    );
-    h.get_by_label(
-        "indicator timeframe must be the chart interval or a longer time interval made of whole chart bars",
-    );
-    assert_eq!(h.state().0.report(), Some(&previous));
+        h.get_by_label(
+            "indicator timeframe must be the chart interval or a longer time interval made of whole chart bars",
+        );
+        assert_eq!(h.state().0.report(), Some(&previous));
+        assert!(!h.state().0.is_stale());
+        assert_eq!(h.state().0.trials.len(), 1);
+        assert_eq!(h.state().0.trials[0].label, "Previous trial");
+        assert_eq!(h.state().0.skipped, [("Previous refusal", 2)]);
+    }
 }
 
 #[test]
