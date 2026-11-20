@@ -580,18 +580,17 @@ impl Trading {
                 .iter()
                 .rev()
                 .map(|fill| {
-                    let order = self.account_panel.fills.orders.get(&fill.order);
-                    let name = order.map(|order| order.symbol.as_str()).unwrap_or("");
+                    let name = self.account_panel.fills.symbol(fill);
                     Row {
                         cells: vec![
-                            symbol(name),
+                            symbol(name.unwrap_or("")),
                             side(fill.side, fill.side.label()),
-                            plain(quantity(name, fill.quantity)),
-                            plain(price(name, fill.price)),
+                            plain(quantity(name.unwrap_or(""), fill.quantity)),
+                            plain(price(name.unwrap_or(""), fill.price)),
                             plain(time(Some(fill.time))),
                             plain(fill.order.to_string()),
                         ],
-                        symbol: order.map(|order| order.symbol.clone()),
+                        symbol: name.map(str::to_owned),
                         edit: None,
                         close: None,
                     }
