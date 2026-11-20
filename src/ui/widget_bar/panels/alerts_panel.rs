@@ -2230,8 +2230,8 @@ mod tests {
         assert!(panel.alerts().is_empty());
     }
 
-    /// Guards #3737: an unknown price cannot save an accidental zero, and a typed level
-    /// survives subsequent quotes and a chart symbol change.
+    /// Guards #3737: an unknown price cannot save zero; replacing a suggested level
+    /// accepts grouped negative input and survives quote and symbol changes.
     #[test]
     fn inline_level_is_empty_without_a_quote_and_keeps_user_input() {
         use egui_kittest::{
@@ -2277,21 +2277,17 @@ mod tests {
                 Some(text),
             );
         }
-        h.state_mut().set_price("SIM", None, Some(0.25));
-        h.run();
-        assert!(
-            h.get_by_label("Create alert")
-                .accesskit_node()
-                .is_disabled()
-        );
         h.get_by_role_and_label(egui::Role::TextInput, "Level")
             .click();
         h.run();
         h.get_by_role_and_label(egui::Role::TextInput, "Level")
-            .type_text("123.45");
+            .type_text("−1 234.56");
         h.key_press(egui::Key::Enter);
         h.run();
-        assert_eq!(h.state().draft.condition, AlertCondition::Crossing(123.45));
+        assert_eq!(
+            h.state().draft.condition,
+            AlertCondition::Crossing(-1234.56)
+        );
         assert!(
             !h.get_by_label("Create alert")
                 .accesskit_node()
@@ -2300,7 +2296,10 @@ mod tests {
         h.state_mut().set_price("SIM", Some(99.0), Some(0.25));
         h.state_mut().set_price("NEXT", Some(200.0), Some(0.25));
         h.run();
-        assert_eq!(h.state().draft.condition, AlertCondition::Crossing(123.45));
+        assert_eq!(
+            h.state().draft.condition,
+            AlertCondition::Crossing(-1234.56)
+        );
     }
 
     #[cfg(feature = "alert-engine")]

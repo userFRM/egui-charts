@@ -1562,16 +1562,25 @@ pub(crate) fn rule_form(
         | AlertCondition::Below(v) => {
             ui.label(l10n::text(ui.ctx(), "Level"));
             if let Some(text) = level_text {
-                level_edited = ui
-                    .add(
-                        egui::TextEdit::singleline(text)
-                            .desired_width(0.0)
-                            .clip_text(false)
-                            .min_size(ui.spacing().interact_size),
-                    )
+                let mut field = egui::TextEdit::singleline(text)
+                    .desired_width(0.0)
+                    .clip_text(false)
+                    .min_size(ui.spacing().interact_size)
+                    .show(ui);
+                if field.response.gained_focus() {
+                    field
+                        .state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::select_all(&field.galley)));
+                    field.state.store(ui.ctx(), field.response.id);
+                }
+                level_edited = field
+                    .response
+                    .response
                     .accessible_name(l10n::text(ui.ctx(), "Level"))
                     .changed();
-                *v = text.trim().parse().unwrap_or(f64::NAN);
+                let number: String = text.split_whitespace().collect();
+                *v = number.replace('−', "-").parse().unwrap_or(f64::NAN);
             } else {
                 ui.add(egui::DragValue::new(v).speed(0.01))
                     .accessible_name(l10n::text(ui.ctx(), "Level"));
