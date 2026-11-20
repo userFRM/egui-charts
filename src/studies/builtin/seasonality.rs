@@ -10,7 +10,8 @@
 //! from the starting year to `y - 1`:
 //!
 //! - Average = mean of the changes
-//! - Standard deviation = population standard deviation of the changes
+//! - Standard deviation = sample standard deviation of the changes, dividing by one less than
+//!   their number; a single change has none
 //! - Months = number of changes
 //! - Expected = previous month's close * (1 + Average / 100)
 //!
@@ -20,10 +21,22 @@
 //! without a previous close or without a change in an earlier year has no value. Months are
 //! calendar months of the bar's UTC date, the date a feed gives a daily or longer bar.
 //!
-//! The heatmap includes each loaded year and monthly average, population standard deviation
+//! The heatmap includes each loaded year and monthly average, sample standard deviation
 //! and percentage positive. Its current month uses the latest close; projections use only
 //! earlier years. The final projection extends through the remaining calendar-month slots
 //! of the time axis, without adding bars to the source history.
+//!
+//! Month and Average cells use the change's sign colour, increasing in opacity up to the
+//! cutoff. Positive cells use their distance from 50%; standard deviations have no sign tint.
+//!
+//! # Inputs
+//! Starting year defaults to 2015. Ignored months accepts comma-separated YYYY-MM entries,
+//! excluded from averages, deviations, percentages and projections and shown as Skipped.
+//! The Expected plot colour is the positive colour; Negative colour sets falling cells, line
+//! segments and the remaining-month box. Historical bands keep their own Style tab colours.
+//! Colour intensity cutoff (%) defaults to 10. Show averages, Show standard deviation and
+//! Show percent positive default to on. Table position defaults to bottom centre; Table
+//! width (%) and Table height (%) default to 0, fitting the cells and rows.
 //!
 //! # Example
 //! ```
@@ -44,23 +57,31 @@
 //! assert_eq!(study.values().value(4, 3), Some(1.0));
 //! ```
 
+use super::performance::{LABEL_FILL, share};
 use crate::model::Bar;
 use crate::model::LineStyle;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{
     Indicator, IndicatorValue, IndicatorValues, PlotStyle, PlotType, StudyCell, StudyProjection,
-    StudyTable,
+    StudyTable, TablePosition,
 };
 use chrono::{Datelike, Months};
 use egui::Color32;
 use std::collections::BTreeMap;
+
+/// Behind a month without a change or one excluded from the calculation.
+const EMPTY_FILL: Color32 = Color32::from_rgba_unmultiplied_const(120, 123, 134, 128);
 
 /// Monthly projection from the average change of the same month in earlier years, drawn
 /// on the price chart.
 #[derive(Clone, Debug)]
 pub struct Seasonality {
     start_year: i32,
+    /// Year and month pairs left out of the calculation, as typed.
+    ignored_months: String,
+    /// `ignored_months` read as (year, zero-based month).
+    ignored: Vec<(i32, u32)>,
     values: IndicatorValues,
     stepper: Stepper<State>,
     history: [Vec<(i32, f64)>; 12],
@@ -69,10 +90,21 @@ pub struct Seasonality {
     before_last_year: Option<i32>,
     table: StudyTable,
     projection: Vec<StudyProjection>,
-    /// One per line: Expected, Previous close, Average, Standard deviation, Months.
+    /// One per line: Expected, Previous close, Average, Standard deviation, Months. The
+    /// Expected colour is the positive colour of the lines, boxes and cells.
     colors: [Color32; 5],
-    /// Expected line and box colour of a month whose average change is negative.
-    negative: Color32,
+    /// Colour of a falling month's line, box and cells.
+    negative_color: Color32,
+    /// The change, in percent, from which a cell or box takes its full colour.
+    color_cutoff: f64,
+    show_averages: bool,
+    show_std_dev: bool,
+    show_positive: bool,
+    table_position: TablePosition,
+    /// The table's width in percent of the pane, 0 to fit its cells.
+    table_width: f64,
+    /// The table's height in percent of the pane, 0 to fit its rows.
+    table_height: f64,
     visible: bool,
 }
 
@@ -98,11 +130,13 @@ impl Default for State {
 }
 
 impl Seasonality {
-    /// Seasonality over every loaded year.
+    /// Seasonality from 2015 on.
     pub fn new() -> Self {
         let gray = palette::GRAY;
         Self {
-            start_year: 1900,
+            start_year: 2015,
+            ignored_months: String::new(),
+            ignored: Vec::new(),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             history: Default::default(),
@@ -122,7 +156,14 @@ impl Seasonality {
             },
             projection: Vec::new(),
             colors: [palette::UP, gray, gray, gray, gray],
-            negative: Color32::from_rgb(242, 55, 69),
+            negative_color: palette::DOWN,
+            color_cutoff: 10.0,
+            show_averages: true,
+            show_std_dev: true,
+            show_positive: true,
+            table_position: TablePosition::BottomCenter,
+            table_width: 0.0,
+            table_height: 0.0,
             visible: true,
         }
     }
@@ -133,10 +174,11 @@ impl Seasonality {
         self
     }
 
-    /// Colours of a month whose average change is positive or zero, and negative.
+    /// Colours of a month whose average change is positive or zero, and negative, and of the
+    /// heatmap cells.
     pub fn with_colors(mut self, positive: Color32, negative: Color32) -> Self {
         self.colors[0] = positive;
-        self.negative = negative;
+        self.negative_color = negative;
         self
     }
 }
@@ -147,6 +189,40 @@ impl Default for Seasonality {
     }
 }
 
+/// Reads comma-separated YYYY-MM entries as years and zero-based months; empty entries do
+/// not exclude anything.
+fn ignored_months(list: &str) -> Result<Vec<(i32, u32)>, String> {
+    let mut months = Vec::new();
+    for entry in list
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        let month = entry
+            .split_once('-')
+            .filter(|(year, month)| {
+                year.len() == 4
+                    && month.len() == 2
+                    && year
+                        .bytes()
+                        .chain(month.bytes())
+                        .all(|b| b.is_ascii_digit())
+            })
+            .and_then(|(year, month)| {
+                let month: u32 = month.parse().ok()?;
+                (1..=12)
+                    .contains(&month)
+                    .then(|| (year.parse().ok(), month - 1))
+            })
+            .and_then(|(year, month)| Some((year?, month)))
+            .ok_or_else(|| {
+                format!("cannot read {entry:?}: write each month as YYYY-MM, such as 2020-03")
+            })?;
+        months.push(month);
+    }
+    Ok(months)
+}
+
 impl Indicator for Seasonality {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -155,8 +231,33 @@ impl Indicator for Seasonality {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        start_year: integer("Starting year", 0, 9999)
-    ; {});
+        start_year: integer("Starting year", 0, 9999),
+        ignored_months: text("Ignored months"),
+        negative_color: color("Negative colour"),
+        color_cutoff: number("Colour intensity cutoff (%)", 0.01, f64::MAX),
+        show_averages: toggle("Show averages"),
+        show_std_dev: toggle("Show standard deviation"),
+        show_positive: toggle("Show percent positive"),
+        table_position: choice("Table position", TablePosition::ALL),
+        table_width: number("Table width (%)", 0.0, 100.0),
+        table_height: number("Table height (%)", 0.0, 100.0)
+    ; changed, previous => {
+        if changed == "ignored_months" {
+            match ignored_months(&self.ignored_months) {
+                Ok(months) => self.ignored = months,
+                Err(reason) => {
+                    // The input macro has already assigned the refused text.
+                    if let crate::studies::InputValue::Text(text) = previous {
+                        self.ignored_months = text;
+                    }
+                    return Err(crate::studies::StudyError::InvalidInput {
+                        id: changed.into(),
+                        reason,
+                    });
+                }
+            }
+        }
+    });
 
     fn name(&self) -> &str {
         "Seasonality"
@@ -235,21 +336,23 @@ impl Indicator for Seasonality {
                     if let Some(base) = state.previous_close {
                         let past: Vec<f64> = self.history[key.1 as usize]
                             .iter()
-                            .filter(|(year, _)| *year < key.0)
+                            .filter(|&&(year, _)| {
+                                year < key.0 && !self.ignored.contains(&(year, key.1))
+                            })
                             .map(|&(_, change)| change)
                             .collect();
                         if !past.is_empty() {
                             let n = past.len() as f64;
                             let average = past.iter().sum::<f64>() / n;
-                            let variance =
-                                past.iter().map(|c| (c - average).powi(2)).sum::<f64>() / n;
-                            state.row = [
-                                base * (1.0 + average / 100.0),
-                                base,
-                                average,
-                                variance.sqrt(),
-                                n,
-                            ];
+                            let deviation = if past.len() > 1 {
+                                (past.iter().map(|c| (c - average).powi(2)).sum::<f64>()
+                                    / (n - 1.0))
+                                    .sqrt()
+                            } else {
+                                f64::NAN
+                            };
+                            state.row =
+                                [base * (1.0 + average / 100.0), base, average, deviation, n];
                         }
                     }
                 }
@@ -274,45 +377,98 @@ impl Indicator for Seasonality {
             .keys()
             .map(|&year| (year, [None; 12]))
             .collect();
+        let fill = |value: f64, full: f64| {
+            (if value < 0.0 {
+                self.negative_color
+            } else {
+                self.colors[0]
+            })
+            .gamma_multiply((value.abs() / full).min(1.0) as f32)
+        };
         let mut summaries = [Vec::new(), Vec::new(), Vec::new()];
+        let mut summary_colors = [Vec::new(), Vec::new(), Vec::new()];
         for (month, history) in self.history.iter().enumerate() {
             let current = developing
                 .filter(|&(at, _, _)| at == month)
                 .map(|(_, year, change)| (year, change));
-            let changes = || history.iter().copied().chain(current);
-            for (year, change) in changes() {
+            for (year, change) in history.iter().copied().chain(current) {
                 years.entry(year).or_insert([None; 12])[month] = Some(change);
             }
+            let changes = || {
+                history
+                    .iter()
+                    .copied()
+                    .chain(current)
+                    .filter(|&(year, _)| !self.ignored.contains(&(year, month as u32)))
+            };
             let n = changes().count() as f64;
             let mean = changes().map(|(_, change)| change).sum::<f64>() / n;
-            let deviation = (changes()
-                .map(|(_, change)| (change - mean).powi(2))
-                .sum::<f64>()
-                / n)
-                .sqrt();
+            let deviation = if n > 1.0 {
+                (changes()
+                    .map(|(_, change)| (change - mean).powi(2))
+                    .sum::<f64>()
+                    / (n - 1.0))
+                    .sqrt()
+            } else {
+                f64::NAN
+            };
             let positive = changes().filter(|(_, change)| *change > 0.0).count() as f64 / n * 100.0;
-            for (row, value) in summaries.iter_mut().zip([mean, deviation, positive]) {
-                row.push(StudyCell::Percent(value.is_finite().then_some(value)));
+            for (index, value) in [mean, deviation, positive].into_iter().enumerate() {
+                let value = value.is_finite().then_some(value);
+                summaries[index].push(StudyCell::Percent(value));
+                summary_colors[index].push(match (index, value) {
+                    (_, None) => EMPTY_FILL,
+                    (0, Some(value)) => fill(value, self.color_cutoff),
+                    (1, Some(_)) => Color32::TRANSPARENT,
+                    (_, Some(value)) => fill(value - 50.0, 50.0),
+                });
             }
         }
-        self.table.rows = years
-            .into_iter()
-            .map(|(year, changes)| {
-                std::iter::once(StudyCell::Text(year.to_string()))
-                    .chain(changes.map(StudyCell::Percent))
-                    .collect()
-            })
-            .collect();
-        for (label, cells) in ["Average", "Standard deviation", "Positive"]
-            .into_iter()
-            .zip(summaries)
-        {
-            self.table.rows.push(
-                std::iter::once(StudyCell::Text(label.into()))
-                    .chain(cells)
-                    .collect(),
-            );
+        self.table.rows.clear();
+        self.table.cell_colors.clear();
+        for (year, changes) in years {
+            let mut row = vec![StudyCell::Text(year.to_string())];
+            let mut colors = vec![LABEL_FILL];
+            for (month, change) in changes.into_iter().enumerate() {
+                let (cell, color) = match change {
+                    Some(_) if self.ignored.contains(&(year, month as u32)) => {
+                        (StudyCell::Text("Skipped".into()), EMPTY_FILL)
+                    }
+                    Some(change) => (
+                        StudyCell::Percent(Some(change)),
+                        fill(change, self.color_cutoff),
+                    ),
+                    None => (StudyCell::Percent(None), EMPTY_FILL),
+                };
+                row.push(cell);
+                colors.push(color);
+            }
+            self.table.rows.push(row);
+            self.table.cell_colors.push(colors);
         }
+        for (((label, shown), cells), colors) in [
+            ("Average", self.show_averages),
+            ("Standard deviation", self.show_std_dev),
+            ("Positive", self.show_positive),
+        ]
+        .into_iter()
+        .zip(summaries)
+        .zip(summary_colors)
+        {
+            if shown {
+                self.table.rows.push(
+                    std::iter::once(StudyCell::Text(label.into()))
+                        .chain(cells)
+                        .collect(),
+                );
+                self.table
+                    .cell_colors
+                    .push(std::iter::once(LABEL_FILL).chain(colors).collect());
+            }
+        }
+        self.table.position = self.table_position;
+        self.table.width = share(self.table_width);
+        self.table.height = share(self.table_height);
         self.projection.clear();
         if let Some(i) = self.stepper.state().latest_source
             && let (Some(expected), Some(base)) = (self.values.value(0, i), self.values.value(1, i))
@@ -371,9 +527,10 @@ impl Indicator for Seasonality {
             .values
             .value(2, projection.bars.start as usize)
             .unwrap_or(0.0);
-        let alpha = ((0.1 + 0.4 * (average.abs() / 10.0).min(1.0)) * 255.0).round() as u8;
+        let alpha =
+            ((0.1 + 0.4 * (average.abs() / self.color_cutoff).min(1.0)) * 255.0).round() as u8;
         (if average < 0.0 {
-            self.negative
+            self.negative_color
         } else {
             self.colors[0]
         })
@@ -395,7 +552,7 @@ impl Indicator for Seasonality {
     }
 
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
-        (line == 0 && self.values.value(2, bar)? < 0.0).then_some(self.negative)
+        (line == 0 && self.values.value(2, bar)? < 0.0).then_some(self.negative_color)
     }
 
     fn fills(&self) -> Vec<crate::studies::StudyFill> {
@@ -405,7 +562,7 @@ impl Indicator for Seasonality {
             first: crate::studies::FillBoundary::Plot(0),
             second: crate::studies::FillBoundary::Plot(1),
             color: tint(self.colors[0]),
-            inverted_color: Some(tint(self.negative)),
+            inverted_color: Some(tint(self.negative_color)),
         }]
     }
 
@@ -455,6 +612,287 @@ mod tests {
     use crate::studies::*;
     use chrono::{TimeZone, Utc};
 
+    fn heatmap_bars() -> Vec<Bar> {
+        [
+            (2020, 12, 100.0),
+            (2021, 1, 112.0),
+            (2021, 3, 114.24),
+            (2022, 1, 110.8128),
+            (2022, 3, 115.245312),
+            (2023, 1, 149.8189056),
+        ]
+        .into_iter()
+        .map(|(year, month, close)| {
+            Bar::new(
+                Utc.with_ymd_and_hms(year, month, 28, 0, 0, 0).unwrap(),
+                close,
+                close,
+                close,
+                close,
+                1.0,
+            )
+        })
+        .collect()
+    }
+
+    /// User colours reach the cells, falling line and remaining-month box through settings,
+    /// and a template round trip retains them.
+    #[test]
+    fn seasonality_cells_take_the_change_colours_through_settings_and_templates() {
+        let bars = heatmap_bars();
+        let mut study = ConfiguredStudy::new(Box::new(Seasonality::new()));
+        study.calculate(&bars);
+        let table = study.table().unwrap();
+        let fills = &table.cell_colors;
+        assert_eq!(fills.len(), table.rows.len());
+        assert!(fills.iter().all(|row| row.len() == table.columns.len()));
+        assert_eq!(fills[1][1].to_array(), [8, 153, 129, 255]);
+        assert_eq!(fills[2][1].to_array(), [73, 16, 21, 77]);
+        assert_eq!(
+            fills[0][0],
+            Color32::from_rgba_unmultiplied(120, 123, 134, 51)
+        );
+        let empty = Color32::from_rgba_unmultiplied(120, 123, 134, 128);
+        assert_eq!(fills[0][1], empty);
+        assert_eq!(fills[5][3], Color32::TRANSPARENT);
+
+        assert_eq!(
+            (table.position, table.width, table.height),
+            (TablePosition::BottomCenter, None, None)
+        );
+        assert_eq!(
+            study
+                .inputs()
+                .iter()
+                .find(|input| input.id == "start_year")
+                .unwrap()
+                .value,
+            InputValue::Integer(2015)
+        );
+
+        let mut settings = study.settings();
+        settings.plots[0].color = Color32::GOLD;
+        study
+            .apply_settings(
+                &[
+                    ("negative_color".into(), InputValue::Color(palette::BLUE)),
+                    ("ignored_months".into(), InputValue::Text("2021-01".into())),
+                ],
+                settings,
+            )
+            .unwrap();
+        study.calculate(&bars);
+        let text = serde_json::to_string(&StudyTemplate::from_study(&study)).unwrap();
+        let saved: StudyTemplate = serde_json::from_str(&text).unwrap();
+        let mut restored = saved.create().unwrap();
+        for study in [&mut study as &mut dyn Indicator, restored.as_mut()] {
+            study.calculate(&bars);
+            let table = study.table().unwrap();
+            assert_eq!(table.cell_colors[2][1].to_array(), [12, 29, 77, 77]);
+            assert_eq!(table.cell_colors[3][1], Color32::GOLD);
+            assert_eq!(table.cell_colors[1][1], empty);
+            assert_eq!(table.rows[1][1], StudyCell::Text("Skipped".into()));
+            assert_eq!(study.plot_color(0, 5), Some(palette::BLUE));
+            assert_eq!(
+                study
+                    .projection_fill_color(study.projections().last().unwrap())
+                    .to_array(),
+                [9, 22, 56, 56]
+            );
+            assert_eq!(study.settings().plots[0].color, Color32::GOLD);
+        }
+    }
+
+    /// Row switches, exclusions and the cutoff affect the calculated heatmap; malformed
+    /// exclusions leave its input, values and table intact.
+    #[test]
+    fn seasonality_inputs_hide_rows_skip_months_and_refuse_malformed_lists() {
+        struct Case {
+            input: Option<(&'static str, InputValue)>,
+            labels: &'static [&'static str],
+            average: Option<f64>,
+            jan_sd: Option<f64>,
+            mar_sd: Option<f64>,
+            skipped: bool,
+            negative: [u8; 4],
+            projection: [u8; 4],
+        }
+        let defaults = || Case {
+            input: None,
+            labels: &["Average", "Standard deviation", "Positive"],
+            average: Some(13.0),
+            jan_sd: Some(16.522711641858304),
+            mar_sd: Some(std::f64::consts::SQRT_2),
+            skipped: false,
+            negative: [73, 16, 21, 77],
+            projection: [2, 43, 36, 71],
+        };
+        let bars = heatmap_bars();
+        for case in [
+            defaults(),
+            Case {
+                input: Some(("show_averages", InputValue::Toggle(false))),
+                labels: &["Standard deviation", "Positive"],
+                average: None,
+                ..defaults()
+            },
+            Case {
+                input: Some(("show_std_dev", InputValue::Toggle(false))),
+                labels: &["Average", "Positive"],
+                jan_sd: None,
+                mar_sd: None,
+                ..defaults()
+            },
+            Case {
+                input: Some(("show_positive", InputValue::Toggle(false))),
+                labels: &["Average", "Standard deviation"],
+                ..defaults()
+            },
+            Case {
+                input: Some(("ignored_months", InputValue::Text("2023-01".into()))),
+                average: Some(4.5),
+                jan_sd: Some(10.606601717798213),
+                skipped: true,
+                ..defaults()
+            },
+            Case {
+                input: Some((
+                    "ignored_months",
+                    InputValue::Text("2021-01, 2022-03".into()),
+                )),
+                average: Some(13.5),
+                jan_sd: Some(23.33452377915607),
+                mar_sd: None,
+                projection: [53, 12, 15, 56],
+                ..defaults()
+            },
+            Case {
+                input: Some(("color_cutoff", InputValue::Number(30.0))),
+                negative: [24, 5, 7, 26],
+                projection: [1, 25, 21, 41],
+                ..defaults()
+            },
+        ] {
+            let mut study = Seasonality::new();
+            if let Some((id, value)) = case.input {
+                study.set_input(id, value).unwrap();
+            }
+            study.calculate(&bars);
+            let table = study.table().unwrap();
+            let labels: Vec<_> = table.rows[4..]
+                .iter()
+                .map(|row| match &row[0] {
+                    StudyCell::Text(label) => label.as_str(),
+                    _ => panic!("a row label"),
+                })
+                .collect();
+            assert_eq!(labels, case.labels);
+            for (label, column, expected) in [
+                ("Average", 1, case.average),
+                ("Standard deviation", 1, case.jan_sd),
+                ("Standard deviation", 3, case.mar_sd),
+            ] {
+                let got = table
+                    .rows
+                    .iter()
+                    .find(|row| row[0] == StudyCell::Text(label.into()))
+                    .and_then(|row| match row[column] {
+                        StudyCell::Percent(value) => value,
+                        _ => panic!("a summary percentage"),
+                    });
+                match expected {
+                    Some(expected) => assert!(
+                        (got.unwrap() - expected).abs() < 1e-9,
+                        "{label}, column {column}"
+                    ),
+                    None => assert_eq!(got, None, "{label}, column {column}"),
+                }
+            }
+            if case.skipped {
+                assert_eq!(table.rows[3][1], StudyCell::Text("Skipped".into()));
+                assert_eq!(table.rows[6][1], StudyCell::Percent(Some(50.0)));
+                assert_eq!(table.cell_colors[6][1], Color32::TRANSPARENT);
+            } else {
+                let StudyCell::Percent(Some(change)) = table.rows[3][1] else {
+                    panic!("January change")
+                };
+                assert!((change - 30.0).abs() < 1e-9);
+            }
+            assert_eq!(table.cell_colors[2][1].to_array(), case.negative);
+            assert_eq!(
+                study
+                    .projection_fill_color(study.projections().last().unwrap())
+                    .to_array(),
+                case.projection
+            );
+        }
+        let mut study = Seasonality::new();
+        study
+            .set_input(
+                "ignored_months",
+                InputValue::Text("2021-01, 2022-01, 2023-01".into()),
+            )
+            .unwrap();
+        study.calculate(&bars);
+        let table = study.table().unwrap();
+        for row in &table.rows[4..] {
+            assert_eq!(row[1], StudyCell::Percent(None));
+        }
+        assert_eq!(study.values().value(4, 5), None);
+        assert!(study.projections().is_empty());
+        study
+            .set_input(
+                "ignored_months",
+                InputValue::Text("2021-01,, 2021-01,".into()),
+            )
+            .unwrap();
+        study.calculate(&bars);
+        let before = study.table().unwrap().clone();
+        let values = study.values().clone();
+        for text in [
+            "2023-13",
+            "2023",
+            "March 2023",
+            "23-01",
+            "2023-1",
+            "2023-00",
+            "2023/01",
+            "-2023-01",
+        ] {
+            assert!(
+                matches!(study.set_input("ignored_months", InputValue::Text(text.into())), Err(StudyError::InvalidInput { id, .. }) if id == "ignored_months")
+            );
+            assert_eq!(
+                study
+                    .inputs()
+                    .iter()
+                    .find(|input| input.id == "ignored_months")
+                    .unwrap()
+                    .value,
+                InputValue::Text("2021-01,, 2021-01,".into())
+            );
+            assert_eq!(study.table().unwrap(), &before);
+            for line in 0..5 {
+                for bar in 0..bars.len() {
+                    assert_eq!(study.values().value(line, bar), values.value(line, bar));
+                }
+            }
+        }
+        for (id, value) in [
+            ("table_position", InputValue::Choice(0)),
+            ("table_width", InputValue::Number(50.0)),
+            ("table_height", InputValue::Number(25.0)),
+        ] {
+            study.set_input(id, value).unwrap();
+        }
+        study.calculate(&bars);
+        let table = study.table().unwrap();
+        assert_eq!(
+            (table.position, table.width, table.height),
+            (TablePosition::TopLeft, Some(0.5), Some(0.25))
+        );
+    }
+
     /// Latest table metrics include the developing month; projections use earlier years only.
     #[test]
     fn seasonality_heatmap_and_remaining_month_use_calendar_changes() {
@@ -493,20 +931,24 @@ mod tests {
             value
         };
         for (label, month, expected) in [
-            ("2023", 1, 10.0),
-            ("2023", 2, -10.0),
-            ("2024", 1, 5.0),
-            ("Average", 1, 7.5),
-            ("Standard deviation", 1, 2.5),
-            ("Positive", 1, 100.0),
+            ("2023", 1, Some(10.0)),
+            ("2023", 2, Some(-10.0)),
+            ("2024", 1, Some(5.0)),
+            ("Average", 1, Some(7.5)),
+            ("Standard deviation", 1, Some(3.5355339059327378)),
+            ("Standard deviation", 2, None),
+            ("Positive", 1, Some(100.0)),
+            ("2022", 12, None),
+            ("2024", 2, None),
         ] {
-            assert!(
-                (percent(label, month).unwrap() - expected).abs() < 1e-9,
-                "{label}"
-            );
+            match expected {
+                Some(expected) => assert!(
+                    (percent(label, month).unwrap() - expected).abs() < 1e-9,
+                    "{label}"
+                ),
+                None => assert_eq!(percent(label, month), None, "{label}"),
+            }
         }
-        assert_eq!(percent("2022", 12), None);
-        assert_eq!(percent("2024", 2), None);
         let zone = study
             .projections()
             .last()

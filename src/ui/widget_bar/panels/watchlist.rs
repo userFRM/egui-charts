@@ -154,8 +154,9 @@ struct ListEdit {
 /// reorder, and rows are right-clicked to flag, rename or remove, and sections to move them with
 /// their symbols. The list menu stars lists, which it then shows first, clears the active list and
 /// undoes a clear or a section move; the more menu shows the descriptions given with
-/// [`set_description`](Self::set_description). The host persists [`lists`](Self::lists), with the
-/// stars, descriptions setting and column widths of each, and handles file intents.
+/// [`set_description`](Self::set_description) and hides the symbol marks. The host persists
+/// [`lists`](Self::lists), with the stars, descriptions and logos settings and column widths of
+/// each, and handles file intents.
 pub struct WatchlistPanel {
     lists: Vec<Watchlist>,
     active: usize,
@@ -326,8 +327,9 @@ impl WatchlistPanel {
         self.decimals.insert(symbol.to_owned(), decimals);
     }
 
-    /// Shows `mark`, such as the issuer's logo, in a circle before `symbol`. Without one, or while
-    /// it loads or cannot be read, the row shows the symbol's first letter or digit on a neutral disc.
+    /// Shows `mark`, such as the issuer's logo, in a circle before `symbol` in the lists that show
+    /// logos, as new lists do. Without one, or while it loads or cannot be read, the row shows the
+    /// symbol's first letter or digit on a neutral disc.
     pub fn set_mark(&mut self, symbol: &str, mark: egui::ImageSource<'static>) {
         self.marks.insert(symbol.to_owned(), mark);
     }
@@ -709,6 +711,10 @@ impl WatchlistPanel {
                 &mut lists[*active].show_descriptions,
                 l10n::text(ui.ctx(), "Symbol descriptions"),
             );
+            ui.checkbox(
+                &mut lists[*active].show_logos,
+                l10n::text(ui.ctx(), "Symbol logos"),
+            );
             if ui.button(l10n::text(ui.ctx(), "Import list…")).clicked() {
                 action = WatchlistAction::Import;
             }
@@ -959,6 +965,7 @@ impl WatchlistPanel {
         // The flag view shows these settings of the active list.
         let widths = lists[*active].column_widths.clone();
         let show_descriptions = lists[*active].show_descriptions;
+        let show_logos = lists[*active].show_logos;
         let filtered = flagged.is_some();
         let list = match &mut flagged {
             Some(view) => view,
@@ -1171,17 +1178,21 @@ impl WatchlistPanel {
                                     egui::Rect::from_min_size(rect.min, vec2(3.0, rect.height()));
                                 painter.rect_filled(bar, 0.0, flag.color());
                             }
-                            let mark = egui::Rect::from_min_size(
-                                pos2(cells[0].left(), rect.center().y - MARK_SIZE / 2.0),
-                                vec2(MARK_SIZE, MARK_SIZE),
-                            );
-                            paint_symbol_mark(
-                                &painter,
-                                mark,
-                                symbol,
-                                marks.get(symbol.as_str()).cloned(),
-                            );
-                            let text = cells[0].with_min_x(mark.right() + 6.0);
+                            let text = if show_logos {
+                                let mark = egui::Rect::from_min_size(
+                                    pos2(cells[0].left(), rect.center().y - MARK_SIZE / 2.0),
+                                    vec2(MARK_SIZE, MARK_SIZE),
+                                );
+                                paint_symbol_mark(
+                                    &painter,
+                                    mark,
+                                    symbol,
+                                    marks.get(symbol.as_str()).cloned(),
+                                );
+                                cells[0].with_min_x(mark.right() + 6.0)
+                            } else {
+                                cells[0]
+                            };
                             let description = show_descriptions
                                 .then(|| descriptions.get(symbol.as_str()))
                                 .flatten();
@@ -1704,14 +1715,14 @@ mod tests {
         }
     }
 
-    /// Stars, the descriptions setting and column widths survive the settings document, a list
-    /// saved before they existed reads without them, and the width of a column a newer release
-    /// added is left out while the rest reads.
+    /// Stars, the descriptions and logos settings and column widths survive the settings document,
+    /// a list saved before they existed reads with stars and descriptions off and logos on, and
+    /// the width of a column a newer release added is left out while the rest reads.
     #[test]
     fn list_settings_survive_the_settings_document() {
         use crate::services::UserSettings;
         let mut list = Watchlist::from_text("Main", "A,###S");
-        (list.favorite, list.show_descriptions) = (true, true);
+        (list.favorite, list.show_descriptions, list.show_logos) = (true, true, false);
         list.column_widths.insert(WatchlistColumn::Last, 70.0);
         let settings = UserSettings {
             watchlists: vec![list],
@@ -1733,6 +1744,103 @@ mod tests {
             UserSettings::from_json(newer).unwrap().watchlists,
             [expected]
         );
+    }
+
+    /// The More menu's Symbol logos box starts checked for a new list. Unchecked, the rows of both
+    /// views paint neither the host's logo nor the initial disc, and each symbol starts under the
+    /// Symbol heading instead of after its mark.
+    #[test]
+    fn symbol_logos_switch_hides_the_marks_in_both_views() {
+        use egui::accesskit::Toggled;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let logo = egui::TextureId::User(7);
+        let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "MSFT,NVDA")]);
+        panel.set_mark(
+            "MSFT",
+            egui::load::SizedTexture::new(logo, vec2(MARK_SIZE, MARK_SIZE)).into(),
+        );
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 600.0))
+            .build_ui_state(
+                |ui, panel: &mut WatchlistPanel| {
+                    panel.show(ui);
+                },
+                panel,
+            );
+        h.get_by_label("More").click();
+        h.run();
+        let toggled = h
+            .get_by_label("Symbol logos")
+            .accesskit_node()
+            .data()
+            .toggled();
+        assert_eq!(toggled, Some(Toggled::True));
+        h.get_by_label("Symbol logos").click();
+        h.run();
+        assert!(!h.state().lists()[0].show_logos);
+        // Logo rects painted, whether NVDA's initial is painted, and how far right of the Symbol
+        // heading each symbol starts.
+        let ctx = egui::Context::default();
+        let details = WatchlistDetails::default();
+        let rows = |panel: &mut WatchlistPanel, wide: bool| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        vec2(300.0, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    if wide {
+                        panel.show_wide(ui, &details);
+                    } else {
+                        panel.show(ui);
+                    }
+                },
+            );
+            let (mut logos, mut texts) = (0, Vec::new());
+            for shape in &output.shapes {
+                match &shape.shape {
+                    Shape::Rect(rect) if rect.fill_texture_id() == logo => logos += 1,
+                    Shape::Text(text) => texts.push((text.galley.text().to_owned(), text.pos.x)),
+                    _ => {}
+                }
+            }
+            output.drop_without_applying_deltas();
+            let x = |label: &str| {
+                texts
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .map(|&(_, x)| x)
+            };
+            let heading = x("Symbol").unwrap();
+            (
+                logos,
+                x("N").is_some(),
+                x("MSFT").unwrap() - heading,
+                x("NVDA").unwrap() - heading,
+            )
+        };
+        for wide in [false, true] {
+            assert_eq!(
+                rows(h.state_mut(), wide),
+                (0, false, 0.0, 0.0),
+                "off, wide {wide}"
+            );
+        }
+        h.state_mut().lists[0].show_logos = true;
+        for wide in [false, true] {
+            assert_eq!(
+                rows(h.state_mut(), wide),
+                (1, true, 24.0, 24.0),
+                "on, wide {wide}"
+            );
+        }
     }
 
     /// Clearing empties only the active list, and undo reverts clears and section moves newest

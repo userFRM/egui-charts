@@ -159,11 +159,20 @@ pub struct Watchlist {
     /// Whether the rows show each symbol's description under it, where the host supplies one.
     #[serde(default)]
     pub show_descriptions: bool,
+    /// Whether the rows show each symbol's logo, or its initial on a disc where the host supplies
+    /// no logo, before the symbol. On by default, also for a saved list without this setting.
+    #[serde(default = "shown")]
+    pub show_logos: bool,
     /// The widths, in points, the user dragged quote columns to. The other columns share the
     /// room left, as they do by default. A column this release does not know is left out when
     /// reading.
     #[serde(default, deserialize_with = "known_columns")]
     pub column_widths: BTreeMap<WatchlistColumn, f32>,
+}
+
+/// The logos setting of a list saved without one.
+fn shown() -> bool {
+    true
 }
 
 /// Reads column widths, leaving out the columns this release does not know, such as one a newer
@@ -210,13 +219,14 @@ impl Watchlist {
             items: Vec::new(),
             favorite: false,
             show_descriptions: false,
+            show_logos: true,
             column_widths: BTreeMap::new(),
         }
     }
 
     /// A copy named after this list and `taken` names: "Name copy", then "Name copy 2" and so on.
-    /// Sections, symbol order, flags, descriptions and column widths carry over; the copy is not
-    /// starred.
+    /// Sections, symbol order, flags, the descriptions and logos settings and column widths carry
+    /// over; the copy is not starred.
     pub fn duplicate<'a>(&self, taken: impl IntoIterator<Item = &'a str>) -> Self {
         let taken: Vec<&str> = taken.into_iter().collect();
         let base = format!("{} copy", self.name);
