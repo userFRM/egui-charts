@@ -113,63 +113,6 @@ use crate::sampledata::{
     DemoSymbol, SAMPLE_LOGO, SAMPLE_LOGO_SVG, us_equity_session, visible_bars_for_range,
 };
 
-/// The legend caption of a study: what identifies it at a glance, leaving out flags, colours,
-/// free text, zero offsets and values that only make sense next to their labels.
-fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
-    use egui_charts::studies::{InputKind, InputValue, StudySource};
-    let price = |source: &StudySource| match source {
-        StudySource::Price(price) => Some(format!("{price:?}").to_lowercase()),
-        // The caption has no name for another study's output.
-        _ => None,
-    };
-    let source = study.source();
-    let inputs = study.inputs();
-    let mut caption: Vec<_> = inputs
-        .iter()
-        // List sizes and painted widths mean nothing alone; the study's source goes below.
-        .filter(|input| {
-            input.is_shown(&inputs)
-                && !input.style
-                && !matches!(input.id.as_str(), "band_count" | "event_count" | "width")
-                && (source.is_none() || input.id != "source")
-        })
-        .filter_map(|input| match (&input.kind, &input.value) {
-            (InputKind::Choice(choices), InputValue::Choice(index)) => choices.get(*index).cloned(),
-            (_, InputValue::Length(value)) => (*value != 0).then(|| value.to_string()),
-            (_, InputValue::Integer(value)) => (*value != 0).then(|| value.to_string()),
-            // Single precision reads short and turns an open upper limit into infinity.
-            (_, InputValue::Number(value)) => {
-                let value = *value as f32;
-                (value != 0.0 && value.is_finite()).then(|| value.to_string())
-            }
-            (_, InputValue::Source(value)) => price(value),
-            (_, InputValue::Timeframe(Some(value))) => Some(value.to_string()),
-            (_, InputValue::Symbol(value)) if !value.is_empty() => Some(value.clone()),
-            _ => None,
-        })
-        .collect();
-    // An anchor or session choice identifies the study, which names its price only once edited.
-    // Flags, which the caption leaves out, can precede that choice.
-    let anchored = matches!(
-        inputs
-            .iter()
-            .map(|input| &input.kind)
-            .find(|kind| !matches!(kind, InputKind::Toggle)),
-        Some(InputKind::Choice(_))
-    );
-    let edited = inputs
-        .iter()
-        .any(|input| matches!(input.kind, InputKind::Source) && input.value != input.default);
-    if let Some(source) = source
-        .as_ref()
-        .filter(|_| !anchored || edited)
-        .and_then(price)
-    {
-        caption.insert(caption.len().min(1), source);
-    }
-    caption.join(" ")
-}
-
 /// Object-tree ids for studies and added series are offset into a high range so a single
 /// `usize` id space cleanly distinguishes series from drawings (which use
 /// small monotonic ids from the drawing manager). The main series reserves the last id.
@@ -614,8 +557,6 @@ impl DemoApp {
         chart.config_mut().candle_width = 0.75;
         chart.config_mut().right_axis_width = 59.0;
         chart.config_mut().skip_background = true;
-        // The library hides the navigation row by default; the demo shows where it is.
-        chart.config_mut().navigation_buttons = egui_charts::config::NavigationButtons::OnHover;
         size_by_atr(&mut chart);
         chart.set_event_visibility(
             cc.storage
@@ -1388,9 +1329,7 @@ impl DemoApp {
             self.indicator_dialog.show(ctx, &self.theme)
         {
             self.chart.begin_user_action();
-            let inputs = study_input_summary(study.as_ref());
-            let id = self.chart.add_indicator(study);
-            self.chart.set_indicator_inputs(id, inputs);
+            self.chart.add_indicator(study);
             self.chart.end_user_action();
         }
 
@@ -1407,14 +1346,10 @@ impl DemoApp {
                 .and_then(|study| {
                     study
                         .apply_settings(&edit.inputs, edit.settings)
-                        .map_err(|error| format!("Study settings not applied: {error}"))?;
-                    Ok(study_input_summary(study))
+                        .map_err(|error| format!("Study settings not applied: {error}"))
                 });
-            match result {
-                Ok(inputs) => {
-                    self.chart.set_indicator_inputs(edit.id, inputs);
-                }
-                Err(error) => self.notify(error),
+            if let Err(error) = result {
+                self.notify(error);
             }
             self.chart.end_user_action();
         }
@@ -2452,9 +2387,7 @@ impl DemoApp {
             TopToolbarAction::AddIndicator(name) => {
                 if let Some(study) = self.indicator_dialog.factory().create(&name) {
                     self.chart.begin_user_action();
-                    let inputs = study_input_summary(study.as_ref());
-                    let id = self.chart.add_indicator(study);
-                    self.chart.set_indicator_inputs(id, inputs);
+                    self.chart.add_indicator(study);
                     self.chart.end_user_action();
                 }
             }
@@ -11479,48 +11412,5 @@ mod tests {
         settle(&mut app, &ctx);
         assert_eq!(app.chart.symbol(), "TOKENA");
         assert!(!app.chart.bars(SeriesId::MAIN).is_empty());
-    }
-
-    /// Captions name what identifies a study: no flags, empty fields, list sizes or open limits.
-    #[test]
-    fn legend_inputs_leave_out_flags() {
-        let factory = egui_charts::studies::IndicatorFactory::new();
-        let caption =
-            |name: &str| super::study_input_summary(factory.create(name).unwrap().as_ref());
-        for (name, expected) in [
-            ("RSI", "14 close SMA 14"),
-            ("VWAP", "Session 1"),
-            ("Vol Profile Session", "24 70 Up / down Trading day"),
-            ("Time Weighted Average Price", "Session"),
-            ("Trend Strength Index", "14 close"),
-            ("Higher Interval Candles", "1D"),
-            ("Accelerator Oscillator", "hl2"),
-        ] {
-            assert_eq!(caption(name), expected);
-        }
-        for name in factory.list() {
-            let caption = caption(&name);
-            assert_eq!(caption.trim(), caption, "{name}");
-            assert!(
-                !caption.contains("  ")
-                    && !caption.contains("true")
-                    && !caption.contains("false")
-                    && !caption.contains("00000"),
-                "{name}: {caption}"
-            );
-        }
-        let mut chart = Chart::new(egui_charts::model::BarData::new());
-        let vwap = chart.add_indicator(factory.create("VWAP").unwrap());
-        let study = chart.indicator_mut(vwap).unwrap();
-        assert_eq!(super::study_input_summary(study), "Session 1");
-        study
-            .set_input(
-                "source",
-                egui_charts::studies::InputValue::Source(egui_charts::studies::StudySource::Price(
-                    egui_charts::model::PriceSource::Close,
-                )),
-            )
-            .unwrap();
-        assert_eq!(super::study_input_summary(study), "Session close 1");
     }
 }
