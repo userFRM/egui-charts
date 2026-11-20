@@ -199,8 +199,10 @@ pub fn render_tooltip_with_options(
 
 /// Renders the floating tooltip: a label and value grid in the top corner of `price_rect`
 /// on the side away from the pointer, so it never covers the hovered bar.
+/// The horizontal value's row is labelled with the scale's [`HorizontalScale::value_name`],
+/// or not at all.
 /// The `instrument`'s symbol heads the grid.
-/// Held values use time, OHLC and total volume instead of the hover change row;
+/// Held values use the horizontal value, OHLC and total volume instead of the hover change row;
 /// optional study rows follow these values. Their card sits beside the bar centred at
 /// `hover_pos.x`, 15 px from that line or clear of the `bar_spacing` slot when it is wider, on
 /// the right unless only the left has room, with its top at the pointer and values in semibold.
@@ -229,7 +231,10 @@ pub fn render_floating_tooltip(
     let mut rows = Vec::new();
 
     if options.show_time || options.on_long_press {
-        rows.push(("Time", scale.format_crosshair(candle.time, bar_seconds)));
+        rows.push((
+            scale.value_name().unwrap_or_default(),
+            scale.format_crosshair(candle.time, bar_seconds),
+        ));
     }
 
     if options.show_ohlc {
@@ -273,7 +278,14 @@ pub fn render_floating_tooltip(
 
     let mut rows: Vec<_> = rows
         .into_iter()
-        .map(|(label, value)| (l10n::text(painter.ctx(), label), value, value_color))
+        .map(|(label, value)| {
+            let label = if label.is_empty() {
+                String::new()
+            } else {
+                l10n::text(painter.ctx(), label)
+            };
+            (label, value, value_color)
+        })
         .collect();
     rows.extend(studies.iter().map(|study| {
         (
@@ -1092,6 +1104,81 @@ mod tests {
             match expected {
                 Some(symbol) => assert!(first.starts_with(symbol), "{first:?}"),
                 None => assert!(!first.contains("SAMPLE"), "{first:?}"),
+            }
+        }
+    }
+
+    /// Numeric readouts use the scale's value name, or keep an unnamed value without a label,
+    /// even when the host translates the empty key.
+    #[test]
+    fn numeric_readouts_name_their_horizontal_value() {
+        use crate::scales::{CustomHorizontalScale, MaturityScale, PriceHorizontalScale, key_time};
+
+        let plot = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(800.0, 300.0));
+        let mut strikes = PriceHorizontalScale::new(0);
+        strikes.value_name = Some("Strike");
+        let sides = CustomHorizontalScale::new(["Call", "Put"], |key: &&str| (*key).to_owned())
+            .with_value_name("Side");
+        let put = sides.time(&"Put").unwrap();
+        // 30 months = 2 * 12 + 6; sorted category "Put" has rank 1.
+        let cases: [(Box<dyn HorizontalScale>, _, &[&str]); 4] = [
+            (
+                Box::new(strikes),
+                key_time(4775.0).unwrap(),
+                &["Strike", "4775"],
+            ),
+            (
+                Box::new(PriceHorizontalScale::new(0)),
+                key_time(4775.0).unwrap(),
+                &["4775"],
+            ),
+            (
+                Box::new(MaturityScale::default()),
+                key_time(30.0).unwrap(),
+                &["Maturity", "2Y6M"],
+            ),
+            (Box::new(sides), put, &["Side", "Put"]),
+        ];
+        for (scale, time, expected) in cases {
+            for held in [false, true] {
+                let ctx = egui::Context::default();
+                crate::localization::set_translator(&ctx, |label| match label {
+                    "" => Some("Unexpected name".to_owned()),
+                    _ => None,
+                });
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    render_floating_tooltip(
+                        ui.painter(),
+                        Pos2::new(plot.left() + 100.0, plot.center().y),
+                        plot,
+                        10.0,
+                        &Bar::from_value(time, 20.0),
+                        None,
+                        &TooltipOptions {
+                            on_long_press: held,
+                            show_ohlc: false,
+                            show_change: false,
+                            show_volume: false,
+                            ..Default::default()
+                        },
+                        egui::Color32::GREEN,
+                        scale.as_ref(),
+                        0,
+                        &[],
+                        None,
+                        ValueFormatters::default(),
+                    );
+                });
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                assert_eq!(texts, expected, "held: {held}");
             }
         }
     }
