@@ -910,6 +910,10 @@ impl Chart {
 
     pub(super) fn record_study(&mut self, id: SeriesId) {
         self.watch_studies([id]);
+        // Whatever the caller changes next may change the study's caption.
+        if let Some(at) = self.study_ids.iter().position(|study| *study == id) {
+            self.study_captions[at].take();
+        }
         self.element_studies.dirty = true;
         if self
             .history
@@ -1343,6 +1347,7 @@ impl Chart {
             self.studies.indicators_mut()[at..].rotate_right(1);
             self.study_ids.insert(at, id);
             self.study_inputs.insert(at, inputs);
+            self.study_captions.insert(at, std::sync::OnceLock::new());
             self.study_autoscale.insert(at, autoscale);
             self.pending_from.insert(at, None);
             self.stale.insert(at, false);

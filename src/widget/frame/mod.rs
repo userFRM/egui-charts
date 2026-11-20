@@ -3792,7 +3792,9 @@ impl Chart {
                 legend.extended_hours = &extended_hours;
                 let background = |pos: Pos2| self.background_at(rect, pos);
                 legend.background = Some(&background);
-                let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
+                let inputs: Vec<_> = (0..self.study_ids.len())
+                    .map(|at| self.study_caption(at))
+                    .collect();
                 legend.study_inputs = &inputs;
                 legend.previous_close = previous_close;
                 legend.bar_index = selected;
