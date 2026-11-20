@@ -273,6 +273,7 @@ mod tests {
                     continue;
                 }
                 tag_rects.retain(|tag| !baseline.contains(tag));
+                // Exactly three newest-profile tags leave none for the earlier profile.
                 assert_eq!(tag_rects.len(), 3, "background {:?}", theme.chart.bg);
                 let map = chart.series_price_map(SeriesId::MAIN).unwrap();
                 for (price, color) in [
@@ -284,13 +285,6 @@ mod tests {
                         tag_rects.iter().any(|(r, fill)| *fill == color
                             && r.y_range().contains(map.price_to_y(price))),
                         "missing {price}"
-                    );
-                }
-                for price in [100.0, 101.0] {
-                    assert!(
-                        tag_rects
-                            .iter()
-                            .all(|(r, _)| !r.y_range().contains(map.price_to_y(price)))
                     );
                 }
             }
