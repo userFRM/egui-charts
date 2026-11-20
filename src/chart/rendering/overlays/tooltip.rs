@@ -278,7 +278,14 @@ pub fn render_floating_tooltip(
 
     let mut rows: Vec<_> = rows
         .into_iter()
-        .map(|(label, value)| (l10n::text(painter.ctx(), label), value, value_color))
+        .map(|(label, value)| {
+            let label = if label.is_empty() {
+                String::new()
+            } else {
+                l10n::text(painter.ctx(), label)
+            };
+            (label, value, value_color)
+        })
         .collect();
     rows.extend(studies.iter().map(|study| {
         (
@@ -1101,7 +1108,8 @@ mod tests {
         }
     }
 
-    /// Numeric readouts use the scale's value name, or keep an unnamed value without a label.
+    /// Numeric readouts use the scale's value name, or keep an unnamed value without a label,
+    /// even when the host translates the empty key.
     #[test]
     fn numeric_readouts_name_their_horizontal_value() {
         use crate::scales::{CustomHorizontalScale, MaturityScale, PriceHorizontalScale, key_time};
@@ -1134,6 +1142,10 @@ mod tests {
         for (scale, time, expected) in cases {
             for held in [false, true] {
                 let ctx = egui::Context::default();
+                crate::localization::set_translator(&ctx, |label| match label {
+                    "" => Some("Unexpected name".to_owned()),
+                    _ => None,
+                });
                 let output = ctx.run_ui(Default::default(), |ui| {
                     render_floating_tooltip(
                         ui.painter(),
