@@ -28,6 +28,9 @@ mod optimize;
 pub use library::StrategyFactory;
 pub use optimize::{StrategyTrial, optimise};
 
+#[cfg(feature = "ui")]
+pub(crate) use backtest::same_bars;
+
 pub use backtest::{
     Backtest, BacktestSettings, Commission, OrderSize, Slippage, Strategy, StrategyContext,
     StrategyFill,

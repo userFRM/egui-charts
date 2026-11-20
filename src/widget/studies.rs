@@ -12,7 +12,10 @@ impl Chart {
     /// chart of a layout and to the object tree's Duplicate; studies already on the chart stay. A
     /// user action that turns the volume setting on, such as the Toggle volume shortcut, leaves
     /// [`ChartConfig::show_volume`](crate::config::ChartConfig::show_volume) off at the cap unless
-    /// a Volume study is already on the chart.
+    /// a Volume study is already on the chart. The same applies to the
+    /// [analyst targets setting](Self::set_price_targets_visible), served by an Analyst price
+    /// forecast study. Both settings stay uncapped outside user actions, as do restores and
+    /// undo/redo.
     /// [`set_chained_study_limit`](Self::set_chained_study_limit) caps, on the same paths, the
     /// studies that read another study's output; a study is refused when it would pass either cap.
     pub fn set_study_limit(&mut self, limit: Option<usize>) {
@@ -197,6 +200,8 @@ impl Chart {
             .flatten();
         let overlay = indicator.is_overlay() && original;
         self.studies.add(indicator);
+        #[cfg(feature = "studies")]
+        self.adopt_price_target_study();
         self.readout_revision = crate::model::next_revision();
         self.study_ids.push(id);
         self.study_autoscale.push(true);
@@ -280,6 +285,18 @@ impl Chart {
             self.volume_setting = false;
         }
         let indicator = self.studies.remove_indicator(at);
+        #[cfg(feature = "studies")]
+        if indicator
+            .as_ref()
+            .is_some_and(|study| is_price_target_study(study.as_ref()))
+            && !self
+                .studies
+                .indicators()
+                .iter()
+                .any(|study| is_price_target_study(study.as_ref()))
+        {
+            self.show_price_targets = false;
+        }
         self.readout_revision = crate::model::next_revision();
         self.study_ids.remove(at);
         self.study_autoscale.remove(at);
@@ -397,14 +414,35 @@ impl Chart {
     }
 
     /// The study `id`, to change its settings. Its values reflect the bars as of the last
-    /// [`show`](Self::show); the next one recomputes it in full.
+    /// [`show`](Self::show); the next one recomputes it in full. Changes report
+    /// [`ChartEvent::Study`](super::ChartEvent::Study) before the next chart notification.
     pub fn indicator_mut(&mut self, id: SeriesId) -> Option<&mut (dyn Indicator + 'static)> {
         let at = self.study_ids.iter().position(|study| *study == id)?;
         self.record_study(id);
+        Some(self.edit_study(at))
+    }
+
+    /// Settings dialog previews keep recomputation and history bookkeeping without reporting
+    /// [`ChartEvent::Study`](super::ChartEvent::Study); the host reports the committed edit.
+    #[cfg(feature = "ui")]
+    pub(crate) fn preview_indicator_mut(
+        &mut self,
+        id: SeriesId,
+    ) -> Option<&mut (dyn Indicator + 'static)> {
+        let at = self.study_ids.iter().position(|study| *study == id)?;
+        self.record_study(id);
+        self.host_events
+            .studies
+            .retain(|(watched, _)| *watched != id);
+        Some(self.edit_study(at))
+    }
+
+    /// Marks the study for a full recompute at the next `show`.
+    fn edit_study(&mut self, at: usize) -> &mut (dyn Indicator + 'static) {
         self.pending_from[at] = Some(0);
         self.next_refresh[at] = f64::NEG_INFINITY;
         self.readout_revision = crate::model::next_revision();
-        Some(self.studies.indicators_mut()[at].as_mut())
+        self.studies.indicators_mut()[at].as_mut()
     }
 
     /// Updates every study with a pending change, as of `now` in seconds. An incremental study
@@ -581,6 +619,12 @@ impl Chart {
 /// Whether `study` reads another study's output, which the chained study cap counts.
 pub(crate) fn reads_study(study: &dyn Indicator) -> bool {
     matches!(study.source(), Some(StudySource::Study { .. }))
+}
+
+/// Whether `study` is an Analyst price forecast, which the chart's targets setting follows.
+#[cfg(feature = "studies")]
+pub(super) fn is_price_target_study(study: &dyn Indicator) -> bool {
+    study.name() == crate::studies::AnalystPriceForecast::NAME
 }
 
 /// The typed events studies read, without the mark source page an export froze at their end: a page

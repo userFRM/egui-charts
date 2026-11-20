@@ -91,6 +91,7 @@ mod targets;
 pub use events::ImageRequest;
 pub use events::{
     ChartEvent, ChartPointer, CursorDataPolicy, DataOperation, PointerKind, PointerTarget,
+    StudyEventKind,
 };
 mod export;
 mod format;
@@ -327,6 +328,10 @@ pub struct Chart {
     volume_setting: bool,
     #[cfg(feature = "studies")]
     volume_study: Option<SeriesId>,
+    /// The colours last given to or taken from the Analyst price forecast studies, positive then
+    /// negative; `None` gives them the configured colours on the next frame.
+    #[cfg(feature = "studies")]
+    price_target_colors: Option<[egui::Color32; 2]>,
     /// Id of each study in `studies`.
     pub(crate) study_ids: Vec<SeriesId>,
     /// The most studies the chart takes through the interface, if capped.
