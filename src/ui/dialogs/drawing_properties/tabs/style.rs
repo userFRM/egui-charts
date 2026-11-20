@@ -1477,26 +1477,58 @@ mod tests {
 
     /// A palette swatch picked in the Style tab of one drawing in a selection recolours every
     /// selected drawing and leaves each at its own opacity: a trend line stays opaque and a
-    /// highlighter stays at 51, whichever of the two the dialog was opened on.
+    /// highlighter stays at 51. Text with its own colour also propagates a pick equal to its
+    /// drawing RGB, while accepting unchanged properties leaves every colour alone.
     #[test]
     fn palette_colour_on_a_selection_keeps_each_line_opacity() {
-        let swatch = MAIN_COLORS[3];
-        let [r, g, b, _] = swatch.to_srgba_unmultiplied();
         let mut observed = Vec::new();
-        for (opened, alpha) in [(1, 51), (2, 51), (1, 0), (2, 0)] {
+        for (opened, alpha, text_tool, swatch) in [
+            (1, 51, DrawingToolType::TextLabel, MAIN_COLORS[3]),
+            (2, 51, DrawingToolType::TextLabel, MAIN_COLORS[3]),
+            (1, 0, DrawingToolType::TextLabel, MAIN_COLORS[3]),
+            (2, 0, DrawingToolType::TextLabel, MAIN_COLORS[3]),
+            (3, 51, DrawingToolType::TextLabel, MAIN_COLORS[6]),
+            (3, 51, DrawingToolType::AnchoredText, MAIN_COLORS[6]),
+        ] {
+            let [r, g, b, _] = swatch.to_srgba_unmultiplied();
             let ctx = Context::default();
             ctx.global_style_mut(|style| style.animation_time = 0.0);
             let mut chart = Chart::new(BarData::new());
             let mut highlighter = Drawing::new(1, DrawingToolType::Highlighter);
-            let line = Drawing::new(2, DrawingToolType::TrendLine);
+            let mut line = Drawing::new(2, DrawingToolType::TrendLine);
             assert_eq!((highlighter.color[3], line.color[3]), (51, 255));
             highlighter.color[3] = alpha;
-            let mut text = Drawing::new(3, DrawingToolType::TextLabel);
-            text.text_color = Some([242, 54, 69, 200]);
+            if opened == 3 {
+                line.color = [242, 54, 69, 255];
+            }
+            let mut text = Drawing::new(3, text_tool);
+            text.text_color = Some([242, 54, 69, 128]);
             chart.drawings_mut().drawings = vec![highlighter, line, text];
             chart.drawings_mut().select_drawings([1, 2, 3]);
             let target = chart.drawings().drawings[opened - 1].clone();
             let mut props = DrawingProps::from_drawing(&target, &chart);
+            let original: Vec<_> = chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| (d.color, d.text_color))
+                .collect();
+            props
+                .apply_to_chart(
+                    crate::ui::dialogs::drawing_properties::actions::DrawingId(opened),
+                    &mut chart,
+                )
+                .unwrap();
+            assert_eq!(
+                chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| (d.color, d.text_color))
+                    .collect::<Vec<_>>(),
+                original,
+                "unchanged properties on {text_tool:?}, drawing {opened}"
+            );
             let mut pickers: [ColorPickerState; 3] = Default::default();
             pickers[0].is_open = true;
             let mut frame = |events| {
@@ -1563,7 +1595,7 @@ mod tests {
                         }
                     })
                     .collect::<Vec<_>>(),
-                vec![[r, g, b, alpha], [r, g, b, 255], [r, g, b, 200]],
+                vec![[r, g, b, alpha], [r, g, b, 255], [r, g, b, 128]],
             ));
             let mut custom =
                 DrawingProps::from_drawing(&chart.drawings().drawings[opened - 1], &chart);

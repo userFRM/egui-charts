@@ -232,11 +232,21 @@ impl DrawingProps {
             })
         });
         let [r, g, b, a] = self.color_rgba();
-        let [tr, tg, tb, _] = target.color;
-        // Without tool settings only the paint colour is held, and it reads back as another hue
-        // at each opacity: the hue was edited unless one RGB paints both it and the target's.
-        let hue_edited = [r, g, b] != [tr, tg, tb]
-            && (self.tool_settings.is_some() || !self.keeps_hue_of(target.color32()));
+        // A Text colour pick also stages text_color; compare with the colour the row showed.
+        let text_pick = self
+            .tool_settings
+            .as_ref()
+            .and_then(|template| template.settings.text_color_override())
+            .zip(target.text_color_override())
+            .filter(|(picked, _)| picked[..3] == [r, g, b]);
+        let hue_edited = if let Some((picked, shown)) = text_pick {
+            picked[..3] != shown[..3]
+        } else {
+            // Without tool settings only the paint colour is held, and it reads back as another
+            // hue at each opacity: the hue was edited unless one RGB paints both colours.
+            [r, g, b] != target.color[..3]
+                && (self.tool_settings.is_some() || !self.keeps_hue_of(target.color32()))
+        };
         let mut edits = Vec::new();
         for mut drawing in chart
             .drawings()
