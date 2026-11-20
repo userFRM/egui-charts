@@ -454,7 +454,7 @@ mod tests {
                 .collect()
         };
         assert_eq!(colours(&study), expected);
-        // Streamed bars give the batch colours. Each bar first arrives one higher, as a live bar
+        // Streamed bars give the same colours. Each bar first arrives one higher, as a live bar
         // whose close then moves, so the flat window at bar 31 first has a value.
         let mut stepped = WoodiesCCI::new(2, 3);
         for end in 1..=bars.len() {
