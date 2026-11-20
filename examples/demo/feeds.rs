@@ -12,7 +12,8 @@ use egui_charts::data::{
 };
 use egui_charts::model::{Bar, PostContent, Quote};
 use egui_charts::services::{
-    ChatEvent, ChatMessage, Chats, Events, Notification, Notifications, Posts, Quotes,
+    ChatEvent, ChatMessage, Chats, Events, Notification, NotificationTarget, Notifications, Posts,
+    Quotes,
 };
 
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
@@ -630,6 +631,13 @@ impl DemoNotifications {
     pub(super) fn notify(&self, title: impl Into<String>, symbol: Option<&str>) {
         let mut entry = Notification::new(Utc::now(), title);
         entry.symbol = symbol.map(str::to_owned);
+        self.publish(entry);
+    }
+
+    /// Logs `title` about the demo's feed entry `id`, which the panel offers to open.
+    pub(super) fn notify_post(&self, title: impl Into<String>, id: &str) {
+        let mut entry = Notification::new(Utc::now(), title);
+        entry.target = Some(NotificationTarget::Post(id.to_owned()));
         self.publish(entry);
     }
 

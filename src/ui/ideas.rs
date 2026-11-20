@@ -229,6 +229,11 @@ impl IdeasPanel {
         self.can_browse = available;
     }
 
+    /// Shows the entries of `kind` in the feed, as the tabs above it do.
+    pub fn set_feed_kind(&mut self, kind: IdeaKind) {
+        self.filter = kind;
+    }
+
     /// Sets the instrument and interval the draft is about, normally those of the chart.
     pub fn set_context(&mut self, symbol: impl Into<String>, interval: impl Into<String>) {
         self.draft.symbol = symbol.into();
