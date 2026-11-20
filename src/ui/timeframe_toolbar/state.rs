@@ -106,7 +106,7 @@ pub(crate) fn has_trading_hours(instrument: Option<&crate::model::Instrument>) -
     })
 }
 
-/// Whether weekly or date-specific overnight windows exist, as the time axis menu checks.
+/// Whether weekly or date-specific overnight windows exist.
 pub(crate) fn has_overnight_windows(instrument: Option<&crate::model::Instrument>) -> bool {
     instrument
         .and_then(|instrument| instrument.session.as_ref())
