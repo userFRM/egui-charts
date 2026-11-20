@@ -105,7 +105,9 @@ fn alert_display_enabled() -> bool {
 }
 
 /// Where a firing is delivered. The alerts panel honours `popup` and `sound`; the host sends the
-/// others itself, reading them from the saved alert. The trigger log records every firing.
+/// others itself, reading them from the saved alert, and
+/// [`AlertNotice`](crate::services::AlertNotice) gives it what to send. The trigger log records
+/// every firing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -114,8 +116,16 @@ pub struct AlertDelivery {
     pub popup: bool,
     /// Play the sound chosen in the alert settings, if they turn sound on. Enabled by default.
     pub sound: bool,
-    /// Ask the host to send an email.
+    /// Ask the host to send an email to the account's address.
     pub email: bool,
+    /// Ask the host to send a plain-text email, without formatting, as pagers and mail-to-text
+    /// gateways need, to [`plain_text_address`](Self::plain_text_address). Independent of
+    /// `email`, so one alert can send both.
+    pub plain_text: bool,
+    /// Where the host sends the plain-text email, such as a pager or a mail-to-text gateway;
+    /// empty sends it to the alternative address the user's account holds. Send to it without
+    /// surrounding spaces. Presets leave it out.
+    pub plain_text_address: String,
     /// Ask the host to send a push notification to the user's mobile app.
     pub push: bool,
     /// Ask the host to post to [`webhook_url`](Self::webhook_url).
@@ -130,6 +140,8 @@ impl Default for AlertDelivery {
             popup: true,
             sound: true,
             email: false,
+            plain_text: false,
+            plain_text_address: String::new(),
             push: false,
             webhook: false,
             webhook_url: String::new(),
@@ -138,8 +150,32 @@ impl Default for AlertDelivery {
 }
 
 impl AlertDelivery {
-    /// Whether an enabled webhook has an `http` or `https` URL.
+    /// Whether an enabled plain-text email's address, when given, is one email address and an
+    /// enabled webhook has an `http` or `https` URL.
     pub fn is_valid(&self) -> bool {
+        self.plain_text_is_valid() && self.webhook_is_valid()
+    }
+
+    /// Whether an enabled plain-text email's address is empty or one `local@domain` address: a
+    /// domain of two or more labels, none empty, and no spaces, control characters or
+    /// `@,;:<>()[]\"` in either part. Surrounding spaces do not count.
+    pub(crate) fn plain_text_is_valid(&self) -> bool {
+        let address = self.plain_text_address.trim();
+        let forbidden =
+            |c: char| c.is_whitespace() || c.is_control() || "@,;:<>()[]\\\"".contains(c);
+        !self.plain_text
+            || address.is_empty()
+            || address.split_once('@').is_some_and(|(local, domain)| {
+                !local.is_empty()
+                    && domain.split('.').count() > 1
+                    && domain.split('.').all(|label| !label.is_empty())
+                    && !local.contains(forbidden)
+                    && !domain.contains(forbidden)
+            })
+    }
+
+    /// Whether an enabled webhook has an `http` or `https` URL.
+    pub(crate) fn webhook_is_valid(&self) -> bool {
         let url = self.webhook_url.trim();
         !self.webhook
             || url.split_once("://").is_some_and(|(scheme, rest)| {
@@ -1421,7 +1457,11 @@ mod tests {
                 progress: AlertPositionProgress::AwaitingEntry,
             }
         }
-        let rows: [(Edit, bool); 41] = [
+        fn plain_text(a: &mut Alert, address: &str) {
+            a.delivery.plain_text = true;
+            a.delivery.plain_text_address = address.into();
+        }
+        let rows: [(Edit, bool); 51] = [
             (|a| a.condition = position(), true),
             (
                 |a| {
@@ -1463,6 +1503,22 @@ mod tests {
                 },
                 false,
             ),
+            (|a| plain_text(a, "pager@example.com"), true),
+            (|a| plain_text(a, " pager@example.com "), true),
+            (|a| plain_text(a, ""), true),
+            (|a| plain_text(a, "José@exämple.com"), true),
+            (
+                |a| {
+                    a.delivery.email = true;
+                    a.delivery.plain_text_address = "pager".into();
+                },
+                true,
+            ),
+            (|a| plain_text(a, "pager@example"), false),
+            (|a| plain_text(a, "@example.com"), false),
+            (|a| plain_text(a, "pager@example..com"), false),
+            (|a| plain_text(a, "a@example.com, b@example.com"), false),
+            (|a| plain_text(a, "pager@example.com\r\nBcc: x@y.z"), false),
             (
                 |a| {
                     a.delivery.webhook = true;

@@ -59,7 +59,7 @@ pub use alert_engine::AlertEngine;
 pub use alert_evaluator::AlertEvaluator;
 #[cfg(feature = "alert-engine")]
 pub use alert_feed::{AlertData, AlertFeed};
-pub use alerts::{AlertEvent, Alerts};
+pub use alerts::{AlertEvent, AlertNotice, Alerts};
 pub use broker::{AccountEvent, Broker, HistoryKind, HistoryPage, HistoryRequest};
 pub use chats::{
     ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, NewChatRoom, NewChatRoomKind,
