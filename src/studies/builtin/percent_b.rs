@@ -6,8 +6,8 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Percent B (%B): where the close sits within its Bollinger Bands, 0 at the lower band and
-/// 1 at the upper band. The pane opens with dashed guides at 1 and 0, a faint guide at 0.5 and
-/// the band between 1 and 0 filled.
+/// 1 at the upper band. Half-opacity guides mark 1 in dashed red, 0 in dashed teal and 0.5 in
+/// solid blue. The outer band is filled, with red shading above 1 and teal shading below 0.
 #[derive(Clone, Debug)]
 pub struct PercentB {
     /// Period for Bollinger Bands (typically 20)
@@ -20,11 +20,11 @@ pub struct PercentB {
 }
 
 impl PercentB {
-    /// `multiplier` is clamped into 0 to `f64::MAX`, NaN to 0.
+    /// `multiplier` is clamped into 0.001 to 50, NaN to 0.001.
     pub fn new(period: usize, multiplier: f64) -> Self {
         Self {
             period: period.max(1),
-            multiplier: clamp_param(multiplier, 0.0, f64::MAX),
+            multiplier: clamp_param(multiplier, 0.001, 50.0),
             values: IndicatorValues::new(),
             color: palette::BLUE,
             visible: true,
@@ -95,8 +95,8 @@ impl Indicator for PercentB {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX),
-        multiplier: number("Multiplier", 0.0, f64::MAX)
+        period: length("Length", 1, usize::MAX),
+        multiplier: number("StdDev", 0.001, 50.0)
     ; {});
 
     fn name(&self) -> &str {
@@ -150,12 +150,40 @@ impl Indicator for PercentB {
         Color32::from_rgba_unmultiplied(self.color.r(), self.color.g(), self.color.b(), 26)
     }
 
+    /// The middle band is solid, the outer guides dashed.
+    fn level_style(&self, value: f64) -> crate::model::LineStyle {
+        if value == 0.5 {
+            crate::model::LineStyle::Solid
+        } else {
+            crate::model::LineStyle::Dashed
+        }
+    }
+
+    /// Shade only outside the fixed outer boundaries, at a tenth of full opacity.
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        use crate::studies::{FillBoundary, StudyFill};
+        vec![
+            StudyFill {
+                first: FillBoundary::Plot(0),
+                second: FillBoundary::Level(1.0),
+                color: palette::RED.gamma_multiply_u8(26),
+                inverted_color: Some(Color32::TRANSPARENT),
+            },
+            StudyFill {
+                first: FillBoundary::Plot(0),
+                second: FillBoundary::Level(0.0),
+                color: Color32::TRANSPARENT,
+                inverted_color: Some(palette::TEAL.gamma_multiply_u8(26)),
+            },
+        ]
+    }
+
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             levels: vec![
-                (1.0, palette::MUTED, "Upper Band"),
-                (0.0, palette::MUTED, "Lower Band"),
-                (0.5, palette::MUTED.gamma_multiply_u8(128), "Middle Band"),
+                (1.0, palette::RED.gamma_multiply_u8(128), "Overbought"),
+                (0.0, palette::TEAL.gamma_multiply_u8(128), "Oversold"),
+                (0.5, palette::BLUE.gamma_multiply_u8(128), "Middle Band"),
             ],
             fill_between_levels: true,
             ..Default::default()
@@ -187,6 +215,30 @@ impl Indicator for PercentB {
 mod tests {
     use super::*;
     use crate::studies::test_support::make_bar;
+
+    /// Both the input editor and constructors enforce the supported deviation range.
+    #[test]
+    fn inputs_read_length_and_stddev_within_their_range() {
+        use crate::studies::InputValue::Number;
+        let mut study = PercentB::default();
+        assert_eq!(
+            study
+                .inputs()
+                .iter()
+                .map(|input| input.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Length", "StdDev"]
+        );
+        for (value, accepted) in [(0.0, false), (50.5, false), (0.001, true), (50.0, true)] {
+            assert_eq!(
+                study.set_input("multiplier", Number(value)).is_ok(),
+                accepted
+            );
+        }
+        for (value, want) in [(0.0, 0.001), (f64::NAN, 0.001), (1e9, 50.0)] {
+            assert_eq!(PercentB::new(20, value).inputs()[1].value, Number(want));
+        }
+    }
 
     #[test]
     fn test_percent_b() {

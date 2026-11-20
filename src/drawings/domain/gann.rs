@@ -42,8 +42,11 @@ pub struct GannLevel {
     pub value: f32,
     /// Whether the line, its label and the band it closes are drawn.
     pub visible: bool,
-    /// Line, label and band colour as RGBA.
+    /// Line, label and band colour as RGBA, unless [`GannConfig::one_color`] is set.
     pub color: [u8; 4],
+    /// Stroke width in points. `None` takes the drawing's width, as drawings saved before levels
+    /// had a width do.
+    pub width: Option<f32>,
 }
 
 impl GannLevel {
@@ -53,6 +56,7 @@ impl GannLevel {
             value,
             visible: true,
             color,
+            width: None,
         }
     }
 }
@@ -66,6 +70,8 @@ enum SavedGannLevel {
         value: f32,
         visible: bool,
         color: [u8; 4],
+        #[serde(default)]
+        width: Option<f32>,
     },
     Value(f32),
 }
@@ -77,10 +83,12 @@ impl From<SavedGannLevel> for GannLevel {
                 value,
                 visible,
                 color,
+                width,
             } => Self {
                 value,
                 visible,
                 color,
+                width,
             },
             // The drawing colour is not known here, so older values take the neutral level colour.
             SavedGannLevel::Value(value) => Self::new(value, GREY),
@@ -125,6 +133,18 @@ pub struct GannConfig {
     pub background_opacity: u8,
     /// Whether a Gann box draws rays from its corners to the level points on its far edges.
     pub show_angles: bool,
+    /// Whether a Gann box writes each level's value beside and below it, and a Gann fan each
+    /// line's ratio at the pane's edge. Gann squares draw no level labels.
+    pub show_labels: bool,
+    /// Whether a Gann box, Gann square or fixed Gann square is mirrored inside its anchors: its
+    /// levels, fan lines and arcs are counted from the corner opposite the first anchor, and
+    /// [`fan_direction`](Self::fan_direction) is read from there. A Gann fan follows its anchors.
+    pub reverse: bool,
+    /// A colour as RGBA that every line, band and label of the tool takes instead of the level
+    /// colours, which are kept for when it is cleared. Labels drawn on a box, the fan's ratios
+    /// and a square's range readout, take it as the box's fill under white or black text,
+    /// whichever reads on it. `None` draws the level colours.
+    pub one_color: Option<[u8; 4]>,
 }
 
 thread_local! {
@@ -214,6 +234,9 @@ impl Default for GannConfig {
             show_background: true,
             background_opacity: 51,
             show_angles: false,
+            show_labels: true,
+            reverse: false,
+            one_color: None,
         }
     }
 }

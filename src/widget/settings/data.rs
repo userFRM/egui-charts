@@ -9,6 +9,43 @@ use egui::Color32;
 // Settings State
 // ============================================================================
 
+/// Backgrounds of supplied extended and overnight bars. Colours include opacity; absent phase
+/// colours use the shared extended-session colour, whose placeholder follows the theme.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct SessionBackgroundSettings {
+    /// Highlight extended and overnight sessions on intraday charts.
+    pub show_extended_hours: bool,
+    /// Shared extended-session fill; `PLACEHOLDER` follows the theme at 8% opacity.
+    pub extended_hours_color: Color32,
+    /// Pre-market fill, or the shared fill when absent.
+    pub premarket_color: Option<Color32>,
+    /// Post-market fill, or the shared fill when absent.
+    pub postmarket_color: Option<Color32>,
+    /// Highlight the pre-market while session highlighting is enabled.
+    pub shade_premarket: bool,
+    /// Highlight the post-market while session highlighting is enabled.
+    pub shade_postmarket: bool,
+    /// Overnight fill; `PLACEHOLDER` follows the theme at 16% opacity.
+    pub overnight_hours_color: Color32,
+}
+
+impl Default for SessionBackgroundSettings {
+    fn default() -> Self {
+        let config = crate::config::ChartConfig::default();
+        Self {
+            show_extended_hours: config.show_extended_hours,
+            extended_hours_color: config.extended_hours_color,
+            premarket_color: config.premarket_color,
+            postmarket_color: config.postmarket_color,
+            shade_premarket: config.shade_premarket,
+            shade_postmarket: config.shade_postmarket,
+            overnight_hours_color: config.overnight_hours_color,
+        }
+    }
+}
+
 /// Candle color configuration (body, border, wick for up/down candles) and which parts are drawn.
 /// Saved settings without a field take its default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -190,6 +227,42 @@ impl Default for CrosshairSettings {
     }
 }
 
+/// Which crosshair lines and axis labels the Canvas tab shows. Lines show only in the full
+/// crosshair style.
+///
+/// ```
+/// use egui_charts::widget::settings::CrosshairVisibility;
+///
+/// let mut shown = CrosshairVisibility::default();
+/// shown.horizontal_line = false;
+/// shown.price_label = false;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct CrosshairVisibility {
+    /// Draw the vertical line.
+    pub vertical_line: bool,
+    /// Draw the horizontal line.
+    pub horizontal_line: bool,
+    /// Draw the time label on the time axis.
+    pub time_label: bool,
+    /// Draw the price label on the price axis, and the values of volume and studies.
+    pub price_label: bool,
+}
+
+impl Default for CrosshairVisibility {
+    /// Everything shown, as on a new chart.
+    fn default() -> Self {
+        Self {
+            vertical_line: true,
+            horizontal_line: true,
+            time_label: true,
+            price_label: true,
+        }
+    }
+}
+
 /// Canvas tab: Watermark settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WatermarkSettings {
@@ -293,7 +366,7 @@ pub struct MarginsSettings {
 impl Default for MarginsSettings {
     /// The margins of a new chart, read as the settings read a chart's.
     fn default() -> Self {
-        let price = crate::scales::PriceScaleMargins::default();
+        let price = crate::scales::PriceScaleMargins::CHART;
         Self {
             top_percent: (price.top * 100.0) as f32,
             bottom_percent: (price.bottom * 100.0) as f32,
@@ -353,7 +426,9 @@ pub struct ScalesAndLinesSettings {
     pub show_currency: bool,
     /// Display host-supplied price unit metadata.
     pub show_unit: bool,
-    /// Show the currency and unit only while the pointer is over the price scale.
+    /// Show the currency and unit only while the pointer is over the price scale. Settings saved
+    /// without this field keep them always visible.
+    #[serde(default)]
     pub currency_unit_on_hover: bool,
     /// Display Auto, Log and Percent navigation buttons.
     pub show_scale_mode_buttons: bool,
@@ -454,7 +529,7 @@ impl Default for ScalesAndLinesSettings {
             axis_layout: Default::default(),
             show_currency: true,
             show_unit: true,
-            currency_unit_on_hover: false,
+            currency_unit_on_hover: true,
             show_scale_mode_buttons: true,
             show_plus_button: true,
             allow_label_overlap: false,
@@ -676,6 +751,10 @@ pub struct OrderFlowSettings {
     pub show_heatmap: bool,
     /// Brightness and resting-size range, retained while the heatmap is off.
     pub heatmap: crate::chart::overlays::LiquidityHeatmapConfig,
+    /// How long to keep depth columns, see
+    /// [`DepthHistoryConfig::retention`](crate::data::DepthHistoryConfig::retention). `None`, the
+    /// default, keeps the full history, including for settings saved without this field.
+    pub heatmap_retention: Option<chrono::TimeDelta>,
     /// Draw the live book's side profile independently of the heatmap.
     pub show_order_book: bool,
     /// Live book measure, order filter and size highlights.
@@ -696,6 +775,7 @@ pub struct OrderFlowSettings {
 /// settings.status_line.show_logo = false;
 /// settings.trading.instant_orders = true;
 /// settings.alerts.play_sound = false;
+/// settings.session_background = Some(egui_charts::widget::settings::SessionBackgroundSettings::default());
 /// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
@@ -744,6 +824,15 @@ pub struct ChartSettingsState {
     /// `None` keeps the chart's choice, as do settings saved without this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extended_hours: Option<bool>,
+    /// Include overnight hours, as [`Chart::set_overnight_hours`](crate::widget::Chart::set_overnight_hours)
+    /// requests them. Applied before extended hours, so regular hours turn both off.
+    /// `None` keeps the chart's choice, as do settings saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overnight_hours: Option<bool>,
+    /// Session highlights, independent of the hours requested from the feed. Absent in older
+    /// settings, which keep the chart's current backgrounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_background: Option<SessionBackgroundSettings>,
     /// Ask the host for continuous futures history back-adjusted at each roll. The host owns
     /// the data, so [`apply_to_chart`](Self::apply_to_chart) leaves reloading to the host;
     /// [`from_chart`](Self::from_chart) leaves this off.
@@ -781,6 +870,10 @@ pub struct ChartSettingsState {
     pub pane_separator_color: Option<Color32>,
     /// Crosshair line appearance.
     pub crosshair: CrosshairSettings,
+    /// Which crosshair lines and labels are drawn. `None` keeps the chart's, as do settings
+    /// saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crosshair_lines: Option<CrosshairVisibility>,
     /// Watermark appearance.
     pub watermark: WatermarkSettings,
     /// Axis appearance.
@@ -846,6 +939,8 @@ impl Default for ChartSettingsState {
             price_target_negative_color: None,
             adjust_for_dividends: false,
             extended_hours: None,
+            overnight_hours: None,
+            session_background: None,
             back_adjust_futures: false,
             settlement_as_close: true,
 
@@ -859,6 +954,7 @@ impl Default for ChartSettingsState {
             grid_lines: grid_lines.clone(),
             pane_separator_color: None,
             crosshair: CrosshairSettings::default(),
+            crosshair_lines: None,
             watermark: WatermarkSettings::default(),
             scales_appearance: ScalesAppearanceSettings::default(),
             btns: ButtonsSettings::default(),

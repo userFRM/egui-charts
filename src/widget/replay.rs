@@ -138,6 +138,7 @@ impl Chart {
         self.attach_feed(driver.clone(), 1);
         self.set_liquidity_heatmap_config(heatmap_config);
         if let (Some(live), Some(replay)) = (&feed, &mut self.feed_link) {
+            replay.depth_retention = live.depth_retention;
             replay.heatmap = live.heatmap.as_ref().map(|_| Default::default());
             replay.book_visible = live.book_visible;
             replay.bubbles_config = live.bubbles_config.clone();

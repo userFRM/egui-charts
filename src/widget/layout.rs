@@ -1641,6 +1641,57 @@ impl ChartLayout {
         }
     }
 
+    /// Goes to `time` on `date`, or to the start of `date`, on the active chart, as
+    /// [`Chart::go_to_local_time`] does. With `sync_time_axis` on, the other charts of its
+    /// synchronization group follow its new span, as after a scroll; otherwise each goes to
+    /// the same local date and time in its own zone when `sync_date_range` is on, and keeps its
+    /// view with both off.
+    pub fn go_to_local_time(
+        &self,
+        charts: &mut [&mut Chart],
+        date: chrono::NaiveDate,
+        time: Option<chrono::NaiveTime>,
+    ) {
+        if self.active >= charts.len().min(MAX_CHARTS) {
+            return;
+        }
+        let group = !self.sync.sync_time_axis && self.sync.sync_date_range;
+        for (index, chart) in charts.iter_mut().take(MAX_CHARTS).enumerate() {
+            if index == self.active || (group && self.same_group(index, self.active)) {
+                chart.go_to_local_time(date, time);
+            }
+        }
+    }
+
+    /// Shows the days from `start` to `end`, both included, on the active chart's calendar:
+    /// from `start_time` on the first day, or its start, to `end_time` on the last day, or its
+    /// end. The charts of its group receive the range as from [`Self::apply_date_range`].
+    /// A range that does not end after its start changes nothing.
+    pub fn apply_local_date_range(
+        &self,
+        charts: &mut [&mut Chart],
+        start: chrono::NaiveDate,
+        start_time: Option<chrono::NaiveTime>,
+        end: chrono::NaiveDate,
+        end_time: Option<chrono::NaiveTime>,
+    ) {
+        let Some(active) = charts.get(self.active) else {
+            return;
+        };
+        let from = active.local_date_instant(start, start_time);
+        let to = match end_time {
+            Some(time) => active.local_date_instant(end, Some(time)),
+            // The last second before the next day starts, as the hosts counted days.
+            None => end
+                .succ_opt()
+                .and_then(|next| active.local_date_instant(next, None))
+                .map(|next| next - chrono::TimeDelta::seconds(1)),
+        };
+        if let Some((from, to)) = from.zip(to) {
+            self.apply_date_range(charts, super::VisibleTimeRange::new(from, to));
+        }
+    }
+
     fn same_group(&self, a: usize, b: usize) -> bool {
         self.groups[a] == self.groups[b]
     }
@@ -4378,22 +4429,88 @@ mod tests {
         // does, and other groups keep their view either way.
         let before = refs[1].get_time_scale_state();
         let isolated = refs[2].get_time_scale_state();
-        for (sync_time_axis, sync_date_range, moves) in [
-            (true, false, true),
-            (false, false, false),
-            (false, true, true),
+        // New York is EST (UTC-5) on 14 November 2023. A fixed offset also exercises
+        // local ranges in builds without the named-zone database.
+        refs[0].chart_options.time_scale.timezone = crate::scales::TimezoneMode::Timezone(
+            crate::model::TimezoneId::fixed_offset(-5 * 3600).unwrap(),
+        );
+        let day = chrono::NaiveDate::from_ymd_opt(2023, 11, 14).unwrap();
+        let time = |hour, minute| chrono::NaiveTime::from_hms_opt(hour, minute, 0);
+        let utc = |hour, minute| {
+            DateTime::from_naive_utc_and_offset(
+                day.and_hms_opt(hour, minute, 0).unwrap(),
+                chrono::Utc,
+            )
+        };
+        for (local, sync_time_axis, sync_date_range, moves) in [
+            (false, true, false, true),
+            (false, false, false, false),
+            (false, false, true, true),
+            (true, true, false, true),
+            (true, false, false, false),
+            (true, false, true, true),
         ] {
             layout.sync.sync_time_axis = sync_time_axis;
             layout.sync.sync_date_range = sync_date_range;
             refs[1].apply_synced_time_scale(before.0, before.1);
-            layout.apply_date_range(&mut refs, range);
+            if local {
+                layout.apply_local_date_range(&mut refs, day, time(17, 30), day, time(18, 0));
+                let span = refs[0].visible_time_range().unwrap();
+                assert!(
+                    (span.from - utc(22, 30)).abs() <= Duration::seconds(60),
+                    "{span:?}"
+                );
+                assert!(
+                    (span.to - utc(23, 0)).abs() <= Duration::seconds(60),
+                    "{span:?}"
+                );
+            } else {
+                layout.apply_date_range(&mut refs, range);
+            }
             assert_eq!(
                 refs[1].get_time_scale_state() != before,
                 moves,
-                "{sync_time_axis} {sync_date_range}"
+                "local={local} {sync_time_axis} {sync_date_range}"
             );
             assert_eq!(refs[2].get_time_scale_state(), isolated);
         }
+        for (sync_time_axis, sync_date_range, follower) in [
+            (true, true, None),
+            (false, false, None),
+            (false, true, Some(utc(17, 30))),
+        ] {
+            layout.sync.sync_time_axis = sync_time_axis;
+            layout.sync.sync_date_range = sync_date_range;
+            for chart in refs.iter_mut() {
+                chart.pending_scroll_time = None;
+            }
+            layout.go_to_local_time(&mut refs, day, time(17, 30));
+            assert_eq!(refs[0].pending_scroll_time, Some(utc(22, 30)));
+            assert_eq!(refs[1].pending_scroll_time, follower);
+            assert_eq!(refs[2].pending_scroll_time, None);
+        }
+        // Bad host ranges, including equal instants, leave every chart's view alone.
+        for end in [time(17, 0), time(17, 30)] {
+            let before: Vec<_> = refs
+                .iter()
+                .map(|chart| chart.get_time_scale_state())
+                .collect();
+            layout.apply_local_date_range(&mut refs, day, time(17, 30), day, end);
+            assert_eq!(
+                refs.iter()
+                    .map(|chart| chart.get_time_scale_state())
+                    .collect::<Vec<_>>(),
+                before
+            );
+        }
+        // An absent active slot cannot navigate its group.
+        for chart in refs.iter_mut() {
+            chart.pending_scroll_time = None;
+        }
+        layout.active = 5;
+        layout.go_to_local_time(&mut refs, day, time(17, 30));
+        assert!(refs.iter().all(|chart| chart.pending_scroll_time.is_none()));
+        layout.active = 0;
         layout.sync.sync_time_axis = true;
 
         // Clearing the legacy picker must exclude a chart, rather than joining unnamed charts.

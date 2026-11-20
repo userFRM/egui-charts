@@ -96,7 +96,9 @@ impl Evaluation {
                     std::iter::once(source).chain(condition.partners().into_iter().flatten())
                 })
                 .filter_map(|source| match source {
-                    AlertSource::Study { id, .. } => id.parse::<usize>().ok(),
+                    AlertSource::Study { id, .. } | AlertSource::StudyCondition { id, .. } => {
+                        id.parse::<usize>().ok()
+                    }
                     _ => None,
                 })
                 .collect(),
@@ -507,6 +509,13 @@ impl AlertEvaluator {
                         .iter()
                         .find(|(key, _)| key.to_string() == *id)
                         .and_then(|(_, study)| study.plot_value(*output, at)),
+                    AlertSource::StudyCondition { id, condition } => context
+                        .0
+                        .studies
+                        .iter()
+                        .find(|(key, _)| key.to_string() == *id)
+                        .and_then(|(_, study)| study.alert_condition(*condition, at))
+                        .map(|holds| if holds { 1.0 } else { 0.0 }),
                     #[cfg(feature = "ui")]
                     AlertSource::Drawing(_) => {
                         let (run, reader, from) = context;
@@ -633,10 +642,7 @@ mod tests {
         fn metric_history(&self, request: MetricRequest, reply: Reply<MetricPage>) {
             reply.send(if request.symbol == "HELD" {
                 Ok(MetricPage {
-                    points: vec![MetricPoint {
-                        time: bar(0, 0.0).time,
-                        value: 42.0,
-                    }],
+                    points: vec![MetricPoint::new(bar(0, 0.0).time, 42.0)],
                     end_of_history: true,
                 })
             } else {
@@ -955,6 +961,34 @@ mod tests {
         delivered.lock().unwrap().clone()
     }
 
+    /// A stored condition rebuilds its saved study, without relying on a chart's instance.
+    #[test]
+    fn a_saved_study_condition_rebuilds_its_study_and_fires() {
+        use crate::model::{AlertCondition, AlertStudy, InputValue};
+        let mut alert = Alert::new("SYM", AlertCondition::Holds);
+        alert.source = AlertSource::StudyCondition {
+            id: "3".into(),
+            condition: 0,
+        };
+        alert.timeframe = Some(Timeframe::Min1);
+        alert.message = "{{close}} {{value}}".into();
+        alert.inputs = Some(Box::new(AlertInputs {
+            studies: vec![AlertStudy::new(
+                3,
+                "SuperTrend",
+                vec![
+                    ("atr_period".into(), InputValue::Length(1)),
+                    ("multiplier".into(), InputValue::Number(1.0)),
+                ],
+            )],
+            ..Default::default()
+        }));
+        assert_eq!(
+            fired_messages(Arc::new(Feed::default()), &IndicatorFactory::new(), alert),
+            ["300 1"]
+        );
+    }
+
     /// `prepare_alert` saves every study of the chart with the alert; a price alert's message
     /// names study 7, which no condition tests. One-minute closes 200 and 300: the mean is 250.
     /// Study 8 is not saved, the factory does not know study 9, study 11 reads study 12, which
@@ -1068,10 +1102,12 @@ mod tests {
         factory.register("Metric", || {
             Box::new(crate::studies::MetricStudy::new(
                 crate::data::MetricSeries {
-                    id: "oi".into(),
-                    name: "Open interest".into(),
                     unit: String::new(),
-                    format: crate::scales::StudyFormat::Volume,
+                    ..crate::data::MetricSeries::new(
+                        "oi",
+                        "Open interest",
+                        crate::scales::StudyFormat::Volume,
+                    )
                 },
             ))
         });

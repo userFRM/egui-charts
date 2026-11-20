@@ -7,14 +7,22 @@
 //! follow the instrument's trading calendar, as VWAP does. On an interval shorter than a day the
 //! study requests the symbol's daily bars and takes the later of the daily close and the chart's
 //! own close on or before each date, the daily close on the same date. A connected feed loads
-//! those daily bars back to the oldest period's date, one year before the latest with the
+//! those daily bars back to the oldest period's date, five years before the latest with the
 //! default periods. Missing history and a zero reference close have no value.
 //!
 //! The table has a row for the chart symbol and one for each other symbol of the Symbol list,
 //! whose daily bars the study requests on every interval and measures from that symbol's own
 //! latest close, and a column for each period of the Timeframe list. With Include chart symbol
 //! off, a listed chart symbol has a row of its own. The six plots keep the chart symbol's
-//! standard periods.
+//! standard periods. A new study compares `AAPL, NASDAQ:AMZN, EURUSD, ES1!, BTCUSD` over
+//! `1W, 1M, 3M, 6M, 12M, YTD, 5Y` in a table at the middle centre, 100% of the pane wide and 95%
+//! high, with falling changes in `#F23745`.
+//!
+//! A row is labelled with the description of its symbol's instrument when the host gives one,
+//! and with the ticker otherwise. Each change is written in its sign's colour, the Positive
+//! colour for no change, over a fill of that colour that runs from 90% transparency at no change
+//! to 70% at Colour intensity cutoff (%) and beyond. A change without a value reads "No data".
+//! Resting the pointer on a change shows the date of the close it is measured from.
 
 use super::anchor_period::ExchangeDays;
 use crate::model::{Bar, Instrument, Timeframe};
@@ -28,7 +36,7 @@ use crate::studies::{
 use chrono::{DateTime, Datelike, Days, Months, NaiveDate, NaiveTime, Utc};
 use egui::Color32;
 
-/// The standard periods: the plots, in this order, and the default Timeframe list.
+/// The standard periods: the plots, in this order.
 const PERIODS: [(&str, Period); 6] = [
     ("1W", Period::Days(7)),
     ("1M", Period::Months(1)),
@@ -39,7 +47,7 @@ const PERIODS: [(&str, Period); 6] = [
 ];
 
 /// Behind each row's label, the grey the table paints behind Performance's headings.
-const LABEL_FILL: Color32 = Color32::from_rgba_unmultiplied_const(120, 123, 134, 51);
+pub(super) const LABEL_FILL: Color32 = Color32::from_rgba_unmultiplied_const(120, 123, 134, 51);
 /// Behind a change without a value.
 const MISSING_FILL: Color32 = Color32::from_rgba_unmultiplied_const(120, 123, 134, 26);
 
@@ -103,8 +111,19 @@ pub struct Performance {
     table_height: f64,
     /// The chart symbol, which labels its row; empty on a chart without a symbol.
     chart_symbol: String,
-    /// Each compared symbol, in list order, with the UTC date and finite close of its daily bars.
-    compared: Vec<(String, Vec<(NaiveDate, f64)>)>,
+    /// The chart instrument's description, which labels its row when given.
+    chart_description: Option<String>,
+    /// The compared symbols daily bars were last supplied or found missing for, in list order.
+    compared: Vec<Compared>,
+}
+
+/// A compared symbol, the description its instrument gives, and the UTC date and finite close of
+/// its daily bars, in time order.
+#[derive(Clone, Debug)]
+struct Compared {
+    symbol: String,
+    description: Option<String>,
+    closes: Vec<(NaiveDate, f64)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -135,16 +154,17 @@ impl Performance {
             },
             colors: [palette::BLUE; 6],
             visible: true,
-            symbols: String::new(),
+            symbols: "AAPL, NASDAQ:AMZN, EURUSD, ES1!, BTCUSD".into(),
             include_chart_symbol: true,
-            periods: "1W, 1M, 3M, 6M, YTD, 1Y".into(),
+            periods: "1W, 1M, 3M, 6M, 12M, YTD, 5Y".into(),
             positive_color: palette::UP,
-            negative_color: palette::DOWN,
+            negative_color: Color32::from_rgb(242, 55, 69),
             color_cutoff: 10.0,
-            table_position: TablePosition::BottomRight,
-            table_width: 0.0,
-            table_height: 0.0,
+            table_position: TablePosition::MiddleCenter,
+            table_width: 100.0,
+            table_height: 95.0,
             chart_symbol: String::new(),
+            chart_description: None,
             compared: Vec::new(),
         }
     }
@@ -176,8 +196,8 @@ impl Performance {
             starts.extend(PERIODS.iter().map(|(_, period)| period.target(date)));
             starts.extend(listed.iter().map(|(_, period)| period.target(date)));
         }
-        for (_, closes) in &self.compared {
-            if let Some(&(date, _)) = closes.last() {
+        for compared in &self.compared {
+            if let Some(&(date, _)) = compared.closes.last() {
                 starts.extend(listed.iter().map(|(_, period)| period.target(date)));
             }
         }
@@ -185,8 +205,10 @@ impl Performance {
     }
 
     /// Fills the table from the latest closes: a row for the chart symbol when it is included,
-    /// then one for each other compared symbol, under a column for each listed period, each
-    /// change on its sign's colour at an intensity growing up to the cutoff.
+    /// then one for each other compared symbol, labelled with its description when it has one,
+    /// under a column for each listed period. Each change is written in its sign's colour over
+    /// that colour at 10% opacity, growing to 30% at the cutoff, with the date of the close it is
+    /// measured from as its tooltip; a change without a value reads "No data".
     fn fill_table(&mut self) {
         let periods = table_periods(&self.periods);
         let changes = |latest: Option<&(NaiveDate, f64)>, histories: [&[(NaiveDate, f64)]; 2]| {
@@ -199,50 +221,63 @@ impl Performance {
         };
         let mut rows = Vec::new();
         if self.include_chart_symbol {
-            let label = if self.chart_symbol.is_empty() {
-                "Chart".to_owned()
-            } else {
-                self.chart_symbol.clone()
+            let label = match &self.chart_description {
+                Some(description) => description.clone(),
+                None if self.chart_symbol.is_empty() => "Chart".to_owned(),
+                None => self.chart_symbol.clone(),
             };
             let histories = [&self.history[..], &self.daily[..]];
             rows.push((label, changes(self.history.last(), histories)));
         }
-        for (symbol, closes) in &self.compared {
+        for symbol in self.compared_symbols() {
             // The chart symbol's row stands for a listed copy of it.
-            if self.include_chart_symbol && *symbol == self.chart_symbol {
+            if self.include_chart_symbol && symbol == self.chart_symbol {
                 continue;
             }
-            rows.push((symbol.clone(), changes(closes.last(), [&closes[..], &[]])));
+            // A listed symbol has its row before any daily bars are supplied for it.
+            let supplied = self.compared.iter().find(|other| other.symbol == symbol);
+            let label = supplied
+                .and_then(|supplied| supplied.description.as_deref())
+                .unwrap_or(symbol);
+            let closes = supplied.map_or(&[][..], |supplied| &supplied.closes[..]);
+            rows.push((label.to_owned(), changes(closes.last(), [closes, &[]])));
         }
-        let fill = |change: Option<f64>| match change {
-            Some(change) => {
+        let table = &mut self.table;
+        table.rows.clear();
+        table.cell_colors.clear();
+        table.cell_text_colors.clear();
+        table.cell_tooltips.clear();
+        for (label, values) in rows {
+            let mut cells = vec![StudyCell::Text(label)];
+            let mut fills = vec![LABEL_FILL];
+            let mut text_colors = vec![None];
+            let mut tooltips = vec![String::new()];
+            for value in values {
+                let Some((change, date)) = value else {
+                    cells.push(StudyCell::Text("No data".into()));
+                    fills.push(MISSING_FILL);
+                    text_colors.push(None);
+                    tooltips.push(String::new());
+                    continue;
+                };
                 let color = if change < 0.0 {
                     self.negative_color
                 } else {
                     self.positive_color
                 };
-                color.gamma_multiply((change.abs() / self.color_cutoff).min(1.0) as f32)
+                let reached = (change.abs() / self.color_cutoff).min(1.0);
+                cells.push(StudyCell::Percent(Some(change)));
+                fills.push(color.gamma_multiply((0.1 + 0.2 * reached) as f32));
+                text_colors.push(Some(color));
+                tooltips.push(date.format("%d %b %Y").to_string());
             }
-            None => MISSING_FILL,
-        };
-        self.table.cell_colors = rows
-            .iter()
-            .map(|(_, values)| {
-                std::iter::once(LABEL_FILL)
-                    .chain(values.iter().map(|&value| fill(value)))
-                    .collect()
-            })
-            .collect();
+            table.rows.push(cells);
+            table.cell_colors.push(fills);
+            table.cell_text_colors.push(text_colors);
+            table.cell_tooltips.push(tooltips);
+        }
         self.table.columns = std::iter::once("Symbol".to_owned())
             .chain(periods.into_iter().map(|(label, _)| label))
-            .collect();
-        self.table.rows = rows
-            .into_iter()
-            .map(|(label, values)| {
-                std::iter::once(StudyCell::Text(label))
-                    .chain(values.into_iter().map(StudyCell::Percent))
-                    .collect()
-            })
             .collect();
         self.table.position = self.table_position;
         self.table.width = share(self.table_width);
@@ -281,18 +316,24 @@ fn closes(bars: &[Bar]) -> Vec<(NaiveDate, f64)> {
     }
 }
 
+/// The trimmed description of `instrument`, or `None` when it has none or a blank one.
+fn description(instrument: Option<&Instrument>) -> Option<String> {
+    let description = instrument?.description.as_deref()?.trim();
+    (!description.is_empty()).then(|| description.to_owned())
+}
+
 /// The percentage change to `close` on `date` from the latest close on or before the start of
-/// `period` in either history, the second one's on the same date; `None` without such a close,
-/// from a zero close or when the change is not finite.
+/// `period` in either history, the second one's on the same date, and the date of that close;
+/// `None` without such a close, from a zero close or when the change is not finite.
 fn change(
     close: f64,
     date: NaiveDate,
     period: Period,
     histories: [&[(NaiveDate, f64)]; 2],
-) -> Option<f64> {
+) -> Option<(f64, NaiveDate)> {
     let target = period.target(date)?;
     // `max_by_key` keeps the last of equal dates.
-    let (_, reference) = histories
+    let (day, reference) = histories
         .into_iter()
         .filter_map(|history| {
             let at = history.partition_point(|(day, _)| *day <= target);
@@ -300,7 +341,7 @@ fn change(
         })
         .max_by_key(|(day, _)| *day)?;
     let change = 100.0 * (close - reference) / reference;
-    (reference != 0.0 && change.is_finite()).then_some(change)
+    (reference != 0.0 && change.is_finite()).then_some((change, day))
 }
 
 /// The periods of a list such as "1W, 3M, YTD, 2Y", in any case: a positive count of days (D),
@@ -338,7 +379,7 @@ fn table_periods(list: &str) -> Vec<(String, Period)> {
 }
 
 /// A size input, in percent of the pane, as the table's share of it; 0 fits the cells.
-fn share(percent: f64) -> Option<f32> {
+pub(super) fn share(percent: f64) -> Option<f32> {
     (percent > 0.0).then_some((percent / 100.0) as f32)
 }
 
@@ -361,7 +402,14 @@ impl Indicator for Performance {
     fn desc(&self) -> &str {
         "Percentage change over standard calendar periods"
     }
+    /// The instrument's description labels the chart symbol's row; a new one relabels the table
+    /// without a recalculation of its own.
     fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
+        let description = description(instrument);
+        if description != self.chart_description {
+            self.chart_description = description;
+            self.fill_table();
+        }
         self.days.set(instrument)
     }
 
@@ -401,18 +449,23 @@ impl Indicator for Performance {
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
         if from == 0 {
             let supplied = |request: &StudyDataRequest| {
-                sources
-                    .iter()
-                    .find(|source| source.request == *request)
-                    .map_or_else(Vec::new, |source| closes(source.bars))
+                sources.iter().find(|source| source.request == *request)
             };
             self.daily = self
                 .daily_request()
-                .map_or_else(Vec::new, |request| supplied(&request));
+                .and_then(|request| supplied(&request))
+                .map_or_else(Vec::new, |source| closes(source.bars));
             self.compared = self
                 .compared_symbols()
                 .into_iter()
-                .map(|symbol| (symbol.to_owned(), supplied(&daily_bars(symbol))))
+                .map(|symbol| {
+                    let source = supplied(&daily_bars(symbol));
+                    Compared {
+                        symbol: symbol.to_owned(),
+                        description: source.and_then(|source| description(source.instrument)),
+                        closes: source.map_or_else(Vec::new, |source| closes(source.bars)),
+                    }
+                })
                 .collect();
         }
         self.update(data, from);
@@ -455,7 +508,8 @@ impl Indicator for Performance {
                             date,
                             period,
                             [&self.history[..], &self.daily[..]],
-                        );
+                        )
+                        .map(|(change, _)| change);
                     }
                     self.history.push((date, bar.close));
                     IndicatorValue::Multiple(
@@ -523,8 +577,8 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     /// Calendar lookbacks use the last close on or before the target date, not bar counts, and
-    /// a study saved before Performance had inputs shows the chart symbol over the six periods at
-    /// the default place and size.
+    /// a study saved before Performance had inputs shows the chart symbol alone over the six
+    /// periods, fitted at the lower right, with falling changes in the red it had.
     #[test]
     fn performance_uses_calendar_dates_and_missing_history() {
         let bars: Vec<_> = [
@@ -580,7 +634,7 @@ mod tests {
         let mut chart_row = vec![StudyCell::Text("Chart".into())];
         chart_row
             .extend([20.0, 44.0, 80.0, 125.0, 80.0].map(|change| StudyCell::Percent(Some(change))));
-        chart_row.push(StudyCell::Percent(None));
+        chart_row.push(StudyCell::Text("No data".into()));
         assert_eq!(
             table.columns,
             ["Symbol", "1W", "1M", "3M", "6M", "YTD", "1Y"]
@@ -590,16 +644,42 @@ mod tests {
             (table.position, table.width, table.height),
             (TablePosition::BottomRight, None, None)
         );
+        assert_eq!(
+            study
+                .inputs()
+                .iter()
+                .find(|input| input.id == "negative_color")
+                .map(|input| &input.value),
+            Some(&InputValue::Color(palette::DOWN))
+        );
         #[cfg(feature = "widget")]
         {
             use crate::widget::{Chart, test_frames::shapes};
             let ctx = egui::Context::default();
             let mut chart = Chart::new(crate::model::BarData::from_bars(bars));
             let id = chart.add_indicator(study);
+            let has = |painted: &[egui::Shape], wanted: &str| {
+                painted.iter().any(
+                    |shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == wanted),
+                )
+            };
             let painted = shapes(&ctx, &mut chart, 0.0, Vec::new());
-            for expected in ["Symbol", "Chart", "1W", "+44.00%", "N/A"] {
-                assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == expected)), "missing table cell {expected}");
+            for expected in ["Symbol", "Chart", "1W", "+44.00%", "No data"] {
+                assert!(has(&painted, expected), "missing table cell {expected}");
             }
+            // Resting the pointer on the 1M change shows the date of the close it starts from. A
+            // new tooltip is laid out unseen on its first frame.
+            assert!(!has(&painted, "29 Feb 2024"));
+            let centre = painted.iter().find_map(|shape| match shape {
+                egui::Shape::Text(text) if text.galley.text() == "+44.00%" => {
+                    Some(text.pos + text.galley.rect.center().to_vec2())
+                }
+                _ => None,
+            });
+            let moved = || vec![egui::Event::PointerMoved(centre.unwrap())];
+            shapes(&ctx, &mut chart, 0.1, moved());
+            let painted = shapes(&ctx, &mut chart, 0.2, moved());
+            assert!(has(&painted, "29 Feb 2024"), "the date of the 1M close");
             chart.indicator_mut(id).unwrap().set_visible(false);
             let painted = shapes(&ctx, &mut chart, 1.0, Vec::new());
             assert!(!painted.iter().any(
@@ -657,6 +737,9 @@ mod tests {
             (week_before, &reversed[..], without_daily),
         ] {
             let mut study = Performance::new();
+            study
+                .set_input("symbols", InputValue::Text(String::new()))
+                .unwrap();
             study.set_timeframe(Timeframe::Min1);
             assert_eq!(study.data_requests(), vec![request.clone()]);
             let source = StudyData {
@@ -683,12 +766,14 @@ mod tests {
     }
 
     /// The chart symbol and each listed symbol get a row under a column per listed period, each
-    /// symbol measured from its own latest daily close and one without history showing N/A,
-    /// and each change fills its cell with its sign's colour, at full intensity from the cutoff.
-    /// A listed chart symbol shares its row while it is included.
+    /// symbol measured from its own latest daily close and one without history showing "No data".
+    /// Each change is written in its sign's colour over a faint fill of it that deepens up to the
+    /// cutoff, with the date of the close it is measured from as its tooltip, and a row is
+    /// labelled with its instrument's description when it has one. A listed chart symbol shares
+    /// its row while it is included.
     #[test]
     fn performance_compares_symbols_over_the_listed_periods() {
-        use crate::model::{BarClock, Timeframe};
+        use crate::model::{BarClock, Instrument, Timeframe};
         use egui::Color32;
         let bar = |(y, m, d, c)| {
             Bar::new(
@@ -727,13 +812,20 @@ mod tests {
             metric: None,
         };
         // GOOG is never supplied.
-        let source = StudyData {
-            request: daily("MSFT"),
-            bars: &msft,
-            clock: BarClock::new(Timeframe::Day1),
-            instrument: None,
-            timeframe: Timeframe::Day1,
-        };
+        fn supplied<'a>(bars: &'a [Bar], instrument: Option<&'a Instrument>) -> StudyData<'a> {
+            StudyData {
+                request: StudyDataRequest {
+                    symbol: "MSFT".into(),
+                    timeframe: Some(Timeframe::Day1),
+                    metric: None,
+                },
+                bars,
+                clock: BarClock::new(Timeframe::Day1),
+                instrument,
+                timeframe: Timeframe::Day1,
+            }
+        }
+        let source = supplied(&msft, None);
         let rows = |study: &Performance| -> Vec<(String, Vec<Option<f64>>)> {
             let table = study.table().unwrap();
             table
@@ -745,7 +837,8 @@ mod tests {
                         changes
                             .iter()
                             .map(|cell| match cell {
-                                StudyCell::Percent(change) => *change,
+                                StudyCell::Percent(Some(change)) => Some(*change),
+                                StudyCell::Text(text) if text == "No data" => None,
                                 _ => panic!("a change cell"),
                             })
                             .collect(),
@@ -758,9 +851,11 @@ mod tests {
         let mut study = Performance::new();
         study.set_chart_symbol("AAPL");
         study.set_timeframe(Timeframe::Min1);
+        let six = || InputValue::Text("1W, 1M, 3M, 6M, YTD, 1Y".into());
         study
             .set_input("symbols", InputValue::Text("GOOG, MSFT, GOOG".into()))
             .unwrap();
+        study.set_input("periods", six()).unwrap();
         study
             .set_input("color_cutoff", InputValue::Number(40.0))
             .unwrap();
@@ -798,15 +893,78 @@ mod tests {
                 ),
             ]
         );
-        let fills = &study.table().unwrap().cell_colors;
-        // +20% at a 40% cutoff: the positive colour (8, 153, 129) at half intensity, each
-        // channel times 0.5 plus 0.5, rounded down.
+        // A change is written in its sign's colour over that colour at 10% plus 20% times the
+        // change's share of the 40% cutoff: each channel times that, plus 0.5, rounded down.
+        let table = study.table().unwrap();
+        let grey = |alpha| Color32::from_rgba_unmultiplied(120, 123, 134, alpha);
+        let tinted = |r, g, b, a| Color32::from_rgba_premultiplied(r, g, b, a);
+        for (row, column, fill, text) in [
+            // +20%, half the cutoff: 20% of the positive colour (8, 153, 129).
+            (0, 1, tinted(2, 31, 26, 51), Some(palette::UP)),
+            // +80%, beyond the cutoff: 30%.
+            (0, 3, tinted(2, 46, 39, 77), Some(palette::UP)),
+            // -50%, beyond the cutoff: 30% of the default negative colour (242, 55, 69).
+            (
+                2,
+                2,
+                tinted(73, 17, 21, 77),
+                Some(Color32::from_rgb(242, 55, 69)),
+            ),
+            // No change: grey at 10% under the default text.
+            (1, 1, grey(26), None),
+            // A label: the same grey at 20%.
+            (0, 0, grey(51), None),
+        ] {
+            assert_eq!(
+                (
+                    table.cell_colors[row][column],
+                    table.cell_text_colors[row][column]
+                ),
+                (fill, text),
+                "row {row}, column {column}"
+            );
+        }
+        // The date of the close each change is measured from; none without a change.
         assert_eq!(
-            fills[0][1],
-            Color32::from_rgba_premultiplied(4, 77, 65, 128)
+            table.cell_tooltips,
+            [
+                [
+                    "",
+                    "22 Mar 2024",
+                    "29 Feb 2024",
+                    "29 Dec 2023",
+                    "29 Sep 2023",
+                    "29 Dec 2023",
+                    ""
+                ],
+                [""; 7],
+                [
+                    "",
+                    "21 Mar 2024",
+                    "28 Feb 2024",
+                    "28 Dec 2023",
+                    "28 Sep 2023",
+                    "28 Dec 2023",
+                    "28 Mar 2023"
+                ],
+            ]
         );
-        // -50%: past the cutoff, the full default negative colour.
-        assert_eq!(fills[2][2], Color32::from_rgb(242, 54, 69));
+        // A row is labelled with the description its instrument gives: the chart's own, and a
+        // compared symbol's from the source of its bars. A blank description keeps the ticker.
+        let described =
+            |symbol: &str, description: &str| Instrument::new(symbol).with_description(description);
+        study.set_instrument(Some(&described("AAPL", "Apple Inc.")));
+        assert_eq!(rows(&study)[0].0, "Apple Inc.");
+        study.set_instrument(None);
+        assert_eq!(rows(&study)[0].0, "AAPL");
+        for (description, label) in [
+            ("Microsoft Corporation", "Microsoft Corporation"),
+            ("  ", "MSFT"),
+        ] {
+            let instrument = described("MSFT", description);
+            study.update_data(&chart, 0, &[supplied(&msft, Some(&instrument))]);
+            assert_eq!(rows(&study)[2].0, label);
+        }
         // A new chart symbol relabels its row.
         study.set_chart_symbol("SPY");
         assert_eq!(rows(&study)[0].0, "SPY");
@@ -832,6 +990,11 @@ mod tests {
                 "MSFT".to_owned(),
                 vec![None, Some(50.0), Some(25.0), Some(-20.0)]
             )
+        );
+        // -20%, half the cutoff: 20% of the negative colour.
+        assert_eq!(
+            study.table().unwrap().cell_colors[2][4],
+            tinted(48, 11, 14, 51)
         );
         // Every request loads from MSFT's 2Y start, three days before the chart's 2022-03-31.
         assert_eq!(
@@ -859,7 +1022,7 @@ mod tests {
 
         // With the chart symbol included, a listed copy of it is not a second row: the chart's
         // row comes first with the chart's own changes, the other listed symbols follow in list
-        // order. Without it, the listed AAPL is a row of its own, N/A without daily bars.
+        // order. Without it, the listed AAPL is a row of its own, without daily bars or changes.
         let aapl = (
             "AAPL".to_owned(),
             vec![
@@ -891,11 +1054,46 @@ mod tests {
             study
                 .set_input("symbols", InputValue::Text(symbols.into()))
                 .unwrap();
+            study.set_input("periods", six()).unwrap();
             study
                 .set_input("include_chart_symbol", InputValue::Toggle(include))
                 .unwrap();
             study.update_data(&chart, 0, std::slice::from_ref(&source));
             assert_eq!(rows(&study), expected, "{symbols}, include {include}");
         }
+
+        // A new study compares five symbols over seven periods in a table that fills the pane.
+        // On a daily chart that never moves, every period with a close to start from is a change
+        // of zero on the positive colour at 10%; the bars start on 2023-09-29, after the 12M and
+        // 5Y starts, and no compared symbol is supplied.
+        let flat = chart
+            .clone()
+            .map(|bar| Bar::new(bar.time, 100.0, 100.0, 100.0, 100.0, 1.0));
+        let symbols = ["AAPL", "NASDAQ:AMZN", "EURUSD", "ES1!", "BTCUSD"];
+        let mut study = Performance::new();
+        assert_eq!(study.data_requests(), symbols.map(daily));
+        study.calculate(&flat);
+        assert_eq!(
+            columns(&study),
+            ["Symbol", "1W", "1M", "3M", "6M", "12M", "YTD", "5Y"]
+        );
+        let unchanged = [true, true, true, true, false, true, false].map(|has| has.then_some(0.0));
+        let mut expected = vec![("Chart".to_owned(), unchanged.to_vec())];
+        expected.extend(symbols.map(|symbol| (symbol.to_owned(), vec![None; 7])));
+        assert_eq!(rows(&study), expected);
+        let table = study.table().unwrap();
+        assert_eq!(table.cell_colors[0][1], tinted(1, 15, 13, 26));
+        assert_eq!(
+            (table.position, table.width, table.height),
+            (TablePosition::MiddleCenter, Some(1.0), Some(0.95))
+        );
+        assert_eq!(
+            study
+                .inputs()
+                .iter()
+                .find(|input| input.id == "negative_color")
+                .map(|input| &input.value),
+            Some(&InputValue::Color(Color32::from_rgb(242, 55, 69)))
+        );
     }
 }
