@@ -104,6 +104,12 @@ pub struct AlertListOptions {
     pub symbol_icon: bool,
     /// Show the most recent firing time when known.
     pub last_firing: bool,
+    /// Show the symbol of each log entry.
+    pub log_symbol: bool,
+    /// Show the price of each log entry.
+    pub log_price: bool,
+    /// Show the message of each log entry.
+    pub log_message: bool,
 }
 
 impl Default for AlertListOptions {
@@ -116,6 +122,9 @@ impl Default for AlertListOptions {
             source_icon: true,
             symbol_icon: true,
             last_firing: true,
+            log_symbol: true,
+            log_price: true,
+            log_message: true,
         }
     }
 }
@@ -1063,7 +1072,7 @@ impl AlertsPanel {
         });
     }
 
-    fn sort_controls(&mut self, ui: &mut Ui) {
+    fn list_controls(&mut self, ui: &mut Ui, log: bool) {
         let before = self.options.clone();
         let mut history_action = None;
         ui.horizontal_wrapped(|ui| {
@@ -1071,61 +1080,73 @@ impl AlertsPanel {
             if self.restoring.is_some() {
                 ui.disable();
             }
-            ui.label(l10n::text(ui.ctx(), "Sort by"));
-            egui::ComboBox::from_id_salt("alert_sort")
-                .selected_text(l10n::text(
-                    ui.ctx(),
-                    match self.options.sort {
-                        AlertSortKey::Name => "Name",
-                        AlertSortKey::Symbol => "Symbol",
-                        AlertSortKey::Status => "Status",
-                        AlertSortKey::Arrival => "Arrival",
-                        AlertSortKey::Created => "Created",
-                        AlertSortKey::Fired => "Last firing",
-                        AlertSortKey::Message => "Message",
-                    },
-                ))
-                .show_ui(ui, |ui| {
-                    for (key, label) in [
-                        (AlertSortKey::Arrival, "Arrival"),
-                        (AlertSortKey::Created, "Created"),
-                        (AlertSortKey::Fired, "Last firing"),
-                        (AlertSortKey::Message, "Message"),
-                        (AlertSortKey::Name, "Name"),
-                        (AlertSortKey::Symbol, "Symbol"),
-                        (AlertSortKey::Status, "Status"),
-                    ] {
-                        ui.selectable_value(
-                            &mut self.options.sort,
-                            key,
-                            l10n::text(ui.ctx(), label),
-                        );
-                    }
-                })
-                .response
-                .accessible_name(l10n::text(ui.ctx(), "Sort by"));
-            if self.options.sort != before.sort {
-                self.options.descending = matches!(
-                    self.options.sort,
-                    AlertSortKey::Created | AlertSortKey::Fired
+            if !log {
+                ui.label(l10n::text(ui.ctx(), "Sort by"));
+                egui::ComboBox::from_id_salt("alert_sort")
+                    .selected_text(l10n::text(
+                        ui.ctx(),
+                        match self.options.sort {
+                            AlertSortKey::Name => "Name",
+                            AlertSortKey::Symbol => "Symbol",
+                            AlertSortKey::Status => "Status",
+                            AlertSortKey::Arrival => "Arrival",
+                            AlertSortKey::Created => "Created",
+                            AlertSortKey::Fired => "Last firing",
+                            AlertSortKey::Message => "Message",
+                        },
+                    ))
+                    .show_ui(ui, |ui| {
+                        for (key, label) in [
+                            (AlertSortKey::Arrival, "Arrival"),
+                            (AlertSortKey::Created, "Created"),
+                            (AlertSortKey::Fired, "Last firing"),
+                            (AlertSortKey::Message, "Message"),
+                            (AlertSortKey::Name, "Name"),
+                            (AlertSortKey::Symbol, "Symbol"),
+                            (AlertSortKey::Status, "Status"),
+                        ] {
+                            ui.selectable_value(
+                                &mut self.options.sort,
+                                key,
+                                l10n::text(ui.ctx(), label),
+                            );
+                        }
+                    })
+                    .response
+                    .accessible_name(l10n::text(ui.ctx(), "Sort by"));
+                if self.options.sort != before.sort {
+                    self.options.descending = matches!(
+                        self.options.sort,
+                        AlertSortKey::Created | AlertSortKey::Fired
+                    );
+                }
+                ui.add_enabled(
+                    self.options.sort != AlertSortKey::Arrival,
+                    egui::Checkbox::new(
+                        &mut self.options.descending,
+                        l10n::text(ui.ctx(), "Descending"),
+                    ),
                 );
             }
-            ui.add_enabled(
-                self.options.sort != AlertSortKey::Arrival,
-                egui::Checkbox::new(
-                    &mut self.options.descending,
-                    l10n::text(ui.ctx(), "Descending"),
-                ),
-            );
             ui.menu_button(l10n::text(ui.ctx(), "Fields"), |ui| {
-                for (value, label) in [
-                    (&mut self.options.name, "Name"),
-                    (&mut self.options.message, "Message"),
-                    (&mut self.options.source_icon, "Source symbol"),
-                    (&mut self.options.symbol_icon, "Instrument image"),
-                    (&mut self.options.last_firing, "Last firing"),
-                ] {
-                    ui.checkbox(value, l10n::text(ui.ctx(), label));
+                if log {
+                    for (value, label) in [
+                        (&mut self.options.log_symbol, "Symbol"),
+                        (&mut self.options.log_price, "Price"),
+                        (&mut self.options.log_message, "Message"),
+                    ] {
+                        ui.checkbox(value, l10n::text(ui.ctx(), label));
+                    }
+                } else {
+                    for (value, label) in [
+                        (&mut self.options.name, "Name"),
+                        (&mut self.options.message, "Message"),
+                        (&mut self.options.source_icon, "Source symbol"),
+                        (&mut self.options.symbol_icon, "Instrument image"),
+                        (&mut self.options.last_firing, "Last firing"),
+                    ] {
+                        ui.checkbox(value, l10n::text(ui.ctx(), label));
+                    }
                 }
             });
             if ui
@@ -1216,6 +1237,7 @@ impl AlertsPanel {
         }
         if self.show_log {
             self.log_filters(ui);
+            self.list_controls(ui, true);
             let (alert, symbol) = (self.log_alert.clone(), self.log_symbol.clone());
             let shown = move |trigger: &AlertTrigger| {
                 alert.as_ref().is_none_or(|id| *id == trigger.id)
@@ -1242,7 +1264,7 @@ impl AlertsPanel {
                         } else {
                             trigger.name.clone()
                         }];
-                        if !trigger.symbol.is_empty() {
+                        if self.options.log_symbol && !trigger.symbol.is_empty() {
                             parts.push(trigger.symbol.clone());
                         }
                         let time = trigger.time.with_timezone(&self.timezone);
@@ -1251,10 +1273,12 @@ impl AlertsPanel {
                             parts.push(l10n::text(ui.ctx(), "Silent"));
                         }
                         ui.label(parts.join(" · "));
-                        if let Some(price) = trigger.price {
+                        if self.options.log_price
+                            && let Some(price) = trigger.price
+                        {
                             ui.label(l10n::text(ui.ctx(), price.to_string()));
                         }
-                        if !trigger.message.is_empty() {
+                        if self.options.log_message && !trigger.message.is_empty() {
                             ui.label(&trigger.message);
                         }
                         ui.separator();
@@ -1288,7 +1312,7 @@ impl AlertsPanel {
             }
         } else if self.alerts.is_empty() {
             self.draft_form(ui);
-            self.sort_controls(ui);
+            self.list_controls(ui, false);
             if EmptyState::new("No alerts yet")
                 .icon(&icons::ALERTS)
                 .description("Create an alert with the + button or the chart menu.")
@@ -1300,7 +1324,7 @@ impl AlertsPanel {
             }
         } else {
             self.draft_form(ui);
-            self.sort_controls(ui);
+            self.list_controls(ui, false);
             let mut remove = None;
             let mut toggle = None;
             let mut duplicate = None;
@@ -2331,6 +2355,8 @@ mod tests {
         let trigger = |id: &str, name: &str, symbol: &str, time: &str| {
             let mut trigger = AlertTrigger::new(AlertId(id.into()), symbol, time.parse().unwrap());
             trigger.name = name.into();
+            trigger.price = Some(123.5);
+            trigger.message = "A logged message".into();
             trigger
         };
         let dip = trigger("3", "Dip", "MSFT", "2026-10-23T12:02:00Z");
@@ -2383,6 +2409,30 @@ mod tests {
             h.run_steps(3);
             assert_eq!(shown(&h), expected, "{filter}: {entry}");
         }
+        // Old presentation options keep every log field visible.
+        let old: AlertListOptions = serde_json::from_str(r#"{"sort":"Created"}"#).unwrap();
+        let restored = serde_json::to_value(old).unwrap();
+        for field in ["log_symbol", "log_price", "log_message"] {
+            assert_eq!(restored[field], true, "{field}");
+        }
+        h.get_by_label("Fields").click();
+        h.run();
+        for field in ["Message", "Price"] {
+            h.get_by_label(field).click();
+            h.run();
+        }
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.query_all_by_label("A logged message").count() == 0);
+        assert!(h.query_all_by_label("123.5").count() == 0);
+        // Export is a fixed format independent of the visible fields.
+        assert!(h.state().log_csv().contains("123.5,\"A logged message\""));
+        for _ in 0..2 {
+            h.get_by_label("Undo").click();
+            h.run();
+        }
+        assert!(h.query_all_by_label("A logged message").count() > 0);
+        assert!(h.query_all_by_label("123.5").count() > 0);
         // Clearing removes the entries shown, also from the engine, and shows the whole log again.
         for (answer, kept, expected) in [
             ("Cancel", 3, [true, true, false]),
