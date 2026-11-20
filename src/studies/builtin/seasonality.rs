@@ -22,9 +22,9 @@
 //! calendar months of the bar's UTC date, the date a feed gives a daily or longer bar.
 //!
 //! The heatmap includes each loaded year and monthly average, sample standard deviation
-//! and percentage positive. Its current month uses the latest close; projections use only
-//! earlier years. The final projection extends through the remaining calendar-month slots
-//! of the time axis, without adding bars to the source history.
+//! and percentage positive, an unchanged month counting as positive. Its current month uses the
+//! latest close; projections use only earlier years. The final projection extends through the
+//! remaining calendar-month slots of the time axis, without adding bars to the source history.
 //!
 //! Month and Average cells use the change's sign colour, increasing in opacity up to the
 //! cutoff. Positive cells use their distance from 50%; standard deviations have no sign tint.
@@ -417,7 +417,8 @@ impl Indicator for Seasonality {
             } else {
                 f64::NAN
             };
-            let positive = changes().filter(|(_, change)| *change > 0.0).count() as f64 / n * 100.0;
+            let positive =
+                changes().filter(|(_, change)| *change >= 0.0).count() as f64 / n * 100.0;
             for (index, value) in [mean, deviation, positive].into_iter().enumerate() {
                 let value = value.is_finite().then_some(value);
                 summaries[index].push(StudyCell::Percent(value));
@@ -946,37 +947,78 @@ mod tests {
         let mut study = ConfiguredStudy::new(Box::new(Seasonality::new()));
         study.set_bar_clock(&crate::model::BarClock::new(crate::model::Timeframe::Day1));
         study.calculate(&bars);
-        let table = study.table().expect("Seasonality heatmap");
-        let percent = |label: &str, month| {
-            let row = table
-                .rows
-                .iter()
-                .find(|row| row.first() == Some(&StudyCell::Text(label.into())))
-                .unwrap();
-            let StudyCell::Percent(value) = row[month] else {
-                panic!("percentage cell")
-            };
-            value
-        };
-        for (label, month, expected) in [
-            ("2023", 1, Some(10.0)),
-            ("2023", 2, Some(-10.0)),
-            ("2024", 1, Some(5.0)),
-            ("Average", 1, Some(7.5)),
-            ("Standard deviation", 1, Some(3.5355339059327378)),
-            ("Standard deviation", 2, None),
-            ("Positive", 1, Some(100.0)),
-            ("2022", 12, None),
-            ("2024", 2, None),
+        let unchanged: Vec<_> = [
+            (2020, 12, 100.0),
+            (2021, 1, 100.0),
+            (2021, 12, 200.0),
+            (2022, 1, 210.0),
+            (2022, 12, 300.0),
+            (2023, 1, 336.0),
+        ]
+        .into_iter()
+        .map(|(y, m, c)| {
+            Bar::new(
+                Utc.with_ymd_and_hms(y, m, 28, 0, 0, 0).unwrap(),
+                c,
+                c,
+                c,
+                c,
+                1.0,
+            )
+        })
+        .collect();
+        // January changes of 0%, 5% and 12% are all positive, including the developing month.
+        for (data, rows) in [
+            (
+                bars.as_slice(),
+                [
+                    ("2023", 1, Some(10.0)),
+                    ("2023", 2, Some(-10.0)),
+                    ("2024", 1, Some(5.0)),
+                    ("Average", 1, Some(7.5)),
+                    ("Standard deviation", 1, Some(3.5355339059327378)),
+                    ("Standard deviation", 2, None),
+                    ("Positive", 1, Some(100.0)),
+                    ("2022", 12, None),
+                    ("2024", 2, None),
+                ]
+                .as_slice(),
+            ),
+            (
+                unchanged.as_slice(),
+                [
+                    ("2021", 1, Some(0.0)),
+                    ("2022", 1, Some(5.0)),
+                    ("2023", 1, Some(12.0)),
+                    ("Positive", 1, Some(100.0)),
+                ]
+                .as_slice(),
+            ),
         ] {
-            match expected {
-                Some(expected) => assert!(
-                    (percent(label, month).unwrap() - expected).abs() < 1e-9,
-                    "{label}"
-                ),
-                None => assert_eq!(percent(label, month), None, "{label}"),
+            study.calculate(data);
+            let table = study.table().expect("Seasonality heatmap");
+            let percent = |label: &str, month| {
+                let row = table
+                    .rows
+                    .iter()
+                    .find(|row| row.first() == Some(&StudyCell::Text(label.into())))
+                    .unwrap();
+                let StudyCell::Percent(value) = row[month] else {
+                    panic!("percentage cell")
+                };
+                value
+            };
+            for &(label, month, expected) in rows {
+                match expected {
+                    Some(expected) => assert!(
+                        (percent(label, month).unwrap() - expected).abs() < 1e-9,
+                        "{label}"
+                    ),
+                    None => assert_eq!(percent(label, month), None, "{label}"),
+                }
             }
         }
+        study.calculate(&bars);
         let zone = study
             .projections()
             .last()
