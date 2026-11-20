@@ -735,11 +735,17 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            let captions = output
+            let mut captions: Vec<_> = output
                 .shapes
                 .iter()
-                .filter(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Mid"))
-                .count();
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t) if ["POC", "VAH", "VAL", "Mid"].contains(&t.galley.text()) => {
+                        Some(t.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+            captions.sort();
             let highlights = output
                 .shapes
                 .iter()
@@ -765,11 +771,29 @@ mod tests {
         // Settings saved before the options existed keep the blocks and midpoint they were saved
         // with.
         let saved = serde_json::from_str::<ChartTypeParams>("{}").unwrap();
-        assert_eq!(draw(saved.clone()), (String::new(), 1, 0, (0, 0)));
+        assert_eq!(
+            draw(saved.clone()),
+            (
+                String::new(),
+                vec![
+                    "Mid".to_owned(),
+                    "POC".to_owned(),
+                    "VAH".to_owned(),
+                    "VAL".to_owned()
+                ],
+                0,
+                (0, 0)
+            )
+        );
         // A new chart letters its blocks and leaves the midpoint off.
         assert_eq!(
             draw(ChartTypeParams::default()),
-            ("ABCDEFGH".to_owned(), 0, 0, (0, 0))
+            (
+                "ABCDEFGH".to_owned(),
+                vec!["POC".to_owned(), "VAH".to_owned(), "VAL".to_owned()],
+                0,
+                (0, 0)
+            )
         );
         // Eight half-hour bars of one session are the periods A to H.
         let lettered = ChartTypeParams {
@@ -782,7 +806,7 @@ mod tests {
             tpo_single_prints: true,
             ..saved.clone()
         });
-        assert_eq!(captions, 1);
+        assert_eq!(captions, ["Mid", "POC", "VAH", "VAL"]);
         assert!(highlights > 0);
         // Each of the seven periods after the first rises a row at both ends.
         let statistics = draw(ChartTypeParams {
