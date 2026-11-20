@@ -172,6 +172,44 @@ mod tests {
     use egui::{Rect, Shape, epaint::ColorMode};
     use serde_json::{Value, json};
 
+    #[test]
+    fn projection_hits_follow_the_sector_and_painted_levels() {
+        use crate::drawings::services::{hit_test, hit_test_painted};
+        let mut drawing = Drawing::new(7, DrawingToolType::ProjectionTool);
+        drawing.points = vec![
+            egui::pos2(100.0, 100.0),
+            egui::pos2(200.0, 100.0),
+            egui::pos2(100.0, 200.0),
+        ];
+        let inside = egui::pos2(125.0, 125.0);
+        let outside = egui::pos2(50.0, 150.0);
+        assert_eq!(hit_test(inside, std::slice::from_ref(&drawing), "1m"), Some(7));
+        assert_eq!(hit_test(outside, std::slice::from_ref(&drawing), "1m"), None);
+
+        let config = drawing.projection.as_mut().unwrap();
+        config.trend_visible = false;
+        config.show_background = false;
+        config.show_coefficients = false;
+        config.levels[0].coefficient = 0.5;
+        let on_level = egui::pos2(135.35534, 135.35534);
+        assert_eq!(hit_test(on_level, std::slice::from_ref(&drawing), "1m"), None);
+        let ctx = egui::Context::default();
+        for visible in [true, false] {
+            drawing.projection.as_mut().unwrap().levels[0].visible = visible;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 300.0))),
+                    ..Default::default()
+                },
+                |ui| drawing.render_projection_tool(ui.painter()),
+            );
+            assert_eq!(hit_test_painted(on_level, &output.shapes), visible);
+            assert!(!hit_test_painted(inside, &output.shapes));
+            assert!(!hit_test_painted(outside, &output.shapes));
+            output.drop_without_applying_deltas();
+        }
+    }
+
     /// A wide level can enter the pane while its centreline is outside the sampling clip.
     #[test]
     fn wide_projection_levels_keep_detail_at_the_pane_edge() {

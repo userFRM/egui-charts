@@ -511,7 +511,7 @@ mod tests {
     /// Each extended end follows its nearest distinct control, and can be selected there.
     #[test]
     fn curves_extend_along_their_end_tangents() {
-        use crate::drawings::services::DrawingInteraction;
+        use crate::drawings::services::hit_test;
         let pane = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(400.0, 300.0));
         for (tool, anchors, left, right, first, last) in [
             (
@@ -607,15 +607,12 @@ mod tests {
                     egui::pos2(350.0, 200.0)
                 };
                 assert_eq!(
-                    DrawingInteraction::new().hit_test(click, &[drawing.clone()], "1m"),
+                    hit_test(click, std::slice::from_ref(&drawing), "1m"),
                     Some(drawing.id)
                 );
                 drawing.extend_left = false;
                 drawing.extend_right = false;
-                assert_eq!(
-                    DrawingInteraction::new().hit_test(click, &[drawing], "1m"),
-                    None
-                );
+                assert_eq!(hit_test(click, &[drawing], "1m"), None);
             }
         }
     }
