@@ -172,6 +172,17 @@ impl Drawing {
                                 ui.add(egui::TextEdit::singleline(cell).id(field).desired_width(
                                     DESIGN_TOKENS.sizing.annotation.table_cell_width,
                                 ));
+                            let label = l10n::format_text(
+                                ui.ctx(),
+                                "Row {row}, column {column}",
+                                &[
+                                    ("row", (r + 1).to_string()),
+                                    ("column", (c + 1).to_string()),
+                                ],
+                            );
+                            ui.ctx().accesskit_node_builder(response.id, |node| {
+                                node.set_label(label);
+                            });
                             // Tabs and line breaks separate the cells in the saved text.
                             cell.retain(|ch| !matches!(ch, '\t' | '\n' | '\r'));
                             if response.has_focus() {
