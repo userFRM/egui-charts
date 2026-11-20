@@ -8,6 +8,20 @@ use egui_charts::ui::top_toolbar::{CompareAction, ComparePlacement, CompareSymbo
 use egui_charts::widget::{Chart, PaneId, SeriesId, SeriesOptions};
 use std::sync::Arc;
 
+/// Line colours handed to new comparisons, first free one first. Each keeps a contrast of at least
+/// 3:1 on both the black and the white chart background, and none is a default colour of the main
+/// series (its line and the candle colours of every theme preset).
+const COMPARISON_COLORS: [egui::Color32; 8] = [
+    egui::Color32::from_rgb(2, 136, 209),
+    egui::Color32::from_rgb(239, 108, 0),
+    egui::Color32::from_rgb(194, 24, 180),
+    egui::Color32::from_rgb(67, 160, 71),
+    egui::Color32::from_rgb(126, 87, 194),
+    egui::Color32::from_rgb(128, 128, 0),
+    egui::Color32::from_rgb(194, 24, 91),
+    egui::Color32::from_rgb(141, 110, 99),
+];
+
 /// An isolated draft: closing the editor never mutates the chart.
 pub(super) struct ComparisonSettings {
     id: SeriesId,
@@ -1047,12 +1061,21 @@ impl DemoApp {
                     return;
                 }
                 let feed = Arc::new(LiveFeed::new(&symbol, chrono::Utc::now()));
-                let colors = [
-                    self.theme.ui.info,
-                    self.theme.ui.warning,
-                    self.theme.ui.success,
-                ];
-                let color = colors[self.live_comparisons().count() % colors.len()];
+                // Every colour an added series draws with, hidden ones included; a series an undoable
+                // removal took off is not on the chart and frees its colour.
+                // shortcut: the main series' colours are not read, only avoided by the palette; read them if the main style gets a getter.
+                let used: Vec<egui::Color32> = self
+                    .chart
+                    .series()
+                    .flat_map(|(_, options)| [options.color, options.up_color, options.down_color])
+                    .collect();
+                let color = COMPARISON_COLORS
+                    .into_iter()
+                    .find(|color| !used.contains(color))
+                    .unwrap_or(
+                        COMPARISON_COLORS
+                            [self.live_comparisons().count() % COMPARISON_COLORS.len()],
+                    );
                 let scale = match placement {
                     // The lowest additional scale id no series uses yet.
                     ComparePlacement::NewPriceScale => {
@@ -1932,5 +1955,62 @@ mod tests {
         assert!(!app.chart.is_series_visible(again));
         app.handle_comparison(CompareAction::RemoveSymbol("STOCKA".into()));
         assert!(listed(&app).is_empty());
+    }
+
+    /// Four comparisons have four colours, and adding after removals reuses the first freed colour.
+    #[test]
+    fn new_comparisons_take_the_first_free_colour() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
+        let shown = |app: &DemoApp| {
+            app.live_comparisons()
+                .map(|(_, id, _)| {
+                    app.chart
+                        .series()
+                        .find(|(current, _)| current == id)
+                        .unwrap()
+                        .1
+                        .color
+                })
+                .collect::<Vec<_>>()
+        };
+        let distinct = |colours: &[egui::Color32]| {
+            colours
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        };
+        for symbol in ["TOKENA", "TOKENB", "STOCKA", "STOCKB"] {
+            app.handle_comparison(CompareAction::AddSymbol(symbol.into(), Default::default()));
+        }
+        let colours = shown(&app);
+        assert_eq!(
+            distinct(&colours),
+            4,
+            "four comparisons, four colours: {colours:?}"
+        );
+        assert_eq!(colours, COMPARISON_COLORS[..4]);
+
+        for symbol in ["TOKENA", "TOKENB"] {
+            app.handle_comparison(CompareAction::RemoveSymbol(symbol.into()));
+        }
+        app.handle_comparison(CompareAction::AddSymbol(
+            "STOCKC".into(),
+            Default::default(),
+        ));
+        let colours = shown(&app);
+        assert_eq!(
+            distinct(&colours),
+            3,
+            "after removals, still distinct: {colours:?}"
+        );
+        assert_eq!(
+            colours,
+            [
+                COMPARISON_COLORS[2],
+                COMPARISON_COLORS[3],
+                COMPARISON_COLORS[0]
+            ]
+        );
     }
 }
