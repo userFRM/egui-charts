@@ -142,7 +142,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] RSI reads 100 with no losses, 0 with no gains and 50 on flat prices at any price size, and its divergence and stochastic studies use the same values. Its Calculate divergence input marks the regular bullish and bearish divergences between its swings and the highs and lows of price.
 - [x] Connors RSI's price and streak components use Wilder smoothing and read 100 on gains alone, and its rank is the share of the previous returns at or below the latest one. Its pane opens with dashed guides at 70 and 30 and a light blue fill between them; one saved with a middle guide at 50 keeps it, and the fill stays tied to the outer guides when it moves past them. Applied settings independently edit guide values, colours, patterns, widths and visibility, fill colour and opacity, and the latest-value line; snapshots and saved templates retain them.
 - [x] Both Tasuki Gap detectors need the third candle to open inside the second body and close inside the gap.
-- [x] Woodies CCI reads the close, with separate neutral, transition and established histogram colours.
+- [x] Woodies CCI reads the close, with separate neutral, transition and established histogram colours. Flat CCI windows end a histogram colour run; non-finite closes are skipped.
 - [x] PPO and PVO draw their histograms as columns and offer average-type inputs.
 - [ ] Give Net Volume's output a histogram default.
 - [x] Bollinger Bands select their basis average, and BandWidth has expansion and contraction lookbacks. Each BandWidth extremum starts only once its window spans the whole lookback, or with the width if that comes later.
