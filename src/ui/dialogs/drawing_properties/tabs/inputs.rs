@@ -388,7 +388,7 @@ impl InputsTab {
                     (None, None) => RowLayout::Count,
                 };
                 let mut height = config.row_size().unwrap_or(1.0);
-                let mut ticks = config.row_ticks().unwrap_or(1);
+                let mut ticks = config.row_ticks().unwrap_or(rows);
                 let mut percent = config.value_area() * 100.0;
                 FormGrid::new("profile_inputs").show(ui, |ui| {
                     let label = ui.label(l10n::text(ui.ctx(), "Row layout"));
@@ -2970,7 +2970,7 @@ mod tests {
         let saved = |h: &Harness<'_, (Chart, DrawingPropertiesDialog)>| {
             h.state().0.drawings().drawings[0].volume_profile
         };
-        let ticks = config.with_row_ticks(Some(1)).unwrap();
+        let ticks = config.with_row_ticks(Some(24)).unwrap();
         for confirm in [false, true] {
             let (chart, dialog) = h.state_mut();
             dialog.open_for_chart(chart, DrawingId(7));
