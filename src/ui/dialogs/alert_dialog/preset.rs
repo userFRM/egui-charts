@@ -23,7 +23,7 @@ const VERSION: u32 = 3;
 pub(super) struct PresetFields {
     /// Each rule's source and operator.
     pub(super) condition: bool,
-    /// Each rule's interval.
+    /// Each rule's interval, and the session of the alert's inputs.
     pub(super) interval: bool,
     /// How often the alert fires.
     pub(super) frequency: bool,
@@ -75,6 +75,9 @@ pub(super) struct AlertPreset {
     source_names: Vec<(AlertSource, AlertSourceName)>,
     timeframe: Option<Timeframe>,
     additional_timeframes: Vec<Option<Timeframe>>,
+    /// The session of the alert's inputs, kept with the interval: extended hours, and overnight
+    /// hours beside them. `None` when the alert had no inputs or the preset predates sessions.
+    hours: Option<(bool, bool)>,
     frequency: AlertFrequency,
     /// Seconds from applying the preset to the expiry; `None` never expires.
     expires_after: Option<i64>,
@@ -130,6 +133,10 @@ impl AlertPreset {
             preset
                 .additional_timeframes
                 .clone_from(&alert.additional_timeframes);
+            preset.hours = alert
+                .inputs
+                .as_ref()
+                .map(|inputs| (inputs.extended_hours, inputs.overnight_hours));
         }
         if fields.frequency {
             preset.frequency = alert.frequency;
@@ -219,6 +226,9 @@ impl AlertPreset {
             alert
                 .additional_timeframes
                 .clone_from(&self.additional_timeframes);
+            if let (Some(hours), Some(inputs)) = (self.hours, &mut alert.inputs) {
+                (inputs.extended_hours, inputs.overnight_hours) = hours;
+            }
         }
         alert
             .additional_timeframes
@@ -881,6 +891,11 @@ mod tests {
             condition: AlertCondition::Above(1.0),
         });
         saved.additional_timeframes.push(Some(Timeframe::Min5));
+        saved.inputs = Some(Box::new(AlertInputs {
+            extended_hours: true,
+            overnight_hours: true,
+            ..Default::default()
+        }));
 
         let mut blank = PresetFields {
             condition: false,
@@ -900,9 +915,16 @@ mod tests {
             alert.expires = Some(now + TimeDelta::days(9));
             alert.inputs = Some(Box::new(AlertInputs {
                 start: span,
+                extended_hours: true,
                 ..Default::default()
             }));
             alert
+        };
+        let hours = |alert: &Alert| {
+            alert
+                .inputs
+                .as_ref()
+                .map(|inputs| (inputs.extended_hours, inputs.overnight_hours))
         };
         let apply = |saved: &Alert, fields: PresetFields| {
             let preset = AlertPreset::capture(saved, &[], fields, saved_at);
@@ -930,7 +952,26 @@ mod tests {
         assert_eq!(alert.timeframe, Some(Timeframe::Hour1));
         assert!(alert.additional_timeframes.is_empty(), "no rule takes it");
         assert_eq!(alert.inputs.as_ref().unwrap().start, None);
+        assert_eq!(hours(&alert), Some((true, true)));
         assert_eq!(alert.condition, AlertCondition::Crossing(100.0));
+        // A preset stored before presets kept the session leaves the alert's.
+        let mut alert = opened();
+        from_document(
+            r#"{"version":3,"presets":{"P":{"fields":{"condition":false,"interval":true,
+            "frequency":false,"expiry":false,"text":false,"delivery":false,"schedule":false},
+            "rules":[],"source_names":[],"timeframe":"Hour1","additional_timeframes":[],
+            "frequency":"Once","expires_after":null,"name":"","message":"","delivery":{"popup":true,
+            "sound":true,"email":false,"push":false,"webhook":false,"webhook_url":""},
+            "schedule":null}},"last_schedule":null}"#,
+            saved_at,
+        )
+        .unwrap()
+        .0["P"]
+            .apply(&mut alert, &[], now);
+        assert_eq!(
+            (alert.timeframe, hours(&alert)),
+            (Some(Timeframe::Hour1), Some((true, false)))
+        );
         blank.interval = false;
         blank.frequency = true;
         assert_eq!(apply(&saved, blank).frequency, AlertFrequency::OncePerBar);

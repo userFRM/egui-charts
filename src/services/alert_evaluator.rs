@@ -1239,6 +1239,73 @@ mod tests {
         );
     }
 
+    /// Every history request and live subscription of each watchlist member carries the session
+    /// the alert watches, whatever the chart that created it showed.
+    #[test]
+    fn every_member_is_requested_with_the_chosen_session() {
+        for hours in [(false, false), (true, false), (true, true)] {
+            let feed = Arc::new(Feed::default());
+            let mut alert = Alert::new("", crate::model::AlertCondition::Above(1_000.0));
+            alert.watchlist = Some("list".into());
+            alert.timeframe = Some(Timeframe::Min1);
+            alert.inputs = Some(Box::new(AlertInputs {
+                extended_hours: hours.0,
+                overnight_hours: hours.1,
+                ..Default::default()
+            }));
+            let engine = AlertEngine::new().with_alerts(vec![alert]);
+            engine.set_watchlist("list", vec!["SYM".into(), "OTHER".into()]);
+            let mut evaluator = AlertEvaluator::new(feed.clone());
+            #[cfg(feature = "ui")]
+            let ctx = egui::Context::default();
+            for _ in 0..6 {
+                let errors = evaluator.poll(
+                    &engine,
+                    &IndicatorFactory::new(),
+                    &[],
+                    #[cfg(feature = "ui")]
+                    &ctx,
+                    DateTime::from_timestamp(1000, 0).unwrap(),
+                );
+                assert!(errors.is_empty(), "{errors:?}");
+            }
+            let requested: Vec<_> = feed
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|live| {
+                    (
+                        live.symbol.clone(),
+                        (live.extended_hours, live.overnight_hours),
+                    )
+                })
+                .collect();
+            let subscribed: Vec<_> = feed
+                .subscriptions
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|live| {
+                    (
+                        live.symbol.clone(),
+                        (live.extended_hours, live.overnight_hours),
+                    )
+                })
+                .collect();
+            for (what, asked) in [("history", requested), ("live", subscribed)] {
+                let mut symbols: Vec<_> = asked.iter().map(|(symbol, _)| symbol.as_str()).collect();
+                symbols.sort_unstable();
+                symbols.dedup();
+                assert_eq!(symbols, ["OTHER", "SYM"], "{what} {hours:?}");
+                assert!(
+                    asked.iter().all(|(_, session)| *session == hours),
+                    "{what} {hours:?}: {asked:?}"
+                );
+            }
+        }
+    }
+
     /// A repeating study alert: one study 7 named `name` on one minute, `Above(100)`.
     fn repeating_alert(name: &str) -> Alert {
         let mut alert: Alert = serde_json::from_value(serde_json::json!({
