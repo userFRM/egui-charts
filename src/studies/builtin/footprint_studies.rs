@@ -1,6 +1,7 @@
-//! Levels and zones derived only from executed volume.
+//! Levels and zones derived from executed volume.
 
 use crate::data::{Footprint, FootprintBarView, FootprintView, meets_threshold};
+use crate::model::Bar;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -43,20 +44,28 @@ pub enum FootprintStudyState {
     Local,
     /// No later bar has traded in the zone, and it has not expired.
     Unvisited,
-    /// A later bar traded in the zone, ending it.
+    /// A later bar traded in the zone, ending it. A zone that ends only when broken ends this
+    /// way only at a bar without a known close.
     Revisited,
-    /// No later bar traded in the zone within the configured number of bars, ending it.
+    /// The configured number of later bars passed without one ending it.
     Expired,
+    /// Later bars traded into a zone that ends only when broken this many times, at least once,
+    /// without closing beyond its far edge, and it is still active.
+    Rejected(usize),
+    /// A later bar closed beyond the far edge of a zone that ends only when broken, ending it.
+    Broken,
 }
 
-/// A level or zone beginning at one bar and optionally ending at its first revisit.
+/// A level or zone beginning at one bar and optionally ending at its first revisit, or at its
+/// break for a zone that ends only when broken.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct FootprintStudy {
     /// Bar that created the level or zone.
     pub start: DateTime<Utc>,
-    /// Last bar of the level or zone: the first later bar whose traded range overlaps it, or the
-    /// last of the configured number of bars when none did; `None` while untouched and
+    /// Last bar of the level or zone: the first later bar whose traded range overlaps it, or for
+    /// a zone that ends only when broken the first later bar closing beyond its far edge, or the
+    /// last of the configured number of bars when none did; `None` while it is active and
     /// unexpired. Local markers use the originating bar as their end.
     pub end: Option<DateTime<Utc>>,
     /// Inclusive lower grouped price key.
@@ -67,6 +76,10 @@ pub struct FootprintStudy {
     pub kind: FootprintStudyKind,
     /// Whether later trading ended it, and how.
     pub state: FootprintStudyState,
+    /// Bars that traded into a zone that ends only when broken without closing beyond its far
+    /// edge, in time order, including those before it broke or expired. Empty for every other
+    /// level, zone and marker. [`FootprintStudyState::Rejected`] counts them while it is active.
+    pub rejections: Vec<DateTime<Utc>>,
 }
 
 /// What [`footprint_studies`] marks, and how. The default marks stacks of three diagonal
@@ -94,9 +107,19 @@ pub struct FootprintStudyConfig {
     /// Build imbalances from a side against the opposite side one price away, as the footprint
     /// shows them, rather than at the same price.
     pub diagonal: bool,
-    /// Bars a level or zone extends past its own: it ends at its first revisit, or expires
-    /// after this many later bars. `None` extends until a revisit or the last bar.
+    /// Bars a level or zone extends past its own: it ends at its first revisit, or its break under
+    /// [`zones_until_broken`](Self::zones_until_broken), or expires after this many later bars.
+    /// `None` extends until then or the last bar.
     pub extend_bars: Option<usize>,
+    /// End stacked imbalance zones only at the first later bar closing beyond their far edge:
+    /// below the lowest row of a [`FootprintStudyKind::StackedAsk`] zone or above the highest row
+    /// of a [`FootprintStudyKind::StackedBid`] zone, whether or not that bar traded in the zone.
+    /// A later bar that trades into the zone without closing beyond its far edge is a rejection,
+    /// which [`FootprintStudyState::Rejected`] counts while the zone stays active. The chart reads
+    /// the closes from its bars and [`footprint_studies_with_closes`] from the bars it is given;
+    /// a bar without a close that trades into the zone ends it as by default, at the first
+    /// revisit. A bar still forming counts with its latest close.
+    pub zones_until_broken: bool,
     /// Row volume above this share of the bar volume, in 0..=1, marks a cluster. Out of range,
     /// not a number, or `None`, none.
     pub cluster_share: Option<f64>,
@@ -129,6 +152,7 @@ impl Default for FootprintStudyConfig {
             stack: 3,
             diagonal: true,
             extend_bars: None,
+            zones_until_broken: false,
             cluster_share: None,
             single_print_max: None,
             delta_percent: None,
@@ -144,32 +168,76 @@ impl Default for FootprintStudyConfig {
 ///
 /// Missing price rows break a stack. Stacks, POCs and unfinished levels end at the first
 /// subsequent bar whose executed range revisits them, or expire as `config.extend_bars` says;
-/// their `state` tells which. Call after trades change, not every paint: extending old zones
-/// scans subsequent bars.
+/// their `state` tells which. Footprint bars hold no closes, so here zones end at their first
+/// revisit even under `config.zones_until_broken`; [`footprint_studies_with_closes`] takes the
+/// closes from chart bars. Call after trades change, not every paint: extending old zones scans
+/// subsequent bars.
 pub fn footprint_studies(flow: &Footprint, config: &FootprintStudyConfig) -> Vec<FootprintStudy> {
     let flow = FootprintView::from(flow);
-    let bars: Vec<_> = flow.complete_bars(..).map(|bar| (bar, 1)).collect();
+    let bars: Vec<_> = flow.complete_bars(..).map(|bar| (bar, 1, None)).collect();
     footprint_studies_on_rows(&bars, config, flow)
 }
 
+/// [`footprint_studies`] over the complete footprint bars of chart `bars`, with each bar's close,
+/// so that a stacked imbalance zone kept by [`FootprintStudyConfig::zones_until_broken`] counts
+/// its rejections and ends where a close breaks it. Bars must be chronological, one per slot of
+/// the footprint's clock; a timestamp inside the slot is accepted, as in the feed history
+/// contract. Footprint bars without a chart bar are left out.
+pub fn footprint_studies_with_closes(
+    flow: &Footprint,
+    bars: &[Bar],
+    config: &FootprintStudyConfig,
+) -> Vec<FootprintStudy> {
+    let view = FootprintView::from(flow);
+    let rows: Vec<_> = bars
+        .iter()
+        .filter_map(|bar| {
+            let row = view
+                .bar_at(bar.time)
+                .filter(|row| flow.complete_at(row.time))?;
+            Some((row, 1, flow.level_of(bar.close)))
+        })
+        .collect();
+    footprint_studies_on_rows(&rows, config, view)
+}
+
 /// Each bar's row keys are in multiples of its display grouping; output keys use input rows.
+/// Each bar comes with the input row of its close, when known, for zones that end only when broken.
 pub(crate) fn footprint_studies_on_rows(
-    bars: &[(FootprintBarView<'_>, i64)],
+    bars: &[(FootprintBarView<'_>, i64, Option<i64>)],
     config: &FootprintStudyConfig,
     flow: FootprintView<'_>,
 ) -> Vec<FootprintStudy> {
     let mut result = Vec::new();
     let mut asks = Vec::new();
-    for (index, &(bar, group)) in bars.iter().enumerate() {
-        let mut add = |low: i64, high: i64, kind, extended| {
+    for (index, &(bar, group, _)) in bars.iter().enumerate() {
+        let mut add = |low: i64, high: i64, kind: FootprintStudyKind, extended| {
             let low = low.saturating_mul(group);
             let high = high.saturating_mul(group).saturating_add(group - 1);
-            let (end, state) = if extended {
+            let (end, state, rejections) = if extended {
                 let later = bars[index + 1..]
                     .iter()
                     .take(config.extend_bars.unwrap_or(usize::MAX));
-                let revisit = later.clone().find(|(next, next_group)| {
-                    next.levels
+                let until_broken = config.zones_until_broken
+                    && matches!(
+                        kind,
+                        FootprintStudyKind::StackedAsk | FootprintStudyKind::StackedBid
+                    );
+                // A buy stack supports from its low, a sell stack resists from its high.
+                let beyond = |close: i64| {
+                    if kind == FootprintStudyKind::StackedAsk {
+                        close < low
+                    } else {
+                        close > high
+                    }
+                };
+                let mut rejections = Vec::new();
+                let ended = later.clone().find_map(|(next, next_group, close)| {
+                    if until_broken && close.is_some_and(beyond) {
+                        return Some((next.time, FootprintStudyState::Broken));
+                    }
+                    let touched = next
+                        .levels
                         .first_key_value()
                         .zip(next.levels.last_key_value())
                         .is_some_and(|((first, _), (last, _))| {
@@ -178,18 +246,27 @@ pub(crate) fn footprint_studies_on_rows(
                                     .saturating_mul(*next_group)
                                     .saturating_add(*next_group - 1)
                                     >= low
-                        })
+                        });
+                    if touched && until_broken && close.is_some() {
+                        rejections.push(next.time);
+                        return None;
+                    }
+                    touched.then_some((next.time, FootprintStudyState::Revisited))
                 });
-                match (revisit, config.extend_bars) {
-                    (Some((next, _)), _) => (Some(next.time), FootprintStudyState::Revisited),
+                let outcome = match (ended, config.extend_bars) {
+                    (Some((time, state)), _) => (Some(time), state),
                     (None, Some(n)) if later.count() == n => (
-                        bars.get(index + n).map(|(last, _)| last.time),
+                        bars.get(index + n).map(|(last, ..)| last.time),
                         FootprintStudyState::Expired,
                     ),
+                    _ if !rejections.is_empty() => {
+                        (None, FootprintStudyState::Rejected(rejections.len()))
+                    }
                     _ => (None, FootprintStudyState::Unvisited),
-                }
+                };
+                (outcome.0, outcome.1, rejections)
             } else {
-                (Some(bar.time), FootprintStudyState::Local)
+                (Some(bar.time), FootprintStudyState::Local, Vec::new())
             };
             result.push(FootprintStudy {
                 start: bar.time,
@@ -198,6 +275,7 @@ pub(crate) fn footprint_studies_on_rows(
                 high,
                 kind,
                 state,
+                rejections,
             });
         };
         let (Some((&first, first_row)), Some((&last, last_row))) =
@@ -351,7 +429,10 @@ mod tests {
                 ))
                 .unwrap();
             }
-            let rows: Vec<_> = flow.complete_bars(..).map(|bar| (bar.into(), 1)).collect();
+            let rows: Vec<_> = flow
+                .complete_bars(..)
+                .map(|bar| (bar.into(), 1, None))
+                .collect();
             let config = FootprintStudyConfig {
                 extend_bars: expiry,
                 ..Default::default()
@@ -458,6 +539,139 @@ mod tests {
         ); // 5/15 at 101 and 102.
     }
 
+    /// Zones that end only when broken: a stacked ask zone at 101..103 supports from its low and
+    /// a stacked bid zone at 101..103 resists from its high. Each later bar trades at one price
+    /// and closes at another: 103 to 107 rejects the ask zone and breaks the bid zone, 102 to 98
+    /// does the reverse, a close in the far edge's own row is a rejection, and a close beyond
+    /// the far edge breaks a zone the bar never traded in. By default, or without closes, each
+    /// zone ends at its first revisit as before. A missing join from minute 2 to 4 withholds
+    /// the outcomes that span it, and each zone lists the bars that rejected it.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn zones_until_broken_count_rejections_until_a_close_beyond_the_far_edge() {
+        use FootprintStudyKind::{StackedAsk, StackedBid};
+        use FootprintStudyState::*;
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let (buy, sell) = (Some(OrderSide::Buy), Some(OrderSide::Sell));
+        // Each side's 4 against the other side's 1 one row away, at 101, 102 and 103.
+        let ask = [
+            (100.0, 1.0, sell),
+            (101.0, 1.0, sell),
+            (101.0, 4.0, buy),
+            (102.0, 1.0, sell),
+            (102.0, 4.0, buy),
+            (103.0, 4.0, buy),
+        ];
+        let bid = [
+            (104.0, 1.0, buy),
+            (103.0, 1.0, buy),
+            (103.0, 4.0, sell),
+            (102.0, 1.0, buy),
+            (102.0, 4.0, sell),
+            (101.0, 4.0, sell),
+        ];
+        // A later bar trades at its first price and closes at its second.
+        let (up, down, low_row, high_row) = (
+            (103.0, 107.0),
+            (102.0, 98.0),
+            (104.0, 101.0),
+            (100.0, 103.0),
+        );
+        let (below, away) = ((97.0, 95.0), (110.0, 110.0));
+        let candle = |minute: i64, prices: &[f64]| {
+            let low = prices.iter().copied().fold(f64::INFINITY, f64::min);
+            let high = prices.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let time = start + TimeDelta::minutes(minute);
+            Bar::new(time, prices[0], high, low, prices[prices.len() - 1], 1.0)
+        };
+        #[rustfmt::skip]
+        let rows = [
+            // Zone, later bars by minute, missing join, outcome by default and until broken.
+            (StackedAsk, &[(1, up)][..], false, Some((Some(1), Revisited)), Some((None, Rejected(1), &[1][..]))),
+            (StackedAsk, &[(1, up), (2, down)][..], false, Some((Some(1), Revisited)), Some((Some(2), Broken, &[1][..]))),
+            (StackedAsk, &[(1, down)][..], false, Some((Some(1), Revisited)), Some((Some(1), Broken, &[][..]))),
+            (StackedAsk, &[(1, up), (2, low_row)][..], false, Some((Some(1), Revisited)), Some((None, Rejected(2), &[1, 2][..]))),
+            (StackedAsk, &[(1, below)][..], false, Some((None, Unvisited)), Some((Some(1), Broken, &[][..]))),
+            (StackedBid, &[(1, down), (2, up)][..], false, Some((Some(1), Revisited)), Some((Some(2), Broken, &[1][..]))),
+            (StackedBid, &[(1, down), (2, high_row)][..], false, Some((Some(1), Revisited)), Some((None, Rejected(2), &[1, 2][..]))),
+            (StackedAsk, &[(1, up), (4, down)][..], true, Some((Some(1), Revisited)), None),
+            (StackedAsk, &[(1, up), (4, away)][..], true, Some((Some(1), Revisited)), None),
+        ];
+        for (kind, later, gap, first_touch, until_broken) in rows {
+            let tape = if kind == StackedAsk { &ask } else { &bid };
+            let mut trades: Vec<_> = tape
+                .iter()
+                .map(|&(price, size, side)| (0, price, size, side))
+                .collect();
+            let prices: Vec<_> = tape.iter().map(|trade| trade.0).collect();
+            let mut bars = vec![candle(0, &prices)];
+            for &(minute, (from, to)) in later {
+                let side = if to >= from { buy } else { sell };
+                trades.extend([
+                    (60 * minute, from, 1.0, side),
+                    (60 * minute + 1, to, 1.0, side),
+                ]);
+                bars.push(candle(minute, &[from, to]));
+            }
+            let mut flow = flow(&trades);
+            if gap {
+                flow.add_missing(start + TimeDelta::minutes(2), start + TimeDelta::minutes(4));
+            }
+            let outcome = |studies: Vec<FootprintStudy>| -> Vec<_> {
+                studies
+                    .into_iter()
+                    .filter(|s| s.kind == kind && s.start == start)
+                    .map(|s| {
+                        (
+                            s.low,
+                            s.high,
+                            s.end.map(|end| (end - start).num_minutes()),
+                            s.state,
+                            s.rejections
+                                .iter()
+                                .map(|time| (*time - start).num_minutes())
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect()
+            };
+            let zone = |expected: Option<(Option<i64>, FootprintStudyState, &[i64])>| -> Vec<_> {
+                expected
+                    .into_iter()
+                    .map(|(end, state, rejections)| (101, 103, end, state, rejections.to_vec()))
+                    .collect()
+            };
+            // By default and without closes no bar rejects.
+            let touched = first_touch.map(|(end, state)| (end, state, &[][..]));
+            let until = FootprintStudyConfig {
+                zones_until_broken: true,
+                ..Default::default()
+            };
+            for (config, expected) in [
+                (FootprintStudyConfig::default(), touched),
+                // Default config serialized before zones_until_broken existed.
+                (serde_json::from_str(r#"{"stacked_imbalances":true,"naked_poc":true,"delta_poc":true,"unfinished_auctions":true,"imbalance_ratio":3.0,"imbalance_min_volume":0.0,"stack":3,"diagonal":true,"extend_bars":null,"cluster_share":null,"single_print_max":null,"delta_percent":null,"ratio":null,"min_delta":0.0}"#).unwrap(), touched),
+                (until, until_broken),
+            ] {
+                let context = format!(
+                    "{kind:?} {later:?}, gap {gap}, until broken {}",
+                    config.zones_until_broken
+                );
+                assert_eq!(
+                    outcome(footprint_studies_with_closes(&flow, &bars, &config)),
+                    zone(expected),
+                    "{context}"
+                );
+                // Without closes a revisit ends the zone, as by default.
+                assert_eq!(
+                    outcome(footprint_studies(&flow, &config)),
+                    zone(touched),
+                    "{context}, no closes"
+                );
+            }
+        }
+    }
+
     /// A footprint of the given executions, `(second, price, size, side)`, in 1-minute bars of
     /// 1.0 ticks, the first bar opening at 10:00. A bar is told apart by its second.
     fn flow(trades: &[(i64, f64, f64, Option<OrderSide>)]) -> Footprint {
@@ -543,7 +757,7 @@ mod tests {
                         } else {
                             bar
                         };
-                        (bar, 1)
+                        (bar, 1, None)
                     })
                     .collect();
                 // Four against one must also pass exactly at the requested ratio and minimum.

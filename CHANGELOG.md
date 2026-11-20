@@ -511,6 +511,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Terminal’s Time and Sales panel now lists older trades when a history page arrives after a live trade. Backfilled rows do not trigger large-trade alerts; a live trade arriving in the same frame still can. ([#3702](https://github.com/userFRM/egui-charts/issues/3702))
+
+- Terminal’s Time and Sales panel drops the old rows when a feed resets its trade tape, even without a market replay driver. ([#3670](https://github.com/userFRM/egui-charts/issues/3670))
+
+- Trade Rate now fills history-only volume and delta intervals when the complete tape reproduces every candle. A split execution contributes to each candle it touches, but only once to the rate windows. ([#3622](https://github.com/userFRM/egui-charts/issues/3622))
+
 - Trade Rate now fills history-only range intervals when the instrument's tick size and the complete trade tape reproduce the candles. ([#3453](https://github.com/userFRM/egui-charts/issues/3453))
 
 - Trade Rate now fills history-only tick charts when the complete trade tape reproduces the candles. Partial or mismatched inputs stay blank. ([#3394](https://github.com/userFRM/egui-charts/issues/3394))

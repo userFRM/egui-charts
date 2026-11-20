@@ -7,6 +7,7 @@ use crate::config::ChartConfig;
 use crate::model::{Bar, ChartType};
 use crate::studies::{Indicator, IndicatorFactory, InputValue, StudySource, StudyTemplateSet};
 use crate::widget::settings::ChartSettingsState;
+use crate::widget::studies::reads_study;
 use crate::widget::study_templates::{Keep, NO_STUDY};
 use crate::widget::{Chart, SeriesId};
 
@@ -27,14 +28,20 @@ pub enum LayoutCopy {
     /// beside the kept ones, their additional scales numbered apart from those the kept studies
     /// use.
     Studies,
-    /// Applies these settings to every chart, the source included. Each other chart keeps its
-    /// symbol, interval and chart type, the sizes and other parameters of that type, its own
-    /// price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes, and
-    /// its bubble grouping when the source uses a price step. It keeps the precision of its
+    /// Applies these settings to every chart, the source included. Each other chart takes the
+    /// source's styles for every chart type and its footprint, session volume profile and TPO
+    /// colours. The TPO drawing switches, including period columns and the legacy poor highs and
+    /// lows flag, block mode, outside value area opacity and initial balance minutes also follow
+    /// the source. Profile sessions, TPO session splitting, period lengths, profile grouping,
+    /// composites, manual profile splits, row sizes and value area shares stay per chart. Each
+    /// other chart keeps its symbol, interval and chart type, the other parameters of that type,
+    /// its own price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes,
+    /// and its bubble grouping when the source uses a price step. It keeps the precision of its
     /// instrument unless the source was given another one. A chart without a feed has no order
     /// flow to give: from it, each chart keeps its order-flow layers and settings. A chart that
     /// has not been drawn yet fits its bars on its first frame, and a lock in the settings then
-    /// locks that view.
+    /// locks that view. Each other chart keeps its futures data choices, since only its host can
+    /// reload its history for them.
     Settings(Box<ChartSettingsState>),
 }
 
@@ -75,6 +82,9 @@ pub enum LayoutCopyIssueKind {
     /// The chart is skipped: the copy would take it past its
     /// [study cap](Chart::set_study_limit).
     StudyLimit,
+    /// The chart is skipped: the copy would add studies reading another study's output past its
+    /// [chained study cap](Chart::set_chained_study_limit).
+    ChainedStudyLimit,
     /// The chart is skipped: it refuses these settings, for the given reason.
     UnsupportedSettings(String),
 }
@@ -96,6 +106,7 @@ impl std::fmt::Display for LayoutCopyIssueKind {
             }
             Self::UnsupportedStudy { study, reason } => write!(f, "skipped: {study}: {reason}"),
             Self::StudyLimit => write!(f, "skipped: study limit reached"),
+            Self::ChainedStudyLimit => write!(f, "skipped: chained study limit reached"),
             Self::UnsupportedSettings(reason) => write!(f, "skipped: {reason}"),
         }
     }
@@ -186,6 +197,20 @@ impl CopiedStudies {
         if chart.study_limit.is_some_and(|limit| kept + added > limit) {
             issues.push(LayoutCopyIssueKind::StudyLimit);
         }
+        let kept_chained = chart
+            .indicators()
+            .filter(|(_, study)| self.keep.keeps(*study) && reads_study(*study))
+            .count();
+        let added_chained = self
+            .set
+            .studies
+            .iter()
+            .filter_map(|template| template.create_with(factory).ok())
+            .filter(|study| self.keep.adds(study.as_ref()) && reads_study(study.as_ref()))
+            .count();
+        if chart.passes_chained_study_limit(kept_chained, added_chained) {
+            issues.push(LayoutCopyIssueKind::ChainedStudyLimit);
+        }
         let no_bars = chart.state.data().bars.is_empty();
         if no_bars {
             issues.push(LayoutCopyIssueKind::NoHistory);
@@ -258,13 +283,17 @@ impl CopiedStudies {
 }
 
 /// Applies the settings of the chart with `from` as its configuration to another chart. That
-/// chart keeps the parameters of its chart type, whose sizes and base prices suit its own prices,
-/// its own price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes,
-/// and its bubble grouping when the source uses a price step, which suit its own instrument. It
-/// keeps all its order-flow settings when `from_feed` is false, since a chart without a feed
-/// holds none. It takes the colours of `from` for its candles when the settings describe another
-/// style of candles and so do not hold them. A precision left at its default follows each
-/// chart's instrument.
+/// chart takes the chart type styles and the footprint, session profile and TPO colours of the
+/// settings. TPO drawing switches, including period columns and the legacy poor highs and lows
+/// flag, block mode, outside value area opacity and initial balance minutes also follow the
+/// source. Profile sessions, TPO session splitting, period lengths, profile grouping, composites,
+/// manual profile splits, row sizes and value area shares stay per chart. It keeps the other
+/// parameters of its chart type, whose sizes and base prices suit its own prices, its own
+/// price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes, and its
+/// bubble grouping when the source uses a price step, which suit its own instrument. It keeps
+/// all its order-flow settings when `from_feed` is false, since a chart without a feed holds none.
+/// It takes the colours of `from` for its candles when the settings describe another style of
+/// candles and so do not hold them. A precision left at its default follows each chart's instrument.
 fn apply_to_other_chart(
     settings: &ChartSettingsState,
     from: &ChartConfig,
@@ -277,6 +306,35 @@ fn apply_to_other_chart(
         own.styles = params.styles;
         own.footprint_colors = params.footprint_colors;
         own.footprint_imbalance_colors = params.footprint_imbalance_colors;
+        let (profile, source) = (&mut own.profile, &params.profile);
+        profile.poc_color = source.poc_color;
+        profile.value_area_high_color = source.value_area_high_color;
+        profile.value_area_low_color = source.value_area_low_color;
+        profile.up_volume_color = source.up_volume_color;
+        profile.down_volume_color = source.down_volume_color;
+        profile.value_area_up_color = source.value_area_up_color;
+        profile.value_area_down_color = source.value_area_down_color;
+        own.tpo_block_colors = params.tpo_block_colors;
+        own.tpo_block_color = params.tpo_block_color;
+        own.tpo_poc = params.tpo_poc;
+        own.tpo_volume_profile = params.tpo_volume_profile;
+        own.tpo_value_area_levels = params.tpo_value_area_levels;
+        own.tpo_open_price = params.tpo_open_price;
+        own.tpo_close_price = params.tpo_close_price;
+        own.tpo_poor_high = params.tpo_poor_high;
+        own.tpo_poor_low = params.tpo_poor_low;
+        own.tpo_poor_highs_lows = params.tpo_poor_highs_lows;
+        own.tpo_extend_poor = params.tpo_extend_poor;
+        own.tpo_initial_balance = params.tpo_initial_balance;
+        own.tpo_initial_balance_minutes = params.tpo_initial_balance_minutes;
+        own.tpo_initial_balance_extensions = params.tpo_initial_balance_extensions;
+        own.tpo_single_prints = params.tpo_single_prints;
+        own.tpo_midpoint = params.tpo_midpoint;
+        own.tpo_letters = params.tpo_letters;
+        own.tpo_statistics = params.tpo_statistics;
+        own.tpo_colored_blocks = params.tpo_colored_blocks;
+        own.tpo_outside_value_area_opacity = params.tpo_outside_value_area_opacity;
+        own.tpo_split_periods = params.tpo_split_periods;
         if &own != chart.chart_type_params() {
             chart.apply_chart_type_params(own);
         }
@@ -299,6 +357,9 @@ fn apply_to_other_chart(
             flow.volume_bubbles.grouping = own.volume_bubbles.grouping;
         }
     }
+    // Only each chart's host can reload its history for the futures data choices.
+    settings.back_adjust_futures = chart.back_adjust_futures;
+    settings.settlement_as_close = chart.settlement_as_close;
     let own_ratio = chart.state().price_scale().bar_ratio();
     // A chart not drawn yet holds the scale's placeholder range, not a view of its own.
     // shortcut: a chart drawn before its bars changed counts as drawn; track a fit since the last
@@ -465,7 +526,7 @@ impl ChartLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Bar, BarData, Instrument, Timeframe};
+    use crate::model::{Bar, BarData, Instrument, ProfileRows, ProfileSession, Timeframe};
     use crate::studies::{RSI, SMA};
     use crate::widget::settings::PrecisionMode;
     use crate::widget::{ChartLayoutMode, PaneId};
@@ -810,6 +871,21 @@ mod tests {
             }]
         );
         charts[1].set_study_limit(None);
+        // Only the studies on studies the set adds count, beside those the chart keeps.
+        charts[1].set_chained_study_limit(Some(0));
+        assert_eq!(
+            layout.copy_issues(&charts, 0, &LayoutCopy::Studies, &factory),
+            [LayoutCopyIssue {
+                slot: 1,
+                kind: LayoutCopyIssueKind::ChainedStudyLimit
+            }]
+        );
+        charts[1].set_chained_study_limit(Some(1));
+        assert_eq!(
+            layout.copy_issues(&charts, 0, &LayoutCopy::Studies, &factory),
+            []
+        );
+        charts[1].set_chained_study_limit(None);
         let own = charts[0].add_indicator(Box::new(crate::studies::EMA::new(3)));
         charts[0].set_indicator_user_edit_enabled(own, false);
         for _ in 0..2 {
@@ -950,7 +1026,8 @@ mod tests {
         assert_eq!(names(charts[2]), ["SMA"]);
     }
 
-    /// Settings reach every chart whatever its style of candles, and leave its chart type, the
+    /// Settings reach every chart whatever its style of candles, give it the source's profile and
+    /// TPO colours and TPO display settings, and leave its chart type, profile structure, the other
     /// parameters of that type and the precision of its instrument alone.
     #[test]
     fn settings_copy_reaches_every_chart_and_reverses_as_one_edit() {
@@ -958,14 +1035,60 @@ mod tests {
         b.set_chart_type(ChartType::HollowCandles);
         let mut params = b.chart_type_params().clone();
         params.renko_brick_size = 0.25;
+        params.profile.session = ProfileSession::Regular;
+        params.profile.rows = ProfileRows::Ticks(4);
+        params.profile.value_area = Some(0.6);
+        params.tpo_row_ticks = 3;
+        params.tpo_value_area = 60.0;
+        params.tpo_poor_highs_lows = true;
+        params.tpo_poor_high = true;
+        params.tpo_poor_low = true;
+        params.tpo_split_sessions = true;
+        params.tpo_split_periods = true;
+        params.tpo_period_minutes = 15;
+        params.tpo_profile_period = crate::model::TPOProfilePeriod::Week;
         b.set_chart_type_params(params);
         a.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.01)));
         b.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.0001)));
         a.config_mut().bullish_color = egui::Color32::RED;
         a.set_chart_type(ChartType::Heikin);
+        let mut params = a.chart_type_params().clone();
+        let profile = &mut params.profile;
+        profile.poc_color = Some(egui::Color32::RED);
+        profile.value_area_high_color = Some(egui::Color32::GREEN);
+        profile.value_area_low_color = Some(egui::Color32::BLUE);
+        profile.up_volume_color = Some(egui::Color32::YELLOW);
+        profile.down_volume_color = Some(egui::Color32::BROWN);
+        profile.value_area_up_color = Some(egui::Color32::DARK_GREEN);
+        profile.value_area_down_color = Some(egui::Color32::DARK_RED);
+        params.tpo_block_colors = [
+            egui::Color32::RED,
+            egui::Color32::GREEN,
+            egui::Color32::BLUE,
+            egui::Color32::WHITE,
+        ];
+        params.tpo_block_color = egui::Color32::BLACK;
+        params.tpo_poc = false;
+        params.tpo_volume_profile = true;
+        params.tpo_value_area_levels = false;
+        params.tpo_open_price = false;
+        params.tpo_close_price = true;
+        params.tpo_initial_balance = false;
+        params.tpo_initial_balance_minutes = 30;
+        params.tpo_extend_poor = true;
+        params.tpo_initial_balance_extensions = true;
+        params.tpo_single_prints = true;
+        params.tpo_midpoint = true;
+        params.tpo_letters = false;
+        params.tpo_statistics = true;
+        params.tpo_colored_blocks = false;
+        params.tpo_outside_value_area_opacity = 80;
+        a.set_chart_type_params(params);
         let mut settings = ChartSettingsState::from_chart(&a);
         settings.chart_basic_styles.background_color = egui::Color32::KHAKI;
         settings.candle_colors.body_up = egui::Color32::GOLD;
+        settings.back_adjust_futures = true;
+        settings.settlement_as_close = false;
         let factory = IndicatorFactory::new();
         let mut layout = ChartLayout {
             mode: ChartLayoutMode::TwoHorizontal,
@@ -973,6 +1096,7 @@ mod tests {
         };
         let mut charts = [&mut a, &mut b];
         let before = charts[1].config().background_color;
+        let params_before = charts[1].chart_type_params().clone();
         let copy = LayoutCopy::Settings(Box::new(settings));
         assert_eq!(layout.apply_copy(&mut charts, 0, &copy, &factory), []);
         for chart in &charts {
@@ -985,15 +1109,127 @@ mod tests {
         }
         assert_eq!(charts[1].chart_type(), ChartType::HollowCandles);
         assert_eq!(charts[1].chart_type_params().renko_brick_size, 0.25);
+        let params = charts[1].chart_type_params();
+        let profile = &params.profile;
+        assert_eq!(
+            [
+                profile.poc_color,
+                profile.value_area_high_color,
+                profile.value_area_low_color,
+                profile.up_volume_color,
+                profile.down_volume_color,
+                profile.value_area_up_color,
+                profile.value_area_down_color,
+            ],
+            [
+                egui::Color32::RED,
+                egui::Color32::GREEN,
+                egui::Color32::BLUE,
+                egui::Color32::YELLOW,
+                egui::Color32::BROWN,
+                egui::Color32::DARK_GREEN,
+                egui::Color32::DARK_RED,
+            ]
+            .map(Some),
+            "the profile colours follow the source"
+        );
+        assert_eq!(
+            (params.tpo_block_colors, params.tpo_block_color),
+            (
+                [
+                    egui::Color32::RED,
+                    egui::Color32::GREEN,
+                    egui::Color32::BLUE,
+                    egui::Color32::WHITE,
+                ],
+                egui::Color32::BLACK,
+            ),
+            "the TPO block colours follow the source"
+        );
+        assert_eq!(
+            (
+                params.tpo_poc,
+                params.tpo_volume_profile,
+                params.tpo_initial_balance,
+                params.tpo_initial_balance_minutes,
+            ),
+            (false, true, false, 30),
+            "the TPO display switches and initial balance minutes follow the source"
+        );
+        assert_eq!(
+            [
+                params.tpo_value_area_levels,
+                params.tpo_open_price,
+                params.tpo_close_price,
+                params.tpo_poor_high,
+                params.tpo_poor_low,
+                params.tpo_poor_highs_lows,
+                params.tpo_extend_poor,
+                params.tpo_initial_balance_extensions,
+                params.tpo_single_prints,
+                params.tpo_midpoint,
+                params.tpo_letters,
+                params.tpo_statistics,
+                params.tpo_colored_blocks,
+                params.tpo_split_periods,
+            ],
+            [
+                false, false, true, false, false, false, true, true, true, true, false, true,
+                false, false,
+            ],
+            "the other TPO display switches follow the source, including the legacy poor flag"
+        );
+        assert_eq!(params.tpo_outside_value_area_opacity, 80);
+        assert_eq!(
+            (
+                &profile.session,
+                profile.rows,
+                profile.value_area,
+                params.tpo_row_ticks,
+                params.tpo_value_area,
+            ),
+            (
+                &ProfileSession::Regular,
+                ProfileRows::Ticks(4),
+                Some(0.6),
+                3,
+                60.0
+            ),
+            "the profile and TPO content settings stay the chart's own"
+        );
+        assert_eq!(
+            (
+                params.tpo_split_sessions,
+                params.tpo_period_minutes,
+                params.tpo_profile_period,
+            ),
+            (true, 15, crate::model::TPOProfilePeriod::Week),
+            "the TPO session and period grouping stay the chart's own"
+        );
         // Neither chose a precision, so each writes its own instrument's.
         let precision = |chart: &Chart| chart.state().price_scale().price_precision();
         assert_eq!(precision(charts[0]), Some(2));
         assert_eq!(precision(charts[1]), Some(4));
 
+        // Only the source takes the futures data choices; the other chart keeps its own.
+        let futures = |chart: &Chart| {
+            let settings = ChartSettingsState::from_chart(chart);
+            (settings.back_adjust_futures, settings.settlement_as_close)
+        };
+        assert_eq!(
+            (futures(charts[0]), futures(charts[1])),
+            ((true, false), (false, true))
+        );
+
         assert!(charts[0].undo());
         show(&mut layout, &mut charts);
         assert_eq!(charts[1].config().background_color, before);
         assert_eq!(charts[0].config().background_color, before);
+        assert_eq!(
+            charts[1].chart_type_params(),
+            &params_before,
+            "one undo restores every parameter"
+        );
     }
 
     /// Settings every chart already has change none of them and leave no step to undo.

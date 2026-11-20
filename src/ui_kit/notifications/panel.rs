@@ -134,11 +134,15 @@ impl NotificationPanel {
         }
 
         // Show toasts
-        let (dismissed, action) = self.show_toasts(ctx, toasts.toasts(), toasts.expanded);
+        let (dismissed, pressed, action) = self.show_toasts(ctx, toasts.toasts(), toasts.expanded);
 
-        // Remove dismissed toasts
+        // Remove dismissed toasts and those whose action was pressed
         for id in dismissed {
             toasts.remove(id);
+        }
+        for (id, index) in pressed {
+            toasts.remove(id);
+            toasts.pressed.push((id, index));
         }
 
         match action {
@@ -157,14 +161,16 @@ impl NotificationPanel {
         }
     }
 
-    /// Internal: show toasts and return IDs of dismissed toasts and the stack control pressed
+    /// Internal: show toasts and return IDs of dismissed toasts, the actions pressed and the
+    /// stack control pressed
     fn show_toasts(
         &self,
         ctx: &Context,
         toasts: &[Toast],
         expanded: bool,
-    ) -> (Vec<u64>, Option<StackAction>) {
+    ) -> (Vec<u64>, Vec<(u64, usize)>, Option<StackAction>) {
         let mut dismissed = Vec::new();
+        let mut pressed = Vec::new();
         let corner = self.config.position.anchor();
         let margin = ctx.active_theme().spacing.xxl;
         let base_pos = corner.pos_in_rect(&ctx.content_rect().shrink(margin));
@@ -194,7 +200,7 @@ impl NotificationPanel {
                 .show(ctx, |ui| {
                     // Reserved first, so that the edges of the older toasts sit under the card.
                     let edges = ui.painter().add(egui::Shape::Noop);
-                    let dismissed = self.render_toast(ui, toast);
+                    let result = self.render_toast(ui, toast);
                     let card = ui.min_rect();
                     let spacing = ui.active_theme().spacing;
                     let visuals = ui.visuals();
@@ -211,7 +217,7 @@ impl NotificationPanel {
                         .into()
                     });
                     ui.painter().set(edges, egui::Shape::Vec(shapes.collect()));
-                    dismissed
+                    result
                 });
 
             // One live node per toast, so a screen reader announces it once when it appears.
@@ -232,9 +238,13 @@ impl NotificationPanel {
             // Track height for stacking
             y_offset += response.response.rect.height() + self.config.gap;
 
-            // Check if toast was dismissed
-            if response.inner {
+            // Check if toast was dismissed or one of its actions pressed
+            let (closed, action) = response.inner;
+            if closed {
                 dismissed.push(toast.id);
+            }
+            if let Some(index) = action {
+                pressed.push((toast.id, index));
             }
         }
 
@@ -243,7 +253,7 @@ impl NotificationPanel {
             self.show_stack_controls(ctx, corner, pos, toasts, expanded)
         });
 
-        (dismissed, action.flatten())
+        (dismissed, pressed, action.flatten())
     }
 
     /// Internal: show the pill and the dismiss-all button beyond the stack, on the side away from
@@ -314,7 +324,9 @@ impl NotificationPanel {
         let theme = ui.active_theme();
         let buy = trade.side == crate::model::OrderSide::Buy;
         let side_color = crate::theme::trading_side_color(&theme, trade.side);
-        let icon_color = if trade.executed {
+        let icon_color = if toast.kind == ToastKind::Error {
+            toast.kind.color(&theme.ui)
+        } else if trade.executed {
             theme.ui.take_profit
         } else {
             side_color
@@ -482,12 +494,13 @@ impl NotificationPanel {
         false
     }
 
-    /// Render a single toast, returns true if dismissed
-    fn render_toast(&self, ui: &mut Ui, toast: &Toast) -> bool {
+    /// Render a single toast, returns whether it was dismissed and the action pressed
+    fn render_toast(&self, ui: &mut Ui, toast: &Toast) -> (bool, Option<usize>) {
         if let Some(trading) = &toast.trading {
-            return self.render_trading_toast(ui, toast, trading);
+            return (self.render_trading_toast(ui, toast, trading), None);
         }
         let mut dismissed = false;
+        let mut pressed = None;
 
         let theme = ui.active_theme();
         let kind_color = toast.kind.color(&theme.ui);
@@ -537,6 +550,19 @@ impl NotificationPanel {
                             RichText::new(l10n::text(ui.ctx(), &toast.message))
                                 .color(message_color),
                         );
+                        if !toast.actions.is_empty() {
+                            ui.horizontal_wrapped(|ui| {
+                                for (index, label) in toast.actions.iter().enumerate() {
+                                    if Button::new(label.as_str())
+                                        .size(ButtonSize::SM)
+                                        .show(ui)
+                                        .clicked()
+                                    {
+                                        pressed = Some(index);
+                                    }
+                                }
+                            });
+                        }
                     });
                 });
             });
@@ -564,7 +590,7 @@ impl NotificationPanel {
             }
         });
 
-        dismissed
+        (dismissed, pressed)
     }
 }
 
@@ -573,13 +599,17 @@ mod tests {
     use super::*;
 
     /// A trading notice is a card of its own over whatever is behind it, with a border, and its
-    /// title is at regular weight.
+    /// title is at regular weight. Error cards use the error tile colour instead of the side.
     #[test]
     fn trading_notices_are_bordered_cards_with_regular_titles() {
-        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        for (theme, kind) in [crate::theme::Theme::light(), crate::theme::Theme::dark()]
+            .into_iter()
+            .flat_map(|theme| [ToastKind::Info, ToastKind::Error].map(|kind| (theme.clone(), kind)))
+        {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
-            let mut toast = Toast::info("Limit order placed").with_title("Limit order placed on");
+            let mut toast =
+                Toast::new(kind, "Limit order placed").with_title("Limit order placed on");
             toast.trading = Some(super::super::TradingToast {
                 symbol: "SYM".into(),
                 logo: None,
@@ -613,6 +643,13 @@ mod tests {
             };
             assert!(card(&|rect| rect.fill == theme.ui.panel_bg_floating));
             assert!(card(&|rect| rect.stroke.color == theme.ui.border));
+            let color = if kind == ToastKind::Error {
+                theme.ui.error
+            } else {
+                crate::theme::trading_side_color(&theme, crate::model::OrderSide::Buy)
+            };
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Rect(rect) if rect.fill == color.gamma_multiply(0.14))));
             output.drop_without_applying_deltas();
         }
     }

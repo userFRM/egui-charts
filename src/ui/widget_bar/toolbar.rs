@@ -4,7 +4,6 @@
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::localization as l10n;
-use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
@@ -132,7 +131,7 @@ impl Default for WidgetBarConfig {
         Self {
             width: 45.0,
             btn_size: DESIGN_TOKENS.sizing.toolbar.right_btn_size,
-            icon_size: icon_sizes::TOOLBAR,
+            icon_size: DESIGN_TOKENS.sizing.icon_xl,
             btn_spacing: crate::theme::Spacing::default().xs,
             hover_margin: DESIGN_TOKENS.sizing.toolbar.right_hover_margin, // 3px
             hover_rounding: crate::theme::Radii::default().lg,

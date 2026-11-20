@@ -14,9 +14,12 @@ use crate::chart::TradingLineAction;
 use crate::icons::icons;
 use crate::model::{Order, OrderSide, OrderType};
 use crate::painting::symbol_mark::paint_symbol_mark;
+use crate::scales::{decimals, to_step};
 use crate::theme::ThemeExt;
 use crate::ui::connection_status::{show_connection_status, show_connection_status_with_label};
 use crate::ui::top_toolbar::buttons::rule_color;
+use crate::ui::trading::format::Numbers;
+use crate::ui::trading::ticket::{limit_text, order_quantity, round_down};
 use crate::ui::trading::widgets::{grouped, semibold, side_color};
 use crate::ui_kit::buttons::ButtonSize;
 use crate::ui_kit::{EmptyState, IconButton};
@@ -158,6 +161,9 @@ impl Trading {
                     false => broker,
                 };
                 egui::Popup::menu(&broker).show(|ui| {
+                    if ui.button(l10n::text(ui.ctx(), "Change broker")).clicked() {
+                        action = Some(AccountPanelAction::ChangeBroker);
+                    }
                     if ui.button(l10n::text(ui.ctx(), "Disconnect")).clicked() {
                         action = Some(AccountPanelAction::Disconnect);
                     }
@@ -203,6 +209,12 @@ impl Trading {
                             account.margin,
                             false,
                             Some("The margin the open positions hold"),
+                        ),
+                        (
+                            "Margin buffer",
+                            account.margin_buffer,
+                            false,
+                            Some("The equity left above the margin the open positions hold"),
                         ),
                         (
                             "Available funds",
@@ -431,10 +443,28 @@ impl Trading {
                         .collect::<Vec<_>>()
                         .join(", ")
                 }));
-                cells.push(plain(optional(&request.symbol, request.stop_loss)));
+                let stops: Vec<_> = request
+                    .stop_loss
+                    .into_iter()
+                    .chain(
+                        request
+                            .take_profit_levels
+                            .iter()
+                            .filter_map(|level| level.stop_loss),
+                    )
+                    .map(|stop| price(&request.symbol, stop))
+                    .collect();
+                cells.push(plain(if stops.is_empty() {
+                    optional(&request.symbol, None)
+                } else {
+                    stops.join(", ")
+                }));
             }
             cells.push(plain(status(&ctx, &order.status)));
             cells.push(plain(time(order.placed)));
+            if !finished {
+                cells.push(plain(time(request.expires)));
+            }
             if finished {
                 cells.push(plain(time(order.closed)));
             }
@@ -512,6 +542,35 @@ impl Trading {
                     symbol: Some(order.request.symbol.clone()),
                     edit: None,
                     close: None,
+                })
+                .collect(),
+            Tab::Closed => self
+                .account_panel
+                .closed
+                .iter()
+                .rev()
+                .map(|closed| {
+                    let s = closed.symbol.as_str();
+                    let label = if closed.side == OrderSide::Buy {
+                        "Long"
+                    } else {
+                        "Short"
+                    };
+                    Row {
+                        cells: vec![
+                            symbol(s),
+                            side(closed.side, label),
+                            plain(quantity(s, closed.quantity)),
+                            plain(price(s, closed.average_price)),
+                            plain(price(s, closed.exit_price)),
+                            colored(money(Some(closed.realized_pnl), true)),
+                            plain(time(closed.opened)),
+                            plain(time(Some(closed.closed))),
+                        ],
+                        symbol: Some(closed.symbol.clone()),
+                        edit: None,
+                        close: None,
+                    }
                 })
                 .collect(),
             Tab::Executions => self
@@ -696,6 +755,7 @@ impl Trading {
                         Tab::Positions => "No open positions",
                         Tab::Orders => "No working orders",
                         Tab::History => "No finished orders",
+                        Tab::Closed => "No closed positions",
                         Tab::Balance => "No balance changes",
                         Tab::Journal => "No journal entries",
                         Tab::Executions => "No executions",
@@ -865,15 +925,13 @@ impl Trading {
         }
         match row_action {
             Some((RowAction::Position(position), _)) => {
-                self.pending = Some(TradingLineAction::Close(position.clone()));
+                self.ask(TradingLineAction::Close(position.clone()), true);
             }
             Some((RowAction::Order(order), false)) => {
-                self.pending = Some(TradingLineAction::Cancel(order.clone()));
+                self.ask(TradingLineAction::Cancel(order.clone()), false);
             }
             Some((RowAction::Order(order), true)) => {
-                self.ticket.open = false;
-                self.load_rules(&order.request.symbol);
-                self.account_panel.editing = Some((order.clone(), order.request.clone()));
+                self.edit_order(order.clone(), order.request.clone());
             }
             None => {}
         }
@@ -883,14 +941,32 @@ impl Trading {
 
     /// The edit dialog of a working order: its quantity, prices and brackets. Saving sends the
     /// change to the broker; the dialog is the user's confirmation.
-    fn show_order_editor(&mut self, ctx: &egui::Context, chart_symbol: &str) {
+    pub(in crate::ui::trading) fn show_order_editor(
+        &mut self,
+        ctx: &egui::Context,
+        chart_symbol: &str,
+    ) {
         let Some(symbol) =
             (self.account_panel.editing.as_ref()).map(|(order, _)| order.request.symbol.clone())
         else {
             return;
         };
-        let decimals = self.numbers(&symbol, chart_symbol).decimals;
+        // The chart and the account panel both draw the dialog; it shows once a pass.
+        let pass = ctx.cumulative_pass_nr();
+        if self.account_panel.editor_pass == Some(pass) {
+            return;
+        }
+        self.account_panel.editor_pass = Some(pass);
+        let price_decimals = self.numbers(&symbol, chart_symbol).decimals;
         let brackets = self.capabilities().brackets;
+        let level_stops = self.capabilities().take_profit_level_stops;
+        let rules_ready = self.rules_ready && self.rules.symbol == symbol;
+        let step = self.rules.quantity_step;
+        let numbers = Numbers {
+            symbol: &symbol,
+            decimals: price_decimals,
+            formatter: self.formatter.as_deref(),
+        };
         let Some((order, request)) = &mut self.account_panel.editing else {
             return;
         };
@@ -915,14 +991,14 @@ impl Trading {
                         ui.add(
                             egui::DragValue::new(value)
                                 .range(0.0..=f64::MAX)
-                                .max_decimals(decimals)
-                                .speed(10f64.powi(-(decimals as i32))),
+                                .max_decimals(price_decimals)
+                                .speed(10f64.powi(-(price_decimals as i32))),
                         )
                         .labelled_by(label.id);
                         ui.end_row();
                     };
                     let quantity = ui.label(l10n::text(ctx, "Quantity"));
-                    // The levels' quantities add up to it; they are changed on the chart.
+                    // With levels it is their sum.
                     ui.add_enabled(
                         request.take_profit_levels.is_empty(),
                         egui::DragValue::new(&mut request.quantity).range(0.0..=f64::MAX),
@@ -946,46 +1022,110 @@ impl Trading {
                             OrderType::StopLimit { limit, .. } => limit,
                             _ => 0.0,
                         };
+                        let bracket_field =
+                            |ui: &mut Ui, label: String, bracket: &mut Option<f64>| {
+                                let mut on = bracket.is_some();
+                                let toggle = ui.checkbox(&mut on, label);
+                                if on {
+                                    let value = bracket.get_or_insert(reference);
+                                    ui.add(
+                                        egui::DragValue::new(value)
+                                            .range(0.0..=f64::MAX)
+                                            .max_decimals(price_decimals)
+                                            .speed(10f64.powi(-(price_decimals as i32))),
+                                    )
+                                    .labelled_by(toggle.id);
+                                } else {
+                                    *bracket = None;
+                                }
+                                ui.end_row();
+                            };
                         for (index, level) in request.take_profit_levels.iter_mut().enumerate() {
-                            let label = l10n::format_text(
-                                ui.ctx(),
-                                "Take profit {0}",
-                                &[("0", (index + 1).to_string())],
+                            let n = [("0", (index + 1).to_string())];
+                            price(
+                                ui,
+                                &l10n::format_text(ctx, "Take profit {0}", &n),
+                                &mut level.price,
                             );
-                            price(ui, &label, &mut level.price);
+                            let label =
+                                ui.label(l10n::format_text(ctx, "Take profit {0} quantity", &n));
+                            let response = ui
+                                .add(
+                                    egui::DragValue::new(&mut level.quantity)
+                                        .range(0.0..=f64::MAX)
+                                        .speed(step),
+                                )
+                                .labelled_by(label.id);
+                            if response.changed() && rules_ready {
+                                level.quantity = to_step(level.quantity, step, f64::round);
+                            }
+                            ui.end_row();
+                            if level_stops {
+                                let label = l10n::format_text(ctx, "Stop loss {0}", &n);
+                                bracket_field(ui, label, &mut level.stop_loss);
+                            }
                         }
-                        let single = request
-                            .take_profit_levels
-                            .is_empty()
+                        let single = (request.take_profit_levels.is_empty())
                             .then_some(("Take profit", &mut request.take_profit));
                         for (label, bracket) in single
                             .into_iter()
                             .chain([("Stop loss", &mut request.stop_loss)])
                         {
-                            let mut on = bracket.is_some();
-                            let toggle = ui.checkbox(&mut on, l10n::text(ctx, label));
-                            if on {
-                                let value = bracket.get_or_insert(reference);
-                                ui.add(
-                                    egui::DragValue::new(value)
-                                        .range(0.0..=f64::MAX)
-                                        .max_decimals(decimals)
-                                        .speed(10f64.powi(-(decimals as i32))),
-                                )
-                                .labelled_by(toggle.id);
-                            } else {
-                                *bracket = None;
-                            }
-                            ui.end_row();
+                            bracket_field(ui, l10n::text(ctx, label), bracket);
                         }
                     }
                 });
+            if !request.take_profit_levels.is_empty() {
+                // Add at the levels' decimals, without snapping an unchanged order to new rules.
+                let levels = &request.take_profit_levels;
+                let places = levels.iter().map(|level| decimals(level.quantity)).max();
+                let scale = 10f64.powi(places.unwrap_or(0) as i32);
+                let sum: f64 = levels.iter().map(|level| level.quantity).sum();
+                request.quantity = (sum * scale).round() / scale;
+            }
             ui.add_space(8.0);
-            let valid = self.rules_ready
-                && self.rules.symbol == request.symbol
-                && crate::ui::trading::ticket::order_quantity(request.quantity, &self.rules)
-                    .is_ok_and(|quantity| quantity == request.quantity)
-                && request != &order.request;
+            let rules = &self.rules;
+            let step_text = || {
+                let step = [("step", limit_text(&numbers, step, decimals(step)))];
+                l10n::format_text(ctx, "Enter quantities in steps of {step}", &step)
+            };
+            let problem = if !rules_ready {
+                None
+            } else {
+                match order_quantity(request.quantity, rules) {
+                    Err(limit) => Some(limit.message(ctx, &numbers, decimals(step))),
+                    Ok(quantity) if quantity != request.quantity => Some(step_text()),
+                    Ok(_) if request.quantity < order.filled => {
+                        let filled =
+                            [("filled", limit_text(&numbers, order.filled, decimals(step)))];
+                        let key = "The quantity is below the {filled} already filled";
+                        Some(l10n::format_text(ctx, key, &filled))
+                    }
+                    Ok(_) => request.take_profit_levels.iter().find_map(|level| {
+                        if level.quantity < rules.min_quantity {
+                            let minimum = [(
+                                "minimum",
+                                limit_text(&numbers, rules.min_quantity, decimals(step)),
+                            )];
+                            let key = "Each take-profit level needs at least the minimum \
+                                quantity of {minimum}";
+                            Some(l10n::format_text(ctx, key, &minimum))
+                        } else if round_down(level.quantity, step) != level.quantity {
+                            Some(step_text())
+                        } else {
+                            None
+                        }
+                    }),
+                }
+            };
+            let valid = rules_ready && problem.is_none() && request != &order.request;
+            let theme = ui.active_theme();
+            if !rules_ready {
+                let waiting = l10n::text(ctx, "Waiting for the symbol's trading rules");
+                ui.colored_label(theme.ui.text_muted, waiting);
+            } else if let Some(problem) = problem {
+                ui.colored_label(theme.ui.error, problem);
+            }
             save = ui
                 .add_enabled(
                     valid,

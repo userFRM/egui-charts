@@ -72,8 +72,8 @@ fn pixel_conflation_threshold() -> Option<f32> {
     Some(1.0)
 }
 
-/// Older saved configurations use the theme for overnight shading.
-fn follow_the_theme() -> Color32 {
+/// Older saved configurations use the theme for analyst targets and overnight shading.
+fn theme_color() -> Color32 {
     Color32::PLACEHOLDER
 }
 
@@ -394,7 +394,9 @@ pub struct ChartConfig {
     pub show_horizontal_grid: bool,
     /// Whether to show vertical grid lines
     pub show_vertical_grid: bool,
-    /// Whether to show volume bars
+    /// Whether to show volume bars. With the `studies` feature it adds a Volume study on the next
+    /// frame unless one is on the chart, and a user action that turns it on at the chart's study
+    /// cap without one leaves it off.
     pub show_volume: bool,
     /// Volume height as a fraction of the price pane above `volume_baseline_inset`
     pub volume_height_fraction: f32,
@@ -410,6 +412,10 @@ pub struct ChartConfig {
     pub title_as_description: bool,
     /// Show the current bid and ask controls in the legend.
     pub show_quote_boxes: bool,
+    /// Show Buy and Sell in a panel over the price pane, moved by its grip, instead of in the
+    /// legend. Off by default and in configurations saved without it.
+    #[serde(default)]
+    pub quote_panel: bool,
     /// Show absolute bar change in the legend.
     pub show_ohlc_change: bool,
     /// Show percentage bar change in the legend.
@@ -434,7 +440,7 @@ pub struct ChartConfig {
     /// Show the host-supplied price unit above the price ticks.
     pub show_unit: bool,
     /// Show the currency and unit only while the pointer is over the price scale or their menu
-    /// is open. Off by default: they stay visible.
+    /// is open. On by default; layouts saved without this field keep them always visible.
     #[serde(default)]
     pub currency_unit_on_hover: bool,
     /// Show Auto, Log and Percent buttons in chart navigation.
@@ -472,8 +478,9 @@ pub struct ChartConfig {
     pub show_price_line: bool,
     /// Draw a line at the preceding session close independently of its tag.
     pub show_prev_close_line: bool,
-    /// Colour, width and pattern of the previous close line and its tag. Without a colour it
-    /// follows the theme's secondary text colour.
+    /// Colour, width and pattern of the previous close line and its tag. Without a colour it is
+    /// mid grey, #555555, in a light theme and follows the theme's secondary text colour in a
+    /// dark one.
     #[serde(default)]
     pub prev_close_line: ChartLineStyle,
     /// Whether to show previous close value line
@@ -554,9 +561,13 @@ pub struct ChartConfig {
     /// When to show the maximize and menu buttons of the panes.
     #[serde(default = "pane_buttons_on_hover")]
     pub pane_buttons: NavigationButtons,
-    /// Draw a vertical line at each session, day, week, month or year boundary, by the interval.
+    /// Draw a vertical line at the first bar of each trading session, or of each day without
+    /// trading hours, on intraday intervals. Daily and longer intervals draw none while this is
+    /// on.
     pub show_session_breaks: bool,
-    /// Colour of session break lines, painted as set for every kind of boundary.
+    /// Colour of session break lines. Default: the theme's
+    /// [`ChartColors::session_break`](crate::theme::ChartColors::session_break), the same blue in
+    /// every built-in theme.
     pub session_break_color: Color32,
     /// Pattern of session break lines.
     pub session_break_style: LineStyle,
@@ -572,14 +583,25 @@ pub struct ChartConfig {
     /// Fill of the pre-market and the post-market where they set no colour of their own.
     /// `PLACEHOLDER` uses the active theme accent at low opacity.
     pub extended_hours_color: Color32,
+    /// Analyst targets above the close on their publication date: their lines and labels, drawn
+    /// opaque, and the area between those lines and that close, filled at this colour's
+    /// opacity. `PLACEHOLDER` uses the active theme's up candle colour, filled at 20% opacity. A
+    /// fully transparent colour fills nothing and draws the lines in the theme's colour.
+    #[serde(default = "theme_color")]
+    pub price_target_positive_color: Color32,
+    /// Analyst targets below the close on their publication date, as
+    /// [`price_target_positive_color`](Self::price_target_positive_color) with the theme's down
+    /// candle colour.
+    #[serde(default = "theme_color")]
+    pub price_target_negative_color: Color32,
     /// Fill of the pre-market: extended hours that regular hours of the same trading date
     /// follow. `None` uses [`extended_hours_color`](Self::extended_hours_color).
-    /// Default: None
+    /// New charts use orange (#FF9800) at 8% opacity; older saved configurations keep the fallback.
     #[serde(default)]
     pub premarket_color: Option<Color32>,
     /// Fill of the post-market: extended hours that no regular hours of the same trading date
     /// follow. `None` uses [`extended_hours_color`](Self::extended_hours_color).
-    /// Default: None
+    /// New charts use blue (#2962FF) at 8% opacity; older saved configurations keep the fallback.
     #[serde(default)]
     pub postmarket_color: Option<Color32>,
     /// Shade the pre-market while [`show_extended_hours`](Self::show_extended_hours) is on.
@@ -594,7 +616,7 @@ pub struct ChartConfig {
     pub shade_postmarket: bool,
     /// Fill for overnight windows. `PLACEHOLDER` follows the active theme accent at twice
     /// the extended-hours opacity. Older saved charts use that theme default.
-    #[serde(default = "follow_the_theme")]
+    #[serde(default = "theme_color")]
     pub overnight_hours_color: Color32,
     /// Whether to show the symbol watermark.
     pub show_watermark: bool,
@@ -696,6 +718,7 @@ impl Default for ChartConfig {
             show_ohlc_info: true,
             title_as_description: true,
             show_quote_boxes: true,
+            quote_panel: false,
             show_ohlc_change: true,
             show_ohlc_change_percent: true,
             show_legend_volume: true,
@@ -706,7 +729,7 @@ impl Default for ChartConfig {
             indicator_backdrop_opacity: 0.6,
             show_currency: true,
             show_unit: true,
-            currency_unit_on_hover: false,
+            currency_unit_on_hover: true,
             show_scale_mode_buttons: true,
             show_plus_button: true,
             show_extended_session_price: true,
@@ -755,14 +778,16 @@ impl Default for ChartConfig {
             pane_buttons: pane_buttons_on_hover(),
             // Session breaks disabled by default
             show_session_breaks: false,
-            session_break_color: chart.grid_line_major,
+            session_break_color: chart.session_break,
             session_break_style: LineStyle::Dashed,
             session_break_width: session_break_width(),
             session_config: None,
             show_extended_hours: true,
             extended_hours_color: Color32::PLACEHOLDER,
-            premarket_color: None,
-            postmarket_color: None,
+            price_target_positive_color: Color32::PLACEHOLDER,
+            price_target_negative_color: Color32::PLACEHOLDER,
+            premarket_color: Some(Color32::from_rgba_unmultiplied(255, 152, 0, 20)),
+            postmarket_color: Some(Color32::from_rgba_unmultiplied(41, 98, 255, 20)),
             shade_premarket: true,
             shade_postmarket: true,
             overnight_hours_color: Color32::PLACEHOLDER,
@@ -780,6 +805,44 @@ impl Default for ChartConfig {
 }
 
 impl ChartConfig {
+    /// The line and fill colours on one side of the publication close, using that side's theme
+    /// candle colour until a colour is chosen.
+    pub(crate) fn price_target_colors(color: Color32, themed: Color32) -> (Color32, Color32) {
+        if color == Color32::PLACEHOLDER {
+            (themed, crate::model::HlcAreaStyle::fill_tint(themed, 51))
+        } else if color.a() == 0 {
+            // A fully transparent colour holds no RGB, so it has no opaque form.
+            (themed, Color32::TRANSPARENT)
+        } else {
+            (color.to_opaque(), color)
+        }
+    }
+
+    /// The colour an Analyst price forecast study shows for the choice `color`: the fill
+    /// `PLACEHOLDER` stands for, made from the side's theme candle colour `themed`, or the
+    /// choice itself.
+    #[cfg(feature = "studies")]
+    pub(crate) fn price_target_study_color(color: Color32, themed: Color32) -> Color32 {
+        if color == Color32::PLACEHOLDER {
+            Self::price_target_colors(color, themed).1
+        } else {
+            color
+        }
+    }
+
+    /// The choice a study colour stands for: `PLACEHOLDER` when it is the theme's own fill,
+    /// within the rounding of a colour picker, otherwise the colour itself.
+    #[cfg(feature = "studies")]
+    pub(crate) fn price_target_choice(color: Color32, themed: Color32) -> Color32 {
+        let theme = Self::price_target_study_color(Color32::PLACEHOLDER, themed);
+        let near = color
+            .to_array()
+            .iter()
+            .zip(theme.to_array())
+            .all(|(a, b)| a.abs_diff(b) <= 1);
+        if near { Color32::PLACEHOLDER } else { color }
+    }
+
     /// Apply the theme's background, grid, axis text, candle, session break and watermark
     /// colours to this configuration.
     ///
@@ -799,7 +862,7 @@ impl ChartConfig {
         self.bearish_border_color = Some(theme.chart.candle_down);
         self.bullish_wick_color = Some(theme.chart.candle_up);
         self.bearish_wick_color = Some(theme.chart.candle_down);
-        self.session_break_color = theme.chart.grid_line_major;
+        self.session_break_color = theme.chart.session_break;
         self.watermark_color = if theme.dark {
             theme.chart.grid_line
         } else {
@@ -810,6 +873,17 @@ impl ChartConfig {
                 .lerp_to_gamma(Color32::from_rgb(10, 16, 33), 0.18)
         };
         self
+    }
+
+    /// The colour of the previous close line and its tag while `prev_close_line` sets none:
+    /// mid grey, #555555, in a light theme, apart from the black scale text, and the theme's
+    /// secondary text colour in a dark one.
+    pub(crate) fn prev_close_fallback(theme: &Theme) -> Color32 {
+        if theme.dark {
+            theme.ui.text_secondary
+        } else {
+            Color32::from_gray(85)
+        }
     }
 }
 
@@ -884,8 +958,22 @@ mod tests {
 
     #[test]
     fn with_theme_recolours_session_breaks_and_watermark() {
-        let config = ChartConfig::default().with_theme(&Theme::light());
-        assert_eq!(config.session_break_color, Color32::from_rgb(229, 229, 229));
+        assert_eq!(
+            ChartConfig::default().session_break_color,
+            Color32::from_rgb(73, 133, 231)
+        );
+        for (name, theme) in crate::theme::presets() {
+            let config = ChartConfig::default().with_theme(&theme);
+            assert_eq!(
+                config.session_break_color,
+                Color32::from_rgb(73, 133, 231),
+                "{name}"
+            );
+        }
+        let mut theme = Theme::light();
+        theme.chart.session_break = Color32::RED;
+        let config = ChartConfig::default().with_theme(&theme);
+        assert_eq!(config.session_break_color, Color32::RED);
         assert_eq!(config.watermark_color, Color32::from_rgb(211, 212, 215));
     }
 

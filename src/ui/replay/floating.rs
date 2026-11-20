@@ -6,11 +6,12 @@
 use super::start::ReplayStartAction;
 use crate::icons::icons;
 use crate::localization as l10n;
-use crate::styles::icons as icon_sizes;
+use crate::services::ReplayAccountSettings;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{Button, ButtonSize, ButtonVariant, IconButton};
 use crate::ui_kit::ext::UiExt;
+use crate::ui_kit::form::FormGrid;
 use crate::ui_kit::list_item::ListItem;
 use egui::{
     Align2, Context, CursorIcon, FontId, Id, Key, Modifiers, Rect, RichText, Ui, Vec2, pos2,
@@ -160,6 +161,10 @@ pub struct FloatingReplayControl {
     at_end: bool,
     update_intervals: Vec<crate::model::Timeframe>,
     update_interval: Option<crate::model::Timeframe>,
+    /// The replay account the start menu offers
+    account: ReplayAccountSettings,
+    /// The text of the start menu's currency field, which may be blank while the user edits it
+    currency: String,
 }
 
 impl Default for FloatingReplayControl {
@@ -174,6 +179,7 @@ impl FloatingReplayControl {
 
     /// Create a new floating replay control
     pub fn new() -> Self {
+        let account = ReplayAccountSettings::default();
         Self {
             id: Id::unique("floating_replay_control"),
             state: ReplayControlState {
@@ -189,6 +195,8 @@ impl FloatingReplayControl {
             at_end: false,
             update_intervals: Vec::new(),
             update_interval: None,
+            currency: account.currency.clone(),
+            account,
         }
     }
 
@@ -236,6 +244,23 @@ impl FloatingReplayControl {
     ) {
         self.update_interval = Some(current);
         self.update_intervals = available;
+    }
+
+    /// The replay account the start menu offers: read it when the user picks a start, and save
+    /// it with the host's settings.
+    pub fn replay_account(&self) -> &ReplayAccountSettings {
+        &self.account
+    }
+
+    /// Sets the replay account the start menu offers, as saved by the host. Returns `false`, and
+    /// keeps the current one, when `settings` are not [valid](ReplayAccountSettings::is_valid).
+    pub fn set_replay_account(&mut self, settings: ReplayAccountSettings) -> bool {
+        if !settings.is_valid() {
+            return false;
+        }
+        self.currency = settings.currency.clone();
+        self.account = settings;
+        true
     }
 
     /// Show the control (clears user_dismissed flag)
@@ -453,7 +478,7 @@ impl FloatingReplayControl {
                             if !self.docked {
                                 // The whole frame drags the bar; the grip says so.
                                 ui.add(icons::UI_DRAG_HANDLE.as_image_tinted(
-                                    Vec2::splat(icon_sizes::COMPACT),
+                                    Vec2::splat(DESIGN_TOKENS.sizing.icon_14),
                                     theme.ui.text_muted,
                                 ))
                                 .on_hover_cursor(CursorIcon::Grab)
@@ -643,8 +668,9 @@ impl FloatingReplayControl {
         action
     }
 
-    /// The start control: a button that selects a bar, and a menu of every start.
-    fn show_start_control(&self, ui: &mut Ui) -> Option<ReplayStartAction> {
+    /// The start control: a button that selects a bar, and a menu of every start and the replay
+    /// account's terms.
+    fn show_start_control(&mut self, ui: &mut Ui) -> Option<ReplayStartAction> {
         let mut start = None;
         if Button::icon_and_text(&icons::REPLAY_SELECT_BAR, "Select bar")
             .variant(if self.selecting {
@@ -706,6 +732,43 @@ impl FloatingReplayControl {
                         ui.close();
                     }
                 }
+                ui.separator();
+                ui.label(
+                    RichText::new(l10n::text(ui.ctx(), "Replay account").to_uppercase())
+                        .size(theme.text.small)
+                        .color(crate::ui_kit::section::menu_heading_color(&theme)),
+                );
+                FormGrid::new("replay_account").show(ui, |ui| {
+                    ui.label(l10n::text(ui.ctx(), "Initial capital"));
+                    ui.add(
+                        egui::DragValue::new(&mut self.account.initial_capital)
+                            .range(1.0..=1.0e12)
+                            .speed(100.0)
+                            .max_decimals(2),
+                    );
+                    ui.end_row();
+                    ui.label(l10n::text(ui.ctx(), "Currency"));
+                    let currency = egui::TextEdit::singleline(&mut self.currency)
+                        .char_limit(8)
+                        .desired_width(64.0);
+                    // A blank field keeps the last currency, so the settings stay valid.
+                    if ui.add(currency).changed() && !self.currency.trim().is_empty() {
+                        self.account.currency = self.currency.trim().to_uppercase();
+                    }
+                    ui.end_row();
+                    ui.label(l10n::text(ui.ctx(), "Commission"));
+                    let mut percent = self.account.commission * 100.0;
+                    let commission = egui::DragValue::new(&mut percent)
+                        .range(0.0..=100.0)
+                        .speed(0.01)
+                        .max_decimals(4)
+                        .suffix("%");
+                    // Written back only when edited, so an untouched rate never drifts.
+                    if ui.add(commission).changed() {
+                        self.account.commission = percent / 100.0;
+                    }
+                    ui.end_row();
+                });
             });
         start
     }

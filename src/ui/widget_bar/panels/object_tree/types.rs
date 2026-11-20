@@ -115,6 +115,10 @@ pub struct SourceItem {
     pub visible: bool,
     /// Is locked (drawings only - prevents modification)
     pub locked: bool,
+    /// Whether the user can edit the drawing, copied from
+    /// [`crate::drawings::Drawing::user_edit_enabled`]. Off, the row offers no lock toggle and
+    /// no delete. Non-drawing rows ignore this field.
+    pub user_edit_enabled: bool,
     /// Is selected in the tree
     pub selected: bool,
     /// Is expanded (shows properties)
@@ -136,13 +140,25 @@ pub struct SourceItem {
 }
 
 impl SourceItem {
-    /// Create a new drawing source
+    /// Create a new drawing source. Hosts listing a chart's drawings use [`Self::for_drawing`],
+    /// which names a registered tool's drawings by the tool.
     ///
     /// # Arguments
     ///
     /// * `id` - Unique identifier
     /// * `tool_type` - Type of drawing tool
     /// * `color` - Primary color
+    ///
+    /// ```
+    /// use egui_charts::drawings::DrawingToolType;
+    /// use egui_charts::ui::widget_bar::SourceItem;
+    ///
+    /// let mut item = SourceItem::drawing(7, DrawingToolType::TrendLine, egui::Color32::GOLD);
+    /// item.locked = true;
+    /// item.user_edit_enabled = false;
+    /// assert!(item.locked);
+    /// assert!(!item.user_edit_enabled);
+    /// ```
     pub fn drawing(id: usize, tool_type: DrawingToolType, color: Color32) -> Self {
         Self {
             id,
@@ -154,6 +170,7 @@ impl SourceItem {
             color,
             visible: true,
             locked: false,
+            user_edit_enabled: true,
             selected: false,
             expanded: false,
             z_index: id as i32,
@@ -166,6 +183,21 @@ impl SourceItem {
             folder: Vec::new(),
             folder_sync: None,
         }
+    }
+
+    /// A drawing row with the chart's tool name, the drawing's label, colour, visibility,
+    /// lock, layer, folder and synchronisation, and the panes it can move to.
+    pub fn for_drawing(chart: &crate::widget::Chart, drawing: &crate::drawings::Drawing) -> Self {
+        let mut item =
+            Self::drawing(drawing.id, drawing.tool_type, drawing.color32()).with_panes(chart);
+        item.name = chart.drawings().registry.tool_name(drawing).to_owned();
+        item.label = drawing.label.clone();
+        item.visible = drawing.visible;
+        item.locked = drawing.locked;
+        item.z_index = drawing.z_order;
+        item.folder = drawing.folder.clone();
+        item.folder_sync = drawing.folder_sync_mode();
+        item
     }
 
     /// Create a new indicator source
@@ -186,6 +218,7 @@ impl SourceItem {
             color,
             visible: true,
             locked: false,
+            user_edit_enabled: true,
             selected: false,
             expanded: false,
             z_index: id as i32,
@@ -228,6 +261,7 @@ impl SourceItem {
             color: Color32::GRAY,
             visible: true,
             locked: false,
+            user_edit_enabled: true,
             selected: false,
             expanded: false,
             z_index: id as i32,
@@ -256,6 +290,7 @@ impl SourceItem {
             color: Color32::PLACEHOLDER, // Follows the panel theme
             visible: true,
             locked: true, // Data source is always locked
+            user_edit_enabled: true,
             selected: false,
             expanded: true, // Data source is expanded by default
             z_index: 0,     // Data source is always at z-index 0
@@ -331,7 +366,7 @@ impl SourceItem {
 /// [`Self::from_chart`], [`Self::from_pointer`] or [`Self::new`].
 ///
 /// ```
-/// use egui_charts::ui::widget_bar::panels::object_tree::{DataWindowInfo, DataWindowSeries};
+/// use egui_charts::ui::widget_bar::{DataWindowInfo, DataWindowSeries};
 ///
 /// let mut info = DataWindowInfo::new("XAUUSD").with_ohlcv(2400.0, 2410.0, 2395.0, 2405.0, 9.0);
 /// let value = Some("5,000.00".to_owned());

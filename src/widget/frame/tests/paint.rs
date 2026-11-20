@@ -738,6 +738,7 @@ fn status_visibility_reaches_the_chart_legend() {
         ));
         let mut settings = crate::widget::settings::ChartSettingsState::from_chart(&chart);
         settings.status_line.show_logo = hidden != 12;
+        settings.status_line.quote_panel = hidden == 2;
         settings.status_line.show_market_status = hidden != 13;
         settings.apply_to_chart(&mut chart).unwrap();
         assert_eq!(
@@ -1996,49 +1997,257 @@ fn unclassified_footprint_rows_do_not_look_like_the_poc() {
     );
 }
 
+#[cfg(all(feature = "drawings", feature = "studies"))]
+fn rect_at(painted: &[Shape], fill: egui::Color32) -> usize {
+    painted
+        .iter()
+        .position(|shape| match shape {
+            Shape::Rect(rect) => rect.fill == fill,
+            Shape::Mesh(mesh) => mesh.vertices.iter().any(|v| v.color == fill),
+            _ => false,
+        })
+        .expect("rectangle painted, including its cached mesh")
+}
+
+#[cfg(all(feature = "drawings", feature = "studies"))]
+fn line_at(painted: &[Shape], color: egui::Color32) -> (usize, usize) {
+    let is_line = |shape: &Shape| match shape {
+        Shape::LineSegment { stroke, .. } => stroke.color == color,
+        Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
+        _ => false,
+    };
+    (
+        painted.iter().position(is_line).unwrap(),
+        painted.iter().rposition(is_line).unwrap(),
+    )
+}
+
+#[cfg(all(feature = "drawings", feature = "studies"))]
+fn add_rect(
+    chart: &mut crate::widget::Chart,
+    pane: Option<usize>,
+    prices: [f64; 2],
+    fill: egui::Color32,
+) -> usize {
+    use crate::drawings::{Drawing, DrawingToolType};
+    use crate::widget::SeriesId;
+    let bars = chart.bars(SeriesId::MAIN);
+    let anchors = [(bars[85].time, prices[0]), (bars[98].time, prices[1])];
+    let mut drawing = Drawing::new(0, DrawingToolType::Rect);
+    drawing.pane = pane;
+    drawing.fill_color = Some(fill.to_array());
+    drawing.color = [201, 1, 201, 255];
+    drawing.theme_shade = false;
+    drawing.completed = true;
+    chart.create_drawing(drawing, &anchors).unwrap()
+}
+
+/// Series and study edits preserve the other items' paint and pointer order through undo,
+/// including drawings passed to a surviving study and drawings whose layers merge (#3614).
+#[cfg(all(feature = "drawings", feature = "studies"))]
+#[test]
+fn drawings_keep_their_place_when_the_series_and_studies_change() {
+    use crate::studies::{RSI, SMA};
+    use crate::widget::{SeriesOptions, VisualOrder};
+    use egui::{Color32, Event};
+    const FILL: Color32 = Color32::from_rgb(200, 0, 200);
+    const SECOND: Color32 = Color32::from_rgb(0, 180, 200);
+    let mut failures = Vec::new();
+    for (case, under, after_layer) in [
+        ("remove study", true, 0),
+        ("move study out", true, 0),
+        ("reorder study", false, 2),
+        ("reorder series", false, 2),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0, 100.0], &[110.0, 104.0]);
+        chart.config.show_volume = false;
+        chart.set_visible_bars(20);
+        // Every pair of closes is 110 and 104, so SMA(2) is 107, above the probed price.
+        let item = if case == "reorder series" {
+            chart.add_series(SeriesOptions::default())
+        } else {
+            chart.add_indicator(Box::new(SMA::new(2)))
+        };
+        let color = chart
+            .indicators()
+            .find(|(id, _)| *id == item)
+            .map(|(_, study)| study.plot_style(0).color);
+        if under {
+            assert!(chart.reorder_indicator(item, VisualOrder::SendToBack));
+        }
+        let id = add_rect(&mut chart, None, [109.0, 101.0], FILL);
+        assert!(chart.reorder_drawing(id, VisualOrder::SendBackward));
+        let second = (case == "remove study").then(|| {
+            let second = add_rect(&mut chart, None, [109.0, 101.0], SECOND);
+            let z = chart
+                .drawings()
+                .drawings
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap()
+                .z_order;
+            chart
+                .drawings_mut()
+                .edit_drawing(second, |d| {
+                    d.series_layer = Some(0);
+                    d.z_order = z + 10;
+                    d.locked = true;
+                })
+                .unwrap();
+            second
+        });
+        for step in 0..3 {
+            match step {
+                0 => chart.user_action(|chart| {
+                    assert!(match case {
+                        "remove study" => chart.remove_series(item),
+                        "move study out" => chart.move_indicator_to_pane(item, item),
+                        "reorder study" => chart.reorder_indicator(item, VisualOrder::SendToBack),
+                        _ => chart.set_series_order(item, 0),
+                    })
+                }),
+                1 => assert!(chart.undo()),
+                _ => assert!(chart.redo()),
+            }
+            frame(&ctx, &mut chart, f64::from(step), vec![]);
+            let map = chart.get_chart_mapping();
+            // Bar 96's bullish body covers 100..110; neither SMA nor comparison covers here.
+            let on = Pos2::new(map.idx_to_x(96), map.price_to_y(105.0));
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                f64::from(step) + 0.1,
+                vec![Event::PointerMoved(on)],
+            );
+            let rect = rect_at(&painted, FILL);
+            let candles: Vec<_> = painted
+                .iter()
+                .enumerate()
+                .filter_map(|(at, shape)| {
+                    matches!(shape, Shape::Rect(r) if r.fill == chart.config().bullish_color
+                    && chart.get_rendered_price_rect().contains_rect(r.rect))
+                    .then_some(at)
+                })
+                .collect();
+            let over_candles = if under {
+                rect < candles[0]
+            } else {
+                *candles.last().unwrap() < rect
+            };
+            let study_order = match color {
+                Some(color) if step == 1 || case == "reorder study" => {
+                    let line = line_at(&painted, color);
+                    if under || step != 1 {
+                        line.1 < rect
+                    } else {
+                        rect < line.0
+                    }
+                }
+                _ => true,
+            };
+            let layer = chart
+                .drawings()
+                .drawings
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap()
+                .series_layer;
+            let expected = (
+                Some(if step == 1 { 1 } else { after_layer }),
+                true,
+                true,
+                (!under).then_some(id),
+            );
+            let actual = (
+                layer,
+                over_candles,
+                study_order,
+                chart.drawings().hit_test(on),
+            );
+            if actual != expected {
+                failures.push(format!(
+                    "{case}, step {step}: {actual:?}, expected {expected:?}"
+                ));
+            }
+            if let Some(second) = second {
+                let other = chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .find(|d| d.id == second)
+                    .unwrap();
+                assert_eq!(other.series_layer, Some(0));
+                assert!(other.locked);
+                if rect_at(&painted, SECOND) >= rect {
+                    failures.push(format!("{case}, step {step}: merged drawings reversed"));
+                }
+            }
+        }
+    }
+
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[100.0, 100.0], &[110.0, 104.0]);
+    chart.config.show_volume = false;
+    chart.set_visible_bars(20);
+    let rsi14 = chart.add_indicator(Box::new(RSI::new(14)));
+    let mut rsi = RSI::new(5);
+    crate::studies::Indicator::set_colors(&mut rsi, vec![Color32::from_rgb(30, 160, 210)]);
+    let rsi5 = chart.add_indicator(Box::new(rsi));
+    assert!(chart.move_indicator_to_pane(rsi5, rsi14));
+    let colors: Vec<_> = chart
+        .indicators()
+        .map(|(_, study)| study.plot_style(0).color)
+        .collect();
+    let id = add_rect(&mut chart, Some(rsi14.0), [80.0, 20.0], FILL);
+    assert!(chart.reorder_drawing(id, VisualOrder::SendBackward));
+    for step in 0..3 {
+        match step {
+            0 => chart.user_action(|chart| assert!(chart.remove_series(rsi14))),
+            1 => assert!(chart.undo()),
+            _ => assert!(chart.redo()),
+        }
+        frame(&ctx, &mut chart, f64::from(step), vec![]);
+        let painted = shapes(&ctx, &mut chart, f64::from(step) + 0.1, vec![]);
+        let rect = rect_at(&painted, FILL);
+        let drawing = chart
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.id == id)
+            .unwrap();
+        let actual = (
+            drawing.pane,
+            drawing.series_layer,
+            rect < line_at(&painted, colors[1]).0,
+        );
+        let expected = if step == 1 {
+            (Some(rsi14.0), Some(1), true)
+        } else {
+            (Some(rsi5.0), Some(0), true)
+        };
+        if actual != expected {
+            failures.push(format!(
+                "study owner removed, step {step}: {actual:?}, expected {expected:?}"
+            ));
+        }
+        if step == 1 {
+            assert!(line_at(&painted, colors[0]).1 < rect);
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 /// Drawings cross series and studies one item at a time, keep that place through undo and
 /// storage, and yield the pointer to a series painted over them, in either theme and pane.
 #[cfg(all(feature = "drawings", feature = "studies"))]
 #[test]
 fn drawings_take_their_place_among_the_series_and_studies() {
-    use crate::drawings::{Drawing, DrawingToolType};
     use crate::studies::{RSI, SMA};
-    use crate::widget::{Chart, SeriesId, VisualOrder};
+    use crate::widget::VisualOrder;
     use egui::{Color32, Event};
     const FILL: Color32 = Color32::from_rgb(200, 0, 200);
 
-    let rect_at = |painted: &[Shape]| {
-        painted
-            .iter()
-            .position(|shape| match shape {
-                Shape::Rect(rect) => rect.fill == FILL,
-                Shape::Mesh(mesh) => mesh.vertices.iter().any(|v| v.color == FILL),
-                _ => false,
-            })
-            .expect("rectangle painted, including its cached mesh")
-    };
-    let line_at = |painted: &[Shape], color| {
-        let is_line = |shape: &Shape| match shape {
-            Shape::LineSegment { stroke, .. } => stroke.color == color,
-            Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
-            _ => false,
-        };
-        (
-            painted.iter().position(is_line).unwrap(),
-            painted.iter().rposition(is_line).unwrap(),
-        )
-    };
-    let add_rect = |chart: &mut Chart, pane, prices: [f64; 2]| {
-        let bars = chart.bars(SeriesId::MAIN);
-        let anchors = [(bars[85].time, prices[0]), (bars[98].time, prices[1])];
-        let mut drawing = Drawing::new(0, DrawingToolType::Rect);
-        drawing.pane = pane;
-        drawing.fill_color = Some(FILL.to_array());
-        drawing.color = [201, 1, 201, 255];
-        drawing.theme_shade = false;
-        drawing.completed = true;
-        chart.create_drawing(drawing, &anchors).unwrap()
-    };
     for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0, 100.0], &[110.0, 104.0]);
@@ -2054,7 +2263,7 @@ fn drawings_take_their_place_among_the_series_and_studies() {
             .1
             .plot_style(0)
             .color;
-        let mut id = add_rect(&mut chart, None, [109.0, 101.0]);
+        let mut id = add_rect(&mut chart, None, [109.0, 101.0], FILL);
         // The step between bars and SMA is a Reorder; the extreme is a Modify.
         for (step, (order, layer)) in [
             (None, None),
@@ -2108,7 +2317,7 @@ fn drawings_take_their_place_among_the_series_and_studies() {
                 step as f64 + 0.1,
                 vec![Event::PointerMoved(on)],
             );
-            let rect = rect_at(&painted);
+            let rect = rect_at(&painted, FILL);
             let candles: Vec<_> = painted
                 .iter()
                 .enumerate()
@@ -2161,7 +2370,7 @@ fn drawings_take_their_place_among_the_series_and_studies() {
         .1
         .plot_style(0)
         .color;
-    let id = add_rect(&mut chart, Some(rsi.0), [80.0, 20.0]);
+    let id = add_rect(&mut chart, Some(rsi.0), [80.0, 20.0], FILL);
     for order in [
         None,
         Some(VisualOrder::SendToBack),
@@ -2172,12 +2381,145 @@ fn drawings_take_their_place_among_the_series_and_studies() {
         }
         frame(&ctx, &mut chart, 0.0, vec![]);
         let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
-        let rect = rect_at(&painted);
+        let rect = rect_at(&painted, FILL);
         let rsi = line_at(&painted, color);
         if order == Some(VisualOrder::SendToBack) {
             assert!(rect < rsi.0, "study covers rectangle");
         } else {
             assert!(rsi.1 < rect, "rectangle covers study");
         }
+    }
+}
+
+/// The panel shares quote intents, replaces the legend buttons, clamps movement, counts one
+/// layout edit per drag and restores its place. Old saves retain the default placement.
+#[cfg(feature = "ui")]
+#[test]
+fn quote_panel_trades_like_the_legend_and_keeps_its_place() {
+    use crate::widget::{Chart, ChartSnapshot, QuoteSide, SeriesId};
+    use egui::{Event, PointerButton};
+    fn label(painted: &[Shape], wanted: &str) -> Pos2 {
+        let found: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) if text.galley.text() == wanted => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(found.len(), 1, "exactly one {wanted}");
+        found[0]
+    }
+    fn outline(painted: &[Shape]) -> Rect {
+        let sell = label(painted, "SELL");
+        let buy = label(painted, "BUY");
+        painted
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Rect(rect)
+                    if rect.stroke.width == 1.0
+                        && rect.rect.contains(sell)
+                        && rect.rect.contains(buy) =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("panel outline")
+    }
+    let setup = || {
+        let mut chart = chart(&[90.0], &[110.0]);
+        chart.set_quote(Some(crate::model::Level1Quote {
+            symbol: chart.symbol().into(),
+            ts: chart.bars(SeriesId::MAIN)[99].time,
+            bid: 99.0,
+            ask: 101.0,
+            bid_size: 1.0,
+            ask_size: 1.0,
+        }));
+        chart.config_mut().quote_panel = true;
+        chart
+    };
+    let button = |at, pressed| Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    let near = |a: f32, b: f32| assert!((a - b).abs() < 0.5, "{a} != {b}");
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, &theme);
+        let mut time = 0.0;
+        let mut draw = |chart: &mut Chart, events| {
+            time += 0.1;
+            shapes(&ctx, chart, time, events)
+        };
+        let mut chart = setup();
+        draw(&mut chart, vec![]);
+        let mut painted = draw(&mut chart, vec![]);
+        let initial = outline(&painted);
+        let free = chart.last_rendered_price_rect.shrink(8.0);
+        near(initial.center().x, free.center().x);
+        near(initial.top(), free.top());
+        // Hiding the legend's contents leaves the independent panel available.
+        chart.config_mut().show_symbol_labels = false;
+        chart.config_mut().show_ohlc_info = false;
+        chart.config_mut().show_ohlc_change = false;
+        chart.config_mut().show_ohlc_change_percent = false;
+        for (wanted, expected) in [("SELL", QuoteSide::Sell), ("BUY", QuoteSide::Buy)] {
+            let at = label(&painted, wanted);
+            for events in [
+                vec![Event::PointerMoved(at)],
+                vec![button(at, true)],
+                vec![button(at, false)],
+                vec![],
+            ] {
+                painted = draw(&mut chart, events);
+            }
+            assert_eq!(chart.take_quote_action(), Some(expected));
+        }
+        let before = chart.edit_count();
+        let grip = Pos2::new(initial.left() + 11.0, initial.center().y);
+        let end = grip + egui::vec2(2000.0, 2000.0);
+        for events in [
+            vec![Event::PointerMoved(grip)],
+            vec![button(grip, true)],
+            vec![Event::PointerMoved(end)],
+            vec![button(end, false)],
+            vec![],
+        ] {
+            painted = draw(&mut chart, events);
+        }
+        let moved = outline(&painted);
+        near(moved.right(), free.right());
+        near(moved.bottom(), free.bottom());
+        let snapshot = chart.snapshot().unwrap();
+        assert_eq!(snapshot.quote_panel, Some([1.0, 1.0]));
+        assert_eq!(chart.edit_count(), before + 1);
+        let mut restored = setup();
+        restored.restore(&snapshot).unwrap();
+        draw(&mut restored, vec![]);
+        let rect = outline(&draw(&mut restored, vec![]));
+        near(rect.left(), moved.left());
+        near(rect.top(), moved.top());
+        near(rect.right(), moved.right());
+        near(rect.bottom(), moved.bottom());
+        let mut old = serde_json::to_value(snapshot).unwrap();
+        assert!(old.as_object_mut().unwrap().remove("quote_panel").is_some());
+        let old: ChartSnapshot = serde_json::from_value(old).unwrap();
+        restored.restore(&old).unwrap();
+        draw(&mut restored, vec![]);
+        let rect = outline(&draw(&mut restored, vec![]));
+        near(rect.center().x, free.center().x);
+        near(rect.top(), free.top());
+        restored.config_mut().show_quote_boxes = false;
+        let hidden = draw(&mut restored, vec![]);
+        assert!(
+            !hidden
+                .iter()
+                .any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "BUY"))
+        );
     }
 }

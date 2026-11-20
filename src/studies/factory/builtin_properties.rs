@@ -6,7 +6,7 @@ use chrono::{Duration, TimeZone, Utc};
 /// Every built-in, with its `k`-th length parameter set to `l(k)` and each
 /// float parameter of conventional value `v` set to `x(v)`.
 fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<dyn Indicator>> {
-    vec![
+    let mut studies: Vec<Box<dyn Indicator>> = vec![
         Box::new(SMA::new(l(0))),
         Box::new(EMA::new(l(0))),
         Box::new(WMA::new(l(0))),
@@ -162,6 +162,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(VolProfileVisible::new(l(0))),
         Box::new(VolProfileFixed::new(l(0))),
         Box::new(VolProfileSession::new(l(0))),
+        Box::new(VolProfileSessionHd::default()),
         Box::new(VolProfilePeriodic::new(l(0))),
         Box::new(VolProfileAnchored::new(l(0))),
         Box::new(VolProfileAutoAnchored::new(l(0))),
@@ -197,6 +198,15 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsTradedThrough {
             seconds: l(0),
         })),
+        Box::new(OrderFlowStudy::new(OrderFlowKind::BookBalance {
+            near_levels: l(0),
+            far_levels: l(1),
+            near_distance: x(0.0),
+            far_distance: x(0.0),
+        })),
+        Box::new(OrderFlowStudy::new(OrderFlowKind::PriceRange {
+            seconds: l(0),
+        })),
         Box::new(NetVolume::new()),
         Box::new(VolumePriceTrend::new()),
         Box::new(PriceVolumeTrendStudy::new(l(0))),
@@ -209,7 +219,11 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(RelativeVolumeAtTime::new(l(0))),
         Box::new(ZigZag::new(x(5.0), l(0))),
         #[cfg(feature = "drawings")]
-        Box::new(AutoDrawing::new(AutoDrawingKind::TrendLine, x(5.0), l(0))),
+        Box::new(
+            AutoTrendLines::new()
+                .with_bars_to_breakout(l(0))
+                .with_pivots(true),
+        ),
         #[cfg(feature = "drawings")]
         Box::new(AutoDrawing::new(
             AutoDrawingKind::ParallelChannel,
@@ -232,7 +246,30 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(AutoDrawing::new(AutoDrawingKind::Pitchfork, x(5.0), l(0))),
         Box::new(PivotPointsHighLow::new(l(0), l(1), l(2), l(3))),
         Box::new(MissedPivots::new(l(0), l(1), x(0.1), l(2))),
+        Box::new(MissedPivots::new(l(0), l(1), x(0.1), l(2)).with_period(MissedPivotPeriod::Daily)),
+        Box::new(
+            MissedPivots::new(l(0), l(1), x(0.1), l(2)).with_period(MissedPivotPeriod::Weekly),
+        ),
+        Box::new(
+            MissedPivots::new(l(0), l(1), x(0.1), l(2)).with_period(MissedPivotPeriod::Monthly),
+        ),
         Box::new(KeyLevels::new(l(0), l(1), l(2), x(0.25))),
+        Box::new(AutoKeyLevels::new()),
+        {
+            let mut custom = AutoKeyLevels::new();
+            custom
+                .set_input("custom", InputValue::Toggle(true))
+                .unwrap();
+            for id in [
+                "custom_levels [0]",
+                "custom_levels [1]",
+                "custom_levels [2]",
+                "custom_levels [3]",
+            ] {
+                custom.set_input(id, InputValue::Toggle(true)).unwrap();
+            }
+            Box::new(custom)
+        },
         Box::new(IntradayPivotPoints::new(l(0))),
         Box::new(ProjectedPivotPoints::new().with_pivots_back(l(1))),
         Box::new(WilliamsFractals::new(l(0))),
@@ -243,6 +280,8 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(TechnicalRatings::new()),
         Box::new(TechnicalRatings::new().with_basis(RatingBasis::Oscillators)),
         Box::new(Reversal::new(l(0))),
+        Box::new(BookerReversal::new(l(0), l(1), l(2), l(3))),
+        Box::new(ZivGhostPivots::new()),
         Box::new(ElliottWave::new(l(0), l(1), l(2))),
         Box::new(RisingWedge::new(l(0), l(1), l(2), l(3), l(4), l(5))),
         Box::new(FallingWedge::new(l(0), l(1), l(2), l(3), l(4), l(5))),
@@ -260,7 +299,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(Ratio::default()),
         Box::new(Spread::default()),
         Box::new(Correlation::new(l(0))),
-        Box::new(Correlation::new(l(0)).with_log_returns(true)),
+        Box::new(CorrelationLog::new(l(0))),
         Box::new(RciRibbon::new(l(0), l(1), l(2))),
         Box::new(MajorityRule::new(l(0))),
         Box::new(MajorityRule::new(l(0)).with_mode(MajorityMode::Direction)),
@@ -276,6 +315,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(HLC3::new()),
         Box::new(OHLC4::new()),
         Box::new(VisibleAveragePrice::new()),
+        Box::new(AnalystPriceForecast::default()),
         Box::new(Week52HighLow::new()),
         Box::new(Week52HighLowLevels::new()),
         Box::new(AcceleratorOscillator::new()),
@@ -295,7 +335,19 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(CandlestickPatterns::default()),
         Box::new(ChartPatterns::new(PatternFamily::Continuation)),
         Box::new(ChartPatterns::new(PatternFamily::Reversal)),
-    ]
+        Box::new(ChartPatterns::all()),
+    ];
+    studies.extend(
+        (0..CandlestickPatterns::PATTERN_COUNT)
+            .map(|k| Box::new(CandlestickPatterns::only(k)) as Box<dyn Indicator>),
+    );
+    studies.extend(
+        PatternFamily::ALL
+            .iter()
+            .flat_map(|family| family.kinds())
+            .map(|&kind| Box::new(ChartPatterns::only(kind)) as Box<dyn Indicator>),
+    );
+    studies
 }
 
 /// xorshift64*, so the event sequence is the same on every platform and run.
@@ -718,13 +770,11 @@ fn degenerate_lengths_and_hostile_bars_are_survivable() {
         IndicatorValue::Multiple(xs) => xs.iter().filter(|x| x.is_finite()).count(),
         IndicatorValue::None => 0,
     };
-    // A Zig Zag deviation of 0 filters nothing, so it has no values by design.
+    // Automatic drawings hold values only on their anchors, which a smaller deviation moves.
     for (study, conventional) in bottom.iter().zip(&conventional).filter(|(study, _)| {
         !matches!(
             study.name(),
-            "ZigZag"
-                | "Auto Trend Line"
-                | "Auto Parallel Channel"
+            "Auto Parallel Channel"
                 | "Auto Fibonacci Retracement"
                 | "Auto Fibonacci Extension"
                 | "Auto Pitchfork"

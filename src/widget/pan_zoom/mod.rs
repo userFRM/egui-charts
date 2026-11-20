@@ -811,7 +811,9 @@ impl Chart {
         {
             let bars = &self.state.data().bars;
             let next = bars.partition_point(|bar| bar.time < time);
-            let index = if next == 0 {
+            let index = if self.pending_scroll_next {
+                next.min(bars.len() - 1)
+            } else if next == 0 {
                 0
             } else if next == bars.len() || time - bars[next - 1].time <= bars[next].time - time {
                 next - 1
@@ -2134,8 +2136,9 @@ mod tests {
         for left in [false, true] {
             let (one, slow) = (drag_price_axis(1, left), drag_price_axis(20, left));
             let span = one.1 - one.0;
-            // Dragging down zooms out from the autoscaled 93.5..111.5 (95..110 plus 10% margins).
-            assert!(span > 18.0, "1 frame: {one:?}");
+            // A 95..110 fit has span 15 / 0.82, from 93.536585 to 111.829268.
+            // Dragging down widens it beyond the initial 10% top and 8% bottom margins.
+            assert!(span > 15.0 / 0.82, "1 frame: {one:?}");
             assert!(
                 (one.0 - slow.0).abs() < span * 1e-9 && (one.1 - slow.1).abs() < span * 1e-9,
                 "1 frame: {one:?}, 20 frames: {slow:?}"
@@ -2850,6 +2853,131 @@ mod tests {
                             assert_eq!(chart.state.time_scale().right_offset(), offset);
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// A selected drawing tool leaves a drag that begins on the main price axis, on either side,
+    /// or on the time axis to that axis: it zooms as without a tool, under the axis's resize
+    /// cursor, and places nothing. A placement that begins in the plot keeps the drag over an
+    /// axis, also when its second anchor is dragged from the axis.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn main_axes_zoom_while_a_drawing_tool_is_selected() {
+        use crate::config::DrawingToolType;
+        use egui::CursorIcon;
+
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let tools = [
+            None,
+            Some(DrawingToolType::TrendLine),
+            Some(DrawingToolType::Rect),
+        ];
+        for tool in tools {
+            for (case, left) in [
+                ("price", false),
+                ("price", true),
+                ("time", false),
+                ("plot", false),
+                ("second anchor", false),
+            ] {
+                if tool.is_none() && matches!(case, "plot" | "second anchor")
+                    || tool == Some(DrawingToolType::Rect) && case == "second anchor"
+                {
+                    continue;
+                }
+                let label = format!("{tool:?}, {case}, left={left}");
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                chart.config.show_left_axis = left;
+                chart.config.show_right_axis = !left;
+                chart.drawings_mut().set_active_tool(tool);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let rect = chart.last_rendered_price_rect;
+                let price_x = if left {
+                    rect.left() - 10.0
+                } else {
+                    rect.right() + 10.0
+                };
+                let on_price_axis = Pos2::new(price_x, rect.center().y);
+                let on_time_axis = Pos2::new(
+                    rect.center().x,
+                    rect.bottom().max(chart.last_rendered_volume_rect.bottom()) + 5.0,
+                );
+                let (start, end) = match case {
+                    "price" | "second anchor" => {
+                        (on_price_axis, on_price_axis + egui::vec2(0.0, 100.0))
+                    }
+                    "time" => (on_time_axis, on_time_axis + egui::vec2(100.0, 0.0)),
+                    _ => (rect.center(), on_price_axis + egui::vec2(0.0, 100.0)),
+                };
+                let mut t = 1.0;
+                let mut step = |chart: &mut Chart, events| {
+                    t += 0.02;
+                    frame(&ctx, chart, t, events)
+                };
+                if case == "second anchor" {
+                    let first = rect.center() - egui::vec2(100.0, 0.0);
+                    step(&mut chart, vec![Event::PointerMoved(first)]);
+                    step(&mut chart, vec![button(first, true)]);
+                    step(&mut chart, vec![button(first, false)]);
+                    assert!(chart.drawings.curr_drawing.is_some(), "{label}");
+                }
+                let span = |chart: &Chart| {
+                    let range = chart.state.price_scale().range();
+                    range.max - range.min
+                };
+                let (span_before, (spacing_before, offset_before)) =
+                    (span(&chart), chart.get_time_scale_state());
+                // Hover is hit-tested against the widgets of the previous frame.
+                step(&mut chart, vec![Event::PointerMoved(start)]);
+                let cursor = step(&mut chart, vec![Event::PointerMoved(start)]);
+                step(&mut chart, vec![button(start, true)]);
+                step(&mut chart, vec![Event::PointerMoved(start.lerp(end, 0.5))]);
+                step(&mut chart, vec![Event::PointerMoved(end)]);
+                step(&mut chart, vec![button(end, false)]);
+                // 100 points widen the price range by e^(100 / height) and the bar spacing by
+                // e^0.1.
+                let (span_after, spacing_after) = match case {
+                    "price" => (
+                        span_before * (100.0 / f64::from(rect.height())).exp(),
+                        spacing_before,
+                    ),
+                    "time" => (span_before, spacing_before * 1.105_171),
+                    _ => (span_before, spacing_before),
+                };
+                assert!(
+                    (span(&chart) - span_after).abs() < 1e-5,
+                    "{label}: span {} for {span_after}",
+                    span(&chart)
+                );
+                assert!(
+                    (chart.state.time_scale().bar_spacing() - spacing_after).abs() < 1e-5,
+                    "{label}: spacing {} for {spacing_after}",
+                    chart.state.time_scale().bar_spacing()
+                );
+                if matches!(case, "price" | "time") {
+                    assert_eq!(chart.drawings.active_tool, tool, "{label}");
+                    let resize = if case == "price" {
+                        CursorIcon::ResizeVertical
+                    } else {
+                        CursorIcon::ResizeHorizontal
+                    };
+                    assert_eq!(cursor, resize, "{label}");
+                    assert!(chart.drawings.curr_drawing.is_none(), "{label}");
+                    assert!(chart.drawings.drawings.is_empty(), "{label}");
+                    if case == "price" {
+                        assert_eq!(chart.get_time_scale_state().1, offset_before, "{label}");
+                    }
+                } else {
+                    assert_eq!(chart.get_time_scale_state().1, offset_before, "{label}");
+                    assert_eq!(chart.drawings.drawings.len(), 1, "{label}");
                 }
             }
         }

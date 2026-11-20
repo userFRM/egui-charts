@@ -21,15 +21,15 @@ pub struct DrawingProps {
     /// Tool-specific settings, edited by the Inputs page.
     pub tool_settings: Option<Box<DrawingTemplate>>,
     /// Template loaded from the Template menu, or the tool's defaults after Reset to defaults.
-    /// Applying gives every unlocked selected drawing of the template's tool all of the template
-    /// first, then the edited values; drawings of other tools take the edited values.
+    /// Applying first gives every selected drawing of its tool that accepts user edits all of the
+    /// template, then the edited values; drawings of other tools take the edited values.
     pub template: Option<Box<DrawingTemplate>>,
     /// Instrument tick size for position level inputs; absent disables editing by ticks.
     pub tick_size: Option<f64>,
     /// Staged anchor edits, applied only to the drawing whose dialog was opened.
     pub coordinates: CoordinatesState,
-    /// Save these properties as the default for new drawings of this tool. Built-in tools only:
-    /// a host-registered tool has no default of its own, so the flag is ignored for one.
+    /// Save these properties as the default for new drawings of this tool, under its registered
+    /// id in `DrawingManager::custom_tool_defaults` or its built-in type.
     pub save_as_default: bool,
     /// Primary color
     pub color: Color32,
@@ -146,11 +146,12 @@ impl DrawingProps {
         })
     }
 
-    /// Validate and apply one undoable edit to the unlocked selection. A value that differs from
-    /// drawing `id`'s, which these properties were read from, was edited, and only edited values
-    /// change the drawings: text only those that show text, tool inputs only drawings of the same
-    /// tool, coordinates only `id`. A loaded `template` first gives every unlocked selected
-    /// drawing of its tool all of its values. Errors leave all live drawings unchanged.
+    /// Validate and apply one undoable edit to the selected drawings that accept user edits.
+    /// A value that differs from drawing `id`'s, which these properties were read from, was
+    /// edited, and only edited values change the drawings: text only those that show text, tool
+    /// inputs only drawings of the same tool, coordinates only `id`. A loaded `template` first
+    /// gives every selected drawing of its tool that accepts user edits all of its values.
+    /// Errors leave all live drawings unchanged.
     pub fn apply_to_chart(&self, id: DrawingId, chart: &mut Chart) -> Result<(), &'static str> {
         let edits = self.edited_drawings(id, chart)?;
         chart.user_action(|chart| {
@@ -166,11 +167,8 @@ impl DrawingProps {
             })?;
             if self.save_as_default
                 && let Some(drawing) = manager.drawings.iter().find(|d| d.id == id.0)
-                && drawing.custom_tool.is_none()
             {
-                let mut defaults = DrawingTemplate::from_drawing(drawing);
-                defaults.settings.visible = true;
-                manager.tool_defaults.insert(drawing.tool_type, defaults);
+                manager.save_tool_default(DrawingTemplate::from_drawing(drawing));
             }
             Ok(())
         })
@@ -199,16 +197,18 @@ impl DrawingProps {
             .iter()
             .find(|d| d.id == id.0)
             .ok_or("Drawing was removed")?;
-        if target.locked
+        if !target.accepts_user_edits()
             && (self.save_as_default
                 || !chart.drawings().is_selected(id.0)
-                || !chart
-                    .drawings()
-                    .drawings
-                    .iter()
-                    .any(|drawing| !drawing.locked && chart.drawings().is_selected(drawing.id)))
+                || !chart.drawings().drawings.iter().any(|drawing| {
+                    drawing.accepts_user_edits() && chart.drawings().is_selected(drawing.id)
+                }))
         {
-            return Err("Unlock the drawing before editing its properties");
+            return Err(if target.user_edit_enabled {
+                "Unlock the drawing before editing its properties"
+            } else {
+                "This drawing cannot be edited"
+            });
         }
         let adds_position_stop = matches!(
             target.tool_type,
@@ -243,7 +243,7 @@ impl DrawingProps {
             .drawings
             .iter()
             .filter(|drawing| {
-                !drawing.locked
+                drawing.accepts_user_edits()
                     && if selected {
                         chart.drawings().is_selected(drawing.id)
                     } else {
@@ -354,6 +354,23 @@ impl DrawingProps {
                     line_measurements.text_vertical_align,
                     line_measurements.text_orientation,
                     line_measurements.across_panes,
+                    range_settings.price_change,
+                    range_settings.percent_change,
+                    range_settings.pip_change,
+                    range_settings.bar_count,
+                    range_settings.elapsed_time,
+                    range_settings.volume,
+                    range_settings.text_color,
+                    range_settings.font_size,
+                    range_settings.background,
+                    range_settings.background_color,
+                    range_settings.shadow_color,
+                    range_settings.border,
+                    range_settings.border_color,
+                    range_settings.border_width,
+                    range_settings.border_style,
+                    range_settings.extend_top,
+                    range_settings.extend_bottom,
                     price_axis_label,
                     time_axis_label,
                     elliott_degree,
@@ -376,6 +393,7 @@ impl DrawingProps {
                     ghost_feed => |d: &Drawing| d.ghost_feed.unwrap_or_default(),
                     bars_pattern => |d: &Drawing| d.bars_pattern.unwrap_or_default(),
                     projection => |d: &Drawing| d.projection_config().into_owned(),
+                    forecast => |d: &Drawing| d.forecast_style(),
                     volume_profile => |d: &Drawing| d.volume_profile.unwrap_or_default(),
                     regression_trend => |d: &Drawing| d.regression_trend.unwrap_or_default(),
                     vwap => |d: &Drawing| d.vwap.unwrap_or_default(),
@@ -519,6 +537,15 @@ impl DrawingProps {
                 {
                     return Err("Gann fan and arc ratios must be positive and finite");
                 }
+                if c.price_levels
+                    .iter()
+                    .chain(&c.time_levels)
+                    .chain(&c.fan_ratios)
+                    .chain(&c.arc_ratios)
+                    .any(|l| l.width.is_some_and(|w| !(w > 0.0 && w <= MAX_STROKE_WIDTH)))
+                {
+                    return Err("Gann widths must be above 0 and at most 100");
+                }
             }
             if settings.ghost_feed.is_some_and(|c| !c.is_valid()) {
                 return Err(
@@ -546,6 +573,11 @@ impl DrawingProps {
             }
             if !settings.position_style.is_valid() {
                 return Err("Position line width must be 1 to 100 and font size 1 to 256");
+            }
+            if !settings.range_settings.is_valid() {
+                return Err(
+                    "Range label size must be 1 to 256 and border width above 0 and at most 100",
+                );
             }
             if !settings.marker.is_valid() {
                 return Err("Glyph must be 1 to 32 bytes");
@@ -680,6 +712,23 @@ mod tests {
             .drawings_mut()
             .edit_drawing(7, |d| d.locked = false)
             .unwrap();
+        chart
+            .drawings_mut()
+            .edit_drawing(7, |d| d.user_edit_enabled = false)
+            .unwrap();
+        assert_eq!(
+            DrawingProps {
+                font_size: 40.0,
+                ..props.clone()
+            }
+            .apply_to_chart(DrawingId(7), &mut chart),
+            Err("This drawing cannot be edited")
+        );
+        assert_eq!(chart.drawings().drawings[0].font_size, 24.0);
+        chart
+            .drawings_mut()
+            .edit_drawing(7, |d| d.user_edit_enabled = true)
+            .unwrap();
         // A size the drawings file would refuse cannot be applied.
         assert!(
             DrawingProps {
@@ -747,6 +796,8 @@ mod tests {
             DrawingToolType::HorizontalRay,
             DrawingToolType::VerticalLine,
             DrawingToolType::CrossLine,
+            DrawingToolType::DateRange,
+            DrawingToolType::DateAndPriceRange,
         ] {
             chart.drawings_mut().drawings.clear();
             let mut drawing = Drawing::new(7, tool);
@@ -769,6 +820,8 @@ mod tests {
                     &mut props,
                     &mut pickers,
                     &mut Default::default(),
+                    &mut Default::default(),
+                    None,
                 );
             });
             let labels: Vec<_> = output
@@ -916,7 +969,17 @@ mod tests {
             settings.note_text_style = Some(note_text);
             settings.arrow_start_style = crate::drawings::ArrowStyle::Arrow;
             settings.arrow_end_style = crate::drawings::ArrowStyle::None;
+            settings.range_settings.shadow_color = [50, 60, 70, 128];
             let expected = format!("{:?}", settings.fib_config);
+            let template: DrawingTemplate = serde_json::from_value(
+                serde_json::to_value(props.tool_settings.as_ref().unwrap()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                template.settings.range_settings.shadow_color,
+                [50, 60, 70, 128]
+            );
+            props.tool_settings = Some(Box::new(template));
             props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
             let saved = &chart.drawings().drawings[0];
             assert_eq!(format!("{:?}", saved.fib_config), expected);
@@ -961,6 +1024,7 @@ mod tests {
             assert_eq!(saved.note_text_style, Some(note_text));
             assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);
             assert_eq!(saved.arrow_end_style, crate::drawings::ArrowStyle::None);
+            assert_eq!(saved.range_settings.shadow_color, [50, 60, 70, 128]);
             assert!(chart.drawings().drawings[1].fib_config.is_none());
             let peer = &chart.drawings().drawings[1];
             assert!(!peer.italic && peer.background && peer.border);
@@ -972,6 +1036,10 @@ mod tests {
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
             assert_eq!(
+                chart.drawings().drawings[0].range_settings.shadow_color,
+                Drawing::new(7, tool).range_settings.shadow_color
+            );
+            assert_eq!(
                 chart.drawings().drawings[0].line_measurements,
                 crate::drawings::LineMeasurements::for_tool(tool)
             );
@@ -980,6 +1048,10 @@ mod tests {
                 format!("{:?}", Drawing::new(7, tool).fib_config)
             );
             assert!(chart.redo());
+            assert_eq!(
+                chart.drawings().drawings[0].range_settings.shadow_color,
+                [50, 60, 70, 128]
+            );
             chart
                 .drawings_mut()
                 .edit_drawing(7, |d| d.locked = true)
@@ -1279,8 +1351,8 @@ mod tests {
         }
         // Opened drawing, peer, dialog edit, and the peer's independently expected settings.
         use crate::drawings::{
-            BarsPatternConfig, ChartPoint, GannConfig, GhostFeedConfig, PitchforkConfig,
-            PitchforkLevel, RegressionTrendConfig, VwapConfig,
+            BarsPatternConfig, ChartPoint, ForecastStyle, GannConfig, GhostFeedConfig,
+            PitchforkConfig, PitchforkLevel, RegressionTrendConfig, VwapConfig,
         };
         type ConfigCase = (
             &'static str,
@@ -1434,6 +1506,23 @@ mod tests {
                 |d| d.volume_profile.as_mut().unwrap().extend_right = true,
             ),
             (
+                "volume profile ticks per row",
+                DrawingToolType::FixedRangeVolumeProfile,
+                |d| d.volume_profile = crate::data::VolumeProfileConfig::new(24, 0.7),
+                |d| {
+                    d.volume_profile = crate::data::VolumeProfileConfig::new(48, 0.8)
+                        .and_then(|c| c.with_row_size(Some(2.0)))
+                },
+                |d| {
+                    let config = d.volume_profile.as_mut().unwrap();
+                    *config = config.with_row_ticks(Some(4)).unwrap();
+                },
+                |d| {
+                    let config = d.volume_profile.as_mut().unwrap();
+                    *config = config.with_row_ticks(Some(4)).unwrap();
+                },
+            ),
+            (
                 "vwap band line",
                 DrawingToolType::AnchoredVWAP,
                 |d| d.vwap = Some(VwapConfig::default()),
@@ -1445,6 +1534,33 @@ mod tests {
                 },
                 |d| d.vwap.as_mut().unwrap().bands[0].upper.visible = false,
                 |d| d.vwap.as_mut().unwrap().bands[0].upper.visible = false,
+            ),
+            (
+                // A forecast saved before its card colours keeps its fill as every background.
+                "forecast saved before its colours",
+                DrawingToolType::Forecast,
+                |_| {},
+                |d| {
+                    d.forecast = None;
+                    d.fill_color = Some([1, 2, 3, 200]);
+                },
+                |d| d.forecast.as_mut().unwrap().start_text = Some([9, 8, 7, 255]),
+                |d| {
+                    let fill = Some([1, 2, 3, 200]);
+                    d.forecast = Some(ForecastStyle {
+                        start_background: fill,
+                        start_text: Some([9, 8, 7, 255]),
+                        start_border: None,
+                        target_background: fill,
+                        target_text: None,
+                        target_border: None,
+                        success_background: fill,
+                        success_text: None,
+                        failure_background: fill,
+                        failure_text: None,
+                        transparency: 0,
+                    });
+                },
             ),
             (
                 "edited level of a list of a different length",

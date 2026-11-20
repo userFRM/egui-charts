@@ -22,7 +22,7 @@ mod legend;
 mod markers;
 mod session_breaks;
 mod trading_lines;
-pub(in crate::chart) mod volume_profile;
+pub(crate) mod volume_profile;
 mod watermark;
 
 // Re-export rendering functions
@@ -45,7 +45,10 @@ pub use grid::{render_grid, render_vertical_grid};
 pub use indicator::IndicatorRenderer;
 pub(crate) use indicator::paint_study_plot;
 pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
-pub(crate) use legend::{SeriesAction, controls_width, price_change_text, study_controls};
+pub(crate) use legend::{
+    SeriesAction, controls_width, held_study_controls, price_change_text, quote_prices,
+    study_controls,
+};
 pub(crate) use markers::{
     marker_bounds, render_change_mark, render_event_badges, render_event_breaks,
 };
@@ -59,11 +62,14 @@ pub(crate) use overlays::{
 };
 pub use session_breaks::{SessionBreakRenderConfig, SessionBreakRenderer};
 pub(crate) use session_breaks::{exchange_session, render_extended_hours};
-pub use trading_lines::{
-    PnlUnit, TradingLabelAlignment, TradingLineAction, TradingLineOptions, TradingLines,
-    render_trading_lines,
-};
 #[cfg(feature = "ui")]
-pub(crate) use trading_lines::{entry_price, pnl_text};
+pub(crate) use trading_lines::{
+    COVERAGE_CELL, coverage_text, entry_price, exit_coverage, exit_request, held_exits,
+    paint_coverage, pnl_text,
+};
+pub use trading_lines::{
+    PnlUnit, TradingLabelAlignment, TradingLineAction, TradingLineAppearance, TradingLineOptions,
+    TradingLines, render_trading_lines,
+};
 pub(crate) use watermark::render_watermark;
 pub use watermark::{Watermark, WatermarkLine};

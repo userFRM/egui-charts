@@ -41,6 +41,53 @@ impl Chart {
             .min_by_key(|tf| (tf.duration_ms() - median).abs())
             .unwrap_or_default()
     }
+
+    /// The calendar that divides the bars into profiles of the hours `selection` picks, and the
+    /// choice that then keeps only the bars of those hours
+    /// ([`ProfileSession::profiled`](crate::model::ProfileSession::profiled)): `selection` on
+    /// intraday bars, and [`ProfileSession::Chart`](crate::model::ProfileSession::Chart) on daily
+    /// and longer bars, which carry a trading date rather than a time of day. Regular and
+    /// extended hours still divide daily bars by their trading dates. The other choices on daily
+    /// bars, and a choice without the instrument hours it reads, keep the chart's calendar, in
+    /// the instrument's zone when it has no hours.
+    pub(crate) fn profile_hours<'a>(
+        &self,
+        selection: &'a crate::model::ProfileSession,
+    ) -> (crate::model::BarClock, &'a crate::model::ProfileSession) {
+        use crate::model::{ProfileSession, Timeframe, TimezoneId};
+        let mut clock = self.bar_clock();
+        let instrument = self.instrument();
+        // Daily and longer bars carry a trading date rather than a time of day to divide or re-zone.
+        let intraday =
+            self.timeframe.unwrap_or_default().duration_ms() < Timeframe::Day1.duration_ms();
+        let zone = instrument
+            .and_then(|i| i.time_zone.clone())
+            .unwrap_or_else(TimezoneId::utc);
+        let hours = instrument.and_then(|i| i.session.as_ref());
+        let by_time_of_day = !matches!(
+            selection,
+            ProfileSession::Regular | ProfileSession::Extended
+        );
+        if (intraday || !by_time_of_day)
+            && let Some(divided) = selection.session_clock(&clock, &zone, hours)
+        {
+            // Daily and longer bars keep every bar of their trading dates.
+            let kept = if intraday {
+                selection
+            } else {
+                &ProfileSession::Chart
+            };
+            return (divided, kept);
+        }
+        // Without instrument hours there is nothing to select among, so the chart's calendar stays.
+        if let Some(zone) = instrument
+            .filter(|i| i.session.is_none())
+            .and_then(|i| i.time_zone.as_ref())
+        {
+            clock = clock.with_timezone(zone.clone());
+        }
+        (clock, &ProfileSession::Chart)
+    }
 }
 
 /// The sessions of `clock` that the bars `shown` of `bars` belong to, each from the open of its
@@ -170,6 +217,80 @@ mod tests {
         }
     }
 
+    /// Rows of four 0.25 ticks: day one counts 2,2 (POC 100, VA 100..101);
+    /// day two counts 2,3,2 (POC 111, VA 110..112). Only day two tags the scale.
+    #[test]
+    fn tpo_level_tags_mark_only_the_latest_profile() {
+        use crate::model::{Bar, BarData, ChartType, ChartTypeParams, Instrument, Timeframe};
+        use crate::widget::SeriesId;
+        let start: chrono::DateTime<chrono::Utc> = "2024-01-02T14:30:00Z".parse().unwrap();
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let mut baseline = Vec::new();
+            for tags in [false, true] {
+                let bars = [
+                    (0, 100.25, 101.0, 100.0, 100.75),
+                    (30, 100.25, 101.0, 100.0, 100.75),
+                    (1440, 110.5, 112.0, 110.0, 111.0),
+                    (1470, 111.0, 112.0, 110.0, 111.5),
+                    (1500, 111.0, 111.0, 111.0, 111.0),
+                ]
+                .into_iter()
+                .map(|(m, o, h, l, c)| {
+                    Bar::new(start + chrono::Duration::minutes(m), o, h, l, c, 1.0)
+                })
+                .collect();
+                let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+                chart.set_timeframe(Timeframe::Min30);
+                chart.set_instrument(Some(Instrument::new("ES").with_tick_size(0.25)));
+                chart.set_chart_type(ChartType::TimePriceOpportunity);
+                chart.set_chart_type_params(ChartTypeParams {
+                    tpo_row_ticks: 4,
+                    tpo_level_tags: tags,
+                    ..Default::default()
+                });
+                chart.config_mut().show_volume = false;
+                chart.config_mut().show_symbol_last_val = false;
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let painted = shapes(&ctx, &mut chart, 0.0, vec![]);
+                let plot = chart.get_rendered_price_rect();
+                let mut tag_rects: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Rect(r)
+                            if r.rect.left() >= plot.right() - 1.0
+                                && [theme.chart.axis_text, theme.chart.axis_text_secondary]
+                                    .contains(&r.fill) =>
+                        {
+                            Some((r.rect, r.fill))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                // The scale's existing controls can use the caption colours too.
+                if !tags {
+                    baseline = tag_rects;
+                    continue;
+                }
+                tag_rects.retain(|tag| !baseline.contains(tag));
+                // Exactly three newest-profile tags leave none for the earlier profile.
+                assert_eq!(tag_rects.len(), 3, "background {:?}", theme.chart.bg);
+                let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+                for (price, color) in [
+                    (111.0, theme.chart.axis_text),
+                    (112.0, theme.chart.axis_text_secondary),
+                    (110.0, theme.chart.axis_text_secondary),
+                ] {
+                    assert!(
+                        tag_rects.iter().any(|(r, fill)| *fill == color
+                            && r.y_range().contains(map.price_to_y(price))),
+                        "missing {price}"
+                    );
+                }
+            }
+        }
+    }
+
     #[cfg(feature = "studies")]
     #[test]
     fn tpo_study_draws_the_table_of_its_statistics_input() {
@@ -199,6 +320,222 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "studies")]
+    #[test]
+    fn tpo_settings_change_the_painted_profile_in_the_chart_type_and_the_study() {
+        use crate::model::{Bar, BarData, ChartType, Instrument, Timeframe};
+        use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
+        use crate::theme::ThemeExt;
+        let start: chrono::DateTime<chrono::Utc> = "2024-01-02T02:00:00Z".parse().unwrap();
+        let paint = |study: bool, edits: &[(&str, InputValue)]| {
+            let bars = (0..40)
+                .map(|i| {
+                    let (low, high) = match i {
+                        0 => (100.0, 101.0),
+                        1 => (101.0, 103.0),
+                        _ => (99.0, 103.0),
+                    };
+                    Bar::new(
+                        start + chrono::Duration::minutes(30 * i),
+                        100.0_f64.clamp(low, high),
+                        high,
+                        low,
+                        102.0_f64.clamp(low, high),
+                        1.0,
+                    )
+                })
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Min30);
+            chart.set_instrument(Some(Instrument::new("X").with_tick_size(1.0)));
+            if study {
+                let mut tpo = TimePriceOpportunity::default();
+                tpo.set_input("row_ticks", InputValue::Length(1)).unwrap();
+                tpo.set_input("display", InputValue::Choice(2)).unwrap();
+                for (id, value) in edits {
+                    tpo.set_input(id, value.clone()).unwrap();
+                }
+                chart.add_indicator(Box::new(tpo));
+            } else {
+                chart.set_chart_type(ChartType::TimePriceOpportunity);
+                let mut saved = serde_json::json!({"tpo_row_ticks":1, "tpo_letters":true, "tpo_midpoint":false});
+                for (id, value) in edits {
+                    let InputValue::Toggle(show) = value else {
+                        panic!("chart rows use toggles")
+                    };
+                    saved[format!("tpo_{id}")] = (*show).into();
+                }
+                chart.set_chart_type_params(serde_json::from_value(saved).unwrap());
+            }
+            let ctx = egui::Context::default();
+            shapes(&ctx, &mut chart, 0.0, vec![]);
+            chart.price_scale_mut().set_range(90.0, 115.0);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            (painted, chart.get_chart_mapping(), ctx.active_theme().chart)
+        };
+        for study in [false, true] {
+            for setting in [
+                "default",
+                "poc",
+                "value_area_levels",
+                "initial_balance",
+                "open_price",
+                "close_price",
+                "poor_high",
+                "poor_low",
+                "volume_profile",
+            ] {
+                let show = matches!(
+                    setting,
+                    "close_price" | "poor_high" | "poor_low" | "volume_profile"
+                );
+                let edits = if setting == "default" {
+                    vec![]
+                } else {
+                    vec![(setting, InputValue::Toggle(show))]
+                };
+                let (painted, map, chart) = paint(study, &edits);
+                let caption = |name| {
+                    painted
+                        .iter()
+                        .any(|s| matches!(s, Shape::Text(t) if t.galley.text() == name))
+                };
+                assert_eq!(caption("POC"), setting != "poc", "{setting}, study {study}");
+                assert_eq!(
+                    (caption("VAH"), caption("VAL")),
+                    (
+                        setting != "value_area_levels",
+                        setting != "value_area_levels"
+                    ),
+                    "{setting}, study {study}"
+                );
+                let balance = painted.iter().filter(|s| matches!(s, Shape::Rect(r) if r.rect.width() == 2.0 && r.fill == crate::tokens::DESIGN_TOKENS.semantic.tpo.initial_balance)).count();
+                assert_eq!(
+                    balance,
+                    usize::from(setting != "initial_balance"),
+                    "{setting}, study {study}"
+                );
+                let markers: Vec<_> = painted
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Path(p) if p.points.len() == 3 && p.points[1].x == p.points[2].x => {
+                            Some(p)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    markers.len(),
+                    usize::from(setting != "open_price") + usize::from(setting == "close_price"),
+                    "{setting}, study {study}"
+                );
+                for (key, price) in [("poor_high", 103.0), ("poor_low", 99.0)] {
+                    let ticks = painted.iter().filter(|s| matches!(s, Shape::LineSegment { points, .. } if points[0].y == map.price_to_y(price) && points[1].x - points[0].x == 8.0)).count();
+                    assert_eq!(
+                        ticks,
+                        usize::from(setting == key),
+                        "{setting}, study {study}, {key}"
+                    );
+                }
+                let color = chart.axis_text_secondary;
+                let dim = chart.bg.lerp_to_gamma(color, 0.45);
+                let volume = painted.iter().filter(|s| matches!(s, Shape::Rect(r) if (r.fill == color || r.fill == dim) && r.rect.width() > 2.0 && r.rect.width() <= 40.0)).count();
+                assert_eq!(
+                    volume,
+                    if setting == "volume_profile" { 5 } else { 0 },
+                    "{setting}, study {study}"
+                );
+                if setting == "close_price" {
+                    let close = markers.last().unwrap();
+                    assert_eq!(close.points[0].y, map.price_to_y(102.0));
+                    assert!(close.points[0].x > markers[0].points[2].x);
+                    assert_eq!(close.fill, chart.candle_up);
+                }
+            }
+        }
+        let yellow = egui::Color32::from_rgb(255, 200, 0);
+        for opacity in [0, 45, 100] {
+            let (painted, map, chart) = paint(
+                true,
+                &[
+                    ("coloring", InputValue::Choice(1)),
+                    ("block_color", InputValue::Color(yellow)),
+                    ("display", InputValue::Choice(1)),
+                    ("outside_value_area_opacity", InputValue::Length(opacity)),
+                ],
+            );
+            let cells: Vec<_> = painted
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Rect(r) if r.rect.width() > 2.0 && r.rect.width() < 24.0 => Some(r),
+                    _ => None,
+                })
+                .collect();
+            // Counts at 99..=103 are 38,39,40,39,39: the value area covers 100..=103.
+            assert!(cells.iter().any(|r| r.fill == yellow));
+            let outside = cells
+                .iter()
+                .find(|r| (r.rect.center().y - map.price_to_y(99.0)).abs() < 1.0)
+                .unwrap();
+            assert_eq!(
+                outside.fill,
+                chart.bg.lerp_to_gamma(yellow, opacity as f32 / 100.0)
+            );
+        }
+        for (minutes, low, high) in [(60, 100.0, 103.0), (30, 100.0, 101.0)] {
+            let (painted, map, _) = paint(
+                true,
+                &[("initial_balance_minutes", InputValue::Length(minutes))],
+            );
+            let balance = painted
+                .iter()
+                .find_map(|s| match s {
+                    Shape::Rect(r)
+                        if r.rect.width() == 2.0
+                            && r.fill
+                                == crate::tokens::DESIGN_TOKENS.semantic.tpo.initial_balance =>
+                    {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                (balance.top(), balance.bottom()),
+                (map.price_to_y(high), map.price_to_y(low))
+            );
+        }
+        let (painted, _, _) = paint(
+            true,
+            &[("initial_balance_extensions", InputValue::Toggle(true))],
+        );
+        assert_eq!(painted.iter().filter(|s| matches!(s, Shape::LineSegment { points, stroke } if points[1].x - points[0].x == 10.0 && stroke.color == crate::tokens::DESIGN_TOKENS.semantic.tpo.initial_balance)).count(), 4);
+        let letter_x = |split| {
+            let (painted, map, _) = paint(true, &[("split_periods", InputValue::Toggle(split))]);
+            let x = |letter: &str, row: Option<f64>| {
+                painted
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Text(t) if t.galley.text() == letter => {
+                            let center = t.pos + t.galley.size() * 0.5;
+                            row.is_none_or(|price| (center.y - map.price_to_y(price)).abs() < 1.0)
+                                .then_some(center.x)
+                        }
+                        _ => None,
+                    })
+                    .min_by(f32::total_cmp)
+                    .unwrap()
+            };
+            (x("B", None), x("B", Some(101.0)) - x("A", Some(101.0)))
+        };
+        let (packed, column) = letter_x(false);
+        let split = letter_x(true).0;
+        assert!(
+            (split - packed - column).abs() < 0.001,
+            "packed {packed}, split {split}, column {column}"
+        );
+    }
+
     #[cfg(feature = "timezones")]
     #[test]
     fn configured_sessions_reach_breaks_and_extended_shading() {
@@ -214,14 +551,16 @@ mod tests {
             "2024-03-11T23:59:00Z",
             "2024-03-12T00:00:00Z",
         ];
-        for (shade, custom, metadata, overnight, pre, post, expected) in [
-            (true, false, false, false, true, true, vec![2]),
-            (false, false, false, false, true, true, vec![2]),
-            (true, true, false, false, true, true, vec![1, 6]),
-            (true, false, true, false, true, true, vec![3]),
-            (true, false, true, true, true, true, vec![1, 7]),
-            (true, false, true, false, false, true, vec![3]),
-            (true, false, true, false, true, false, vec![3]),
+        for (shade, custom, metadata, overnight, pre, post, defaults, expected) in [
+            (true, false, false, false, true, true, false, vec![2]),
+            (false, false, false, false, true, true, false, vec![2]),
+            (true, true, false, false, true, true, false, vec![1, 6]),
+            (true, false, true, false, true, true, false, vec![3]),
+            (true, false, true, true, true, true, false, vec![1, 7]),
+            (true, false, true, false, false, true, false, vec![3]),
+            (true, false, true, false, true, false, false, vec![3]),
+            (true, false, true, false, true, true, true, vec![3]),
+            (false, false, true, false, true, true, true, vec![3]),
         ] {
             let ctx = egui::Context::default();
             let bars = times
@@ -272,8 +611,17 @@ mod tests {
                 egui::Color32::from_rgba_unmultiplied(90, 40, 170, 30);
             chart.config.overnight_hours_color =
                 egui::Color32::from_rgba_unmultiplied(170, 90, 40, 30);
-            chart.config.show_extended_hours = shade;
-            chart.config.premarket_color = Some(PREMARKET);
+            if !defaults {
+                chart.config.premarket_color = Some(PREMARKET);
+                chart.config.postmarket_color = None;
+            }
+            let mut settings = crate::widget::settings::ChartSettingsState::from_chart(&chart);
+            settings
+                .session_background
+                .as_mut()
+                .unwrap()
+                .show_extended_hours = shade;
+            settings.apply_to_chart(&mut chart).unwrap();
             chart.config.shade_premarket = pre;
             chart.config.shade_postmarket = post;
             if custom {
@@ -301,10 +649,15 @@ mod tests {
                     .map(|index| map.idx_to_x(*index))
                     .collect::<Vec<_>>()
             );
-            // The pre-market has its own colour; the post-market uses the shared fallback.
+            // Defaults use distinct phase colours at round(255 * 0.08) = 20 alpha; explicit
+            // pre-market and shared post-market colours remain independent of those defaults.
             for (color, spans) in [
                 (
-                    PREMARKET,
+                    if defaults {
+                        egui::Color32::from_rgba_unmultiplied(255, 152, 0, 20)
+                    } else {
+                        PREMARKET
+                    },
                     if shade && pre {
                         vec![(if metadata { 3 } else { 2 }, 4)]
                     } else {
@@ -312,7 +665,11 @@ mod tests {
                     },
                 ),
                 (
-                    chart.config.extended_hours_color,
+                    if defaults {
+                        egui::Color32::from_rgba_unmultiplied(41, 98, 255, 20)
+                    } else {
+                        chart.config.extended_hours_color
+                    },
                     if shade && post {
                         vec![(0, 1), (5, 7)]
                     } else {
@@ -372,18 +729,22 @@ mod tests {
         }
     }
 
-    /// Session breaks paint their colour and width as set on every kind of boundary, days on an
-    /// hourly chart and weeks and months on a daily one, and shade no session.
+    /// Session breaks paint their colour and width as set at each new session of an hourly
+    /// chart, none on daily, weekly and monthly charts, and shade no session.
     #[test]
     fn session_breaks_paint_as_configured_without_shading() {
         use crate::model::{Bar, BarData, LineStyle, Timeframe};
         use egui::{Color32, Stroke};
         let start: chrono::DateTime<chrono::Utc> = "2024-01-01T00:00:00Z".parse().unwrap();
-        for (timeframe, step) in [
-            (Timeframe::Hour1, chrono::Duration::hours(1)),
-            (Timeframe::Day1, chrono::Duration::days(1)),
+        // Fifty bars stay in view. Days start at hourly bars 24 and 48; the longer charts cross
+        // weeks, months and years, which they drew before.
+        for (timeframe, step, expected) in [
+            (Timeframe::Hour1, chrono::Duration::hours(1), vec![24, 48]),
+            (Timeframe::Day1, chrono::Duration::days(1), vec![]),
+            (Timeframe::Week1, chrono::Duration::weeks(1), vec![]),
+            (Timeframe::Month1, chrono::Duration::days(30), vec![]),
         ] {
-            let bars = (0..120)
+            let bars = (0..50)
                 .map(|i| Bar::new(start + step * i, 100.0, 102.0, 99.0, 101.0, 1.0))
                 .collect();
             let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
@@ -396,6 +757,7 @@ mod tests {
             chart.config.session_break_width = 2.0;
             let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
             let plot = chart.last_rendered_price_rect;
+            let map = chart.get_chart_mapping();
             let breaks: Vec<_> = painted
                 .iter()
                 .filter_map(|shape| match shape {
@@ -404,15 +766,16 @@ mod tests {
                             && points[0].y == plot.top()
                             && points[1].y == plot.bottom() =>
                     {
-                        Some(*stroke)
+                        Some((points[0].x, *stroke))
                     }
                     _ => None,
                 })
                 .collect();
-            assert!(
-                !breaks.is_empty() && breaks.iter().all(|s| *s == Stroke::new(2.0, Color32::RED)),
-                "{timeframe:?}: {breaks:?}"
-            );
+            let expected: Vec<_> = expected
+                .iter()
+                .map(|index| (map.idx_to_x(*index), Stroke::new(2.0, Color32::RED)))
+                .collect();
+            assert_eq!(breaks, expected, "{timeframe:?}");
             let shading = chart.config.background_color.gamma_multiply(0.94);
             assert!(
                 !painted
@@ -578,12 +941,12 @@ mod tests {
                     }
                     if count <= 8 {
                         let range = map.price.range();
-                        // At 10% margins each side: 60.25 / 0.8 = 75.3125 for executed rows;
-                        // TPO rows of 2 span 99.875..161.875, so 62 / 0.8 = 77.5.
+                        // The span takes 82% of the pane, with 8% below and 10% above.
+                        // Executed rows span 99.875..160.125; TPO rows of 2 end at 161.875.
                         let (low, high) = if kind == ChartType::SessionVolumeProfile {
-                            (92.34375, 167.65625)
+                            (99.875 - 60.25 / 0.82 * 0.08, 160.125 + 60.25 / 0.82 * 0.1)
                         } else {
-                            (92.125, 169.625)
+                            (99.875 - 62.0 / 0.82 * 0.08, 161.875 + 62.0 / 0.82 * 0.1)
                         };
                         assert!(
                             (range.min - low).abs() < 1e-9 && (range.max - high).abs() < 1e-9,
@@ -701,11 +1064,21 @@ mod tests {
                     for (prices, expected) in [
                         (
                             [100.0, 100.0],
-                            crate::scales::PriceRange::new(99.875, 100.125),
+                            // Flat data uses 1% of its price, so the margin span is 1 / 0.82.
+                            crate::scales::PriceRange::new(
+                                100.0 - 1.0 / 0.82 * 0.08,
+                                100.0 + 1.0 / 0.82 * 0.1,
+                            ),
                         ),
                         // Rows of 2 cover 7..73; rows of 2.5 cover 8.75..71.25. Starting over
-                        // would alternate between spans 66/0.8 = 82.5 and 62.5/0.8 = 78.125.
-                        ([8.9, 71.0], crate::scales::PriceRange::new(-1.25, 81.25)),
+                        // would alternate between spans 66/0.82 and 62.5/0.82.
+                        (
+                            [8.9, 71.0],
+                            crate::scales::PriceRange::new(
+                                7.0 - 66.0 / 0.82 * 0.08,
+                                73.0 + 66.0 / 0.82 * 0.1,
+                            ),
+                        ),
                     ] {
                         let mut chart =
                             crate::widget::Chart::new(crate::model::BarData::from_bars(
@@ -723,10 +1096,11 @@ mod tests {
                         chart.set_visible_bars(8);
                         chart.set_start_idx(0);
                         draw(&mut chart, None);
-                        assert_eq!(
-                            chart.state.price_scale().range(),
-                            expected,
-                            "automatic rows converge and preserve flat-session bounds: {prices:?}"
+                        let range = chart.state.price_scale().range();
+                        assert!(
+                            (range.min - expected.min).abs() < 1e-9
+                                && (range.max - expected.max).abs() < 1e-9,
+                            "automatic rows converge and preserve flat-session bounds: {prices:?}, {range:?}, expected {expected:?}"
                         );
                     }
                 }

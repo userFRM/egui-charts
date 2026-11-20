@@ -212,19 +212,22 @@ pub(crate) fn paint_candles(
         if !style.visible {
             continue;
         }
+        let color = study
+            .plot_color(candle.plot, candle.bars.start)
+            .unwrap_or(style.color);
         if let Some((body, wick)) =
             candle_geometry(candle, coords, bar_spacing, |p| price.price_to_y(p))
         {
             if solid {
-                painter.rect_filled(body, 0.0, style.color);
+                painter.rect_filled(body, 0.0, color);
                 continue;
             }
-            let stroke = egui::Stroke::new(style.width, style.color);
+            let stroke = egui::Stroke::new(style.width, color);
             painter.line_segment(wick, stroke);
             painter.rect(
                 body,
                 0.0,
-                style.color.gamma_multiply_u8(77),
+                color.gamma_multiply_u8(77),
                 stroke,
                 egui::StrokeKind::Inside,
             );
@@ -276,7 +279,11 @@ pub(crate) fn paint_labels(
     let last = coords
         .x_to_idx(clip.right() + LABEL_REACH)
         .saturating_add(1);
-    for label in &labels[labels.partition_point(|label| label.bar < first)..] {
+    for (index, label) in labels
+        .iter()
+        .enumerate()
+        .skip(labels.partition_point(|label| label.bar < first))
+    {
         if label.bar > last {
             break;
         }
@@ -286,6 +293,35 @@ pub(crate) fn paint_labels(
             continue;
         }
         let color = style.color.to_opaque();
+        if study.labels_use_plot_background() {
+            // The last visible tag at a shared point owns it, including its full background.
+            if labels[index + 1..]
+                .iter()
+                .take_while(|later| later.bar == label.bar)
+                .any(|later| later.price == label.price && study.plot_style(later.plot).visible)
+            {
+                continue;
+            }
+            let galley = painter.layout_no_wrap(
+                label.text.clone(),
+                egui::FontId::proportional(11.0),
+                egui::Color32::WHITE,
+            );
+            let size = galley.size() + vec2(8.0, 4.0);
+            let rect = egui::Rect::from_min_size(point - vec2(size.x + 5.0, size.y * 0.5), size);
+            painter.rect_filled(rect, 2.0, color);
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(rect.right() - 1.0, point.y - 4.0),
+                    point,
+                    egui::pos2(rect.right() - 1.0, point.y + 4.0),
+                ],
+                color,
+                egui::Stroke::NONE,
+            ));
+            painter.galley(rect.min + vec2(4.0, 2.0), galley, egui::Color32::WHITE);
+            continue;
+        }
         let galley =
             painter.layout_no_wrap(label.text.clone(), egui::FontId::proportional(11.0), color);
         let (anchor, offset) = match label.placement {

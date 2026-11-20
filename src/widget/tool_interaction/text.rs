@@ -24,11 +24,9 @@ fn edits_in_place(tool: DrawingToolType) -> bool {
 }
 
 pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize, placed: bool) {
-    let Some(drawing) = manager
-        .drawings
-        .iter()
-        .find(|d| d.id == id && !d.locked && d.is_visible_on_timeframe(&manager.curr_timeframe))
-    else {
+    let Some(drawing) = manager.drawings.iter().find(|d| {
+        d.id == id && d.accepts_user_edits() && d.is_visible_on_timeframe(&manager.curr_timeframe)
+    }) else {
         return;
     };
     if !drawing.tool_type.edits_text_inline() {
@@ -77,7 +75,7 @@ pub(super) fn begin_fibonacci_edit(
             DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension
         ) && hit.is_none_or(|id| id == drawing.id)
             && drawing.selectable
-            && !drawing.locked
+            && drawing.accepts_user_edits()
             && manager.owns_pane(drawing)
             && manager.shows(drawing)
     }) {
@@ -121,8 +119,9 @@ pub(super) fn begin_fibonacci_edit(
     }
 }
 
-/// Open the text field of a selected rectangle, circle or ellipse on a click on its text, or on
-/// the hint it shows in place of none. The click that selects the shape leaves the field closed.
+/// Open the text field of a selected rectangle, circle, ellipse, horizontal line or horizontal
+/// ray on a click on its text, or on the hint a shape shows in place of none. The click that
+/// selects the drawing leaves the field closed.
 /// A click on one of the shape's handles leaves it closed too, so a circle's centre handle, where
 /// its text is painted, keeps starting a move. The field opens once the double-click delay has
 /// passed with no second press, since a field over the text would take the second click of a
@@ -185,20 +184,24 @@ pub(super) fn begin_shape_edit(ui: &Ui, manager: &mut DrawingManager, response: 
         .request_repaint_after(std::time::Duration::from_secs_f64(delay));
 }
 
-/// The selected, unlocked rectangle, circle or ellipse `id`.
+/// The selected rectangle, circle, ellipse, horizontal line or horizontal ray `id` that accepts user edits.
 fn editable_shape(manager: &DrawingManager, id: usize) -> Option<&crate::drawings::Drawing> {
     manager.drawings.iter().find(|drawing| {
         drawing.id == id
             && matches!(
                 drawing.tool_type,
-                DrawingToolType::Rect | DrawingToolType::Circle | DrawingToolType::Ellipse
+                DrawingToolType::Rect
+                    | DrawingToolType::Circle
+                    | DrawingToolType::Ellipse
+                    | DrawingToolType::HorizontalLine
+                    | DrawingToolType::HorizontalRay
             )
-            && !drawing.locked
+            && drawing.accepts_user_edits()
             && manager.is_selected(id)
     })
 }
 
-/// Opens the field of shape `id` when the click at `pos` is on its painted text or hint.
+/// Opens the field of drawing `id` when the click at `pos` is on its painted text or hint.
 fn open_shape_edit(ui: &Ui, manager: &mut DrawingManager, id: usize, pos: egui::Pos2) {
     let Some(drawing) = editable_shape(manager, id) else {
         return;
@@ -235,7 +238,9 @@ pub(super) fn show_editor(
         return;
     };
     let Some(drawing) = manager.drawings.iter().find(|d| {
-        d.id == editor.id && !d.locked && d.is_visible_on_timeframe(&manager.curr_timeframe)
+        d.id == editor.id
+            && d.accepts_user_edits()
+            && d.is_visible_on_timeframe(&manager.curr_timeframe)
     }) else {
         return;
     };
@@ -650,7 +655,12 @@ mod tests {
             DrawingToolType::Circle,
             DrawingToolType::Ellipse,
         ] {
-            for (initial, locked) in [(None, false), (Some("Zone"), false), (None, true)] {
+            for (initial, locked, user_edit) in [
+                (None, false, true),
+                (Some("Zone"), false, true),
+                (None, true, true),
+                (None, false, false),
+            ] {
                 let ctx = Context::default();
                 let mut chart = chart(&[10.0; 20], &[20.0; 20]);
                 let mut drawing = Drawing::new(7, tool);
@@ -659,6 +669,8 @@ mod tests {
                     vec![ChartPoint::new(8.0, 15.0), ChartPoint::new(28.0, 18.0)];
                 drawing.completed = true;
                 drawing.locked = locked;
+                drawing.user_edit_enabled = user_edit;
+                let blocked = locked || !user_edit;
                 drawing.text = initial.map(String::from);
                 chart.drawings_mut().drawings.push(drawing);
                 let mut time = 0.0;
@@ -709,10 +721,10 @@ mod tests {
                 assert!(chart.drawings().text_editor.is_none(), "{tool:?}");
                 assert_eq!(
                     hint(&chart).is_some(),
-                    initial.is_none() && !locked,
+                    initial.is_none() && !blocked,
                     "{tool:?} {initial:?} locked {locked}"
                 );
-                if !locked {
+                if !blocked {
                     // A double click on the selected shape's text or hint reports itself.
                     let click = click_at(&chart);
                     for _ in 0..5 {
@@ -739,19 +751,19 @@ mod tests {
                     for _ in 0..5 {
                         step(&mut chart, vec![]);
                     }
-                    let click = if locked { center } else { click_at(&chart) };
+                    let click = if blocked { center } else { click_at(&chart) };
                     for pressed in [true, false] {
                         step(&mut chart, vec![button(click, pressed)]);
                     }
                     // The field opens once a second click can no longer make it a double click.
                     step(&mut chart, vec![]);
-                    if !locked {
+                    if !blocked {
                         assert!(chart.drawings().text_editor.is_none(), "{tool:?} waits");
                     }
                     for _ in 0..3 {
                         step(&mut chart, vec![]);
                     }
-                    if locked {
+                    if blocked {
                         assert!(chart.drawings().text_editor.is_none(), "{tool:?}");
                         break;
                     }
@@ -791,7 +803,7 @@ mod tests {
                         assert!(!chart.can_undo());
                     }
                 }
-                if tool == DrawingToolType::Circle && !locked {
+                if tool == DrawingToolType::Circle && !blocked {
                     // A press on the centre handle moves the circle, also after a still click.
                     // A loaded drawing has its screen points after the next frame, and a new id.
                     step(&mut chart, vec![]);
@@ -841,6 +853,157 @@ mod tests {
                         after > before + 1.0,
                         "{initial:?} moved from {before} to {after}"
                     );
+                }
+            }
+        }
+    }
+
+    /// A still click on the text of a selected, unlocked horizontal line or horizontal ray opens
+    /// its field over the text once the double-click delay has passed; the click that selects the
+    /// line and a double click leave it closed. A line without text, with its text switched off
+    /// or locked or with user editing disabled opens no field. The field cancels without history
+    /// and confirms as one undoable edit.
+    #[test]
+    fn line_text_click_edits_the_text() {
+        use crate::drawings::{ChartPoint, Drawing};
+        for tool in [
+            DrawingToolType::HorizontalLine,
+            DrawingToolType::HorizontalRay,
+        ] {
+            // The text, whether it is switched on, and the lock and host edit flags.
+            for (initial, shown, locked, user_edit) in [
+                (Some("Support"), true, false, true),
+                (None, true, false, true),
+                (Some("Support"), false, false, true),
+                (Some("Support"), true, true, true),
+                (Some("Support"), true, false, false),
+            ] {
+                let opens = initial.is_some() && shown && !locked && user_edit;
+                let ctx = Context::default();
+                let mut chart = chart(&[10.0; 20], &[20.0; 20]);
+                let mut drawing = Drawing::new(7, tool);
+                drawing.chart_points = vec![ChartPoint::new(8.0, 15.0)];
+                drawing.completed = true;
+                drawing.locked = locked;
+                drawing.user_edit_enabled = user_edit;
+                drawing.text = initial.map(String::from);
+                drawing.marker.show_text = shown;
+                chart.drawings_mut().drawings.push(drawing);
+                let mut time = 0.0;
+                let mut step = |chart: &mut crate::Chart, events| {
+                    time += 0.1;
+                    frame(&ctx, chart, time, events);
+                };
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                };
+                let key = |key, modifiers| Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                };
+                step(&mut chart, vec![]);
+                let case = format!(
+                    "{tool:?} {initial:?} shown {shown} locked {locked} user_edit {user_edit}"
+                );
+                // The middle of the painted text, else a point of the line clear of its handle.
+                let painted = chart
+                    .drawings()
+                    .painted_text(7, initial.unwrap_or_default());
+                assert_eq!(painted.is_some(), initial.is_some() && shown, "{case}");
+                let click = painted.as_ref().map_or_else(
+                    || chart.drawings().drawings[0].points[0] + egui::vec2(60.0, 0.0),
+                    |(min, galley)| egui::Rect::from_min_size(*min, galley.size()).center(),
+                );
+                // The click that selects the line opens nothing.
+                step(&mut chart, vec![Event::PointerMoved(click)]);
+                for pressed in [true, false] {
+                    step(&mut chart, vec![button(click, pressed)]);
+                }
+                for _ in 0..5 {
+                    step(&mut chart, vec![]);
+                }
+                assert!(chart.drawings().is_selected(7), "{case}");
+                assert!(chart.drawings().text_editor.is_none(), "{case}");
+                if opens {
+                    // A double click on the selected line's text reports itself.
+                    chart.drain_events().for_each(drop);
+                    for pressed in [true, false, true, false] {
+                        step(&mut chart, vec![button(click, pressed)]);
+                    }
+                    for _ in 0..5 {
+                        step(&mut chart, vec![]);
+                    }
+                    let doubles = chart
+                        .drain_events()
+                        .filter(|event| {
+                            matches!(event, crate::widget::ChartEvent::DoubleClick { .. })
+                        })
+                        .count();
+                    assert_eq!(doubles, 1, "{case}");
+                    assert!(chart.drawings().text_editor.is_none(), "{case}");
+                }
+                for confirm in [false, true] {
+                    for _ in 0..5 {
+                        step(&mut chart, vec![]);
+                    }
+                    for pressed in [true, false] {
+                        step(&mut chart, vec![button(click, pressed)]);
+                    }
+                    for _ in 0..4 {
+                        step(&mut chart, vec![]);
+                    }
+                    if !opens {
+                        assert!(chart.drawings().text_editor.is_none(), "{case}");
+                        assert!(!chart.can_undo(), "{case}");
+                        break;
+                    }
+                    assert_eq!(
+                        chart.drawings().text_editor.as_ref().map(|e| e.id),
+                        Some(7),
+                        "{case}"
+                    );
+                    // The field sits on the painted text; its area rounds to whole pixels.
+                    let (min, _) = painted.clone().unwrap();
+                    let field = ctx
+                        .memory(|memory| memory.focused())
+                        .and_then(|id| ctx.read_response(id))
+                        .unwrap();
+                    assert!(
+                        field.rect.min.distance(min) < 1.0,
+                        "{case}: {:?}",
+                        field.rect
+                    );
+                    step(
+                        &mut chart,
+                        vec![
+                            key(Key::A, Modifiers::COMMAND),
+                            Event::Text("Resistance".into()),
+                        ],
+                    );
+                    let text = |chart: &crate::Chart| chart.drawings().drawings[0].text.clone();
+                    assert_eq!(text(&chart).as_deref(), initial, "{case}");
+                    assert!(!chart.can_undo(), "{case}");
+                    step(
+                        &mut chart,
+                        vec![if confirm {
+                            key(Key::Enter, Modifiers::COMMAND)
+                        } else {
+                            key(Key::Escape, Modifiers::NONE)
+                        }],
+                    );
+                    assert!(chart.drawings().text_editor.is_none(), "{case}");
+                    if confirm {
+                        assert_eq!(text(&chart).as_deref(), Some("Resistance"), "{case}");
+                        assert!(chart.undo());
+                        assert_eq!(text(&chart).as_deref(), initial, "{case}");
+                    }
+                    assert!(!chart.can_undo(), "{case}");
                 }
             }
         }
@@ -1088,25 +1251,34 @@ mod tests {
                 "{tool:?}"
             );
             assert_eq!(chart.drawings().sel_drawing(), Some(id), "{tool:?}");
-            chart
-                .drawings_mut()
-                .edit_drawing(id, |drawing| drawing.locked = true)
-                .unwrap();
-            for _ in 0..2 {
+            for locked in [true, false] {
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |drawing| {
+                        drawing.locked = locked;
+                        drawing.user_edit_enabled = locked;
+                    })
+                    .unwrap();
+                for _ in 0..2 {
+                    step(
+                        &mut chart,
+                        vec![Event::PointerMoved(on_text), button(on_text, true)],
+                    );
+                    step(&mut chart, vec![button(on_text, false)]);
+                }
                 step(
                     &mut chart,
-                    vec![Event::PointerMoved(on_text), button(on_text, true)],
+                    vec![
+                        Event::Text("Locked".into()),
+                        key(Key::Enter, Modifiers::COMMAND),
+                    ],
                 );
-                step(&mut chart, vec![button(on_text, false)]);
+                assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some(expected));
             }
-            step(
-                &mut chart,
-                vec![
-                    Event::Text("Locked".into()),
-                    key(Key::Enter, Modifiers::COMMAND),
-                ],
-            );
-            assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some(expected));
+            chart
+                .drawings_mut()
+                .edit_drawing(id, |d| d.user_edit_enabled = true)
+                .unwrap();
             if tool == DrawingToolType::AnchoredNote {
                 chart
                     .drawings_mut()

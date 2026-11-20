@@ -11,8 +11,8 @@ use egui::Color32;
 /// as an ATR value.
 /// Developed by Chuck LeBeau
 ///
-/// The `period` input sets both lengths, as studies saved with a single length expect;
-/// `atr_period`, which follows it in `inputs()`, then sets the ATR length alone.
+/// The `period` and `atr_period` inputs are independent; setting either leaves the other.
+/// A template saved before the ATR period had an input of its own restores it equal to `period`.
 #[derive(Clone, Debug)]
 pub struct ChandelierExit {
     /// Lookback period (typically 22)
@@ -72,12 +72,7 @@ impl Indicator for ChandelierExit {
         period: length("Lookback period", 1, usize::MAX),
         atr_period: length("ATR period", 1, usize::MAX),
         multiplier: number("Multiplier", 0.0, f64::MAX)
-    ; changed => {
-        // Before the ATR input existed, `period` set both lengths; saved studies still do.
-        if changed == "period" {
-            self.atr_period = self.period;
-        }
-    });
+    ; {});
 
     fn name(&self) -> &str {
         "Chandelier"
@@ -162,6 +157,10 @@ impl Indicator for ChandelierExit {
 
     fn line_count(&self) -> usize {
         2
+    }
+
+    fn draws_only_plots(&self) -> bool {
+        true
     }
 
     fn line_names(&self) -> Vec<String> {

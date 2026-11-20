@@ -32,8 +32,8 @@ use egui::Color32;
 /// Average Directional Index indicator. Draws its ADX line; +DI and -DI are computed and can be shown
 /// from its style settings.
 ///
-/// The `period` input sets both lengths, as studies saved with a single length expect;
-/// `adx_smoothing`, which follows it in `inputs()`, then sets the smoothing alone.
+/// The `period` and `adx_smoothing` inputs are independent; setting either leaves the other.
+/// A template saved before the smoothing had an input of its own restores it equal to `period`.
 #[derive(Clone, Debug)]
 pub struct ADX {
     period: usize,
@@ -54,6 +54,8 @@ struct State {
     plus: f64,
     minus: f64,
     tr: f64,
+    /// The last defined +DI and -DI.
+    di: Option<[f64; 2]>,
     dx_count: usize,
     adx: f64,
 }
@@ -109,12 +111,7 @@ impl Indicator for ADX {
     crate::studies::inputs::study_inputs!(self;
         period: length("DI period", 1, usize::MAX),
         adx_smoothing: length("ADX smoothing period", 1, usize::MAX)
-    ; changed => {
-        // Before the smoothing input existed, `period` set both lengths; saved studies still do.
-        if changed == "period" {
-            self.adx_smoothing = self.period;
-        }
-    });
+    ; {});
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
@@ -166,16 +163,16 @@ impl Indicator for ADX {
                     state.minus = Self::wilders_smooth(state.minus, minus, self.period);
                     state.tr = Self::wilders_smooth(state.tr, tr, self.period);
                 }
-                let (plus, minus) = if state.tr != 0.0 {
-                    (
-                        100.0 * state.plus / state.tr,
-                        100.0 * state.minus / state.tr,
-                    )
-                } else {
-                    (0.0, 0.0)
+                // Undefined ratios hold the last defined pair, leaving opening flat bars empty.
+                let di = [state.plus, state.minus].map(|sum| 100.0 * sum / state.tr);
+                if di.iter().all(|x| x.is_finite()) {
+                    state.di = Some(di);
+                }
+                let Some([plus, minus]) = state.di else {
+                    return IndicatorValue::None;
                 };
                 let sum = plus + minus;
-                let dx = if sum.abs() > 1e-10 {
+                let dx = if sum > 0.0 {
                     100.0 * (plus - minus).abs() / sum
                 } else {
                     0.0
@@ -227,6 +224,10 @@ impl Indicator for ADX {
         3 // ADX, +DI, -DI
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }
@@ -265,5 +266,162 @@ mod tests {
                 [0, 1, 2].map(|line| study.plot_style(line).visible)
             );
         }
+    }
+
+    /// The DI period and the ADX smoothing are separate inputs: set in either order, or the
+    /// period alone after `with_smoothing`, both keep their values and the smoothing drives the
+    /// ADX. Bars rise by one to bar 19 and fall by one after, each with a true range of 1.5, so
+    /// with a DI period of 10 DX is 100 on bars 10 to 19 and 100 |2 (0.9^m) - 1| on the m-th
+    /// falling bar; the 20-bar ADX starts on bar 29 at (1000 + 314.43359218) / 20.
+    #[test]
+    fn the_di_period_leaves_the_adx_smoothing() {
+        use crate::model::Bar;
+        use crate::studies::{ADX, DirectionalMovement, InputValue};
+        use chrono::{TimeZone, Utc};
+        let bars: Vec<Bar> = (0..31i64)
+            .map(|i| {
+                let low = (if i <= 19 { i } else { 38 - i }) as f64;
+                let time = Utc.timestamp_opt(i * 60, 0).unwrap();
+                Bar::new(time, low + 0.5, low + 1.0, low, low + 0.5, 1.0)
+            })
+            .collect();
+        type Build = fn() -> Box<dyn Indicator>;
+        type Applied = &'static [(&'static str, usize)];
+        let adx: Build = || Box::new(ADX::default());
+        let adx_20: Build = || Box::new(ADX::new(14).with_smoothing(20));
+        let dmi: Build = || Box::new(DirectionalMovement::default());
+        let dmi_20: Build = || Box::new(DirectionalMovement::new(14).with_smoothing(20));
+        let smoothing_first: Applied = &[("adx_smoothing", 20), ("period", 10)];
+        let period_first: Applied = &[("period", 10), ("adx_smoothing", 20)];
+        let period: Applied = &[("period", 10)];
+        // (study, inputs set in order, plot of the ADX line)
+        for (build, applied, line) in [
+            (adx, smoothing_first, 0),
+            (adx, period_first, 0),
+            (adx_20, period, 0),
+            (dmi, smoothing_first, 2),
+            (dmi, period_first, 2),
+            (dmi_20, period, 2),
+        ] {
+            let mut study = build();
+            for &(id, value) in applied {
+                study.set_input(id, InputValue::Length(value)).unwrap();
+            }
+            let name = format!("{} {applied:?}", study.name());
+            let inputs: Vec<_> = study
+                .inputs()
+                .into_iter()
+                .map(|input| (input.id, input.value))
+                .collect();
+            assert_eq!(
+                inputs,
+                [
+                    ("period".to_owned(), InputValue::Length(10)),
+                    ("adx_smoothing".to_owned(), InputValue::Length(20)),
+                ],
+                "{name}"
+            );
+            study.calculate(&bars);
+            assert_eq!(study.values().value(line, 28), None, "{name}");
+            for (bar, expected) in [(29, 65.721679609), (30, 64.29748966765)] {
+                let value = study.values().value(line, bar).unwrap();
+                assert!((value - expected).abs() < 1e-9, "{name} bar {bar}: {value}");
+            }
+        }
+    }
+
+    /// Undefined DI pairs wait for a true range and then hold their last value. Fifteen flat
+    /// bars followed by a unit rise give +DI 100 and -DI 0 from bar 15, so ADX(14) first reads
+    /// 1400 / 14 on bar 28. With period 1, a flat bar after a rise holds that pair and ADX 100.
+    /// Inside bars keep -DI 0 while +DI decays below 1e-10; DX stays 100 for any positive +DI.
+    #[test]
+    fn directional_lines_wait_for_and_hold_a_defined_value() {
+        use crate::model::Bar;
+        use crate::studies::{ADX, DirectionalMovement};
+        use chrono::{TimeZone, Utc};
+        let bar = |i: usize, [high, low, close]: [f64; 3]| {
+            let time = Utc.timestamp_opt(i as i64 * 60, 0).unwrap();
+            Bar::new(time, close, high, low, close, 1.0)
+        };
+        let flat_open: Vec<Bar> = (0..30)
+            .map(|i| match i {
+                0..15 => bar(i, [100.0; 3]),
+                _ => {
+                    let low = 100.0 + (i - 15) as f64;
+                    bar(i, [low + 1.0, low, low + 1.0])
+                }
+            })
+            .collect();
+        let flat_after_rise = vec![
+            bar(0, [101.0, 100.0, 101.0]),
+            bar(1, [102.0, 101.0, 102.0]),
+            bar(2, [102.0; 3]),
+        ];
+        let inside: Vec<Bar> = (0..=400)
+            .map(|i| {
+                bar(
+                    i,
+                    if i == 0 {
+                        [1.0, 0.0, 0.5]
+                    } else {
+                        [2.0, 1.0, 1.5]
+                    },
+                )
+            })
+            .collect();
+        type Build = fn(usize) -> [Box<dyn Indicator>; 2];
+        let both: Build = |period| {
+            [
+                Box::new(ADX::new(period)),
+                Box::new(DirectionalMovement::new(period)),
+            ]
+        };
+        const PLUS: usize = 0;
+        const MINUS: usize = 1;
+        const AVERAGE: usize = 2;
+        // (bars, period, [(bar, +DI, -DI or ADX, expected)])
+        type Rows<'a> = [(&'a [Bar], usize, &'a [(usize, usize, Option<f64>)]); 3];
+        let rows: Rows = [
+            (
+                &flat_open,
+                14,
+                &[
+                    (14, PLUS, None),
+                    (14, MINUS, None),
+                    (14, AVERAGE, None),
+                    (15, PLUS, Some(100.0)),
+                    (15, MINUS, Some(0.0)),
+                    (27, AVERAGE, None),
+                    (28, AVERAGE, Some(100.0)),
+                ],
+            ),
+            (
+                &flat_after_rise,
+                1,
+                &[
+                    (2, PLUS, Some(100.0)),
+                    (2, MINUS, Some(0.0)),
+                    (2, AVERAGE, Some(100.0)),
+                ],
+            ),
+            (&inside, 14, &[(400, AVERAGE, Some(100.0))]),
+        ];
+        let mut failures = Vec::new();
+        for (bars, period, expected) in rows {
+            // ADX draws ADX, +DI, -DI; DMI draws +DI, -DI, ADX.
+            for (mut study, lines) in both(period).into_iter().zip([[1, 2, 0], [0, 1, 2]]) {
+                study.calculate(bars);
+                for &(at, line, value) in expected {
+                    let got = study.values().value(lines[line], at);
+                    if got.map(|v| (v * 1e6).round() / 1e6) != value {
+                        failures.push(format!(
+                            "{} period {period} bar {at} line {line}: {got:?} != {value:?}",
+                            study.name()
+                        ));
+                    }
+                }
+            }
+        }
+        assert_eq!(failures, Vec::<String>::new());
     }
 }

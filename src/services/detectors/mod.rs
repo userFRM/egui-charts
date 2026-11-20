@@ -79,6 +79,7 @@ const TRADE_IDS: usize = 100_000;
 /// detectors.track(&instrument).unwrap();
 /// let mut settings = detectors.settings();
 /// settings.big_trades.enabled = true;
+/// settings.big_trades.rule.passive_orders = true;
 /// detectors.set_settings(settings);
 /// // `Chart::set_signal_source(Some(detectors.clone()))` draws the detections.
 ///
@@ -102,9 +103,9 @@ impl std::fmt::Debug for OrderFlowDetectors {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DetectionKind {
-    /// A large aggressive execution, as a marker: see [`BigTradeRule`].
+    /// A large trade, as a marker: see [`BigTradeRule`].
     BigTrade,
-    /// The prices a large aggressive execution traded at, as a zone: see [`BigTradeRule`].
+    /// The prices a large trade traded at, as a zone: see [`BigTradeRule`].
     BigTradeZone,
     /// A rapid sequence of same-side aggressive fills.
     StopRun,
@@ -173,7 +174,7 @@ impl DetectionKind {
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct DetectorSettings {
-    /// Large aggressive executions and their zones.
+    /// Large trades and their zones.
     pub big_trades: Detector<BigTradeRule>,
     /// Rapid same-side execution bursts.
     pub stop_runs: Detector<StopRunRule>,
@@ -215,6 +216,12 @@ impl DetectorSettings {
         if self.icebergs.rule.refills == 0 {
             return Err(FeedError::InvalidData(
                 "iceberg refills must be positive".into(),
+            ));
+        }
+        let min_size = self.stop_runs.rule.min_size;
+        if !min_size.is_finite() || min_size < 0.0 {
+            return Err(FeedError::InvalidData(
+                "stop run minimum size must be finite and not negative".into(),
             ));
         }
         for alert in [self.iceberg_count_alert, self.stop_run_count_alert]
@@ -260,8 +267,40 @@ pub struct Detector<R> {
     pub alert: bool,
     /// Whether that alert should play a sound.
     pub sound: bool,
-    /// What the detector detects.
+    /// What the detector detects. A rule saved as `null`, as rules without settings were,
+    /// restores the default rule.
+    #[serde(
+        deserialize_with = "rule_or_default",
+        bound(deserialize = "R: serde::Deserialize<'de> + Default")
+    )]
     pub rule: R,
+}
+
+/// Reads a rule object without an option wrapper, or the unit form of an older settings file.
+fn rule_or_default<'de, D, R>(deserializer: D) -> Result<R, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    R: serde::Deserialize<'de> + Default,
+{
+    struct Rule<R>(std::marker::PhantomData<R>);
+
+    impl<'de, R: serde::Deserialize<'de> + Default> serde::de::Visitor<'de> for Rule<R> {
+        type Value = R;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a rule object or unit")
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<R, E> {
+            Ok(R::default())
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<R, A::Error> {
+            R::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_any(Rule(std::marker::PhantomData))
 }
 
 impl<R: Default> Default for Detector<R> {
@@ -623,7 +662,7 @@ impl State {
             seen_ids: HashSet::new(),
             detections: VecDeque::new(),
             big_trades: BigTrades::new(tick, instrument.volume_decimals),
-            stop_runs: StopRuns::default(),
+            stop_runs: StopRuns::new(instrument.volume_decimals),
             stop_sweeps: StopSweeps::new(tick),
             counting: Counting::default(),
         };
@@ -718,8 +757,13 @@ impl Tracked {
                 out,
             );
         }
-        self.stop_runs
-            .trade(trade, self.tick, settings.stop_runs.enabled, out);
+        self.stop_runs.trade(
+            trade,
+            self.tick,
+            &settings.stop_runs.rule,
+            settings.stop_runs.enabled,
+            out,
+        );
         self.stop_sweeps.trade(trade, settings, out);
         let big = &settings.big_trades;
         (self.big_trades).trade(trade, &big.rule, big.enabled, out);
@@ -985,18 +1029,30 @@ mod tests {
         }
     }
 
-    fn time(seconds: i64) -> DateTime<Utc> {
+    pub(super) fn time(seconds: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(seconds, 0).unwrap()
     }
 
-    fn fill(seconds: i64, price: f64, size: f64, side: OrderSide, aggressor: Option<u64>) -> Tick {
+    pub(super) fn fill(
+        seconds: i64,
+        price: f64,
+        size: f64,
+        side: OrderSide,
+        aggressor: Option<u64>,
+    ) -> Tick {
         Tick {
             aggressor_order_id: aggressor,
             ..Tick::new(time(seconds), price, size, Some(side))
         }
     }
 
-    fn marker(number: u64, at: i64, price: f64, direction: Direction, size: &str) -> SignalEvent {
+    pub(super) fn marker(
+        number: u64,
+        at: i64,
+        price: f64,
+        direction: Direction,
+        label: &str,
+    ) -> SignalEvent {
         SignalEvent::Upsert(Signal {
             id: SignalId(format!("big-trade-{number}")),
             shape: SignalShape::Marker {
@@ -1005,12 +1061,18 @@ mod tests {
                 direction,
             },
             category: "Big trades".into(),
-            label: Some(size.into()),
+            label: Some(label.into()),
             tooltip: None,
         })
     }
 
-    fn zone(number: u64, from: i64, to: Option<i64>, low: f64, high: f64) -> SignalEvent {
+    pub(super) fn zone(
+        number: u64,
+        from: i64,
+        to: Option<i64>,
+        low: f64,
+        high: f64,
+    ) -> SignalEvent {
         SignalEvent::Upsert(Signal {
             id: SignalId(format!("big-trade-zone-{number}")),
             shape: SignalShape::Zone {
@@ -1026,8 +1088,8 @@ mod tests {
     }
 
     /// A service tracking "ES", with a fixed big trade threshold of `threshold` unless `None`.
-    struct Host {
-        detectors: OrderFlowDetectors,
+    pub(super) struct Host {
+        pub(super) detectors: OrderFlowDetectors,
         inbox: Arc<Inbox>,
         listeners: Vec<Listener>,
         timeframe: Timeframe,
@@ -1042,7 +1104,11 @@ mod tests {
         }
 
         /// `instrument`, as "ES", subscribed at `timeframe`.
-        fn tracking(instrument: &Instrument, timeframe: Timeframe, threshold: Option<f64>) -> Self {
+        pub(super) fn tracking(
+            instrument: &Instrument,
+            timeframe: Timeframe,
+            threshold: Option<f64>,
+        ) -> Self {
             let detectors = OrderFlowDetectors::new();
             detectors.track(instrument).unwrap();
             let mut settings = DetectorSettings::default();
@@ -1068,7 +1134,7 @@ mod tests {
         }
 
         /// Pushes `event` and returns the signal events pushed since the last call.
-        fn push(&self, event: MarketEvent) -> Vec<SignalEvent> {
+        pub(super) fn push(&self, event: MarketEvent) -> Vec<SignalEvent> {
             self.detectors.push("ES", time(0), &event);
             self.events()
         }
@@ -1091,14 +1157,14 @@ mod tests {
         assert_eq!(
             trade(self::fill(2, 101.0, 8.0, Buy, Some(7))),
             [
-                marker(1, 1, 100.875, Direction::Up, "16"),
+                marker(1, 1, 100.875, Direction::Up, "16 aggressive"),
                 zone(1, 1, None, 100.0, 101.0)
             ]
         );
         assert_eq!(
             trade(self::fill(3, 101.0, 16.0, Buy, Some(7))),
             [
-                marker(1, 1, 100.9375, Direction::Up, "32"),
+                marker(1, 1, 100.9375, Direction::Up, "32 aggressive"),
                 zone(1, 1, None, 100.0, 101.0)
             ]
         );
@@ -1107,7 +1173,7 @@ mod tests {
             trade(self::fill(4, 99.0, 12.0, Sell, None)),
             [
                 zone(1, 1, Some(4), 100.0, 101.0),
-                marker(2, 4, 99.0, Direction::Down, "12"),
+                marker(2, 4, 99.0, Direction::Down, "12 aggressive"),
                 zone(2, 4, None, 98.875, 99.125)
             ]
         );
@@ -1337,8 +1403,8 @@ mod tests {
         // 5,002 detections lose marker 1 and zone 1; restoring ended zone 1 loses marker 2.
         assert_eq!(replay.len(), 5000);
         assert!(replay.contains(&zone(1, 1, Some(2), 49.875, 50.125)));
-        assert!(!replay.contains(&marker(1, 1, 50.0, Direction::Up, "10")));
-        assert!(!replay.contains(&marker(2, 1, 100.0, Direction::Up, "10")));
+        assert!(!replay.contains(&marker(1, 1, 50.0, Direction::Up, "10 aggressive")));
+        assert!(!replay.contains(&marker(2, 1, 100.0, Direction::Up, "10 aggressive")));
         assert_eq!(live.len(), 5000, "live detections after one history page");
         let replay: HashMap<_, _> = replay
             .into_iter()
@@ -1368,7 +1434,7 @@ mod tests {
         assert_eq!(
             host.push(MarketEvent::Trade(buy(100.0))),
             [
-                marker(2501, 1, 100.0, Direction::Up, "10"),
+                marker(2501, 1, 100.0, Direction::Up, "10 aggressive"),
                 SignalEvent::Remove(SignalId("big-trade-1".into())),
                 zone(2501, 1, None, 99.875, 100.125),
                 SignalEvent::Remove(SignalId("big-trade-zone-1".into()))
@@ -1401,6 +1467,15 @@ mod tests {
             assert!(
                 std::panic::catch_unwind(|| detectors.set_settings(settings)).is_err(),
                 "accepted {size}"
+            );
+            assert_eq!(detectors.settings(), DetectorSettings::default());
+        }
+        for size in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+            let mut settings = detectors.settings();
+            settings.stop_runs.rule.min_size = size;
+            assert!(
+                std::panic::catch_unwind(|| detectors.set_settings(settings)).is_err(),
+                "accepted stop run minimum {size}"
             );
             assert_eq!(detectors.settings(), DetectorSettings::default());
         }
@@ -1476,7 +1551,7 @@ mod tests {
                 Some(7)
             ))),
             [
-                marker(1, 1, 100.0, Direction::Neutral, "10"),
+                marker(1, 1, 100.0, Direction::Neutral, "10 aggressive"),
                 zone(1, 1, None, 100.0, 101.0)
             ]
         );
@@ -1503,7 +1578,7 @@ mod tests {
         assert!(trade(989.0).is_empty());
         assert_eq!(
             trade(990.0)[0],
-            marker(1, 2000, 100.0, Direction::Up, "990")
+            marker(1, 2000, 100.0, Direction::Up, "990 aggressive")
         );
     }
 
@@ -1535,7 +1610,10 @@ mod tests {
             ..fill(1, 100.0, 4.0, OrderSide::Buy, Some(5))
         };
         let detections = host.push(MarketEvent::Trade(rest));
-        assert_eq!(detections[0], marker(1, 1, 100.0, Direction::Up, "10"));
+        assert_eq!(
+            detections[0],
+            marker(1, 1, 100.0, Direction::Up, "10 aggressive")
+        );
 
         let book = |price| OrderBook {
             ts: time(2),
@@ -1590,7 +1668,7 @@ mod tests {
         assert_eq!(
             events,
             [
-                marker(1, 2, 100.0, Direction::Up, "12"),
+                marker(1, 2, 100.0, Direction::Up, "12 aggressive"),
                 zone(1, 2, None, 99.875, 100.125)
             ],
             "the validated fill precedes the invalid cancel in the snapshot buffer"
@@ -1632,111 +1710,6 @@ mod tests {
                 usize::from(sequence == 3),
                 "only a new book update confirms the retained level"
             );
-        }
-    }
-
-    #[test]
-    fn stop_runs_require_a_fast_monotone_burst_and_distinct_known_aggressors() {
-        for (name, ids, gap, prices, known, expected) in [
-            (
-                "three aggressors",
-                vec![1, 1, 2, 2, 3],
-                20,
-                vec![400, 401, 401, 402, 403],
-                true,
-                true,
-            ),
-            (
-                "no ids",
-                vec![],
-                10,
-                vec![400, 401, 401, 402, 403],
-                true,
-                true,
-            ),
-            (
-                "one aggressor",
-                vec![1; 5],
-                10,
-                vec![400, 401, 401, 402, 403],
-                true,
-                false,
-            ),
-            (
-                "gap",
-                vec![],
-                21,
-                vec![400, 401, 401, 402, 403],
-                true,
-                false,
-            ),
-            (
-                "reversal",
-                vec![],
-                10,
-                vec![400, 401, 400, 402, 403],
-                true,
-                false,
-            ),
-            (
-                "unknown side",
-                vec![],
-                10,
-                vec![400, 401, 401, 402, 403],
-                false,
-                false,
-            ),
-        ] {
-            for side in [OrderSide::Buy, OrderSide::Sell] {
-                let host = Host::new(Some(1_000.0));
-                let mut settings = host.detectors.settings();
-                settings.stop_runs.enabled = true;
-                host.detectors.set_settings(settings);
-                let mut events = Vec::new();
-                for (i, price) in prices.iter().enumerate() {
-                    let price = if side == OrderSide::Buy {
-                        *price
-                    } else {
-                        800 - price
-                    };
-                    let mut fill = Tick::new(
-                        time(0) + chrono::TimeDelta::milliseconds(i as i64 * gap),
-                        price as f64 * 0.25,
-                        2.0,
-                        known.then_some(side),
-                    );
-                    fill.aggressor_order_id = ids.get(i).copied();
-                    events.extend(host.push(MarketEvent::Trade(fill)));
-                }
-                let signals: Vec<_> = events
-                    .into_iter()
-                    .filter_map(|event| match event {
-                        SignalEvent::Upsert(signal) if signal.category == "Stop runs" => {
-                            Some(signal)
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                assert_eq!(signals.len(), usize::from(expected), "{name} {side:?}");
-                if let Some(signal) = signals.first() {
-                    assert_eq!(
-                        signal.tooltip.as_deref(),
-                        Some(format!("5 fills, 3 ticks, size 10, {} ms", gap * 4).as_str())
-                    );
-                    assert_eq!(
-                        signal.shape,
-                        SignalShape::Marker {
-                            time: time(0) + chrono::TimeDelta::milliseconds(gap * 4),
-                            price: Some(if side == OrderSide::Buy {
-                                100.75
-                            } else {
-                                99.25
-                            }),
-                            direction: stops::direction(side),
-                        }
-                    );
-                }
-            }
         }
     }
 
@@ -1889,6 +1862,69 @@ mod tests {
                 &["Buy imbalance: Buy imbalance on 3 rows"],
             ),
         ];
+        // Bar 60's buy zone at 100.25 to 100.75: bar 120 rejects it, bar 180 closes below
+        // it, ending it silently, and bar 240 trades into the ended zone without a signal.
+        let rejection: [Step; 7] = [
+            (
+                120,
+                100.5,
+                1.0,
+                Sell,
+                &[
+                    "Buy imbalance: Buy imbalance on 3 rows",
+                    "Stacked buy imbalance: Stacked buy imbalance of 3 rows",
+                ],
+            ),
+            (121, 100.75, 1.0, Buy, &[]),
+            (
+                180,
+                100.25,
+                1.0,
+                Buy,
+                &["Buy zone rejection: Buy zone rejection at 100.25 to 100.75"],
+            ),
+            (181, 100.0, 1.0, Sell, &[]),
+            (240, 100.5, 1.0, Sell, &[]),
+            (241, 100.75, 1.0, Buy, &[]),
+            (300, 100.0, 1.0, Buy, &[]),
+        ];
+        // Bar 120 repeats bar 60's stack. Both later rejections name the shared bounds once.
+        let repeated: [Step; 9] = [
+            (
+                120,
+                100.0,
+                1.0,
+                Sell,
+                &[
+                    "Buy imbalance: Buy imbalance on 3 rows",
+                    "Stacked buy imbalance: Stacked buy imbalance of 3 rows",
+                ],
+            ),
+            (121, 100.25, 1.0, Sell, &[]),
+            (122, 100.5, 1.0, Sell, &[]),
+            (123, 100.25, 12.0, Buy, &[]),
+            (124, 100.5, 9.0, Buy, &[]),
+            (125, 100.75, 15.0, Buy, &[]),
+            (
+                180,
+                100.5,
+                1.0,
+                Sell,
+                &[
+                    "Buy imbalance: Buy imbalance on 3 rows",
+                    "Stacked buy imbalance: Stacked buy imbalance of 3 rows",
+                    "Buy zone rejection: Buy zone rejection at 100.25 to 100.75",
+                ],
+            ),
+            (181, 100.75, 1.0, Buy, &[]),
+            (
+                240,
+                101.0,
+                1.0,
+                Buy,
+                &["Buy zone rejection: Buy zone rejection at 100.25 to 100.75"],
+            ),
+        ];
         let settings = |minimum: f64| {
             let mut settings = DetectorSettings::default();
             settings.footprint.enabled = true;
@@ -1898,6 +1934,8 @@ mod tests {
             rule.sell_imbalance = true;
             rule.stacked_buy_imbalance = true;
             rule.stacked_sell_imbalance = true;
+            rule.buy_zone_rejection = true;
+            rule.sell_zone_rejection = true;
             rule.imbalance_min_volume = minimum;
             rule.buy_volume_above = Some(100.0);
             rule.sell_volume_above = Some(100.0);
@@ -1930,6 +1968,16 @@ mod tests {
             ),
             ("levels", 0.0, selling.to_vec()),
             ("horizontal gap breaks the stack", 0.0, gapped.to_vec()),
+            (
+                "zone rejection",
+                0.0,
+                [&stacked(&[])[..7], &rejection[..]].concat(),
+            ),
+            (
+                "repeated stack",
+                0.0,
+                [&stacked(&[])[..7], &repeated[..]].concat(),
+            ),
         ] {
             let mut host = Host::new(Some(1_000.0));
             let mut configured = settings(minimum);
@@ -1950,6 +1998,57 @@ mod tests {
                 let id = SignalId("footprint-stacked-buy-60000".into());
                 assert!(host.events().contains(&SignalEvent::Remove(id)), "{name}");
                 assert!(alerts(&host).is_empty(), "{name}: rebuilt five-minute bars");
+            }
+        }
+        // A closed bar skipped while disabled or after retention ends every active zone.
+        // Disabling and enabling inside a bar still reads its close and keeps unbroken zones.
+        for name in [
+            "disabled across close",
+            "first retained bar",
+            "disabled inside bar",
+        ] {
+            let host = Host::new(None);
+            let mut configured = DetectorSettings::default();
+            configured.footprint.enabled = true;
+            configured.footprint.alert = true;
+            configured.footprint.rule.buy_zone_rejection = true;
+            configured.footprint.rule.sell_zone_rejection = true;
+            host.detectors.set_settings(configured.clone());
+            let push = |second, price, size, side, expected: &[&str]| {
+                let trade = MarketEvent::Trade(fill(second, price, size, side, None));
+                host.detectors.push("ES", time(second), &trade);
+                assert_eq!(alerts(&host), expected, "{name}, second {second}");
+            };
+            for &(second, price, size, side, expected) in &stacked(&[])[..7] {
+                push(second, price, size, side, expected);
+            }
+            push(120, 100.5, 1.0, Sell, &[]);
+            if name != "first retained bar" {
+                configured.footprint.enabled = false;
+                host.detectors.set_settings(configured.clone());
+            }
+            if name == "disabled inside bar" {
+                push(121, 100.75, 1.0, Buy, &[]);
+                configured.footprint.enabled = true;
+                host.detectors.set_settings(configured);
+                let rejected = &["Buy zone rejection: Buy zone rejection at 100.25 to 100.75"];
+                push(180, 100.5, 1.0, Sell, rejected);
+                push(181, 100.75, 1.0, Buy, &[]);
+                push(240, 101.0, 1.0, Buy, rejected);
+            } else {
+                let fills = if name == "first retained bar" {
+                    100_010
+                } else {
+                    1
+                };
+                for _ in 0..fills {
+                    push(121, 99.0, 1.0, Sell, &[]);
+                }
+                push(180, 99.0, 1.0, Sell, &[]);
+                configured.footprint.enabled = true;
+                host.detectors.set_settings(configured);
+                push(181, 100.25, 1.0, Buy, &[]);
+                push(240, 100.5, 1.0, Buy, &[]);
             }
         }
         // Loaded history, with 101 sold on its own row: marked, never alerted, also when the first

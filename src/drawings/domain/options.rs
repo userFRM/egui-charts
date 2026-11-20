@@ -821,6 +821,20 @@ impl RegressionTrendConfig {
     }
 }
 
+impl RegressionTrendConfig {
+    /// Settings for a new drawing: the defaults with 2 px accent blue bands at 30% opacity.
+    pub fn drawing_default() -> Self {
+        let band = RegressionBandLine::new([41, 98, 255, 77])
+            .with_width(Some(2.0))
+            .expect("2 px is a valid width");
+        Self {
+            upper_line: band,
+            lower_line: band,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for RegressionTrendConfig {
     /// A dashed line fitted to the closes in the drawing's colour and width, solid bands two
     /// standard deviations away in the accent blue at the drawing's width, and a correlation label
@@ -1224,13 +1238,30 @@ impl Default for MiddleLineStyle {
 }
 
 /// What a pin and a signpost show at their marker: a pin's text popup, and the glyph a signpost
-/// can carry on a coloured disc below its text. Other tools ignore these settings. A new drawing
-/// shows a pin's text and leaves a signpost's glyph off.
+/// can carry on a coloured disc below its text. The text switch also shows and hides the text
+/// of a horizontal line, a horizontal ray, an arrow mark and the parallel, flat top/bottom and
+/// disjoint channels. Other tools ignore these settings. A new drawing shows its text and
+/// leaves a signpost's glyph off.
+///
+/// ```
+/// use egui_charts::drawings::{AnnotationMarker, Drawing, DrawingToolType};
+///
+/// let mut marker = AnnotationMarker::default();
+/// marker.glyph = "🚀".into();
+/// marker.show_glyph = true;
+/// assert!(marker.is_valid());
+///
+/// let mut level = Drawing::new(1, DrawingToolType::HorizontalLine);
+/// level.text = Some("Weekly support".into());
+/// level.marker.show_text = false;
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct AnnotationMarker {
-    /// Whether a pin shows its text in a popup while it is selected or under the pointer.
+    /// Whether a pin shows its text in a popup while it is selected or under the pointer, and
+    /// whether a horizontal line, a horizontal ray, an arrow mark or a parallel, flat
+    /// top/bottom or disjoint channel draws its text. Switched off, the text is kept.
     pub show_text: bool,
     /// Glyph on a signpost's disc: an emoji, or the id of a bundled icon or sticker.
     pub glyph: String,
@@ -1313,10 +1344,10 @@ pub enum LineTextOrientation {
     Horizontal,
 }
 
-/// Independent readouts of a trend line, ray, extended line, info line or trend angle, and the
-/// placement of the text of those tools and of a horizontal line or ray or a vertical line,
-/// which have no readouts. Readouts start hidden except on an info line, see [`Self::for_tool`];
-/// saves from before these settings read the same way.
+/// Independent readouts of a trend line, ray, extended line, info line, trend angle or arrow,
+/// and the placement of the text of those tools and of a horizontal line or ray or a vertical
+/// line, which have no readouts. Readouts start hidden except on an info line, see
+/// [`Self::for_tool`]; saves from before these settings read the same way.
 /// Price changes follow anchor order; lengths and elapsed time are unsigned.
 ///
 /// ```
@@ -1372,8 +1403,9 @@ thread_local! {
 impl LineMeasurements {
     /// The settings a new drawing of `tool` starts with: an info line keeps every readout visible
     /// in the middle of the line, a horizontal or vertical line writes its text on the line and a
-    /// vertical line runs through every pane, other tools keep their readouts hidden and their text
-    /// above the line.
+    /// vertical line runs through every pane, a parallel channel, flat top/bottom or disjoint
+    /// channel starts its text at the left end of its first line, and other tools keep their
+    /// readouts hidden and their text above the middle of the line.
     pub fn for_tool(tool: super::DrawingToolType) -> Self {
         if tool == super::DrawingToolType::VerticalLine {
             return Self {
@@ -1385,6 +1417,17 @@ impl LineMeasurements {
         if tool == super::DrawingToolType::HorizontalLine {
             return Self {
                 text_vertical_align: LineTextVerticalAlign::Middle,
+                ..Self::default()
+            };
+        }
+        if matches!(
+            tool,
+            super::DrawingToolType::ParallelChannel
+                | super::DrawingToolType::FlatTopBottom
+                | super::DrawingToolType::DisjointChannel
+        ) {
+            return Self {
+                text_horizontal_align: LineTextHorizontalAlign::Left,
                 ..Self::default()
             };
         }
@@ -1422,6 +1465,139 @@ impl LineMeasurements {
     pub(crate) fn fill_left_out(&mut self, tool: super::DrawingToolType) {
         if LINE_MEASUREMENTS_LEFT_OUT.replace(false) && tool == super::DrawingToolType::InfoLine {
             *self = Self::for_tool(tool);
+        }
+    }
+}
+
+thread_local! {
+    /// Whether the last drawing read on this thread left out its range settings.
+    static RANGE_SETTINGS_LEFT_OUT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Readouts, readout card, box border and vertical reach of a date range and a date and price
+/// range; other tools ignore these settings. Missing saved fields keep the readouts on a card
+/// in the theme's tooltip colours and the box edges in the drawing's line colour, width and
+/// pattern. New drawings start from [`Self::for_tool`].
+///
+/// ```
+/// use egui_charts::drawings::RangeSettings;
+///
+/// let mut settings = RangeSettings::default();
+/// settings.volume = false;
+/// settings.text_color = Some([242, 54, 69, 255]);
+/// settings.extend_top = true;
+/// assert!(settings.is_valid());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct RangeSettings {
+    /// Price change from the first anchor to the second. A date range shows no price readouts.
+    pub price_change: bool,
+    /// Price change as a percentage of the first anchor's price.
+    pub percent_change: bool,
+    /// Price change in instrument pips, or ticks when pips are not defined.
+    pub pip_change: bool,
+    /// Number of bars between the anchors.
+    pub bar_count: bool,
+    /// Time between the anchors, on a time axis.
+    pub elapsed_time: bool,
+    /// Volume traded over the bars from one anchor to the other.
+    pub volume: bool,
+    /// Colour of the readouts, whose alpha is their opacity; `None` takes the theme's axis text
+    /// colour.
+    pub text_color: Option<[u8; 4]>,
+    /// Size of the readouts, in points.
+    pub font_size: f32,
+    /// Whether the readouts sit on a card.
+    pub background: bool,
+    /// Colour of the card, whose alpha is its opacity; `None` takes the theme's tooltip colour.
+    pub background_color: Option<[u8; 4]>,
+    /// Colour of the card's shadow, whose alpha is its opacity. Missing saved fields are
+    /// transparent; new range cards start with black at 20% opacity.
+    pub shadow_color: [u8; 4],
+    /// Whether the box edges are drawn: at the measured times and, on a date and price range,
+    /// at the measured prices.
+    pub border: bool,
+    /// Colour of the box edges; `None` takes the drawing colour.
+    pub border_color: Option<[u8; 4]>,
+    /// Width of the box edges, in points; `None` takes the drawing's line width.
+    pub border_width: Option<f32>,
+    /// Pattern of the box edges; `None` takes the drawing's line style.
+    pub border_style: Option<crate::model::LineStyle>,
+    /// Whether a date range's time edges run up to the top of the pane.
+    pub extend_top: bool,
+    /// Whether a date range's time edges run down to the bottom of the pane.
+    pub extend_bottom: bool,
+}
+
+impl Default for RangeSettings {
+    fn default() -> Self {
+        Self {
+            price_change: true,
+            percent_change: true,
+            pip_change: true,
+            bar_count: true,
+            elapsed_time: true,
+            volume: true,
+            text_color: None,
+            font_size: 12.0,
+            background: true,
+            background_color: None,
+            shadow_color: [0; 4],
+            border: true,
+            border_color: None,
+            border_width: None,
+            border_style: None,
+            extend_top: false,
+            extend_bottom: false,
+        }
+    }
+}
+
+impl RangeSettings {
+    /// Settings for a new range, with a black card shadow at 20% opacity. A date and price
+    /// range starts without box edges; enabling them draws a 1 px border in the line colour.
+    pub fn for_tool(tool: super::DrawingToolType) -> Self {
+        let mut settings = Self::default();
+        if matches!(
+            tool,
+            super::DrawingToolType::DateRange | super::DrawingToolType::DateAndPriceRange
+        ) {
+            settings.shadow_color = [0, 0, 0, 51];
+        }
+        if tool == super::DrawingToolType::DateAndPriceRange {
+            settings.border = false;
+            settings.border_width = Some(1.0);
+        }
+        settings
+    }
+
+    /// Whether the font size lies in 1 to 256 points and a set border width above 0 and at
+    /// most 100 points.
+    pub fn is_valid(&self) -> bool {
+        crate::styles::typography::FONT_SIZES.contains(&self.font_size)
+            && self.border_width.is_none_or(|width| {
+                width > 0.0 && width <= crate::drawings::validation::MAX_STROKE_WIDTH
+            })
+    }
+
+    /// Notes that the drawing being read has no range settings, and gives the [`Default`] ones.
+    pub(crate) fn left_out() -> Self {
+        RANGE_SETTINGS_LEFT_OUT.set(true);
+        Self::default()
+    }
+
+    /// Clears the note of [`Self::left_out`], before a drawing is read.
+    pub(crate) fn forget_left_out() {
+        RANGE_SETTINGS_LEFT_OUT.set(false);
+    }
+
+    /// Takes `font_size`, the drawing's own, for the readouts when the drawing just read left
+    /// these settings out: its card was drawn at that size.
+    pub(crate) fn fill_left_out(&mut self, font_size: f32) {
+        if RANGE_SETTINGS_LEFT_OUT.replace(false) {
+            self.font_size = font_size;
         }
     }
 }

@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 /// The smallest and largest font size a footprint number is drawn at, in points.
 const FONT_LIMITS: [f32; 2] = [8.0, 24.0];
+/// Readable row heights accepted by the chart type's zoom grouping and number threshold.
+const ROW_HEIGHT_LIMITS: [f32; 2] = [10.0, 40.0];
 /// The share of a ladder column each of its side cells takes.
 const LADDER_CELL_SHARE: f32 = 0.39;
 /// The height of a ladder bar's totals and box, three rows of the 10 point font and their margins.
@@ -26,7 +28,7 @@ const MARKER_ROOM: f32 = 18.0;
 /// The height of a bar's extreme ratio, one line of the 10 point font.
 const RATIO_TEXT_HEIGHT: f32 = 14.0;
 
-pub use crate::model::{FootprintColor, FootprintMode};
+pub use crate::model::{FootprintColor, FootprintIntensity, FootprintMode};
 
 /// Footprint appearance. Supply colours from the host's theme. Serializable, so a host can keep
 /// it with its chart settings; fields missing from older documents take their defaults.
@@ -40,6 +42,9 @@ pub struct FootprintConfig {
     pub profile: bool,
     /// Cell colouring rule.
     pub color_by: FootprintColor,
+    /// What volume, delta-opacity and volume-step shades and number sizes are measured against.
+    /// Each bar uses its own rows by default.
+    pub intensity: FootprintIntensity,
     /// Buy colour.
     pub ask_color: Color32,
     /// Sell colour.
@@ -102,7 +107,8 @@ pub struct FootprintConfig {
     /// the side that traded.
     pub show_zero: bool,
     /// Preferred smallest and largest font size of the numbers, in points. A row's size follows
-    /// its volume relative to the bar's largest row; equal values request one size. Both are held
+    /// its volume relative to the largest row of the [`intensity`](Self::intensity) scale; equal
+    /// values request one size. Both are held
     /// within 8 and 24 points. Fitting to the cell can reduce the size to 8 points; columns that
     /// cannot fit readable numbers use an overview without them.
     pub font_size: [f32; 2],
@@ -125,7 +131,8 @@ pub struct FootprintConfig {
     /// bar. A bar of a day or longer then shows its own delta. Used by the footprint chart type
     /// and [`crate::widget::Chart::show_footprint`].
     pub session_cumulative_delta: bool,
-    /// Annotations calculated from the displayed rows after executions or grouping change.
+    /// Annotations calculated from the displayed rows and their bars' closes after executions,
+    /// grouping or closes change.
     /// `None` hides them. Used by the footprint chart type and [`crate::widget::Chart::show_footprint`].
     #[cfg(feature = "studies")]
     pub studies: Option<crate::studies::FootprintStudyConfig>,
@@ -137,6 +144,7 @@ impl Default for FootprintConfig {
             modes: vec![FootprintMode::Ladder],
             profile: false,
             color_by: FootprintColor::VolumeSteps,
+            intensity: FootprintIntensity::Bar,
             ask_color: crate::tokens::DESIGN_TOKENS.semantic.chart.bullish,
             bid_color: crate::tokens::DESIGN_TOKENS.semantic.chart.bearish,
             imbalance_ask_color: None,
@@ -175,6 +183,7 @@ impl Default for FootprintConfig {
 impl FootprintConfig {
     /// The footprint of the chart type under `params`, its rows `row_ticks` instrument ticks
     /// tall, as `ChartTypeParams::footprint_row_size` resolves them, or grouped by zoom at zero.
+    /// Automatic row height and smallest text row height are held within 10 to 40 points.
     pub(crate) fn from_chart_params(
         params: &ChartTypeParams,
         colors: [Color32; 4],
@@ -186,13 +195,16 @@ impl FootprintConfig {
             modes: params.footprint_modes.clone(),
             profile: params.footprint_profile,
             color_by: params.footprint_color_by,
+            intensity: params.footprint_intensity,
             ask_color,
             bid_color,
             imbalance_ask_color: params.footprint_imbalance_colors[0],
             imbalance_bid_color: params.footprint_imbalance_colors[1],
             text_color,
             neutral_color,
-            auto_row_height: (row_ticks == 0).then_some(16.0),
+            auto_row_height: (row_ticks == 0)
+                .then(|| readable_row_height(params.footprint_auto_row_height, 16.0)),
+            min_text_height: readable_row_height(params.footprint_min_text_height, 12.0),
             row_ticks,
             imbalance_ratio: params.footprint_imbalance_ratio,
             imbalance_min_volume: params.footprint_imbalance_min_volume,
@@ -221,6 +233,7 @@ impl FootprintConfig {
             .then_some(crate::studies::FootprintStudyConfig {
                 stacked_imbalances: params.footprint_stacked_imbalances,
                 stack: params.footprint_stack,
+                zones_until_broken: params.footprint_zones_until_broken,
                 naked_poc: params.footprint_naked_poc,
                 delta_poc: params.footprint_delta_poc,
                 unfinished_auctions: params.footprint_unfinished_auctions,
@@ -231,6 +244,7 @@ impl FootprintConfig {
                 imbalance_ratio: params.footprint_imbalance_ratio,
                 imbalance_min_volume: params.footprint_imbalance_min_volume,
                 diagonal: params.footprint_diagonal,
+                extend_bars: params.footprint_extend_bars,
                 ..Default::default()
             }),
             ..Default::default()
@@ -295,7 +309,9 @@ pub(crate) fn footprint_column_width(bar_spacing: f32, config: &FootprintConfig)
 /// grouping runs during painting. Cells under a point wide are too narrow to read and are skipped
 /// before looking up executions. Unless a [`FootprintMode::Ladder`] column draws its candle, a
 /// price spine occupies a separate gutter to the left of each bar: the opening tick points left,
-/// the closing tick right, and the colour follows price direction.
+/// the closing tick right, and the colour follows price direction. Shades and value-sized fonts
+/// follow `config.intensity`; [`FootprintIntensity::Visible`] measures them against complete bars
+/// whose cells overlap `mapping.rect` horizontally.
 pub fn render_footprint(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -339,6 +355,25 @@ pub(crate) fn render_footprint_read(
     let steps = config.color_by == FootprintColor::VolumeSteps;
     let imbalance_colors = config.imbalance_colors();
     let spine_drawn = !has_ladder(config);
+    // Only complete bars whose cells overlap the plot set the view's scale.
+    let visible = (config.intensity == FootprintIntensity::Visible)
+        .then(|| {
+            bars.iter()
+                .enumerate()
+                .take(end)
+                .skip(first)
+                .filter_map(|(index, bar)| {
+                    let source = flow.bar_at(bar.time).filter(|s| flow.complete_at(s.time))?;
+                    let left = mapping.idx_to_x(index) - mapping.bar_spacing * 0.46;
+                    let right = left + columns as f32 * width - 0.5;
+                    (left < mapping.rect.right() && right > mapping.rect.left()).then(|| {
+                        let group = row_group(mapping, bar, flow, config);
+                        Scale::of(group_bar(source, group).view().levels.values())
+                    })
+                })
+                .reduce(Scale::merge)
+        })
+        .flatten();
     // Use the existing half-gap so price markers do not shrink execution columns.
     let gutter = (mapping.bar_spacing * 0.04).min(2.5);
     let mut partial_visible = false;
@@ -413,26 +448,14 @@ pub(crate) fn render_footprint_read(
                 }
             }
         }
-        let max_volume = shown
-            .levels
-            .values()
-            .map(|row| row.volume())
-            .fold(0.0, f64::max);
-        let max_delta = shown
-            .levels
-            .values()
-            .map(|row| row.delta().abs())
-            .fold(0.0, f64::max);
-        let side_range = |side: fn(&FootprintLevel) -> f64| {
-            shown
-                .levels
-                .values()
-                .map(side)
-                .fold([f64::INFINITY, 0.0], |[min, max], value| {
-                    [min.min(value), max.max(value)]
-                })
+        let own = Scale::of(shown.levels.values());
+        let scale = match config.intensity {
+            FootprintIntensity::Visible => visible.unwrap_or(own),
+            FootprintIntensity::Volume(volume) if volume.is_finite() && volume > 0.0 => {
+                Scale::entered(volume)
+            }
+            _ => own,
         };
-        let side_ranges = [side_range(|row| row.bid), side_range(|row| row.ask)];
         let area = config
             .value_area
             .filter(|_| !partial)
@@ -469,7 +492,7 @@ pub(crate) fn render_footprint_read(
             .take(columns)
             .map(|mode| {
                 let fit = |width, text: &dyn Fn(&FootprintLevel, bool) -> String| {
-                    column_galleys(&painter, &text_rows, max_volume, text, config, width)
+                    column_galleys(&painter, &text_rows, scale.volume, text, config, width)
                 };
                 if *mode == FootprintMode::Ladder {
                     let width = (width - 0.5) * LADDER_CELL_SHARE - 2.5;
@@ -532,7 +555,7 @@ pub(crate) fn render_footprint_read(
                     } else {
                         step_color(
                             color,
-                            volume_step(volume, side_ranges[side]),
+                            volume_step(volume, scale.sides[side]),
                             text_background,
                         )
                     }
@@ -583,15 +606,15 @@ pub(crate) fn render_footprint_read(
                     let color = if partial && config.color_by == FootprintColor::Imbalance {
                         config.neutral_color
                     } else {
-                        cell_color(&shown, row, max_volume, max_delta, config)
+                        cell_color(&shown, row, scale.volume, scale.delta, config)
                     };
                     let (value, largest) = if ladder {
                         (
                             if side == 0 { row.bid } else { row.ask },
-                            side_ranges[0][1].max(side_ranges[1][1]),
+                            own.sides[0][1].max(own.sides[1][1]),
                         )
                     } else {
-                        (row.volume(), max_volume)
+                        (row.volume(), own.volume)
                     };
                     // The POC row stays a full band, so both of its numbers lie on its fill.
                     let share = if config.profile && !(steps && poc_row) && largest > 0.0 {
@@ -900,6 +923,15 @@ pub(crate) fn render_footprint_read(
     }
 }
 
+/// A chart-type row height within the readable limits, or `default` for NaN.
+fn readable_row_height(height: f32, default: f32) -> f32 {
+    if height.is_nan() {
+        default
+    } else {
+        height.clamp(ROW_HEIGHT_LIMITS[0], ROW_HEIGHT_LIMITS[1])
+    }
+}
+
 /// The font sizes of the smallest and the largest row: the configured pair within the readable
 /// limits, in ascending order; the default size for one that is not a number.
 fn font_limits(sizes: [f32; 2]) -> [f32; 2] {
@@ -936,7 +968,7 @@ fn column_galleys(
                     text = text.replace(" × ", "×").replace(" / ", "/");
                 }
                 let share = if max_volume > 0.0 {
-                    (row.volume() / max_volume) as f32
+                    (row.volume() / max_volume).min(1.0) as f32
                 } else {
                     0.0
                 };
@@ -970,7 +1002,7 @@ fn column_galleys(
 }
 
 /// The text of one cell in `mode`; empty when every number in it is a hidden zero.
-fn cell_text(
+pub(super) fn cell_text(
     mode: FootprintMode,
     row: &FootprintLevel,
     abbreviate: bool,
@@ -1222,6 +1254,56 @@ fn ladder_sides(column: Rect) -> [Rect; 2] {
     ]
 }
 
+/// The volumes cell shades and number sizes are measured against.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Scale {
+    volume: f64,
+    delta: f64,
+    /// Sell and buy minima and maxima, respectively.
+    sides: [[f64; 2]; 2],
+}
+
+impl Scale {
+    fn of<'a>(rows: impl IntoIterator<Item = &'a FootprintLevel>) -> Self {
+        rows.into_iter().fold(
+            Self {
+                volume: 0.0,
+                delta: 0.0,
+                sides: [[f64::INFINITY, 0.0]; 2],
+            },
+            |scale, row| {
+                scale.merge(Self {
+                    volume: row.volume(),
+                    delta: row.delta().abs(),
+                    sides: [[row.bid; 2], [row.ask; 2]],
+                })
+            },
+        )
+    }
+
+    fn merge(self, other: Self) -> Self {
+        let side = |i: usize| {
+            [
+                self.sides[i][0].min(other.sides[i][0]),
+                self.sides[i][1].max(other.sides[i][1]),
+            ]
+        };
+        Self {
+            volume: self.volume.max(other.volume),
+            delta: self.delta.max(other.delta),
+            sides: [side(0), side(1)],
+        }
+    }
+
+    fn entered(volume: f64) -> Self {
+        Self {
+            volume,
+            delta: volume,
+            sides: [[0.0, volume]; 2],
+        }
+    }
+}
+
 /// The quarter of the `[smallest, largest]` range of its side that `volume` falls in, 0 to 3. A
 /// side that traded one volume throughout takes the strongest shade, or the weakest at zero.
 fn volume_step(volume: f64, [smallest, largest]: [f64; 2]) -> usize {
@@ -1386,10 +1468,10 @@ fn cell_color(
             } else {
                 config.bid_color
             };
-            side.gamma_multiply((row.delta().abs() / max_delta) as f32)
+            side.gamma_multiply((row.delta().abs() / max_delta).min(1.0) as f32)
         }
         FootprintColor::Volume => config.neutral_color.gamma_multiply(if max_volume > 0.0 {
-            (row.volume() / max_volume) as f32
+            (row.volume() / max_volume).min(1.0) as f32
         } else {
             0.0
         }),
@@ -1785,12 +1867,13 @@ pub(crate) fn render_footprint_statistics_rows_read(
 #[derive(Clone, Default)]
 struct FootprintStudyCache {
     revision: Option<u64>,
-    source: Vec<(chrono::DateTime<chrono::Utc>, i64)>,
+    source: Vec<(chrono::DateTime<chrono::Utc>, i64, Option<i64>)>,
     config: Option<crate::studies::FootprintStudyConfig>,
     studies: std::sync::Arc<[crate::studies::FootprintStudy]>,
 }
 
-/// Cache calculations per chart, including display grouping and execution corrections.
+/// Cache calculations per chart, including display grouping, execution corrections and corrected
+/// closes.
 #[cfg(feature = "studies")]
 pub(crate) fn render_footprint_annotations(
     painter: &Painter,
@@ -1811,8 +1894,10 @@ pub(crate) fn render_footprint_annotations(
         .iter()
         .zip(flow.matching(bars))
         .filter_map(|(bar, row)| {
-            row.filter(|row| flow.complete_at(row.time))
-                .map(|row| (bar.time, row, row_group(mapping, bar, flow, config)))
+            row.filter(|row| flow.complete_at(row.time)).map(|row| {
+                let group = row_group(mapping, bar, flow, config);
+                (bar.time, row, group, flow.level_of(bar.close))
+            })
         })
         .collect();
     let studies = painter.ctx().data_mut(|data| {
@@ -1822,22 +1907,22 @@ pub(crate) fn render_footprint_annotations(
             || cache.config.as_ref() != Some(&settings)
             || cache.source.len() != source.len()
             || !cache.source.iter().zip(&source).all(
-                |((time, group), (next_time, _, next_group))| {
-                    time == next_time && group == next_group
+                |((time, group, close), (next_time, _, next_group, next_close))| {
+                    time == next_time && group == next_group && close == next_close
                 },
             )
         {
             cache.source = source
                 .iter()
-                .map(|(time, _, group)| (*time, *group))
+                .map(|(time, _, group, close)| (*time, *group, *close))
                 .collect();
             let grouped: Vec<_> = source
                 .iter()
-                .map(|(_, bar, group)| (group_bar(*bar, *group), *group))
+                .map(|(_, bar, group, close)| (group_bar(*bar, *group), *group, *close))
                 .collect();
             let rows: Vec<_> = grouped
                 .iter()
-                .map(|(bar, group)| (bar.view(), *group))
+                .map(|(bar, group, close)| (bar.view(), *group, *close))
                 .collect();
             cache.studies =
                 crate::studies::footprint_studies_on_rows(&rows, &settings, flow).into();
@@ -1849,9 +1934,12 @@ pub(crate) fn render_footprint_annotations(
     render_footprint_studies_read(painter, mapping, bars, flow, &studies, config);
 }
 
-/// Paints footprint study levels and zones. Compute `studies` only after executions change.
-/// Stacks, naked POCs and unfinished levels extend to their first revisit, their expiry or the
-/// last displayed bar, in full colour while unvisited and dimmed once revisited or expired;
+/// Paints footprint study levels and zones. Compute `studies` after executions or closes change.
+/// Stacks, naked POCs and unfinished levels extend to their first revisit, or a stack that ends
+/// only when broken to its break, to their expiry or the last displayed bar, in full colour while
+/// unvisited or rejected and dimmed once revisited, broken or expired;
+/// each bar that rejected a stack that ends only when broken is marked
+/// by a triangle on the stack's near edge, pointing away from it;
 /// stacks take the imbalance colour of their side;
 /// local annotations stay anchored to their originating bar. Delta percentage and ratio markers
 /// are triangles outside the bar: buy markers above it, sell markers below, the delta marker
@@ -1955,11 +2043,38 @@ pub(crate) fn render_footprint_studies_read(
             _ => config.text_color,
         };
         let color = match study.state {
-            FootprintStudyState::Revisited | FootprintStudyState::Expired => {
-                color.gamma_multiply(0.45)
-            }
+            FootprintStudyState::Revisited
+            | FootprintStudyState::Expired
+            | FootprintStudyState::Broken => color.gamma_multiply(0.45),
             _ => color,
         };
+        // The near edge follows the price even on an inverted scale.
+        let radius = (mapping.bar_spacing * 0.2).min(4.0);
+        let edge = if study.kind == FootprintStudyKind::StackedBid {
+            y1
+        } else {
+            y2
+        };
+        let away = if edge < rect.center().y { -1.0 } else { 1.0 };
+        for time in &study.rejections {
+            let Some(&index) = indices.get(time) else {
+                continue;
+            };
+            let x = mapping.idx_to_x(index);
+            painter.add(Shape::convex_polygon(
+                vec![
+                    pos2(x, edge + away * radius * 1.5),
+                    pos2(x - radius, edge),
+                    pos2(x + radius, edge),
+                ],
+                if detail {
+                    color
+                } else {
+                    color.gamma_multiply(0.5)
+                },
+                Stroke::NONE,
+            ));
+        }
         let label = match study.kind {
             FootprintStudyKind::StackedBid => "Bid stack",
             FootprintStudyKind::StackedAsk => "Ask stack",
@@ -2032,11 +2147,15 @@ pub(crate) fn render_footprint_studies_read(
             continue;
         }
         if pointer.is_some_and(|p| rect.expand(2.0).contains(p)) {
-            let key = match study.state {
-                FootprintStudyState::Unvisited => "{label}: {low} to {high} (unvisited)",
-                FootprintStudyState::Revisited => "{label}: {low} to {high} (revisited)",
-                FootprintStudyState::Expired => "{label}: {low} to {high} (expired)",
-                FootprintStudyState::Local => "{label}: {low} to {high} (this bar)",
+            let (key, count) = match study.state {
+                FootprintStudyState::Unvisited => ("{label}: {low} to {high} (unvisited)", 0),
+                FootprintStudyState::Revisited => ("{label}: {low} to {high} (revisited)", 0),
+                FootprintStudyState::Expired => ("{label}: {low} to {high} (expired)", 0),
+                FootprintStudyState::Local => ("{label}: {low} to {high} (this bar)", 0),
+                FootprintStudyState::Rejected(count) => {
+                    ("{label}: {low} to {high} (rejections: {count})", count)
+                }
+                FootprintStudyState::Broken => ("{label}: {low} to {high} (broken)", 0),
             };
             let ctx = painter.ctx();
             hovered.push(l10n::format_text(
@@ -2046,6 +2165,7 @@ pub(crate) fn render_footprint_studies_read(
                     ("label", l10n::text(ctx, label)),
                     ("low", (study.low as f64 * flow.price_step()).to_string()),
                     ("high", (study.high as f64 * flow.price_step()).to_string()),
+                    ("count", count.to_string()),
                 ],
             ));
         }
@@ -2218,13 +2338,13 @@ mod tests {
                             let group = row_group(&map, bar, flow.into(), config);
                             let mut owned = FootprintBar::empty(source.time);
                             owned.absorb_grouped(source, group);
-                            (owned, group)
+                            (owned, group, flow.level_of(bar.close))
                         })
                 })
                 .collect();
             let rows: Vec<_> = grouped
                 .iter()
-                .map(|(bar, group)| (bar.into(), *group))
+                .map(|(bar, group, close)| (bar.into(), *group, *close))
                 .collect();
             let settings = crate::studies::FootprintStudyConfig {
                 imbalance_min_volume: config.imbalance_min_volume,
@@ -2264,6 +2384,40 @@ mod tests {
         flow.set_budget(100, 100);
         let repeated = cached_annotations(&ctx, &map, &bars, &flow, &config);
         assert!(Arc::ptr_eq(&covered, &repeated));
+
+        // Zones that end only when broken read the bars' closes, and a corrected close
+        // recalculates. Bar 0 is incomplete now. Bar 1's ask zone at 101..103 is rejected by
+        // bar 2, closing at 104, and broken once that close becomes 99.
+        config.row_ticks = 1;
+        config.auto_row_height = None;
+        config.studies.as_mut().unwrap().zones_until_broken = true;
+        let mut corrected = bars.clone();
+        corrected[2].close = 99.0;
+        corrected[2].low = 99.0;
+        for (shown, outcome) in [
+            (
+                &bars[..],
+                (None, crate::studies::FootprintStudyState::Rejected(1)),
+            ),
+            (
+                &corrected[..],
+                (
+                    Some(bars[2].time),
+                    crate::studies::FootprintStudyState::Broken,
+                ),
+            ),
+        ] {
+            let cached = cached_annotations(&ctx, &map, shown, &flow, &config);
+            assert_eq!(&*cached, eager(shown, &flow, &config));
+            let zone = cached
+                .iter()
+                .find(|s| {
+                    s.start == bars[1].time
+                        && s.kind == crate::studies::FootprintStudyKind::StackedAsk
+                })
+                .map(|s| (s.end, s.state));
+            assert_eq!(zone, Some(outcome));
+        }
     }
 
     /// The settings of a chart saved before the ladder became the default.
@@ -2274,6 +2428,113 @@ mod tests {
             color_by: FootprintColor::Delta,
             abbreviate: false,
             ..Default::default()
+        }
+    }
+
+    /// Nothing after bar 0 reaches its POC at 100. With five later bars allowed,
+    /// bars 1 through 5 exhaust the extension and it ends at bar 5 rather than bar 6.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn chart_type_expiry_ends_an_unrevisited_poc_at_the_fifth_later_bar() {
+        use crate::studies::{FootprintStudyKind, FootprintStudyState};
+        let time: chrono::DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        let bars: Vec<_> = (0..7)
+            .map(|i| {
+                let at = time + chrono::TimeDelta::minutes(i);
+                if i == 0 {
+                    flow.push(&Tick::new(at, 100.0, 10.0, Some(OrderSide::Buy)))
+                        .unwrap();
+                    flow.push(&Tick::new(at, 101.0, 1.0, Some(OrderSide::Buy)))
+                        .unwrap();
+                    Bar::new(at, 100.0, 101.0, 100.0, 101.0, 11.0)
+                } else {
+                    flow.push(&Tick::new(at, 105.0, 1.0, Some(OrderSide::Buy)))
+                        .unwrap();
+                    Bar::new(at, 105.0, 105.0, 105.0, 105.0, 1.0)
+                }
+            })
+            .collect();
+        let ctx = egui::Context::default();
+        for (expiry, end, state) in [
+            (None, None, FootprintStudyState::Unvisited),
+            (
+                Some(5),
+                Some(time + chrono::TimeDelta::minutes(5)),
+                FootprintStudyState::Expired,
+            ),
+            (Some(0), Some(time), FootprintStudyState::Expired),
+            (Some(7), None, FootprintStudyState::Unvisited),
+        ] {
+            let params = ChartTypeParams {
+                footprint_naked_poc: true,
+                footprint_extend_bars: expiry,
+                ..Default::default()
+            };
+            let config = FootprintConfig::from_chart_params(&params, [Color32::WHITE; 4], 1);
+            let studies = cached_annotations(&ctx, &annotation_mapping(), &bars, &flow, &config);
+            let poc: Vec<_> = studies
+                .iter()
+                .filter(|s| s.start == time && s.kind == FootprintStudyKind::NakedPoc)
+                .collect();
+            assert_eq!(poc.len(), 1);
+            assert_eq!(
+                (poc[0].low, poc[0].high, poc[0].end, poc[0].state),
+                (100, 100, end, state),
+                "{expiry:?}"
+            );
+        }
+        let expiry_only = ChartTypeParams {
+            footprint_extend_bars: Some(5),
+            ..Default::default()
+        };
+        assert!(
+            FootprintConfig::from_chart_params(&expiry_only, [Color32::WHITE; 4], 1)
+                .studies
+                .is_none()
+        );
+
+        // The chart type's persistence setting reaches the cached annotations: a buy stack
+        // at 100.25..100.75 is rejected by the next bar, which trades inside and closes at 100.75.
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for (price, size, side) in [
+            (100.0, 1.0, OrderSide::Sell),
+            (100.25, 1.0, OrderSide::Sell),
+            (100.5, 1.0, OrderSide::Sell),
+            (100.25, 12.0, OrderSide::Buy),
+            (100.5, 9.0, OrderSide::Buy),
+            (100.75, 15.0, OrderSide::Buy),
+        ] {
+            flow.push(&Tick::new(time, price, size, Some(side)))
+                .unwrap();
+        }
+        let next = time + chrono::TimeDelta::minutes(1);
+        for (price, side) in [(100.5, OrderSide::Sell), (100.75, OrderSide::Buy)] {
+            flow.push(&Tick::new(next, price, 1.0, Some(side))).unwrap();
+        }
+        let bars = [
+            Bar::new(time, 100.0, 100.75, 100.0, 100.75, 39.0),
+            Bar::new(next, 100.5, 100.75, 100.5, 100.75, 2.0),
+        ];
+        for until_broken in [true, false] {
+            let params = ChartTypeParams {
+                footprint_stacked_imbalances: true,
+                footprint_zones_until_broken: until_broken,
+                ..Default::default()
+            };
+            let config = FootprintConfig::from_chart_params(&params, [Color32::WHITE; 4], 1);
+            let studies = cached_annotations(&ctx, &annotation_mapping(), &bars, &flow, &config);
+            let zones: Vec<_> = studies
+                .iter()
+                .filter(|s| s.start == time && s.kind == FootprintStudyKind::StackedAsk)
+                .map(|s| (s.low, s.high, s.end, s.state, s.rejections.clone()))
+                .collect();
+            let expected = if until_broken {
+                (401, 403, None, FootprintStudyState::Rejected(1), vec![next])
+            } else {
+                (401, 403, Some(next), FootprintStudyState::Revisited, vec![])
+            };
+            assert_eq!(zones, [expected], "zones until broken: {until_broken}");
         }
     }
 
@@ -2325,6 +2586,178 @@ mod tests {
             Color32::WHITE
         );
         assert_eq!(contrasting_text(Color32::WHITE), Color32::BLACK);
+    }
+
+    /// The quiet row's share is 40/40000 in view, or 40/20000 at an entered volume.
+    /// The third bar is in the loop's margin but its cells start beyond the plot.
+    #[test]
+    fn intensity_scales_shades_and_fonts_per_bar_in_view_or_to_a_volume() {
+        let time: chrono::DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        let bars: Vec<_> = [(40.0, 0.0), (40_000.0, 10_000.0), (4_000_000.0, 0.0)]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (low, high))| {
+                let at = time + chrono::TimeDelta::minutes(index as i64);
+                flow.push(&Tick::new(at, 100.0, low, Some(OrderSide::Buy)))
+                    .unwrap();
+                if high > 0.0 {
+                    flow.push(&Tick::new(at, 101.0, high, Some(OrderSide::Buy)))
+                        .unwrap();
+                }
+                let top = if high > 0.0 { 101.0 } else { 100.0 };
+                Bar::new(at, 100.0, top, 100.0, top, low + high)
+            })
+            .collect();
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 160.0));
+        let mapping = |high| {
+            ChartMapping::new(
+                rect,
+                120.0,
+                0,
+                1,
+                0.0,
+                PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(98.0, high),
+                    0.0,
+                    160.0,
+                    false,
+                ),
+            )
+        };
+        let mut config = FootprintConfig {
+            modes: vec![FootprintMode::BidAsk],
+            auto_row_height: None,
+            min_text_height: 100.0,
+            show_poc: false,
+            show_imbalance: false,
+            value_area: None,
+            neutral_color: Color32::WHITE,
+            ask_color: Color32::from_rgb(0, 200, 100),
+            bid_color: Color32::from_rgb(220, 20, 60),
+            ..Default::default()
+        };
+        let paint = |config: &FootprintConfig, map: &ChartMapping| {
+            let mut output = egui::Context::default().run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| render_footprint(ui.painter(), map, &bars, &flow, config),
+            );
+            output.textures_delta.clear();
+            output.shapes
+        };
+        let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_premultiplied(r, g, b, a);
+        type FillCase = (FootprintColor, FootprintIntensity, [[u8; 4]; 3]);
+        let cases: &[FillCase] = &[
+            (
+                FootprintColor::Volume,
+                FootprintIntensity::Bar,
+                [[128; 4], [128; 4], [32; 4]],
+            ),
+            (
+                FootprintColor::Volume,
+                FootprintIntensity::Visible,
+                [[0; 4], [128; 4], [32; 4]],
+            ),
+            (
+                FootprintColor::Volume,
+                FootprintIntensity::Volume(20_000.0),
+                [[1; 4], [128; 4], [64; 4]],
+            ),
+            (
+                FootprintColor::DeltaOpacity,
+                FootprintIntensity::Bar,
+                [[0, 100, 50, 128], [0, 100, 50, 128], [0, 25, 13, 32]],
+            ),
+            (
+                FootprintColor::DeltaOpacity,
+                FootprintIntensity::Visible,
+                [[0; 4], [0, 100, 50, 128], [0, 25, 13, 32]],
+            ),
+            (
+                FootprintColor::DeltaOpacity,
+                FootprintIntensity::Volume(20_000.0),
+                [[0, 0, 0, 1], [0, 100, 50, 128], [0, 50, 25, 64]],
+            ),
+        ];
+        let map = mapping(110.0);
+        for &(color_by, intensity, expected) in cases {
+            config.color_by = color_by;
+            config.intensity = intensity;
+            let fills = quads(&paint(&config, &map));
+            for ((index, price), expected) in [(0, 100.0), (1, 100.0), (1, 101.0)]
+                .into_iter()
+                .zip(expected)
+            {
+                assert_eq!(
+                    color_at(&fills, pos2(map.idx_to_x(index), map.price_to_y(price))),
+                    Some(rgba(expected)),
+                    "{color_by:?} {intensity:?} bar {index} @ {price}"
+                );
+            }
+        }
+        config.color_by = FootprintColor::VolumeSteps;
+        for background in [Color32::BLACK, Color32::WHITE] {
+            config.background = Some(background);
+            for (intensity, expected) in [
+                (FootprintIntensity::Bar, [3, 3, 0]),
+                (FootprintIntensity::Visible, [0, 3, 0]),
+                (FootprintIntensity::Volume(20_000.0), [0, 3, 2]),
+            ] {
+                config.intensity = intensity;
+                let fills = quads(&paint(&config, &map));
+                for ((index, price), step) in [(0, 100.0), (1, 100.0), (1, 101.0)]
+                    .into_iter()
+                    .zip(expected)
+                {
+                    for (offset, color, step) in
+                        [(-27.0, config.bid_color, 0), (27.0, config.ask_color, step)]
+                    {
+                        assert_eq!(
+                            color_at(
+                                &fills,
+                                pos2(map.idx_to_x(index) + offset, map.price_to_y(price))
+                            ),
+                            Some(step_color(color, step, background)),
+                            "{intensity:?} bar {index} @ {price}, offset {offset}"
+                        );
+                    }
+                }
+            }
+        }
+        config.color_by = FootprintColor::Volume;
+        config.min_text_height = 10.0;
+        config.font_size = [8.0, 24.0];
+        let map = mapping(102.0);
+        for (intensity, expected) in [
+            (FootprintIntensity::Bar, 24.0),
+            (FootprintIntensity::Visible, 8.016),
+            (FootprintIntensity::Volume(20_000.0), 8.032),
+            (FootprintIntensity::Volume(1e-9), 24.0),
+            (FootprintIntensity::Volume(0.0), 24.0),
+            (FootprintIntensity::Volume(-1.0), 24.0),
+            (FootprintIntensity::Volume(f64::NAN), 24.0),
+            (FootprintIntensity::Volume(f64::INFINITY), 24.0),
+        ] {
+            config.intensity = intensity;
+            let shapes = paint(&config, &map);
+            let size = shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    Shape::Text(text) if text.galley.text() == "0 × 40" => {
+                        Some(text.galley.job.sections[0].format.font_id.size)
+                    }
+                    _ => None,
+                })
+                .expect("quiet bar's numbers");
+            assert!(
+                (size - expected).abs() < 1e-3,
+                "{intensity:?}: {size} != {expected}"
+            );
+        }
     }
 
     /// With the default settings each row has a sell cell left and a buy cell right of a candle
@@ -3027,6 +3460,94 @@ mod tests {
                     _ => false,
                 }),
                 "missing {expected}"
+            );
+        }
+    }
+
+    /// One tick is 160/3.5*0.25 = 11.43 points: automatic height 16 groups two,
+    /// while height 10 leaves one. A minimum of 12 hides single-row numbers; 10 keeps them.
+    #[test]
+    fn chart_type_row_heights_choose_numbers_or_the_overview() {
+        let time: chrono::DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for (price, size, side) in [
+            (100.0, 2.0, OrderSide::Sell),
+            (100.0, 3.0, OrderSide::Buy),
+            (100.25, 4.0, OrderSide::Buy),
+        ] {
+            flow.push(&Tick::new(time, price, size, Some(side)))
+                .unwrap();
+        }
+        let bars = [Bar::new(time, 100.0, 100.25, 100.0, 100.25, 9.0)];
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 160.0));
+        let map = ChartMapping::new(
+            rect,
+            240.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(98.5, 102.0),
+                0.0,
+                160.0,
+                false,
+            ),
+        );
+        for (auto, minimum, expected) in [
+            (16.0, 12.0, vec!["2 × 7"]),
+            (10.0, 12.0, vec![]),
+            (10.0, 10.0, vec!["0 × 4", "2 × 3"]),
+            (f32::NAN, 12.0, vec!["2 × 7"]),
+            (10.0, f32::NAN, vec![]),
+        ] {
+            let params = ChartTypeParams {
+                footprint_modes: vec![FootprintMode::BidAsk],
+                footprint_color_by: FootprintColor::Volume,
+                footprint_value_area: None,
+                footprint_auto_row_height: auto,
+                footprint_min_text_height: minimum,
+                ..Default::default()
+            };
+            let config = FootprintConfig::from_chart_params(&params, [Color32::WHITE; 4], 0);
+            let mut output = egui::Context::default().run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| render_footprint(ui.painter(), &map, &bars, &flow, &config),
+            );
+            output.textures_delta.clear();
+            let mut texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            texts.sort_unstable();
+            assert_eq!(texts, expected, "automatic {auto}, minimum {minimum}");
+        }
+        for (height, expected) in [
+            (0.0, 10.0),
+            (100.0, 40.0),
+            (f32::NEG_INFINITY, 10.0),
+            (f32::INFINITY, 40.0),
+        ] {
+            let params = ChartTypeParams {
+                footprint_auto_row_height: height,
+                footprint_min_text_height: height,
+                ..Default::default()
+            };
+            let config = FootprintConfig::from_chart_params(&params, [Color32::WHITE; 4], 0);
+            assert_eq!(
+                (config.auto_row_height, config.min_text_height),
+                (Some(expected), expected)
+            );
+            assert_eq!(
+                FootprintConfig::from_chart_params(&params, [Color32::WHITE; 4], 1).auto_row_height,
+                None
             );
         }
     }
@@ -4029,6 +4550,7 @@ mod tests {
             high: 106,
             kind,
             state: FootprintStudyState::Local,
+            rejections: Vec::new(),
         });
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(480.0, 320.0));
         let ctx = egui::Context::default();
@@ -4125,9 +4647,9 @@ mod tests {
         }
     }
 
-    /// Guards that the painted study annotations follow their public state: an unvisited zone
-    /// keeps its colour, a revisited or expired one is dimmed, and a buy marker is a triangle
-    /// above the bar's top row.
+    /// Guards that the painted study annotations follow their public state: an unvisited or
+    /// rejected zone keeps its colour, a revisited, expired or broken one is dimmed, each rejection
+    /// is a triangle on the zone's near edge, and a buy marker is above the bar's top row.
     #[cfg(feature = "studies")]
     #[test]
     fn studies_are_painted_as_their_state_and_kind_say() {
@@ -4159,8 +4681,9 @@ mod tests {
             high: low,
             kind,
             state,
+            rejections: Vec::new(),
         };
-        let studies = [
+        let mut studies = [
             study(
                 FootprintStudyKind::StackedAsk,
                 FootprintStudyState::Unvisited,
@@ -4181,7 +4704,24 @@ mod tests {
                 FootprintStudyState::Local,
                 400,
             ),
+            study(
+                FootprintStudyKind::StackedAsk,
+                FootprintStudyState::Rejected(2),
+                403,
+            ),
+            study(
+                FootprintStudyKind::StackedAsk,
+                FootprintStudyState::Broken,
+                404,
+            ),
+            study(
+                FootprintStudyKind::StackedBid,
+                FootprintStudyState::Rejected(1),
+                405,
+            ),
         ];
+        studies[4].rejections = vec![time];
+        studies[6].rejections = vec![time];
         let config = bid_ask_config();
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(
@@ -4201,7 +4741,35 @@ mod tests {
             })
             .collect();
         let dimmed = config.ask_color.gamma_multiply(0.45);
-        assert_eq!(strokes, [config.ask_color, dimmed, dimmed]);
+        assert_eq!(
+            strokes,
+            [
+                config.ask_color,
+                dimmed,
+                dimmed,
+                config.ask_color,
+                dimmed,
+                config.bid_color
+            ]
+        );
+        // Radius 4, height 6: up from the high of buy row 403, down from the low of sell row 405.
+        let x = map.idx_to_x(0);
+        let (top, bottom) = (map.price_to_y(100.875), map.price_to_y(101.125));
+        let paths: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Path(path) => Some((path.fill, path.points.clone())),
+                _ => None,
+            })
+            .collect();
+        for (fill, tip, edge) in [
+            (config.ask_color, top - 6.0, top),
+            (config.bid_color, bottom + 6.0, bottom),
+        ] {
+            let mark = vec![pos2(x, tip), pos2(x - 4.0, edge), pos2(x + 4.0, edge)];
+            assert!(paths.contains(&(fill, mark)), "{fill:?} rejection mark");
+        }
         let top = map.price_to_y(100.125);
         let triangle = output.shapes.iter().find_map(|shape| match &shape.shape {
             Shape::Path(path) if path.fill == config.ask_color => Some(path.points.clone()),
@@ -4226,6 +4794,7 @@ mod tests {
             high: 400,
             kind: FootprintStudyKind::SinglePrint,
             state: FootprintStudyState::Local,
+            rejections: Vec::new(),
         };
         // At 120 a default ladder bar has room for its summary below, and captions avoid that too.
         let ladder = FootprintConfig::default();

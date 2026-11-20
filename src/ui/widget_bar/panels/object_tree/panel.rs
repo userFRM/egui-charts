@@ -31,7 +31,7 @@ use crate::ui_kit::ext::UiExt;
 /// # Example
 ///
 /// ```no_run
-/// use egui_charts::ui::widget_bar::panels::object_tree::{ObjectTreePanel, SourceItem};
+/// use egui_charts::ui::widget_bar::{ObjectTreePanel, SourceItem};
 ///
 /// # fn side_panel(ui: &mut egui::Ui) {
 /// let mut panel = ObjectTreePanel::new();
@@ -141,8 +141,8 @@ impl ObjectTreePanel {
                 .iter()
                 .filter(|s| self.state.is_selected(s.id))
                 .peekable();
-            let all_locked =
-                selected.peek().is_some() && selected.all(|s| s.is_drawing() && s.locked);
+            let all_locked = selected.peek().is_some()
+                && selected.all(|s| s.is_drawing() && (s.locked || !s.user_edit_enabled));
             self.show_header(ui, &mut action, can_group, all_locked);
 
             ui.separator();
@@ -645,7 +645,10 @@ mod tests {
     #[test]
     fn selected_drawings_can_be_nested_hidden_locked_and_moved_without_replacing_them() {
         use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
-        use egui_kittest::{Harness, kittest::Queryable};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let mut chart = crate::widget::ChartBuilder::new().build();
             for name in ["Support", "Resistance", "Outside"] {
@@ -684,6 +687,7 @@ mod tests {
                                 item.folder = d.folder.clone();
                                 item.visible = d.visible;
                                 item.locked = d.locked;
+                                item.user_edit_enabled = d.user_edit_enabled;
                                 item.z_index = d.z_order;
                                 item
                             })
@@ -778,7 +782,23 @@ mod tests {
                     }
                 );
             }
-            h.query_all_by_label("Hide folder").next().unwrap().click();
+            for drawing in h.state_mut().1.drawings_mut().drawings.iter_mut().take(2) {
+                drawing.user_edit_enabled = false;
+            }
+            h.run();
+            assert!(
+                h.query_all_by_label("Lock folder")
+                    .next()
+                    .unwrap()
+                    .accesskit_node()
+                    .is_disabled()
+            );
+            let hide = h.query_all_by_label("Hide folder").next().unwrap();
+            assert!(
+                !hide.accesskit_node().is_disabled(),
+                "protected drawings can still be hidden"
+            );
+            hide.click();
             h.run();
             assert_eq!(
                 saved(&h)
@@ -787,6 +807,17 @@ mod tests {
                     .collect::<Vec<_>>(),
                 [false, false, true]
             );
+            let show = h.query_all_by_label("Show folder").next().unwrap();
+            assert!(!show.accesskit_node().is_disabled());
+            show.click();
+            h.run();
+            assert!(h.state().1.drawings().drawings.iter().all(|d| d.visible));
+            for drawing in h.state_mut().1.drawings_mut().drawings.iter_mut().take(2) {
+                drawing.user_edit_enabled = true;
+            }
+            h.run();
+            h.query_all_by_label("Hide folder").next().unwrap().click();
+            h.run();
             h.query_all_by_label("Lock folder").next().unwrap().click();
             h.run();
             assert_eq!(

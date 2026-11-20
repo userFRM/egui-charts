@@ -32,6 +32,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// request already in flight may finish, but its answer is discarded after cancellation.
 /// Search sends qualified text unchanged in `query`, keeps the explicit `exchange` independent,
 /// and includes `country`, `sector` and `source` parameters only when those filters are set.
+/// A search result this build cannot read is left out, and paging continues past it.
 /// Symbol objects may report those fields alongside `root`, `logo` and `exchange_logo`.
 ///
 /// ```
@@ -166,18 +167,30 @@ impl HttpDatafeed {
         let target = url(&self.base, "search", params);
         get(target, String::new(), move |result| {
             // A result this build cannot read is left out rather than hiding the others; resolving
-            // it still reports why.
-            reply.send(result.map(|symbols: Vec<serde_json::Value>| {
-                symbols
+            // it still reports why. A full page with none readable signals bounded automatic
+            // paging with its first reason; an empty answer would hide later server results.
+            reply.send(result.and_then(|symbols: Vec<serde_json::Value>| {
+                let full = limit > 0 && symbols.len() >= limit;
+                let mut unreadable = None;
+                let found: Vec<Instrument> = symbols
                     .into_iter()
+                    .take(limit)
                     .filter_map(|symbol| {
                         serde_json::from_value::<Symbol>(symbol)
-                            .ok()?
-                            .into_instrument()
+                            .map_err(|error| FeedError::InvalidData(error.to_string()))
+                            .and_then(Symbol::into_instrument)
+                            .map_err(|error| {
+                                unreadable.get_or_insert(error);
+                            })
                             .ok()
                     })
-                    .take(limit)
-                    .collect()
+                    .collect();
+                match unreadable {
+                    Some(error) if found.is_empty() && full => {
+                        Err(FeedError::Other(error.to_string()))
+                    }
+                    _ => Ok(found),
+                }
             }));
         });
     }
@@ -307,15 +320,14 @@ impl Poll {
             return None;
         }
         let sink = &self.subscription.sink;
-        let result = result.and_then(|page| {
-            if page.bars.len() == 500 && self.since.is_some_and(|since| page.bars[0].time > since) {
-                Err(FeedError::InvalidData(
-                    "live history window exceeded; reload history".into(),
-                ))
-            } else {
-                Ok(page)
-            }
-        });
+        // A full window starting after the newest held bar leaves missing bars between them.
+        if let Ok(page) = &result
+            && page.bars.len() == 500
+            && self.since.is_some_and(|since| page.bars[0].time > since)
+        {
+            sink.reload_history();
+            return None;
+        }
         let delay = match result {
             Ok(page) => {
                 for bar in page.bars {

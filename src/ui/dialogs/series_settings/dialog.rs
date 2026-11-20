@@ -66,15 +66,6 @@ impl SeriesSettingsDialog {
         self.series_id = None;
     }
 
-    /// Sync dialog open/close state from an external flag.
-    ///
-    /// Opening requires series context, so only close is synced here.
-    pub fn sync_open_state(&mut self, should_be_open: bool) {
-        if !should_be_open && self.is_open {
-            self.close();
-        }
-    }
-
     /// Show the dialog and return the requested action.
     pub fn show(&mut self, ctx: &Context) -> SeriesSettingsAction {
         if !self.is_open {
@@ -433,6 +424,262 @@ mod tests {
         }
     }
 
+    /// A chart of the closes 100, 102 and 101.5 with the colours `up` and `down` as its candle
+    /// body colours and no last price line: one thin Kagi line from 100 to 102, or one column of
+    /// Xs from 100 to 102.
+    fn price_based_chart(kind: ChartType, [up, down]: [egui::Color32; 2]) -> crate::Chart {
+        use crate::model::{Bar, BarData};
+        let time = chrono::DateTime::UNIX_EPOCH;
+        let bars = [100.0, 102.0, 101.5]
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| Bar::new(time + chrono::Duration::days(i as i64), c, c, c, c, 0.0))
+            .collect();
+        let mut chart = crate::Chart::new(BarData::from_bars(bars));
+        chart.config_mut().show_volume = false;
+        chart.config_mut().bullish_color = up;
+        chart.config_mut().bearish_color = down;
+        chart.set_chart_type(kind);
+        // The last price line takes the colours too; only the elements are read.
+        let style = chart
+            .series_style_mut(crate::widget::SeriesId::MAIN)
+            .unwrap();
+        style.price_line_visible = false;
+        chart
+    }
+
+    /// The colours of the strokes `chart` paints in its plot, without repeats.
+    fn painted_strokes(chart: &mut crate::Chart) -> Vec<egui::Color32> {
+        use crate::widget::test_frames::{frame, shapes};
+        let ctx = Context::default();
+        frame(&ctx, chart, 0.0, vec![]);
+        let painted = shapes(&ctx, chart, 0.1, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let mut colors = Vec::new();
+        for shape in painted {
+            if let egui::Shape::LineSegment { points, stroke } = shape
+                && plot.contains(points[0])
+                && !colors.contains(&stroke.color)
+            {
+                colors.push(stroke.color);
+            }
+        }
+        colors
+    }
+
+    /// Kagi lines and Point and Figure columns take the colours accepted for them and leave the
+    /// candle colours alone, also when their type is chosen again. A layout or template saved
+    /// before they had colours draws them in its candle body colours, as it was drawn.
+    #[test]
+    fn series_settings_colours_reach_kagi_lines_and_point_and_figure_columns() {
+        let candles = [
+            egui::Color32::from_rgb(8, 153, 129),
+            egui::Color32::from_rgb(242, 54, 69),
+        ];
+        let own = [
+            egui::Color32::from_rgb(1, 2, 3),
+            egui::Color32::from_rgb(4, 5, 6),
+        ];
+        let saved = [
+            egui::Color32::from_rgb(1, 100, 2),
+            egui::Color32::from_rgb(101, 2, 3),
+        ];
+        // The thin Kagi line takes the falling colour, the X column the rising one.
+        for (kind, side) in [(ChartType::Kagi, 1), (ChartType::PointAndFigure, 0)] {
+            let mut chart = price_based_chart(kind, candles);
+            let mut settings = chart.series_settings();
+            let styles = &mut settings.chart_type_params.styles;
+            [styles.kagi.up_color, styles.kagi.down_color] = own;
+            [styles.point_figure.up_color, styles.point_figure.down_color] = own;
+            chart.apply_series_settings(&settings);
+            assert!(painted_strokes(&mut chart).contains(&own[side]), "{kind:?}");
+            chart.set_chart_type(ChartType::Candles);
+            let config = chart.config();
+            assert_eq!([config.bullish_color, config.bearish_color], candles);
+            let (bodies, _) = painted_candles(&mut chart, &own);
+            assert!(bodies.is_empty(), "{kind:?}: {bodies:?}");
+            chart.set_chart_type(kind);
+            assert!(painted_strokes(&mut chart).contains(&own[side]), "{kind:?}");
+
+            // The Kagi entry as saved before its colours, and no Point and Figure entry.
+            let former: serde_json::Value =
+                serde_json::from_str(r#"{"thick_width":2.5,"thin_width":1.5}"#).unwrap();
+            for template in [false, true] {
+                let saved_chart = price_based_chart(kind, saved);
+                let mut restored = price_based_chart(kind, candles);
+                if template {
+                    let state =
+                        crate::widget::settings::ChartSettingsState::from_chart(&saved_chart);
+                    let mut json = serde_json::to_value(state).unwrap();
+                    let styles = &mut json["chart_type_params"]["styles"];
+                    styles["kagi"] = former.clone();
+                    styles.as_object_mut().unwrap().remove("point_figure");
+                    let state: crate::widget::settings::ChartSettingsState =
+                        serde_json::from_value(json).unwrap();
+                    state.apply_to_chart(&mut restored).unwrap();
+                } else {
+                    let snapshot = saved_chart.snapshot().unwrap();
+                    let mut json = serde_json::to_value(snapshot).unwrap();
+                    for params in ["/chart_type_params", "/settings/chart_type_params"] {
+                        let styles = &mut json.pointer_mut(params).unwrap()["styles"];
+                        styles["kagi"] = former.clone();
+                        styles.as_object_mut().unwrap().remove("point_figure");
+                    }
+                    let snapshot: crate::widget::ChartSnapshot =
+                        serde_json::from_value(json).unwrap();
+                    restored.restore(&snapshot).unwrap();
+                }
+                let strokes = painted_strokes(&mut restored);
+                assert!(
+                    strokes.contains(&saved[side]),
+                    "{kind:?} {template}: {strokes:?}"
+                );
+            }
+        }
+    }
+
+    /// Every setting of the price-based chart types accepted in the dialog comes back from a
+    /// saved layout.
+    #[test]
+    fn price_based_settings_survive_a_layout() {
+        let color = |v: u8| Some(egui::Color32::from_rgb(v, 2 * v, 3 * v));
+        let mut chart = price_based_chart(ChartType::Renko, [egui::Color32::GREEN; 2]);
+        let mut settings = chart.series_settings();
+        let params = &mut settings.chart_type_params;
+        params.pnf_one_step_back = true;
+        params.renko_real_price = false;
+        params.kagi_real_price = false;
+        params.line_break_real_price = false;
+        params.pnf_real_price = false;
+        let styles = &mut params.styles;
+        [styles.kagi.up_color, styles.kagi.down_color] = [color(10), color(11)].map(Option::unwrap);
+        let point_figure = [color(12), color(13)].map(Option::unwrap);
+        [styles.point_figure.up_color, styles.point_figure.down_color] = point_figure;
+        styles.range.thin_bars = true;
+        styles.range.phantom_bars = true;
+        styles.renko = crate::model::RenkoStyle {
+            border_visible: false,
+            border_up: color(14),
+            border_down: color(15),
+            wick_up: color(16),
+            wick_down: color(17),
+        };
+        styles.line_break = crate::model::LineBreakStyle {
+            border_visible: false,
+            border_up: color(18),
+            border_down: color(19),
+        };
+        chart.apply_series_settings(&settings);
+        let json = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+        let mut restored = price_based_chart(ChartType::Candles, [egui::Color32::RED; 2]);
+        restored
+            .restore(&serde_json::from_str(&json).unwrap())
+            .unwrap();
+        assert_eq!(restored.chart_type_params(), &settings.chart_type_params);
+    }
+
+    /// Each placement, width, values and box control of the session profile edits only the draft:
+    /// Cancel drops the edit, and Ok applies it as one undoable step.
+    #[test]
+    fn session_profile_layout_controls_apply_on_ok_only_and_undo() {
+        use egui::Color32;
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        use serde_json::json;
+        let picked =
+            serde_json::to_value(Color32::from_rgba_unmultiplied(49, 27, 146, 128)).unwrap();
+        // Colour wells are found by their seeded colour, so their label is unused.
+        let cases = [
+            ("Placement", Role::ComboBox, "right_aligned", json!(true)),
+            ("Width", Role::SpinButton, "width", json!(0.99)),
+            ("Volume values", Role::CheckBox, "values", json!(true)),
+            ("", Role::ColorWell, "values_color", picked.clone()),
+            ("Session box", Role::CheckBox, "session_box", json!(false)),
+            ("", Role::ColorWell, "session_box_color", picked),
+        ];
+        for (label, role, field, value) in cases {
+            for accept in [false, true] {
+                let mut chart = crate::ChartBuilder::new().build();
+                chart.set_chart_type(ChartType::SessionVolumeProfile);
+                // Theme colours can repeat across rows; seeded ones label each well apart.
+                let mut params = chart.chart_type_params().clone();
+                params.profile.values_color =
+                    Some(Color32::from_rgba_unmultiplied(10, 20, 30, 128));
+                params.profile.session_box_color =
+                    Some(Color32::from_rgba_unmultiplied(40, 50, 60, 128));
+                chart.set_chart_type_params(params);
+                let seeded = chart.trade_profile_settings().clone();
+                let saved = serde_json::to_value(&seeded).unwrap();
+                let mut expected = saved.clone();
+                expected[field] = value.clone();
+                let label = if role == Role::ColorWell {
+                    let color: Color32 = serde_json::from_value(saved[field].clone()).unwrap();
+                    let [r, g, b, _] = color.to_srgba_unmultiplied();
+                    format!("#{r:02X}{g:02X}{b:02X}")
+                } else {
+                    label.to_owned()
+                };
+                let mut dialog = SeriesSettingsDialog::new();
+                dialog.open(SeriesId::MAIN, chart.series_settings());
+                let mut harness = Harness::builder()
+                    .with_context_setup(|ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                    })
+                    .with_size(Vec2::new(1440.0, 900.0))
+                    .build_ui_state(
+                        |ui, (dialog, chart): &mut (SeriesSettingsDialog, crate::Chart)| {
+                            if let SeriesSettingsAction::Apply(_, settings) = dialog.show(ui.ctx())
+                            {
+                                chart.user_action(|c| c.apply_series_settings(&settings));
+                            }
+                        },
+                        (dialog, chart),
+                    );
+                harness.run();
+                // The profile section is taller than the dialog.
+                harness.get_by_role_and_label(role, &label).scroll_to_me();
+                harness.run();
+                let control = harness.get_by_role_and_label(role, &label);
+                match role {
+                    Role::SpinButton => control.decrement_accesskit(),
+                    _ => control.click(),
+                }
+                harness.run();
+                match role {
+                    Role::ComboBox => harness.get_by_label("Right").click(),
+                    Role::ColorWell => harness
+                        .get_by_role_and_label(Role::ColorWell, "#311B92")
+                        .click(),
+                    _ => {}
+                }
+                harness.run();
+                assert_eq!(
+                    harness.state().1.trade_profile_settings(),
+                    &seeded,
+                    "{field}: draft only"
+                );
+                harness
+                    .get_by_label(if accept { "Ok" } else { "Cancel" })
+                    .click();
+                harness.run();
+                let chart = &mut harness.state_mut().1;
+                let current = |chart: &crate::Chart| {
+                    serde_json::to_value(chart.trade_profile_settings()).unwrap()
+                };
+                if accept {
+                    assert_eq!(current(chart), expected, "{field}");
+                    assert!(chart.undo(), "{field}");
+                    assert_eq!(current(chart), saved, "{field}");
+                    assert!(chart.redo(), "{field}");
+                    assert_eq!(current(chart), expected, "{field}");
+                } else {
+                    assert_eq!(current(chart), saved, "{field}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn type_controls_leave_the_footer_inside_short_and_narrow_windows() {
         for dark in [false, true] {
@@ -475,22 +722,10 @@ mod tests {
                             )),
                             _ => None,
                         });
-                        let inert_colour_controls = output.shapes.iter().any(|shape| {
-                            matches!(
-                                &shape.shape, egui::Shape::Text(text)
-                                if matches!(text.galley.text(), "Border" | "Wick")
-                            )
-                        });
                         let inactive = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if matches!(text.galley.text(), "Trading" | "Alerts" | "Events" | "Coming soon")));
                         output.drop_without_applying_deltas();
                         assert!(!inactive, "placeholder settings must not be offered");
                         if frame > 0 {
-                            if kind == ChartType::Renko {
-                                assert!(
-                                    !inert_colour_controls,
-                                    "Renko must only offer colours its renderer reads"
-                                );
-                            }
                             let ok = ok.expect("apply button is painted");
                             assert!(
                                 screen.contains_rect(ok.1) && ok.0.contains_rect(ok.1),

@@ -227,6 +227,9 @@ impl StoredDrawing {
         if !d.position_style.is_valid() {
             return Some("position_style".into());
         }
+        if !d.range_settings.is_valid() {
+            return Some("range_settings".into());
+        }
         if !d.marker.is_valid() {
             return Some("marker".into());
         }
@@ -270,6 +273,19 @@ impl StoredDrawing {
                     .any(|level| level.width.is_some_and(bad_width))
         }) {
             return Some("fib_config".into());
+        }
+        if d.gann.as_ref().is_some_and(|c| {
+            [
+                &c.price_levels,
+                &c.time_levels,
+                &c.fan_ratios,
+                &c.arc_ratios,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|level| level.width.is_some_and(bad_width))
+        }) {
+            return Some("gann".into());
         }
         for (name, values) in [
             (
@@ -1171,6 +1187,10 @@ mod v1 {
         drawing.fib_config = None;
         drawing.pitchfork = None;
         drawing.volume_profile = None;
+        // Version 1 feeds keep the range and noise the former loader supplied.
+        if let Some(feed) = drawing.ghost_feed.as_mut() {
+            (feed.average_range_ticks, feed.noise_ticks) = (10.0, 5.0);
+        }
         drawing.line_style = LineStyle::Solid;
         // The released renderers used fixed sizes, not the constructor's unused 12 pt field.
         // Other tools had no stored text presentation; their added captions keep their defaults.
@@ -1193,12 +1213,22 @@ mod v1 {
             _ => drawing.font_size,
         };
         drawing.font_weight = FontWeight::Normal;
+        // Released measuring readouts used the fixed size above.
+        drawing.range_settings = crate::drawings::RangeSettings {
+            font_size: drawing.font_size,
+            ..Default::default()
+        };
         drawing.text_color = None;
         drawing.background = true;
         drawing.border = true;
         drawing.border_color = None;
         drawing.channel_midline = false;
         drawing.theme_shade = false;
+        drawing.regression_trend = None;
+        drawing.position_size = None;
+        drawing.position_target_color = None;
+        drawing.position_stop_color = None;
+        drawing.elliott_degree = crate::drawings::ElliottDegree::default();
         // Info lines already displayed readouts; other lines keep their old text placement.
         drawing.line_measurements = if tool_type == DrawingToolType::InfoLine {
             LineMeasurements::for_tool(tool_type)
@@ -1383,6 +1413,7 @@ mod tests {
         d.line_style = LineStyle::Dotted;
         d.fill_color = Some([5, 6, 7, 8]);
         d.locked = true;
+        d.user_edit_enabled = false;
         d.visible = false;
         d.font_size = 18.0;
         d.font_weight = FontWeight::Bold;
@@ -1473,6 +1504,25 @@ mod tests {
             show_glyph: true,
             glyph_color: Some([21, 22, 23, 24]),
         };
+        d.range_settings = crate::drawings::RangeSettings {
+            price_change: false,
+            percent_change: false,
+            pip_change: false,
+            bar_count: false,
+            elapsed_time: false,
+            volume: false,
+            text_color: Some([25, 26, 27, 28]),
+            font_size: 18.0,
+            background: false,
+            background_color: Some([29, 30, 31, 32]),
+            shadow_color: [37, 38, 39, 40],
+            border: false,
+            border_color: Some([33, 34, 35, 36]),
+            border_width: Some(2.5),
+            border_style: Some(LineStyle::Dashed),
+            extend_top: true,
+            extend_bottom: true,
+        };
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d
@@ -1498,7 +1548,10 @@ mod tests {
             }
             drawing.gann = Some(crate::drawings::GannConfig {
                 price_levels: vec![
-                    GannLevel::new(0.25, [1, 2, 3, 255]),
+                    GannLevel {
+                        width: Some(3.5),
+                        ..GannLevel::new(0.25, [1, 2, 3, 255])
+                    },
                     GannLevel::new(0.75, [4, 5, 6, 255]),
                 ],
                 time_levels: vec![GannLevel::new(0.5, [7, 8, 9, 255])],
@@ -1517,6 +1570,9 @@ mod tests {
                 show_background: false,
                 background_opacity: 7,
                 show_angles: true,
+                show_labels: false,
+                reverse: true,
+                one_color: Some([19, 20, 21, 255]),
             });
             drawing.ghost_feed = Some(crate::drawings::GhostFeedConfig {
                 average_range_ticks: 2.5,
@@ -1556,6 +1612,13 @@ mod tests {
                 }],
                 ..Default::default()
             });
+            drawing.forecast = Some(crate::drawings::ForecastStyle {
+                start_text: None,
+                target_border: Some([11, 12, 13, 14]),
+                failure_text: Some([15, 16, 17, 18]),
+                transparency: 35,
+                ..Default::default()
+            });
             drawing.channel_midline = true;
             drawing.closed = true;
             drawing.elliott_degree = ElliottDegree::Submicro;
@@ -1585,7 +1648,12 @@ mod tests {
             };
             for &display in modes {
                 let config = drawing.volume_profile.as_mut().unwrap();
-                *config = config.with_row_size(Some(0.25)).unwrap();
+                *config = if display == UpDown {
+                    config.with_row_ticks(Some(4))
+                } else {
+                    config.with_row_size(Some(0.25))
+                }
+                .unwrap();
                 config.display = display;
                 config.up_color = [1, 2, 3, 240];
                 config.down_color = [4, 5, 6, 200];
@@ -1724,11 +1792,30 @@ mod tests {
         for saved in [
             include_str!("fixtures/storage_v2.json"),
             include_str!("fixtures/storage_v10_channels.json"),
+            // A forecast saved on main before its card settings, with a shared translucent fill.
+            r#"{"version":10,"symbol":"LEGACY","drawings":[{"id":"7","points":[{"ts_ms":1704067200000,"price":1.1},{"ts_ms":1704326400000,"price":1.10055}],"drawing":{"label":null,"pane":null,"selectable":true,"saveable":true,"listed":true,"user_edit_enabled":true,"group":null,"folder":[],"custom_tool":null,"custom_settings":null,"tool_type":"Forecast","screen_anchor":null,"color":[41,98,255,255],"stroke_width":2.0,"text":null,"post":null,"line_style":"Solid","fill_color":[12,34,56,80],"locked":false,"visible":true,"font_size":14.0,"font_weight":"Normal","italic":false,"text_color":null,"background":true,"border":true,"border_color":null,"text_wrap":false,"text_wrap_width":200.0,"text_follows_zoom":false,"text_zoom_spacing":null,"note_text_style":null,"extend_left":false,"extend_right":false,"arrow_start_style":"None","arrow_end_style":"None","timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"price_axis_label":true,"time_axis_label":true,"line_measurements":{"persistent":false,"price_change":false,"percent_change":false,"pip_change":false,"bar_count":false,"elapsed_time":false,"length":false,"inclination":false,"midpoint":false,"price_labels":false,"position":"Right","text_horizontal_align":"Center","text_vertical_align":"Bottom","text_orientation":"Vertical","across_panes":false},"range_settings":{"price_change":true,"percent_change":true,"pip_change":true,"bar_count":true,"elapsed_time":true,"volume":true,"text_color":null,"font_size":12.0,"background":true,"background_color":null,"border":true,"border_color":null,"border_width":null,"border_style":null,"extend_top":false,"extend_bottom":false},"position_size":null,"position_sizing":{"point_value":1.0,"lot_size":1.0,"quantity_step":0.0,"leverage":1.0},"position_readout":{"persistent":false,"condensed":false,"account_currency":null,"conversion_rate":null,"quantity_decimals":null},"position_target_color":null,"position_stop_color":null,"position_style":{"line_color":null,"line_width":1.0,"text_color":null,"font_size":12.0,"label_background":true,"label_color":null,"fill":true,"border":false,"border_color":[102,123,139,255]},"marker":{"show_text":true,"glyph":"🙂","show_glyph":false,"glyph_color":null},"fib_config":null,"volume_profile":null,"regression_trend":null,"vwap":null,"gann":null,"ghost_feed":null,"channel_midline":false,"anchor_price_style":null,"middle_line":{"color":null,"width":1.0,"line_style":"Dashed"},"theme_shade":true,"image":null,"glyph_angle":0.0,"closed":false,"pitchfork":null,"elliott_degree":"Minor","elliott_show_wave":true,"bars_pattern":null,"projection":null,"z_order":0},"created_at":1704067200000,"modified_at":1704067200000}],"metadata":{"created_at":1704067200000,"modified_at":1704067200000,"app_version":null}}"#,
         ] {
             let (storage, skipped) = DrawingStorage::from_json(saved).unwrap();
             assert!(skipped.is_empty(), "{skipped:?}");
             for stored in storage.drawings() {
-                assert_eq!(restore(stored, 1).series_layer, None);
+                let restored = restore(stored, 1);
+                assert_eq!(restored.series_layer, None);
+                if restored.tool_type == DrawingToolType::Forecast {
+                    assert_eq!(restored.forecast, None);
+                    let style = restored.forecast_style();
+                    assert_eq!(style.start_background, Some([12, 34, 56, 80]));
+                    assert_eq!(style.target_background, style.start_background);
+                    assert_eq!(style.success_background, style.start_background);
+                    assert_eq!(style.failure_background, style.start_background);
+                    assert_eq!((style.start_border, style.target_border), (None, None));
+                    assert_eq!(style.transparency, 0);
+                }
+                // These literal older saves have no tick layout and keep their row count.
+                if let Some(config) = restored.volume_profile {
+                    assert_eq!(config.row_ticks(), None);
+                    assert_eq!((config.rows(), config.value_area()), (50, 0.68));
+                    assert_eq!(config.row_size(), None);
+                }
                 assert!(
                     !serde_json::to_string(&stored.drawing)
                         .unwrap()
@@ -1736,6 +1823,19 @@ mod tests {
                 );
             }
         }
+        // A literal Gann box saved before per-line widths and the three switches.
+        let saved = r#"{"version":10,"symbol":"LEGACY","timeframe":null,"drawings":[{"id":"1","points":[{"ts_ms":1700006000000,"price":101.0},{"ts_ms":1700008700000,"price":109.0}],"drawing":{"label":null,"pane":null,"selectable":true,"saveable":true,"listed":true,"user_edit_enabled":true,"group":null,"folder":[],"custom_tool":null,"custom_settings":null,"tool_type":"GannBox","screen_anchor":null,"color":[41,98,255,255],"stroke_width":2.0,"text":null,"post":null,"line_style":"Solid","fill_color":null,"locked":false,"visible":true,"font_size":14.0,"font_weight":"Normal","italic":false,"text_color":null,"background":true,"border":true,"border_color":null,"text_wrap":false,"text_wrap_width":200.0,"text_follows_zoom":false,"text_zoom_spacing":null,"note_text_style":null,"extend_left":false,"extend_right":false,"arrow_start_style":"None","arrow_end_style":"None","timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"price_axis_label":true,"time_axis_label":true,"line_measurements":{"persistent":false,"price_change":false,"percent_change":false,"pip_change":false,"bar_count":false,"elapsed_time":false,"length":false,"inclination":false,"midpoint":false,"price_labels":false,"position":"Right","text_horizontal_align":"Center","text_vertical_align":"Bottom","text_orientation":"Vertical","across_panes":false},"range_settings":{"price_change":true,"percent_change":true,"pip_change":true,"bar_count":true,"elapsed_time":true,"volume":true,"text_color":null,"font_size":12.0,"background":true,"background_color":null,"border":true,"border_color":null,"border_width":null,"border_style":null,"extend_top":false,"extend_bottom":false},"position_size":null,"position_sizing":{"point_value":1.0,"lot_size":1.0,"quantity_step":0.0,"leverage":1.0},"position_readout":{"persistent":false,"condensed":false,"account_currency":null,"conversion_rate":null,"quantity_decimals":null},"position_target_color":null,"position_stop_color":null,"position_style":{"line_color":null,"line_width":1.0,"text_color":null,"font_size":12.0,"label_background":true,"label_color":null,"fill":true,"border":false,"border_color":[102,123,139,255]},"marker":{"show_text":true,"glyph":"🙂","show_glyph":false,"glyph_color":null},"fib_config":null,"volume_profile":null,"regression_trend":null,"vwap":null,"gann":{"price_levels":[{"value":0.0,"visible":true,"color":[128,128,128,255]},{"value":0.25,"visible":true,"color":[255,152,0,255]},{"value":1.0,"visible":true,"color":[0,188,212,255]}],"time_levels":[{"value":0.0,"visible":true,"color":[128,128,128,255]},{"value":0.25,"visible":true,"color":[255,152,0,255]},{"value":1.0,"visible":true,"color":[0,188,212,255]}],"show_grid":true,"show_fan":true,"fan_ratios":[{"value":8.0,"visible":false,"color":[128,128,128,255]},{"value":5.0,"visible":false,"color":[128,128,128,255]},{"value":4.0,"visible":false,"color":[128,128,128,255]},{"value":3.0,"visible":false,"color":[128,128,128,255]},{"value":2.0,"visible":true,"color":[0,188,212,255]},{"value":1.0,"visible":true,"color":[76,175,80,255]},{"value":0.5,"visible":true,"color":[8,153,129,255]},{"value":0.33333334,"visible":false,"color":[128,128,128,255]},{"value":0.25,"visible":false,"color":[128,128,128,255]},{"value":0.2,"visible":false,"color":[128,128,128,255]},{"value":0.125,"visible":false,"color":[128,128,128,255]}],"fan_direction":"Forward","show_arcs":true,"arc_ratios":[{"value":1.0,"visible":true,"color":[255,152,0,255]},{"value":1.4142135,"visible":true,"color":[255,152,0,255]},{"value":2.0,"visible":true,"color":[0,188,212,255]},{"value":2.236068,"visible":true,"color":[0,188,212,255]},{"value":3.0,"visible":true,"color":[76,175,80,255]},{"value":3.1622777,"visible":true,"color":[76,175,80,255]},{"value":4.0,"visible":true,"color":[8,153,129,255]},{"value":4.1231055,"visible":true,"color":[8,153,129,255]},{"value":5.0,"visible":true,"color":[41,98,255,255]},{"value":5.0990195,"visible":true,"color":[41,98,255,255]}],"show_background":true,"background_opacity":51,"show_angles":false},"ghost_feed":null,"channel_midline":false,"anchor_price_style":null,"middle_line":{"color":null,"width":1.0,"line_style":"Dashed"},"theme_shade":true,"image":null,"glyph_angle":0.0,"closed":false,"pitchfork":null,"elliott_degree":"Minor","elliott_show_wave":true,"bars_pattern":null,"projection":null,"z_order":0},"created_at":1795162989221,"modified_at":1795162989221,"notes":null}],"metadata":{"created_at":1795162989221,"modified_at":1795162989221,"app_version":null}}"#;
+        let (storage, skipped) = DrawingStorage::from_json(saved).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let mut want = crate::drawings::GannConfig::for_tool(DrawingToolType::GannBox);
+        want.price_levels = vec![
+            crate::drawings::GannLevel::new(0.0, [128, 128, 128, 255]),
+            crate::drawings::GannLevel::new(0.25, [255, 152, 0, 255]),
+            crate::drawings::GannLevel::new(1.0, [0, 188, 212, 255]),
+        ];
+        want.time_levels = want.price_levels.clone();
+        assert_eq!(restore(&storage.drawings()[0], 1).gann, Some(want));
+
         let v1_json = include_str!("fixtures/storage_v1.json");
         let (v1, skipped) = DrawingStorage::from_json(v1_json).unwrap();
         assert!(skipped.is_empty(), "{skipped:?}");
@@ -1757,6 +1857,8 @@ mod tests {
             want.line_style = LineStyle::Solid;
             // Only the text label rendered text here, in a fixed 14 pt font.
             want.font_size = 14.0;
+            want.elliott_degree = ElliottDegree::default(); // Version 1 waves read at Minor.
+            want.range_settings.font_size = 14.0;
             want.text_color = None;
             want.background = true;
             want.border = true;
@@ -1773,6 +1875,20 @@ mod tests {
             want.visible = tool != DrawingToolType::Arrow;
             assert_eq!(format!("{:?}", restore(stored, 1)), format!("{want:?}"));
         }
+        // A version 1 ghost feed keeps the range, noise and body colours the former loader gave it.
+        let mut value: serde_json::Value = serde_json::from_str(v1_json).unwrap();
+        let records = value["drawings"].as_array_mut().unwrap();
+        records.truncate(1);
+        records[0]["tool_type"] = "Ghost Feed".into();
+        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let feed = restore(&loaded.drawings[0], 1).ghost_feed.unwrap();
+        assert_eq!((feed.average_range_ticks, feed.noise_ticks), (10.0, 5.0));
+        assert_eq!(
+            (feed.body_up, feed.body_down),
+            ([172, 229, 220, 255], [250, 161, 164, 255])
+        );
+
         // A version 1 anchored VWAP stored one point and neither a line style nor bands: it
         // loads with a solid line and the default bands.
         let mut value: serde_json::Value = serde_json::from_str(v1_json).unwrap();
@@ -1806,6 +1922,17 @@ mod tests {
             (DrawingToolType::ElliottImpulse, ElliottDegree::Cycle, true)
         );
 
+        value["drawings"][0]["drawing"]
+            .as_object_mut()
+            .unwrap()
+            .remove("elliott_degree");
+        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(
+            loaded.drawings[0].drawing.elliott_degree,
+            ElliottDegree::Minor
+        );
+
         // A version 10 sticker saved before glyph angles still loads upright.
         let mut value: serde_json::Value =
             serde_json::from_str(include_str!("fixtures/storage_v10_channels.json")).unwrap();
@@ -1827,8 +1954,12 @@ mod tests {
         assert_eq!(v2.drawings().len(), tools.len());
         for (stored, tool) in v2.drawings().iter().zip(tools) {
             let mut want = non_default_drawing(tool);
+            want.user_edit_enabled = true; // Older files allow user edits.
             want.label = None; // Earlier files have no object name.
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
+            // Earlier positions keep their greyed zones when no colours were stored.
+            want.position_target_color = None;
+            want.position_stop_color = None;
             want.position_readout.persistent = true; // Earlier files always showed statistics.
             want.vwap = None; // Earlier files use the default bands.
             want.theme_shade = false; // Earlier files draw their stored colours on every theme.
@@ -1849,6 +1980,11 @@ mod tests {
             // Earlier files draw no channel prices and the default middle line.
             want.anchor_price_style = None;
             want.middle_line = crate::drawings::MiddleLineStyle::default();
+            // Earlier files draw every readout at their saved font size.
+            want.range_settings = crate::drawings::RangeSettings {
+                font_size: want.font_size,
+                ..Default::default()
+            };
             // Earlier files show a pin's text and carry no glyph on a signpost.
             want.marker = crate::drawings::AnnotationMarker {
                 show_text: true,
@@ -2490,8 +2626,31 @@ mod tests {
             assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
             let (twice, skipped) = DrawingStorage::from_json(&once.to_json().unwrap()).unwrap();
             assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+            if matches!(tool, T::DateRange | T::DateAndPriceRange) {
+                let mut saved: serde_json::Value =
+                    serde_json::from_str(&once.to_json().unwrap()).unwrap();
+                saved["drawings"][0]["drawing"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("range_settings");
+                let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+                assert!(skipped.is_empty());
+                assert_eq!(
+                    loaded.drawings[0].drawing.range_settings,
+                    crate::drawings::RangeSettings {
+                        font_size: font.unwrap(),
+                        ..Default::default()
+                    }
+                );
+            }
             for storage in [&once, &twice] {
                 let drawing = &storage.drawings[0].drawing;
+                if matches!(tool, T::DateRange | T::DateAndPriceRange) {
+                    assert!(drawing.range_settings.border, "{tool:?}");
+                    assert_eq!(drawing.range_settings.border_width, None, "{tool:?}");
+                    assert_eq!(drawing.range_settings.border_color, None, "{tool:?}");
+                    assert_eq!(drawing.range_settings.shadow_color, [0; 4], "{tool:?}");
+                }
                 let tint = if prices[1] < prices[0] {
                     [242, 54, 69]
                 } else {
@@ -2762,7 +2921,8 @@ mod tests {
 
     /// The fixture is a parallel channel and a flat top/bottom as the release before their middle
     /// line and price settings saved them. They restore with the default middle line, a dashed
-    /// hairline in the line colour, and no price style, as they were drawn.
+    /// hairline in the line colour, no price style and their text in the middle of their first
+    /// line, as they were drawn.
     #[test]
     fn channels_saved_before_their_middle_line_and_price_settings_keep_their_look() {
         let saved = include_str!("fixtures/storage_v10_channels.json");
@@ -2777,6 +2937,11 @@ mod tests {
             assert_eq!(drawing.tool_type, tool);
             assert_eq!(drawing.middle_line, MiddleLineStyle::default(), "{tool:?}");
             assert_eq!(drawing.anchor_price_style, None, "{tool:?}");
+            assert_eq!(
+                drawing.line_measurements.text_horizontal_align,
+                LineTextHorizontalAlign::Center,
+                "{tool:?}"
+            );
             assert_eq!(
                 drawing.channel_midline,
                 tool == DrawingToolType::ParallelChannel
@@ -2977,7 +3142,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 42] = [
+        let cases: [(Spoil, &str); 45] = [
             (
                 |s| {
                     first(s)
@@ -3031,6 +3196,14 @@ mod tests {
             (
                 |s| first(s).drawing.position_style.font_size = f32::NAN,
                 "invalid position_style",
+            ),
+            (
+                |s| first(s).drawing.range_settings.font_size = f32::NAN,
+                "invalid range_settings",
+            ),
+            (
+                |s| first(s).drawing.range_settings.border_width = Some(0.0),
+                "invalid range_settings",
             ),
             (|s| first(s).drawing.marker.glyph.clear(), "invalid marker"),
             (
@@ -3188,6 +3361,17 @@ mod tests {
                         .value = f32::NAN
                 },
                 "invalid gann.time_levels[0].value",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .gann
+                        .get_or_insert_with(Default::default)
+                        .fan_ratios[0]
+                        .width = Some(0.0)
+                },
+                "invalid gann",
             ),
             (
                 |s| {

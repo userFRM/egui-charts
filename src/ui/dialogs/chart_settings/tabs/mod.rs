@@ -45,6 +45,7 @@ impl SettingsDialog {
             "Right margin (bars)",
             "Visibility",
             "Timezone",
+            "Session",
         ]
         .iter()
         .map(|label| {
@@ -114,6 +115,22 @@ fn pick_color(ui: &mut Ui, state: &mut ColorPickerState, id: &str, color: &mut C
     *color = keep_opacity(picked, current, custom || state.custom_mode);
     state.sel_color = *color;
     true
+}
+
+/// Keeps inherited line visibility until a different value or line mode is chosen.
+fn price_line_dropdown_pinning(
+    ui: &mut Ui,
+    id: &str,
+    color: Color32,
+    label: &mut bool,
+    lines: &mut Option<bool>,
+) {
+    let before = (*label, lines.unwrap_or(*label));
+    let mut line = before.1;
+    price_line_dropdown(ui, id, color, label, &mut line);
+    if (*label, line) != before {
+        *lines = Some(line);
+    }
 }
 
 fn price_line_dropdown(ui: &mut Ui, id: &str, color: Color32, label: &mut bool, line: &mut bool) {

@@ -10,10 +10,10 @@
 
 use super::{
     AnnotationMarker, ArrowStyle, BarsPatternConfig, BarsPatternMode, ChartPoint, DrawingToolType,
-    ElliottDegree, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig,
-    ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig,
-    PositionReadout, PositionSize, PositionSizing, PositionStyle, ProjectionConfig,
-    RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    ElliottDegree, FibonacciConfig, FontWeight, ForecastStyle, GANN_SQUARE_UNITS, GannConfig,
+    GhostFeedConfig, ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle,
+    PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
+    ProjectionConfig, RangeSettings, RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -142,6 +142,17 @@ pub struct Drawing {
     /// Whether host object lists should include this drawing. Rendering is independent.
     #[serde(default = "enabled")]
     pub listed: bool,
+    /// Whether the user can edit this drawing. Off, the chart, its drawing menu, the floating
+    /// toolbar, the properties dialog and the object tree offer no drag, nudge, style, text,
+    /// anchor or settings edit of it, no deletion, no lock or unlock and no move to another
+    /// pane; it can still be selected, hidden, renamed, filed, layered and copied. Host calls
+    /// that name the drawing, such as
+    /// [`DrawingManager::edit_drawing`](crate::drawings::DrawingManager::edit_drawing) and
+    /// [`Chart::set_drawing_points`](crate::Chart::set_drawing_points), still change it, and
+    /// undo and redo keep its current value. Independent of [`Self::locked`], the user's own
+    /// lock. Copies the user makes have it on. Older saved drawings have it on.
+    #[serde(default = "enabled")]
+    pub user_edit_enabled: bool,
     /// Host-defined group identity, retained through saving and undo.
     #[serde(default)]
     pub group: Option<String>,
@@ -284,11 +295,19 @@ pub struct Drawing {
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
-    /// info line or trend angle, the text placement of a horizontal line or ray or a vertical
-    /// line, and the reach of a vertical line. Other tools ignore these settings.
+    /// info line, trend angle or arrow, the text placement of a horizontal line or ray, a
+    /// vertical line, a cross line, a channel or a regression trend, the prices of a flat
+    /// top/bottom or disjoint channel, and the reach of a vertical line. Other tools ignore
+    /// these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
-    /// Quantity of the long and short position tools
+    /// Readouts, card, box border and vertical reach of a date range or date and price range.
+    /// Other tools ignore these settings. Older drawings keep every readout in the theme's
+    /// colours at the drawing's saved font size.
+    #[serde(default = "RangeSettings::left_out")]
+    pub range_settings: RangeSettings,
+    /// Quantity of the long and short position tools. New positions risk 25% of an account of
+    /// 1,000; `None` sizes one unit, as positions saved without a size do.
     pub position_size: Option<PositionSize>,
     /// Instrument economics for long and short position sizing. Older drawings use unit sizing.
     #[serde(default)]
@@ -297,25 +316,30 @@ pub struct Drawing {
     #[serde(default = "PositionReadout::legacy")]
     pub position_readout: PositionReadout,
     /// Target zone and level colour of position tools, whose alpha is the zone's opacity while
-    /// labels and tags stay opaque; `None` keeps the default green at 20% opacity.
+    /// labels and tags stay opaque. New positions start green at 20% opacity; `None` draws
+    /// the greyed green of positions saved without a colour.
     #[serde(default)]
     pub position_target_color: Option<[u8; 4]>,
     /// Stop zone and level colour of position tools, whose alpha is the zone's opacity while
-    /// labels and tags stay opaque; `None` keeps the default red at 20% opacity.
+    /// labels and tags stay opaque. New positions start red at 20% opacity; `None` draws
+    /// the greyed red of positions saved without a colour.
     #[serde(default)]
     pub position_stop_color: Option<[u8; 4]>,
     /// Lines, labels, zone fill and border of position tools.
     #[serde(default)]
     pub position_style: PositionStyle,
-    /// Text popup of a pin and glyph disc of a signpost. Drawings saved without it show their
-    /// text and no glyph, as new ones do.
+    /// Text popup of a pin, glyph disc of a signpost, and the Show text switch of horizontal
+    /// lines and rays, arrow marks and the parallel, flat top/bottom and disjoint channels.
+    /// Drawings saved without it show their text and no glyph, as new ones do.
     #[serde(default)]
     pub marker: AnnotationMarker,
     /// Customizable Fibonacci levels for Fib tools
     pub fib_config: Option<FibonacciConfig>,
     /// Rows and value area of the volume profile tools
     pub volume_profile: Option<VolumeProfileConfig>,
-    /// Source, bounds, line styles and correlation label of the regression trend tool
+    /// Source, bounds, line styles and correlation label of the regression trend tool. New
+    /// trends take [`RegressionTrendConfig::drawing_default`]; `None` uses the defaults, as
+    /// trends saved without settings do.
     pub regression_trend: Option<RegressionTrendConfig>,
     /// Bands of the anchored VWAP. Older drawings use the defaults.
     #[serde(default)]
@@ -327,7 +351,7 @@ pub struct Drawing {
     pub gann: Option<GannConfig>,
     /// Average range and noise, in ticks, and colours of the candles a Ghost Feed projects. New
     /// feeds start from [`GhostFeedConfig::drawing_default`]; `None` uses the defaults, the
-    /// colours of feeds saved before these settings.
+    /// range, noise and colours of feeds saved before these settings.
     #[serde(default)]
     pub ghost_feed: Option<GhostFeedConfig>,
     /// Whether a rectangle or parallel channel draws its halfway line; a channel's takes
@@ -385,6 +409,12 @@ pub struct Drawing {
     /// colour with a zone in the fill colour and no coefficients. Other tools ignore it.
     #[serde(default)]
     pub projection: Option<ProjectionConfig>,
+    /// Card and badge colours and the background transparency of the forecast tool. New
+    /// forecasts start from [`ForecastStyle::default`]; `None`, as on forecasts saved before
+    /// these settings, draws the theme's colours without borders, with the fill colour, when
+    /// set, as the background of every card and badge. Other tools ignore it.
+    #[serde(default)]
+    pub forecast: Option<ForecastStyle>,
 
     // === Z-Order (rendering layer) ===
     /// Z-order among the drawings of the same `series_layer` (higher = drawn on top).
@@ -393,7 +423,9 @@ pub struct Drawing {
     /// back of the pane's draw order: `Some(0)` draws it under all of them. `None`, the default,
     /// draws it over all of them, as drawings were drawn before this setting, and so does a
     /// count of at least the number of series and studies in the pane. Drawings with the same
-    /// count are layered by [`z_order`](Self::z_order).
+    /// count are layered by [`z_order`](Self::z_order). The chart updates the count when a series
+    /// or study is removed, moved out of the pane or moved in its order, so the drawing stays
+    /// over and under the same other items.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub series_layer: Option<usize>,
 }
@@ -416,10 +448,10 @@ pub(super) const PINK: [u8; 4] = [233, 30, 99, 255];
 pub(super) const PURPLE: [u8; 4] = [156, 39, 176, 255];
 pub(super) const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
 pub(super) const GREY: [u8; 4] = [128, 128, 128, 255];
-const WHITE: [u8; 4] = [255, 255, 255, 255];
+pub(super) const WHITE: [u8; 4] = [255, 255, 255, 255];
 
 /// `color` at `alpha` of 255.
-const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
+pub(super) const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
     [color[0], color[1], color[2], alpha]
 }
 
@@ -455,7 +487,7 @@ const LINE: DefaultStyle = DefaultStyle {
 };
 
 /// The default style of each tool, chosen for its role: areas start filled with a light tint
-/// (20%, 15% for chart patterns, 40% for date ranges), small labels take 12 px text.
+/// (20%, 15% for chart patterns, 40% for date ranges), small labels and chart pattern labels take 12 px text.
 fn default_style(tool: DrawingToolType) -> DefaultStyle {
     use DrawingToolType as T;
     let filled = |color: [u8; 4], alpha: u8| DefaultStyle {
@@ -470,18 +502,31 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             ..LINE
         },
         T::ParallelChannel => filled(BLUE, 51),
-        // The centre line and lower band take the line colour, the upper band the fill.
+        // The fitted line is lighter than its text; bands carry their own style.
         T::RegressionTrend => DefaultStyle {
-            color: RED,
+            color: tint(RED, 77),
+            width: 1.0,
             fill: Some(tint(BLUE, 51)),
             ..LINE
         },
-        T::FlatTopBottom => filled(ORANGE, 51),
-        T::DisjointChannel | T::Triangle => filled(TEAL, 51),
-        T::DoubleCurve | T::ThreeDrivesPattern => colored(DEEP_PURPLE),
+        T::FlatTopBottom => DefaultStyle {
+            font_size: 12.0,
+            ..filled(ORANGE, 51)
+        },
+        T::DisjointChannel => DefaultStyle {
+            font_size: 12.0,
+            ..filled(TEAL, 51)
+        },
+        T::Triangle => filled(TEAL, 51),
+        T::DoubleCurve => colored(DEEP_PURPLE),
+        T::ThreeDrivesPattern => DefaultStyle {
+            font_size: 12.0,
+            ..colored(DEEP_PURPLE)
+        },
         T::Rect => filled(PURPLE, 51),
         T::RotatedRect => filled(GREEN, 51),
-        T::Circle | T::Ellipse => filled(RED, 51),
+        T::Circle => filled(ORANGE, 51),
+        T::Ellipse => filled(RED, 51),
         T::Polyline => filled(CYAN, 51),
         T::Brush => colored(CYAN),
         T::Arc => filled(PINK, 51),
@@ -536,18 +581,37 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             width: 1.0,
             ..LINE
         },
-        T::AnchoredVWAP => DefaultStyle { width: 1.0, ..LINE },
+        T::AnchoredVWAP => DefaultStyle {
+            color: [30, 136, 229, 255],
+            width: 1.0,
+            ..LINE
+        },
         // The colour of the range tint, the same cyan as the rows of rising volume.
         T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile => colored([83, 196, 216, 255]),
-        T::XABCDPattern | T::CypherPattern => filled(BLUE, 38),
-        T::HeadAndShoulders => filled(TEAL, 38),
-        T::ABCDPattern | T::SineLine => colored(TEAL),
-        T::TrianglePattern => filled(DEEP_PURPLE, 38),
-        T::ElliottImpulse
-        | T::ElliottCorrection
-        | T::ElliottTriangle
-        | T::ElliottDoubleCombo
-        | T::ElliottTripleCombo => colored([61, 133, 198, 255]),
+        T::XABCDPattern | T::CypherPattern => DefaultStyle {
+            font_size: 12.0,
+            ..filled(BLUE, 38)
+        },
+        T::HeadAndShoulders => DefaultStyle {
+            font_size: 12.0,
+            ..filled(TEAL, 38)
+        },
+        T::ABCDPattern => DefaultStyle {
+            font_size: 12.0,
+            ..colored(TEAL)
+        },
+        T::SineLine => colored([21, 153, 128, 255]),
+        T::TrianglePattern => DefaultStyle {
+            font_size: 12.0,
+            ..filled(DEEP_PURPLE, 38)
+        },
+        T::ElliottImpulse | T::ElliottCorrection => colored([61, 133, 198, 255]),
+        T::ElliottTriangle => colored(ORANGE),
+        T::ElliottDoubleCombo | T::ElliottTripleCombo => colored([106, 168, 79, 255]),
+        T::TrendAngle => DefaultStyle {
+            font_size: 12.0,
+            ..LINE
+        },
         T::ProjectionTool => colored([156, 156, 156, 255]),
         T::CyclicLines => colored([144, 202, 249, 255]),
         T::TimeCycles => DefaultStyle {
@@ -610,6 +674,12 @@ impl Drawing {
         )
     }
 
+    /// Whether the user can edit this drawing now: it is not [locked](Self::locked) and
+    /// [user edits](Self::user_edit_enabled) are on.
+    pub fn accepts_user_edits(&self) -> bool {
+        self.user_edit_enabled && !self.locked
+    }
+
     /// Create a new drawing with default properties
     pub fn new(id: usize, tool_type: DrawingToolType) -> Self {
         let style = default_style(tool_type);
@@ -628,6 +698,7 @@ impl Drawing {
             selectable: true,
             saveable: true,
             listed: true,
+            user_edit_enabled: true,
             group: None,
             folder: Vec::new(),
             folder_sync: Vec::new(),
@@ -650,7 +721,10 @@ impl Drawing {
             locked: false,
             visible: true,
             font_size: style.font_size,
-            font_weight: if tool_type == DrawingToolType::ArrowMarker {
+            font_weight: if matches!(
+                tool_type,
+                DrawingToolType::ArrowMarker | DrawingToolType::PriceLabel
+            ) {
                 FontWeight::Bold
             } else {
                 FontWeight::Normal
@@ -670,6 +744,8 @@ impl Drawing {
                 DrawingToolType::Rect | DrawingToolType::Circle | DrawingToolType::Ellipse => {
                     Some(style.color)
                 }
+                // Opaque above its translucent line.
+                DrawingToolType::RegressionTrend => Some(RED),
                 _ => None,
             },
             background: !plain_text,
@@ -696,11 +772,27 @@ impl Drawing {
             price_axis_label: true,
             time_axis_label: true,
             line_measurements: LineMeasurements::for_tool(tool_type),
-            position_size: None,
+            range_settings: RangeSettings::for_tool(tool_type),
+            position_size: matches!(
+                tool_type,
+                DrawingToolType::LongPos | DrawingToolType::ShortPos
+            )
+            .then_some(PositionSize::RiskPercent {
+                account_size: 1_000.0,
+                percent: 25.0,
+            }),
             position_sizing: PositionSizing::default(),
             position_readout: PositionReadout::default(),
-            position_target_color: None,
-            position_stop_color: None,
+            position_target_color: matches!(
+                tool_type,
+                DrawingToolType::LongPos | DrawingToolType::ShortPos
+            )
+            .then_some(tint(TEAL, 51)),
+            position_stop_color: matches!(
+                tool_type,
+                DrawingToolType::LongPos | DrawingToolType::ShortPos
+            )
+            .then_some(tint(RED, 51)),
             position_style: PositionStyle::default(),
             marker: AnnotationMarker::default(),
             fib_config: matches!(
@@ -722,7 +814,8 @@ impl Drawing {
                 DrawingToolType::FixedRangeVolumeProfile | DrawingToolType::AnchoredVolumeProfile
             )
             .then(VolumeProfileConfig::drawing_default),
-            regression_trend: None,
+            regression_trend: (tool_type == DrawingToolType::RegressionTrend)
+                .then(RegressionTrendConfig::drawing_default),
             vwap: None,
             pitchfork: matches!(
                 tool_type,
@@ -733,7 +826,18 @@ impl Drawing {
                     | DrawingToolType::Pitchfan
             )
             .then(|| PitchforkConfig::for_tool(tool_type)),
-            elliott_degree: ElliottDegree::default(),
+            elliott_degree: if matches!(
+                tool_type,
+                DrawingToolType::ElliottImpulse
+                    | DrawingToolType::ElliottCorrection
+                    | DrawingToolType::ElliottTriangle
+                    | DrawingToolType::ElliottDoubleCombo
+                    | DrawingToolType::ElliottTripleCombo
+            ) {
+                ElliottDegree::Intermediate
+            } else {
+                ElliottDegree::default()
+            },
             elliott_show_wave: true,
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
             anchor_price_style: None,
@@ -751,6 +855,7 @@ impl Drawing {
             }),
             projection: (tool_type == DrawingToolType::ProjectionTool)
                 .then(ProjectionConfig::default),
+            forecast: (tool_type == DrawingToolType::Forecast).then(ForecastStyle::default),
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
             series_layer: None,
@@ -860,6 +965,21 @@ impl Drawing {
     /// the theme, rather than one chosen for this drawing.
     pub(crate) fn has_default_color(&self) -> bool {
         self.color == default_style(self.tool_type).color
+            || Self::former_default_color(self.tool_type) == Some(self.color)
+    }
+
+    /// A tool's former creation colour, still shaded when held by a saved drawing.
+    pub(crate) fn former_default_color(tool: DrawingToolType) -> Option<[u8; 4]> {
+        use DrawingToolType as T;
+        match tool {
+            T::AnchoredVWAP => Some(BLUE),
+            T::Circle | T::RegressionTrend => Some(RED),
+            T::SineLine => Some(TEAL),
+            T::ElliottTriangle | T::ElliottDoubleCombo | T::ElliottTripleCombo => {
+                Some([61, 133, 198, 255])
+            }
+            _ => None,
+        }
     }
 
     /// Calls `visit` with each line, text and level colour that rendering may shade for the
@@ -871,8 +991,12 @@ impl Drawing {
         if matches!(tool, T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile) {
             return;
         }
-        let line = default_style(tool).color;
-        if let Some(text) = self.text_color.as_mut().filter(|text| **text == line) {
+        let defaults = [
+            Some(default_style(tool).color),
+            Self::former_default_color(tool),
+        ];
+        let default = |color: &[u8; 4]| defaults.contains(&Some(*color));
+        if let Some(text) = self.text_color.as_mut().filter(|text| default(text)) {
             visit(ColorSlot::Text, text);
         }
         visit(ColorSlot::Line, &mut self.color);
@@ -885,7 +1009,7 @@ impl Drawing {
         ]
         .into_iter()
         .flatten()
-        .filter(|color| **color == line)
+        .filter(|color| default(color))
         {
             visit(ColorSlot::Line, color);
         }
@@ -1037,14 +1161,20 @@ impl Drawing {
     /// level number, name and price: a line's price extended through its two anchors, the base and
     /// second lines of parallel or disjoint channels, the trend and flat lines of a flat
     /// top/bottom, a horizontal level, a rectangle's top and bottom, a position's entry, target
-    /// and stop, and each visible Fibonacci retracement or extension level, numbered by its place
-    /// in the level settings. Sloping lines are straight on the price axis `scale` paints, so
-    /// they are linear in price except on a logarithmic scale.
+    /// and stop, each visible Fibonacci retracement, extension or channel level, numbered by its
+    /// place in the level settings and named by its ratio as the drawing labels it, each ray of a
+    /// Fibonacci speed resistance fan, the price level at place `n` numbered `2n` and the time level
+    /// at place `n` numbered `2n + 1`, and each Gann fan line, numbered by its place in the fan
+    /// ratios and named by its ratio, such as `2×1`. Sloping lines are straight on the price axis
+    /// `scale` paints, so they are linear in price except on a logarithmic scale; channel lines run
+    /// on through their anchors, and fan rays have a price only from their first anchor on, on the
+    /// side they are drawn.
     /// Fork levels use two stable slots per configured level (first and second line), with
     /// only the first slot used by a median. Regression and anchored VWAP levels require
     /// [`Self::alert_levels_with_bars`]. Empty for other drawings and for
-    /// geometry with no price at `bar`, such as a vertical line or a sloping line through a
-    /// non-positive price on a logarithmic scale.
+    /// geometry with no price at `bar`, such as a vertical line, a Fibonacci channel with two
+    /// anchors, a vertical fan ray or a sloping line through a non-positive price on a
+    /// logarithmic scale.
     pub fn alert_levels(&self, bar: f64, scale: PriceScaleMode) -> Vec<(usize, String, f64)> {
         use DrawingToolType as T;
         let named = |names: &[&str], prices: &[f64]| {
@@ -1057,7 +1187,14 @@ impl Drawing {
         };
         let log = scale == PriceScaleMode::Logarithmic;
         let to_axis = |price: f64| if log { price.ln() } else { price };
-        let from_axis = |value: f64| if log { value.exp() } else { value };
+        // A vertical line or one through a non-positive price is minus infinity here, not zero.
+        let from_axis = |value: f64| {
+            if log && value.is_finite() {
+                value.exp()
+            } else {
+                value
+            }
+        };
         // The line through `a` and `b` at `bar`, in axis coordinates.
         let along = |a: &ChartPoint, b: &ChartPoint, bar: f64| {
             let (from, to) = (to_axis(a.price), to_axis(b.price));
@@ -1113,6 +1250,28 @@ impl Drawing {
                         .map_or(2.0 * entry.price - target.price, |stop| stop.price),
                 ],
             ),
+            // Each line is the base translated by its ratio times the third anchor's offset.
+            (T::FibonacciChannel, [start, end, through, ..]) => {
+                let config = self.fibonacci_config();
+                let shift = to_axis(through.price) - along(start, end, f64::from(through.bar_idx));
+                let base = along(start, end, bar);
+                config
+                    .levels
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, level)| level.visible)
+                    .map(|(index, level)| {
+                        (
+                            index,
+                            level.label(config.levels_as_percent),
+                            from_axis(base + f64::from(level.value) * shift),
+                        )
+                    })
+                    .filter(|(.., price)| price.is_finite())
+                    .collect()
+            }
+            (T::FibonacciSpeedFan, _) => self.speed_fan_alert_levels(bar, scale),
+            (T::GannFan, _) => self.gann_fan_alert_levels(bar, scale),
             _ => self
                 .fib_levels()
                 .map(|(config, prices)| {
@@ -1380,12 +1539,15 @@ impl Serialize for Drawing {
 
 impl<'de> Deserialize<'de> for Drawing {
     /// A saved `gann` object takes the fields it leaves out from [`GannConfig::for_tool`] of the
-    /// drawing's tool, which a drawing without one draws.
+    /// drawing's tool, which a drawing without one draws. Range settings it leaves out take
+    /// the drawing's font size for the readouts.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         GannConfig::forget_left_out();
         LineMeasurements::forget_left_out();
+        RangeSettings::forget_left_out();
         let mut drawing = Self::deserialize(deserializer)?;
         drawing.line_measurements.fill_left_out(drawing.tool_type);
+        drawing.range_settings.fill_left_out(drawing.font_size);
         if let Some(gann) = &mut drawing.gann {
             gann.fill_left_out(drawing.tool_type);
         }
@@ -1396,6 +1558,251 @@ impl<'de> Deserialize<'de> for Drawing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// New drawings start in their tool's style. Chart patterns, the flat top/bottom and
+    /// disjoint channels and the trend angle write 12 px text; a circle is orange with an orange
+    /// 20% fill and text; a sine line takes the green time cycles start in; each kind of
+    /// Elliott wave has its colour and starts at the Intermediate degree; a regression trend
+    /// draws a 1 px line in red at 30% opacity (77 of 255) under opaque red text, with 2 px bands
+    /// in blue at 30% opacity; a price label is bold; a position risks 25% of an account of
+    /// 1,000 in lots of 1, over a green target and a red stop zone at 20% opacity (51). A
+    /// parallel channel, flat top/bottom or disjoint channel starts its text at the left end of
+    /// its first line, and one saved without line measurements keeps it in the middle. The
+    /// triangle, ellipse and double curve keep the styles they shared before.
+    #[test]
+    fn new_drawings_start_in_their_tool_style() {
+        use DrawingToolType as T;
+        type Style = (T, [u8; 4], f32, Option<[u8; 4]>, f32, Option<[u8; 4]>);
+        let rows: [Style; 20] = [
+            (T::ABCDPattern, [8, 153, 129, 255], 2.0, None, 12.0, None),
+            (
+                T::XABCDPattern,
+                [41, 98, 255, 255],
+                2.0,
+                Some([41, 98, 255, 38]),
+                12.0,
+                None,
+            ),
+            (
+                T::CypherPattern,
+                [41, 98, 255, 255],
+                2.0,
+                Some([41, 98, 255, 38]),
+                12.0,
+                None,
+            ),
+            (
+                T::HeadAndShoulders,
+                [8, 153, 129, 255],
+                2.0,
+                Some([8, 153, 129, 38]),
+                12.0,
+                None,
+            ),
+            (
+                T::TrianglePattern,
+                [103, 58, 183, 255],
+                2.0,
+                Some([103, 58, 183, 38]),
+                12.0,
+                None,
+            ),
+            (
+                T::ThreeDrivesPattern,
+                [103, 58, 183, 255],
+                2.0,
+                None,
+                12.0,
+                None,
+            ),
+            (
+                T::Circle,
+                [255, 152, 0, 255],
+                2.0,
+                Some([255, 152, 0, 51]),
+                14.0,
+                Some([255, 152, 0, 255]),
+            ),
+            (T::SineLine, [21, 153, 128, 255], 2.0, None, 14.0, None),
+            (
+                T::FlatTopBottom,
+                [255, 152, 0, 255],
+                2.0,
+                Some([255, 152, 0, 51]),
+                12.0,
+                None,
+            ),
+            (
+                T::DisjointChannel,
+                [8, 153, 129, 255],
+                2.0,
+                Some([8, 153, 129, 51]),
+                12.0,
+                None,
+            ),
+            (T::TrendAngle, [41, 98, 255, 255], 2.0, None, 12.0, None),
+            (
+                T::ElliottImpulse,
+                [61, 133, 198, 255],
+                2.0,
+                None,
+                14.0,
+                None,
+            ),
+            (
+                T::ElliottCorrection,
+                [61, 133, 198, 255],
+                2.0,
+                None,
+                14.0,
+                None,
+            ),
+            (
+                T::ElliottTriangle,
+                [255, 152, 0, 255],
+                2.0,
+                None,
+                14.0,
+                None,
+            ),
+            (
+                T::ElliottDoubleCombo,
+                [106, 168, 79, 255],
+                2.0,
+                None,
+                14.0,
+                None,
+            ),
+            (
+                T::ElliottTripleCombo,
+                [106, 168, 79, 255],
+                2.0,
+                None,
+                14.0,
+                None,
+            ),
+            (
+                T::RegressionTrend,
+                [242, 54, 69, 77],
+                1.0,
+                Some([41, 98, 255, 51]),
+                14.0,
+                Some([242, 54, 69, 255]),
+            ),
+            (
+                T::Triangle,
+                [8, 153, 129, 255],
+                2.0,
+                Some([8, 153, 129, 51]),
+                14.0,
+                None,
+            ),
+            (
+                T::Ellipse,
+                [242, 54, 69, 255],
+                2.0,
+                Some([242, 54, 69, 51]),
+                14.0,
+                Some([242, 54, 69, 255]),
+            ),
+            (T::DoubleCurve, [103, 58, 183, 255], 2.0, None, 14.0, None),
+        ];
+        let wrong: Vec<String> = rows
+            .into_iter()
+            .filter_map(|want| {
+                let d = Drawing::new(1, want.0);
+                let got = (
+                    want.0,
+                    d.color,
+                    d.stroke_width,
+                    d.fill_color,
+                    d.font_size,
+                    d.text_color,
+                );
+                (got != want).then(|| format!("got {got:?}, want {want:?}"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+        for tool in [
+            T::ElliottImpulse,
+            T::ElliottCorrection,
+            T::ElliottTriangle,
+            T::ElliottDoubleCombo,
+            T::ElliottTripleCombo,
+        ] {
+            assert_eq!(
+                Drawing::new(1, tool).elliott_degree,
+                ElliottDegree::Intermediate,
+                "{tool:?}"
+            );
+        }
+        assert_eq!(Drawing::new(1, T::PriceLabel).font_weight, FontWeight::Bold);
+        let placed = Drawing::new(1, T::DateAndPriceRange);
+        assert_eq!(
+            (
+                placed.range_settings.border,
+                placed.range_settings.border_width
+            ),
+            (false, Some(1.0))
+        );
+        assert_eq!(placed.range_settings.border_color, None);
+        let mut saved = serde_json::to_value(&placed).unwrap();
+        saved.as_object_mut().unwrap().remove("range_settings");
+        let read: Drawing = serde_json::from_value(saved).unwrap();
+        assert!(read.range_settings.border);
+        assert_eq!(read.range_settings.border_width, None);
+        // Channels write their text from the left end of their first line; a channel saved
+        // without line measurements keeps it in the middle.
+        use crate::drawings::LineTextHorizontalAlign as H;
+        for tool in [T::ParallelChannel, T::FlatTopBottom, T::DisjointChannel] {
+            let placed = Drawing::new(1, tool);
+            let mut saved = serde_json::to_value(&placed).unwrap();
+            saved.as_object_mut().unwrap().remove("line_measurements");
+            let read: Drawing = serde_json::from_value(saved).unwrap();
+            assert_eq!(
+                (
+                    placed.line_measurements.text_horizontal_align,
+                    read.line_measurements.text_horizontal_align
+                ),
+                (H::Left, H::Center),
+                "{tool:?}"
+            );
+        }
+        let config = Drawing::new(1, T::RegressionTrend)
+            .regression_trend
+            .unwrap();
+        for band in [config.upper_line, config.lower_line] {
+            assert_eq!(
+                (band.visible, band.color, band.width(), band.line_style),
+                (true, [41, 98, 255, 77], Some(2.0), LineStyle::Solid)
+            );
+        }
+        assert_eq!(
+            (config.line_style, config.show_base_line),
+            (LineStyle::Dashed, true)
+        );
+        for tool in [T::LongPos, T::ShortPos] {
+            let d = Drawing::new(1, tool);
+            assert_eq!(
+                (
+                    d.position_size,
+                    d.position_sizing.lot_size,
+                    d.position_target_color,
+                    d.position_stop_color
+                ),
+                (
+                    Some(PositionSize::RiskPercent {
+                        account_size: 1_000.0,
+                        percent: 25.0
+                    }),
+                    1.0,
+                    Some([8, 153, 129, 51]),
+                    Some([242, 54, 69, 51])
+                ),
+                "{tool:?}"
+            );
+        }
+    }
 
     /// Text and Anchored text keep the first positive bar spacing they are shown at and are drawn
     /// at the ratio of the current spacing to it; other tools record none.
@@ -1462,6 +1869,7 @@ mod tests {
     /// names the same level once the drawing is stored.
     #[test]
     fn alert_levels_follow_the_drawing_geometry() {
+        use super::super::{FibonacciLevel, GannLevel};
         use DrawingToolType as T;
         use PriceScaleMode::{Logarithmic, Normal as Linear};
         let drawing = |tool, points: &[(f32, f64)]| {
@@ -1478,8 +1886,240 @@ mod tests {
         config.levels[2].label = "100%".into();
         config.levels[3].label.clear();
         fib.fib_config = Some(config);
+        let channel = |points: &[(f32, f64)]| {
+            let mut d = drawing(T::FibonacciChannel, points);
+            let mut config = FibonacciConfig::legacy();
+            config.levels[1].visible = false;
+            d.fib_config = Some(config);
+            d
+        };
+        let fan = |points: &[(f32, f64)], time: Option<Vec<f32>>, reverse| {
+            let mut d = drawing(T::FibonacciSpeedFan, points);
+            let levels = |values: Vec<f32>| {
+                values
+                    .into_iter()
+                    .map(|value| FibonacciLevel::new(value, "", [0; 4]))
+                    .collect()
+            };
+            d.fib_config = Some(FibonacciConfig {
+                levels: levels(vec![0.0, 0.5, 1.0]),
+                time_levels: time.map(levels),
+                levels_as_percent: true,
+                reverse,
+                ..FibonacciConfig::legacy()
+            });
+            d
+        };
+        let gann = |points: &[(f32, f64)]| {
+            let mut d = drawing(T::GannFan, points);
+            let mut config = GannConfig::for_tool(T::GannFan);
+            config.fan_ratios = [2.0, 1.0, 0.5, 0.0]
+                .map(|v| GannLevel::new(v, [0; 4]))
+                .to_vec();
+            config.fan_ratios[1].visible = false;
+            d.gann = Some(config);
+            d
+        };
         // (drawing, bar) -> (level, name, price); prices by hand.
         for (drawing, bar, scale, expected) in [
+            (
+                channel(&[(10.0, 100.0), (20.0, 120.0), (14.0, 130.0)]),
+                15.0,
+                Linear,
+                vec![
+                    (0, "0", 110.0),
+                    (2, "0.382", 118.404),
+                    (3, "0.5", 121.0),
+                    (4, "0.618", 123.596),
+                    (5, "0.786", 127.292),
+                    (6, "1", 132.0),
+                ],
+            ),
+            (
+                channel(&[(10.0, 100.0), (20.0, 120.0), (14.0, 130.0)]),
+                18.0,
+                Linear,
+                vec![
+                    (0, "0", 116.0),
+                    (2, "0.382", 124.404),
+                    (3, "0.5", 127.0),
+                    (4, "0.618", 129.596),
+                    (5, "0.786", 133.292),
+                    (6, "1", 138.0),
+                ],
+            ),
+            (
+                channel(&[(10.0, 100.0), (20.0, 400.0), (10.0, 200.0)]),
+                15.0,
+                Logarithmic,
+                vec![
+                    (0, "0", 200.0 * 2f64.powf(0.0)),
+                    (2, "0.382", 200.0 * 2f64.powf(0.382)),
+                    (3, "0.5", 200.0 * 2f64.powf(0.5)),
+                    (4, "0.618", 200.0 * 2f64.powf(0.618)),
+                    (5, "0.786", 200.0 * 2f64.powf(0.786)),
+                    (6, "1", 200.0 * 2f64.powf(1.0)),
+                ],
+            ),
+            (
+                channel(&[(10.0, 100.0), (20.0, 400.0), (10.0, 200.0)]),
+                18.0,
+                Logarithmic,
+                vec![
+                    (0, "0", 100.0 * 4f64.powf(0.8) * 2f64.powf(0.0)),
+                    (2, "0.382", 100.0 * 4f64.powf(0.8) * 2f64.powf(0.382)),
+                    (3, "0.5", 100.0 * 4f64.powf(0.8) * 2f64.powf(0.5)),
+                    (4, "0.618", 100.0 * 4f64.powf(0.8) * 2f64.powf(0.618)),
+                    (5, "0.786", 100.0 * 4f64.powf(0.8) * 2f64.powf(0.786)),
+                    (6, "1", 100.0 * 4f64.powf(0.8) * 2f64.powf(1.0)),
+                ],
+            ),
+            (
+                channel(&[(10.0, 100.0), (20.0, 400.0), (10.0, 200.0)]),
+                15.0,
+                Linear,
+                vec![
+                    (0, "0", 250.0),
+                    (2, "0.382", 288.2),
+                    (3, "0.5", 300.0),
+                    (4, "0.618", 311.8),
+                    (5, "0.786", 328.6),
+                    (6, "1", 350.0),
+                ],
+            ),
+            (
+                channel(&[(10.0, 100.0), (20.0, 120.0)]),
+                15.0,
+                Linear,
+                vec![],
+            ),
+            (
+                channel(&[(10.0, 100.0), (10.0, 120.0), (14.0, 130.0)]),
+                15.0,
+                Linear,
+                vec![],
+            ),
+            (
+                fan(&[(10.0, 100.0), (20.0, 200.0)], None, false),
+                15.0,
+                Linear,
+                vec![
+                    (0, "0%: price level", 150.0),
+                    (2, "50%: price level", 125.0),
+                    (3, "50%: time level", 200.0),
+                    (4, "100%: price level", 100.0),
+                ],
+            ),
+            (
+                fan(&[(10.0, 100.0), (20.0, 200.0)], None, false),
+                20.0,
+                Linear,
+                vec![
+                    (0, "0%: price level", 200.0),
+                    (2, "50%: price level", 150.0),
+                    (3, "50%: time level", 300.0),
+                    (4, "100%: price level", 100.0),
+                ],
+            ),
+            (
+                fan(&[(10.0, 100.0), (20.0, 200.0)], None, false),
+                5.0,
+                Linear,
+                vec![],
+            ),
+            (
+                fan(&[(10.0, 100.0), (20.0, 400.0)], None, false),
+                15.0,
+                Logarithmic,
+                vec![
+                    (0, "0%: price level", 200.0),
+                    (2, "50%: price level", 100.0 * 2f64.sqrt()),
+                    (3, "50%: time level", 400.0),
+                    (4, "100%: price level", 100.0),
+                ],
+            ),
+            (
+                fan(&[(10.0, 100.0), (20.0, 400.0)], None, false),
+                20.0,
+                Logarithmic,
+                vec![
+                    (0, "0%: price level", 400.0),
+                    (2, "50%: price level", 200.0),
+                    (3, "50%: time level", 1600.0),
+                    (4, "100%: price level", 100.0),
+                ],
+            ),
+            (
+                fan(
+                    &[(10.0, 100.0), (20.0, 200.0)],
+                    Some(vec![0.0, 0.5, 2.0]),
+                    true,
+                ),
+                15.0,
+                Linear,
+                vec![
+                    (0, "0%: price level", 150.0),
+                    (1, "0%: time level", 150.0),
+                    (2, "50%: price level", 175.0),
+                    (3, "50%: time level", 100.0),
+                    (4, "100%: price level", 200.0),
+                ],
+            ),
+            (
+                fan(
+                    &[(10.0, 100.0), (20.0, 200.0)],
+                    Some(vec![0.0, 0.5, 2.0]),
+                    true,
+                ),
+                5.0,
+                Linear,
+                vec![(5, "200%: time level", 150.0)],
+            ),
+            (
+                fan(&[(10.0, 100.0), (10.0, 200.0)], None, false),
+                15.0,
+                Linear,
+                vec![(4, "100%: price level", 100.0)],
+            ),
+            (
+                gann(&[(10.0, 100.0), (20.0, 120.0)]),
+                15.0,
+                Linear,
+                vec![(0, "2×1", 120.0), (2, "1×2", 105.0)],
+            ),
+            (
+                gann(&[(10.0, 100.0), (20.0, 120.0)]),
+                20.0,
+                Linear,
+                vec![(0, "2×1", 140.0), (2, "1×2", 110.0)],
+            ),
+            (gann(&[(10.0, 100.0), (20.0, 120.0)]), 5.0, Linear, vec![]),
+            (
+                gann(&[(20.0, 100.0), (10.0, 120.0)]),
+                15.0,
+                Linear,
+                vec![(0, "2×1", 120.0), (2, "1×2", 105.0)],
+            ),
+            (gann(&[(20.0, 100.0), (10.0, 120.0)]), 25.0, Linear, vec![]),
+            (
+                gann(&[(10.0, 100.0), (20.0, 400.0)]),
+                15.0,
+                Logarithmic,
+                vec![(0, "2×1", 400.0), (2, "1×2", 100.0 * 2f64.sqrt())],
+            ),
+            (
+                gann(&[(10.0, 100.0), (20.0, 400.0)]),
+                20.0,
+                Logarithmic,
+                vec![(0, "2×1", 1600.0), (2, "1×2", 200.0)],
+            ),
+            (gann(&[(10.0, 100.0), (10.0, 120.0)]), 15.0, Linear, vec![]),
+            (
+                gann(&[(10.0, 0.0), (20.0, 10.0)]),
+                15.0,
+                Logarithmic,
+                vec![],
+            ),
             // 100 + (25 - 10) * (120 - 100) / (20 - 10).
             (
                 drawing(T::TrendLine, &[(10.0, 100.0), (20.0, 120.0)]),
@@ -1547,6 +2187,19 @@ mod tests {
             (
                 drawing(T::TrendLine, &[(10.0, 0.0), (20.0, 10.0)]),
                 15.0,
+                Logarithmic,
+                vec![],
+            ),
+            // Before the anchor at zero, and beside a vertical base, the log line has no price.
+            (
+                drawing(T::TrendLine, &[(10.0, 0.0), (20.0, 10.0)]),
+                5.0,
+                Logarithmic,
+                vec![],
+            ),
+            (
+                channel(&[(10.0, 100.0), (10.0, 120.0), (14.0, 130.0)]),
+                5.0,
                 Logarithmic,
                 vec![],
             ),
@@ -1620,6 +2273,45 @@ mod tests {
             ),
         ] {
             let levels = drawing.alert_levels(bar, scale);
+            // Compare the hand prices with the same screen segments the renderer paints.
+            if !expected.is_empty()
+                && matches!(
+                    drawing.tool_type,
+                    T::FibonacciChannel | T::FibonacciSpeedFan | T::GannFan
+                )
+            {
+                let mut painted = drawing.clone();
+                let x = |bar: f32| 100.0 + 10.0 * bar;
+                let y = |price: f64| {
+                    (1000.0
+                        - if scale == Logarithmic {
+                            100.0 * price.ln()
+                        } else {
+                            price
+                        }) as f32
+                };
+                painted.update_screen_coords(x, y);
+                let rect = egui::Rect::from_min_max(egui::pos2(-1e4, -1e4), egui::pos2(1e4, 1e4));
+                let lines = if painted.tool_type == T::FibonacciChannel {
+                    painted.fib_channel_level_lines(rect).unwrap().1
+                } else {
+                    painted.outline(rect).unwrap().lines
+                };
+                for (_, name, price) in &levels {
+                    let px = x(bar as f32);
+                    assert!(
+                        lines.iter().any(|[a, b]| {
+                            a.x != b.x
+                                && px >= a.x.min(b.x)
+                                && px <= a.x.max(b.x)
+                                && (a.y + (px - a.x) * (b.y - a.y) / (b.x - a.x) - y(*price)).abs()
+                                    < 0.01
+                        }),
+                        "{:?} {name} at {bar} is off its painted line",
+                        drawing.tool_type
+                    );
+                }
+            }
             assert_eq!(levels.len(), expected.len(), "{:?}", drawing.tool_type);
             for ((level, name, price), (want_level, want_name, want_price)) in
                 levels.into_iter().zip(expected)

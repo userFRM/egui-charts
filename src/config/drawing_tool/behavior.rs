@@ -58,6 +58,8 @@ impl DrawingToolType {
                 | Self::FibonacciWedge
                 // Projections fill their target zones from their own settings.
                 | Self::ProjectionTool
+                // Forecasts colour their cards and badges from their own settings.
+                | Self::Forecast
                 // Forks fill their bands from their level settings.
                 | Self::Pitchfork
                 | Self::SchiffPitchfork
@@ -114,8 +116,7 @@ impl DrawingToolType {
         )
     }
 
-    /// Whether the drawing is a text annotation: its text is its content and its colour is the
-    /// text's.
+    /// Whether the drawing is a text annotation, whose text is its content.
     pub(crate) fn is_text_annotation(&self) -> bool {
         matches!(
             self,
@@ -154,6 +155,8 @@ impl DrawingToolType {
                     | Self::Rect
                     | Self::Circle
                     | Self::Ellipse
+                    | Self::DateRange
+                    | Self::DateAndPriceRange
                     | Self::Arrow
                     | Self::ArrowMarker
                     | Self::ArrowMarkUp
@@ -192,7 +195,12 @@ impl DrawingToolType {
     pub fn supports_line_measurements(&self) -> bool {
         matches!(
             self,
-            Self::TrendLine | Self::Ray | Self::ExtendedLine | Self::InfoLine | Self::TrendAngle
+            Self::TrendLine
+                | Self::Ray
+                | Self::ExtendedLine
+                | Self::InfoLine
+                | Self::TrendAngle
+                | Self::Arrow
         )
     }
 
@@ -216,6 +224,34 @@ impl DrawingToolType {
                     | Self::Pitchfan
                     | Self::RegressionTrend
                     | Self::ProjectionTool
+            )
+    }
+
+    /// Whether the renderer paints the drawing's colour, so the Style tab and the floating
+    /// toolbar offer it. Post and idea cards follow the theme, a sticker's art and the ghost
+    /// feed's candles keep their own colours, pitchforks, the pitchfan, Gann squares and fans,
+    /// the Fib channel and the Fib speed resistance fan draw each level in its own colour, and a
+    /// position draws in its target and stop colours.
+    pub fn supports_color(&self) -> bool {
+        !self.is_cursor()
+            && !matches!(
+                self,
+                Self::Tweet
+                    | Self::Idea
+                    | Self::Sticker
+                    | Self::GhostFeed
+                    | Self::Pitchfork
+                    | Self::SchiffPitchfork
+                    | Self::ModifiedSchiffPitchfork
+                    | Self::InsidePitchfork
+                    | Self::Pitchfan
+                    | Self::GannSquare
+                    | Self::GannFixed
+                    | Self::GannFan
+                    | Self::FibonacciChannel
+                    | Self::FibonacciSpeedFan
+                    | Self::LongPos
+                    | Self::ShortPos
             )
     }
 
@@ -251,6 +287,25 @@ impl DrawingToolType {
                 | Self::FibonacciSpeedFan
                 | Self::LongPos
                 | Self::ShortPos
+        )
+    }
+
+    /// Whether the drawing's text follows the Show text switch, `marker.show_text`: a horizontal
+    /// line, a horizontal ray, an arrow mark and the parallel, flat top/bottom and disjoint
+    /// channels. A pin's popup reads the same switch itself; other tools always show their text.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn has_text_switch(&self) -> bool {
+        matches!(
+            self,
+            Self::HorizontalLine
+                | Self::HorizontalRay
+                | Self::ArrowMarkUp
+                | Self::ArrowMarkDown
+                | Self::ArrowMarkLeft
+                | Self::ArrowMarkRight
+                | Self::ParallelChannel
+                | Self::FlatTopBottom
+                | Self::DisjointChannel
         )
     }
 

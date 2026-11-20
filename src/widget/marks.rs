@@ -316,7 +316,7 @@ impl Chart {
             #[cfg(feature = "drawings")]
             self.drawings.deselect();
             if let Some(id) = id {
-                self.host_events.push(ChartEvent::MarkClick {
+                self.push_event(ChartEvent::MarkClick {
                     id: id.clone(),
                     series: *series,
                     time: *time,
@@ -757,6 +757,9 @@ mod tests {
                 .series_price_scale_mut(series)
                 .unwrap()
                 .set_range(95.0, 105.0);
+            // The manual 95..105 range puts 100 halfway down, independently of autoscale margins.
+            let (top, bottom) = chart.series_price_map(series).unwrap().extent();
+            let pos = egui::pos2(pos.x, (top + bottom) * 0.5);
             chart.set_markers(
                 series,
                 vec![

@@ -91,6 +91,35 @@ pub enum OrderFlowKind {
         /// Rolling seconds, or zero for per-bar totals.
         seconds: usize,
     },
+    /// Last synchronized resting balance, `(bid - ask) / (bid + ask) * 100`, of two
+    /// non-overlapping bands, from -100 (asks only) to 100 (bids only).
+    /// With zero `near_distance`, the near band takes `near_levels` levels per side and
+    /// the far band the next `far_levels`. Otherwise, the near band reaches `near_distance`
+    /// price units from each side's inside market, inclusive; the far band reaches
+    /// `far_distance` further, inclusive. Level counts are unused in distance mode.
+    /// An empty or lost band has no value (NaN), as does a band whose total size overflows.
+    /// The third output is unused (NaN). An [`OrderFilter`] applies as for
+    /// [`BookSize`](Self::BookSize).
+    BookBalance {
+        /// Near levels per side when `near_distance` is zero.
+        near_levels: usize,
+        /// Further levels per side, after the near band, in level mode.
+        far_levels: usize,
+        /// Near price distance, or zero to select both bands by level count.
+        near_distance: f64,
+        /// Further price distance beyond the near edge, in distance mode.
+        far_distance: f64,
+    },
+    /// Highest minus lowest execution price over `(now - seconds, now]`, followed by
+    /// the high and low prices, at each bar's latest execution or heartbeat.
+    /// An empty window gives zero range and NaN prices. Late executions count at their
+    /// own times. Each extreme retains at most 100,000 candidates; exceeding that bound
+    /// leaves all outputs missing until the dropped executions expire. The Volatility
+    /// Regime study ranks these ranges against earlier bars.
+    PriceRange {
+        /// Rolling window in seconds, clamped to 1..=86400.
+        seconds: usize,
+    },
 }
 
 impl OrderFlowKind {
@@ -133,6 +162,20 @@ impl OrderFlowKind {
             },
             Self::LevelsTradedThrough { seconds } => Self::LevelsTradedThrough {
                 seconds: seconds.min(86400),
+            },
+            Self::BookBalance {
+                near_levels,
+                far_levels,
+                near_distance,
+                far_distance,
+            } => Self::BookBalance {
+                near_levels: near_levels.clamp(1, 10000),
+                far_levels: far_levels.clamp(1, 10000),
+                near_distance: size_bound(near_distance),
+                far_distance: size_bound(far_distance),
+            },
+            Self::PriceRange { seconds } => Self::PriceRange {
+                seconds: seconds.clamp(1, 86400),
             },
             Self::Spread => Self::Spread,
         }
@@ -388,6 +431,72 @@ impl Distinct {
     }
 }
 
+/// Time-ordered candidates: decreasing high prices and increasing low prices.
+#[derive(Clone, Default)]
+struct Extremes {
+    high: VecDeque<(DateTime<Utc>, f64)>,
+    low: VecDeque<(DateTime<Utc>, f64)>,
+    lost_until: Option<DateTime<Utc>>,
+    now: Option<DateTime<Utc>>,
+}
+
+impl Extremes {
+    /// Add a price, or just expire, relative to the newest observed time.
+    fn push(&mut self, time: DateTime<Utc>, price: Option<f64>, seconds: usize) -> [f64; 3] {
+        let now = self.now.map_or(time, |last| last.max(time));
+        self.now = Some(now);
+        let cutoff = now
+            .checked_sub_signed(TimeDelta::seconds(seconds.clamp(1, 86400) as i64))
+            .unwrap_or(DateTime::<Utc>::MIN_UTC);
+        for side in [&mut self.high, &mut self.low] {
+            while side.front().is_some_and(|(time, _)| *time <= cutoff) {
+                side.pop_front();
+            }
+        }
+        if let Some(price) = price.filter(|_| time > cutoff) {
+            Self::insert(&mut self.high, time, price, |a, b| a >= b);
+            Self::insert(&mut self.low, time, price, |a, b| a <= b);
+        }
+        for side in [&mut self.high, &mut self.low] {
+            if side.len() > 100_000 {
+                let (time, _) = side.pop_front().unwrap();
+                self.lost_until = self.lost_until.max(Some(time));
+            }
+        }
+        if self.lost_until.is_some_and(|time| time > cutoff) {
+            return [f64::NAN; 3];
+        }
+        match (self.high.front(), self.low.front()) {
+            (Some(&(_, high)), Some(&(_, low))) => [high - low, high, low],
+            _ => [0.0, f64::NAN, f64::NAN],
+        }
+    }
+
+    /// A later, at least as extreme price outlives this one; otherwise remove the
+    /// earlier candidates it dominates, including any weaker price at the same time.
+    fn insert(
+        side: &mut VecDeque<(DateTime<Utc>, f64)>,
+        time: DateTime<Utc>,
+        price: f64,
+        dominates: fn(f64, f64) -> bool,
+    ) {
+        let later = side.partition_point(|(held, _)| *held < time);
+        if side
+            .get(later)
+            .is_some_and(|&(_, held)| dominates(held, price))
+        {
+            return;
+        }
+        let end = side.partition_point(|(held, _)| *held <= time);
+        let mut start = later;
+        while start > 0 && dominates(price, side[start - 1].1) {
+            start -= 1;
+        }
+        side.drain(start..end);
+        side.insert(start, (time, price));
+    }
+}
+
 #[derive(Clone, Default)]
 struct PendingParts {
     sizes: OrderSizes,
@@ -409,6 +518,8 @@ struct State {
     inside: Option<(f64, f64)>,
     window: Window,
     instant: Window,
+    /// Candidate highs and lows of the rolling execution range.
+    extremes: Extremes,
     /// Distinct keys of the bar, rolling and instant windows, or of the buy and sell prices.
     distinct: [Distinct; 3],
     /// Price of the previous buy and sell execution.
@@ -509,9 +620,9 @@ impl OrderFlowInput {
         Self(Arc::new(Mutex::new(self.state().clone())))
     }
 
-    /// The same source, with book size summed over the individual orders `filter` accepts. The
+    /// The same source, with book size and book balance summed over the individual orders `filter` accepts. The
     /// feed must send order events; with aggregate depth only, or when the filter needs a
-    /// participant or placement time that no held order has, a book size bar has no value (NaN),
+    /// participant or placement time that no held order has, a book size or book balance bar has no value (NaN),
     /// instead of an unfiltered one. Other aggregations ignore it. A filter that accepts every
     /// order is the same as none.
     pub fn with_order_filter(self, filter: OrderFilter) -> Self {
@@ -536,7 +647,7 @@ impl OrderFlowInput {
         self
     }
 
-    /// Feed services read by this source. Book size with an order filter needs individual
+    /// Feed services read by this source. Filtered book size and book balance need individual
     /// orders; executions need trade-side classification only for side-dependent outputs.
     pub fn services(&self) -> &'static [crate::model::FeedService] {
         use crate::model::FeedService::*;
@@ -545,13 +656,18 @@ impl OrderFlowInput {
             Source::Fixed(OrderFlowKind::Spread | OrderFlowKind::LevelsTradedThrough { .. }) => {
                 &[BestBidAsk]
             }
-            Source::Fixed(OrderFlowKind::BookSize { .. }) if state.filter.is_some() => {
+            Source::Fixed(OrderFlowKind::BookSize { .. } | OrderFlowKind::BookBalance { .. })
+                if state.filter.is_some() =>
+            {
                 &[OrderDepth]
             }
-            Source::Fixed(OrderFlowKind::BookSize { .. }) | Source::Book(_) => &[Depth],
+            Source::Fixed(OrderFlowKind::BookSize { .. } | OrderFlowKind::BookBalance { .. })
+            | Source::Book(_) => &[Depth],
             Source::Footprint
             | Source::Fixed(
-                OrderFlowKind::TradeRate { .. } | OrderFlowKind::AggressorRate { .. },
+                OrderFlowKind::TradeRate { .. }
+                | OrderFlowKind::AggressorRate { .. }
+                | OrderFlowKind::PriceRange { .. },
             ) => &[LiveTrades],
             Source::Fixed(
                 OrderFlowKind::LevelsExecuted { .. }
@@ -562,13 +678,15 @@ impl OrderFlowInput {
         }
     }
 
-    /// The filter of book size, if it has one.
+    /// The filter of book size or book balance, if it has one.
     pub(crate) fn order_filter(&self) -> Option<OrderFilter> {
         let state = self.state();
-        state
-            .filter
-            .clone()
-            .filter(|_| matches!(state.source, Source::Fixed(OrderFlowKind::BookSize { .. })))
+        state.filter.clone().filter(|_| {
+            matches!(
+                state.source,
+                Source::Fixed(OrderFlowKind::BookSize { .. } | OrderFlowKind::BookBalance { .. })
+            )
+        })
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -885,7 +1003,8 @@ impl OrderFlowInput {
                 | OrderFlowKind::LevelsExecuted { .. }
                 | OrderFlowKind::SizeDelta { .. }
                 | OrderFlowKind::FlowSum { .. }
-                | OrderFlowKind::FilteredCvd { .. },
+                | OrderFlowKind::FilteredCvd { .. }
+                | OrderFlowKind::PriceRange { .. },
             ) => {
                 state.bars.retain(|bar, _| *bar > open);
                 state.pending = PendingParts::default();
@@ -894,6 +1013,7 @@ impl OrderFlowInput {
                 let until = Some(until);
                 state.window.lost_until = state.window.lost_until.max(until);
                 state.instant.lost_until = state.instant.lost_until.max(until);
+                state.extremes.lost_until = state.extremes.lost_until.max(until);
                 for distinct in &mut state.distinct {
                     distinct.lost_until = distinct.lost_until.max(until);
                 }
@@ -957,6 +1077,7 @@ impl OrderFlowInput {
                 let values = state.window.push(now, [0.0; 2], seconds);
                 [values[0], values[1], values[0] + values[1]]
             }
+            OrderFlowKind::PriceRange { seconds } => state.extremes.push(now, None, seconds),
             _ => return,
         };
         state.bars.insert(open, (row, 0));
@@ -984,25 +1105,29 @@ impl OrderFlowInput {
             return;
         }
         let mut grouped = super::inbox::TradeBars::default();
-        let mut tape = trades.iter();
-        let matched = history.iter().all(|expected| {
-            let mut last = None;
-            for trade in tape.by_ref() {
+        let mut tape = trades.iter().peekable();
+        let mut candles = history.iter();
+        let matched = 'tape: {
+            while let Some(trade) = tape.next() {
                 let Ok(parts) = grouped.push(timeframe, trade, tick_size) else {
-                    return false;
+                    break 'tape false;
                 };
-                // Both tick and range intervals allocate each fill to exactly one bar.
-                let Some((bar, size)) = parts.into_iter().next() else {
-                    return false;
-                };
-                state.add_trade(trade, bar.time, size, true);
-                last = Some(bar);
-                if grouped.closed {
-                    break;
+                let n = parts.len();
+                let check_last = grouped.closed || tape.peek().is_none();
+                for (i, (bar, size)) in parts.into_iter().enumerate() {
+                    // Every non-final part closes a candle. The last may still be forming.
+                    if (i + 1 < n || check_last)
+                        && !candles
+                            .next()
+                            .is_some_and(|expected| super::merge::same_values(&bar, expected))
+                    {
+                        break 'tape false;
+                    }
+                    state.add_trade(trade, bar.time, size, i == 0);
                 }
             }
-            last.is_some_and(|bar| super::merge::same_values(&bar, expected))
-        }) && tape.next().is_none();
+            candles.next().is_none()
+        };
         if matched {
             state.paged_rate = true;
         } else {
@@ -1040,7 +1165,8 @@ impl OrderFlowInput {
                 | OrderFlowKind::LevelsExecuted { .. }
                 | OrderFlowKind::SizeDelta { .. }
                 | OrderFlowKind::FlowSum { .. }
-                | OrderFlowKind::FilteredCvd { .. },
+                | OrderFlowKind::FilteredCvd { .. }
+                | OrderFlowKind::PriceRange { .. },
             ) => false,
             Source::Footprint => true,
             _ => return,
@@ -1121,6 +1247,7 @@ impl OrderFlowInput {
                 let lost = lost.max(left_out);
                 state.window.lost_until = lost;
                 state.instant.lost_until = lost;
+                state.extremes.lost_until = lost;
                 for distinct in &mut state.distinct {
                     distinct.lost_until = lost;
                 }
@@ -1362,6 +1489,8 @@ impl OrderFlowInput {
                 Source::Fixed(
                     OrderFlowKind::Spread
                     | OrderFlowKind::BookSize { .. }
+                    | OrderFlowKind::BookBalance { .. }
+                    | OrderFlowKind::PriceRange { .. }
                     | OrderFlowKind::TradeRate { .. }
                     | OrderFlowKind::AggressorRate { .. }
                     | OrderFlowKind::LevelsExecuted { .. }
@@ -1598,11 +1727,10 @@ impl OrderFlowInput {
         if levels.is_none() {
             state.inside = None;
         }
-        let (count, distance) = match state.source {
-            Source::Fixed(OrderFlowKind::BookSize {
-                levels: count,
-                distance,
-            }) => (count, distance),
+        let kind = match state.source {
+            Source::Fixed(
+                kind @ (OrderFlowKind::BookSize { .. } | OrderFlowKind::BookBalance { .. }),
+            ) => kind,
             Source::Book(count) => return state.push_bar_book(clock, time, count, levels),
             _ => return,
         };
@@ -1611,7 +1739,7 @@ impl OrderFlowInput {
         }
         let mut row = [f64::NAN; 3];
         if let Some(levels) = levels {
-            let mut sizes = [0.0; 2];
+            let mut sizes = [[0.0; 2]; 2];
             let mut seen = [0; 2];
             let mut inside = [None; 2];
             for (bid, level) in levels {
@@ -1621,14 +1749,49 @@ impl OrderFlowInput {
                 let side = usize::from(!bid);
                 let first = *inside[side].get_or_insert(level.price);
                 let tolerance = 4.0 * f64::EPSILON * level.price.abs().max(first.abs());
-                if (distance > 0.0 && (level.price - first).abs() <= distance + tolerance)
-                    || (distance == 0.0 && seen[side] < count.max(1))
-                {
-                    sizes[side] += level.size;
+                let within = |count: usize, distance: f64| {
+                    if distance > 0.0 {
+                        (level.price - first).abs() <= distance + tolerance
+                    } else {
+                        seen[side] < count
+                    }
+                };
+                let band = match kind {
+                    OrderFlowKind::BookSize { levels, distance } => {
+                        within(levels, distance).then_some(0)
+                    }
+                    OrderFlowKind::BookBalance {
+                        near_levels,
+                        far_levels,
+                        near_distance,
+                        far_distance,
+                    } => {
+                        let far = if near_distance > 0.0 {
+                            near_distance + far_distance
+                        } else {
+                            0.0
+                        };
+                        if within(near_levels, near_distance) {
+                            Some(0)
+                        } else if within(near_levels + far_levels, far) {
+                            Some(1)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(band) = band {
+                    sizes[band][side] += level.size;
                 }
                 seen[side] += 1;
             }
-            row = [sizes[0], sizes[1], sizes[0] - sizes[1]];
+            row = match kind {
+                OrderFlowKind::BookBalance { .. } => {
+                    [balance(sizes[0]), balance(sizes[1]), f64::NAN]
+                }
+                _ => [sizes[0][0], sizes[0][1], sizes[0][0] - sizes[0][1]],
+            };
         }
         let Some(open) = state.open(clock, time) else {
             return;
@@ -1648,6 +1811,16 @@ fn signed_size(trade: &Tick, measured: f64, min: f64, max: f64, size: f64) -> f6
         Some(OrderSide::Buy) => size,
         Some(OrderSide::Sell) => -size,
         None => 0.0,
+    }
+}
+
+/// Percentage resting balance; no value without a finite positive total.
+fn balance([bid, ask]: [f64; 2]) -> f64 {
+    let total = bid + ask;
+    if total > 0.0 && total.is_finite() {
+        (bid - ask) / total * 100.0
+    } else {
+        f64::NAN
     }
 }
 
@@ -1819,6 +1992,10 @@ impl State {
                 let delta = old[0] + signed_size(trade, measured, min, max, size);
                 [delta, old[1].max(delta), old[2].min(delta)]
             }
+            OrderFlowKind::PriceRange { seconds } => {
+                self.extremes
+                    .push(trade.ts, first.then_some(trade.price), seconds)
+            }
             _ => return,
         };
         let latest = self.last.map_or(trade.ts, |t| t.max(trade.ts));
@@ -1841,6 +2018,7 @@ impl State {
             inside: None,
             window: Window::default(),
             instant: Window::default(),
+            extremes: Extremes::default(),
             distinct: Default::default(),
             last_price: [None; 2],
             revision: 0,
@@ -2383,13 +2561,30 @@ mod tests {
             levels: 5,
             distance: 0.0,
         };
-        let cases: [(_, &[crate::model::FeedService]); 13] = [
+        let cases: [(_, &[crate::model::FeedService]); 15] = [
             (OrderFlowInput::new(Spread), &[BestBidAsk]),
+            (
+                OrderFlowInput::new(PriceRange { seconds: 60 }),
+                &[LiveTrades],
+            ),
             (
                 OrderFlowInput::new(LevelsTradedThrough { seconds: 0 }),
                 &[BestBidAsk],
             ),
             (OrderFlowInput::new(book), &[Depth]),
+            (
+                OrderFlowInput::new(BookBalance {
+                    near_levels: 5,
+                    far_levels: 10,
+                    near_distance: 0.0,
+                    far_distance: 0.0,
+                })
+                .with_order_filter(OrderFilter {
+                    min_size: 10.0,
+                    ..Default::default()
+                }),
+                &[OrderDepth],
+            ),
             (
                 OrderFlowInput::new(book).with_order_filter(OrderFilter {
                     min_size: 10.0,
@@ -2452,6 +2647,49 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(input.services(), expected);
         }
+    }
+
+    /// The late 99 remains the minimum until the exclusive left edge reaches its time.
+    /// Candidate overflow must leave a gap instead of quietly understating the range.
+    #[test]
+    fn price_range_keeps_late_executions_and_drops_none_silently() {
+        let clock = BarClock::new(Timeframe::Min1);
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let input = OrderFlowInput::new(OrderFlowKind::PriceRange { seconds: 10 });
+        for (second, price, expected) in [
+            (1, 100.0, [0.0, 100.0, 100.0]),
+            (3, 102.0, [2.0, 102.0, 100.0]),
+            (2, 99.0, [3.0, 102.0, 99.0]),
+            (5, 101.0, [3.0, 102.0, 99.0]),
+        ] {
+            input.push_trade(
+                &clock,
+                &Tick::new(start + TimeDelta::seconds(second), price, 1.0, None),
+            );
+            assert_eq!(input.values()[&start], expected, "second {second}");
+        }
+        input.advance_time(&clock, start + TimeDelta::seconds(12));
+        assert_eq!(input.values()[&start], [1.0, 102.0, 101.0]);
+        input.advance_time(&clock, start + TimeDelta::seconds(16));
+        let empty = input.values()[&start];
+        assert_eq!(empty[0], 0.0);
+        assert!(empty[1..].iter().all(|v| v.is_nan()));
+
+        let input = OrderFlowInput::new(OrderFlowKind::PriceRange { seconds: 10 });
+        for i in 0..=100_000 {
+            input.push_trade(
+                &clock,
+                &Tick::new(
+                    start + TimeDelta::nanoseconds(i),
+                    100.0 + i as f64,
+                    1.0,
+                    None,
+                ),
+            );
+        }
+        assert!(input.values()[&start].iter().all(|v| v.is_nan()));
+        input.advance_time(&clock, start + TimeDelta::seconds(10));
+        assert_eq!(input.values()[&start], [99_999.0, 100_100.0, 101.0]);
     }
 
     #[test]
@@ -3281,13 +3519,23 @@ mod tests {
                 instant: 3,
             });
             rate.replace_trades(&clock, store, history, None);
+            let range = OrderFlowInput::new(OrderFlowKind::PriceRange { seconds: 60 });
+            range.replace_trades(&clock, store, history, None);
             for &(second, size, side, bar) in *later {
                 let trade = Tick::new(at(second), 100.0, size, Some(side));
-                match bar {
-                    Some(bar) => rate.push_trade_part(&clock, &trade, at(bar), size, true),
-                    None => rate.push_trade(&clock, &trade),
+                for input in [&rate, &range] {
+                    match bar {
+                        Some(bar) => input.push_trade_part(&clock, &trade, at(bar), size, true),
+                        None => input.push_trade(&clock, &trade),
+                    }
                 }
             }
+            assert!(
+                range.values()[&at(opens[opens.len() - 1])]
+                    .iter()
+                    .all(|v| v.is_nan()),
+                "{interval}: the price range reaches lost executions"
+            );
             let values = rate.values();
             assert_eq!(
                 values.keys().copied().collect::<Vec<_>>(),

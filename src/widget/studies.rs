@@ -7,9 +7,17 @@ use web_time::Instant;
 
 impl Chart {
     /// Caps the studies at `limit`, or lifts the cap with `None`. The cap applies to
-    /// [`try_add_indicator`](Self::try_add_indicator) and to pasting a copied study, which the
-    /// terminal's dialogs and shortcuts use, and to applying a study template set; studies
-    /// already on the chart stay.
+    /// [`try_add_indicator`](Self::try_add_indicator), which the terminal's dialogs use, to
+    /// pasting a copied study, to applying a study template set, to copying studies from another
+    /// chart of a layout and to the object tree's Duplicate; studies already on the chart stay. A
+    /// user action that turns the volume setting on, such as the Toggle volume shortcut, leaves
+    /// [`ChartConfig::show_volume`](crate::config::ChartConfig::show_volume) off at the cap unless
+    /// a Volume study is already on the chart. The same applies to the
+    /// [analyst targets setting](Self::set_price_targets_visible), served by an Analyst price
+    /// forecast study. Both settings stay uncapped outside user actions, as do restores and
+    /// undo/redo.
+    /// [`set_chained_study_limit`](Self::set_chained_study_limit) caps, on the same paths, the
+    /// studies that read another study's output; a study is refused when it would pass either cap.
     pub fn set_study_limit(&mut self, limit: Option<usize>) {
         self.study_limit = limit;
     }
@@ -19,21 +27,67 @@ impl Chart {
         self.study_limit
     }
 
+    /// Caps at `limit` the studies that read another study's output ([`StudySource::Study`]),
+    /// each on its own or as part of a chain, or lifts the cap with `None`, the default. Every
+    /// such study counts once, also when the study it reads has left the chart. The paths the
+    /// [study cap](Self::set_study_limit) covers refuse a study reading another study's output
+    /// past it, and [`set_indicator_source`](Self::set_indicator_source) and the study settings
+    /// dialog refuse another study's output as the source of a study that reads none. Studies
+    /// already on the chart stay when the cap is below their number, and a study that reads one
+    /// study's output can still switch to another's.
+    pub fn set_chained_study_limit(&mut self, limit: Option<usize>) {
+        self.chained_study_limit = limit;
+    }
+
+    /// The cap set with [`set_chained_study_limit`](Self::set_chained_study_limit); `None` when
+    /// uncapped.
+    pub fn chained_study_limit(&self) -> Option<usize> {
+        self.chained_study_limit
+    }
+
     /// Whether the chart holds as many studies as its cap allows.
     pub(crate) fn study_limit_reached(&self) -> bool {
         self.study_limit
             .is_some_and(|limit| self.study_ids.len() >= limit)
     }
 
+    /// Whether adding `added` studies that read another study's output, beside the `kept` such
+    /// studies that stay on the chart, passes the chained study cap. Adding none never does, so
+    /// studies already past the cap stay and studies reading prices are still added.
+    pub(super) fn passes_chained_study_limit(&self, kept: usize, added: usize) -> bool {
+        added > 0
+            && self
+                .chained_study_limit
+                .is_some_and(|limit| kept + added > limit)
+    }
+
+    /// Whether the chart holds as many studies reading another study's output as its chained
+    /// study cap allows, so that it takes no further one.
+    pub(crate) fn chained_study_limit_reached(&self) -> bool {
+        let chained = self
+            .indicators()
+            .filter(|(_, study)| reads_study(*study))
+            .count();
+        self.passes_chained_study_limit(chained, 1)
+    }
+
     /// Adds a study like [`add_indicator`](Self::add_indicator), unless the chart already holds
-    /// as many as [`study_limit`](Self::study_limit) allows. A refused study leaves the chart
-    /// unchanged and comes back in [`StudyError::StudyLimitReached`].
+    /// as many as [`study_limit`](Self::study_limit) allows or, for a study that reads another
+    /// study's output, as many of those as [`chained_study_limit`](Self::chained_study_limit)
+    /// allows. A refused study leaves the chart unchanged and comes back in
+    /// [`StudyError::StudyLimitReached`] or [`StudyError::ChainedStudyLimitReached`], the first
+    /// when both caps refuse it.
     pub fn try_add_indicator(
         &mut self,
         indicator: Box<dyn Indicator>,
     ) -> Result<SeriesId, StudyError> {
         if self.study_limit_reached() {
             return Err(StudyError::StudyLimitReached(RefusedStudy::new(indicator)));
+        }
+        if reads_study(indicator.as_ref()) && self.chained_study_limit_reached() {
+            return Err(StudyError::ChainedStudyLimitReached(RefusedStudy::new(
+                indicator,
+            )));
         }
         Ok(self.add_indicator(indicator))
     }
@@ -93,7 +147,7 @@ impl Chart {
     /// has a pane of its own, and takes the source's scale when the two share a pane; move it
     /// afterwards with [`move_indicator_to_pane`](Self::move_indicator_to_pane).
     /// Returns the study's id, which stays valid when other studies are removed. Host code adds
-    /// past the cap; the interface goes through [`try_add_indicator`](Self::try_add_indicator).
+    /// past both caps; the interface goes through [`try_add_indicator`](Self::try_add_indicator).
     pub fn add_indicator(&mut self, indicator: Box<dyn Indicator>) -> SeriesId {
         let id = self.insert_indicator(indicator);
         self.place_on_source(id);
@@ -119,7 +173,7 @@ impl Chart {
             return;
         };
         if !overlay && let Some(pane) = self.series_pane(source) {
-            self.move_series_to_pane(id, pane);
+            self.move_series_keeping_layers(id, pane);
         }
         let own = self
             .indicators()
@@ -146,6 +200,8 @@ impl Chart {
             .flatten();
         let overlay = indicator.is_overlay() && original;
         self.studies.add(indicator);
+        #[cfg(feature = "studies")]
+        self.adopt_price_target_study();
         self.readout_revision = crate::model::next_revision();
         self.study_ids.push(id);
         self.study_autoscale.push(true);
@@ -229,6 +285,18 @@ impl Chart {
             self.volume_setting = false;
         }
         let indicator = self.studies.remove_indicator(at);
+        #[cfg(feature = "studies")]
+        if indicator
+            .as_ref()
+            .is_some_and(|study| is_price_target_study(study.as_ref()))
+            && !self
+                .studies
+                .indicators()
+                .iter()
+                .any(|study| is_price_target_study(study.as_ref()))
+        {
+            self.show_price_targets = false;
+        }
         self.readout_revision = crate::model::next_revision();
         self.study_ids.remove(at);
         self.study_autoscale.remove(at);
@@ -346,14 +414,35 @@ impl Chart {
     }
 
     /// The study `id`, to change its settings. Its values reflect the bars as of the last
-    /// [`show`](Self::show); the next one recomputes it in full.
+    /// [`show`](Self::show); the next one recomputes it in full. Changes report
+    /// [`ChartEvent::Study`](super::ChartEvent::Study) before the next chart notification.
     pub fn indicator_mut(&mut self, id: SeriesId) -> Option<&mut (dyn Indicator + 'static)> {
         let at = self.study_ids.iter().position(|study| *study == id)?;
         self.record_study(id);
+        Some(self.edit_study(at))
+    }
+
+    /// Settings dialog previews keep recomputation and history bookkeeping without reporting
+    /// [`ChartEvent::Study`](super::ChartEvent::Study); the host reports the committed edit.
+    #[cfg(feature = "ui")]
+    pub(crate) fn preview_indicator_mut(
+        &mut self,
+        id: SeriesId,
+    ) -> Option<&mut (dyn Indicator + 'static)> {
+        let at = self.study_ids.iter().position(|study| *study == id)?;
+        self.record_study(id);
+        self.host_events
+            .studies
+            .retain(|(watched, _)| *watched != id);
+        Some(self.edit_study(at))
+    }
+
+    /// Marks the study for a full recompute at the next `show`.
+    fn edit_study(&mut self, at: usize) -> &mut (dyn Indicator + 'static) {
         self.pending_from[at] = Some(0);
         self.next_refresh[at] = f64::NEG_INFINITY;
         self.readout_revision = crate::model::next_revision();
-        Some(self.studies.indicators_mut()[at].as_mut())
+        self.studies.indicators_mut()[at].as_mut()
     }
 
     /// Updates every study with a pending change, as of `now` in seconds. An incremental study
@@ -457,6 +546,9 @@ impl Chart {
 
     /// Select a price source or another study's undisplaced output. Rejects missing plots and
     /// dependency cycles without changing either study. Hidden sources continue calculating.
+    /// Refuses another study's output for a study that reads none while the chart holds as many
+    /// studies on studies as [`chained_study_limit`](Self::chained_study_limit) allows, with
+    /// [`StudyError::InvalidInput`] for `source`.
     pub fn set_indicator_source(
         &mut self,
         id: SeriesId,
@@ -502,6 +594,16 @@ impl Chart {
                 return Err(StudyError::CyclicSource);
             }
         }
+        if matches!(source, StudySource::Study { .. })
+            && !reads_study(self.studies.indicators()[at].as_ref())
+            && self.chained_study_limit_reached()
+        {
+            return Err(StudyError::InvalidInput {
+                id: "source".into(),
+                reason: "would read another study's output past the chart's chained study cap"
+                    .into(),
+            });
+        }
         let mut edited = self.studies.indicators()[at].clone_box();
         edited.set_input("source", InputValue::Source(source))?;
         self.record_study(id);
@@ -512,6 +614,17 @@ impl Chart {
         self.element_studies.dirty = true;
         Ok(())
     }
+}
+
+/// Whether `study` reads another study's output, which the chained study cap counts.
+pub(crate) fn reads_study(study: &dyn Indicator) -> bool {
+    matches!(study.source(), Some(StudySource::Study { .. }))
+}
+
+/// Whether `study` is an Analyst price forecast, which the chart's targets setting follows.
+#[cfg(feature = "studies")]
+pub(super) fn is_price_target_study(study: &dyn Indicator) -> bool {
+    study.name() == crate::studies::AnalystPriceForecast::NAME
 }
 
 /// The typed events studies read, without the mark source page an export froze at their end: a page
@@ -1608,7 +1721,7 @@ mod tests {
             "a shared name does not identify a built-in"
         );
         assert!(serde_json::to_value(SMA::new(1).settings()).unwrap()["help_url"].is_string());
-        let articles: [(Box<dyn Indicator>, &str); 10] = [
+        let articles: [(Box<dyn Indicator>, &str); 11] = [
             (
                 Box::new(crate::studies::SMIErgodicIndicator::default()),
                 "SMIErgodicIndicator",
@@ -1630,6 +1743,10 @@ mod tests {
             (
                 Box::new(crate::studies::Correlation::default()),
                 "Correlation",
+            ),
+            (
+                Box::new(crate::studies::CorrelationLog::default()),
+                "CorrelationLog",
             ),
             (
                 Box::new(crate::studies::AdvanceDeclineRatio::default()),

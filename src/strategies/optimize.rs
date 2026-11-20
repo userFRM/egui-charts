@@ -30,7 +30,9 @@ pub struct StrategyTrial {
 /// `Err("duplicate strategy input")`, and an assignment [`Strategy::set_input`] rejects yields
 /// its exact error; either ends the iterator without running that trial. A combination
 /// [`Strategy::validate_inputs`] refuses yields its error in place of that trial, which does
-/// not run, and iteration continues with the next combination.
+/// not run, and iteration continues with the next combination. A trial whose run needs an exchange
+/// rate where none applies yields `Err("exchange rates unavailable")` in its place, and iteration
+/// continues.
 /// `lower` has the same meaning as in [`Backtest::run`]; pass `&[]` for chart bars alone.
 ///
 /// # Panics
@@ -85,9 +87,15 @@ pub fn optimise<'a>(
             values.push((id.clone(), value));
         }
         // A combination refused as a whole is skipped without a run; the next one follows.
-        let trial = strategy.validate_inputs().map(|()| StrategyTrial {
-            inputs: values,
-            performance: backtest.run(strategy.as_mut(), bars, lower).performance(),
+        let trial = strategy.validate_inputs().and_then(|()| {
+            let report = backtest.run(strategy.as_mut(), bars, lower);
+            match report.unavailable {
+                Some(_) => Err("exchange rates unavailable"),
+                None => Ok(StrategyTrial {
+                    inputs: values,
+                    performance: report.performance(),
+                }),
+            }
         });
         finished = true;
         for i in (0..indices.len()).rev() {
@@ -234,7 +242,7 @@ mod tests {
                     ]
                 );
                 // Two units times the exit minus entry price, less 1 on each fill.
-                assert_eq!(trial.performance.net_profit, profits[i]);
+                assert_eq!(trial.performance.all.net_profit, profits[i]);
                 let separate_runs = AtomicUsize::new(0);
                 let mut separate = Timed {
                     entry,
@@ -315,5 +323,22 @@ mod tests {
             assert_eq!(base.runs.load(Ordering::SeqCst), expected_runs, "{grid:?}");
             assert_eq!((base.entry, base.hold, base.entered), (0, 1, false));
         }
+        // A trial whose run lacks exchange rates yields an error in its place; the next runs.
+        let mut converted = Backtest::new("Grid", "TEST", Timeframe::Min1, 1_000.0);
+        converted.settings.currency = Some("EUR".into());
+        converted.instrument_currency = Some("USD".into());
+        let runs = AtomicUsize::new(0);
+        let base = Timed {
+            entry: 0,
+            hold: 1,
+            entered: false,
+            runs: &runs,
+        };
+        let grid = [axis("entry", &[0, 1])];
+        let trials: Vec<_> = optimise(|| Box::new(base.clone()), &converted, &bars, &[], &grid)
+            .map(|item| item.map(|_| ()))
+            .collect();
+        assert_eq!(trials, [Err("exchange rates unavailable"); 2]);
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
     }
 }

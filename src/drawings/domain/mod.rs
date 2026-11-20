@@ -9,6 +9,7 @@ mod bars_pattern;
 mod coordinates;
 mod drawing;
 mod elliott;
+mod forecast;
 mod gann;
 mod ghost_feed;
 mod image;
@@ -24,6 +25,8 @@ pub use coordinates::ChartPoint;
 pub(crate) use drawing::ColorSlot;
 pub use drawing::{Drawing, FolderSync};
 pub use elliott::ElliottDegree;
+pub(crate) use forecast::CardColors;
+pub use forecast::ForecastStyle;
 pub(crate) use gann::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
 pub use gann::{GannConfig, GannFanDirection, GannLevel};
 pub use ghost_feed::{GhostCandle, GhostFeedConfig, MAX_GHOST_CANDLES};
@@ -32,8 +35,8 @@ pub use options::{
     AnnotationMarker, ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight,
     HandlePos, LineMeasurementPosition, LineMeasurements, LineTextHorizontalAlign,
     LineTextOrientation, LineTextVerticalAlign, MiddleLineStyle, NoteTextStyle, PositionReadout,
-    PositionSize, PositionSizing, PositionStyle, RegressionBandLine, RegressionTrendConfig,
-    TimeframeVisibility,
+    PositionSize, PositionSizing, PositionStyle, RangeSettings, RegressionBandLine,
+    RegressionTrendConfig, TimeframeVisibility,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use projection::{ProjectionConfig, ProjectionLevel};

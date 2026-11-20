@@ -10,7 +10,7 @@ use crate::localization as l10n;
 use crate::model::{Alert, AlertCondition, AlertSource};
 use crate::studies::StudyScale;
 use crate::ui::Control;
-use crate::ui::context_menu::{MenuEntry, MenuItem, trim_separators};
+use crate::ui::context_menu::{MenuEntry, MenuItem, MenuRowId, trim_separators};
 use crate::widget::{Chart, PaneId, VisualOrder};
 
 use egui::Context;
@@ -25,7 +25,7 @@ use std::collections::HashSet;
 pub enum StudyContextMenuAction {
     /// Save this alert, on the study's value at the menu's bar, through the host's alerts
     /// service, for example with
-    /// [`AlertsPanel::save`](crate::ui::widget_bar::panels::AlertsPanel::save).
+    /// [`AlertsPanel::save`](crate::ui::widget_bar::AlertsPanel::save).
     AddAlert(Box<Alert>),
     /// Open the indicators dialog to add a study.
     AddIndicator,
@@ -162,6 +162,51 @@ pub(crate) struct StudyContextMenu {
 }
 
 impl StudyContextMenu {
+    pub(super) fn row_id(&self, action: &StudyContextMenuAction) -> Option<MenuRowId> {
+        use crate::model::SeriesScale;
+        use StudyContextMenuAction as A;
+        Some(match action {
+            A::AddAlert(_) => MenuRowId::AddAlert,
+            A::AddIndicator => MenuRowId::AddIndicator,
+            A::AddToFavorites(_) => MenuRowId::AddToFavorites,
+            A::AddToLayout => MenuRowId::AddToLayout,
+            A::VisualOrder(order) => match order {
+                VisualOrder::BringToFront => MenuRowId::BringToFront,
+                VisualOrder::BringForward => MenuRowId::BringForward,
+                VisualOrder::SendBackward => MenuRowId::SendBackward,
+                VisualOrder::SendToBack => MenuRowId::SendToBack,
+            },
+            A::Intervals(range) => match range {
+                IntervalRange::AndAbove => MenuRowId::IntervalsAndAbove,
+                IntervalRange::AndBelow => MenuRowId::IntervalsAndBelow,
+                IntervalRange::Only => MenuRowId::CurrentIntervalOnly,
+                IntervalRange::All => MenuRowId::AllIntervals,
+            },
+            A::MoveTo(pane) => match pane {
+                PaneTarget::NewPaneAbove => MenuRowId::MoveToNewPaneAbove,
+                PaneTarget::NewPaneBelow => MenuRowId::MoveToNewPaneBelow,
+                PaneTarget::Pane(pane) => MenuRowId::MoveToPane(*pane),
+                PaneTarget::Main => MenuRowId::MoveToMainPane,
+            },
+            A::PinTo(scale) => match scale {
+                StudyScale::Shared(SeriesScale::Right) => MenuRowId::PinToRightScale,
+                StudyScale::Shared(SeriesScale::Left) => MenuRowId::PinToLeftScale,
+                StudyScale::Shared(SeriesScale::Separate(key)) if *key == self.next_scale => {
+                    MenuRowId::PinToNewScale
+                }
+                StudyScale::Shared(SeriesScale::Separate(key)) => MenuRowId::PinToSharedScale(*key),
+                StudyScale::None => MenuRowId::NoScale,
+                _ => return None,
+            },
+            A::Copy => MenuRowId::Copy,
+            A::ToggleVisibility => MenuRowId::ToggleVisibility,
+            A::Remove => MenuRowId::Remove,
+            A::ObjectTree => MenuRowId::ObjectTree,
+            A::Settings => MenuRowId::StudySettings,
+            A::Help(_) => MenuRowId::StudyHelp,
+        })
+    }
+
     /// Open the menu on study `id` of `chart` at the rendered bar `bar`.
     pub(crate) fn open(&mut self, ctx: &Context, chart: &Chart, id: SeriesId, bar: usize) {
         let Some((_, study)) = chart.indicators().find(|(study, _)| *study == id) else {
@@ -282,6 +327,7 @@ impl StudyContextMenu {
         items.extend([
             MenuEntry::Separator,
             MenuEntry::Submenu {
+                id: Some(MenuRowId::VisualOrder),
                 label: "Visual order".into(),
                 icon: Some(&embedded_icons::WIDGET_BAR_LAYERS),
                 entries: [
@@ -297,6 +343,7 @@ impl StudyContextMenu {
         ]);
         if self.has_interval {
             items.push(MenuEntry::Submenu {
+                id: Some(MenuRowId::IntervalVisibility),
                 label: "Visibility on intervals".into(),
                 icon: None,
                 entries: [
@@ -320,6 +367,7 @@ impl StudyContextMenu {
             moves.push(item("Main pane", A::MoveTo(PaneTarget::Main)));
         }
         items.push(MenuEntry::Submenu {
+            id: Some(MenuRowId::MoveTo),
             label: "Move to".into(),
             icon: Some(&embedded_icons::MOVE_PANE),
             entries: moves,
@@ -372,6 +420,7 @@ impl StudyContextMenu {
         }
         entries.push(item("No scale", A::PinTo(StudyScale::None)));
         items.push(MenuEntry::Submenu {
+            id: Some(MenuRowId::PinToScale),
             label: l10n::format_text(ctx, "Pin to scale (now {now})", &[("now", now.as_str())]),
             icon: Some(&embedded_icons::PIN_TO_SCALE),
             entries,

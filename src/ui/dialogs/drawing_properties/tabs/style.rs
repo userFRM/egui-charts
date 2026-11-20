@@ -3,6 +3,7 @@
 use crate::drawings::glyphs::GLYPHS;
 use crate::drawings::{
     ArrowStyle, Drawing, DrawingToolType, FontWeight, GhostFeedConfig, LineMeasurementPosition,
+    RangeSettings, StyleControls,
 };
 use crate::localization as l10n;
 use crate::model::LineStyle;
@@ -24,14 +25,19 @@ const LINE_WIDTHS: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
 pub struct StyleTab;
 
 impl StyleTab {
-    /// `badge_pickers` are the text, background and border pickers of a price label's badge and
-    /// of a price note's label.
+    /// `badge_pickers` edit the text, background and border of a price label's badge, a price
+    /// note's label or a range's readout label, card and border. `card_pickers` edit the
+    /// background, text and border colours of a forecast's cards and badges, in the order of its
+    /// rows.
     pub fn show(
         ui: &mut Ui,
         props: &mut DrawingProps,
         pickers: &mut [ColorPickerState; 3],
         badge_pickers: &mut [ColorPickerState; 3],
+        card_pickers: &mut [ColorPickerState; 10],
+        custom: Option<&crate::drawings::RegisteredDrawingTool>,
     ) {
+        let style = custom.map_or_else(StyleControls::default, |tool| tool.style);
         let tool = props.tool_settings.as_ref().map(|t| t.settings.tool_type);
         // A price label and the label of a price note style their text, background and border
         // in the rows below; a price label has no other colour.
@@ -70,16 +76,12 @@ impl StyleTab {
                     ],
                 );
             }
-            // A sticker's art and the ghost feed's candles keep their own colours.
-            if tool != Some(DrawingToolType::FibonacciChannel)
+            if tool.is_none_or(|tool| tool.supports_color())
                 && tool != Some(DrawingToolType::PriceLabel)
-                && !matches!(
-                    tool,
-                    Some(DrawingToolType::Sticker | DrawingToolType::GhostFeed)
-                )
                 && !position
                 && !regression
                 && !projection
+                && style.color
             {
                 ui.label(l10n::text(ui.ctx(), "Color"));
                 color_picker.sel_color = props.color;
@@ -107,12 +109,16 @@ impl StyleTab {
                 ui.end_row();
             }
 
-            if tool.is_none_or(|tool| tool.supports_line_width()) && !regression && !projection {
+            if tool.is_none_or(|tool| tool.supports_line_width())
+                && !regression
+                && !projection
+                && style.line_width
+            {
                 ui.label(l10n::text(ui.ctx(), "Line width"));
                 line_width_row(ui, &mut props.line_width);
                 ui.end_row();
             }
-            if tool.is_none_or(|tool| tool.supports_line_style()) {
+            if tool.is_none_or(|tool| tool.supports_line_style()) && style.line_style {
                 let label = ui.label(l10n::text(ui.ctx(), "Line style"));
                 ui.label_inputs_by(label.id, |ui| {
                     ui.combo_select(
@@ -347,7 +353,10 @@ impl StyleTab {
                         badge_pickers,
                     );
                 }
-                if settings.tool_type.supports_line_ends() {
+                if settings.tool_type == DrawingToolType::Forecast {
+                    forecast_rows(ui, settings, card_pickers);
+                }
+                if settings.tool_type.supports_line_ends() && style.line_ends {
                     for (label, style) in [
                         ("Line start", &mut settings.arrow_start_style),
                         ("Line end", &mut settings.arrow_end_style),
@@ -458,7 +467,9 @@ impl StyleTab {
                 badge_rows(ui, props, badge_pickers);
             }
 
-            if let Some(tool) = tool.filter(|tool| tool.supports_fill() && !position && !badge) {
+            if let Some(tool) =
+                tool.filter(|tool| tool.supports_fill() && !position && !badge && style.fill)
+            {
                 let label = ui.label(l10n::text(ui.ctx(), "Fill"));
                 ui.checkbox(&mut props.fill_enabled, l10n::text(ui.ctx(), "Enable fill"))
                     .labelled_by(label.id);
@@ -489,6 +500,21 @@ impl StyleTab {
                     ui.checkbox(&mut props.extend_right, l10n::text(ui.ctx(), "Right"));
                 });
                 ui.end_row();
+            }
+            if let Some(template) = &mut props.tool_settings
+                && matches!(
+                    template.settings.tool_type,
+                    DrawingToolType::DateRange | DrawingToolType::DateAndPriceRange
+                )
+            {
+                range_rows(
+                    ui,
+                    template.settings.tool_type,
+                    &mut template.settings.range_settings,
+                    (exact, props.line_width, props.line_style),
+                    badge_pickers,
+                    glyph_picker,
+                );
             }
             // Last, so that the long list of readouts keeps the other rows above the fold.
             if let Some(template) = &mut props.tool_settings
@@ -540,6 +566,13 @@ impl StyleTab {
                 ui.end_row();
             }
         });
+        if let Some(tool) = custom
+            && let Some(template) = &mut props.tool_settings
+        {
+            ui.space_md();
+            tool.implementation
+                .settings(ui, &mut template.settings.custom_settings);
+        }
     }
 }
 
@@ -664,6 +697,131 @@ fn badge_rows(ui: &mut Ui, props: &mut DrawingProps, pickers: &mut [ColorPickerS
     ui.end_row();
 }
 
+/// Rows for a range's border, reach, readout label and card, and individual readouts.
+/// Palette colours keep the current opacity; the custom editor sets it.
+fn range_rows(
+    ui: &mut Ui,
+    tool: DrawingToolType,
+    settings: &mut RangeSettings,
+    (color, width, style): ([u8; 4], f32, LineStyle),
+    pickers: &mut [ColorPickerState; 3],
+    shadow_picker: &mut ColorPickerState,
+) {
+    let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+    let [text_picker, background_picker, border_picker] = pickers;
+    let label = ui.label(l10n::text(ui.ctx(), "Border"));
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut settings.border, l10n::text(ui.ctx(), "Show border"))
+            .labelled_by(label.id);
+        let shown = rgba(settings.border_color.unwrap_or(color));
+        if settings.border
+            && let Some(picked) = color_swatch(ui, border_picker, shown, "range_border_color")
+        {
+            settings.border_color = Some(
+                keep_opacity(picked, shown, border_picker.custom_mode).to_srgba_unmultiplied(),
+            );
+        }
+    });
+    ui.end_row();
+    if settings.border {
+        ui.label(l10n::text(ui.ctx(), "Border width"));
+        let shown = settings.border_width.unwrap_or(width);
+        let mut edited = shown;
+        line_width_row(ui, &mut edited);
+        if edited != shown {
+            settings.border_width = Some(edited);
+        }
+        ui.end_row();
+        let label = ui.label(l10n::text(ui.ctx(), "Border style"));
+        let shown = settings.border_style.unwrap_or(style);
+        let mut edited = shown;
+        ui.label_inputs_by(label.id, |ui| {
+            ui.combo_select(
+                "range_border_style",
+                &mut edited,
+                LineStyle::all().iter().copied(),
+                |v| v.name().to_string(),
+            );
+        });
+        if edited != shown {
+            settings.border_style = Some(edited);
+        }
+        ui.end_row();
+    }
+    if tool == DrawingToolType::DateRange {
+        ui.label(l10n::text(ui.ctx(), "Extend"));
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut settings.extend_top, l10n::text(ui.ctx(), "Top"));
+            ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
+            ui.checkbox(&mut settings.extend_bottom, l10n::text(ui.ctx(), "Bottom"));
+        });
+        ui.end_row();
+    }
+    ui.label(l10n::text(ui.ctx(), "Label"));
+    ui.horizontal(|ui| {
+        let shown = settings
+            .text_color
+            .map_or(ui.active_theme().chart.axis_text, rgba);
+        if let Some(picked) = color_swatch(ui, text_picker, shown, "range_label_color") {
+            settings.text_color =
+                Some(keep_opacity(picked, shown, text_picker.custom_mode).to_srgba_unmultiplied());
+        }
+        ui.combo_select(
+            "range_label_font_size",
+            &mut settings.font_size,
+            super::text::FONT_SIZES.iter().copied(),
+            |v| format!("{}px", *v as i32),
+        );
+    });
+    ui.end_row();
+    let label = ui.label(l10n::text(ui.ctx(), "Label background"));
+    ui.horizontal(|ui| {
+        ui.checkbox(
+            &mut settings.background,
+            l10n::text(ui.ctx(), "Show background"),
+        )
+        .labelled_by(label.id);
+        let shown = settings
+            .background_color
+            .map_or(ui.active_theme().chart.bg_tooltip, rgba);
+        if settings.background
+            && let Some(picked) =
+                color_swatch(ui, background_picker, shown, "range_label_background")
+        {
+            settings.background_color = Some(
+                keep_opacity(picked, shown, background_picker.custom_mode).to_srgba_unmultiplied(),
+            );
+        }
+    });
+    ui.end_row();
+    ui.label(l10n::text(ui.ctx(), "Label shadow"));
+    let shown = rgba(settings.shadow_color);
+    if let Some(picked) = color_swatch(ui, shadow_picker, shown, "range_label_shadow") {
+        settings.shadow_color =
+            keep_opacity(picked, shown, shadow_picker.custom_mode).to_srgba_unmultiplied();
+    }
+    ui.end_row();
+    for (label, value) in [
+        ("Price range", &mut settings.price_change),
+        ("Percent change", &mut settings.percent_change),
+        ("Change in pips or ticks", &mut settings.pip_change),
+        ("Bar range", &mut settings.bar_count),
+        ("Date and time range", &mut settings.elapsed_time),
+        ("Volume", &mut settings.volume),
+    ]
+    .into_iter()
+    .skip(if tool == DrawingToolType::DateRange {
+        3
+    } else {
+        0
+    }) {
+        ui.label(l10n::text(ui.ctx(), label));
+        ui.checkbox(value, l10n::text(ui.ctx(), "Show"))
+            .accessible_name(l10n::text(ui.ctx(), label));
+        ui.end_row();
+    }
+}
+
 /// The ghost feed's candle rows: the body colours, the borders and the wick, each with a switch,
 /// then the transparency. A ghost feed shows no colour, fill or badge rows, so its five swatches
 /// use those rows' pickers. A palette colour keeps the opacity in use; the custom editor sets it.
@@ -727,6 +885,97 @@ fn ghost_feed_rows(
     // Written only when edited, so that an untouched feed keeps `None` and the apply sees no edit.
     if config != original {
         *feed = Some(config);
+    }
+}
+
+/// The forecast's card and badge rows: the background and text colours of the start card, the
+/// target card and the success and failure badges, a border switch and colour for each card,
+/// then the background transparency. Unset colours show the active theme's. A palette colour
+/// keeps the opacity in use; the custom editor sets it.
+fn forecast_rows(ui: &mut Ui, settings: &mut Drawing, pickers: &mut [ColorPickerState; 10]) {
+    let mut style = settings.forecast_style();
+    let original = style;
+    let [start, target, success, failure] = style.cards(&ui.active_theme().chart);
+    // A border row switches its colour on and off; switched on, it starts in the text colour.
+    let rows = [
+        (
+            "Start background",
+            &mut style.start_background,
+            start.background,
+            false,
+        ),
+        ("Start text", &mut style.start_text, start.text, false),
+        ("Start border", &mut style.start_border, start.text, true),
+        (
+            "Target background",
+            &mut style.target_background,
+            target.background,
+            false,
+        ),
+        ("Target text", &mut style.target_text, target.text, false),
+        ("Target border", &mut style.target_border, target.text, true),
+        (
+            "Success background",
+            &mut style.success_background,
+            success.background,
+            false,
+        ),
+        ("Success text", &mut style.success_text, success.text, false),
+        (
+            "Failure background",
+            &mut style.failure_background,
+            failure.background,
+            false,
+        ),
+        ("Failure text", &mut style.failure_text, failure.text, false),
+    ];
+    for ((name, color, shown, border), picker) in rows.into_iter().zip(pickers) {
+        let label = ui.label(l10n::text(ui.ctx(), name));
+        ui.horizontal(|ui| {
+            if border {
+                let mut show = color.is_some();
+                if ui
+                    .checkbox(&mut show, l10n::text(ui.ctx(), "Show border"))
+                    .labelled_by(label.id)
+                    .changed()
+                {
+                    *color = show.then(|| shown.to_srgba_unmultiplied());
+                }
+                if color.is_none() {
+                    return;
+                }
+            }
+            // The exact bytes are edited, so that a translucent colour keeps its hue.
+            let current = color.unwrap_or_else(|| shown.to_srgba_unmultiplied());
+            let [r, g, b, a] = current;
+            picker.sel_color = Color32::from_rgba_unmultiplied(r, g, b, a);
+            if let Some([r, g, b, a]) = ColorPicker::new(picker, ("forecast", name))
+                .show_unmultiplied(ui, current)
+                .inner
+            {
+                let a = if picker.custom_mode || current[3] == 0 {
+                    a
+                } else {
+                    current[3]
+                };
+                *color = Some([r, g, b, a]);
+            }
+        });
+        ui.end_row();
+    }
+    let label = ui.label(l10n::text(ui.ctx(), "Transparency"));
+    ui.label_inputs_by(label.id, |ui| {
+        ui.add(
+            egui::DragValue::new(&mut style.transparency)
+                .range(0..=100)
+                .suffix("%"),
+        )
+    });
+    ui.end_row();
+    // Written only when edited, so that an untouched forecast keeps `None` and the apply sees no
+    // edit.
+    if style != original {
+        settings.forecast = Some(style);
     }
 }
 
@@ -1011,11 +1260,88 @@ mod tests {
                         &mut props,
                         &mut Default::default(),
                         &mut Default::default(),
+                        &mut Default::default(),
+                        None,
                     )
                 },
             );
             output.drop_without_applying_deltas();
             assert_eq!(props.fill_color, Some(fill), "{tool:?}");
+        }
+    }
+
+    /// Each of a forecast's ten card and badge wells sets its own colour, and a palette colour
+    /// keeps the opacity in use.
+    #[test]
+    fn forecast_wells_set_their_own_colours() {
+        use crate::drawings::ForecastStyle;
+        type Member = fn(&mut ForecastStyle) -> &mut Option<[u8; 4]>;
+        let members: [Member; 10] = [
+            |s| &mut s.start_background,
+            |s| &mut s.start_text,
+            |s| &mut s.start_border,
+            |s| &mut s.target_background,
+            |s| &mut s.target_text,
+            |s| &mut s.target_border,
+            |s| &mut s.success_background,
+            |s| &mut s.success_text,
+            |s| &mut s.failure_background,
+            |s| &mut s.failure_text,
+        ];
+        // Every colour set, so that both border wells show and no well paints the swatch.
+        let mut saved = ForecastStyle::default();
+        for (i, member) in members.iter().enumerate() {
+            *member(&mut saved) = Some([10 + i as u8, 20, 30, 128]);
+        }
+        let swatch = MAIN_COLORS[3];
+        let [r, g, b, _] = swatch.to_srgba_unmultiplied();
+        for (i, member) in members.iter().enumerate() {
+            let ctx = Context::default();
+            ctx.global_style_mut(|style| style.animation_time = 0.0);
+            let chart = Chart::new(BarData::new());
+            let mut drawing = Drawing::new(1, DrawingToolType::Forecast);
+            drawing.forecast = Some(saved);
+            let mut props = DrawingProps::from_drawing(&drawing, &chart);
+            let mut card_pickers: [ColorPickerState; 10] = Default::default();
+            card_pickers[i].is_open = true;
+            let mut frame = |events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        StyleTab::show(
+                            ui,
+                            &mut props,
+                            &mut Default::default(),
+                            &mut Default::default(),
+                            &mut card_pickers,
+                            None,
+                        )
+                    },
+                );
+                let well = output.shapes.iter().find_map(|s| match &s.shape {
+                    Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
+                    _ => None,
+                });
+                output.drop_without_applying_deltas();
+                well
+            };
+            frame(vec![]);
+            let pos = frame(vec![]).expect("the palette shows the swatch");
+            frame(click(pos));
+            let mut want = saved;
+            *member(&mut want) = Some([r, g, b, 128]);
+            assert_eq!(
+                props.tool_settings.as_ref().unwrap().settings.forecast,
+                Some(want),
+                "well {i}"
+            );
         }
     }
 
@@ -1058,7 +1384,16 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| StyleTab::show(ui, &mut props, &mut pickers, &mut Default::default()),
+                    |ui| {
+                        StyleTab::show(
+                            ui,
+                            &mut props,
+                            &mut pickers,
+                            &mut Default::default(),
+                            &mut Default::default(),
+                            None,
+                        )
+                    },
                 );
                 let well = output.shapes.iter().find_map(|s| match &s.shape {
                     Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
@@ -1148,7 +1483,16 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| StyleTab::show(ui, &mut props, &mut pickers, &mut Default::default()),
+                    |ui| {
+                        StyleTab::show(
+                            ui,
+                            &mut props,
+                            &mut pickers,
+                            &mut Default::default(),
+                            &mut Default::default(),
+                            None,
+                        )
+                    },
                 );
                 let well = output.shapes.iter().find_map(|s| match &s.shape {
                     Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
@@ -1296,7 +1640,16 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| StyleTab::show(ui, &mut props, &mut pickers, &mut Default::default()),
+                    |ui| {
+                        StyleTab::show(
+                            ui,
+                            &mut props,
+                            &mut pickers,
+                            &mut Default::default(),
+                            &mut Default::default(),
+                            None,
+                        )
+                    },
                 );
                 let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
                 output.drop_without_applying_deltas();
@@ -1332,8 +1685,8 @@ mod tests {
         }
     }
 
-    /// A price label's badge and a price note's label offer their text, background and border on
-    /// the Style tab in place of a fill, and a palette colour keeps the border's opacity.
+    /// Badges and ranges offer their border, label and readout settings on the Style tab;
+    /// a palette colour keeps the border's opacity.
     #[test]
     fn price_label_and_note_style_their_badge() {
         let chart = Chart::new(BarData::new());
@@ -1356,12 +1709,66 @@ mod tests {
                 ][..],
                 &["Fill"][..],
             ),
+            (
+                DrawingToolType::DateRange,
+                &[
+                    "Border",
+                    "Border width",
+                    "Border style",
+                    "Extend",
+                    "Top",
+                    "Bottom",
+                    "Label",
+                    "Label background",
+                    "Bar range",
+                    "Label shadow",
+                    "Date and time range",
+                    "Volume",
+                ][..],
+                &[
+                    "Left",
+                    "Right",
+                    "Price range",
+                    "Percent change",
+                    "Change in pips or ticks",
+                ][..],
+            ),
+            (
+                DrawingToolType::DateAndPriceRange,
+                &[
+                    "Border",
+                    "Border width",
+                    "Border style",
+                    "Label",
+                    "Label background",
+                    "Price range",
+                    "Label shadow",
+                    "Percent change",
+                    "Change in pips or ticks",
+                    "Bar range",
+                    "Date and time range",
+                    "Volume",
+                    "Left",
+                    "Right",
+                ][..],
+                &["Top", "Bottom"][..],
+            ),
         ] {
             let ctx = Context::default();
             ctx.global_style_mut(|style| style.animation_time = 0.0);
             let mut drawing = Drawing::new(0, tool);
-            drawing.border_color = Some([10, 20, 30, 128]);
+            let range = matches!(
+                tool,
+                DrawingToolType::DateRange | DrawingToolType::DateAndPriceRange
+            );
+            if range {
+                drawing.range_settings.border = true;
+                drawing.range_settings.border_color = Some([10, 20, 30, 128]);
+            } else {
+                drawing.border_color = Some([10, 20, 30, 128]);
+            }
             let mut props = DrawingProps::from_drawing(&drawing, &chart);
+            let original = (drawing.text_color, props.fill_color);
             let mut badge_pickers: [ColorPickerState; 3] = Default::default();
             badge_pickers[2].is_open = true;
             let mut frame = |events| {
@@ -1375,7 +1782,14 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        StyleTab::show(ui, &mut props, &mut Default::default(), &mut badge_pickers)
+                        StyleTab::show(
+                            ui,
+                            &mut props,
+                            &mut Default::default(),
+                            &mut badge_pickers,
+                            &mut Default::default(),
+                            None,
+                        )
                     },
                 );
                 let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
@@ -1406,9 +1820,78 @@ mod tests {
                 .expect("the palette shows the swatch");
             frame(click(well));
             let settings = &props.tool_settings.as_ref().unwrap().settings;
-            assert_eq!(settings.border_color, Some([76, 175, 80, 128]), "{tool:?}");
-            assert_eq!((settings.text_color, props.fill_color), (None, None));
+            assert_eq!(
+                if range {
+                    settings.range_settings.border_color
+                } else {
+                    settings.border_color
+                },
+                Some([76, 175, 80, 128]),
+                "{tool:?}"
+            );
+            assert_eq!((settings.text_color, props.fill_color), original);
         }
+    }
+
+    /// An arrow's Style tab lists the trend line's statistics, and its Middle point, switched on
+    /// there, gives the selected arrow a middle handle halfway between its anchors.
+    #[test]
+    fn arrow_offers_statistics_and_a_middle_handle() {
+        use crate::drawings::services::HandleService;
+        use crate::drawings::{ChartPoint, HandlePos};
+        use crate::ui::dialogs::{DrawingId, DrawingPropertiesDialog, PropertiesTab};
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+        let mut drawing = Drawing::new(7, DrawingToolType::Arrow);
+        drawing.completed = true;
+        drawing.chart_points = vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(8.0, 200.0)];
+        drawing.points = vec![Pos2::new(100.0, 300.0), Pos2::new(300.0, 100.0)];
+        chart.drawings_mut().drawings.push(drawing);
+        chart.drawings_mut().select_drawings([7]);
+        let mut dialog = DrawingPropertiesDialog::new();
+        // Tall enough to show the statistics rows, which come last, without scrolling.
+        dialog.config.height = 1300.0;
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 1400.0))
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, (chart, dialog): &mut (Chart, DrawingPropertiesDialog)| {
+                    dialog.show_and_apply(ui.ctx(), chart);
+                },
+                (chart, dialog),
+            );
+        let (chart, dialog) = h.state_mut();
+        dialog.open_for_chart(chart, DrawingId(7));
+        dialog.active_tab = PropertiesTab::Style;
+        h.run();
+        for label in [
+            "Price labels",
+            "Keep statistics visible",
+            "Price change",
+            "Percentage change",
+            "Pip change",
+            "Bar count",
+            "Elapsed time",
+            "Length in periods",
+            "Inclination",
+        ] {
+            h.get_by_role_and_label(Role::CheckBox, label);
+        }
+        h.get_by_label("Statistics placement");
+        let handles = |h: &Harness<'_, (Chart, DrawingPropertiesDialog)>| {
+            HandleService::get_handles(&h.state().0.drawings().drawings[0])
+        };
+        assert_eq!(handles(&h).len(), 2);
+        h.get_by_role_and_label(Role::CheckBox, "Middle point")
+            .click();
+        h.run();
+        h.get_by_role_and_label(Role::Button, "Ok").click();
+        h.run();
+        assert_eq!(
+            handles(&h).last(),
+            Some(&(HandlePos::Middle, Pos2::new(200.0, 200.0)))
+        );
     }
 
     /// Each switch of the regression trend's Style tab turns off its own line or the correlation
@@ -1441,6 +1924,8 @@ mod tests {
                             &mut props,
                             &mut Default::default(),
                             &mut Default::default(),
+                            &mut Default::default(),
+                            None,
                         )
                     },
                 );

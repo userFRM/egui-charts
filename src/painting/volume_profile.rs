@@ -16,16 +16,19 @@ const STUDY_ROW_ALPHA: u8 = 163;
 
 /// Whether a study's profile measures the bars in view, not a span of its own, so that its point
 /// of control crosses the plot. An options profile measures strikes.
-pub(crate) fn measures_view(profile: &VolumeProfile, right_aligned: bool) -> bool {
-    right_aligned && profile.source() != ProfileSource::Options
+pub(crate) fn measures_view(profile: &VolumeProfile, strip: bool) -> bool {
+    strip && profile.source() != ProfileSource::Options
 }
 
 /// Study rows leave candles visible; drawings also tint their span.
 pub(crate) enum ProfileStyle {
     Study {
         right_aligned: bool,
+        strip: bool,
         /// Share of the span that the row with the most volume takes.
         width: f32,
+        /// Visibility of the option profile's call and put wall plots.
+        walls_visible: [bool; 2],
     },
     #[cfg(feature = "drawings")]
     Drawing {
@@ -87,36 +90,58 @@ pub(crate) fn paint_profile(
         return;
     }
     let options = profile.source() == ProfileSource::Options;
-    let (drawing, right_aligned, share, poc_width) = match style {
+    let (drawing, right_aligned, strip, share, poc_width, walls_visible) = match style {
         ProfileStyle::Study {
             right_aligned,
+            strip,
             width,
+            walls_visible,
         } => (
             false,
             right_aligned,
+            strip,
             width,
             if options {
                 stroke::HAIRLINE
             } else {
                 stroke::THICK
             },
+            walls_visible,
         ),
         #[cfg(feature = "drawings")]
         ProfileStyle::Drawing {
             anchored,
             poc_width,
-        } => (true, anchored, 0.3, poc_width),
+        } => (true, anchored, false, 0.3, poc_width, [true; 2]),
     };
     if profile.exposure.is_some() {
-        paint_exposure(painter, profile, config, span, share, price_to_y);
+        paint_exposure(painter, profile, config, span.clone(), share, price_to_y);
+        paint_option_walls(
+            painter,
+            profile,
+            span,
+            right_aligned,
+            price_to_y,
+            walls_visible,
+        );
         return;
     }
     let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(config.value_area()) else {
+        if !drawing {
+            paint_option_walls(
+                painter,
+                profile,
+                span,
+                right_aligned,
+                price_to_y,
+                walls_visible,
+            );
+        }
         return;
     };
     let y_at_row = |row: usize| (price_to_y)(profile.low + row as f64 * profile.row_height);
     let color = shown_color(painter, color);
-    let spans_view = !drawing && measures_view(profile, right_aligned);
+    let spans_view = !drawing && measures_view(profile, strip);
     let rect = Rect::from_two_pos(
         Pos2::new(left, y_at_row(profile.volume.len())),
         Pos2::new(right, y_at_row(0)),
@@ -154,7 +179,7 @@ pub(crate) fn paint_profile(
             },
             poc_width,
             [y_at_row(va_high + 1), y_at_row(va_low)],
-            config.show_value_area_lines,
+            config,
             drawing,
         );
     };
@@ -163,7 +188,12 @@ pub(crate) fn paint_profile(
         draw_lines();
     }
 
-    for (row, &volume) in profile.volume.iter().enumerate() {
+    for (row, &volume) in profile
+        .volume
+        .iter()
+        .enumerate()
+        .filter(|_| config.show_rows)
+    {
         // Ordered on screen: the upper row edge is lower down on an inverted scale.
         let (upper, lower) = (y_at_row(row + 1), y_at_row(row));
         let (top, bottom) = (upper.min(lower), upper.max(lower));
@@ -284,8 +314,78 @@ pub(crate) fn paint_profile(
         }
     }
 
+    if config.show_values && !drawing {
+        use crate::scales::PriceFormatter;
+        let formatter = crate::scales::VolumeFormatter { precision: 2 };
+        let font = egui::FontId::proportional(typography::XS);
+        let text_color = painter.ctx().active_theme().ui.text;
+        for (row, &volume) in profile.volume.iter().enumerate() {
+            let delta = profile.up[row] - profile.down[row];
+            let amount = if config.display == ProfileDisplay::Delta {
+                delta.abs()
+            } else {
+                volume
+            };
+            // A strike's figures show while it has any, also where its calls and puts net out.
+            if (if options { volume } else { amount }) <= 0.0 {
+                continue;
+            }
+            let text = if options && profile.ratio_rows {
+                format!("{:.2}", profile.up[row])
+            } else if options {
+                format!(
+                    "{} × {}",
+                    formatter.format(profile.up[row]),
+                    formatter.format(profile.down[row])
+                )
+            } else {
+                match config.display {
+                    ProfileDisplay::Total => formatter.format(volume),
+                    ProfileDisplay::UpDown => format!(
+                        "{} / {}",
+                        formatter.format(profile.up[row]),
+                        formatter.format(profile.down[row])
+                    ),
+                    ProfileDisplay::Delta => format!(
+                        "{}{}",
+                        if delta > 0.0 { "+" } else { "" },
+                        formatter.format(delta)
+                    ),
+                }
+            };
+            let galley = painter.layout_no_wrap(text, font.clone(), text_color);
+            let (a, b) = (y_at_row(row), y_at_row(row + 1));
+            if (a - b).abs() < galley.size().y {
+                continue;
+            }
+            let width = if config.show_rows {
+                (amount / max_volume) as f32 * max_width
+            } else {
+                0.0
+            };
+            let x = if right_aligned {
+                row_right - width - 2.0 - galley.size().x
+            } else {
+                left + width + 2.0
+            };
+            painter.galley(
+                Pos2::new(x, (a + b - galley.size().y) * 0.5),
+                galley,
+                text_color,
+            );
+        }
+    }
+
     if !drawing {
         draw_lines();
+        paint_option_walls(
+            painter,
+            profile,
+            span,
+            right_aligned,
+            price_to_y,
+            walls_visible,
+        );
     }
     if let Some(parts) = &profile.expiry_parts {
         paint_expiry_key(painter, &parts.labels, rect, !right_aligned);
@@ -300,6 +400,40 @@ pub(crate) fn paint_profile(
         color
     };
     paint_source_note(painter, profile.source(), rect, note_right, note_color);
+}
+
+fn paint_option_walls(
+    painter: &egui::Painter,
+    profile: &VolumeProfile,
+    span: Range<f32>,
+    right_aligned: bool,
+    price_to_y: &dyn Fn(f64) -> f32,
+    visible: [bool; 2],
+) {
+    let Some(walls) = &profile.walls else {
+        return;
+    };
+    for (side, label) in ["Call wall", "Put wall"].into_iter().enumerate() {
+        let Some(strike) = walls.strikes[side].filter(|_| visible[side]) else {
+            continue;
+        };
+        let [r, g, b, a] = walls.colors[side];
+        let color = Color32::from_rgba_unmultiplied(r, g, b, a);
+        let y = price_to_y(strike);
+        painter.hline(span.start..=span.end, y, Stroke::new(1.0, color));
+        let (x, align) = if right_aligned {
+            (span.end - 2.0, egui::Align2::RIGHT_BOTTOM)
+        } else {
+            (span.start + 2.0, egui::Align2::LEFT_BOTTOM)
+        };
+        painter.text(
+            Pos2::new(x, y - 2.0),
+            align,
+            crate::localization::text(painter.ctx(), label),
+            egui::FontId::proportional(typography::XS),
+            color,
+        );
+    }
 }
 
 // Both painting and selection use these signed rectangles, including inverted price scales.
@@ -541,7 +675,7 @@ fn draw_volume_profile_lines(
     poc_span: egui::Rangef,
     poc_width: f32,
     [vah_y, val_y]: [f32; 2],
-    show_value_area_lines: bool,
+    config: VolumeProfileConfig,
     drawing: bool,
 ) {
     let theme = painter.ctx().active_theme();
@@ -552,37 +686,58 @@ fn draw_volume_profile_lines(
     } else {
         Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3])
     };
-    painter.add(egui::Shape::line(
-        vec![
-            Pos2::new(poc_span.min, poc_y),
-            Pos2::new(poc_span.max, poc_y),
-        ],
-        Stroke::new(poc_width, poc_color),
-    ));
+    if config.show_poc {
+        painter.add(egui::Shape::line(
+            vec![
+                Pos2::new(poc_span.min, poc_y),
+                Pos2::new(poc_span.max, poc_y),
+            ],
+            Stroke::new(poc_width, poc_color),
+        ));
+    }
 
     let va_color = Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 200);
-    for y in [vah_y, val_y].into_iter().filter(|_| show_value_area_lines) {
+    let away = if vah_y <= val_y { 8.0 } else { -8.0 };
+    for (i, (label, y, label_y, shown)) in [
+        (
+            "VAH",
+            vah_y,
+            vah_y - away,
+            config.show_value_area_lines || config.show_value_area_high,
+        ),
+        (
+            "VAL",
+            val_y,
+            val_y + away,
+            config.show_value_area_lines || config.show_value_area_low,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if !shown {
+            continue;
+        }
+        let rgba = config.value_area_line_colors[i];
+        let line_color = if rgba == Color32::PLACEHOLDER.to_srgba_unmultiplied() {
+            va_color
+        } else {
+            Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3])
+        };
         painter.hline(
             rect.min.x..=rect.max.x,
             y,
-            Stroke::new(stroke::HAIRLINE, va_color),
+            Stroke::new(stroke::HAIRLINE, line_color),
         );
-    }
-    if rect.width() < 50.0 || !show_value_area_lines {
-        return;
-    }
-
-    // Each label sits outside the value area, away from the other line;
-    // the VAH line is the lower one on an inverted scale.
-    let away = if vah_y <= val_y { 8.0 } else { -8.0 };
-    for (label, y) in [("VAH", vah_y - away), ("VAL", val_y + away)] {
-        painter.text(
-            Pos2::new(rect.max.x - 25.0, y),
-            egui::Align2::CENTER_CENTER,
-            crate::localization::text(painter.ctx(), label),
-            font.clone(),
-            va_color,
-        );
+        if rect.width() >= 50.0 {
+            painter.text(
+                Pos2::new(rect.max.x - 25.0, label_y),
+                egui::Align2::CENTER_CENTER,
+                crate::localization::text(painter.ctx(), label),
+                font.clone(),
+                line_color,
+            );
+        }
     }
 }
 
@@ -654,6 +809,8 @@ mod tests {
                     } else {
                         ProfileStyle::Study {
                             right_aligned: false,
+                            strip: false,
+                            walls_visible: [true; 2],
                             width: 0.9,
                         }
                     },
@@ -748,6 +905,8 @@ mod tests {
                     span.clone(),
                     ProfileStyle::Study {
                         right_aligned,
+                        strip: right_aligned,
+                        walls_visible: [true; 2],
                         width: if right_aligned { 1.0 } else { 0.9 },
                     },
                     &|price| (price - 100.0) as f32 * 10.0,

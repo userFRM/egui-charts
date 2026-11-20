@@ -95,6 +95,8 @@ pub(crate) struct FeedLink {
     order_queue: Option<crate::data::OrderQueue>,
     /// The order book over time, when the host turned it on.
     pub(super) depth_history: Option<DepthHistory>,
+    /// The chart's retention, also applied when a history starts later.
+    pub(super) depth_retention: Option<chrono::TimeDelta>,
     depth_complete: bool,
     footprints_complete: bool,
     /// A terminal footprint error stops requests until refresh, independently of older EOF.
@@ -169,7 +171,7 @@ impl FeedLink {
     }
 
     fn rebuild_paged_trade_rate(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
-        if let Some(tf @ (Timeframe::Ticks(_) | Timeframe::Range(_))) = self.clock.timeframe()
+        if let Some(tf) = self.clock.timeframe().filter(|tf| tf.is_trade_based())
             && self.trades_from_start
             && self.pushed_from.is_none()
             && self.trades.live().next().is_none()
@@ -241,6 +243,7 @@ impl FeedLink {
             order_book: self.order_book.clone(),
             order_queue: self.order_queue.clone(),
             depth_history: self.depth_history.clone(),
+            depth_retention: self.depth_retention,
             depth_complete: self.depth_complete,
             footprints_complete: true,
             footprints_stopped: true,
@@ -539,6 +542,7 @@ impl Chart {
 
         self.legend_instrument = None;
         self.currency_choice = None;
+        self.unit_choice = None;
         self.bar_close_time = None;
         self.server_time_offset = None;
         self.set_quote(None);
@@ -555,6 +559,7 @@ impl Chart {
                 .bubbles
                 .take()
                 .map(|bubbles| new.bubbles(bubbles.config));
+            new.depth_retention = old.depth_retention;
             new.depth_history = old.depth_history.take();
             new.depth_history.iter_mut().for_each(DepthHistory::clear);
             new.heatmap = old.heatmap.take().map(|_| Default::default());
@@ -635,6 +640,7 @@ impl Chart {
             order_book: None,
             order_queue: None,
             depth_history: None,
+            depth_retention: None,
             depth_complete: false,
             footprints_complete: false,
             footprints_stopped: false,
@@ -745,8 +751,6 @@ impl Chart {
             link.instrument = None;
         }
         if symbol != self.symbol {
-            self.host_events
-                .push(super::ChartEvent::SymbolChanged(symbol.clone()));
             #[cfg(feature = "drawings")]
             self.anchor_drawing_points();
             #[cfg(feature = "drawings")]
@@ -761,6 +765,7 @@ impl Chart {
                 next.0.registry = self.drawings.registry.clone();
                 next.0.options = self.drawings.options.clone();
                 next.0.tool_defaults = self.drawings.tool_defaults.clone();
+                next.0.custom_tool_defaults = self.drawings.custom_tool_defaults.clone();
                 next.0.set_active_tool(self.drawings.active_tool);
                 if let Some(id) = self.drawings.active_custom_tool() {
                     let _ = next.0.set_custom_tool(id);
@@ -769,6 +774,9 @@ impl Chart {
                 next.0.eraser_mode = self.drawings.eraser_mode;
                 next.0.set_hidden(self.drawings.is_hidden());
                 next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
+                self.flush_change_events();
+                next.0.events.clear();
+                next.0.events_dropped = 0;
                 std::mem::swap(&mut self.drawings, &mut next.0);
                 std::mem::swap(&mut self.marks, &mut next.1);
                 self.attach_pending_drawings();
@@ -792,6 +800,7 @@ impl Chart {
                     self.symbol_markers.insert(self.symbol.clone(), next_marks);
                 }
             }
+            self.push_event(super::ChartEvent::SymbolChanged(symbol.clone()));
             if !keep_history {
                 self.history.clear();
             }
@@ -801,6 +810,7 @@ impl Chart {
             self.pending_scroll_time = None;
             self.legend_instrument = None;
             self.currency_choice = None;
+            self.unit_choice = None;
             self.bar_close_time = None;
             self.server_time_offset = None;
             self.legend_badge = None;
@@ -856,8 +866,7 @@ impl Chart {
     pub fn set_timeframe(&mut self, timeframe: Timeframe) {
         if self.timeframe != Some(timeframe) {
             self.clear_source_signals();
-            self.host_events
-                .push(super::ChartEvent::TimeframeChanged(timeframe));
+            self.push_event(super::ChartEvent::TimeframeChanged(timeframe));
             self.bar_close_time = None;
         }
         if self.timeframe != Some(timeframe)
@@ -965,6 +974,8 @@ impl Chart {
 
     /// Reloads the current feed key on the next frame, retaining drawings and chart history.
     /// Use after changing host-side feed settings or to retry a permanent request failure.
+    /// A feed asks for the same reload of the chart's series through
+    /// [`Sink::reload_history`](crate::data::Sink::reload_history).
     pub fn reload_feed(&mut self) {
         self.study_data.clear_feed();
         if let Some(link) = &mut self.feed_link {
@@ -1006,6 +1017,32 @@ impl Chart {
     pub fn trades(&self, series: SeriesId) -> impl Iterator<Item = &Tick> {
         let link = self.feed_link.as_ref().filter(|_| series == SeriesId::MAIN);
         link.into_iter().flat_map(|link| link.trades.iter())
+    }
+
+    /// Identifies the retained tape behind [`Self::trades`], or `None` without a feed or for
+    /// another series than [`SeriesId::MAIN`]. Compare for equality: replacing the tape,
+    /// including on a feed reset, changes the value; adding or evicting trades does not.
+    pub fn trade_generation(&self, series: SeriesId) -> Option<u64> {
+        self.feed_link
+            .as_ref()
+            .filter(|_| series == SeriesId::MAIN)
+            .map(|link| link.trades.generation)
+    }
+
+    /// The last history page revision and the index in [`Self::trades`] where newly streamed
+    /// executions begin. If the revision changed, refresh older rows without alerting on them.
+    /// Start `live_cursor` at zero for each [`Self::trade_generation`]; this call advances it
+    /// through the current stream, even when history and live executions arrived together.
+    /// Returns `None` without a feed or for a series other than [`SeriesId::MAIN`].
+    pub fn trade_progress(
+        &self,
+        series: SeriesId,
+        live_cursor: &mut usize,
+    ) -> Option<(u64, usize)> {
+        self.feed_link
+            .as_ref()
+            .filter(|_| series == SeriesId::MAIN)
+            .map(|link| link.trades.progress(live_cursor))
     }
 
     /// Combines the retained fills with explicit aggressor ids, in first-fill order. At most
@@ -1089,15 +1126,24 @@ impl Chart {
 
     /// Loads recorded depth from the feed and keeps `history` of its live book, or stops
     /// with `None`. The history starts empty and is cleared when the symbol or interval changes.
-    /// It needs the instrument's tick size, and keeps no columns without one or without a feed.
+    /// A history without its own [`retention`](crate::data::DepthHistoryConfig::retention)
+    /// takes the chart's [`set_depth_retention`](Self::set_depth_retention); one with its own
+    /// replaces that setting. It needs the instrument's tick size, and keeps no columns without
+    /// one or without a feed.
     /// Columns follow the times of the depth updates: an update stamped more than a minute after
     /// the feed's time ([`Sink::set_server_time`](crate::data::Sink::set_server_time)) samples
     /// nothing, so a wrong time cannot hold the history back.
     /// The chart takes the columns sampled since its last frame when it is drawn: while it is not,
-    /// at most [`columns`](crate::data::DepthHistoryConfig::columns) of them wait, the oldest
-    /// making room for new ones.
-    pub fn set_depth_history(&mut self, history: Option<DepthHistory>) {
+    /// at most [`columns`](crate::data::DepthHistoryConfig::columns) of them wait, or 600 under a
+    /// retention, the oldest making room for new ones.
+    pub fn set_depth_history(&mut self, mut history: Option<DepthHistory>) {
         if let Some(link) = &mut self.feed_link {
+            if let Some(history) = &mut history {
+                if history.config().retention.is_none() && link.depth_retention.is_some() {
+                    history.set_retention(link.depth_retention);
+                }
+                link.depth_retention = history.config().retention;
+            }
             if let Some(id) = link.subscription {
                 let config = history.as_ref().map(|history| history.config().clone());
                 link.inbox.sample_depth(id, config);
@@ -1112,8 +1158,51 @@ impl Chart {
         }
     }
 
+    /// Keeps the depth history for `retention`, choosing tier capacity with
+    /// [`DepthHistoryConfig::with_retention`](crate::data::DepthHistoryConfig::with_retention).
+    /// Columns outside it leave immediately, and paging stops at its start. `None` restores
+    /// the full default history of 600 columns per tier. Also applies to a history started later
+    /// by [`set_liquidity_heatmap`](Self::set_liquidity_heatmap); a history supplied with its own
+    /// retention replaces the setting. A non-positive duration acts as `None`. Does nothing
+    /// without a feed.
+    pub fn set_depth_retention(&mut self, retention: Option<chrono::TimeDelta>) {
+        let retention = retention.filter(|r| *r > chrono::TimeDelta::zero());
+        let Some(link) = &mut self.feed_link else {
+            return;
+        };
+        link.depth_retention = retention;
+        if let Some(mut history) = link
+            .depth_history
+            .take_if(|h| h.config().retention != retention)
+        {
+            history.set_retention(retention);
+            self.set_depth_history(Some(history));
+        }
+    }
+
+    /// Empties held depth columns and heatmap textures, keeping their settings, as the Order
+    /// flow tab's Release memory button requests. Live depth and historical pages within the
+    /// retention fill the history again. Does nothing without a feed or a depth history.
+    pub fn clear_depth_history(&mut self) {
+        let Some(link) = &mut self.feed_link else {
+            return;
+        };
+        let Some(history) = &mut link.depth_history else {
+            return;
+        };
+        history.clear();
+        link.heatmap = link.heatmap.take().map(|_| Default::default());
+        link.depth_complete = false;
+        link.depth_cursor = None;
+        link.pending
+            .retain(|(_, r, _)| !matches!(r, Request::Depth(_)));
+        link.retries
+            .retain(|(_, r, _)| !matches!(r, Request::Depth(_)));
+    }
+
     /// Shows resting liquidity behind the price series. A feed and instrument tick size are
-    /// required. Enabling starts the default depth history if none is configured; disabling
+    /// required. Enabling starts the default depth history with the retention of
+    /// [`set_depth_retention`](Self::set_depth_retention) if none is configured; disabling
     /// releases textures and retains that history and the appearance settings. Re-enabling an
     /// enabled heatmap keeps its textures. Trade bubbles and best bid/ask lines can be
     /// enabled independently through the existing chart options.

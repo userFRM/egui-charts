@@ -251,6 +251,7 @@ fn every_study_styles_a_line_past_its_last() {
 /// Catalogue studies have distinct values except ADX and DMI, which expose the same Wilder
 /// components in a different order, and Donchian and Price Channel, which draw the same highest
 /// high, lowest low and midpoint with their own colours and fill. Fixed profiles use a saved end.
+/// Single candlestick patterns are left out.
 #[test]
 fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
     use crate::model::Bar;
@@ -261,8 +262,12 @@ fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
     let bars: Vec<Bar> = (0..800)
         .map(|i: i64| {
             let x = i as f64;
-            let close =
-                100.0 + (x * 0.13).sin() * 8.0 + (x * 0.029).cos() * 5.0 + (i / 160) as f64 * 6.0;
+            // The slower swing also gives extreme-filtered reversal studies signals.
+            let close = 100.0
+                + (x * 0.13).sin() * 8.0
+                + (x * 0.03).sin() * 10.0
+                + (x * 0.029).cos() * 5.0
+                + (i / 160) as f64 * 6.0;
             let open = close - (x * 0.7).sin() * 1.5;
             Bar {
                 time: Utc.timestamp_opt((i / 2 * 48 + i % 2) * 3_600, 0).unwrap(),
@@ -284,6 +289,21 @@ fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
     for name in names {
         let mut study = factory.create(&name).unwrap();
         if study.needs_order_flow() {
+            continue;
+        }
+        // Many single patterns never complete on this fixture; their definition table tests
+        // distinguish them and their factory names instead.
+        if (0..CandlestickPatterns::PATTERN_COUNT)
+            .any(|k| CandlestickPatterns::only(k).name() == name)
+        {
+            continue;
+        }
+        // A single chart formation repeats its family's study with the other formations off.
+        if PatternFamily::ALL
+            .iter()
+            .flat_map(|family| family.kinds())
+            .any(|&kind| ChartPatterns::only(kind).name() == name)
+        {
             continue;
         }
         // External series have no values until the host supplies their distinct inputs.
@@ -338,41 +358,52 @@ fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
     assert_eq!(duplicates, ["ADX and DMI", "Donchian and Price Channel"]);
 }
 
-/// The study browser opens these studies with the lengths most often used for them.
+/// The study browser opens these studies with the lengths and switches most often used for them.
 #[test]
 fn catalogue_studies_open_with_their_usual_lengths() {
+    use crate::studies::InputValue::{Length, Toggle};
     let rows = [
-        ("SMA", "period", 9),
-        ("EMA", "period", 9),
-        ("WMA", "period", 9),
-        ("HMA", "period", 9),
-        ("DEMA", "period", 9),
-        ("TEMA", "period", 9),
-        ("LSMA", "period", 25),
-        ("SMMA", "period", 7),
-        ("ROC", "period", 9),
-        ("TRIX", "period", 18),
-        ("CMO", "period", 9),
-        ("HV", "period", 10),
-        ("TSI", "signal_period", 13),
-        ("Knoxville Divergence", "momentum_period", 20),
-        ("Knoxville Divergence", "rsi_period", 21),
-        ("Knoxville Divergence", "lookback", 150),
-        ("Advance/Decline", "period", 10),
+        ("SMA", "period", Length(9)),
+        ("EMA", "period", Length(9)),
+        ("WMA", "period", Length(9)),
+        ("HMA", "period", Length(9)),
+        ("DEMA", "period", Length(9)),
+        ("TEMA", "period", Length(9)),
+        ("LSMA", "period", Length(25)),
+        ("SMMA", "period", Length(7)),
+        ("EMA Cross", "period_0", Length(9)),
+        ("EMA Cross", "period_1", Length(26)),
+        ("ROC", "period", Length(9)),
+        ("TRIX", "period", Length(18)),
+        ("CMO", "period", Length(9)),
+        ("HV", "period", Length(10)),
+        ("TSI", "signal_period", Length(13)),
+        ("Correlation Coefficient", "length", Length(20)),
+        ("Correlation - Log", "length", Length(25)),
+        ("Knoxville Divergence", "momentum_period", Length(20)),
+        ("Knoxville Divergence", "rsi_period", Length(21)),
+        ("Knoxville Divergence", "lookback", Length(150)),
+        ("Advance/Decline", "period", Length(10)),
+        ("Booker Reversal", "fast_period", Length(12)),
+        ("Booker Reversal", "slow_period", Length(26)),
+        ("Booker Reversal", "k_period", Length(70)),
+        ("Booker Reversal", "slowing", Length(10)),
+        ("Booker Reversal", "stoch_upper", Length(70)),
+        ("Booker Reversal", "stoch_lower", Length(30)),
+        ("Ziv Ghost Pivots", "show_four_hour", Toggle(true)),
+        ("Ziv Ghost Pivots", "show_day", Toggle(true)),
+        ("Ziv Ghost Pivots", "show_week", Toggle(true)),
+        ("Ziv Ghost Pivots", "show_month", Toggle(true)),
     ];
     let factory = IndicatorFactory::new();
-    for (name, id, length) in rows {
+    for (name, id, value) in rows {
         assert!(
             factory.list().iter().any(|listed| listed == name),
             "{name} is not listed"
         );
         let inputs = factory.create(name).unwrap().inputs();
         let input = inputs.iter().find(|input| input.id == id);
-        assert_eq!(
-            input.map(|input| &input.value),
-            Some(&crate::studies::InputValue::Length(length)),
-            "{name} {id}"
-        );
+        assert_eq!(input.map(|input| &input.value), Some(&value), "{name} {id}");
     }
 }
 
@@ -733,15 +764,30 @@ fn catalogue_choices_read_in_words_and_restore() {
         ("All Candlestick Patterns", "trend", 2, "No detection"),
         ("Pivot Points Standard", "timeframe", 6, "Biyearly"),
         ("Pivot Points Standard", "timeframe", 9, "Decennially"),
-        ("VWAP Auto Anchored", "anchor", 1, "Highest High"),
-        ("VWAP Auto Anchored", "anchor", 3, "Highest Volume"),
-        ("Vol Profile Auto Anchored", "anchor", 2, "Lowest Low"),
+        ("VWAP Auto Anchored", "anchor", 1, "Highest high"),
+        ("VWAP Auto Anchored", "anchor", 3, "Highest volume"),
+        ("Vol Profile Auto Anchored", "anchor", 1, "Highest high"),
+        ("Vol Profile Auto Anchored", "anchor", 2, "Lowest low"),
+        ("Vol Profile Auto Anchored", "anchor", 3, "Highest volume"),
         ("BB", "basis", 4, "VWMA"),
         ("Volume", "color_rule", 1, "Previous close"),
         ("CVD", "mode", 0, "Close position"),
         ("CVD", "mode", 1, "Body ratio"),
         ("ZigZag", "mode", 0, "High/Low"),
         ("Keltner", "band", 0, "Average True Range"),
+        ("Auto Key Levels", "start", 0, "Start of period"),
+        ("Auto Key Levels", "start", 1, "Current bar"),
+        ("Auto Key Levels", "anchor", 0, "Custom"),
+        ("Auto Key Levels", "anchor", 1, "Earnings"),
+        ("Auto Key Levels", "anchor", 2, "Split"),
+        ("Auto Key Levels", "anchor", 3, "Dividends"),
+        ("Auto Key Levels", "unit", 0, "Days"),
+        ("Auto Key Levels", "unit", 1, "Weeks"),
+        ("Auto Key Levels", "unit", 2, "Months"),
+        ("Missed Pivot Levels", "period", 0, "Swings"),
+        ("Missed Pivot Levels", "period", 1, "Daily"),
+        ("Missed Pivot Levels", "period", 2, "Weekly"),
+        ("Missed Pivot Levels", "period", 3, "Monthly"),
     ];
     let got: Vec<_> = saved
         .iter()

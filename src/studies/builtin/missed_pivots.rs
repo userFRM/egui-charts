@@ -1,27 +1,34 @@
 //! Missed Pivot Levels.
 //!
-//! Swing highs and lows that price has not returned to. Each level is the price of a pivot
-//! (see [`PivotPointsHighLow`](super::PivotPointsHighLow)) and follows three rules:
+//! A completed trading period has pivot P = (high + low + close) / 3. If the next period's
+//! running high to low range never reaches P, within `tolerance` percent of |P|, that pivot
+//! is missed. It is confirmed when another period starts and drawn from the first bar of
+//! the period that missed it. A pending pivot is not drawn while its test period is forming.
+//! Daily, weekly (ISO weeks) and monthly periods follow exchange trading days in the chart
+//! instrument's time zone and session ([`Indicator::set_instrument`]; UTC until supplied).
+//! Periods without usable bars are skipped. The first period may be partial.
 //!
-//! - **Confirmed** `right` bars after its pivot bar, when the pivot window is complete. Bars of
-//!   that window never revisit it.
-//! - **Missed** from then on: a pivot high lies above every later bar and a pivot low below.
-//! - **Revisited** at the first later bar whose high reaches the level of a pivot high, or whose
-//!   low reaches the level of a pivot low, within a tolerance of `tolerance` percent of the level
-//!   (high >= level * (1 - t), low <= level * (1 + t), t = tolerance / 100). A revisited level is
-//!   invalidated: it is drawn up to the revisit bar and takes no further part.
+//! With the period set to swings, levels are swing highs and lows (see
+//! [`PivotPointsHighLow`](super::PivotPointsHighLow)):
 //!
-//! The latest `max_levels` levels, missed or revisited, are kept. Every level is a zone from its
-//! pivot bar to its revisit bar, or to the last bar while it is missed, in the colour of its
-//! side (pivot highs first, then pivot lows). It has no per-bar values. The defaults are 10
-//! bars on each side, a tolerance of 0.1% and 20 levels. Overlay indicator.
+//! - Confirmed `right` bars after the pivot bar; bars in that window never revisit it.
+//! - Missed while every later bar stays below a pivot high or above a pivot low.
+//! - Revisited when a later high reaches a high level or a low reaches a low level, within
+//!   `tolerance` percent of |P|. A gap beyond the level also counts as reaching it.
+//!
+//! In both modes a revisited level ends at the first bar reaching it, including the bar that
+//! confirms a missed period pivot. The latest `max_levels` levels, missed or revisited, are
+//! kept, in the colour of their side (above first, below second). A bar without a finite high
+//! and low takes no part; period pivots also require a finite close. A pivot whose sum
+//! overflows is skipped. Overlay indicator without per-bar values. The defaults take daily
+//! pivots, a tolerance of 0.1% and 20 levels; `new` takes swings of `left` and `right` bars.
 //!
 //! # Example
 //!
 //! ```rust
 //! use chrono::{TimeZone, Utc};
 //! use egui_charts::model::Bar;
-//! use egui_charts::studies::{Indicator, MissedPivots};
+//! use egui_charts::studies::{Indicator, MissedPivotPeriod, MissedPivots};
 //!
 //! // A peak at 10, then a fall that never returns to it.
 //! let bars: Vec<Bar> = [5.0, 8.0, 10.0, 8.0, 5.0, 6.0]
@@ -34,11 +41,17 @@
 //! // The pivot high at bar 2 is confirmed at bar 4 and is still missed.
 //! assert_eq!(missed.zones().len(), 1);
 //! assert_eq!((missed.zones()[0].bars.clone(), missed.zones()[0].top), (2..6, 10.0));
+//!
+//! // The six bars fall on one day, so no daily pivot has completed yet.
+//! let mut daily = MissedPivots::new(2, 2, 0.1, 20).with_period(MissedPivotPeriod::Daily);
+//! daily.calculate(&bars);
+//! assert!(daily.zones().is_empty());
 //! ```
 
+use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use super::clamp_param;
 use super::pivot_points_high_low::Swings;
-use crate::model::Bar;
+use crate::model::{Bar, Instrument};
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues, StudyZone};
@@ -48,9 +61,37 @@ use std::collections::VecDeque;
 /// The most levels that can be kept.
 const MAX_LEVELS: usize = 500;
 
-/// Missed Pivot Levels: swing highs and lows that price has not returned to.
+/// Where [`MissedPivots`] takes its levels from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MissedPivotPeriod {
+    /// Swing highs and lows found by the left and right bar counts.
+    Swings,
+    /// The pivot of each trading day.
+    Daily,
+    /// The pivot of each ISO week of trading days.
+    Weekly,
+    /// The pivot of each calendar month of trading days.
+    Monthly,
+}
+
+impl MissedPivotPeriod {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Swings => "Swings",
+            Self::Daily => "Daily",
+            Self::Weekly => "Weekly",
+            Self::Monthly => "Monthly",
+        }
+    }
+}
+
+/// Missed Pivot Levels: pivot levels that price has not returned to.
 #[derive(Clone, Debug)]
 pub struct MissedPivots {
+    period: MissedPivotPeriod,
+    days: ExchangeDays,
+    intraday: bool,
     left: usize,
     right: usize,
     tolerance: f64,
@@ -71,9 +112,22 @@ struct Level {
     revisited: Option<usize>,
 }
 
+/// The forming period and the preceding period's pivot, until its range reaches it.
+#[derive(Clone, Debug)]
+struct Span {
+    key: (i32, u32),
+    high: f64,
+    low: f64,
+    close: f64,
+    pivot: Option<(usize, f64)>,
+}
+
 #[derive(Clone, Debug, Default)]
 struct State {
     source: usize,
+    previous_date: Option<chrono::NaiveDate>,
+    intraday: bool,
+    span: Option<Span>,
     swings: Swings,
     levels: VecDeque<Level>,
 }
@@ -84,6 +138,9 @@ impl MissedPivots {
     /// (1 to 500).
     pub fn new(left: usize, right: usize, tolerance: f64, max_levels: usize) -> Self {
         Self {
+            period: MissedPivotPeriod::Swings,
+            days: ExchangeDays::default(),
+            intraday: false,
             left: left.max(1),
             right: right.max(1),
             tolerance: clamp_param(tolerance, 0.0, 100.0),
@@ -95,19 +152,26 @@ impl MissedPivots {
             visible: true,
         }
     }
+
+    /// Takes swing levels or the pivot of each completed day, week or month.
+    pub fn with_period(mut self, period: MissedPivotPeriod) -> Self {
+        self.period = period;
+        self
+    }
 }
 
 /// Construct with the conventional default parameters.
 impl Default for MissedPivots {
     fn default() -> Self {
-        Self::new(10, 10, 0.1, 20)
+        Self::new(10, 10, 0.1, 20).with_period(MissedPivotPeriod::Daily)
     }
 }
 
 impl Indicator for MissedPivots {
     crate::studies::inputs::study_inputs!(self;
-        left: length("Pivot left bars", 1, usize::MAX),
-        right: length("Pivot right bars", 1, usize::MAX),
+        period: choice("Pivots Timeframe", [MissedPivotPeriod::Swings, MissedPivotPeriod::Daily, MissedPivotPeriod::Weekly, MissedPivotPeriod::Monthly]),
+        left: length("Pivot left bars", 1, usize::MAX) if period in [0],
+        right: length("Pivot right bars", 1, usize::MAX) if period in [0],
         tolerance: number("Revisit tolerance (%)", 0.0, 100.0),
         max_levels: length("Max number of levels", 1, MAX_LEVELS)
     ; {});
@@ -117,51 +181,113 @@ impl Indicator for MissedPivots {
     }
 
     fn desc(&self) -> &str {
-        "Missed Pivot Levels - Swing highs and lows that price has not returned to"
+        "Missed Pivot Levels - Pivot levels that price has not returned to"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
         self.update(data, 0);
     }
 
-    fn update(&mut self, data: &[Bar], from: usize) {
+    fn update(&mut self, data: &[Bar], mut from: usize) {
         let (left, right, max_levels) = (self.left, self.right, self.max_levels);
         let tolerance = self.tolerance / 100.0;
-        self.stepper
-            .run(data, from, &mut self.values, |state, bar| {
-                let index = state.source;
-                state.source += 1;
-                // A bar without a finite high and low takes no part, as if it were absent.
-                if !(bar.high.is_finite() && bar.low.is_finite()) {
-                    return IndicatorValue::None;
-                }
-                for level in state.levels.iter_mut().filter(|l| l.revisited.is_none()) {
-                    let reach = level.price.abs() * tolerance;
-                    let reached = if level.high {
-                        bar.high >= level.price - reach
-                    } else {
-                        bar.low <= level.price + reach
-                    };
-                    if reached {
-                        level.revisited = Some(index);
+        let anchor = match self.period {
+            MissedPivotPeriod::Swings => None,
+            MissedPivotPeriod::Daily => Some(AnchorPeriod::Session),
+            MissedPivotPeriod::Weekly => Some(AnchorPeriod::Week),
+            MissedPivotPeriod::Monthly => Some(AnchorPeriod::Month),
+        };
+        loop {
+            self.stepper
+                .run(data, from, &mut self.values, |state, bar| {
+                    let index = state.source;
+                    state.source += 1;
+                    // A bar without a finite high and low takes no part, as if it were absent.
+                    if !(bar.high.is_finite() && bar.low.is_finite())
+                        || (anchor.is_some() && !bar.close.is_finite())
+                    {
+                        return IndicatorValue::None;
                     }
-                }
-                let confirmed = state.swings.push(index, bar, left, right);
-                for (high, pivot) in [(true, confirmed[0]), (false, confirmed[1])] {
-                    if let Some((bar, price)) = pivot {
-                        state.levels.push_back(Level {
-                            bar,
-                            price,
-                            high,
-                            revisited: None,
-                        });
+                    if let Some(anchor) = anchor {
+                        let date = bar.time.date_naive();
+                        state.intraday |= state.previous_date == Some(date);
+                        state.previous_date = Some(date);
+                        let key = anchor.key(self.days.day(bar, !self.intraday));
+                        match &mut state.span {
+                            Some(span) if span.key == key => {
+                                span.high = span.high.max(bar.high);
+                                span.low = span.low.min(bar.low);
+                                span.close = bar.close;
+                            }
+                            _ => {
+                                let done = state.span.take();
+                                if let Some(span) = &done
+                                    && let Some((bar, price)) = span.pivot
+                                {
+                                    state.levels.push_back(Level {
+                                        bar,
+                                        price,
+                                        high: price > span.high,
+                                        revisited: None,
+                                    });
+                                }
+                                let pivot = done
+                                    .map(|span| (span.high + span.low + span.close) / 3.0)
+                                    .filter(|p| p.is_finite())
+                                    .map(|p| (index, p));
+                                state.span = Some(Span {
+                                    key,
+                                    high: bar.high,
+                                    low: bar.low,
+                                    close: bar.close,
+                                    pivot,
+                                });
+                            }
+                        }
                     }
-                }
-                while state.levels.len() > max_levels {
-                    state.levels.pop_front();
-                }
-                IndicatorValue::None
-            });
+                    for level in state.levels.iter_mut().filter(|l| l.revisited.is_none()) {
+                        let reach = level.price.abs() * tolerance;
+                        let reached = if level.high {
+                            bar.high >= level.price - reach
+                        } else {
+                            bar.low <= level.price + reach
+                        };
+                        if reached {
+                            level.revisited = Some(index);
+                        }
+                    }
+                    if anchor.is_none() {
+                        let confirmed = state.swings.push(index, bar, left, right);
+                        for (high, pivot) in [(true, confirmed[0]), (false, confirmed[1])] {
+                            if let Some((bar, price)) = pivot {
+                                state.levels.push_back(Level {
+                                    bar,
+                                    price,
+                                    high,
+                                    revisited: None,
+                                });
+                            }
+                        }
+                    } else if let Some(span) = &mut state.span
+                        && let Some((_, price)) = span.pivot
+                    {
+                        let reach = price.abs() * tolerance;
+                        if span.low <= price + reach && span.high >= price - reach {
+                            span.pivot = None;
+                        }
+                    }
+                    while state.levels.len() > max_levels {
+                        state.levels.pop_front();
+                    }
+                    IndicatorValue::None
+                });
+            if self.intraday == self.stepper.state().intraday {
+                break;
+            }
+            // Switching the inferred interval changes earlier exchange dates too.
+            self.intraday = self.stepper.state().intraday;
+            from = 0;
+        }
         let state = self.stepper.state();
         self.zones = state
             .levels
@@ -177,6 +303,10 @@ impl Indicator for MissedPivots {
 
     fn is_incremental(&self) -> bool {
         true
+    }
+
+    fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
+        self.days.set(instrument)
     }
 
     fn zones(&self) -> &[StudyZone] {
@@ -216,6 +346,15 @@ impl Indicator for MissedPivots {
     fn line_names(&self) -> Vec<String> {
         vec!["Missed high".to_string(), "Missed low".to_string()]
     }
+
+    // The lines only style zones and hold no values.
+    fn legend_lines(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    fn alert_outputs(&self) -> Vec<(usize, String)> {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -223,13 +362,13 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
 
-    fn bars(highs_lows: &[(f64, f64)]) -> Vec<Bar> {
+    fn bars(highs_lows: &[(f64, f64, f64)]) -> Vec<Bar> {
         highs_lows
             .iter()
             .enumerate()
-            .map(|(i, &(high, low))| {
-                let time = Utc.timestamp_opt(i as i64 * 60, 0).unwrap();
-                Bar::new(time, low, high, low, low, 1.0)
+            .map(|(i, &(high, low, close))| {
+                let time = Utc.timestamp_opt(i as i64 * 86_400, 0).unwrap();
+                Bar::new(time, low, high, low, close, 1.0)
             })
             .collect()
     }
@@ -241,32 +380,80 @@ mod tests {
     /// bar 5 is confirmed at bar 6 and missed.
     #[test]
     fn levels_are_confirmed_missed_and_revisited() {
-        let data = bars(&[
-            (6.0, 5.0),
-            (10.0, 8.0),
-            (9.0, 7.0),
-            (6.0, 4.0),
-            (7.0, 5.0),
-            (9.96, 8.0),
-            (8.0, 6.0),
+        let swings = bars(&[
+            (6.0, 5.0, 5.0),
+            (10.0, 8.0, 8.0),
+            (9.0, 7.0, 7.0),
+            (6.0, 4.0, 4.0),
+            (7.0, 5.0, 5.0),
+            (9.96, 8.0, 8.0),
+            (8.0, 6.0, 6.0),
+        ]);
+        // Pivots 10, 13, 14, 12, 10.5. The next day touches 13 at its low;
+        // 10 is missed below day 1 then reached on day 4; 14 is missed above day 3
+        // then reached on day 5. Day 5 confirms and revisits 12 in the same step.
+        let periods = bars(&[
+            (12.0, 8.0, 10.0),
+            (15.0, 11.0, 13.0),
+            (14.5, 13.0, 14.5),
+            (13.5, 10.5, 12.0),
+            (11.5, 9.5, 10.5),
+            (14.5, 12.0, 14.0),
         ]);
         // Bars seen, then the zones (bars, price, plot) at that point.
         type Zone = (std::ops::Range<usize>, f64, usize);
-        let want: [(usize, Vec<Zone>); 4] = [
+        let swing_want: [(usize, Vec<Zone>); 4] = [
             (2, vec![]),
             (3, vec![(1..3, 10.0, 0)]),
             (5, vec![(1..5, 10.0, 0), (3..5, 4.0, 1)]),
             (7, vec![(1..6, 10.0, 0), (3..7, 4.0, 1), (5..7, 9.96, 0)]),
         ];
-        let mut missed = MissedPivots::new(1, 1, 0.5, 20);
-        for (seen, zones) in want {
-            missed.calculate(&data[..seen]);
-            let got: Vec<_> = missed
-                .zones()
-                .iter()
-                .map(|z| (z.bars.clone(), z.top, z.plot))
-                .collect();
-            assert_eq!(got, zones, "after {seen} bars");
+        let period_want = vec![
+            (2, vec![]),
+            (3, vec![(1..3, 10.0, 1)]),
+            (4, vec![(1..4, 10.0, 1)]),
+            (5, vec![(1..5, 10.0, 1), (3..5, 14.0, 0)]),
+            (6, vec![(1..5, 10.0, 1), (3..6, 14.0, 0), (4..6, 12.0, 0)]),
+        ];
+        let mut rows = vec![(
+            MissedPivots::new(1, 1, 0.5, 20),
+            swings,
+            swing_want.to_vec(),
+        )];
+        for period in [
+            MissedPivotPeriod::Daily,
+            MissedPivotPeriod::Weekly,
+            MissedPivotPeriod::Monthly,
+        ] {
+            let mut data = periods.clone();
+            for (i, bar) in data.iter_mut().enumerate() {
+                bar.time = match period {
+                    MissedPivotPeriod::Weekly => {
+                        Utc.with_ymd_and_hms(2026, 1, 5, 0, 0, 0).unwrap()
+                            + chrono::TimeDelta::weeks(i as i64)
+                    }
+                    MissedPivotPeriod::Monthly => Utc
+                        .with_ymd_and_hms(2026, i as u32 + 1, 1, 0, 0, 0)
+                        .unwrap(),
+                    _ => bar.time,
+                };
+            }
+            rows.push((
+                MissedPivots::new(1, 1, 0.0, 20).with_period(period),
+                data,
+                period_want.clone(),
+            ));
+        }
+        for (mut missed, data, want) in rows {
+            for (seen, zones) in want {
+                missed.calculate(&data[..seen]);
+                let got: Vec<_> = missed
+                    .zones()
+                    .iter()
+                    .map(|z| (z.bars.clone(), z.top, z.plot))
+                    .collect();
+                assert_eq!(got, zones, "{:?} after {seen} bars", missed.period);
+            }
         }
     }
 }

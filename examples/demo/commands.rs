@@ -453,7 +453,7 @@ impl DemoApp {
                 return;
             }
             "date" => {
-                self.date_picker.open();
+                self.date_picker.open_for_chart(&self.chart);
                 return;
             }
             "reset" => {
@@ -527,8 +527,8 @@ impl DemoApp {
                 }
                 if !self.chart.is_main_series_visible() {
                     self.notify(
-                        "Analyst targets start at the last close. Show the price series, then try \
-                         again.",
+                        "Analyst targets start at the close on their publication date. Show the price \
+                         series, then try again.",
                     );
                     return;
                 }
@@ -1176,7 +1176,7 @@ mod tests {
         assert!(app.chart.format_time(time).contains("Mär"));
         let info = app.build_data_window();
         let output = ctx.run_ui(Default::default(), |ui| {
-            egui_charts::ui::widget_bar::panels::object_tree::show_data_window(ui, &info, true);
+            egui_charts::ui::widget_bar::show_data_window(ui, &info, true);
         });
         let texts: Vec<_> = output
             .shapes

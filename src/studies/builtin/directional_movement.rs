@@ -9,8 +9,8 @@ use egui::Color32;
 /// Shows the positive and negative directional indicators and the ADX, Wilder's average of DX
 /// over the ADX smoothing period (Wilder 1978)
 ///
-/// The `period` input sets both lengths, as studies saved with a single length expect;
-/// `adx_smoothing`, which follows it in `inputs()`, then sets the smoothing alone.
+/// The `period` and `adx_smoothing` inputs are independent; setting either leaves the other.
+/// A template saved before the smoothing had an input of its own restores it equal to `period`.
 #[derive(Clone, Debug)]
 pub struct DirectionalMovement {
     /// Period of the directional indicators (typically 14)
@@ -18,21 +18,11 @@ pub struct DirectionalMovement {
     /// Length of Wilder's average of DX that forms the ADX line.
     adx_smoothing: usize,
     values: IndicatorValues,
-    stepper: Stepper<State>,
+    stepper: Stepper<usize>,
     adx: ADX,
     /// Colors: [+DI, -DI, ADX]
     colors: Vec<Color32>,
     visible: bool,
-}
-
-#[derive(Clone, Debug, Default)]
-struct State {
-    index: usize,
-    previous: Option<[f64; 3]>,
-    count: usize,
-    plus: f64,
-    minus: f64,
-    tr: f64,
 }
 
 impl DirectionalMovement {
@@ -78,12 +68,7 @@ impl Indicator for DirectionalMovement {
     crate::studies::inputs::study_inputs!(self;
         period: length("DI period", 1, usize::MAX),
         adx_smoothing: length("ADX smoothing period", 1, usize::MAX)
-    ; changed => {
-        // Before the smoothing input existed, `period` set both lengths; saved studies still do.
-        if changed == "period" {
-            self.adx_smoothing = self.period;
-        }
-    });
+    ; {});
 
     fn name(&self) -> &str {
         "DMI"
@@ -102,51 +87,18 @@ impl Indicator for DirectionalMovement {
             self.adx = ADX::new(self.period).with_smoothing(self.adx_smoothing);
         }
         self.adx.update(data, from);
-        self.stepper
-            .run(data, from, &mut self.values, |state, bar| {
-                let index = state.index;
-                state.index += 1;
-                if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
-                    return IndicatorValue::None;
-                }
-                let Some(previous) = state.previous.replace([bar.high, bar.low, bar.close]) else {
-                    return IndicatorValue::None;
-                };
-                state.count += 1;
-                let up = bar.high - previous[0];
-                let down = previous[1] - bar.low;
-                let plus = if up > down && up > 0.0 { up } else { 0.0 };
-                let minus = if down > up && down > 0.0 { down } else { 0.0 };
-                let tr = (bar.high - bar.low)
-                    .max((bar.high - previous[2]).abs())
-                    .max((bar.low - previous[2]).abs());
-                if state.count <= self.period {
-                    state.plus += plus;
-                    state.minus += minus;
-                    state.tr += tr;
-                    if state.count < self.period {
-                        return IndicatorValue::None;
-                    }
-                } else {
-                    state.plus = state.plus - state.plus / self.period as f64 + plus;
-                    state.minus = state.minus - state.minus / self.period as f64 + minus;
-                    state.tr = state.tr - state.tr / self.period as f64 + tr;
-                }
-                let adx = self.adx.values().value(0, index).unwrap_or(f64::NAN);
-                if state.tr.is_nan() || state.tr == 0.0 {
-                    if adx.is_nan() {
-                        IndicatorValue::None
-                    } else {
-                        IndicatorValue::Multiple(vec![f64::NAN, f64::NAN, adx])
-                    }
-                } else {
-                    IndicatorValue::Multiple(vec![
-                        100.0 * state.plus / state.tr,
-                        100.0 * state.minus / state.tr,
-                        adx,
-                    ])
-                }
-            });
+        self.stepper.run(data, from, &mut self.values, |index, _| {
+            let at = *index;
+            *index += 1;
+            // The inner ADX draws ADX, +DI and -DI.
+            let [plus, minus, adx] =
+                [1, 2, 0].map(|line| self.adx.values().value(line, at).unwrap_or(f64::NAN));
+            if plus.is_nan() {
+                IndicatorValue::None
+            } else {
+                IndicatorValue::Multiple(vec![plus, minus, adx])
+            }
+        });
     }
 
     fn is_incremental(&self) -> bool {
@@ -169,6 +121,10 @@ impl Indicator for DirectionalMovement {
 
     fn is_overlay(&self) -> bool {
         false
+    }
+
+    fn draws_only_plots(&self) -> bool {
+        true
     }
 
     fn is_visible(&self) -> bool {

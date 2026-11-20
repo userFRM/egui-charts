@@ -3,9 +3,10 @@
 mod quotes;
 mod study_controls;
 
-pub(crate) use study_controls::{controls_width, study_controls};
+pub(crate) use study_controls::{controls_width, held_study_controls, study_controls};
 
 use quotes::paint_quotes;
+pub(crate) use quotes::quote_prices;
 
 use crate::chart::rendering::StyleColors;
 use crate::chart::rendering::axes::semibold;
@@ -54,9 +55,9 @@ impl<'a> LegendStatus<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum QuoteSide {
-    /// Sell at the displayed bid.
+    /// Sell at the displayed bid, or at market where the buttons show the last price.
     Sell,
-    /// Buy at the displayed ask.
+    /// Buy at the displayed ask, or at market where the buttons show the last price.
     Buy,
     /// Open the order ticket without placing an order.
     Ticket,
@@ -133,6 +134,10 @@ pub struct Legend<'a> {
     /// Host formatters for the price values of `studies`, in their order. A missing or `None`
     /// entry keeps the built-in decimals and thousands grouping.
     pub study_formatters: &'a [Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>],
+    /// The chart's ids of `studies`, in their order. A study row's held controls, touch
+    /// selection and focus follow its id, so the study that takes a removed study's row draws
+    /// its own buttons. The chart sets it; a row without an entry is keyed by its index.
+    pub(crate) study_ids: &'a [crate::chart::selection::SeriesId],
     /// Global index of `bar` in each study's values.
     pub bar_index: usize,
     /// Whether this series has volume.
@@ -165,9 +170,12 @@ pub struct Legend<'a> {
     /// Opacity from 0 to 1 of the chart background behind the volume and study rows.
     /// Text and controls retain opaque backing so profiles cannot interfere with them.
     pub study_backdrop: f32,
-    /// The order quantity shown in a box under the quote buttons' spread, which the user clicks
-    /// to change it.
-    pub(crate) quantity: Option<f64>,
+    /// The order quantity and the host's text for it, shown under the quote buttons' spread,
+    /// which the user clicks to change it.
+    pub(crate) quantity: Option<(f64, Option<String>)>,
+    /// The last price the Sell and Buy buttons show without a two-sided quote; the chart sets
+    /// it while trading draws on it.
+    pub(crate) last_price: Option<f64>,
     /// Groups the thousands of built-in price values; the chart sets it from
     /// `ChartConfig::thousands_sep`.
     pub(crate) thousands_sep: Option<char>,
@@ -227,6 +235,7 @@ impl<'a> Legend<'a> {
             studies: &[],
             study_inputs: &[],
             study_formatters: &[],
+            study_ids: &[],
             bar_index: 0,
             show_volume: true,
             show_title: true,
@@ -242,6 +251,7 @@ impl<'a> Legend<'a> {
             day_change: None,
             study_backdrop: 0.6,
             quantity: None,
+            last_price: None,
             thousands_sep: None,
             price_decimals: None,
             extended_hours: &[],
@@ -681,27 +691,23 @@ impl<'a> Legend<'a> {
             layout.new_row();
         }
 
-        let (action, quantity) = self.quote.map_or((None, None), |quote| {
-            let (bid, ask) = (quote.bid, quote.ask);
-            if !bid.is_finite() || !ask.is_finite() || bid > ask || !quote.spread().is_finite() {
-                return (None, None);
-            }
-            let precision = self.price_precision(bid.abs().max(ask.abs()));
-            let action = paint_quotes(
-                ui,
-                &mut layout,
-                bid,
-                ask,
-                precision,
-                self.thousands_sep,
-                self.formatters.price,
-                self.quantity,
-                id,
-            );
-            layout.new_row();
-            layout.pos.y += 4.0;
-            action
-        });
+        let (action, quantity) =
+            quote_prices(self.quote, self.last_price).map_or((None, None), |prices| {
+                let precision = self.price_precision(prices.magnitude());
+                let action = paint_quotes(
+                    ui,
+                    &mut layout,
+                    prices,
+                    precision,
+                    self.thousands_sep,
+                    self.formatters.price,
+                    self.quantity.clone(),
+                    id,
+                );
+                layout.new_row();
+                layout.pos.y += 4.0;
+                action
+            });
 
         layout.backdrop = self.study_backdrop.clamp(0.0, 1.0);
         let mut study_settings = None;
@@ -732,7 +738,10 @@ impl<'a> Legend<'a> {
                             self.instrument
                                 .and_then(|instrument| instrument.volume_decimals)
                                 .map_or_else(
-                                    || format_volume(self.bar.volume),
+                                    || {
+                                        crate::scales::StudyFormat::Volume
+                                            .format(self.bar.volume, None)
+                                    },
                                     |decimals| {
                                         crate::scales::PriceFormatter::format(
                                             &crate::scales::VolumeFormatter {
@@ -757,7 +766,25 @@ impl<'a> Legend<'a> {
                 if study.is_volume() && !self.show_volume {
                     continue;
                 }
-                let (row_start, row_end) = (layout.pos, layout.row_end);
+                let (row_start, row_end, row_height) = (layout.pos, layout.row_end, layout.height);
+                let controls_id = id.with((
+                    "study",
+                    self.study_ids.get(index).map_or(index, |study| study.0),
+                ));
+                let held = held_study_controls(ui, controls_id, Some(row_start.y)).map(|held| {
+                    let width = controls_width(study.as_ref(), self.show_settings);
+                    let end = if held.top() >= row_start.y + row_height {
+                        bounds.right()
+                    } else {
+                        row_end
+                    };
+                    Rect::from_min_size(
+                        Pos2::new(held.left().min(end - width).max(bounds.left()), held.top()),
+                        Vec2::new(width, 20.0),
+                    )
+                    .intersect(bounds)
+                });
+                layout.held_controls = held;
                 if self.show_indicator_titles {
                     layout.text(
                         l10n::text(
@@ -857,6 +884,17 @@ impl<'a> Legend<'a> {
                 // shortened first row when nothing comes before it. Controls past that end take
                 // a row of their own.
                 layout.row_end = layout.row_end.min(row_end);
+                if let Some(held) = held {
+                    // Keep the controls on their drawn flow row even when its text wraps differently.
+                    while layout.pos.y + layout.height <= held.top() {
+                        layout.new_row();
+                    }
+                    if layout.pos.y > row_start.y {
+                        layout.row_end = bounds.right();
+                    }
+                    layout.pos = held.min - Vec2::new(0.0, (layout.height - 20.0) / 2.0);
+                }
+                layout.held_controls = None;
                 let controls = layout
                     .reserve(Vec2::new(
                         controls_width(study.as_ref(), self.show_settings),
@@ -877,7 +915,7 @@ impl<'a> Legend<'a> {
                     row,
                     controls,
                     None,
-                    id.with(("study", index)),
+                    controls_id,
                     study.as_ref(),
                     self.show_settings,
                 );
@@ -1083,6 +1121,8 @@ struct Layout<'a> {
     /// Where the current row ends: `bounds` less what the first row leaves to another control.
     row_end: f32,
     height: f32,
+    /// The held controls end the study's last flow row and clip its live value text.
+    held_controls: Option<Rect>,
     background: egui::layers::ShapeIdx,
     /// The colour of the chart background at a point.
     chart_background: &'a dyn Fn(Pos2) -> Color32,
@@ -1108,6 +1148,7 @@ impl<'a> Layout<'a> {
             pos: bounds.min,
             row_end: first_row_end,
             height: 24.0,
+            held_controls: None,
             background: painter.add(egui::Shape::Noop),
             chart_background,
             backdrop: 1.0,
@@ -1170,6 +1211,9 @@ impl<'a> Layout<'a> {
         // A shortened first row gives way even to its first item; a full row has nowhere better.
         if (self.pos.x > self.bounds.left() || self.row_end < self.bounds.right())
             && self.pos.x + size.x > self.row_end
+            && self
+                .held_controls
+                .is_none_or(|controls| self.pos.y + self.height <= controls.top())
         {
             self.new_row();
         }
@@ -1198,15 +1242,29 @@ impl<'a> Layout<'a> {
         let background = (self.chart_background)(rect.center());
         if background.gamma_multiply(self.backdrop) != background {
             // Profiles can be opaque or contain letters; protect the full content bounds.
-            self.painter
+            self.content_painter(rect)
                 .add(self.fill(rect.expand(2.0).intersect(self.bounds.expand(2.0)), 1.0));
         }
         rect
     }
 
+    fn content_painter(&self, rect: Rect) -> egui::Painter {
+        let mut painter = self.painter.clone();
+        if let Some(controls) = self.held_controls
+            && rect.bottom() > controls.top()
+        {
+            painter.set_clip_rect(painter.clip_rect().intersect(Rect::from_min_max(
+                self.bounds.min,
+                Pos2::new(controls.left(), controls.bottom()),
+            )));
+        }
+        painter
+    }
+
     fn galley(&mut self, galley: Arc<egui::Galley>) {
         let rect = self.reserve(galley.size());
-        self.painter.galley(rect.min, galley, self.colors.text);
+        self.content_painter(rect)
+            .galley(rect.min, galley, self.colors.text);
     }
 
     fn text(&mut self, text: String, size: f32, color: Color32, max_width: f32) {
@@ -1270,15 +1328,6 @@ impl<'a> Layout<'a> {
             );
         }
     }
-}
-
-fn format_volume(volume: f64) -> String {
-    for (divisor, suffix) in [(1_000_000_000.0, "B"), (1_000_000.0, "M"), (1_000.0, "K")] {
-        if volume.abs() >= divisor {
-            return format!("{:.2}{suffix}", volume / divisor);
-        }
-    }
-    format!("{volume:.0}")
 }
 
 #[cfg(test)]

@@ -25,7 +25,7 @@ pub struct StudyTemplate {
     /// was kept do.
     #[serde(default)]
     pub scale: Option<StudyScale>,
-    /// A scalar metric's host key, display name, unit and format. Restored without requiring a
+    /// A metric's host key, display name, unit, format and declared plot and colours. Restored without requiring a
     /// catalogue entry; its history is requested again from the host. Absent in older saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric: Option<crate::data::MetricSeries>,
@@ -375,6 +375,15 @@ impl StudyTemplate {
     pub(crate) fn upgraded(&self, study: &str, own: &[StudyInput]) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
         let declares = |id: &str| own.iter().any(|input| input.id == id);
+        let out_of_range = |id: &str| {
+            self.inputs.iter().any(|(saved, value)| {
+                saved == id
+                    && matches!(value, InputValue::Number(_))
+                    && own
+                        .iter()
+                        .any(|input| input.id == id && !input.accepts(value))
+            })
+        };
         // Profile endpoints saved in Unix milliseconds that the study does not take as numbers.
         let millis = |id: &str, value: &InputValue| match (id, value) {
             ("start_time" | "end_time", InputValue::Number(ms))
@@ -408,6 +417,17 @@ impl StudyTemplate {
             settings.fill_between_levels = false;
             settings.level_fill_color = color;
         };
+        let hidden_fills = |declared: &dyn Indicator| {
+            declared
+                .fills()
+                .iter()
+                .map(|fill| crate::studies::FillStyle {
+                    inverted_color: fill.inverted_color,
+                    visible: false,
+                    ..crate::studies::FillStyle::new(fill.color)
+                })
+                .collect()
+        };
         let value = |id: &str| {
             self.inputs
                 .iter()
@@ -416,7 +436,19 @@ impl StudyTemplate {
         let shared_smoothing = declares("smoothing")
             && value("smooth1").is_some()
             && value("smooth1") == value("smooth2");
+        // A saved Zig Zag deviation that the study declares but now refuses.
+        let refused_deviation = value("deviation_percent").and_then(|saved| match saved {
+            InputValue::Number(deviation)
+                if own
+                    .iter()
+                    .any(|input| input.id == "deviation_percent" && !input.accepts(saved)) =>
+            {
+                Some(*deviation)
+            }
+            _ => None,
+        });
         let mut template = self.clone();
+        let mut changed = true;
         match study {
             // Older Knoxville saves drew only momentum and its confirmation marks, and saves
             // from before the window rule took pivot sides and the momentum pane's own scale.
@@ -453,6 +485,21 @@ impl StudyTemplate {
                     })
                     .collect();
             }
+            // `period` also set the ADX smoothing before the smoothing had an input of its
+            // own. The last `period` saved is the one the study applied.
+            "ADX" | "DMI" if has("period") && !has("adx_smoothing") => {
+                let period = self.inputs.iter().rev().find(|(id, _)| id == "period");
+                template
+                    .inputs
+                    .extend(period.map(|(_, value)| ("adx_smoothing".to_owned(), value.clone())));
+            }
+            // `period` also set the ATR period before that had an input of its own.
+            "Chandelier" if has("period") && !has("atr_period") => {
+                let period = self.inputs.iter().rev().find(|(id, _)| id == "period");
+                template
+                    .inputs
+                    .extend(period.map(|(_, value)| ("atr_period".to_owned(), value.clone())));
+            }
             // Before it averaged highs and lows, MA Channel drew the close average with percentage
             // bands, which Envelopes draws with a simple average.
             "MA Channel" if has("offset_percent") && !declares("offset_percent") => {
@@ -484,6 +531,12 @@ impl StudyTemplate {
                 template
                     .inputs
                     .push(("midpoint".to_owned(), InputValue::Toggle(true)));
+            }
+            // Missed pivots were swings before they could follow a period.
+            "Missed Pivot Levels" if !has("period") => {
+                template
+                    .inputs
+                    .push(("period".to_owned(), InputValue::Choice(0)));
             }
             // Higher-interval candles drew their saved interval before one could follow the chart's.
             "Higher Interval Candles" if !has("auto_interval") => {
@@ -617,6 +670,22 @@ impl StudyTemplate {
                     })
                     .collect();
             }
+            // Older oscillators keep their unshaded appearance until their new fills are shown.
+            "Aroon Oscillator" if self.settings.fills.is_empty() => {
+                template.settings.fills = hidden_fills(&crate::studies::AroonOscillator::default());
+            }
+            "%B" if self.settings.fills.is_empty() || out_of_range("multiplier") => {
+                if self.settings.fills.is_empty() {
+                    template.settings.fills = hidden_fills(&crate::studies::PercentB::default());
+                }
+                if out_of_range("multiplier") {
+                    for (id, value) in &mut template.inputs {
+                        if let ("multiplier", InputValue::Number(v)) = (id.as_str(), value) {
+                            *v = v.clamp(0.001, 50.0);
+                        }
+                    }
+                }
+            }
             // A VWAP opened without bands, and no band was filled, before it opened with a filled
             // one.
             "VWAP" if !has("band_count") || (self.settings.fills.is_empty() && bands > 0) => {
@@ -640,6 +709,12 @@ impl StudyTemplate {
                         )
                     })
                     .collect();
+            }
+            // A CCI drew no average before it opened with one.
+            "CCI" if !has("smoothing") => {
+                template
+                    .inputs
+                    .push(("smoothing".to_owned(), InputValue::Choice(0)));
             }
             // A Rank Correlation had no average, and drew no levels, before it opened with an
             // average, three levels and the band between them filled.
@@ -691,6 +766,54 @@ impl StudyTemplate {
                     ("show_developing", InputValue::Toggle(true)),
                     ("projections", InputValue::Toggle(false)),
                     ("as_drawings", InputValue::Toggle(false)),
+                ] {
+                    if !has(id) {
+                        template.inputs.push((id.to_owned(), value));
+                    }
+                }
+            }
+            // Seasonality saved before its Positive colour input coloured rising months with its
+            // Expected plot. One saved before placement inputs also counted from 1900, sat at the
+            // lower right and drew falling months in their original red.
+            "Seasonality" if !has("positive_color") => {
+                let positive = self
+                    .settings
+                    .plots
+                    .first()
+                    .map_or(crate::studies::palette::UP, |plot| plot.color);
+                let mut added = vec![("positive_color", InputValue::Color(positive))];
+                if !has("table_position") {
+                    added.extend([
+                        ("start_year", InputValue::Integer(1900)),
+                        ("table_position", InputValue::Choice(8)),
+                        (
+                            "negative_color",
+                            InputValue::Color(egui::Color32::from_rgb(242, 55, 69)),
+                        ),
+                    ]);
+                }
+                for (id, value) in added {
+                    if !has(id) {
+                        template.inputs.push((id.to_owned(), value));
+                    }
+                }
+            }
+            // Performance saved before it took inputs showed the chart symbol alone over the six
+            // standard periods, fitted at the lower right, falling changes in the palette red.
+            "Performance" if !has("periods") => {
+                for (id, value) in [
+                    ("symbols", InputValue::Text(String::new())),
+                    (
+                        "periods",
+                        InputValue::Text("1W, 1M, 3M, 6M, YTD, 1Y".into()),
+                    ),
+                    (
+                        "negative_color",
+                        InputValue::Color(crate::studies::palette::DOWN),
+                    ),
+                    ("table_position", InputValue::Choice(8)),
+                    ("table_width", InputValue::Number(0.0)),
+                    ("table_height", InputValue::Number(0.0)),
                 ] {
                     if !has(id) {
                         template.inputs.push((id.to_owned(), value));
@@ -812,9 +935,153 @@ impl StudyTemplate {
                     plot.visible = false;
                 }
             }
-            _ => return None,
+            // Zig Zag took deviations from 0 up, and drew no labels and stopped at its last pivot
+            // before either had a setting; the automatic drawings share its deviation.
+            "ZigZag"
+            | "Auto Trend Line"
+            | "Auto Parallel Channel"
+            | "Auto Fibonacci Retracement"
+            | "Auto Fibonacci Extension"
+            | "Auto Pitchfork"
+                if refused_deviation.is_some()
+                    || (study == "ZigZag" && !has("extend_to_last_bar")) =>
+            {
+                if let Some(deviation) = refused_deviation {
+                    for (id, value) in &mut template.inputs {
+                        if id == "deviation_percent" {
+                            *value = InputValue::Number(deviation.clamp(
+                                crate::studies::ZigZag::MIN_DEVIATION,
+                                crate::studies::ZigZag::MAX_DEVIATION,
+                            ));
+                        }
+                    }
+                }
+                if study == "ZigZag" && !has("extend_to_last_bar") {
+                    for (id, value) in [
+                        ("extend_to_last_bar", InputValue::Toggle(false)),
+                        ("price_labels", InputValue::Toggle(false)),
+                        ("change_labels", InputValue::Toggle(false)),
+                        ("change_mode", InputValue::Choice(1)),
+                        ("volume_labels", InputValue::Toggle(false)),
+                    ] {
+                        if !has(id) {
+                            template.inputs.push((id.to_owned(), value));
+                        }
+                    }
+                }
+            }
+            // The former Zig Zag construction's inputs and single plot give way to the
+            // defaults and separate support/resistance styles of the breakout study.
+            #[cfg(feature = "drawings")]
+            "Auto Trend Line" if has("deviation_percent") && !declares("deviation_percent") => {
+                const REMOVED: [&str; 5] = [
+                    "swing_size",
+                    "atr_multiple",
+                    "atr_period",
+                    "deviation_percent",
+                    "depth",
+                ];
+                template
+                    .inputs
+                    .retain(|(id, _)| !REMOVED.contains(&id.as_str()));
+                let declared = crate::studies::AutoTrendLines::new().settings();
+                template.settings.plots = declared.plots;
+                template.settings.plot_variants = declared.plot_variants;
+                if self
+                    .settings
+                    .help_url
+                    .as_deref()
+                    .is_some_and(|url| url.ends_with("/struct.AutoDrawing.html"))
+                {
+                    template.settings.help_url = declared.help_url;
+                }
+            }
+            _ => changed = false,
         }
-        Some(template)
+        // Profile inputs added since a save, set to draw what it drew.
+        if matches!(
+            study,
+            "Vol Profile VR"
+                | "Vol Profile FR"
+                | "Vol Profile Session"
+                | "Vol Profile Session HD"
+                | "Vol Profile Periodic"
+                | "Vol Profile Anchored"
+                | "Vol Profile Auto Anchored"
+        ) && declares("show_rows")
+        {
+            if declares("whole_tick_rows") && !has("whole_tick_rows") {
+                template
+                    .inputs
+                    .push(("whole_tick_rows".to_owned(), InputValue::Toggle(false)));
+                changed = true;
+            }
+            if study == "Vol Profile Periodic" && !has("restart_yearly") {
+                template
+                    .inputs
+                    .push(("restart_yearly".to_owned(), InputValue::Toggle(false)));
+                changed = true;
+            }
+            if self.settings.plots.is_empty() {
+                let declared = crate::studies::VolProfileSession::default();
+                template.settings.plots = (0..3).map(|line| declared.plot_style(line)).collect();
+                template.settings.untagged_plots.clear();
+                changed = true;
+            }
+        }
+        // Options profile inputs added since a save, set to draw what it drew: every strike
+        // unless a limit was saved, and no current price line, whose style it lacks.
+        if study == "Options Volume Profile" && declares("current_price") {
+            for (id, value) in [
+                ("strikes_around_price", InputValue::Length(0)),
+                ("current_price", InputValue::Toggle(false)),
+            ] {
+                if !has(id) {
+                    template.inputs.push((id.to_owned(), value));
+                    changed = true;
+                }
+            }
+            if template.settings.plots.len() == 8 {
+                template.settings.plots.push(crate::studies::PlotStyle {
+                    visible: true,
+                    color: crate::studies::palette::GRAY,
+                    width: 1.0,
+                    pattern: crate::model::LineStyle::Dotted,
+                    plot_type: crate::studies::PlotType::Line,
+                });
+                template.settings.untagged_plots.push(8);
+                changed = true;
+            }
+        }
+        // A single candlestick pattern study saved while it drew the bullish, bearish and
+        // neutral lines of All Candlestick Patterns, and took the trend rule whatever its rule
+        // reads, keeps the style of its side's line and drops a rule it now ignores.
+        if let Some(line) = crate::studies::CandlestickPatterns::pattern_line(study) {
+            if has("trend") && !declares("trend") {
+                template.inputs.retain(|(id, _)| id != "trend");
+                changed = true;
+            }
+            if self.settings.plots.len() == 3 {
+                let settings = &mut template.settings;
+                settings.plots = vec![self.settings.plots[line]];
+                settings.plot_variants = vec![
+                    self.settings
+                        .plot_variants
+                        .get(line)
+                        .cloned()
+                        .unwrap_or_default(),
+                ];
+                for flagged in [&mut settings.untagged_plots, &mut settings.price_line_plots] {
+                    *flagged = if flagged.contains(&line) {
+                        vec![0]
+                    } else {
+                        Vec::new()
+                    };
+                }
+                changed = true;
+            }
+        }
+        changed.then_some(template)
     }
 }
 
@@ -1029,6 +1296,92 @@ mod tests {
                     .with_fibonacci_config(fibonacci),
             )
         }));
+        let mut tpo = crate::studies::TimePriceOpportunity::default();
+        // A literal save from before these controls keeps its palette, levels and boundaries.
+        let legacy: StudyTemplate = serde_json::from_str(r#"{"name":"Time Price Opportunity","inputs":[["period",{"Length":30}],["row_ticks",{"Length":0}],["value_area",{"Number":70.0}],["split_sessions",{"Toggle":false}],["single_prints",{"Toggle":false}],["midpoint",{"Toggle":false}],["statistics",{"Toggle":false}],["display",{"Choice":0}],["sessions",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TimePriceOpportunity.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,16,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let restored = legacy.create().unwrap();
+        assert_eq!(restored.settings(), legacy.settings);
+        let before = crate::model::TPOConfig {
+            tick_size: 0.0,
+            period_minutes: 30,
+            initial_balance_minutes: 60,
+            value_area_pct: 0.70,
+            display_mode: crate::model::TPODisplayMode::Letters,
+            split_periods: false,
+            color_mode: crate::model::TPOColorMode::ByPeriod,
+            period_colors: [
+                Color32::from_rgb(214, 56, 100),
+                Color32::from_rgb(90, 197, 97),
+                Color32::from_rgb(84, 185, 209),
+                Color32::from_rgb(93, 36, 245),
+            ],
+            solid_color: Color32::from_rgb(189, 189, 189),
+            outside_value_area_opacity: 0.45,
+            show_poc: true,
+            show_value_area: true,
+            show_midpoint: false,
+            show_initial_balance: true,
+            show_initial_balance_extensions: false,
+            show_poor_high: false,
+            show_poor_low: false,
+            extend_poor_extremes: false,
+            show_single_prints: false,
+            show_statistics: false,
+            show_opening_range: true,
+            labels: crate::model::TPOLabels::default(),
+            show_closing_price: false,
+            show_volume_profile: false,
+            split_sessions: false,
+            session: crate::model::ProfileSession::Chart,
+            profile_period: crate::model::TPOProfilePeriod::Session,
+            custom_letters: None,
+            composites: Vec::new(),
+            splits: Vec::new(),
+            latest_session_only: false,
+            instrument_tick: None,
+        };
+        assert_eq!(
+            format!("{:?}", restored.tpo()),
+            format!("{:?}", Some(&before))
+        );
+        for (id, value) in [
+            ("split_periods", InputValue::Toggle(true)),
+            ("coloring", InputValue::Choice(1)),
+            ("period_color_1", InputValue::Color(Color32::RED)),
+            ("period_color_2", InputValue::Color(Color32::GREEN)),
+            ("period_color_3", InputValue::Color(Color32::BLUE)),
+            ("period_color_4", InputValue::Color(Color32::YELLOW)),
+            ("block_color", InputValue::Color(Color32::GOLD)),
+            ("outside_value_area_opacity", InputValue::Length(80)),
+            ("poc", InputValue::Toggle(false)),
+            ("value_area_levels", InputValue::Toggle(false)),
+            ("initial_balance", InputValue::Toggle(false)),
+            ("initial_balance_minutes", InputValue::Length(30)),
+            ("initial_balance_extensions", InputValue::Toggle(true)),
+            ("open_price", InputValue::Toggle(false)),
+            ("close_price", InputValue::Toggle(true)),
+            ("poor_high", InputValue::Toggle(true)),
+            ("poor_low", InputValue::Toggle(true)),
+            ("extend_poor", InputValue::Toggle(true)),
+            ("volume_profile", InputValue::Toggle(true)),
+            (
+                "composites",
+                InputValue::Text("1970-01-01T00:00:00Z/1970-01-02T00:00:00Z".into()),
+            ),
+            ("splits", InputValue::Text("1970-01-02T01:00:00Z".into())),
+        ] {
+            tpo.set_input(id, value.clone()).unwrap();
+            assert_eq!(
+                tpo.inputs()
+                    .iter()
+                    .find(|input| input.id == id)
+                    .unwrap()
+                    .value,
+                value,
+                "{id}"
+            );
+        }
+        studies.push(ConfiguredStudy::new(Box::new(tpo)));
         let mut scaled = ConfiguredStudy::new(Box::new(RSI::new(14)));
         scaled.set_scale(crate::studies::StudyScale::Shared(SeriesScale::Left));
         studies.push(scaled);
@@ -1041,6 +1394,12 @@ mod tests {
                 Ok(mut restored) => {
                     study.calculate(&bars);
                     restored.calculate(&bars);
+                    if study.tpo().is_some() {
+                        assert_eq!(
+                            format!("{:?}", restored.tpo()),
+                            format!("{:?}", study.tpo())
+                        );
+                    }
                     if shown(restored.as_ref()) != shown(&study) {
                         differing.push(format!("{row} {}", study.name()));
                     }
@@ -1091,7 +1450,7 @@ mod tests {
                 // A literal save from before drawings could keep their own style restores its
                 // settings and the input ids that identify its study pane unchanged.
                 (
-                    serde_json::from_str(r#"{"name":"Auto Trend Line","inputs":[["swing_size",{"Choice":1}],["atr_multiple",{"Number":3.0}],["atr_period",{"Length":10}],["deviation_percent",{"Number":5.0}],["depth",{"Length":3}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AutoDrawing.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap(),
+                    serde_json::from_str(r#"{"name":"Auto Parallel Channel","inputs":[["swing_size",{"Choice":1}],["atr_multiple",{"Number":3.0}],["atr_period",{"Length":10}],["deviation_percent",{"Number":5.0}],["depth",{"Length":3}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AutoDrawing.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap(),
                     &[
                         ("swing_size", InputValue::Choice(1)),
                         ("deviation_percent", InputValue::Number(5.0)),
@@ -1122,6 +1481,35 @@ mod tests {
                 }
             }
         }
+        #[cfg(feature = "drawings")]
+        {
+            // The literal single-line save on origin/main upgrades to the breakout study.
+            let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Auto Trend Line","inputs":[["swing_size",{"Choice":1}],["atr_multiple",{"Number":3.0}],["atr_period",{"Length":10}],["deviation_percent",{"Number":5.0}],["depth",{"Length":3}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AutoDrawing.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+            let restored = saved.create().unwrap();
+            let defaults = crate::studies::AutoTrendLines::new().settings();
+            assert_eq!(restored.settings().plots, defaults.plots);
+            assert_eq!(restored.settings().help_url, defaults.help_url);
+            let inputs = restored.inputs();
+            for (id, expected) in [
+                ("bars_to_breakout", InputValue::Length(3)),
+                ("line_size", InputValue::Choice(2)),
+                ("show_pivots", InputValue::Toggle(false)),
+            ] {
+                assert_eq!(
+                    inputs.iter().find(|input| input.id == id).unwrap().value,
+                    expected
+                );
+            }
+            for id in [
+                "swing_size",
+                "atr_multiple",
+                "atr_period",
+                "deviation_percent",
+                "depth",
+            ] {
+                assert!(inputs.iter().all(|input| input.id != id));
+            }
+        }
         // Literal two-plot saves from before developing boundaries had their own style keep
         // their input ids and styles, with the third plot in the style they already drew.
         for saved in [
@@ -1141,6 +1529,17 @@ mod tests {
             expected.plot_variants.push(Vec::new());
             assert_eq!(restored.settings(), expected, "{}", saved.name);
             let inputs = restored.inputs();
+            if saved.name == "Missed Pivot Levels" {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == "period")
+                        .unwrap()
+                        .value,
+                    InputValue::Choice(0)
+                );
+                assert_eq!(Some(restored.scale()), saved.scale);
+            }
             for (id, value) in &saved.inputs {
                 assert_eq!(
                     inputs
@@ -1155,13 +1554,143 @@ mod tests {
         }
     }
 
+    /// Main templates without Symbol or Offset keep every saved input, style and value.
+    #[test]
+    fn templates_saved_before_symbol_and_offset_restore_unchanged() {
+        let factory = IndicatorFactory::new();
+        // Two bars per session over more than 52 weeks warm up every saved study.
+        let bars: Vec<_> = (0..800)
+            .map(|i: i64| {
+                let x = i as f64;
+                let close = 100.0
+                    + (x * 0.13).sin() * 8.0
+                    + (x * 0.029).cos() * 5.0
+                    + (i / 160) as f64 * 6.0;
+                let open = close - (x * 0.7).sin() * 1.5;
+                crate::model::Bar::new(
+                    chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(i / 2 * 48 + i % 2),
+                    open,
+                    close.max(open) + 0.5 + (x * 0.3).sin().abs(),
+                    close.min(open) - 0.5 - (x * 0.5).cos().abs(),
+                    close,
+                    1_000.0 + ((i * 37) % 211) as f64 * 9.0,
+                )
+            })
+            .collect();
+        // Literal saves captured on origin/main 1b270ce51, each with one edited input.
+        for text in [
+            r#"{"name":"PSAR","inputs":[["initial_af",{"Number":0.03}],["af_step",{"Number":0.02}],["max_af",{"Number":0.2}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ParabolicSAR.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            r#"{"name":"MA Cross","inputs":[["cross_first",{"Choice":0}],["cross_second",{"Choice":2}],["period_0",{"Length":9}],["kind_0",{"Choice":0}],["source_0",{"Choice":3}],["period_1",{"Length":21}],["kind_1",{"Choice":0}],["source_1",{"Choice":3}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MACross.html","plots":[{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[67,160,71,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,7,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            r#"{"name":"VWAP Auto Anchored","inputs":[["anchor",{"Choice":0}],["length",{"Length":5}],["source",{"Choice":5}],["percentage_bands",{"Toggle":false}],["band_multiplier",{"Number":1.0}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VwapAutoAnchored.html","plots":[{"color":[30,136,229,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[128,128,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[128,128,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[0,137,123,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[0,137,123,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,9,14,16],"untagged_plots":[3,4,5,6],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[4,9,4,13],"inverted_color":null,"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            r#"{"name":"Multi MA","inputs":[["cross_first",{"Choice":0}],["cross_second",{"Choice":0}],["period_0",{"Length":10}],["kind_0",{"Choice":0}],["source_0",{"Choice":3}],["period_1",{"Length":50}],["kind_1",{"Choice":0}],["source_1",{"Choice":3}],["period_2",{"Length":100}],["kind_2",{"Choice":0}],["source_2",{"Choice":3}],["period_3",{"Length":200}],["kind_3",{"Choice":0}],["source_3",{"Choice":3}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MultipleMA.html","plots":[{"color":[246,195,9,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[251,152,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[251,101,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[246,12,12,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,12,1,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            r#"{"name":"ZigZag","inputs":[["deviation_percent",{"Number":5.0}],["depth",{"Length":11}],["mode",{"Choice":0}],["price_labels",{"Toggle":false}],["change_labels",{"Toggle":false}],["change_mode",{"Choice":1}],["volume_labels",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ZigZag.html","plots":[{"color":[41,98,255,255],"width":2.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            #[cfg(feature = "timezones")]
+            r#"{"name":"Trading Sessions","inputs":[["show [0]",{"Toggle":false}],["name [0]",{"Text":"Tokyo"}],["start [0]",{"Length":540}],["end [0]",{"Length":900}],["zone [0]",{"Text":"Asia/Tokyo"}],["show [1]",{"Toggle":true}],["name [1]",{"Text":"London"}],["start [1]",{"Length":510}],["end [1]",{"Length":990}],["zone [1]",{"Text":"Europe/London"}],["show [2]",{"Toggle":true}],["name [2]",{"Text":"New York"}],["start [2]",{"Length":570}],["end [2]",{"Length":960}],["zone [2]",{"Text":"America/New_York"}],["boxes",{"Toggle":true}],["name_labels",{"Toggle":true}],["range_labels",{"Toggle":false}],["average_labels",{"Toggle":false}],["open_lines",{"Toggle":false}],["close_lines",{"Toggle":false}],["average_lines",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradingSessions.html","plots":[{"color":[6,15,38,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true},{"color":[38,23,0,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true},{"color":[1,23,19,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true}],"precision":0,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[0,1,2,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            #[cfg(not(feature = "timezones"))]
+            r#"{"name":"Trading Sessions","inputs":[["show [0]",{"Toggle":false}],["name [0]",{"Text":"Tokyo"}],["start [0]",{"Length":540}],["end [0]",{"Length":900}],["zone [0]",{"Text":"+09:00"}],["show [1]",{"Toggle":true}],["name [1]",{"Text":"London"}],["start [1]",{"Length":510}],["end [1]",{"Length":990}],["zone [1]",{"Text":"+00:00"}],["show [2]",{"Toggle":true}],["name [2]",{"Text":"New York"}],["start [2]",{"Length":570}],["end [2]",{"Length":960}],["zone [2]",{"Text":"-05:00"}],["boxes",{"Toggle":true}],["name_labels",{"Toggle":true}],["range_labels",{"Toggle":false}],["average_labels",{"Toggle":false}],["open_lines",{"Toggle":false}],["close_lines",{"Toggle":false}],["average_lines",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradingSessions.html","plots":[{"color":[6,15,38,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true},{"color":[38,23,0,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true},{"color":[1,23,19,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true}],"precision":0,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[0,1,2,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(text).unwrap();
+            let mut restored = saved.create().unwrap();
+            let inputs = restored.inputs();
+            for (id, value) in &saved.inputs {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == *id)
+                        .map(|input| &input.value),
+                    Some(value),
+                    "{} {id}",
+                    saved.name
+                );
+            }
+            assert_eq!(
+                inputs
+                    .iter()
+                    .find(|input| input.id == "calculation_symbol")
+                    .unwrap()
+                    .value,
+                InputValue::Symbol(String::new()),
+                "{}",
+                saved.name
+            );
+            if let Some(offset) = inputs.iter().find(|input| input.id == "plot_offset") {
+                assert_eq!(offset.value, InputValue::Integer(0), "{}", saved.name);
+            }
+            assert_eq!(restored.settings(), saved.settings, "{}", saved.name);
+            assert_eq!(restored.is_visible(), saved.visible, "{}", saved.name);
+            assert_eq!(Some(restored.scale()), saved.scale, "{}", saved.name);
+            let mut fresh = ConfiguredStudy::new(factory.create(&saved.name).unwrap());
+            for (id, value) in &saved.inputs {
+                if fresh
+                    .inputs()
+                    .iter()
+                    .any(|input| input.id == *id && input.value != *value)
+                {
+                    fresh.set_input(id, value.clone()).unwrap();
+                }
+            }
+            // Zig Zag saves from before its extension and labels retain the former drawing.
+            if saved.name == "ZigZag" {
+                for (id, value) in [
+                    ("extend_to_last_bar", InputValue::Toggle(false)),
+                    ("price_labels", InputValue::Toggle(false)),
+                    ("change_labels", InputValue::Toggle(false)),
+                    ("change_mode", InputValue::Choice(1)),
+                    ("volume_labels", InputValue::Toggle(false)),
+                ] {
+                    fresh.set_input(id, value).unwrap();
+                }
+            }
+            restored.calculate(&bars);
+            fresh.calculate(&bars);
+            for line in 0..restored.line_count() {
+                for bar in 0..bars.len() {
+                    assert_eq!(
+                        restored.values().value(line, bar),
+                        fresh.values().value(line, bar),
+                        "{} {line} {bar}",
+                        saved.name
+                    );
+                }
+            }
+            if saved.name == "MA Cross" {
+                let zero = StudyTemplate::from_study(restored.as_ref())
+                    .create()
+                    .unwrap();
+                assert_eq!(zero.plot_offset(0), 0);
+                restored
+                    .set_input("plot_offset", InputValue::Integer(2))
+                    .unwrap();
+                let again = StudyTemplate::from_study(restored.as_ref())
+                    .create()
+                    .unwrap();
+                assert_eq!(again.plot_offset(0), 2);
+            }
+        }
+    }
+
     /// A template restores the inputs it holds whatever the study's default has become, with every
     /// line it showed, and an input it lacks takes the value the saved inputs had before the
-    /// study offered it.
+    /// study offered it. Values outside a narrowed input range load clamped to that range.
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
         use InputValue::{Choice, Length, Number, Text, Toggle};
         let rows = [
+            (
+                "CCI",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("smoothing", Choice(0))],
+            ),
+            (
+                "%B",
+                vec![("multiplier", Number(0.0))],
+                vec![("multiplier", Number(0.001))],
+            ),
+            (
+                "%B",
+                vec![("multiplier", Number(80.0))],
+                vec![("multiplier", Number(50.0))],
+            ),
             (
                 "Vol Profile Session",
                 vec![
@@ -1194,6 +1723,27 @@ mod tests {
                 vec![("period", Length(20))],
                 vec![("period", Length(20)), ("adx_smoothing", Length(20))],
             ),
+            // Saved with both lengths, in either order.
+            (
+                "ADX",
+                vec![("adx_smoothing", Length(20)), ("period", Length(10))],
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+            ),
+            (
+                "ADX",
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+            ),
+            (
+                "DMI",
+                vec![("adx_smoothing", Length(20)), ("period", Length(10))],
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+            ),
+            (
+                "DMI",
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+            ),
             (
                 "Chandelier",
                 vec![("period", Length(10)), ("multiplier", Number(2.0))],
@@ -1202,6 +1752,11 @@ mod tests {
                     ("atr_period", Length(10)),
                     ("multiplier", Number(2.0)),
                 ],
+            ),
+            (
+                "Chandelier",
+                vec![("atr_period", Length(5)), ("period", Length(10))],
+                vec![("period", Length(10)), ("atr_period", Length(5))],
             ),
             (
                 "MA Cross",
@@ -1248,6 +1803,17 @@ mod tests {
                 "Time Price Opportunity",
                 vec![("midpoint", Toggle(false))],
                 vec![("midpoint", Toggle(false))],
+            ),
+            // Saved before levels could follow a period, when they were swings.
+            (
+                "Missed Pivot Levels",
+                vec![("left", Length(5))],
+                vec![("left", Length(5)), ("period", Choice(0))],
+            ),
+            (
+                "Missed Pivot Levels",
+                vec![("period", Choice(2))],
+                vec![("period", Choice(2))],
             ),
             // Saved before the interval could follow the chart's, as new studies do.
             (
@@ -1317,6 +1883,44 @@ mod tests {
                     ("sessions", Choice(0)),
                     ("hours_only", Toggle(false)),
                     ("row_ticks", Length(0)),
+                ],
+            ),
+            // Saved when the deviation took any number from 0 up: restored at the nearer bound.
+            (
+                "ZigZag",
+                vec![("deviation_percent", Number(0.0))],
+                vec![("deviation_percent", Number(0.000_01))],
+            ),
+            (
+                "ZigZag",
+                vec![("deviation_percent", Number(150.0))],
+                vec![("deviation_percent", Number(100.0))],
+            ),
+            #[cfg(feature = "drawings")]
+            (
+                "Auto Pitchfork",
+                vec![("deviation_percent", Number(0.0))],
+                vec![("deviation_percent", Number(0.000_01))],
+            ),
+            // Saved before labels and the extension to the last bar, both on by default since.
+            (
+                "ZigZag",
+                vec![("deviation_percent", Number(3.0))],
+                vec![
+                    ("deviation_percent", Number(3.0)),
+                    ("price_labels", Toggle(false)),
+                    ("change_labels", Toggle(false)),
+                    ("change_mode", Choice(1)),
+                    ("volume_labels", Toggle(false)),
+                    ("extend_to_last_bar", Toggle(false)),
+                ],
+            ),
+            (
+                "ZigZag",
+                vec![("extend_to_last_bar", Toggle(true))],
+                vec![
+                    ("extend_to_last_bar", Toggle(true)),
+                    ("price_labels", Toggle(true)),
                 ],
             ),
             // Saved before the twelve lengths were inputs.
@@ -1407,15 +2011,195 @@ mod tests {
                 "{name}"
             );
         }
+        // Literal study saved on main before Hours existed: all saved inputs and styles stay,
+        // and the trading day remains selected with its extended hours split.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Time Price Opportunity","inputs":[["period",{"Length":30}],["row_ticks",{"Length":0}],["value_area",{"Number":70.0}],["split_sessions",{"Toggle":true}],["single_prints",{"Toggle":false}],["midpoint",{"Toggle":false}],["statistics",{"Toggle":false}],["display",{"Choice":0}],["sessions",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TimePriceOpportunity.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,16,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let study = saved.create().unwrap();
+        assert_eq!(study.settings(), saved.settings);
+        let inputs = study.inputs();
+        for (id, value) in saved
+            .inputs
+            .iter()
+            .chain(&[("hours".to_owned(), Choice(0))])
+        {
+            assert_eq!(
+                inputs
+                    .iter()
+                    .find(|input| input.id == *id)
+                    .map(|input| &input.value),
+                Some(value),
+                "Time Price Opportunity {id}"
+            );
+        }
+
+        // Literal single-period saves retain their lengths, plot visibility and styles.
+        for text in [
+            r#"{"name":"ADX","inputs":[["period",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ADX.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+            r#"{"name":"DMI","inputs":[["period",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.DirectionalMovement.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[245,0,87,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+            r#"{"name":"Chandelier","inputs":[["period",{"Length":10}],["multiplier",{"Number":3.0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ChandelierExit.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(text).unwrap();
+            let study = saved.create().unwrap();
+            assert_eq!(study.settings(), saved.settings, "{}", saved.name);
+            assert_eq!(Some(study.scale()), saved.scale, "{}", saved.name);
+            let inputs = study.inputs();
+            let (other, period) = if saved.name == "Chandelier" {
+                ("atr_period", 10)
+            } else {
+                ("adx_smoothing", 20)
+            };
+            for id in ["period", other] {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == id)
+                        .map(|input| &input.value),
+                    Some(&Length(period)),
+                    "{} {id}",
+                    saved.name
+                );
+            }
+        }
+
+        // Literal Seasonality saves keep their year, colours and table position: one from before
+        // its display inputs at the lower right, one from before its Positive colour input, whose
+        // Expected plot coloured rising months.
+        for (text, year, positive, negative, position) in [
+            (
+                r#"{"name":"Seasonality","inputs":[["start_year",{"Integer":1900}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Seasonality.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[1,10,8,16],"untagged_plots":[0,1,2,3,4],"price_line_plots":[],"plot_variants":[[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,31,26,51],"inverted_color":[48,11,14,51],"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                1900,
+                Color32::from_rgb(41, 98, 255),
+                Color32::from_rgb(242, 55, 69),
+                crate::studies::TablePosition::BottomRight,
+            ),
+            (
+                r#"{"name":"Seasonality","inputs":[["start_year",{"Integer":2015}],["ignored_months",{"Text":""}],["negative_color",{"Color":[242,54,69,255]}],["color_cutoff",{"Number":10.0}],["show_averages",{"Toggle":true}],["show_std_dev",{"Toggle":true}],["show_positive",{"Toggle":true}],["table_position",{"Choice":7}],["table_width",{"Number":0.0}],["table_height",{"Number":0.0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Seasonality.html","plots":[{"color":[255,0,255,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[1,10,8,16],"untagged_plots":[0,1,2,3,4],"price_line_plots":[],"plot_variants":[[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,31,26,51],"inverted_color":[48,11,14,51],"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                2015,
+                Color32::from_rgb(255, 0, 255),
+                Color32::from_rgb(242, 54, 69),
+                crate::studies::TablePosition::BottomCenter,
+            ),
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(text).unwrap();
+            let mut study = saved.create().unwrap();
+            let inputs = study.inputs();
+            for (id, value) in [
+                ("start_year", InputValue::Integer(year)),
+                ("positive_color", InputValue::Color(positive)),
+                ("negative_color", InputValue::Color(negative)),
+            ] {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == id)
+                        .map(|input| &input.value),
+                    Some(&value),
+                    "Seasonality from {year} {id}"
+                );
+            }
+            assert_eq!(study.settings(), saved.settings);
+            // January 2021 rises 12%, past the cutoff: the full positive colour.
+            let bars = [(2020, 12, 100.0), (2021, 1, 112.0)].map(|(year, month, close)| {
+                Bar::new(
+                    Utc.with_ymd_and_hms(year, month, 28, 0, 0, 0).unwrap(),
+                    close,
+                    close,
+                    close,
+                    close,
+                    1.0,
+                )
+            });
+            study.calculate(&bars);
+            let table = study.table().unwrap();
+            assert_eq!(
+                (table.position, table.width, table.height),
+                (position, None, None)
+            );
+            assert_eq!(table.cell_colors[1][1], positive);
+        }
+
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Periodic","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["period_count",{"Length":1}],["period",{"Choice":1}],["restart_yearly",{"Toggle":false}],["width",{"Number":30.0}],["extend_poc",{"Toggle":false}],["extend_vah",{"Toggle":false}],["extend_val",{"Toggle":false}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfilePeriodic.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        for legacy in [
+            saved.clone(),
+            StudyTemplate {
+                inputs: saved
+                    .inputs
+                    .iter()
+                    .filter(|(id, _)| id != "restart_yearly")
+                    .cloned()
+                    .collect(),
+                ..saved
+            },
+        ] {
+            let restored = legacy.create().unwrap();
+            assert_eq!(
+                restored
+                    .inputs()
+                    .into_iter()
+                    .find(|input| input.id == "restart_yearly")
+                    .unwrap()
+                    .value,
+                Toggle(false)
+            );
+        }
+
+        let hd: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Session HD","inputs":[["sessions",{"Choice":3}],["session_start",{"Length":570}],["session_end",{"Length":960}],["show_values",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileSessionHd.html","plots":[{"color":[255,152,0,255],"width":1.0,"pattern":"Solid","plot_type":"StepLine","visible":false},{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"StepLine","visible":false},{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"StepLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let study = hd.create().unwrap();
+        assert_eq!(study.name(), "Vol Profile Session HD");
+        assert!(!study.inputs().iter().any(|input| input.id == "row_count"));
+        let template = StudyTemplate::from_study(study.as_ref());
+        let restored =
+            serde_json::from_str::<StudyTemplate>(&serde_json::to_string(&template).unwrap())
+                .unwrap()
+                .create()
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(StudyTemplate::from_study(restored.as_ref())).unwrap(),
+            serde_json::to_value(template).unwrap()
+        );
 
         // A chart save of an anchored profile from before tick heights and width were inputs
         // keeps its settings and inputs and takes the defaults of both.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Session","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["adaptive_rows",{"Toggle":false}],["sessions",{"Choice":0}],["session_start",{"Length":0}],["session_end",{"Length":0}],["session_zone",{"Text":""}],["hours_only",{"Toggle":false}],["width",{"Number":30.0}],["extend_poc",{"Toggle":false}],["extend_vah",{"Toggle":false}],["extend_val",{"Toggle":false}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileSession.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let restored = saved.create().unwrap();
+        let mut expected = saved.settings.clone();
+        expected.plots = (0..3)
+            .map(|line| crate::studies::VolProfileSession::default().plot_style(line))
+            .collect();
+        expected.plot_variants = vec![vec![]; 3];
+        assert_eq!(restored.settings(), expected);
+        for (id, value) in &saved.inputs {
+            assert_eq!(
+                restored
+                    .inputs()
+                    .iter()
+                    .find(|input| &input.id == id)
+                    .map(|input| &input.value),
+                Some(value),
+                "{id}"
+            );
+        }
+        assert_eq!(
+            restored
+                .inputs()
+                .iter()
+                .find(|input| input.id == "whole_tick_rows")
+                .unwrap()
+                .value,
+            Toggle(false)
+        );
         let saved: StudyTemplate = serde_json::from_str(
             r#"{"name":"Vol Profile Anchored","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["start_time",{"Text":""}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileAnchored.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
         )
         .unwrap();
         let study = saved.create().unwrap();
-        assert_eq!(study.settings(), saved.settings);
+        let mut expected_settings = saved.settings.clone();
+        expected_settings.plots = (0..3)
+            .map(|line| crate::studies::VolProfileSession::default().plot_style(line))
+            .collect();
+        expected_settings.plot_variants = vec![vec![]; 3];
+        assert_eq!(study.settings(), expected_settings);
+        assert!(study.settings().plots.iter().all(|plot| !plot.visible));
         let inputs = study.inputs();
         let value = |id: &str| {
             inputs
@@ -1426,8 +2210,57 @@ mod tests {
         for (id, kept) in &saved.inputs {
             assert_eq!(value(id), Some(kept), "{id}");
         }
+        assert_eq!(value("whole_tick_rows"), Some(&Toggle(false)));
         assert_eq!(value("row_ticks"), Some(&Length(0)));
         assert_eq!(value("width"), Some(&Number(30.0)));
+        for (id, expected) in [
+            ("show_rows", Toggle(true)),
+            ("show_poc", Toggle(true)),
+            ("show_vah", Toggle(false)),
+            ("show_val", Toggle(false)),
+            ("poc_color", InputValue::Color(Color32::PLACEHOLDER)),
+            ("vah_color", InputValue::Color(Color32::PLACEHOLDER)),
+            ("val_color", InputValue::Color(Color32::PLACEHOLDER)),
+        ] {
+            assert_eq!(value(id), Some(&expected), "{id}");
+        }
+        let mut edited = study.clone_box();
+        edited
+            .set_input("up_color", InputValue::Color(Color32::BLUE))
+            .unwrap();
+        let mut settings = edited.settings();
+        settings.plots[0].visible = true;
+        edited.apply_settings(&[], settings).unwrap();
+        let template = StudyTemplate::from_study(edited.as_ref());
+        let encoded = serde_json::to_string(&template).unwrap();
+        let restored = serde_json::from_str::<StudyTemplate>(&encoded)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(StudyTemplate::from_study(restored.as_ref())).unwrap(),
+            serde_json::to_value(template).unwrap()
+        );
+
+        // A Zig Zag as a chart saved it before the extension and the new label defaults.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"ZigZag","inputs":[["deviation_percent",{"Number":3.0}],["depth",{"Length":10}],["mode",{"Choice":0}],["price_labels",{"Toggle":true}],["change_labels",{"Toggle":true}],["change_mode",{"Choice":1}],["volume_labels",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ZigZag.html","plots":[{"color":[41,98,255,255],"width":2.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        )
+        .unwrap();
+        let study = saved.create().unwrap();
+        assert_eq!(study.settings(), saved.settings);
+        let inputs = study.inputs();
+        for (id, kept) in [
+            ("deviation_percent", Number(3.0)),
+            ("price_labels", Toggle(true)),
+            ("change_labels", Toggle(true)),
+            ("change_mode", Choice(1)),
+            ("volume_labels", Toggle(false)),
+            ("extend_to_last_bar", Toggle(false)),
+        ] {
+            let input = inputs.iter().find(|input| input.id == id);
+            assert_eq!(input.map(|input| &input.value), Some(&kept), "ZigZag {id}");
+        }
     }
 
     /// A Correlation Coefficient as a chart saved it before it opened as an area: a line with its
@@ -1445,6 +2278,31 @@ mod tests {
     /// input labels retain the ids, values and styles of the saved studies.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
+        // A metric descriptor saved before plot declarations and the Symbol input keeps its look.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Open interest","inputs":[],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":null,"plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent","metric":{"id":"oi","name":"Open interest","unit":"","format":"Volume"}}"#,
+        ).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.settings(), saved.settings);
+        assert_eq!(Some(restored.scale()), saved.scale);
+        assert_eq!(
+            restored.metric().unwrap().plot,
+            crate::data::MetricPlot::StepLine
+        );
+        assert_eq!(restored.metric().unwrap().colors, None);
+        assert_eq!(restored.data_requests()[0].symbol, "");
+        let symbol = restored
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == "symbol")
+            .unwrap();
+        assert_eq!(symbol.value, InputValue::Symbol(String::new()));
+        assert_eq!(symbol.default, symbol.value);
+        let again = StudyTemplate::from_study(restored.as_ref())
+            .create()
+            .unwrap();
+        assert_eq!(again.settings(), saved.settings);
+
         // This Knoxville template was saved before price lines and before the window rule. It
         // keeps its inputs and styles, without pivot sides and on the price scale, with lines
         // off; enabling them and saving again retains that choice.
@@ -1520,6 +2378,12 @@ mod tests {
         // Chart saves made before the input labels changed keep every saved id, value and
         // style while the editor describes the three study-local controls distinctly.
         for (saved, id, label) in [
+            // Literal default study captured on origin/main 04d6d16e7, before period pivots.
+            (
+                r#"{"name":"Missed Pivot Levels","inputs":[["left",{"Length":10}],["right",{"Length":10}],["tolerance",{"Number":0.1}],["max_levels",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MissedPivots.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                "left",
+                "Pivot left bars",
+            ),
             // Saved before Elliott Wave gained its swing and display inputs.
             (
                 r#"{"name":"Elliott Wave","inputs":[["left",{"Length":2}],["right",{"Length":3}],["history",{"Length":7}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ElliottWave.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Circles","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,

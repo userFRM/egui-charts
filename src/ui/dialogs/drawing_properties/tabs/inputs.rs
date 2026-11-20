@@ -65,6 +65,7 @@ impl InputsTab {
         pickers: &mut Vec<Vec<ColorPickerState>>,
         coordinates: &mut CoordinatesState,
         tick_size: Option<f64>,
+        vwap_estimated: Option<(usize, usize)>,
     ) {
         ui.space_md();
         match drawing.tool_type {
@@ -237,8 +238,8 @@ impl InputsTab {
                             0 => PositionSize::Quantity(1.0),
                             1 => PositionSize::RiskAmount(100.0),
                             _ => PositionSize::RiskPercent {
-                                account_size: 10_000.0,
-                                percent: 1.0,
+                                account_size: 1_000.0,
+                                percent: 25.0,
                             },
                         };
                     }
@@ -381,33 +382,67 @@ impl InputsTab {
                 let original = drawing.volume_profile.unwrap_or_default();
                 let mut config = original;
                 let mut rows = config.rows();
-                let mut fixed = config.row_size().is_some();
+                let mut layout = match (config.row_ticks(), config.row_size()) {
+                    (Some(_), _) => RowLayout::Ticks,
+                    (None, Some(_)) => RowLayout::Height,
+                    (None, None) => RowLayout::Count,
+                };
                 let mut height = config.row_size().unwrap_or(1.0);
+                let mut ticks = config.row_ticks().unwrap_or(rows);
                 let mut percent = config.value_area() * 100.0;
                 FormGrid::new("profile_inputs").show(ui, |ui| {
                     let label = ui.label(l10n::text(ui.ctx(), "Row layout"));
                     ui.label_inputs_by(label.id, |ui| {
-                        ui.combo_select("profile_layout", &mut fixed, [false, true], |fixed| {
-                            if *fixed {
-                                "Price height".into()
-                            } else {
-                                "Number of rows".into()
-                            }
-                        });
+                        ui.combo_select(
+                            "profile_layout",
+                            &mut layout,
+                            [RowLayout::Count, RowLayout::Height, RowLayout::Ticks],
+                            |layout| match layout {
+                                RowLayout::Count => "Number of rows".into(),
+                                RowLayout::Height => "Price height".into(),
+                                RowLayout::Ticks => "Ticks per row".into(),
+                            },
+                        );
                     });
                     ui.end_row();
-                    if fixed {
-                        number(
+                    let row_count = |ui: &mut Ui, rows: &mut usize| {
+                        let label = ui.label(l10n::text(ui.ctx(), "Rows"));
+                        ui.add(egui::DragValue::new(rows).range(VolumeProfileConfig::ROWS))
+                            .labelled_by(label.id);
+                        ui.end_row();
+                    };
+                    match layout {
+                        RowLayout::Count => row_count(ui, &mut rows),
+                        RowLayout::Height => number(
                             ui,
                             "Price height",
                             &mut height,
                             f64::MIN_POSITIVE..=f64::MAX,
-                        );
-                    } else {
-                        let label = ui.label(l10n::text(ui.ctx(), "Rows"));
-                        ui.add(egui::DragValue::new(&mut rows).range(VolumeProfileConfig::ROWS))
+                        ),
+                        RowLayout::Ticks => {
+                            let label = ui.label(l10n::text(ui.ctx(), "Ticks per row"));
+                            ui.add(
+                                egui::DragValue::new(&mut ticks)
+                                    .range(VolumeProfileConfig::ROW_TICKS),
+                            )
                             .labelled_by(label.id);
-                        ui.end_row();
+                            ui.end_row();
+                            // The rule the drawing applies, so the note shows exactly when it
+                            // draws the row count.
+                            if VolumeProfileConfig::default()
+                                .with_row_ticks(Some(ticks))
+                                .and_then(|c| c.tick_height(tick_size))
+                                .is_none()
+                            {
+                                ui.label("");
+                                ui.label(l10n::text(
+                                    ui.ctx(),
+                                    "No tick size for this symbol: rows follow the row count",
+                                ));
+                                ui.end_row();
+                                row_count(ui, &mut rows);
+                            }
+                        }
                     }
                     number(
                         ui,
@@ -456,15 +491,20 @@ impl InputsTab {
                         ui.end_row();
                     }
                 });
-                if let Some(mut updated) = VolumeProfileConfig::new(rows, percent / 100.0)
-                    .and_then(|c| c.with_row_size(fixed.then_some(height)))
+                // A share times 100 over 100 is not always the same share: keep an untouched one.
+                let value_area = if percent == original.value_area() * 100.0 {
+                    original.value_area()
+                } else {
+                    percent / 100.0
+                };
+                if let Some(sized) =
+                    VolumeProfileConfig::new(rows, value_area).and_then(|c| match layout {
+                        RowLayout::Count => Some(c),
+                        RowLayout::Height => c.with_row_size(Some(height)),
+                        RowLayout::Ticks => c.with_row_ticks(Some(ticks)),
+                    })
                 {
-                    updated.display = config.display;
-                    updated.up_color = config.up_color;
-                    updated.down_color = config.down_color;
-                    updated.value_area_colors = config.value_area_colors;
-                    updated.show_value_area_lines = config.show_value_area_lines;
-                    updated.extend_right = config.extend_right;
+                    let updated = config.with_layout(sized);
                     if updated != original {
                         drawing.volume_profile = Some(updated);
                     }
@@ -541,6 +581,24 @@ impl InputsTab {
                         );
                     });
                     ui.end_row();
+                    ui.label("");
+                    ui.checkbox(
+                        &mut config.executions,
+                        l10n::text(ui.ctx(), "Use executions"),
+                    );
+                    ui.end_row();
+                    if config.executions
+                        && let Some((estimated, bars)) =
+                            vwap_estimated.filter(|&(estimated, _)| estimated > 0)
+                    {
+                        ui.label("");
+                        ui.label(l10n::format_text(
+                            ui.ctx(),
+                            "Estimated from bars: {0} of {1}",
+                            &[("0", estimated.to_string()), ("1", bars.to_string())],
+                        ));
+                        ui.end_row();
+                    }
                     let label = ui.label(l10n::text(ui.ctx(), "Bands calculation"));
                     ui.label_inputs_by(label.id, |ui| {
                         let ctx = ui.ctx().clone();
@@ -792,6 +850,14 @@ fn position_number(
         .changed();
     ui.end_row();
     changed
+}
+
+/// How the Inputs tab of a volume profile drawing lays out its rows.
+#[derive(Clone, Copy, PartialEq)]
+enum RowLayout {
+    Count,
+    Height,
+    Ticks,
 }
 
 fn number(ui: &mut Ui, label: &str, value: &mut f64, range: std::ops::RangeInclusive<f64>) {
@@ -1413,7 +1479,11 @@ fn projection(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerS
     }
 }
 
-fn gann_row(level: &mut GannLevel, range: std::ops::RangeInclusive<f32>) -> LevelRow<'_> {
+fn gann_row(
+    level: &mut GannLevel,
+    range: std::ops::RangeInclusive<f32>,
+    inherited_width: f32,
+) -> LevelRow<'_> {
     LevelRow {
         visible: &mut level.visible,
         value: &mut level.value,
@@ -1422,7 +1492,7 @@ fn gann_row(level: &mut GannLevel, range: std::ops::RangeInclusive<f32>) -> Leve
         color: &mut level.color,
         line_style: None,
         style_override: None,
-        width: None,
+        width: Some((&mut level.width, inherited_width)),
         range,
     }
 }
@@ -1441,7 +1511,8 @@ fn gann(
     let original = config.clone();
     let square = matches!(tool, Tool::GannSquare | Tool::GannFixed);
     let max = if square { GANN_SQUARE_UNITS } else { 1.0 };
-    let new = |value| GannLevel::new(value, drawing.color);
+    let (width, color) = (drawing.stroke_width, drawing.color);
+    let new = |value| GannLevel::new(value, color);
     if tool == Tool::GannFan {
         ui.strong(l10n::text(ui.ctx(), "Fan lines"));
         level_grid(
@@ -1450,7 +1521,7 @@ fn gann(
             &mut config.fan_ratios,
             grid_pickers(pickers, 0),
             new(1.0),
-            |level| gann_row(level, 0.01..=100.0),
+            |level| gann_row(level, 0.01..=100.0, width),
         );
     } else {
         if square {
@@ -1464,7 +1535,7 @@ fn gann(
                 &mut config.price_levels,
                 grid_pickers(pickers, 0),
                 new(max / 2.0),
-                |level| gann_row(level, 0.0..=max),
+                |level| gann_row(level, 0.0..=max, width),
             );
             ui.strong(l10n::text(ui.ctx(), "Time levels"));
             level_grid(
@@ -1473,7 +1544,7 @@ fn gann(
                 &mut config.time_levels,
                 grid_pickers(pickers, 1),
                 new(max / 2.0),
-                |level| gann_row(level, 0.0..=max),
+                |level| gann_row(level, 0.0..=max, width),
             );
         }
         if square {
@@ -1506,7 +1577,7 @@ fn gann(
                     &mut config.fan_ratios,
                     grid_pickers(pickers, 2),
                     new(1.0),
-                    |level| gann_row(level, 0.01..=100.0),
+                    |level| gann_row(level, 0.01..=100.0, width),
                 );
             }
             ui.checkbox(&mut config.show_arcs, l10n::text(ui.ctx(), "Show arcs"));
@@ -1518,13 +1589,34 @@ fn gann(
                     &mut config.arc_ratios,
                     grid_pickers(pickers, 3),
                     new(1.0),
-                    |level| gann_row(level, 0.01..=GANN_MAX_ARC),
+                    |level| gann_row(level, 0.01..=GANN_MAX_ARC, width),
                 );
             }
         } else {
             ui.checkbox(&mut config.show_angles, l10n::text(ui.ctx(), "Angles"));
         }
     }
+    ui.horizontal_wrapped(|ui| {
+        if matches!(tool, Tool::GannBox | Tool::GannFan) {
+            ui.checkbox(&mut config.show_labels, l10n::text(ui.ctx(), "Labels"));
+        }
+        if tool != Tool::GannFan {
+            ui.checkbox(&mut config.reverse, l10n::text(ui.ctx(), "Reverse"));
+        }
+        let mut one = config.one_color.is_some();
+        if ui
+            .checkbox(&mut one, l10n::text(ui.ctx(), "Use one colour"))
+            .changed()
+        {
+            // The one colour starts from the drawing's line colour.
+            config.one_color = one.then_some(color);
+        }
+        if let Some(one_color) = &mut config.one_color {
+            let picker = grid_pickers(pickers, 4);
+            picker.resize_with(1, ColorPickerState::default);
+            level_color(ui, one_color, &mut picker[0]);
+        }
+    });
     background(
         ui,
         &mut config.show_background,
@@ -2102,6 +2194,104 @@ mod tests {
                     h.run();
                 }
                 assert_eq!(h.state().0.drawings().drawings[0].projection, original);
+            }
+        }
+    }
+
+    /// The width of the first line of each list a Gann tool offers, Labels on the box and the fan,
+    /// Reverse on the box and the squares and Use one colour, which starts from the drawing's line
+    /// colour, preview without history; Cancel restores the drawing and Ok records one undo step.
+    #[test]
+    fn gann_controls_preview_cancel_and_commit() {
+        use egui::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        for tool in [
+            Tool::GannBox,
+            Tool::GannFan,
+            Tool::GannSquare,
+            Tool::GannFixed,
+        ] {
+            for confirm in [false, true] {
+                let mut chart = crate::widget::test_frames::chart(&[80.0], &[200.0]);
+                let mut drawing = Drawing::new(7, tool);
+                drawing.completed = true;
+                drawing.chart_points =
+                    vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 150.0)];
+                let one = vec![GannLevel::new(1.0, [128, 128, 128, 255])];
+                let original = GannConfig {
+                    price_levels: one.clone(),
+                    time_levels: one.clone(),
+                    fan_ratios: one.clone(),
+                    arc_ratios: one,
+                    ..GannConfig::for_tool(tool)
+                };
+                drawing.gann = Some(original.clone());
+                let mut expected = original.clone();
+                let mut widths = Vec::new();
+                if tool != Tool::GannFan {
+                    expected.price_levels[0].width = Some(5.0);
+                    expected.time_levels[0].width = Some(5.0);
+                    widths.extend(["Price level 1 width", "Time level 1 width"]);
+                }
+                if tool != Tool::GannBox {
+                    expected.fan_ratios[0].width = Some(5.0);
+                    widths.push("Fan line 1 width");
+                }
+                if matches!(tool, Tool::GannSquare | Tool::GannFixed) {
+                    expected.arc_ratios[0].width = Some(5.0);
+                    widths.push("Arc 1 width");
+                }
+                let mut switches = vec!["Use one colour"];
+                expected.one_color = Some(drawing.color);
+                if matches!(tool, Tool::GannBox | Tool::GannFan) {
+                    expected.show_labels = false;
+                    switches.push("Labels");
+                }
+                if tool != Tool::GannFan {
+                    expected.reverse = true;
+                    switches.push("Reverse");
+                }
+                chart.drawings_mut().drawings.push(drawing);
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.config.height = 1300.0;
+                dialog.open_for_chart(&chart, DrawingId(7));
+                dialog.active_tab = PropertiesTab::Inputs;
+                let mut h = Harness::builder()
+                    .with_size(egui::vec2(1440.0, 1400.0))
+                    .with_accessibility_check(false)
+                    .allow_missing_glyphs()
+                    .build_ui_state(
+                        |ui, (chart, dialog): &mut (Chart, DrawingPropertiesDialog)| {
+                            dialog.show_and_apply(ui.ctx(), chart);
+                        },
+                        (chart, dialog),
+                    );
+                h.run();
+                for label in widths {
+                    h.get_by_role_and_label(Role::SpinButton, label)
+                        .set_value_accesskit(5.0);
+                    h.run();
+                }
+                for label in switches {
+                    h.get_by_role_and_label(Role::CheckBox, label).click();
+                    h.run();
+                }
+                let gann = |h: &Harness<'_, (Chart, DrawingPropertiesDialog)>| {
+                    h.state().0.drawings().drawings[0].gann.clone()
+                };
+                assert_eq!(gann(&h), Some(expected.clone()), "{tool:?}");
+                assert!(!h.state().0.can_undo(), "{tool:?}");
+                if confirm {
+                    h.get_by_role_and_label(Role::Button, "Ok").click();
+                    h.run();
+                    assert_eq!(gann(&h), Some(expected), "{tool:?}");
+                    assert!(h.state_mut().0.undo(), "{tool:?}");
+                    assert!(!h.state().0.can_undo(), "{tool:?}");
+                } else {
+                    h.state_mut().1.close();
+                    h.run();
+                }
+                assert_eq!(gann(&h), Some(original), "{tool:?}");
             }
         }
     }
@@ -2744,6 +2934,67 @@ mod tests {
                 dialog.close();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
             }
+        }
+    }
+
+    /// Opening the Inputs tab of a volume profile drawing keeps the display settings the tab
+    /// does not show, and a value area of 64.06%, which times 100 over 100 is not the same share.
+    /// Ticks per row previews on the drawing with them, Cancel
+    /// restores the drawing, and Ok records one undoable edit.
+    #[test]
+    fn volume_profile_inputs_keep_settings_they_do_not_edit() {
+        use egui::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+        chart.set_instrument(Some(Instrument::new("TEST").with_tick_size(0.25)));
+        let mut config = VolumeProfileConfig::new(24, 0.6406).unwrap();
+        config.show_poc = false;
+        config.show_rows = false;
+        config.show_value_area_high = true;
+        config.value_area_line_colors = [[1, 2, 3, 255]; 2];
+        let mut drawing = Drawing::new(7, Tool::FixedRangeVolumeProfile);
+        drawing.completed = true;
+        drawing.chart_points = vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(8.0, 200.0)];
+        drawing.volume_profile = Some(config);
+        chart.drawings_mut().drawings.push(drawing);
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, (chart, dialog): &mut (Chart, DrawingPropertiesDialog)| {
+                    dialog.show_and_apply(ui.ctx(), chart);
+                },
+                (chart, DrawingPropertiesDialog::new()),
+            );
+        let saved = |h: &Harness<'_, (Chart, DrawingPropertiesDialog)>| {
+            h.state().0.drawings().drawings[0].volume_profile
+        };
+        let ticks = config.with_row_ticks(Some(24)).unwrap();
+        for confirm in [false, true] {
+            let (chart, dialog) = h.state_mut();
+            dialog.open_for_chart(chart, DrawingId(7));
+            dialog.active_tab = PropertiesTab::Inputs;
+            h.run();
+            assert_eq!(saved(&h), Some(config), "opened");
+            h.get_by_role_and_label(Role::ComboBox, "Row layout")
+                .click();
+            h.run();
+            h.get_by_label("Ticks per row").click();
+            h.run();
+            assert_eq!(saved(&h), Some(ticks), "previewed");
+            assert!(!h.state().0.can_undo());
+            if confirm {
+                h.get_by_role_and_label(Role::Button, "Ok").click();
+                h.run();
+                assert_eq!(saved(&h), Some(ticks), "applied");
+                assert!(h.state_mut().0.undo());
+            } else {
+                h.state_mut().1.close();
+                h.run();
+            }
+            assert_eq!(saved(&h), Some(config), "restored");
+            assert!(!h.state().0.can_undo());
         }
     }
 }

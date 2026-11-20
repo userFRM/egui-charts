@@ -106,8 +106,9 @@ pub struct SavedPane {
 
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
 /// the host's feed. Take one with [`Chart::snapshot`] and apply it with [`Chart::restore`].
-/// The trading and alert settings of the settings dialog belong to the host and are not part
-/// of it.
+/// The trading and alert settings of the settings dialog belong to the host and are not part of
+/// it. Its settings hold the futures data choices, which [`Chart::restore`] records on the chart;
+/// the host reloads its history for them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ChartSnapshot {
@@ -191,6 +192,10 @@ pub struct ChartSnapshot {
     /// each restored study starts with its columns shown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_by: Option<u64>,
+    /// Where the Buy and Sell panel sits, as the share of the room left of and above it, from
+    /// 0 to 1. `None` uses its default place, centred at the top, also in older saved layouts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote_panel: Option<[f32; 2]>,
 }
 
 /// Why [`Chart::restore`] did not show a snapshot.
@@ -313,6 +318,8 @@ impl Chart {
             settings: {
                 let mut settings = ChartSettingsState::from_chart(self);
                 settings.adjust_for_dividends = self.dividend_adjusted();
+                settings.extended_hours = None;
+                settings.overnight_hours = None;
                 settings
             },
             config: Some(self.config.clone()),
@@ -395,6 +402,7 @@ impl Chart {
             drawings,
             other_symbol_drawings,
             saved_by: Some(self.data_table_identity),
+            quote_panel: self.quote_panel_at,
         };
         // A layout that restore would refuse is an error now rather than at the next load.
         check(&snapshot, factory, self.main_series_scale)
@@ -486,13 +494,14 @@ impl Chart {
         self.main_series_style.alerts = snapshot.main_series_alerts;
         self.main_series_style.display_format = snapshot.main_series_display_format;
         let mut settings = snapshot.settings.clone();
+        // The snapshot's own fields hold the hours, set above.
+        settings.extended_hours = None;
+        settings.overnight_hours = None;
         // Layouts saved before a precision could be chosen hold the one shown, which followed
-        // the next instrument; the saved scale holds the chosen one.
-        settings.precision = super::settings::PrecisionMode::from_decimals(
-            snapshot
-                .price_scale
-                .as_ref()
-                .and_then(crate::scales::PriceScale::chosen_precision),
+        // the next instrument; the saved scale holds the chosen decimals or fraction.
+        settings.precision = snapshot.price_scale.as_ref().map_or(
+            super::settings::PrecisionMode::Default,
+            super::settings::PrecisionMode::from_scale,
         );
         if settings.chart_type == crate::model::ChartType::HollowCandles {
             // Settings saved before hollow candles had a style hold the switches of the candles.
@@ -542,10 +551,11 @@ impl Chart {
             *self.state.price_scale_mut() = scale.clone();
         }
         if self.panes().contains(&PaneId::MAIN) {
-            self.move_series_to_pane(super::SeriesId::MAIN, PaneId::MAIN);
+            self.move_series_keeping_layers(super::SeriesId::MAIN, PaneId::MAIN);
         } else {
             self.leave_panes(super::SeriesId::MAIN);
         }
+        let outer = self.begin_study_batch();
         let mut replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
         if snapshot.series.is_some() {
             replaced.extend(self.series().map(|(id, _)| id));
@@ -595,14 +605,14 @@ impl Chart {
             .iter()
             .position(|pane| pane.members.contains(&0))
         {
-            self.move_series_to_pane(super::SeriesId::MAIN, panes[&at]);
+            self.move_series_keeping_layers(super::SeriesId::MAIN, panes[&at]);
         }
         for (saved, study) in snapshot.studies.iter().zip(studies) {
             let id = self.insert_indicator(study);
             self.set_indicator_inputs(id, saved.caption.clone());
             self.set_indicator_autoscale(id, saved.autoscale);
             self.restored_studies.insert(saved.id, id.0);
-            self.move_series_to_pane(id, panes[&saved.pane]);
+            self.move_series_keeping_layers(id, panes[&saved.pane]);
         }
         // Only a snapshot this chart took names its columns by saved ids; a study of any other
         // snapshot starts a new column.
@@ -651,7 +661,7 @@ impl Chart {
             self.set_series_visible(id, saved.visible);
             self.restore_annotations(id, &saved.annotations);
             self.restored_studies.insert(saved.id, id.0);
-            self.move_series_to_pane(id, panes[&saved.pane]);
+            self.move_series_keeping_layers(id, panes[&saved.pane]);
             if let Some(scale) = &saved.price_scale {
                 *self.series_price_scale_mut(id).expect("restored series") = scale.clone();
             }
@@ -687,6 +697,7 @@ impl Chart {
             }
         }
         self.recalculate_studies();
+        self.end_study_batch(outer);
         for (at, saved) in snapshot.panes.iter().enumerate() {
             let id = panes[&at];
             self.move_pane(id, at);
@@ -737,6 +748,7 @@ impl Chart {
             }
         }
         self.pane_layout.maximized = snapshot.maximized.map(|at| panes[&at]);
+        self.quote_panel_at = snapshot.quote_panel;
         if self.state.time_scale().numeric_positions().is_some() {
             let positions =
                 crate::model::numeric_positions(self.state.shown(), snapshot.numeric_unit);
@@ -753,9 +765,20 @@ impl Chart {
             None => Vec::new(),
         };
         self.restore_aside_drawings(&snapshot.other_symbol_drawings);
+        // Restores stay uncapped, including the targets-setting migration below.
+        self.history.clear();
+        // Layouts saved before the forecast study existed hold only the targets setting, and a
+        // saved study keeps it on; the next frame gives the study the restored colours.
+        #[cfg(feature = "studies")]
+        {
+            let held = self
+                .indicators()
+                .any(|(_, study)| super::studies::is_price_target_study(study));
+            self.set_price_targets_visible(snapshot.settings.show_price_targets || held);
+            self.price_target_colors = None;
+        }
         // A layout without the original pane has just left it: the main bars are live again.
         self.follow_feed_pause();
-        self.history.clear();
         // Undone or redone before the restore, they belong to the state it replaced.
         self.history.size_steps.clear();
         self.history.link_steps.clear();
@@ -1549,6 +1572,62 @@ mod tests {
         }
     }
 
+    /// A Correlation - Log saves and restores under its own name with its edited inputs and
+    /// style.
+    #[test]
+    fn correlation_log_restores_under_its_own_name_with_its_inputs_and_style() {
+        use crate::studies::{IndicatorFactory, InputValue};
+        let bars: Vec<_> = (0..30)
+            .map(|i| {
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    10.0,
+                    11.0,
+                    9.0,
+                    10.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        let id = chart.add_indicator(IndicatorFactory::new().create("Correlation - Log").unwrap());
+        let study = chart.indicator_mut(id).unwrap();
+        for (input, value) in [
+            ("symbol_1", InputValue::Symbol("B".into())),
+            ("length", InputValue::Length(30)),
+            ("log_returns", InputValue::Toggle(false)),
+        ] {
+            study.set_input(input, value).unwrap();
+        }
+        let mut settings = study.settings();
+        settings.plots[0].width = 3.0;
+        settings.plots[0].color = egui::Color32::RED;
+        study.apply_settings(&[], settings).unwrap();
+        let saved = |chart: &Chart| {
+            let (_, study) = chart.indicators().next().unwrap();
+            let inputs: Vec<_> = study
+                .inputs()
+                .into_iter()
+                .map(|input| (input.id, input.value))
+                .collect();
+            (study.registered_name().to_owned(), inputs, study.settings())
+        };
+        let json = SavedLayout {
+            mode: ChartLayoutMode::Single,
+            charts: vec![chart.snapshot().unwrap()],
+            sizing: None,
+            link_groups: None,
+        }
+        .to_json()
+        .unwrap();
+        let mut restored = Chart::new(BarData::from_bars(bars));
+        restored
+            .restore(&SavedLayout::from_json(&json).unwrap().charts[0])
+            .unwrap();
+        assert_eq!(saved(&restored), saved(&chart));
+        assert_eq!(saved(&restored).0, "Correlation - Log");
+    }
+
     /// A custom study saved with another study's output in a Source input its calculation never
     /// read, or in `source` while it ran on another interval, restores through a snapshot and a
     /// study template set on that input's default, as it calculated when it was saved.
@@ -1772,6 +1851,24 @@ mod tests {
         restored.apply_synced_time_scale(99.0, 4.0);
         assert_eq!(restored.get_time_scale_state(), (12.0, 4.0));
         restored.apply_synced_time_scale(0.25, 4.0);
+        // Older layouts used the shared fill for both phases and carried no background settings.
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let saved = &mut older["charts"][0];
+        saved["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("session_background");
+        saved["config"]["premarket_color"] = serde_json::Value::Null;
+        saved["config"]["postmarket_color"] = serde_json::Value::Null;
+        let older: SavedLayout = serde_json::from_value(older).unwrap();
+        let mut legacy = Chart::new(BarData::new());
+        legacy.restore(&older.charts[0]).unwrap();
+        assert_eq!(legacy.config().premarket_color, None);
+        assert_eq!(legacy.config().postmarket_color, None);
+        assert_eq!(
+            legacy.config().extended_hours_color,
+            chart.config().extended_hours_color
+        );
         assert_eq!(restored.config(), chart.config());
         assert_eq!(restored.chart_options(), chart.chart_options());
         assert_eq!(
@@ -2437,6 +2534,111 @@ mod tests {
             serde_json::from_str::<CrosshairOptions>("{}").unwrap(),
             CrosshairOptions::default()
         );
+    }
+
+    /// Chosen time labels survive layouts; older layouts keep the labels they showed.
+    #[test]
+    fn layouts_keep_the_time_label_choices() {
+        use crate::scales::{TickMarkType, WeekdayNames};
+        use crate::widget::settings::{ChartSettingsState, DateFormat};
+        use crate::widget::{ChartLayoutMode, SavedLayout, test_frames::chart};
+        let time = Utc.with_ymd_and_hms(2024, 3, 13, 14, 30, 0).unwrap();
+        let labels = |chart: &Chart| {
+            let formatter = chart.build_time_formatter();
+            [
+                formatter.format_crosshair(time, 60),
+                formatter.format_crosshair(time, 86_400),
+                formatter.format(time, TickMarkType::Time),
+            ]
+        };
+        let mut source = chart(&[100.0], &[110.0]);
+        let mut settings = ChartSettingsState::from_chart(&source);
+        settings.scales_and_lines.date_format = Some(DateFormat::Pattern("%d.%m.%Y".into()));
+        settings.scales_and_lines.use_24_hour = Some(false);
+        settings.scales_and_lines.weekday_names = Some(WeekdayNames::Always);
+        settings.apply_to_chart(&mut source).unwrap();
+        let json = SavedLayout::new(ChartLayoutMode::Single, vec![source.snapshot().unwrap()])
+            .to_json()
+            .unwrap();
+        let mut restored = chart(&[100.0], &[110.0]);
+        restored
+            .restore(&SavedLayout::from_json(&json).unwrap().charts[0])
+            .unwrap();
+        assert_eq!(
+            labels(&restored),
+            ["Wed 13.03.2024 02:30 PM", "Wed 13.03.2024", "02:30 PM"]
+        );
+
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        for (group, choice) in [
+            ("/charts/0/settings/scales_and_lines", "date_format"),
+            ("/charts/0/settings/scales_and_lines", "use_24_hour"),
+            ("/charts/0/settings/scales_and_lines", "weekday_names"),
+            ("/charts/0/options/time_scale", "use_24_hour"),
+            ("/charts/0/options/time_scale", "weekday_names"),
+        ] {
+            older
+                .pointer_mut(group)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(choice)
+                .expect(choice);
+        }
+        let older = SavedLayout::from_json(&older.to_string()).unwrap();
+        let mut restored = chart(&[100.0], &[110.0]);
+        restored.restore(&older.charts[0]).unwrap();
+        assert_eq!(
+            labels(&restored),
+            ["Wed 13 Mar '24 14:30", "Mar 13, 2024", "14:30"]
+        );
+        // Older saves never stored host date patterns, so restoring one still keeps that pattern.
+        restored.set_date_format(Some("%Y-%m-%d".into()));
+        restored.restore(&older.charts[0]).unwrap();
+        assert_eq!(
+            labels(&restored),
+            ["2024-03-13 14:30", "2024-03-13", "14:30"]
+        );
+    }
+
+    /// The futures data choices applied with the settings read back and survive layouts;
+    /// layouts saved without them restore settlement closes without back adjustment.
+    #[test]
+    fn layouts_keep_the_futures_data_choices() {
+        use crate::widget::settings::ChartSettingsState;
+        use crate::widget::{ChartLayoutMode, SavedLayout, test_frames::chart};
+        let choices = |chart: &Chart| {
+            let settings = ChartSettingsState::from_chart(chart);
+            (settings.back_adjust_futures, settings.settlement_as_close)
+        };
+        let mut source = chart(&[100.0], &[110.0]);
+        let mut settings = ChartSettingsState::from_chart(&source);
+        settings.back_adjust_futures = true;
+        settings.settlement_as_close = false;
+        settings.apply_to_chart(&mut source).unwrap();
+        assert_eq!(choices(&source), (true, false));
+        let json = SavedLayout::new(ChartLayoutMode::Single, vec![source.snapshot().unwrap()])
+            .to_json()
+            .unwrap();
+        let mut restored = chart(&[100.0], &[110.0]);
+        restored
+            .restore(&SavedLayout::from_json(&json).unwrap().charts[0])
+            .unwrap();
+        assert_eq!(choices(&restored), (true, false));
+
+        // Saved before the chart kept them: the defaults replace the restoring chart's choices.
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let saved = older
+            .pointer_mut("/charts/0/settings")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        for choice in ["back_adjust_futures", "settlement_as_close"] {
+            saved.remove(choice).expect(choice);
+        }
+        let older = SavedLayout::from_json(&older.to_string()).unwrap();
+        restored.restore(&older.charts[0]).unwrap();
+        assert_eq!(choices(&restored), (false, true));
     }
 
     /// An HLC area layout or template saved before the style held each line and fill restores as

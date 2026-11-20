@@ -782,6 +782,270 @@ fn added_series_legend_controls_undo_as_one_step() {
     }
 }
 
+/// Study legend buttons stay where drawn in both pane kinds as hovered values change.
+/// Remove there removes the study and its dependents in one undo step.
+/// Clipped values cannot mask the chart beyond the held controls.
+#[test]
+fn study_pane_legend_buttons_stay_under_the_pointer() {
+    use crate::studies::{
+        ConfiguredStudy, CustomIndicator, Indicator, IndicatorValue, SMA, StudySource,
+    };
+    use crate::widget::test_frames::frame;
+
+    let custom = |early, late, overlay| {
+        Box::new(
+            CustomIndicator::new("Legend width study", move |bars| {
+                (0..bars.len())
+                    .map(|bar| IndicatorValue::Single(if bar < 50 { early } else { late }))
+                    .collect()
+            })
+            .with_overlay(overlay),
+        ) as Box<dyn Indicator>
+    };
+    let mut failures = Vec::new();
+    for overlay in [false, true] {
+        let mut rsi = ConfiguredStudy::new(Box::new(RSI::default()));
+        rsi.set_overlay(overlay);
+        for (case, indicator) in [
+            ("warm-up", Box::new(rsi) as Box<dyn Indicator>),
+            ("narrower", custom(1.0, 123456.78, overlay)),
+            ("wider", custom(123456.78, 1.0, overlay)),
+        ] {
+            let name = format!("{} {case}", if overlay { "main pane" } else { "own pane" });
+            let ctx = Context::default();
+            ctx.enable_accesskit();
+            let mut chart = chart(&[100.0, 102.0, 99.0], &[101.0, 104.0, 100.0]);
+            let study = chart.add_indicator(indicator);
+            let dependent = chart.add_indicator(Box::new(SMA::new(2)));
+            chart
+                .set_indicator_source(
+                    dependent,
+                    StudySource::Study {
+                        id: study.0,
+                        plot: 0,
+                    },
+                )
+                .unwrap();
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            let pane = chart.series_pane(study).unwrap();
+            let rect = chart
+                .pane_layout
+                .panes
+                .iter()
+                .find(|item| item.id == pane)
+                .unwrap()
+                .rect;
+            let mut remove_at = |at: Option<Pos2>| {
+                let input = RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                    time: Some(ctx.input(|input| input.time) + 0.1),
+                    events: at.into_iter().map(Event::PointerMoved).collect(),
+                    ..Default::default()
+                };
+                let mut output = ctx.run_ui(input, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        chart.show(ui);
+                    });
+                });
+                output.textures_delta.clear();
+                let nodes = &output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()
+                    .unwrap()
+                    .nodes;
+                let bounds_of = |label| {
+                    nodes
+                        .iter()
+                        .filter_map(move |(_, node)| {
+                            (node.label() == Some(label))
+                                .then(|| node.bounds())
+                                .flatten()
+                        })
+                        .map(|bounds| {
+                            Rect::from_min_max(
+                                Pos2::new(bounds.x0 as f32, bounds.y0 as f32),
+                                Pos2::new(bounds.x1 as f32, bounds.y1 as f32),
+                            )
+                        })
+                };
+                let remove = bounds_of("Remove study").next();
+                let row = bounds_of("Study controls")
+                    .filter(|row| rect.contains(row.center()))
+                    .min_by(|a, b| a.top().total_cmp(&b.top()));
+                if overlay
+                    && case == "wider"
+                    && remove.is_some_and(|rect| at == Some(rect.center()))
+                {
+                    let shapes = output
+                        .shapes
+                        .windows(2)
+                        .find(|shapes| matches!(&shapes[1].shape,
+                            egui::Shape::Text(text) if text.galley.text() == "123,456.78"
+                                && text.pos.x + text.galley.size().x > shapes[1].clip_rect.right()
+                        ))
+                        .expect("the wider hovered value overflows the held controls");
+                    assert!(matches!(&shapes[0].shape, egui::Shape::Rect(_)));
+                    assert_eq!(
+                        shapes[0].clip_rect, shapes[1].clip_rect,
+                        "{name}: the text protection patch must share the text clip"
+                    );
+                }
+                output.drop_without_applying_deltas();
+                (remove, row)
+            };
+            let row = remove_at(None)
+                .1
+                .unwrap_or_else(|| panic!("{name}: study row"));
+            // Left of the first bar: the row initially shows the last bar's values.
+            let start = Pos2::new(row.left() + 2.0, row.top() + 10.0);
+            let Some(drawn) = remove_at(Some(start)).0 else {
+                failures.push(format!("{name}: no Remove at {start:?} on row {row:?}"));
+                continue;
+            };
+            let reached = remove_at(Some(drawn.center())).0;
+            if reached != Some(drawn) {
+                failures.push(format!("{name}: drawn {drawn:?}, reached {reached:?}"));
+            }
+            click(&ctx, &mut chart, drawn.center());
+            if chart.indicators().any(|(id, _)| id == study) {
+                failures.push(format!("{name}: Remove missed the study"));
+                continue;
+            }
+            assert!(
+                !chart.indicators().any(|(id, _)| id == dependent),
+                "{name}: dependent study remained"
+            );
+            assert!(chart.undo(), "{name}: removal left no undo step");
+            assert!(chart.indicators().any(|(id, _)| id == study), "{name}");
+            assert!(
+                chart.indicators().any(|(id, indicator)| id == dependent
+                    && indicator.source()
+                        == Some(StudySource::Study {
+                            id: study.0,
+                            plot: 0
+                        })),
+                "{name}: undo did not restore the source link"
+            );
+            assert!(!chart.can_undo(), "{name}: removal took more than a step");
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// A study that takes a removed study's legend row draws its own buttons after its title, and a
+/// second click where the removed study's Remove was does not reach it.
+#[test]
+fn legend_row_taken_after_a_removal_draws_its_own_buttons() {
+    use crate::studies::{CustomIndicator, IndicatorValue, SMA};
+
+    /// Remove buttons, study rows and painted `title` texts with their clip, from one frame.
+    fn legend(
+        ctx: &Context,
+        chart: &mut crate::widget::Chart,
+        title: &str,
+        at: Option<Pos2>,
+    ) -> (Vec<Rect>, Vec<Rect>, Vec<(Rect, Rect)>) {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+            time: Some(ctx.input(|input| input.time) + 0.1),
+            events: at.into_iter().map(Event::PointerMoved).collect(),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                chart.show(ui);
+            });
+        });
+        output.textures_delta.clear();
+        let nodes = &output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes;
+        let bounds = |label| {
+            nodes
+                .iter()
+                .filter(|(_, node)| node.label() == Some(label))
+                .filter_map(|(_, node)| node.bounds())
+                .map(|b| {
+                    Rect::from_min_max(
+                        Pos2::new(b.x0 as f32, b.y0 as f32),
+                        Pos2::new(b.x1 as f32, b.y1 as f32),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let (remove, rows) = (bounds("Remove study"), bounds("Study controls"));
+        let titles = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == title => Some((
+                    Rect::from_min_size(text.pos, text.galley.size()),
+                    clipped.clip_rect,
+                )),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        (remove, rows, titles)
+    }
+
+    let title = "Legend study with a much longer title";
+    let ctx = Context::default();
+    ctx.enable_accesskit();
+    let mut chart = chart(&[100.0, 102.0, 99.0], &[101.0, 104.0, 100.0]);
+    let short = chart.add_indicator(Box::new(SMA::new(2)));
+    let long = chart.add_indicator(Box::new(
+        CustomIndicator::new(title, |bars| {
+            (0..bars.len())
+                .map(|_| IndicatorValue::Single(1.0))
+                .collect()
+        })
+        .with_overlay(true),
+    ));
+    let row = legend(&ctx, &mut chart, title, None)
+        .1
+        .into_iter()
+        .min_by(|a, b| a.top().total_cmp(&b.top()))
+        .expect("study rows");
+    let start = Pos2::new(row.left() + 2.0, row.top() + 10.0);
+    legend(&ctx, &mut chart, title, Some(start));
+    let [removed] = legend(&ctx, &mut chart, title, Some(start)).0[..] else {
+        panic!("one Remove on the hovered first row");
+    };
+    let at = removed.center();
+    click(&ctx, &mut chart, at);
+    assert!(
+        !chart.indicators().any(|(id, _)| id == short),
+        "Remove missed the first study"
+    );
+
+    legend(&ctx, &mut chart, title, Some(at));
+    let (remove, _, titles) = legend(&ctx, &mut chart, title, Some(at));
+    // The legend's title, not a tooltip or label elsewhere on the chart.
+    let (text, clip) = *titles
+        .iter()
+        .find(|(text, _)| (row.top()..=row.bottom()).contains(&text.center().y))
+        .expect("the remaining study's title on the first row");
+    assert!(
+        matches!(remove[..], [remove] if remove.left() >= text.right()),
+        "Remove {remove:?} is not after the title {text:?}"
+    );
+    assert!(
+        clip.right() >= text.right(),
+        "title {text:?} clipped at {clip:?}"
+    );
+
+    click(&ctx, &mut chart, at);
+    assert!(
+        chart.indicators().any(|(id, _)| id == long),
+        "a second click where the removed study's Remove was removed the next study"
+    );
+}
+
 #[test]
 fn merged_panes_share_scales_and_studies_can_return_to_the_main_pane() {
     use crate::scales::PriceScaleMode;

@@ -372,6 +372,12 @@ impl IndicatorRenderer {
                 crate::chart::rendering::volume_profile::profile_span(&plot, coords),
                 crate::painting::volume_profile::ProfileStyle::Study {
                     right_aligned: plot.right_aligned,
+                    strip: plot.strip.is_some(),
+                    walls_visible: if plot.profile.walls.is_some() {
+                        [3, 4].map(|line| indicator.plot_style(line).visible)
+                    } else {
+                        [true; 2]
+                    },
                     width: plot.width,
                 },
                 &|price| price_scale.price_to_y(price),
@@ -1404,7 +1410,6 @@ mod tests {
             .map(|p| Bar::new(Utc.timestamp_opt(0, 0).unwrap(), p, p, p, p, 1.0))
             .collect();
         let mut study = ConfiguredStudy::new(Box::new(AwesomeOscillator::new(2, 3)));
-        assert_eq!(study.plot_style(0).plot_type, PlotType::Histogram);
         // On the price pane, where the tint lies beneath the shared geometry.
         study.set_overlay(true);
         study.set_scale(crate::studies::StudyScale::Main);
@@ -1435,6 +1440,7 @@ mod tests {
                 settings["plots"][0]["visible"] = visible.into();
                 settings["plots"][0]["color"] = serde_json::json!([17, 71, 191, 255]);
                 settings["plots"][0]["width"] = 2.0.into();
+                settings["plots"][0]["plot_type"] = serde_json::json!("Histogram");
                 let tint = Color32::from_rgba_unmultiplied(20, 40, 60, 16);
                 settings["background"] = serde_json::to_value(tint).unwrap();
                 settings["plot_variants"] = serde_json::json!([[{
@@ -1526,7 +1532,7 @@ mod tests {
                         serde_json::to_value(study.settings()).unwrap()["background"],
                         serde_json::to_value(tint).unwrap()
                     );
-                    // A new study draws its rising and falling bars at their own widths.
+                    // Histogram bars have independently editable rising and falling widths.
                     if visible && offset == 0 {
                         for (color, width) in [
                             (Color32::from_rgb(17, 71, 191), 2.0),

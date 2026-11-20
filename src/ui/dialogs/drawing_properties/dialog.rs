@@ -36,10 +36,13 @@ pub struct DrawingPropertiesDialog {
     pub coordinates: CoordinatesState,
     /// Named templates, kept in memory unless the host attaches its storage service.
     pub templates: TemplateStore<DrawingTemplate>,
+    /// Estimated and total bars of the edited anchored VWAP, last read by `show_and_apply`.
+    vwap_estimated: Option<(usize, usize)>,
     preview: Option<(String, DrawingId, Vec<PreviewDrawing>)>,
     template_name: String,
     saving_template: bool,
     default_template: Option<DrawingTemplate>,
+    custom_tool: Option<crate::drawings::RegisteredDrawingTool>,
     /// Validation error from the most recent edit.
     pub error: Option<String>,
 }
@@ -63,15 +66,18 @@ impl DrawingPropertiesDialog {
             coordinates: CoordinatesState::default(),
             error: None,
             templates: TemplateStore::new(StoreKind::DrawingTemplates),
+            vwap_estimated: None,
             preview: None,
             template_name: String::new(),
             saving_template: false,
             default_template: None,
+            custom_tool: None,
         }
     }
 
     /// Open the dialog for a specific drawing
     pub fn open(&mut self, id: DrawingId, name: String, props: DrawingProps) {
+        self.custom_tool = None;
         self.is_open = true;
         self.drawing_id = Some(id);
         self.drawing_name = name;
@@ -93,18 +99,22 @@ impl DrawingPropertiesDialog {
         };
         self.open(
             id,
-            drawing.tool_type.as_str().into(),
+            chart.drawings().registry.tool_name(drawing).into(),
             DrawingProps::from_drawing(drawing, chart),
         );
-        self.default_template = Some(DrawingTemplate::from_drawing(
-            &chart.drawings().new_drawing(0, drawing.tool_type),
-        ));
-        // The built-in factory cannot apply a template carrying a custom tool's identity.
-        if drawing.custom_tool.is_some()
-            && let Some(defaults) = chart.drawings().tool_defaults.get(&drawing.tool_type)
+        self.custom_tool = drawing
+            .custom_tool
+            .as_deref()
+            .and_then(|id| chart.drawings().registry.get(id))
+            .cloned();
+        let manager = chart.drawings();
+        self.default_template = Some(DrawingTemplate::from_drawing(&match drawing
+            .custom_tool
+            .as_deref()
         {
-            self.default_template = Some(defaults.clone());
-        }
+            Some(tool) => manager.new_custom_drawing(0, tool),
+            None => manager.new_drawing(0, drawing.tool_type),
+        }));
         true
     }
 
@@ -116,6 +126,10 @@ impl DrawingPropertiesDialog {
         ctx: &Context,
         chart: &mut crate::widget::Chart,
     ) -> DrawingPropertiesAction {
+        self.vwap_estimated = self
+            .drawing_id
+            .filter(|_| self.is_open)
+            .and_then(|id| chart.vwap_estimated_bars(id.0));
         let action = self.show(ctx);
         // Each frame edits the drawings as they were before the preview, as Ok does.
         self.restore_preview(chart);
@@ -134,13 +148,9 @@ impl DrawingPropertiesDialog {
                 Ok(edits) => {
                     if self.props.save_as_default
                         && let Some(mut template) = self.current_template()
-                        && template.settings.custom_tool.is_none()
                     {
                         template.settings.visible = true;
-                        chart
-                            .drawings_mut()
-                            .tool_defaults
-                            .insert(template.settings.tool_type, template.clone());
+                        chart.drawings_mut().save_tool_default(template.clone());
                         self.default_template = Some(template);
                         self.props.save_as_default = false;
                     }
@@ -244,6 +254,7 @@ impl DrawingPropertiesDialog {
                 drawing.ghost_feed = old.ghost_feed;
                 drawing.bars_pattern = old.bars_pattern;
                 drawing.projection = old.projection;
+                drawing.forecast = old.forecast;
                 // Only the opacity is previewed; a corner drag may have resized the frame since.
                 if let Some(image) = &mut drawing.image {
                     image.opacity = old.image.map_or(255, |c| c.opacity);
@@ -263,6 +274,7 @@ impl DrawingPropertiesDialog {
                 drawing.middle_line = old.middle_line;
                 drawing.theme_shade = old.theme_shade;
                 drawing.line_measurements = old.line_measurements;
+                drawing.range_settings = old.range_settings;
                 drawing.price_axis_label = old.price_axis_label;
                 drawing.time_axis_label = old.time_axis_label;
                 drawing.elliott_degree = old.elliott_degree;
@@ -290,15 +302,6 @@ impl DrawingPropertiesDialog {
     pub fn close(&mut self) {
         self.is_open = false;
         self.drawing_id = None;
-    }
-
-    /// Sync dialog open/close state from an external flag.
-    ///
-    /// Opening requires drawing context, so only close is synced here.
-    pub fn sync_open_state(&mut self, should_be_open: bool) {
-        if !should_be_open && self.is_open {
-            self.close();
-        }
     }
 
     /// Show the dialog
@@ -378,14 +381,12 @@ impl DrawingPropertiesDialog {
                 ui.close();
             }
             let tool = self.props.tool_settings.as_ref().map(|t| &t.settings);
-            // A host-registered tool has no default of its own.
-            let built_in = tool.is_some_and(|tool| tool.custom_tool.is_none());
             // The check `load_template` makes: another tool's default would not load.
             let defaults = self.default_template.as_ref().map(|t| &t.settings);
             let resets = tool.zip(defaults).is_some_and(|(tool, defaults)| {
                 tool.tool_type == defaults.tool_type && tool.custom_tool == defaults.custom_tool
             });
-            if built_in
+            if tool.is_some()
                 && ui
                     .button(l10n::text(ui.ctx(), "Save as default for this tool"))
                     .clicked()
@@ -526,6 +527,8 @@ impl DrawingPropertiesDialog {
                         &mut self.props,
                         &mut state.pickers,
                         &mut state.text_pickers,
+                        &mut state.card_pickers,
+                        self.custom_tool.as_ref(),
                     );
                 }
                 PropertiesTab::Inputs => {
@@ -538,6 +541,7 @@ impl DrawingPropertiesDialog {
                             &mut state.level_pickers,
                             &mut self.coordinates,
                             self.props.tick_size,
+                            self.vwap_estimated,
                         );
                     }
                 }
@@ -574,6 +578,7 @@ impl DrawingPropertiesDialog {
             .pickers
             .iter()
             .chain(&state.text_pickers)
+            .chain(&state.card_pickers)
             .chain(state.level_pickers.iter().flatten())
             .any(|p| p.is_open)
         {
@@ -582,6 +587,7 @@ impl DrawingPropertiesDialog {
                     .pickers
                     .iter_mut()
                     .chain(&mut state.text_pickers)
+                    .chain(&mut state.card_pickers)
                     .chain(state.level_pickers.iter_mut().flatten())
                     .for_each(|p| p.is_open = false);
             }
@@ -626,6 +632,9 @@ struct UiState {
     /// serve the ghost feed's rising and falling borders, and the background picker the regression
     /// trend's lower line.
     text_pickers: [ColorPickerState; 3],
+    /// Background, text and border pickers of a forecast's cards and badges in the Style tab, in
+    /// the order of its rows.
+    card_pickers: [ColorPickerState; 10],
     /// One list of colour pickers per level grid of the current tool.
     level_pickers: Vec<Vec<ColorPickerState>>,
     /// Whether a widget had keyboard focus at the end of the previous frame.
@@ -646,6 +655,60 @@ mod tests {
     use crate::model::BarData;
     use crate::widget::Chart;
     use egui::{Color32, Pos2, Rect, Shape};
+
+    /// The registered settings editor is reachable, and Ok records its edit as one undo step.
+    #[test]
+    fn registered_tool_settings_show_in_the_style_tab() {
+        for common in [true, false] {
+            let ctx = Context::default();
+            let mut chart = Chart::new(BarData::new());
+            let mut tool = crate::drawings::registry::tests::midpoint();
+            tool.style.color = common;
+            tool.style.line_width = common;
+            tool.style.line_style = common;
+            tool.style.fill = false;
+            tool.style.line_ends = false;
+            chart
+                .drawings_mut()
+                .registry
+                .register("midpoint", tool)
+                .unwrap();
+            let mut drawing = Drawing::custom("midpoint");
+            drawing.id = 7;
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+            chart.drawings_mut().drawings.push(drawing);
+            let mut dialog = DrawingPropertiesDialog::new();
+            assert!(dialog.open_for_chart(&chart, DrawingId(7)));
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+            let labels = frame(&mut dialog, &mut chart, &ctx, vec![]);
+            for (label, present) in [
+                ("Radius", true),
+                ("Color", common),
+                ("Line width", common),
+                ("Line style", common),
+                ("Fill", false),
+                ("Line start", false),
+                ("Line end", false),
+            ] {
+                assert_eq!(
+                    labels.iter().any(|(text, _)| text == label),
+                    present,
+                    "{label}"
+                );
+            }
+            click(&mut dialog, &mut chart, &ctx, "Ok");
+            assert_eq!(
+                chart.drawings().drawings[0].custom_settings,
+                serde_json::json!({"radius": 10})
+            );
+            assert!(chart.undo());
+            assert_eq!(
+                chart.drawings().drawings[0].custom_settings,
+                serde_json::Value::Null
+            );
+            assert!(!chart.can_undo());
+        }
+    }
 
     fn frame(
         dialog: &mut DrawingPropertiesDialog,
@@ -744,7 +807,11 @@ mod tests {
                         "Color",
                         !matches!(
                             tool,
-                            Tool::FibonacciChannel | Tool::Sticker | Tool::GhostFeed
+                            Tool::FibonacciChannel
+                                | Tool::Pitchfork
+                                | Tool::Tweet
+                                | Tool::Sticker
+                                | Tool::GhostFeed
                         ),
                     ),
                     ("Line width", width),
@@ -780,6 +847,8 @@ mod tests {
             (Tool::TrendAngle, false, true, false),
             (Tool::TrendLine, true, true, false),
             (Tool::TextLabel, true, true, true),
+            (Tool::DateRange, true, true, false),
+            (Tool::DateAndPriceRange, true, true, false),
             (Tool::XABCDPattern, false, true, false),
         ] {
             let mut drawing = Drawing::new(7, tool);
@@ -874,7 +943,12 @@ mod tests {
             for (width, peer) in [(3.0, 3.0), (20.0, 4.0), (5.0, 5.0)] {
                 dialog.props.line_width = width;
                 dialog.props.color = Color32::GREEN;
+                let forecast = crate::drawings::ForecastStyle {
+                    start_border: Some([4, 5, 6, 255]),
+                    ..Default::default()
+                };
                 let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;
+                settings.forecast = Some(forecast);
                 settings.position_target_color = Some([40, 100, 220, 255]);
                 settings.position_stop_color = Some([220, 140, 40, 255]);
                 settings.position_style.border = true;
@@ -895,6 +969,7 @@ mod tests {
                 settings.note_text_style = Some(note_text);
                 settings.text_color = Some([1, 2, 3, 255]);
                 settings.line_measurements.price_labels = true;
+                settings.range_settings.volume = false;
                 settings.theme_shade = true;
                 settings.anchor_price_style = Some(note_text);
                 settings.middle_line.width = 3.0;
@@ -920,10 +995,16 @@ mod tests {
                 assert_eq!(preview.note_text_style, Some(note_text));
                 assert_eq!(preview.text_color, Some([1, 2, 3, 255]));
                 assert!(preview.line_measurements.price_labels);
+                assert!(!preview.range_settings.volume);
                 assert!(preview.theme_shade);
                 assert_eq!(preview.anchor_price_style, Some(note_text));
                 assert_eq!(preview.middle_line.width, 3.0);
                 assert!(!preview.elliott_show_wave);
+                assert_eq!(
+                    preview.forecast,
+                    Some(forecast),
+                    "{finish}: forecast preview"
+                );
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
                 assert!(!chart.can_undo());
                 assert!(chart.can_redo(), "preview must retain existing redo");
@@ -982,6 +1063,11 @@ mod tests {
             );
             assert_eq!(restored.text_color, Some([41, 98, 255, 255]), "{finish}");
             assert_eq!(restored.line_measurements, Default::default(), "{finish}");
+            assert_eq!(
+                restored.range_settings,
+                crate::drawings::RangeSettings::default(),
+                "{finish}"
+            );
             assert!(!restored.theme_shade, "{finish}");
             assert_eq!(restored.anchor_price_style, None, "{finish}");
             assert_eq!(
@@ -990,6 +1076,7 @@ mod tests {
                 "{finish}"
             );
             assert!(restored.elliott_show_wave, "{finish}");
+            assert_eq!(restored.forecast, None, "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");
             assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0, "{finish}");
             assert_eq!(
@@ -1071,14 +1158,13 @@ mod tests {
                     defaults.custom_tool = Some("host-path".into());
                 }
                 defaults.stroke_width = 3.0;
-                manager
-                    .tool_defaults
-                    .insert(tool, DrawingTemplate::from_drawing(&defaults));
+                manager.save_tool_default(DrawingTemplate::from_drawing(&defaults));
             }
-            let mut drawing = manager.new_drawing(7, tool);
-            if custom {
-                drawing.custom_tool = Some("host-path".into());
-            }
+            let mut drawing = if custom {
+                manager.new_custom_drawing(7, "host-path")
+            } else {
+                manager.new_drawing(7, tool)
+            };
             drawing.stroke_width = 5.0;
             drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
             let anchors = drawing.chart_points.clone();
@@ -1169,7 +1255,7 @@ mod tests {
         );
         assert!(chart.undo());
         assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0);
-        // A host tool has no default of its own: saving one keeps the built-in polyline's.
+        // A host tool saves its default under its id and leaves the polyline's alone.
         let polyline =
             DrawingTemplate::from_drawing(&chart.drawings().new_drawing(0, Tool::Polyline));
         chart
@@ -1189,6 +1275,12 @@ mod tests {
             serde_json::to_value(&polyline).unwrap()
         );
         assert_eq!(chart.drawings().drawings[1].stroke_width, 5.0);
+        assert_eq!(
+            chart.drawings().custom_tool_defaults["host-path"]
+                .settings
+                .stroke_width,
+            5.0
+        );
     }
 
     /// Several tools keep a template of one name apart in the host's storage, and each lists and

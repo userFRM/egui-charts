@@ -1,11 +1,12 @@
 //! Automatic chart patterns found in confirmed swing pivots.
 //!
 //! [`ChartPatterns`] detects continuation formations (flags, pennants, rectangles and
-//! triangles) or reversal formations (cup and handle, double and triple tops and bottoms,
-//! head and shoulders) in a bar history, and returns each one's anchors, boundary segments,
-//! direction and confirmation time through [`ChartPatterns::formations`]. Developing formations are
-//! told apart from confirmed ones, and every confirmed formation is marked on the bar that
-//! confirms it.
+//! triangles), reversal formations (cup and handle, double and triple tops and bottoms,
+//! head and shoulders), or every formation together, including wedges, in a bar history, and
+//! returns each one's anchors, boundary segments, direction and confirmation time through
+//! [`ChartPatterns::formations`]. Developing formations are told apart from confirmed ones, and
+//! every confirmed formation is marked on the bar that confirms it. The factory also offers
+//! each formation under its own name.
 
 use super::clamp_param;
 use super::swings::{Swing, Swings};
@@ -64,7 +65,34 @@ pub enum FormationKind {
     HeadAndShoulders,
     /// A head below two shoulders; confirms above the neckline through the peaks.
     InverseHeadAndShoulders,
+    /// Rising highs over more steeply rising lows; confirms below.
+    RisingWedge,
+    /// Falling lows under more steeply falling highs; confirms above.
+    FallingWedge,
 }
+
+/// Every formation, as [`ChartPatterns::all`] lists them: the continuation family, the reversal
+/// family, then the wedges.
+static ALL_KINDS: [FormationKind; 18] = [
+    FormationKind::BullFlag,
+    FormationKind::BearFlag,
+    FormationKind::BullPennant,
+    FormationKind::BearPennant,
+    FormationKind::Rectangle,
+    FormationKind::AscendingTriangle,
+    FormationKind::DescendingTriangle,
+    FormationKind::SymmetricalTriangle,
+    FormationKind::CupAndHandle,
+    FormationKind::InvertedCupAndHandle,
+    FormationKind::DoubleTop,
+    FormationKind::DoubleBottom,
+    FormationKind::TripleTop,
+    FormationKind::TripleBottom,
+    FormationKind::HeadAndShoulders,
+    FormationKind::InverseHeadAndShoulders,
+    FormationKind::RisingWedge,
+    FormationKind::FallingWedge,
+];
 
 impl FormationKind {
     fn label(self) -> &'static str {
@@ -85,6 +113,8 @@ impl FormationKind {
             Self::TripleBottom => "Triple Bottom",
             Self::HeadAndShoulders => "Head and Shoulders",
             Self::InverseHeadAndShoulders => "Inverse Head and Shoulders",
+            Self::RisingWedge => "Rising Wedge",
+            Self::FallingWedge => "Falling Wedge",
         }
     }
 
@@ -106,6 +136,8 @@ impl FormationKind {
             Self::TripleBottom => "TB",
             Self::HeadAndShoulders => "HS",
             Self::InverseHeadAndShoulders => "IHS",
+            Self::RisingWedge => "RW",
+            Self::FallingWedge => "FW",
         }
     }
 
@@ -118,14 +150,16 @@ impl FormationKind {
             | Self::CupAndHandle
             | Self::DoubleBottom
             | Self::TripleBottom
-            | Self::InverseHeadAndShoulders => Some(PatternDirection::Bullish),
+            | Self::InverseHeadAndShoulders
+            | Self::FallingWedge => Some(PatternDirection::Bullish),
             Self::BearFlag
             | Self::BearPennant
             | Self::DescendingTriangle
             | Self::InvertedCupAndHandle
             | Self::DoubleTop
             | Self::TripleTop
-            | Self::HeadAndShoulders => Some(PatternDirection::Bearish),
+            | Self::HeadAndShoulders
+            | Self::RisingWedge => Some(PatternDirection::Bearish),
             Self::Rectangle | Self::SymmetricalTriangle => None,
         }
     }
@@ -144,7 +178,7 @@ impl PatternFamily {
     /// Every family.
     pub(crate) const ALL: [Self; 2] = [Self::Continuation, Self::Reversal];
 
-    fn kinds(self) -> &'static [FormationKind] {
+    pub(crate) fn kinds(self) -> &'static [FormationKind] {
         match self {
             Self::Continuation => &[
                 FormationKind::BullFlag,
@@ -174,6 +208,35 @@ impl PatternFamily {
             Self::Continuation => "Continuation Chart Patterns",
             Self::Reversal => "Reversal Chart Patterns",
         }
+    }
+}
+
+/// The formations a study looks for: a family, every formation, or one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scope {
+    Family(PatternFamily),
+    All,
+    One(FormationKind),
+}
+
+impl Scope {
+    fn kinds(self) -> &'static [FormationKind] {
+        match self {
+            Self::Family(family) => family.kinds(),
+            Self::All => &ALL_KINDS,
+            Self::One(kind) => {
+                let at = ALL_KINDS.iter().position(|&k| k == kind).unwrap();
+                &ALL_KINDS[at..=at]
+            }
+        }
+    }
+
+    /// Whether the scope holds a formation of `family`; wedges count as continuation.
+    fn covers(self, family: PatternFamily) -> bool {
+        let reversal = |kind: &FormationKind| PatternFamily::Reversal.kinds().contains(kind);
+        self.kinds()
+            .iter()
+            .any(|kind| reversal(kind) == (family == PatternFamily::Reversal))
     }
 }
 
@@ -379,7 +442,7 @@ fn flag(config: &Config, pivots: &VecDeque<Swing>, bull: bool, pennant: bool) ->
     })
 }
 
-/// A rectangle or triangle through the last `2 * touches` pivots.
+/// A rectangle, triangle or wedge through the last `2 * touches` pivots.
 fn channel(config: &Config, pivots: &VecDeque<Swing>) -> Option<Candidate> {
     let w = last_pivots(pivots, 2 * config.touches)?;
     let side =
@@ -419,6 +482,12 @@ fn channel(config: &Config, pivots: &VecDeque<Swing>) -> Option<Candidate> {
         (false, false) if upper.slope < 0.0 && lower.slope > 0.0 => {
             FormationKind::SymmetricalTriangle
         }
+        (false, false) if upper.slope > 0.0 && lower.slope > upper.slope => {
+            FormationKind::RisingWedge
+        }
+        (false, false) if lower.slope < 0.0 && upper.slope < lower.slope => {
+            FormationKind::FallingWedge
+        }
         _ => return None,
     };
     let up = Outcome::Confirm(PatternDirection::Bullish);
@@ -430,12 +499,18 @@ fn channel(config: &Config, pivots: &VecDeque<Swing>) -> Option<Candidate> {
         upper,
         lower,
         shown: [true; 2],
-        on_up: if kind == FormationKind::DescendingTriangle {
+        on_up: if matches!(
+            kind,
+            FormationKind::DescendingTriangle | FormationKind::RisingWedge
+        ) {
             Outcome::Fail
         } else {
             up
         },
-        on_down: if kind == FormationKind::AscendingTriangle {
+        on_down: if matches!(
+            kind,
+            FormationKind::AscendingTriangle | FormationKind::FallingWedge
+        ) {
             Outcome::Fail
         } else {
             down
@@ -656,17 +731,19 @@ struct State {
     pending: Vec<Candidate>,
     confirmed: Vec<Formation>,
     /// Per kind, the last pivot of the latest formation found.
-    used: [Option<usize>; 8],
+    used: [Option<usize>; 18],
 }
 
 impl State {
     fn advance(
         &mut self,
         config: &Config,
-        family: PatternFamily,
-        enabled: &[bool; 8],
+        scope: Scope,
+        enabled: &[bool; 18],
         bar: &Bar,
-    ) -> [u8; 2] {
+    ) -> [u32; 2] {
+        // Every family keeps its share of developing and confirmed formations.
+        let share = if scope == Scope::All { 2 } else { 1 };
         let index = self.index;
         self.index += 1;
         let mut marks = [0; 2];
@@ -683,7 +760,7 @@ impl State {
             .swings
             .push(bar, config.strength, config.strength, MAX_PIVOTS)
         {
-            self.detect(config, family, enabled);
+            self.detect(config, scope, enabled, share * MAX_PENDING);
         }
         let mut i = 0;
         while i < self.pending.len() {
@@ -696,10 +773,10 @@ impl State {
                     let candidate = self.pending.remove(i);
                     self.confirmed
                         .push(candidate.formation(Some(direction), true, (seq, index)));
-                    if self.confirmed.len() > MAX_CONFIRMED {
+                    if self.confirmed.len() > share * MAX_CONFIRMED {
                         self.confirmed.remove(0);
                     }
-                    let slot = family
+                    let slot = scope
                         .kinds()
                         .iter()
                         .position(|&k| k == candidate.kind)
@@ -711,17 +788,20 @@ impl State {
         marks
     }
 
-    fn detect(&mut self, config: &Config, family: PatternFamily, enabled: &[bool; 8]) {
+    fn detect(&mut self, config: &Config, scope: Scope, enabled: &[bool; 18], limit: usize) {
         let pivots = &self.swings.pivots;
-        let found: Vec<Option<Candidate>> = match family {
-            PatternFamily::Continuation => vec![
+        let mut found: Vec<Option<Candidate>> = Vec::new();
+        if scope.covers(PatternFamily::Continuation) {
+            found.extend([
                 flag(config, pivots, true, false),
                 flag(config, pivots, false, false),
                 flag(config, pivots, true, true),
                 flag(config, pivots, false, true),
                 channel(config, pivots),
-            ],
-            PatternFamily::Reversal => vec![
+            ]);
+        }
+        if scope.covers(PatternFamily::Reversal) {
+            found.extend([
                 cup(config, pivots, true),
                 cup(config, pivots, false),
                 multiple(config, pivots, true, false),
@@ -730,27 +810,36 @@ impl State {
                 multiple(config, pivots, false, true),
                 head_and_shoulders(config, pivots, true),
                 head_and_shoulders(config, pivots, false),
-            ],
-        };
-        // A pennant's last four pivots are also a symmetrical triangle; only the pennant is kept.
-        let pennant = found.iter().flatten().any(|c| {
+            ]);
+        }
+        let slot_of = |kind| scope.kinds().iter().position(|&k| k == kind);
+        // A pennant's last four pivots are also a symmetrical triangle, and a narrowing flag's
+        // a wedge; only the flag or pennant is kept.
+        let pole = found.iter().flatten().any(|c| {
             matches!(
                 c.kind,
-                FormationKind::BullPennant | FormationKind::BearPennant
-            ) && enabled[family.kinds().iter().position(|&k| k == c.kind).unwrap()]
+                FormationKind::BullFlag
+                    | FormationKind::BearFlag
+                    | FormationKind::BullPennant
+                    | FormationKind::BearPennant
+            ) && slot_of(c.kind).is_some_and(|slot| enabled[slot])
         });
         for candidate in found.into_iter().flatten() {
-            if pennant
-                && candidate.kind == FormationKind::SymmetricalTriangle
+            if pole
+                && matches!(
+                    candidate.kind,
+                    FormationKind::SymmetricalTriangle
+                        | FormationKind::RisingWedge
+                        | FormationKind::FallingWedge
+                )
                 && candidate.anchors.len() == 4
             {
                 continue;
             }
-            let slot = family
-                .kinds()
-                .iter()
-                .position(|&k| k == candidate.kind)
-                .unwrap();
+            // Wedges and the other family's formations are not this study's.
+            let Some(slot) = slot_of(candidate.kind) else {
+                continue;
+            };
             let (first, last) = (
                 candidate.anchors[0].position,
                 candidate.anchors.last().unwrap().position,
@@ -760,14 +849,15 @@ impl State {
             }
             self.used[slot] = Some(last);
             self.pending.push(candidate);
-            if self.pending.len() > MAX_PENDING {
+            if self.pending.len() > limit {
                 self.pending.remove(0);
             }
         }
     }
 }
 
-/// Automatic chart patterns: the formations of a [`PatternFamily`], each with a toggle,
+/// Automatic chart patterns: a [`PatternFamily`], every formation with [`all`](Self::all),
+/// or one formation registered under its label, with a toggle per kind for multiple formations,
 /// detected from swing pivots and marked on the bar that confirms them. Read the formations,
 /// with their anchors, boundaries, direction and confirmation bar, from
 /// [`formations`](Self::formations).
@@ -796,6 +886,8 @@ impl State {
 /// | Ascending triangle | as the rectangle | flat upper boundary, rising lower boundary |
 /// | Descending triangle | as the rectangle | falling upper boundary, flat lower boundary |
 /// | Symmetrical triangle | as the rectangle | falling upper and rising lower boundary |
+/// | Rising wedge | as the rectangle | neither boundary flat, both rise and the lower more steeply; confirms bearish below the lower boundary, fails above the upper |
+/// | Falling wedge | as the rectangle | neither boundary flat, both fall and the upper more steeply; confirms bullish above the upper boundary, fails below the lower |
 ///
 /// | Cup and handle | high, low, high, low | the rims differ by at most `tolerance` percent of their mean; the cup is at least `depth` percent deep below the mean rim, lasts between `min_length` and `max_length` bars and has its low in the middle half of that time; the handle pulls back from the right rim by at most `handle` percent of the cup depth over at most half the cup's duration; confirms bullish above the higher rim, fails below the cup's low |
 /// | Inverted cup and handle | mirror | confirms bearish below the lower rim |
@@ -813,10 +905,13 @@ impl State {
 /// confirm bullish above their upper boundary; a bear flag, bear pennant and descending
 /// triangle confirm bearish below their lower boundary. A
 /// rectangle and a symmetrical triangle confirm in the direction of the break. A pennant's
-/// last four pivots also form a symmetrical triangle, which is then not reported, and a triple
-/// top or bottom follows the double top or bottom of its first two tops. Each pivot
-/// belongs to at most one formation of a kind. At most 16 pivots, 8 developing and 64
-/// confirmed formations are kept.
+/// last four pivots also form a symmetrical triangle, and a narrowing flag's a wedge; neither is
+/// then reported. A triple top or bottom follows the double top or bottom of its first two tops.
+/// Each pivot belongs to at most one formation of a kind. At most 16 pivots, 8 developing and 64
+/// confirmed formations are kept, twice as many formations for every formation at once.
+/// Wedges here follow these shared pivot, length and tolerance rules; the standalone
+/// [`RisingWedge`](crate::studies::RisingWedge) and [`FallingWedge`](crate::studies::FallingWedge)
+/// studies use their own touch and convergence rules and can find different wedges.
 ///
 /// # Outputs
 ///
@@ -829,11 +924,11 @@ impl State {
 /// name, such as "Bear Flag".
 #[derive(Clone, Debug)]
 pub struct ChartPatterns {
-    family: PatternFamily,
+    scope: Scope,
     config: Config,
-    enabled: [bool; 8],
-    /// One bit per kind of the family confirmed bullish and bearish on each bar.
-    found: Vec<[u8; 2]>,
+    enabled: [bool; 18],
+    /// One bit per kind of the scope confirmed bullish and bearish on each bar.
+    found: Vec<[u32; 2]>,
     values: IndicatorValues,
     stepper: Stepper<State>,
     #[cfg(feature = "drawings")]
@@ -848,10 +943,44 @@ pub struct ChartPatterns {
 impl ChartPatterns {
     /// Detect every formation of `family` with its conventional parameters.
     pub fn new(family: PatternFamily) -> Self {
+        Self::scoped(Scope::Family(family))
+    }
+
+    /// Detect every formation of both families and the rising and falling wedges, with one
+    /// set of inputs and a toggle per formation; registered as All Chart Patterns.
+    pub fn all() -> Self {
+        Self::scoped(Scope::All)
+    }
+
+    /// Detect only `kind`, with the inputs and defaults of its family, under the name of the
+    /// formation. Not for a wedge, whose name the Rising Wedge and Falling Wedge studies hold.
+    pub(crate) fn only(kind: FormationKind) -> Self {
+        Self::scoped(Scope::One(kind))
+    }
+
+    fn scoped(scope: Scope) -> Self {
+        let family = match scope {
+            Scope::Family(family) => Some(family),
+            Scope::All => None,
+            Scope::One(kind) if PatternFamily::Reversal.kinds().contains(&kind) => {
+                Some(PatternFamily::Reversal)
+            }
+            Scope::One(_) => Some(PatternFamily::Continuation),
+        };
         Self {
-            family,
+            scope,
             config: match family {
-                PatternFamily::Continuation => Config {
+                None => Config {
+                    strength: 3,
+                    min_length: 8,
+                    max_length: 200,
+                    tolerance: 1.0,
+                    touches: 2,
+                    pole: 5.0,
+                    depth: 3.0,
+                    handle: 50.0,
+                },
+                Some(PatternFamily::Continuation) => Config {
                     strength: 3,
                     min_length: 8,
                     max_length: 120,
@@ -861,7 +990,7 @@ impl ChartPatterns {
                     depth: 3.0,
                     handle: 50.0,
                 },
-                PatternFamily::Reversal => Config {
+                Some(PatternFamily::Reversal) => Config {
                     strength: 3,
                     min_length: 10,
                     max_length: 200,
@@ -872,7 +1001,7 @@ impl ChartPatterns {
                     handle: 50.0,
                 },
             },
-            enabled: [true; 8],
+            enabled: [true; 18],
             found: Vec::new(),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
@@ -887,7 +1016,7 @@ impl ChartPatterns {
 
     /// Detect only the formations whose label, such as `"Bull Flag"`, `keep` accepts.
     pub fn with_patterns(mut self, keep: impl Fn(&str) -> bool) -> Self {
-        for (on, kind) in self.enabled.iter_mut().zip(self.family.kinds()) {
+        for (on, kind) in self.enabled.iter_mut().zip(self.scope.kinds()) {
             *on = keep(kind.label());
         }
         self
@@ -941,7 +1070,7 @@ impl ChartPatterns {
         formations
     }
 
-    /// The formations one line marks at a source bar, in the family's order.
+    /// The formations one line marks at a source bar, in the scope's order.
     fn marked(&self, line: usize, bar: usize) -> impl Iterator<Item = FormationKind> + '_ {
         let bits = self
             .found
@@ -949,7 +1078,7 @@ impl ChartPatterns {
             .and_then(|marks| marks.get(line))
             .copied()
             .unwrap_or(0);
-        self.family
+        self.scope
             .kinds()
             .iter()
             .enumerate()
@@ -960,7 +1089,7 @@ impl ChartPatterns {
 
 impl Indicator for ChartPatterns {
     fn inputs(&self) -> Vec<StudyInput> {
-        let defaults = Self::new(self.family);
+        let defaults = Self::scoped(self.scope);
         let length = |id: &str, label: &str, value, default| {
             StudyInput::new(
                 id,
@@ -986,8 +1115,8 @@ impl Indicator for ChartPatterns {
             length("max_length", "Maximum length", c.max_length, d.max_length),
             number("tolerance", "Tolerance %", c.tolerance, d.tolerance),
         ];
-        inputs.extend(match self.family {
-            PatternFamily::Continuation => vec![
+        if self.scope.covers(PatternFamily::Continuation) {
+            inputs.extend([
                 StudyInput::new(
                     "touches",
                     "Touches per boundary",
@@ -1002,21 +1131,27 @@ impl Indicator for ChartPatterns {
                     InputKind::Number(0.0, f64::MAX),
                 )
                 .with_default(InputValue::Number(d.pole)),
-            ],
-            PatternFamily::Reversal => vec![
+            ]);
+        }
+        if self.scope.covers(PatternFamily::Reversal) {
+            inputs.extend([
                 number("depth", "Depth %", c.depth, d.depth),
                 number("handle", "Handle pullback %", c.handle, d.handle),
-            ],
-        });
-        inputs.extend(self.family.kinds().iter().enumerate().map(|(k, kind)| {
-            StudyInput::new(
-                format!("patterns[{k}]"),
-                kind.label(),
-                InputValue::Toggle(self.enabled[k]),
-                InputKind::Toggle,
-            )
-            .with_default(InputValue::Toggle(true))
-        }));
+            ]);
+        }
+        // A study of one formation has no toggle to switch it off.
+        let kinds = self.scope.kinds();
+        if kinds.len() > 1 {
+            inputs.extend(kinds.iter().enumerate().map(|(k, kind)| {
+                StudyInput::new(
+                    format!("patterns[{k}]"),
+                    kind.label(),
+                    InputValue::Toggle(self.enabled[k]),
+                    InputKind::Toggle,
+                )
+                .with_default(InputValue::Toggle(true))
+            }));
+        }
         inputs
     }
 
@@ -1084,7 +1219,11 @@ impl Indicator for ChartPatterns {
     }
 
     fn name(&self) -> &str {
-        self.family.name()
+        match self.scope {
+            Scope::Family(family) => family.name(),
+            Scope::All => "All Chart Patterns",
+            Scope::One(kind) => kind.label(),
+        }
     }
 
     fn desc(&self) -> &str {
@@ -1103,10 +1242,10 @@ impl Indicator for ChartPatterns {
             0
         };
         self.found.truncate(start);
-        let (config, family, enabled) = (self.config, self.family, self.enabled);
+        let (config, scope, enabled) = (self.config, self.scope, self.enabled);
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                let marks = state.advance(&config, family, &enabled, bar);
+                let marks = state.advance(&config, scope, &enabled, bar);
                 self.found.push(marks);
                 if marks == [0, 0] {
                     return IndicatorValue::None;
@@ -1202,6 +1341,26 @@ impl Indicator for ChartPatterns {
         vec![0, 1]
     }
 
+    // Developing holds no values, and a side holds values only while a formation that confirms
+    // that way is on: a one-sided formation fails on a break the other way.
+    fn alert_outputs(&self) -> Vec<(usize, String)> {
+        [PatternDirection::Bullish, PatternDirection::Bearish]
+            .into_iter()
+            .zip(self.line_names())
+            .enumerate()
+            .filter(|(_, (side, _))| {
+                self.scope
+                    .kinds()
+                    .iter()
+                    .zip(self.enabled)
+                    .any(|(kind, on)| {
+                        on && kind.expected().is_none_or(|expected| expected == *side)
+                    })
+            })
+            .map(|(output, (_, name))| (output, name))
+            .collect()
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }
@@ -1266,17 +1425,12 @@ mod tests {
     const ASCENDING: [f64; 6] = [105.0, 110.0, 100.0, 110.5, 103.0, 116.0];
     const SYMMETRICAL: [f64; 6] = [106.0, 112.0, 100.0, 109.0, 103.0, 114.0];
 
-    /// Each fixture confirms its formation on the hand-computed bar, or, as a near miss that
-    /// breaks one rule, finds nothing: the flag's lows widen the channel, the pennant's lines
-    /// stay too far apart, the rectangle's lows differ by more than the tolerance, and the
-    /// triangles lack the flat or the converging side. Mirrors give the bearish kinds.
-    #[test]
-    fn continuation_fixtures_confirm_where_the_rules_say() {
+    fn continuation_cases() -> Vec<Case> {
         use FormationKind::*;
         use PatternDirection::*;
         let flat = |a: &[f64]| a.to_vec();
         #[rustfmt::skip]
-        let cases: [Case; 14] = [
+        let cases = vec![
             ("bull flag", flat(&BULL_FLAG), BullFlag, Some((Bullish, 28))),
             ("bear flag", mirror(&BULL_FLAG), BearFlag, Some((Bearish, 28))),
             ("flag with widening lows", vec![105.0, 100.0, 130.0, 122.0, 127.0, 116.0, 135.0], BullFlag, None),
@@ -1292,7 +1446,18 @@ mod tests {
             ("rising channel", vec![105.0, 110.0, 100.0, 113.0, 103.0, 116.0], AscendingTriangle, None),
             ("symmetrical triangle", flat(&SYMMETRICAL), SymmetricalTriangle, Some((Bullish, 23))),
         ];
-        for (label, anchors, kind, expected) in cases {
+        cases
+    }
+
+    /// Each fixture confirms its formation on the hand-computed bar, or, as a near miss that
+    /// breaks one rule, finds nothing: the flag's lows widen the channel, the pennant's lines
+    /// stay too far apart, the rectangle's lows differ by more than the tolerance, and the
+    /// triangles lack the flat or the converging side. Mirrors give the bearish kinds.
+    #[test]
+    fn continuation_fixtures_confirm_where_the_rules_say() {
+        use FormationKind::*;
+        use PatternDirection::*;
+        for (label, anchors, kind, expected) in continuation_cases() {
             let formations = found(
                 &mut ChartPatterns::new(PatternFamily::Continuation),
                 &path(&anchors),
@@ -1395,18 +1560,12 @@ mod tests {
     const HEAD_AND_SHOULDERS: [f64; 7] = [100.0, 110.0, 100.0, 120.0, 101.0, 111.0, 80.0];
     const CUP: [f64; 6] = [110.0, 120.0, 100.0, 119.0, 114.0, 130.0];
 
-    /// Each reversal fixture confirms on the hand-computed bar, often later than the first
-    /// close beyond the neckline because the last pivot is known only three bars on, or, as a
-    /// near miss breaking one rule, does not: unequal tops, a shallow valley, a third top
-    /// that is too low, a head too close to its shoulders, shoulders of unequal height, and a
-    /// handle that gives back more than half the cup. Mirrors give the other direction.
-    #[test]
-    fn reversal_fixtures_confirm_where_the_rules_say() {
+    fn reversal_cases() -> Vec<Case> {
         use FormationKind::*;
         use PatternDirection::*;
         let flat = |a: &[f64]| a.to_vec();
         #[rustfmt::skip]
-        let cases: [Case; 20] = [
+        let cases = vec![
             ("double top", flat(&DOUBLE_TOP), DoubleTop, Some((Bearish, 18))),
             ("double bottom", mirror(&DOUBLE_TOP), DoubleBottom, Some((Bullish, 18))),
             ("double top with unequal tops", vec![100.0, 120.0, 105.0, 115.0, 60.0], DoubleTop, None),
@@ -1428,7 +1587,19 @@ mod tests {
             ("double top with no break", vec![100.0, 120.0, 105.0, 119.0, 112.0], DoubleTop, None),
             ("cup with a break back down", vec![110.0, 120.0, 100.0, 119.0, 114.0, 95.0], CupAndHandle, None),
         ];
-        for (label, anchors, kind, expected) in cases {
+        cases
+    }
+
+    /// Each reversal fixture confirms on the hand-computed bar, often later than the first
+    /// close beyond the neckline because the last pivot is known only three bars on, or, as a
+    /// near miss breaking one rule, does not: unequal tops, a shallow valley, a third top
+    /// that is too low, a head too close to its shoulders, shoulders of unequal height, and a
+    /// handle that gives back more than half the cup. Mirrors give the other direction.
+    #[test]
+    fn reversal_fixtures_confirm_where_the_rules_say() {
+        use FormationKind::*;
+        use PatternDirection::*;
+        for (label, anchors, kind, expected) in reversal_cases() {
             let formations = found(
                 &mut ChartPatterns::new(PatternFamily::Reversal),
                 &path(&anchors),
@@ -1475,6 +1646,186 @@ mod tests {
             &path(&DOUBLE_TOP),
         );
         assert!(apart.iter().all(|f| f.kind != DoubleTop));
+    }
+
+    /// All scopes preserve family confirmations, independent toggles and template identity;
+    /// the wedge's slopes 0.4 and 0.6 put its lower break on bar 26, before the double top.
+    #[test]
+    fn all_chart_patterns_match_the_families_and_keep_their_toggles() {
+        use crate::studies::{ConfiguredStudy, IndicatorFactory, StudyTemplate};
+        use FormationKind::*;
+        use PatternDirection::*;
+
+        let confirmed = |study: &mut ChartPatterns, bars: &[Bar]| -> Vec<Formation> {
+            found(study, bars)
+                .into_iter()
+                .filter(|f| f.status == FormationStatus::Confirmed)
+                .collect()
+        };
+        for (family, cases) in [
+            (PatternFamily::Continuation, continuation_cases()),
+            (PatternFamily::Reversal, reversal_cases()),
+        ] {
+            for (label, anchors, _, _) in cases {
+                let mut one_family = ChartPatterns::new(family);
+                let mut all = ChartPatterns::all();
+                for input in one_family.inputs() {
+                    if !input.id.starts_with("patterns[") {
+                        all.set_input(&input.id, input.value).unwrap();
+                    }
+                }
+                let bars = path(&anchors);
+                let together: Vec<_> = confirmed(&mut all, &bars)
+                    .into_iter()
+                    .filter(|f| family.kinds().contains(&f.kind))
+                    .collect();
+                assert_eq!(together, confirmed(&mut one_family, &bars), "{label}");
+            }
+        }
+
+        const RISING_WEDGE: [f64; 7] = [100.0, 110.0, 102.0, 114.0, 108.0, 113.0, 90.0];
+        let bars = path(&RISING_WEDGE);
+        let mut all = ChartPatterns::all();
+        let formations = confirmed(&mut all, &bars);
+        let signature = |formations: &[Formation]| -> Vec<_> {
+            formations
+                .iter()
+                .map(|f| (f.kind, f.direction.unwrap(), f.confirmed_at.unwrap()))
+                .collect()
+        };
+        // The later upper line moves 1.5 across bars 10..25, beyond the 1% flatness bound.
+        assert_eq!(
+            signature(&formations),
+            [
+                (RisingWedge, Bearish, 26),
+                (SymmetricalTriangle, Bearish, 28),
+                (DoubleTop, Bearish, 28)
+            ]
+        );
+        assert_eq!(
+            formations[0].anchors,
+            [(5, 110.0), (10, 102.0), (15, 114.0), (20, 108.0)]
+        );
+        let expected = [[(5, 110.0), (26, 118.4)], [(5, 99.0), (26, 111.6)]];
+        assert_eq!(formations[0].boundaries.len(), expected.len());
+        for (actual, expected) in formations[0].boundaries.iter().zip(expected) {
+            for (&(bar, price), (expected_bar, expected_price)) in actual.iter().zip(expected) {
+                assert_eq!(bar, expected_bar);
+                assert!((price - expected_price).abs() < 1e-9);
+            }
+        }
+        assert_eq!(all.plot_text(1, 26).as_deref(), Some("RW"));
+        assert_eq!(all.plot_tooltip(1, 26).as_deref(), Some("Rising Wedge"));
+        assert_eq!(all.values().value(1, 26), Some(bars[26].high));
+        assert_eq!(all.plot_text(1, 28).as_deref(), Some("STR\nDT"));
+        assert_eq!(
+            signature(&confirmed(
+                &mut ChartPatterns::all(),
+                &path(&mirror(&RISING_WEDGE))
+            )),
+            [
+                (FallingWedge, Bullish, 26),
+                (SymmetricalTriangle, Bullish, 28),
+                (DoubleBottom, Bullish, 28)
+            ]
+        );
+        // A parallel rising channel breaking down is no rising wedge.
+        assert!(
+            confirmed(
+                &mut ChartPatterns::all(),
+                &path(&[105.0, 110.0, 100.0, 113.0, 103.0, 106.0, 90.0])
+            )
+            .iter()
+            .all(|f| f.kind != RisingWedge)
+        );
+        // A narrowing flag's four pivots also make a falling wedge, reported only without the flag.
+        let narrowing = path(&[105.0, 100.0, 130.0, 122.0, 127.0, 120.0, 135.0]);
+        let kinds = |study: &mut ChartPatterns| -> Vec<_> {
+            confirmed(study, &narrowing)
+                .iter()
+                .map(|f| f.kind)
+                .collect()
+        };
+        assert_eq!(kinds(&mut ChartPatterns::all()), [BullFlag]);
+        assert_eq!(
+            kinds(&mut ChartPatterns::all().with_patterns(|label| label != "Bull Flag")),
+            [FallingWedge]
+        );
+        for family in PatternFamily::ALL {
+            assert!(
+                confirmed(&mut ChartPatterns::new(family), &bars)
+                    .iter()
+                    .all(|f| !matches!(f.kind, RisingWedge | FallingWedge))
+            );
+        }
+        let toggles: Vec<_> = all
+            .inputs()
+            .into_iter()
+            .filter(|input| input.id.starts_with("patterns["))
+            .collect();
+        assert_eq!(toggles.len(), 18);
+        for input in toggles {
+            assert_eq!(input.value, InputValue::Toggle(true));
+            let mut off = ChartPatterns::all();
+            off.set_input(&input.id, InputValue::Toggle(false)).unwrap();
+            let expected: Vec<_> = formations
+                .iter()
+                .filter(|f| f.kind.label() != input.label)
+                .cloned()
+                .collect();
+            assert_eq!(confirmed(&mut off, &bars), expected, "{}", input.label);
+        }
+
+        all.set_input("patterns[16]", InputValue::Toggle(false))
+            .unwrap();
+        all.set_input("tolerance", InputValue::Number(2.0)).unwrap();
+        let all = ConfiguredStudy::new(Box::new(all));
+        let mut restored = StudyTemplate::from_study(&all).create().unwrap();
+        assert_eq!(restored.name(), "All Chart Patterns");
+        assert_eq!(
+            StudyTemplate::from_study(restored.as_ref()).inputs,
+            StudyTemplate::from_study(&all).inputs
+        );
+        restored.calculate(&bars);
+        assert_eq!(restored.plot_text(1, 26), None);
+        assert_eq!(restored.plot_text(1, 28).as_deref(), Some("DT"));
+
+        let factory = IndicatorFactory::new();
+        for (name, extra) in [
+            ("Double Top", ["depth", "handle"]),
+            ("Bull Flag", ["touches", "pole"]),
+        ] {
+            let single = factory.create(name).unwrap();
+            assert_eq!(
+                single
+                    .inputs()
+                    .iter()
+                    .map(|input| input.id.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "strength",
+                    "min_length",
+                    "max_length",
+                    "tolerance",
+                    extra[0],
+                    extra[1]
+                ]
+            );
+            let single = ConfiguredStudy::new(single);
+            let mut restored = StudyTemplate::from_study(&single).create().unwrap();
+            assert_eq!(restored.name(), name);
+            assert_eq!(
+                StudyTemplate::from_study(restored.as_ref()).inputs,
+                StudyTemplate::from_study(&single).inputs
+            );
+            let (anchors, line, bar, text): (&[f64], _, _, _) = if name == "Double Top" {
+                (&DOUBLE_TOP, 1, 18, "DT")
+            } else {
+                (&BULL_FLAG, 0, 28, "BF")
+            };
+            restored.calculate(&path(anchors));
+            assert_eq!(restored.plot_text(line, bar).as_deref(), Some(text));
+        }
     }
 
     /// Replaying any prefix of the bars finds the confirmed formations the full history

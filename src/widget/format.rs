@@ -214,6 +214,20 @@ impl Chart {
         }
     }
 
+    /// Resolves local fields on the calendar that dates the bars. A skipped wall time opens at
+    /// the clock jump, a repeated one at its first occurrence; unrepresentable dates give `None`.
+    pub(super) fn local_date_instant(
+        &self,
+        date: chrono::NaiveDate,
+        time: Option<chrono::NaiveTime>,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        let local = date.and_time(time.unwrap_or(chrono::NaiveTime::MIN));
+        match Self::calendar_zone(self.label_timezone(|| self.time_label_seconds())) {
+            Some(zone) => crate::model::local_instant(zone, local),
+            None => crate::model::local_instant(chrono::Local, local),
+        }
+    }
+
     /// Dates and the axis marks read in [`label_timezone`](Self::label_timezone).
     pub(crate) fn build_time_formatter(&self) -> Box<dyn crate::scales::TimeFormatter> {
         self.time_formatter_in(self.label_timezone(|| self.time_label_seconds()))
@@ -224,10 +238,12 @@ impl Chart {
         &self,
         timezone: crate::scales::TimezoneMode,
     ) -> Box<dyn crate::scales::TimeFormatter> {
+        let time_scale = &self.chart_options.time_scale;
         let mut builder = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(self.chart_options.time_scale.seconds_visible)
-            .with_time_visible(self.chart_options.time_scale.time_visible)
+            .with_24_hour(time_scale.use_24_hour)
+            .with_seconds(time_scale.seconds_visible)
+            .with_time_visible(time_scale.time_visible)
+            .with_weekday_names(time_scale.weekday_names)
             .with_timezone(timezone);
         if let Some(locale) = &self.locale {
             builder = builder.with_locale(locale.clone());
@@ -242,9 +258,11 @@ impl Chart {
     }
 
     /// Names months and weekdays in time axis, crosshair, tooltip and forecast date labels in
-    /// `locale`'s language, such as `"de-DE"` (see
-    /// [`LocaleTimeFormatter`](crate::scales::LocaleTimeFormatter)).
-    /// `None` restores English names.
+    /// `locale`'s language: a language code such as `"de"`, alone or with a region such as
+    /// `"de-AT"`, in any letter case. A language alone uses its most common region, `"de"` as
+    /// `"de-DE"`; [`LocaleTimeFormatter::locale`](crate::scales::LocaleTimeFormatter::locale)
+    /// lists the accepted forms. `None` restores English names, which other forms and languages
+    /// without names also get.
     ///
     /// The names need the `locales` cargo feature, on by default; without it they stay English.
     pub fn set_locale(&mut self, locale: Option<String>) {
@@ -252,10 +270,12 @@ impl Chart {
     }
 
     /// Writes crosshair, tooltip and forecast dates with a `strftime` pattern, such as
-    /// `"%d.%m.%Y"`, followed by the clock for intraday bars. `None` restores the built-in dates,
-    /// which an invalid pattern also falls back to.
+    /// `"%d.%m.%Y"`, followed by the clock for intraday bars. `None` or an empty pattern restores
+    /// the built-in dates, which an invalid pattern also falls back to.
+    /// [`TimeScaleOptions::weekday_names`](crate::config::TimeScaleOptions::weekday_names) can
+    /// add the weekday to a pattern without one.
     pub fn set_date_format(&mut self, date_format: Option<String>) {
-        self.date_format = date_format;
+        self.date_format = date_format.filter(|pattern| !pattern.is_empty());
     }
 
     /// Formats time axis marks with [`TimeFormatter::format_tick`], whose default calls
@@ -265,10 +285,10 @@ impl Chart {
     /// `format_tick` receives the chart's locale in a
     /// [`TickMarkContext`](crate::scales::TickMarkContext) and can return `None` to use the
     /// built-in locale-aware text for that tick. Otherwise the
-    /// formatter replaces the built-in one, the locale and the date format. It receives
-    /// wall-clock times in the zone [`format_time`](Self::format_time) reads them in, and the
-    /// time scale's [`time_visible`](crate::config::TimeScaleOptions::time_visible) option
-    /// still applies.
+    /// formatter replaces the built-in one, the locale, date format, clock and weekday names.
+    /// It receives wall-clock times in the zone [`format_time`](Self::format_time) reads them
+    /// in, and the time scale's
+    /// [`time_visible`](crate::config::TimeScaleOptions::time_visible) option still applies.
     /// `None` restores the built-in formatter.
     ///
     /// [`TimeFormatter::format`]: crate::scales::TimeFormatter::format
@@ -379,6 +399,17 @@ impl Chart {
         true
     }
 
+    /// A series' saved display declaration, else the fraction chosen on its scale.
+    fn display_format(&self, id: super::SeriesId) -> Option<SeriesDisplayFormat> {
+        self.series_style(id)?.display_format.or_else(|| {
+            let fraction = self.series_price_scale(id)?.chosen_fraction()?;
+            Some(SeriesDisplayFormat {
+                kind: SeriesFormat::Fraction(fraction),
+                ..Default::default()
+            })
+        })
+    }
+
     pub(super) fn series_label_formatter(
         &self,
         id: super::SeriesId,
@@ -393,10 +424,15 @@ impl Chart {
                     .cloned()
                     .or_else(|| self.price_formatter.clone())
                     .or_else(|| {
+                        let format = self.display_format(id)?;
+                        // An apostrophe separates the fraction, so it groups no thousands there.
+                        let fraction = matches!(format.kind, SeriesFormat::Fraction(_));
                         Some(std::sync::Arc::new(DisplayFormatLabels {
-                            format: self.series_style(id)?.display_format?,
+                            format,
                             thousands_sep: self.config.thousands_sep.filter(|separator| {
-                                *separator != '.' && !separator.is_ascii_digit()
+                                *separator != '.'
+                                    && !separator.is_ascii_digit()
+                                    && !(fraction && *separator == '\'')
                             }),
                         }))
                     })
@@ -485,8 +521,7 @@ impl Chart {
         id: super::SeriesId,
         map: crate::scales::PriceMap,
     ) -> crate::scales::PriceMap {
-        self.series_style(self.series_axis_owner(id))
-            .and_then(|style| style.display_format)
+        self.display_format(self.series_axis_owner(id))
             .map_or(map, |format| map.with_display_format(format))
     }
 

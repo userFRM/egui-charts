@@ -181,8 +181,8 @@ impl Inbox {
 /// ```
 ///
 /// Pending bars are capped at 100,000 slots independently of raw trades. Overflow discards
-/// the oldest slots and reports `FeedError::InvalidData` on the next drain; the host reloads
-/// history to recover the missing bars.
+/// the oldest slots and asks the chart to load the history again, as
+/// [`Self::reload_history`] does.
 #[derive(Clone)]
 pub struct Sink {
     inbox: Arc<Inbox>,
@@ -538,6 +538,31 @@ impl Sink {
         self.update(|live| live.updates.symbols_changed = true);
     }
 
+    /// Asks the chart to discard this subscription's history and load it again when the feed
+    /// discovers missing or incorrect bars, such as after a stream gap it cannot fill. On its
+    /// next frame the chart ends this subscription, discards all pushes since its last read,
+    /// including those after this call, requests the latest history page and subscribes with a
+    /// new sink, as `Chart::reload_feed` does for the chart's own series. A study's history of
+    /// another symbol or interval and an `AlertFeed` reload the same way.
+    ///
+    /// Repeated calls before a read make one reload; calling on every new subscription causes
+    /// repeated reloads. A later [`Self::reset_replay`] before the read cancels this request
+    /// along with the data it discards. Ignored once the subscription ends.
+    ///
+    /// ```
+    /// use egui_charts::data::SinkReader;
+    /// use egui_charts::model::Timeframe;
+    ///
+    /// let (reader, sink) = SinkReader::new("ES", Timeframe::Min1, None);
+    /// sink.reload_history();
+    /// sink.reload_history();
+    /// assert!(reader.take().reload);
+    /// assert!(!reader.take().reload);
+    /// ```
+    pub fn reload_history(&self) {
+        self.update(|live| live.updates.reload = true);
+    }
+
     /// False once the subscription ended. Pushes are ignored from then on.
     pub fn is_active(&self) -> bool {
         self.inbox.state().subscriptions.contains_key(&self.id)
@@ -773,7 +798,8 @@ impl Live {
     fn bound_bars(&mut self) {
         while self.updates.bars.len() > MAX_PENDING_BARS.saturating_add(self.rebuilt_bars) {
             self.updates.bars.pop_first();
-            self.updates.dropped_bars += 1;
+            // The held bars now miss the evicted slot: the reader must load history again.
+            self.updates.reload = true;
         }
     }
 
@@ -791,7 +817,7 @@ impl Live {
     }
 
     /// See [`Sink::open_quiet_slots`]. Reports whether it opened any. Stops short of the bars
-    /// that may wait undrained, so that no slot is dropped and no loss is reported for one.
+    /// that may wait undrained, so that no slot is dropped and no reload is asked for one.
     fn open_quiet_slots(&mut self, now: DateTime<Utc>) -> bool {
         let (Some(close), Some(mut newest)) = (self.last_close, self.forming) else {
             return false;
@@ -990,7 +1016,7 @@ impl Live {
                 return true;
             }
             let columns = &mut self.updates.depth_columns;
-            if columns.len() == sampler.config.columns {
+            if columns.len() == sampler.config.page_columns() {
                 columns.pop_front();
             }
             columns.push_back(column);

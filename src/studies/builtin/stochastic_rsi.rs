@@ -76,11 +76,6 @@ impl StochasticRSI {
         }
     }
 
-    /// Create with default params (14, 14, 3, 3)
-    pub fn default_params() -> Self {
-        Self::new(14, 14, 3, 3)
-    }
-
     /// Set colors for %K and %D lines
     pub fn with_colors(mut self, k_color: Color32, d_color: Color32) -> Self {
         self.k_color = k_color;

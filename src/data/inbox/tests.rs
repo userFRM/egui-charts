@@ -354,9 +354,9 @@ fn count_bars_follow_accepted_trades_across_frames() {
     }
 }
 
-/// Hidden streams bound bars independently of raw fills and report every evicted slot.
+/// Hidden streams bound bars independently of raw fills and ask for a reload on eviction.
 #[test]
-fn undrained_bars_are_bounded_and_overflow_is_reported() {
+fn undrained_bars_are_bounded_and_overflow_asks_for_a_reload() {
     for pushed_bars in [false, true] {
         let inbox = Arc::new(Inbox::default());
         let sink = inbox.subscribe(
@@ -381,10 +381,15 @@ fn undrained_bars_are_bounded_and_overflow_is_reported() {
             updates.bars.first_key_value().unwrap().0,
             &(at(0, 0) + TimeDelta::nanoseconds(2))
         );
-        assert!(matches!(updates.error, Some(FeedError::InvalidData(_))));
-        assert_eq!(updates.rejected, 2);
+        assert!(updates.reload);
+        assert_eq!(
+            updates.error,
+            Some(FeedError::Network("another failure".into()))
+        );
+        assert_eq!(updates.rejected, 0);
         sink.push_tick(tick(at(0, 0) + TimeDelta::nanoseconds(100_003), 101.0, 1.0));
         let (_, next) = inbox.drain().updates.pop().unwrap();
+        assert!(!next.reload);
         assert_eq!(next.bars.len(), 1);
         assert_eq!(next.error, None);
         assert_eq!(next.rejected, 0);
@@ -769,6 +774,7 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
         rows: 2,
         ticks_per_row: 2,
         columns: 10,
+        retention: None,
         orders: None,
     };
     inbox.sample_depth(sink.id, Some(config));
@@ -820,6 +826,39 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
     assert!(
         updates.depth_columns.is_empty(),
         "new settings discard pending old rows"
+    );
+}
+
+/// A short retention saves tier memory without shrinking the queue of an undrawn chart.
+#[test]
+fn waiting_depth_columns_keep_600_under_a_retention() {
+    let inbox = Arc::new(Inbox::default());
+    let sink = inbox.subscribe("ES".into(), BarClock::new(Timeframe::Min1), 100, Some(0.1));
+    let config = DepthHistoryConfig::default().with_retention(Some(TimeDelta::minutes(15)));
+    assert_eq!(config.columns, 5);
+    inbox.sample_depth(sink.id, Some(config));
+    let level = |price| OrderBookLevel {
+        price,
+        size: 1.0,
+        order_cnt: None,
+    };
+    sink.push_depth_snapshot(
+        1,
+        OrderBook {
+            ts: at(0, 0),
+            symbol: "ES".into(),
+            bids: vec![level(0.1)],
+            asks: vec![level(0.2)],
+        },
+    );
+    for second in 1..=700 {
+        sink.advance_time(at(0, 0) + TimeDelta::seconds(second));
+    }
+    let (_, updates) = inbox.drain().updates.pop().unwrap();
+    assert_eq!(updates.depth_columns.len(), 600);
+    assert_eq!(
+        updates.depth_columns.front().unwrap().time,
+        at(0, 0) + TimeDelta::seconds(100)
     );
 }
 

@@ -85,6 +85,8 @@ pub struct FloatingSelectionToolbar {
     menu: DrawingContextMenu,
     /// Whether object is locked
     is_locked: bool,
+    /// Whether the user can edit the object
+    user_edit_enabled: bool,
     /// Whether object is visible
     is_visible: bool,
     /// Whether to offer an alert on the object
@@ -117,6 +119,7 @@ impl FloatingSelectionToolbar {
             colour_drag: false,
             menu: DrawingContextMenu::new(),
             is_locked: false,
+            user_edit_enabled: true,
             is_visible: true,
             alert_available: false,
             last_rect: Rect::NOTHING,
@@ -162,6 +165,12 @@ impl FloatingSelectionToolbar {
     /// Set locked state
     pub fn set_locked(&mut self, locked: bool) {
         self.is_locked = locked;
+    }
+
+    /// Set whether the user can edit the object; off disables its colour, width and style
+    /// controls, Reverse position, Lock and Delete, as the drawing menu does.
+    pub fn set_user_edit_enabled(&mut self, enabled: bool) {
+        self.user_edit_enabled = enabled;
     }
 
     /// Set visibility state
@@ -251,25 +260,32 @@ impl FloatingSelectionToolbar {
             ));
         }
         self.set_locked(drawing.locked);
+        self.set_user_edit_enabled(drawing.user_edit_enabled);
+        let (editable, unprotected) = (drawing.accepts_user_edits(), drawing.user_edit_enabled);
         self.set_object_visible(drawing.visible);
-        // A sticker's art and the ghost feed's candles keep their own colours.
-        self.set_colors(
-            if matches!(
-                drawing.tool_type,
-                DrawingToolType::Sticker | DrawingToolType::GhostFeed
-            ) {
-                Vec::new()
-            } else {
-                vec![ColorSlot {
-                    label: if drawing.tool_type.is_text_annotation() {
-                        "Text color"
-                    } else {
-                        "Line color"
-                    },
-                    color: drawing.color32(),
-                }]
-            },
-        );
+        // Without a colour slot, the fill is the first slot.
+        let fill_slot = usize::from(drawing.tool_type.supports_color());
+        self.set_colors(if drawing.tool_type.supports_color() {
+            vec![ColorSlot {
+                // A pin, a table and text with a colour of its own paint their text separately.
+                label: if drawing.text_color.is_none()
+                    && matches!(
+                        drawing.tool_type,
+                        DrawingToolType::TextLabel
+                            | DrawingToolType::AnchoredText
+                            | DrawingToolType::Note
+                            | DrawingToolType::Callout
+                            | DrawingToolType::FlagNote
+                    ) {
+                    "Text color"
+                } else {
+                    "Line color"
+                },
+                color: drawing.color32(),
+            }]
+        } else {
+            Vec::new()
+        });
         if drawing.tool_type.supports_fill() {
             self.color_slots.push(ColorSlot {
                 label: "Fill color",
@@ -291,14 +307,14 @@ impl FloatingSelectionToolbar {
         }
         let action = self.show_with_shortcuts(ui, chart.shortcuts())?;
         match action {
-            FloatingToolbarAction::ChangeColor(slot, color) => {
+            FloatingToolbarAction::ChangeColor(slot, color) if editable => {
                 let down = ui.input(|i| i.pointer.any_down());
                 chart.user_action(|chart| {
                     let edit = |drawing: &mut crate::drawings::Drawing| {
-                        if slot == 0 {
-                            drawing.recolor(color.to_srgba_unmultiplied());
-                        } else {
+                        if slot == fill_slot {
                             drawing.fill_color = Some(color.to_srgba_unmultiplied());
+                        } else {
+                            drawing.recolor(color.to_srgba_unmultiplied());
                         }
                     };
                     let _ = if down {
@@ -309,21 +325,25 @@ impl FloatingSelectionToolbar {
                 });
                 self.colour_drag = down;
             }
-            FloatingToolbarAction::ChangeWidth(width) => chart.user_action(|chart| {
+            FloatingToolbarAction::ChangeWidth(width) if editable => chart.user_action(|chart| {
                 let _ = chart
                     .drawings_mut()
                     .edit_drawing(id, |d| d.stroke_width = width);
             }),
-            FloatingToolbarAction::ChangeStyle(style) => chart.user_action(|chart| {
+            FloatingToolbarAction::ChangeStyle(style) if editable => chart.user_action(|chart| {
                 let _ = chart
                     .drawings_mut()
                     .edit_drawing(id, |d| d.line_style = style);
             }),
             FloatingToolbarAction::OpenSettings => return Some(DrawingContextMenuAction::Edit),
             FloatingToolbarAction::Duplicate => return Some(DrawingContextMenuAction::Clone),
-            FloatingToolbarAction::ToggleLock => return Some(DrawingContextMenuAction::Lock),
+            FloatingToolbarAction::ToggleLock if unprotected => {
+                return Some(DrawingContextMenuAction::Lock);
+            }
             FloatingToolbarAction::ToggleVisibility => return Some(DrawingContextMenuAction::Hide),
-            FloatingToolbarAction::Delete => return Some(DrawingContextMenuAction::Delete),
+            FloatingToolbarAction::Delete if unprotected => {
+                return Some(DrawingContextMenuAction::Delete);
+            }
             FloatingToolbarAction::AddAlert => {
                 return self
                     .menu
@@ -331,11 +351,14 @@ impl FloatingSelectionToolbar {
                     .clone()
                     .map(|alert| DrawingContextMenuAction::AddAlert(Box::new(alert)));
             }
-            FloatingToolbarAction::DrawingMenu(DrawingContextMenuAction::ReversePosition) => {
+            FloatingToolbarAction::DrawingMenu(DrawingContextMenuAction::ReversePosition)
+                if editable =>
+            {
                 let _ = chart.reverse_position_drawing(id);
             }
             FloatingToolbarAction::DrawingMenu(action)
-                if !action.apply_interval_visibility(chart, id) =>
+                if action != DrawingContextMenuAction::ReversePosition
+                    && !action.apply_interval_visibility(chart, id) =>
             {
                 return Some(action);
             }
@@ -405,7 +428,7 @@ impl FloatingSelectionToolbar {
                                 self.position += drag.drag_delta();
                             }
                             Self::render_separator(ui);
-                            ui.add_enabled_ui(!self.is_locked, |ui| {
+                            ui.add_enabled_ui(!self.is_locked && self.user_edit_enabled, |ui| {
                                 ui.horizontal(|ui| {
                                     for (idx, slot) in self.color_slots.iter_mut().enumerate() {
                                         let picker = &mut self.pickers[idx];
@@ -469,7 +492,7 @@ impl FloatingSelectionToolbar {
                                 && IconButton::new(&icons::ROTATE_CCW)
                                     .size(ButtonSize::SM)
                                     .tooltip("Reverse position")
-                                    .enabled(!self.is_locked)
+                                    .enabled(!self.is_locked && self.user_edit_enabled)
                                     .show(ui)
                                     .clicked()
                             {
@@ -493,13 +516,14 @@ impl FloatingSelectionToolbar {
                             })
                             .size(ButtonSize::SM)
                             .tooltip(if self.is_locked { "Unlock" } else { "Lock" })
+                            .enabled(self.user_edit_enabled)
                             .show(ui)
                             .clicked()
                             {
                                 action = Some(FloatingToolbarAction::ToggleLock);
                             }
                             if ui
-                                .add_enabled_ui(!self.is_locked, |ui| {
+                                .add_enabled_ui(!self.is_locked && self.user_edit_enabled, |ui| {
                                     IconButton::new(&icons::TRASH)
                                         .size(ButtonSize::SM)
                                         .tooltip("Delete")
@@ -521,6 +545,7 @@ impl FloatingSelectionToolbar {
                                     self.is_locked,
                                     self.is_visible,
                                 );
+                                self.menu.user_edit_enabled = self.user_edit_enabled;
                                 self.menu.open(
                                     more.rect.left_bottom(),
                                     self.menu.drawing_id.unwrap_or_default(),
@@ -720,11 +745,12 @@ mod tests {
     /// and the alert when it is available.
     #[test]
     fn action_buttons_have_accessible_names() {
-        for locked in [false, true] {
+        for (locked, user_edit) in [(false, true), (true, true), (false, false)] {
             let ctx = egui::Context::default();
             let mut toolbar = FloatingSelectionToolbar::new();
             toolbar.show_at(Pos2::new(100.0, 100.0));
             toolbar.set_locked(locked);
+            toolbar.set_user_edit_enabled(user_edit);
             toolbar.set_object_visible(!locked);
             toolbar.set_alert_available(locked);
             let mut frame = |tab| {
@@ -758,8 +784,8 @@ mod tests {
             for label in ["Settings"]
                 .into_iter()
                 .chain(alert)
-                .chain([if locked { "Unlock" } else { "Lock" }])
-                .chain((!locked).then_some("Delete"))
+                .chain(user_edit.then_some(if locked { "Unlock" } else { "Lock" }))
+                .chain((!locked && user_edit).then_some("Delete"))
                 .chain(["More"])
             {
                 let mut output = frame(true);
@@ -775,19 +801,24 @@ mod tests {
         }
     }
 
-    /// The colour of a text annotation is its text's; a label on a line does not make the line's
-    /// colour a text colour, although the colour paints both. A sticker and a ghost feed keep
-    /// their own colours. Width and style are offered apart, each where the tool draws it.
+    /// The colour of a text annotation is its text's where it paints the text; a note's own
+    /// white text, a pin's text and a table's cells do not take it. A label on a line does not
+    /// make the line's colour a text colour, although the colour paints both. A sticker, a ghost
+    /// feed and a pitchfork keep their own colours, and a post card's first slot is its fill.
+    /// Width and style are offered apart, each where the tool draws it.
     #[test]
     fn colour_slot_names_what_the_colour_paints() {
         use crate::drawings::{Drawing, DrawingToolType as Tool};
         for (tool, label, offers) in [
             (Tool::TrendLine, Some("Line color"), (true, true)),
             (Tool::TextLabel, Some("Text color"), (false, false)),
+            (Tool::Note, Some("Line color"), (false, false)),
+            (Tool::AnchoredNote, Some("Line color"), (false, false)),
+            (Tool::Table, Some("Line color"), (false, false)),
             (Tool::ArrowMarkUp, Some("Line color"), (false, false)),
             (Tool::ArrowMarker, Some("Line color"), (false, false)),
-            (Tool::Pitchfork, Some("Line color"), (true, false)),
-            (Tool::Tweet, Some("Text color"), (false, true)),
+            (Tool::Pitchfork, None, (true, false)),
+            (Tool::Tweet, Some("Fill color"), (false, true)),
             (Tool::Sticker, None, (false, false)),
             (Tool::GhostFeed, None, (false, false)),
         ] {
@@ -816,50 +847,76 @@ mod tests {
         }
     }
 
-    /// The colour slot recolours the whole badge of a price label: the border that shares the
-    /// colour follows it, where it would otherwise stay behind as an outline in the old colour.
+    /// The first colour slot edits what it names. A price label's border follows its colour;
+    /// a post card's first slot fills the card, leaving its unused colour alone.
     #[test]
-    fn colour_slot_recolours_a_price_label_with_its_border() {
+    fn first_colour_slot_edits_what_it_names() {
         use crate::drawings::{Drawing, DrawingToolType};
         use crate::ui_kit::color_picker::{MAIN_COLORS, tests::click};
-        let swatch = MAIN_COLORS[3];
-        let ctx = egui::Context::default();
-        ctx.global_style_mut(|style| style.animation_time = 0.0);
-        let mut chart = Chart::new(crate::model::BarData::new());
-        let mut label = Drawing::new(7, DrawingToolType::PriceLabel);
-        // A border kept in the label's colour, as an older save holds it.
-        label.border_color = Some(label.color);
-        label.completed = true;
-        label.points = vec![Pos2::new(100.0, 100.0)];
-        chart.drawings_mut().drawings = vec![label];
-        chart.drawings_mut().select(7);
-        let mut toolbar = FloatingSelectionToolbar::new();
-        let mut frame = |toolbar: &mut FloatingSelectionToolbar, events| {
-            let output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
-                    events,
-                    ..Default::default()
-                },
-                |ui| {
-                    toolbar.show_and_apply(ui, &mut chart);
-                },
-            );
-            let well = output.shapes.iter().find_map(|s| match &s.shape {
-                egui::Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
-                _ => None,
-            });
-            output.drop_without_applying_deltas();
-            well
-        };
-        frame(&mut toolbar, vec![]);
-        toolbar.pickers[0].is_open = true;
-        frame(&mut toolbar, vec![]);
-        let pos = frame(&mut toolbar, vec![]).expect("the palette shows the swatch");
-        frame(&mut toolbar, click(pos));
-        let label = &chart.drawings().drawings[0];
-        let green = swatch.to_srgba_unmultiplied();
-        assert_eq!((label.color, label.border_color), (green, Some(green)));
+        for (tool, user_edit) in [
+            (DrawingToolType::PriceLabel, true),
+            (DrawingToolType::PriceLabel, false),
+            (DrawingToolType::Tweet, true),
+        ] {
+            let swatch = MAIN_COLORS[3];
+            let ctx = egui::Context::default();
+            ctx.global_style_mut(|style| style.animation_time = 0.0);
+            let mut chart = Chart::new(crate::model::BarData::new());
+            let mut label = Drawing::new(7, tool);
+            // A border kept in the label's colour, as an older save holds it.
+            if tool == DrawingToolType::PriceLabel {
+                label.border_color = Some(label.color);
+            }
+            label.user_edit_enabled = user_edit;
+            let original = label.color;
+            label.completed = true;
+            label.points = vec![Pos2::new(100.0, 100.0)];
+            chart.drawings_mut().drawings = vec![label];
+            chart.drawings_mut().select(7);
+            let mut toolbar = FloatingSelectionToolbar::new();
+            let mut frame = |toolbar: &mut FloatingSelectionToolbar, events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        toolbar.show_and_apply(ui, &mut chart);
+                    },
+                );
+                let well = output.shapes.iter().find_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
+                    _ => None,
+                });
+                output.drop_without_applying_deltas();
+                well
+            };
+            frame(&mut toolbar, vec![]);
+            toolbar.pickers[0].is_open = true;
+            frame(&mut toolbar, vec![]);
+            let pos = frame(&mut toolbar, vec![]);
+            if user_edit {
+                assert!(pos.is_some(), "the palette shows the swatch");
+            }
+            if let Some(pos) = pos {
+                frame(&mut toolbar, click(pos));
+            }
+            let label = &chart.drawings().drawings[0];
+            let green = if user_edit {
+                swatch.to_srgba_unmultiplied()
+            } else {
+                original
+            };
+            if tool == DrawingToolType::Tweet {
+                assert_eq!((label.color, label.fill_color), (original, Some(green)));
+            } else {
+                assert_eq!((label.color, label.border_color), (green, Some(green)));
+            }
+        }
     }
 
     /// Floating surfaces and group rules follow each preset's popup and separator visuals.
