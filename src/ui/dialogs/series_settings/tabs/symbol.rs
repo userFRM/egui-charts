@@ -523,6 +523,11 @@ impl SymbolTab {
                 ui.add(egui::DragValue::new(&mut params.footprint_stack).range(1..=1000))
                     .labelled_by(label.id);
                 ui.end_row();
+                Self::switch(
+                    ui,
+                    "Zones end only when broken",
+                    &mut params.footprint_zones_until_broken,
+                );
             }
             if params.footprint_stacked_imbalances
                 || params.footprint_naked_poc

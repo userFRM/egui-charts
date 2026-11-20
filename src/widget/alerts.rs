@@ -655,12 +655,18 @@ mod tests {
                 vec![offered(0, "Bullish"), offered(1, "Bearish")],
                 2,
             ),
-            // A single candlestick pattern marks only its own side.
+            // A single candlestick pattern marks its own side on output 0, with one legend value.
             (
                 create("Engulfing - Bullish"),
                 vec![offered(0, "Bullish")],
-                3,
+                1,
             ),
+            (
+                create("Engulfing - Bearish"),
+                vec![offered(0, "Bearish")],
+                1,
+            ),
+            (create("Doji"), vec![offered(0, "Neutral")], 1),
             (
                 create("All Candlestick Patterns"),
                 vec![
