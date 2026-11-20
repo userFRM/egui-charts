@@ -31,10 +31,12 @@ pub fn render_trade_profiles(
     render_profiles(painter, mapping, bars, profiles, step, tick, config, None);
 }
 
-/// Draws the session volume profile chart: each session fills its bar span inside a faint box,
-/// with up volume stacked before down volume, a POC across the session, and the value area shown
-/// by row colour, by default the same colours at a higher opacity. The levels, their colours
-/// and optional annotations follow the supplied settings.
+/// Draws the session volume profile chart: each session's histogram grows from the left or right
+/// edge of its session over the chosen share of its width, inside a faint box the settings can
+/// hide or recolour, with up volume stacked before down volume, a POC across the session, and the
+/// value area shown by row colour, by default the same colours at a higher opacity. Rows tall
+/// enough for the text can show their volume. The levels, their colours and optional annotations
+/// follow the supplied settings.
 /// A session whose profile is not complete is labelled "Partial executions".
 pub(crate) fn render_session_volume_profiles(
     painter: &Painter,
@@ -90,6 +92,10 @@ pub(crate) struct SessionColors {
     pub(crate) volume: [Color32; 2],
     /// Up and down volume inside the value area.
     pub(crate) value_area_volume: [Color32; 2],
+    /// The box behind each session.
+    pub(crate) session_box: Color32,
+    /// The row values.
+    pub(crate) values: Color32,
 }
 
 impl SessionColors {
@@ -114,6 +120,17 @@ impl SessionColors {
                 settings.value_area_up_color,
                 settings.value_area_down_color,
             ),
+            session_box: settings.session_box_color.unwrap_or_else(|| {
+                theme
+                    .chart
+                    .bg
+                    .lerp_to_gamma(theme.chart.axis_text, 0.035)
+                    .lerp_to_gamma(
+                        DESIGN_TOKENS.semantic.brand.accent,
+                        if theme.dark { 0.065 } else { 0.035 },
+                    )
+            }),
+            values: settings.values_color.unwrap_or(theme.chart.axis_text),
         }
     }
 }
@@ -125,6 +142,24 @@ fn row_opacity(inside: bool, dark: bool) -> f32 {
         (true, false) => 0.82,
         (false, true) => 0.32,
         (false, false) => 0.24,
+    }
+}
+
+/// The share of its session's width a histogram's longest row spans: 0.01 to 1, NaN as 1.
+fn histogram_share(width: f64) -> f32 {
+    if width.is_nan() {
+        1.0
+    } else {
+        width.clamp(0.01, 1.0) as f32
+    }
+}
+
+/// The footprint text matching the bar a session row draws in `mode`.
+fn value_mode(mode: FootprintMode) -> FootprintMode {
+    match mode {
+        FootprintMode::BidAsk | FootprintMode::Ladder => FootprintMode::BidAsk,
+        FootprintMode::Volume | FootprintMode::Delta | FootprintMode::DeltaVolume => mode,
+        _ => FootprintMode::Delta,
     }
 }
 
@@ -149,6 +184,11 @@ fn render_profiles(
         .as_ref()
         .map_or(config.text_color, |colors| colors.poc);
     let pixel = 1.0 / painter.pixels_per_point();
+    let values = settings.filter(|(s, _)| s.values).map(|_| {
+        let font = FontId::monospace(crate::styles::typography::TINY);
+        let height = painter.ctx().fonts_mut(|fonts| fonts.row_height(&font));
+        (font, height)
+    });
     let mut extensions = Vec::new();
     for profile in profiles {
         let step = step * profile.group as f64;
@@ -210,19 +250,35 @@ fn render_profiles(
                 }
             }
         }
-        let x = mapping.idx_to_x(first) - mapping.bar_spacing * 0.45;
-        if mapping.idx_to_x(end - 1) < mapping.rect.left() || x > mapping.rect.right() {
+        let start = mapping.idx_to_x(first) - mapping.bar_spacing * 0.45;
+        let stop = mapping.idx_to_x(end - 1) + mapping.bar_spacing * 0.5;
+        if mapping.idx_to_x(end - 1) < mapping.rect.left() || start > mapping.rect.right() {
             continue;
         }
-        let x = x.max(mapping.rect.left());
-        let session_width = (mapping.idx_to_x(end - 1) + mapping.bar_spacing * 0.5 - x).max(1.0);
-        let width = if session {
-            session_width
-        } else {
-            ((end - first) as f32 * mapping.bar_spacing * 0.7)
-                .clamp(1.0, 160.0)
-                .min(session_width)
+        let x = start.max(mapping.rect.left());
+        let session_width = (stop - x).max(1.0);
+        // Fit each histogram to the visible part of its session, so both of its edges stay in view.
+        let (anchor, toward, width) = match settings {
+            Some((s, _)) if s.right_aligned => {
+                let anchor = stop.min(mapping.rect.right());
+                (
+                    anchor,
+                    -1.0,
+                    (anchor - x).max(1.0) * histogram_share(s.width),
+                )
+            }
+            Some((s, _)) => (x, 1.0, session_width * histogram_share(s.width)),
+            None => (
+                x,
+                1.0,
+                ((end - first) as f32 * mapping.bar_spacing * 0.7)
+                    .clamp(1.0, 160.0)
+                    .min(session_width),
+            ),
         };
+        let hist_left = if toward < 0.0 { anchor - width } else { anchor };
+        // Levels, labels and the box span the session; a trade profile has only its column.
+        let span = if session { session_width } else { width };
         let max = profile
             .volume
             .levels
@@ -232,7 +288,9 @@ fn render_profiles(
         if max <= 0.0 {
             continue;
         }
-        if session
+        if let Some((s, _)) = settings
+            && s.session_box
+            && let Some(colors) = &colors
             && let (Some((&low, _)), Some((&high, _))) = (
                 profile.volume.levels.first_key_value(),
                 profile.volume.levels.last_key_value(),
@@ -241,18 +299,10 @@ fn render_profiles(
             let y0 = mapping.price_to_y(low as f64 * step - tick * 0.5);
             let y1 = mapping.price_to_y((high as f64 + 1.0) * step - tick * 0.5);
             if y0.is_finite() && y1.is_finite() {
-                let fill = theme
-                    .chart
-                    .bg
-                    .lerp_to_gamma(theme.chart.axis_text, 0.035)
-                    .lerp_to_gamma(
-                        DESIGN_TOKENS.semantic.brand.accent,
-                        if theme.dark { 0.065 } else { 0.035 },
-                    );
                 painter.rect_filled(
-                    Rect::from_min_max(pos2(x, y0.min(y1)), pos2(x + width, y0.max(y1))),
+                    Rect::from_min_max(pos2(x, y0.min(y1)), pos2(x + session_width, y0.max(y1))),
                     0.0,
-                    fill,
+                    colors.session_box,
                 );
             }
         }
@@ -280,7 +330,7 @@ fn render_profiles(
                 None => [config.ask_color, config.bid_color].map(|c| c.gamma_multiply(alpha)),
             };
             let neutral = config.neutral_color.gamma_multiply(alpha);
-            let mut left = x;
+            let mut left = anchor;
             let mode = config
                 .modes
                 .first()
@@ -295,28 +345,29 @@ fn render_profiles(
                 }
                 FootprintMode::Volume => vec![(row.volume(), neutral)],
                 _ => {
-                    left += width * 0.5;
+                    left = hist_left + width * 0.5;
                     vec![(
                         row.delta().abs(),
                         if row.delta() >= 0.0 { ask } else { bid },
                     )]
                 }
             };
+            let delta = matches!(mode, FootprintMode::Delta | FootprintMode::DeltaVolume);
+            let centred = !matches!(
+                mode,
+                FootprintMode::BidAsk | FootprintMode::Ladder | FootprintMode::Volume
+            );
+            // Stacks grow away from their anchor; delta keeps its sign about the middle.
+            let dir = if !centred {
+                toward
+            } else if delta && row.delta() < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
             for (volume, color) in segments {
-                let w = width
-                    * (volume / max) as f32
-                    * if matches!(mode, FootprintMode::Delta | FootprintMode::DeltaVolume) {
-                        0.5
-                    } else {
-                        1.0
-                    };
-                let right = if row.delta() < 0.0
-                    && matches!(mode, FootprintMode::Delta | FootprintMode::DeltaVolume)
-                {
-                    left - w
-                } else {
-                    left + w
-                };
+                let w = width * (volume / max) as f32 * if delta { 0.5 } else { 1.0 };
+                let right = left + dir * w;
                 painter.rect_filled(
                     Rect::from_min_max(pos2(left.min(right), top), pos2(left.max(right), bottom)),
                     0.0,
@@ -327,15 +378,34 @@ fn render_profiles(
             if config.show_poc && poc == Some(row.level) {
                 let y = mapping.price_to_y((row.level as f64 + 0.5) * step - tick * 0.5);
                 painter.line_segment(
-                    [pos2(x, y), pos2(x + width, y)],
+                    [pos2(x, y), pos2(x + span, y)],
                     Stroke::new(DESIGN_TOKENS.stroke.hairline, poc_color),
                 );
+            }
+            if let Some((font, height)) = &values
+                && let Some(colors) = &colors
+                && (y0 - y1).abs() >= *height
+            {
+                let text = super::footprint::cell_text(value_mode(mode), row, true, true);
+                let (lo, hi) = (x + 2.0, (x + session_width).min(mapping.rect.right()) - 2.0);
+                let galley = painter.layout_no_wrap(text, font.clone(), colors.values);
+                let size = galley.size();
+                if size.x > 0.0 && size.x <= hi - lo {
+                    // Beside the outer end of the bar, pulled inside the visible session box.
+                    let tx = if dir < 0.0 {
+                        left - 3.0 - size.x
+                    } else {
+                        left + 3.0
+                    };
+                    let pos = pos2(tx.clamp(lo, hi - size.x), (y0 + y1) * 0.5 - size.y * 0.5);
+                    painter.galley(pos, galley, colors.values);
+                }
             }
         }
         // A range that starts before the first complete footprint bar leaves those bars out.
         // No narrower profile has room for the note, so its text is never laid out.
         if !profile.complete
-            && width >= 60.0
+            && span >= 60.0
             && let Some(&high) = profile.volume.levels.keys().next_back()
         {
             let y = mapping.price_to_y((high as f64 + 1.0) * step - tick * 0.5);
@@ -345,7 +415,7 @@ fn render_profiles(
                 theme.chart.axis_text_secondary,
             );
             let size = galley.size();
-            if y.is_finite() && size.x <= width {
+            if y.is_finite() && size.x <= span {
                 painter.galley(pos2(x, y - size.y), galley, theme.chart.axis_text_secondary);
             }
         }
@@ -361,20 +431,24 @@ fn render_profiles(
                         FontId::monospace(crate::styles::typography::TINY),
                         config.text_color,
                     );
-                    if session && galley.size().x + 6.0 > width {
+                    if session && galley.size().x + 6.0 > span {
                         continue;
                     }
-                    let anchor = if session {
+                    // Session node labels sit opposite the edge the histogram grows from.
+                    let right_placed = session && toward < 0.0;
+                    let align = if session && !right_placed {
                         Align2::RIGHT_CENTER
                     } else {
                         Align2::LEFT_CENTER
                     };
-                    let pos = pos2(
-                        x + width + if session { -3.0 } else { 3.0 },
-                        (y0 + y1) * 0.5,
-                    );
+                    let label_x = if right_placed {
+                        x + 3.0
+                    } else {
+                        x + span + if session { -3.0 } else { 3.0 }
+                    };
+                    let pos = pos2(label_x, (y0 + y1) * 0.5);
                     painter.galley(
-                        anchor.anchor_size(pos, galley.size()).min,
+                        align.anchor_size(pos, galley.size()).min,
                         galley,
                         config.text_color,
                     );
@@ -391,7 +465,7 @@ fn render_profiles(
                 if let Some(stroke) = stroke
                     && y.is_finite()
                 {
-                    painter.line_segment([pos2(x, y), pos2(x + width, y)], stroke);
+                    painter.line_segment([pos2(x, y), pos2(x + span, y)], stroke);
                 }
             }
         }
@@ -439,7 +513,7 @@ fn render_developing(
     points: impl Iterator<Item = (chrono::DateTime<chrono::Utc>, f64)>,
     stroke: Stroke,
 ) {
-    let mut previous = None;
+    let mut previous: Option<egui::Pos2> = None;
     let mut points = points.peekable();
     while let Some((time, price)) = points.next() {
         // Keep the last point before retained candles, so the trace enters at the right level.
@@ -453,7 +527,9 @@ fn render_developing(
             continue;
         }
         if let Some(old) = previous {
-            painter.line_segment([old, point], stroke);
+            let corner = pos2(point.x, old.y);
+            painter.line_segment([old, corner], stroke);
+            painter.line_segment([corner, point], stroke);
         }
         previous = Some(point);
     }
@@ -468,6 +544,337 @@ mod tests {
     use crate::studies::{TradeProfileRanges, trade_profiles};
     use chrono::TimeDelta;
     use egui::{Shape, vec2};
+
+    /// The four-bar session spans x 200 to 279. At half width a histogram spans 39.5 points from
+    /// the edge it grows from and a row with half the top volume 19.75, while the box keeps the
+    /// whole session. Past the viewport, a right-placed histogram grows from the viewport's edge.
+    #[test]
+    fn session_histograms_follow_their_placement_width_and_box() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (price, size, side) in [(100.0, 4.0, OrderSide::Buy), (101.0, 2.0, OrderSide::Sell)] {
+            flow.push(&Tick::new(time, price, size, Some(side)))
+                .unwrap();
+        }
+        let bars: Vec<_> = (0..4)
+            .map(|i| {
+                Bar::new(
+                    time + TimeDelta::minutes(i),
+                    100.0,
+                    101.0,
+                    100.0,
+                    101.0,
+                    0.0,
+                )
+            })
+            .collect();
+        let ranges = TradeProfileRanges::new(vec![time..time + TimeDelta::minutes(4)]).unwrap();
+        let profiles = trade_profiles(&flow, &ranges);
+        let cases = [
+            (
+                serde_json::json!({}),
+                0.0,
+                true,
+                [(200.0, 279.0), (200.0, 239.5)],
+            ),
+            (
+                serde_json::json!({"right_aligned": true, "width": 0.5}),
+                0.0,
+                true,
+                [(239.5, 279.0), (259.25, 279.0)],
+            ),
+            (
+                serde_json::json!({"width": 0.5}),
+                0.0,
+                true,
+                [(200.0, 239.5), (200.0, 219.75)],
+            ),
+            // Delta grows about the histogram's centre, with its sign in either placement.
+            (
+                serde_json::json!({"right_aligned": true, "width": 0.5, "mode": "Delta"}),
+                0.0,
+                true,
+                [(259.25, 279.0), (249.375, 259.25)],
+            ),
+            (
+                serde_json::json!({"session_box": false}),
+                0.0,
+                false,
+                [(200.0, 279.0), (200.0, 239.5)],
+            ),
+            (
+                serde_json::json!({"session_box_color": [40, 50, 60, 128]}),
+                0.0,
+                true,
+                [(200.0, 279.0), (200.0, 239.5)],
+            ),
+            // Stop=319 is beyond the viewport; the anchor stays at 280, giving width=20.
+            (
+                serde_json::json!({"right_aligned": true, "width": 0.5}),
+                -2.0,
+                true,
+                [(260.0, 280.0), (270.0, 280.0)],
+            ),
+            // Start=20 is before the viewport; the longest row stops at its edge, x=40.
+            (
+                serde_json::json!({"right_aligned": true}),
+                9.0,
+                true,
+                [(40.0, 99.0), (69.5, 99.0)],
+            ),
+            (
+                serde_json::json!({"width": 2.0}),
+                0.0,
+                true,
+                [(200.0, 279.0), (200.0, 239.5)],
+            ),
+        ];
+        for (saved, offset, boxed, expected) in cases {
+            let settings = serde_json::from_value(saved.clone()).unwrap();
+            let mapping = ChartMapping::new(
+                Rect::from_min_size(pos2(40.0, 20.0), vec2(240.0, 160.0)),
+                20.0,
+                0,
+                3,
+                offset,
+                PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(99.0, 104.0),
+                    20.0,
+                    180.0,
+                    false,
+                ),
+            );
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(320.0, 200.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    render_session_volume_profiles(
+                        ui.painter(),
+                        &mapping,
+                        &bars,
+                        &profiles,
+                        (&flow).into(),
+                        &settings,
+                    )
+                },
+            );
+            output.textures_delta.clear();
+            let rects: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Rect(r) if r.rect.width() > 0.0 => Some((r.rect, r.fill)),
+                    _ => None,
+                })
+                .collect();
+            // The box and the POC span the session, whatever the histogram's share.
+            let (left, right) = if offset == 0.0 {
+                (200.0, 279.0)
+            } else if offset > 0.0 {
+                (40.0, 99.0)
+            } else {
+                (240.0, 319.0)
+            };
+            let boxes: Vec<_> = rects.iter().filter(|(r, _)| r.height() == 64.0).collect();
+            assert_eq!(boxes.len(), usize::from(boxed), "{saved}, offset {offset}");
+            if let Some((rect, fill)) = boxes.first() {
+                assert_eq!(
+                    *rect,
+                    Rect::from_min_max(pos2(left, 100.0), pos2(right, 164.0)),
+                    "{saved}, offset {offset}"
+                );
+                if saved.get("session_box_color").is_some() {
+                    assert_eq!(*fill, Color32::from_rgba_premultiplied(40, 50, 60, 128));
+                }
+            }
+            let rows: Vec<_> = rects
+                .iter()
+                .filter(|(r, _)| r.height() == 31.0)
+                .map(|(r, _)| (r.left(), r.top(), r.right(), r.bottom()))
+                .collect();
+            assert_eq!(
+                rows,
+                [
+                    (expected[0].0, 132.0, expected[0].1, 163.0),
+                    (expected[1].0, 100.0, expected[1].1, 131.0)
+                ],
+                "{saved}, offset {offset}"
+            );
+            let lines: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::LineSegment { points, .. } => Some((points[0].x, points[1].x)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(lines, [(left, right)], "{saved}, offset {offset}");
+        }
+    }
+
+    /// The rows hold bid 500 with ask 1,500 and bid 1,000 alone: totals 2K and 1K, deltas +1K and
+    /// -1K. Their text fits rows 32 points tall but not 1.6, beside each bar inside the box.
+    #[test]
+    fn session_profile_values_follow_mode_rows_and_colour() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (price, size, side) in [
+            (100.0, 1500.0, OrderSide::Buy),
+            (100.0, 500.0, OrderSide::Sell),
+            (101.0, 1000.0, OrderSide::Sell),
+        ] {
+            flow.push(&Tick::new(time, price, size, Some(side)))
+                .unwrap();
+        }
+        let bars: Vec<_> = (0..4)
+            .map(|i| {
+                Bar::new(
+                    time + TimeDelta::minutes(i),
+                    100.0,
+                    101.0,
+                    100.0,
+                    101.0,
+                    0.0,
+                )
+            })
+            .collect();
+        let ranges = TradeProfileRanges::new(vec![time..time + TimeDelta::minutes(4)]).unwrap();
+        let profiles = trade_profiles(&flow, &ranges);
+        let cases: [(serde_json::Value, bool, &[&str]); 9] = [
+            (serde_json::json!({}), false, &[]),
+            (
+                serde_json::json!({"values": true}),
+                false,
+                &["500 × 1.5K", "1K × 0"],
+            ),
+            (
+                serde_json::json!({"values": true, "values_color": [0, 0, 200, 200], "mode": "Volume"}),
+                false,
+                &["2K", "1K"],
+            ),
+            (
+                serde_json::json!({"values": true, "values_color": [0, 0, 200, 200], "mode": "Delta"}),
+                false,
+                &["+1K", "-1K"],
+            ),
+            (serde_json::json!({"values": true}), true, &[]),
+            (
+                serde_json::json!({"values": true, "right_aligned": true}),
+                false,
+                &["500 × 1.5K", "1K × 0"],
+            ),
+            (
+                serde_json::json!({"values": true, "mode": "DeltaVolume"}),
+                false,
+                &["+1K / 2K", "-1K / 1K"],
+            ),
+            (
+                serde_json::json!({"values": true, "mode": "Ladder"}),
+                false,
+                &["500 × 1.5K", "1K × 0"],
+            ),
+            (
+                serde_json::json!({"values": true, "mode": "Trades"}),
+                false,
+                &["+1K", "-1K"],
+            ),
+        ];
+        for (saved, short, expected) in cases {
+            let settings = serde_json::from_value(saved.clone()).unwrap();
+            for theme in [Theme::dark(), Theme::light()] {
+                let mapping = ChartMapping::new(
+                    Rect::from_min_size(pos2(40.0, 20.0), vec2(240.0, 160.0)),
+                    40.0,
+                    0,
+                    3,
+                    0.0,
+                    PriceMap::new(
+                        PriceTransform::default(),
+                        if short {
+                            PriceRange::new(50.0, 150.0)
+                        } else {
+                            PriceRange::new(99.0, 104.0)
+                        },
+                        20.0,
+                        180.0,
+                        false,
+                    ),
+                );
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(320.0, 200.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        render_session_volume_profiles(
+                            ui.painter(),
+                            &mapping,
+                            &bars,
+                            &profiles,
+                            (&flow).into(),
+                            &settings,
+                        )
+                    },
+                );
+                output.textures_delta.clear();
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::Text(t)
+                            if !matches!(t.galley.text(), "Partial executions" | "HVN" | "LVN") =>
+                        {
+                            Some(t)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    texts.iter().map(|t| t.galley.text()).collect::<Vec<_>>(),
+                    expected,
+                    "{saved}, short {short}, dark {}",
+                    theme.dark
+                );
+                let color = if saved.get("values_color").is_some() {
+                    Color32::from_rgba_premultiplied(0, 0, 200, 200)
+                } else {
+                    theme.chart.axis_text
+                };
+                for t in &texts {
+                    assert_eq!(t.galley.job.sections[0].format.color, color, "{saved}");
+                    assert!(
+                        t.pos.x >= 123.0 && t.pos.x + t.galley.size().x <= 277.001,
+                        "{saved}: {t:?}"
+                    );
+                }
+                if !short
+                    && saved.get("values") == Some(&serde_json::json!(true))
+                    && saved.get("mode").is_none()
+                {
+                    let right = saved.get("right_aligned").is_some();
+                    let (first, second) = if right {
+                        (texts[0].pos.x, texts[1].pos.x + texts[1].galley.size().x)
+                    } else {
+                        (texts[0].pos.x + texts[0].galley.size().x, texts[1].pos.x)
+                    };
+                    assert!(
+                        (first - if right { 123.0 } else { 277.0 }).abs() < 1e-3,
+                        "{saved}"
+                    );
+                    assert!(
+                        (second - if right { 197.0 } else { 203.0 }).abs() < 1e-3,
+                        "{saved}"
+                    );
+                }
+            }
+        }
+    }
 
     /// A session can start before the viewport while its last bars remain visible. Its full
     /// distribution stays visible, preserving volume proportions within its visible bars.
@@ -1116,6 +1523,14 @@ mod tests {
                 for (saved, developing, extend_poc, extend_vah, extend_val, share) in [
                     (r#"{}"#, false, false, false, false, 0.7),
                     (
+                        r#"{"developing_poc":true}"#,
+                        false,
+                        false,
+                        false,
+                        false,
+                        0.7,
+                    ),
+                    (
                         r#"{"developing_value_area":true}"#,
                         true,
                         false,
@@ -1143,7 +1558,7 @@ mod tests {
                         0.7,
                     ),
                     (
-                        r#"{"developing_value_area":true,"extend_poc":true,"extend_vah":true,"extend_val":true,"poc_color":[200,0,0,255],"value_area_high_color":[0,200,0,255],"value_area_low_color":[0,0,100,128]}"#,
+                        r#"{"developing_poc":true,"developing_value_area":true,"extend_poc":true,"extend_vah":true,"extend_val":true,"poc_color":[200,0,0,255],"value_area_high_color":[0,200,0,255],"value_area_low_color":[0,0,100,128]}"#,
                         true,
                         true,
                         true,
@@ -1173,6 +1588,11 @@ mod tests {
                             lines,
                             paint(&rebuilt, count, saved, offset, inverted, mode).1
                         );
+                        assert!(
+                            lines.iter().all(|(points, _)| points[0].x == points[1].x
+                                || points[0].y == points[1].y),
+                            "levels hold until the next bar: {saved}, {mode:?}"
+                        );
                         let contains = |a, b, color| {
                             lines
                                 .iter()
@@ -1191,21 +1611,23 @@ mod tests {
                                     "POC joins its extension at the same price on {mode:?}"
                                 );
                             }
-                            for (first, last) in [
-                                (100.5, 99.5),
+                            for (first, last, color, enabled) in [
+                                (101.0, 100.0, poc_color, colors.developing_poc),
+                                (100.5, 99.5, area_color, developing),
                                 (
                                     if share == 0.7 { 102.5 } else { 101.5 },
                                     if share == 0.7 { 101.5 } else { 100.5 },
+                                    area_color,
+                                    developing,
                                 ),
                             ] {
+                                let old = pos2(map.idx_to_x(0), map.price_to_y(first * step));
+                                let next = pos2(map.idx_to_x(1), map.price_to_y(last * step));
+                                let corner = pos2(next.x, old.y);
                                 assert_eq!(
-                                    contains(
-                                        pos2(map.idx_to_x(0), map.price_to_y(first * step)),
-                                        pos2(map.idx_to_x(1), map.price_to_y(last * step)),
-                                        area_color
-                                    ),
-                                    developing,
-                                    "developing: {saved}"
+                                    contains(old, corner, color) && contains(corner, next, color),
+                                    enabled,
+                                    "developing step: {saved}, {mode:?}"
                                 );
                             }
                         }

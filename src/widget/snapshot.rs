@@ -106,8 +106,9 @@ pub struct SavedPane {
 
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
 /// the host's feed. Take one with [`Chart::snapshot`] and apply it with [`Chart::restore`].
-/// The trading and alert settings and futures data choices of the settings dialog belong to
-/// the host and are not part of it.
+/// The trading and alert settings of the settings dialog belong to the host and are not part of
+/// it. Its settings hold the futures data choices, which [`Chart::restore`] records on the chart;
+/// the host reloads its history for them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ChartSnapshot {
@@ -2598,6 +2599,46 @@ mod tests {
             labels(&restored),
             ["2024-03-13 14:30", "2024-03-13", "14:30"]
         );
+    }
+
+    /// The futures data choices applied with the settings read back and survive layouts;
+    /// layouts saved without them restore settlement closes without back adjustment.
+    #[test]
+    fn layouts_keep_the_futures_data_choices() {
+        use crate::widget::settings::ChartSettingsState;
+        use crate::widget::{ChartLayoutMode, SavedLayout, test_frames::chart};
+        let choices = |chart: &Chart| {
+            let settings = ChartSettingsState::from_chart(chart);
+            (settings.back_adjust_futures, settings.settlement_as_close)
+        };
+        let mut source = chart(&[100.0], &[110.0]);
+        let mut settings = ChartSettingsState::from_chart(&source);
+        settings.back_adjust_futures = true;
+        settings.settlement_as_close = false;
+        settings.apply_to_chart(&mut source).unwrap();
+        assert_eq!(choices(&source), (true, false));
+        let json = SavedLayout::new(ChartLayoutMode::Single, vec![source.snapshot().unwrap()])
+            .to_json()
+            .unwrap();
+        let mut restored = chart(&[100.0], &[110.0]);
+        restored
+            .restore(&SavedLayout::from_json(&json).unwrap().charts[0])
+            .unwrap();
+        assert_eq!(choices(&restored), (true, false));
+
+        // Saved before the chart kept them: the defaults replace the restoring chart's choices.
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let saved = older
+            .pointer_mut("/charts/0/settings")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        for choice in ["back_adjust_futures", "settlement_as_close"] {
+            saved.remove(choice).expect(choice);
+        }
+        let older = SavedLayout::from_json(&older.to_string()).unwrap();
+        restored.restore(&older.charts[0]).unwrap();
+        assert_eq!(choices(&restored), (false, true));
     }
 
     /// An HLC area layout or template saved before the style held each line and fill restores as
