@@ -173,16 +173,7 @@ impl AxisMenus {
                 ),
             ];
             let overnight = chart.overnight_hours()
-                || chart
-                    .instrument()
-                    .and_then(|instrument| instrument.session.as_ref())
-                    .is_some_and(|session| {
-                        !session.overnight_windows.is_empty()
-                            || session
-                                .overrides
-                                .iter()
-                                .any(|date| !date.overnight_windows.is_empty())
-                    });
+                || crate::ui::timeframe_toolbar::state::has_overnight_windows(chart.instrument());
             entries.push(MenuEntry::Separator);
             entries.push(row(
                 "Extended hours",
