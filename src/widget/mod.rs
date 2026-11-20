@@ -167,7 +167,8 @@ pub use sync::VisibleTimeRange;
 #[cfg(feature = "drawings")]
 pub(crate) mod tool_interaction;
 
-pub use keyboard::{ShortcutMap, ShortcutRequest};
+pub use crate::config::shortcut_map::ShortcutMap;
+pub use keyboard::ShortcutRequest;
 pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 
 /// The main bars' revision, length and last high, low and close, and the pending sizes, that
