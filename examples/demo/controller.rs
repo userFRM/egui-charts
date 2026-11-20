@@ -915,8 +915,6 @@ impl DemoApp {
             annotation_editor: false,
             annotation_series: SeriesId::MAIN,
         });
-        app.drawing_toolbar
-            .set_control_visible(egui_charts::ui::Control::Trading, false);
         app.settings_dialog
             .templates
             .set_storage(app.storage.clone());
@@ -2489,6 +2487,10 @@ impl DemoApp {
             });
         self.drawing_toolbar.state.hide_indicators = self.chart.indicators_hidden();
         self.drawing_toolbar.state.hide_drawings = self.chart.drawings().is_hidden();
+        // The trading rows show while a broker is connected; their checks follow the Trading tab.
+        self.drawing_toolbar
+            .set_control_visible(egui_charts::ui::Control::Trading, self.trading.has_broker());
+        self.trading.sync_hide_menu(&mut self.drawing_toolbar.state);
         let drawings = &self.chart.drawings().drawings;
         self.drawing_toolbar.state.lock_all = drawings.iter().any(|d| d.user_edit_enabled)
             && drawings
@@ -2534,7 +2536,12 @@ impl DemoApp {
                 .any(|drawing| drawing.locked && drawing.user_edit_enabled),
             &mut self.drawing_toolbar.state,
         );
+        self.trading
+            .apply_hide_action(&action, &self.drawing_toolbar.state);
         match action {
+            DrawingToolbarAction::HideAllPoss
+            | DrawingToolbarAction::HideAllOrders
+            | DrawingToolbarAction::HideAllExecutions => return,
             DrawingToolbarAction::SetToolbarVisible(visible) => {
                 self.drawing_toolbar.state.preferences.hidden = !visible;
                 return;
@@ -2706,8 +2713,6 @@ impl DemoApp {
             | DrawingToolbarAction::ManageTemplates
             | DrawingToolbarAction::SaveTemplate { .. }
             | DrawingToolbarAction::LoadTemplate { .. }
-            | DrawingToolbarAction::HideAllPoss
-            | DrawingToolbarAction::HideAllOrders
             | DrawingToolbarAction::RemoveAllIndicators
             | DrawingToolbarAction::RemoveAllStudies
             | DrawingToolbarAction::HideAllIndicators
@@ -4896,6 +4901,129 @@ mod tests {
                 toggle(&mut app, &restored_ctx);
             }
         }
+    }
+
+    /// The real Hide menu follows the broker and settings, and each row changes only its layer.
+    #[test]
+    fn hide_menu_rows_toggle_trading_layers() {
+        use egui_charts::model::{OrderId, OrderRequest, OrderSide, OrderType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        let size = egui::vec2(1440.0, 900.0);
+        let menu = |app: &mut DemoApp| {
+            app.drawing_toolbar.state.expanded_category = Some("Hide".into());
+            egui::Popup::open_id(&ctx, egui::Id::unique(("drawing_toolbar_flyout", "Hide")));
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = ui_frame(&ctx, size, vec![], |ui| {
+                    app.show_drawing_toolbar(ui, app.theme.chart.bg)
+                });
+            }
+            texts
+        };
+        let choose = |app: &mut DemoApp, label: &str| {
+            let texts = menu(app);
+            let point = texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .expect("hide menu row")
+                .1
+                .center();
+            ui_click(&ctx, size, point, |ui| {
+                app.show_drawing_toolbar(ui, app.theme.chart.bg)
+            });
+        };
+        let texts = menu(&mut app);
+        for name in ["Hide positions", "Hide orders", "Hide executions"] {
+            assert!(!texts.iter().any(|(text, _)| text == name));
+        }
+        egui::Popup::close_all(&ctx);
+        let symbol = app.chart.symbol().to_owned();
+        let last = app.chart.bars(SeriesId::MAIN).last().unwrap().close;
+        let limit = last * 0.99;
+        app.chart
+            .price_scale_mut()
+            .set_range(last * 0.97, last * 1.03);
+        app.paper.set_price(&symbol, last);
+        app.trading.set_service(app.paper.clone());
+        app.trading.poll(&ctx, &mut app.toasts);
+        app.trading.display.instant_orders = true;
+        app.trading.trade(symbol.clone(), OrderSide::Buy);
+        app.trading.poll(&ctx, &mut app.toasts);
+        let (_answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
+        egui_charts::services::Broker::place(
+            &*app.paper,
+            OrderRequest::new(&symbol, OrderSide::Buy, 1.0, OrderType::Limit(limit)),
+            reply,
+        );
+        app.trading.poll(&ctx, &mut app.toasts);
+        // Settle the pane mapping before checking the rendered labels.
+        for _ in 0..3 {
+            ui_frame(&ctx, size, vec![], |ui| {
+                app.chart.show(ui);
+                app.trading.show(ui, &mut app.chart);
+            });
+        }
+        for (label, expected) in [
+            (None, (true, true, true)),
+            (Some("Hide positions"), (false, true, true)),
+            (Some("Hide orders"), (false, false, true)),
+            (Some("Hide executions"), (false, false, false)),
+            (Some("Hide positions"), (true, false, false)),
+            (Some("Hide all"), (false, false, false)),
+            (Some("Hide all"), (true, true, true)),
+        ] {
+            if let Some(label) = label {
+                choose(&mut app, label);
+            }
+            let texts = ui_frame(&ctx, size, vec![], |ui| {
+                app.chart.show(ui);
+                app.trading.show(ui, &mut app.chart);
+            });
+            let display = &app.trading.display;
+            assert_eq!(
+                (
+                    display.show_positions,
+                    display.show_orders,
+                    display.show_executions
+                ),
+                expected,
+                "{label:?}"
+            );
+            let mapping = app.chart.get_chart_mapping();
+            let has_label = |caption: &str, price| {
+                texts.iter().any(|(text, rect)| {
+                    text == caption
+                        && mapping.rect.contains(rect.center())
+                        && (rect.center().y - mapping.price_to_y(price)).abs() < 2.0
+                })
+            };
+            assert_eq!(has_label("1", last), expected.0, "position: {label:?}");
+            assert_eq!(has_label("Limit", limit), expected.1, "order: {label:?}");
+            assert_eq!(
+                texts.iter().any(|(text, _)| text == "Buy 1"),
+                expected.2,
+                "execution: {label:?}"
+            );
+            if label == Some("Hide all") {
+                assert_eq!(app.chart.drawings().is_hidden(), !expected.0);
+            }
+        }
+        let mut state = app.chart_settings_state();
+        state.trading.show_orders = false;
+        app.apply_chart_settings(state);
+        menu(&mut app);
+        assert!(app.drawing_toolbar.state.hide_orders);
+        app.trading.disconnect();
+        let texts = menu(&mut app);
+        assert!(!texts.iter().any(|(text, _)| text == "Hide orders"));
+        assert!(!app.trading.display.show_orders);
+        app.trading.set_service(app.paper.clone());
+        menu(&mut app);
+        assert!(app.drawing_toolbar.state.hide_orders);
     }
 
     /// The toolbar's real flyout toggles studies in both directions, including after undo.
