@@ -33,6 +33,11 @@ pub struct DrawingProps {
     pub save_as_default: bool,
     /// Primary color
     pub color: Color32,
+    /// The text colour last picked under Color in the Style tab, for a Text or Anchored text with
+    /// a text colour of its own. While it matches the edited text colour, applying gives its hue
+    /// to every selected drawing, as a Color pick does on other tools. Properties assembled by
+    /// hand leave it `None`.
+    pub color_row_text_pick: Option<[u8; 4]>,
     /// Line width (1-10)
     pub line_width: f32,
     /// Line style
@@ -63,6 +68,7 @@ impl Default for DrawingProps {
             coordinates: CoordinatesState::default(),
             save_as_default: false,
             color: crate::theme::Theme::default().ui.accent,
+            color_row_text_pick: None,
             line_width: 1.0,
             line_style: LineStyle::Solid,
             fill_color: None,
@@ -232,11 +238,21 @@ impl DrawingProps {
             })
         });
         let [r, g, b, a] = self.color_rgba();
-        let [tr, tg, tb, _] = target.color;
-        // Without tool settings only the paint colour is held, and it reads back as another hue
-        // at each opacity: the hue was edited unless one RGB paints both it and the target's.
-        let hue_edited = [r, g, b] != [tr, tg, tb]
-            && (self.tool_settings.is_some() || !self.keeps_hue_of(target.color32()));
+        // Only a recorded Color-row pick propagates text colour through the whole selection.
+        let text_pick = self
+            .tool_settings
+            .as_ref()
+            .and_then(|template| template.settings.text_color_override())
+            .zip(target.text_color_override())
+            .filter(|(picked, _)| self.color_row_text_pick == Some(*picked));
+        let hue_edited = if let Some((picked, shown)) = text_pick {
+            picked[..3] != shown[..3]
+        } else {
+            // Without tool settings only the paint colour is held, and it reads back as another
+            // hue at each opacity: the hue was edited unless one RGB paints both colours.
+            [r, g, b] != target.color[..3]
+                && (self.tool_settings.is_some() || !self.keeps_hue_of(target.color32()))
+        };
         let mut edits = Vec::new();
         for mut drawing in chart
             .drawings()
@@ -259,10 +275,23 @@ impl DrawingProps {
             // The dialog opened with the target's values: one that differs from them was edited,
             // and only edited values are written, so each drawing keeps the rest of its own.
             if hue_edited {
-                drawing.recolor([r, g, b, drawing.color[3]]);
+                let [.., opacity] = drawing.text_color_override().unwrap_or(drawing.color);
+                drawing.recolor([r, g, b, opacity]);
             }
             if a != target.color[3] {
                 drawing.color[3] = a;
+                if drawing.text_color_override().is_some() {
+                    drawing.text_color = drawing.text_color.map(|[r, g, b, _]| [r, g, b, a]);
+                }
+            }
+            if let Some((picked, shown)) = text_pick
+                && picked[3] != shown[3]
+                && matches!(
+                    drawing.tool_type,
+                    DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+                )
+            {
+                drawing.text_color.as_mut().unwrap_or(&mut drawing.color)[3] = picked[3];
             }
             if self.line_width != target.stroke_width {
                 drawing.stroke_width = self.line_width;
@@ -309,11 +338,14 @@ impl DrawingProps {
                         })+
                     };
                 }
+                // Colour-row picks already keep each text opacity above unless it was edited.
+                if text_pick.is_none() {
+                    edited!(text_color);
+                }
                 edited!(
                     font_weight,
                     italic,
                     glyph_angle,
-                    text_color,
                     background,
                     border,
                     border_color,
@@ -1421,6 +1453,7 @@ mod tests {
                             .to_vec(),
                         show_background: true,
                         background_opacity: 75,
+                        extend_lines: true,
                     })
                 },
             ),

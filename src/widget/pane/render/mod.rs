@@ -583,7 +583,7 @@ impl Chart {
                 config.show_values = self.config.show_indicator_last_val;
                 config.inputs = match study {
                     Some(idx) if self.config.show_indicator_inputs => {
-                        self.study_inputs[idx].clone()
+                        self.study_caption(idx).to_owned()
                     }
                     _ => String::new(),
                 };
@@ -1068,8 +1068,13 @@ impl Chart {
                                 .min(chart_rect.bottom()),
                         ),
                     );
+                    let toggle_id = ui.scope_id().with((key, "toggle"));
+                    // A maximized pane is drawn alone and expanded: its header has nothing to collapse.
                     let toggle = ui
-                        .interact(header, ui.scope_id().with((key, "toggle")), Sense::click())
+                        .add_enabled_ui(maximized.is_none(), |ui| {
+                            ui.interact(header, toggle_id, Sense::click())
+                        })
+                        .inner
                         .on_hover_text(l10n::text(
                             ui.ctx(),
                             if collapsed {
