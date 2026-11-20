@@ -112,6 +112,10 @@ impl Indicator for ParabolicSAR {
         }
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &str {
         "PSAR"
     }
