@@ -105,9 +105,9 @@ Its market status and shading distinguish it from pre-market and post-market act
 selects all hours, including extended hours. History and live requests carry both
 `extended_hours` and `overnight_hours`; hosts supply data for that choice.
 The time scale toolbar reads the chart's choice with
-[`SessionType::from_chart`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/timeframe_toolbar/state/enum.SessionType.html#method.from_chart).
+[`SessionType::from_chart`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/timeframe_toolbar/enum.SessionType.html#method.from_chart).
 After showing the toolbar, call
-[`TimeframeToolbar::show_session_menu`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/timeframe_toolbar/toolbar/struct.TimeframeToolbar.html#method.show_session_menu)
+[`TimeframeToolbar::show_session_menu`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/timeframe_toolbar/struct.TimeframeToolbar.html#method.show_session_menu)
 each frame, setting `session_menu_open` on `OpenSessionMenu`, to offer regular and
 extended hours, plus overnight hours where supported or already selected. A choice
 applies as one undo step and reloads history. Instruments without session hours

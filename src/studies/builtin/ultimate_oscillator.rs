@@ -58,11 +58,6 @@ impl UltimateOscillator {
         }
     }
 
-    /// Create with default params (7, 14, 28)
-    pub fn default_params() -> Self {
-        Self::new(7, 14, 28)
-    }
-
     /// Set the line color
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
