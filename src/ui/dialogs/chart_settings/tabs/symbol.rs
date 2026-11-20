@@ -1663,6 +1663,7 @@ mod tests {
                 "Keep host values",
                 "Fixed volume default",
                 "Expiry on",
+                "Zones end only when broken",
             ] {
                 let mut seeded = seeded.clone();
                 if edit == "Fixed volume default" {
@@ -1670,6 +1671,9 @@ mod tests {
                 }
                 if edit == "Expiry on" {
                     seeded.footprint_extend_bars = None;
+                }
+                if edit == "Zones end only when broken" {
+                    seeded.footprint_stacked_imbalances = true;
                 }
                 if edit == "Keep host values" {
                     seeded.footprint_intensity = FootprintIntensity::Volume(-1.0);
@@ -1747,6 +1751,18 @@ mod tests {
                         harness.get_by_label("Annotations").scroll_to_me();
                         harness.run();
                         harness.get_by_label("Annotations").click();
+                    }
+                    "Zones end only when broken" => {
+                        harness.get_by_label("Annotations").scroll_to_me();
+                        harness.run();
+                        harness.get_by_label("Annotations").click();
+                        harness.run();
+                        harness
+                            .get_by_role_and_label(Role::CheckBox, edit)
+                            .scroll_to_me();
+                        harness.run();
+                        harness.get_by_role_and_label(Role::CheckBox, edit).click();
+                        expected.footprint_zones_until_broken = true;
                     }
                     "Expiry value" | "Expiry off" | "Expiry on" => {
                         harness.get_by_label("Annotations").scroll_to_me();

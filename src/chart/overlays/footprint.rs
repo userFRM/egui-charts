@@ -2493,6 +2493,49 @@ mod tests {
                 .studies
                 .is_none()
         );
+
+        // The chart type's persistence setting reaches the cached annotations: a buy stack
+        // at 100.25..100.75 is rejected by the next bar, which trades inside and closes at 100.75.
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for (price, size, side) in [
+            (100.0, 1.0, OrderSide::Sell),
+            (100.25, 1.0, OrderSide::Sell),
+            (100.5, 1.0, OrderSide::Sell),
+            (100.25, 12.0, OrderSide::Buy),
+            (100.5, 9.0, OrderSide::Buy),
+            (100.75, 15.0, OrderSide::Buy),
+        ] {
+            flow.push(&Tick::new(time, price, size, Some(side)))
+                .unwrap();
+        }
+        let next = time + chrono::TimeDelta::minutes(1);
+        for (price, side) in [(100.5, OrderSide::Sell), (100.75, OrderSide::Buy)] {
+            flow.push(&Tick::new(next, price, 1.0, Some(side))).unwrap();
+        }
+        let bars = [
+            Bar::new(time, 100.0, 100.75, 100.0, 100.75, 39.0),
+            Bar::new(next, 100.5, 100.75, 100.5, 100.75, 2.0),
+        ];
+        for until_broken in [true, false] {
+            let params = ChartTypeParams {
+                footprint_stacked_imbalances: true,
+                footprint_zones_until_broken: until_broken,
+                ..Default::default()
+            };
+            let config = FootprintConfig::from_chart_params(&params, [Color32::WHITE; 4], 1);
+            let studies = cached_annotations(&ctx, &annotation_mapping(), &bars, &flow, &config);
+            let zones: Vec<_> = studies
+                .iter()
+                .filter(|s| s.start == time && s.kind == FootprintStudyKind::StackedAsk)
+                .map(|s| (s.low, s.high, s.end, s.state, s.rejections.clone()))
+                .collect();
+            let expected = if until_broken {
+                (401, 403, None, FootprintStudyState::Rejected(1), vec![next])
+            } else {
+                (401, 403, Some(next), FootprintStudyState::Revisited, vec![])
+            };
+            assert_eq!(zones, [expected], "zones until broken: {until_broken}");
+        }
     }
 
     /// Volumes fall into equal quarters of their side's range, whatever the other side traded, and
