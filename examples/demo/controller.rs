@@ -4737,6 +4737,81 @@ mod tests {
         );
     }
 
+    /// The gap above the account panel resizes it, preserves the chosen height across both
+    /// size toggles, and stops before hiding either the chart or the account header.
+    #[test]
+    fn account_panel_edge_drag_resizes_restores_and_clamps_the_height() {
+        use eframe::App;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.connect_paper();
+        let size = egui::vec2(1440.0, 900.0);
+        let frame = |app: &mut DemoApp, events| {
+            ui_frame(&ctx, size, events, |ui| {
+                app.ui(ui, &mut eframe::Frame::_new_kittest())
+            })
+        };
+        let positions_y = |texts: &[(String, egui::Rect)]| {
+            texts
+                .iter()
+                .find(|(text, rect)| text == "Positions" && rect.top() > 100.0)
+                .expect("account Positions tab")
+                .1
+                .top()
+        };
+        let drag = |app: &mut DemoApp, from: f32, to: f32| {
+            let from = egui::pos2(700.0, from);
+            let to = egui::pos2(700.0, to);
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(app, vec![egui::Event::PointerMoved(from)]);
+            frame(app, vec![button(from, true)]);
+            frame(app, vec![egui::Event::PointerMoved(from.lerp(to, 0.5))]);
+            frame(app, vec![egui::Event::PointerMoved(to)]);
+            frame(app, vec![button(to, false)]);
+            frame(app, vec![])
+        };
+        for _ in 0..3 {
+            frame(&mut app, vec![]);
+        }
+        let before = positions_y(&frame(&mut app, vec![]));
+        // At 320 points high, the middle of the 4 point gap is y = 582.
+        let moved = positions_y(&drag(&mut app, 582.0, 432.0));
+        assert_eq!(before - moved, 150.0);
+        assert_eq!(app.account_panel_height, 470.0);
+
+        for state in [AccountPanelSize::Minimized, AccountPanelSize::Maximized] {
+            app.account_panel = state;
+            frame(&mut app, vec![]);
+            frame(&mut app, vec![]);
+            app.account_panel = AccountPanelSize::Normal;
+            frame(&mut app, vec![]);
+            assert_eq!(positions_y(&frame(&mut app, vec![])), moved, "{state:?}");
+        }
+
+        let upper = size.y - app.top_toolbar.config.height - 4.0 - 96.0;
+        let high = positions_y(&drag(&mut app, 432.0, 0.0));
+        assert_eq!(app.account_panel_height, upper);
+        assert_eq!(before - high, upper - 320.0);
+        let texts = drag(&mut app, size.y + 2.0 - upper, 899.0);
+        assert_eq!(app.account_panel_height, 42.0);
+        let header = texts
+            .iter()
+            .find(|(text, _)| text == "Paper Trading")
+            .expect("account header remains visible")
+            .1;
+        assert!(header.top() >= size.y - 42.0 && header.bottom() <= size.y);
+    }
+
     /// Bulk removal waits for a lock decision, saves only remembered decisions, and restores
     /// the exact drawings and study ids together in one undo step without removing price series.
     #[test]
