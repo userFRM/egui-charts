@@ -76,7 +76,7 @@ pub(crate) use events::Listener;
 pub use events::{Events, EventsReader};
 pub use marks::{Marks, MarksPage, MarksRequest};
 pub use notifications::{Notification, NotificationTarget, Notifications};
-pub use paper::{PaperAccount, SavedPaperAccount};
+pub use paper::{PaperAccount, ReplayAccountSettings, SavedPaperAccount};
 pub use posts::Posts;
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
