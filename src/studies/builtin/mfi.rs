@@ -7,13 +7,16 @@
 //! - MFI > 80: Overbought (potential reversal down)
 //! - MFI < 20: Oversold (potential reversal up)
 //! - Divergence between MFI and price can signal trend changes
-//! - The pane opens on a 0 to 100 scale with guides at 80 and 20 and the band between them filled
+//! - The pane opens on a 0 to 100 scale with guides at 80 and 20, a faint dashed middle guide
+//!   at 50 and the band between 80 and 20 filled
 //!
 //! # Calculation
 //! Raw Money Flow = |Typical Price| * Volume, assigned to positive or negative flow by
 //! the change in typical price; an unchanged typical price contributes to neither.
 //! MFI = 100 * Positive Money Flow / (Positive Money Flow + Negative Money Flow).
 //! A window with no flow gives 50, only positive flow gives 100 and only negative flow gives 0.
+//! The first bar has no earlier typical price, so its flow enters both sums. The first value
+//! is on bar `length - 1`.
 //!
 //! # Example
 //! ```
@@ -72,7 +75,7 @@ impl MoneyFlowIndex {
     /// The values over `data`, every bar of which has finite inputs.
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let mut values = IndicatorValues::new();
-        if data.len() < self.period.saturating_add(1) {
+        if data.len() < self.period {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
             }
@@ -88,8 +91,8 @@ impl MoneyFlowIndex {
             .collect();
 
         // Determine positive/negative money flow
-        let mut positive_flows = vec![0.0];
-        let mut negative_flows = vec![0.0];
+        let mut positive_flows = vec![raw_money_flows[0]];
+        let mut negative_flows = vec![raw_money_flows[0]];
 
         for i in 1..data.len() {
             if typical_prices[i] > typical_prices[i - 1] {
@@ -106,7 +109,7 @@ impl MoneyFlowIndex {
 
         // Calculate MFI for each bar
         for i in 0..data.len() {
-            if i < self.period {
+            if i + 1 < self.period {
                 values.push(IndicatorValue::None);
             } else {
                 let start = i + 1 - self.period;
@@ -186,6 +189,11 @@ impl Indicator for MoneyFlowIndex {
         }
     }
 
+    /// The band between the outer band guides, whatever the middle guide's value.
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        Some([0, 1])
+    }
+
     fn level_fill_color(&self) -> Color32 {
         Color32::from_rgba_unmultiplied(self.color.r(), self.color.g(), self.color.b(), 26)
     }
@@ -196,6 +204,7 @@ impl Indicator for MoneyFlowIndex {
             levels: vec![
                 (80.0, palette::MUTED, "Overbought"),
                 (20.0, palette::MUTED, "Oversold"),
+                (50.0, palette::MUTED.gamma_multiply_u8(128), "Middle Band"),
             ],
             fill_between_levels: true,
             ..Default::default()
@@ -229,15 +238,15 @@ mod tests {
 
     #[test]
     fn endpoints_and_scale_invariance() {
-        // Period 2 sums the flows of the last two changes. With unit volume,
-        // [1, 2, 1, 3] gives 100 * 2/3 then 100 * 3/4.
+        // Period 2 counts the first raw flow on both sides. With unit volume,
+        // [1, 2, 1, 3] gives 100 * 3/4, 100 * 2/3, then 100 * 3/4.
         for (closes, volume, expected) in [
-            ([1.0, 2.0, 3.0, 4.0], 0.0, [50.0, 50.0]),
-            ([5.0; 4], 700.0, [50.0, 50.0]),
-            ([1.0, 2.0, 3.0, 4.0], 1.0, [100.0, 100.0]),
-            ([4.0, 3.0, 2.0, 1.0], 1.0, [0.0, 0.0]),
-            ([1.0, 2.0, 1.0, 3.0], 1.0, [200.0 / 3.0, 75.0]),
-            ([-4.0, -2.0, -3.0, -1.0], 1.0, [40.0, 25.0]),
+            ([1.0, 2.0, 3.0, 4.0], 0.0, [50.0, 50.0, 50.0]),
+            ([5.0; 4], 700.0, [50.0, 50.0, 50.0]),
+            ([1.0, 2.0, 3.0, 4.0], 1.0, [75.0, 100.0, 100.0]),
+            ([4.0, 3.0, 2.0, 1.0], 1.0, [400.0 / 11.0, 0.0, 0.0]),
+            ([1.0, 2.0, 1.0, 3.0], 1.0, [75.0, 200.0 / 3.0, 75.0]),
+            ([-4.0, -2.0, -3.0, -1.0], 1.0, [60.0, 40.0, 25.0]),
         ] {
             for scale in [1.0, 1e-17, 1e12] {
                 let bars: Vec<_> = closes
@@ -249,9 +258,9 @@ mod tests {
                     .collect();
                 let mut study = MoneyFlowIndex::new(2);
                 study.calculate(&bars);
-                assert_eq!(study.values().value(0, 1), None);
+                assert_eq!(study.values().value(0, 0), None);
                 for (bar, want) in expected.into_iter().enumerate() {
-                    let got = study.values().value(0, bar + 2).unwrap();
+                    let got = study.values().value(0, bar + 1).unwrap();
                     assert!(
                         (got - want).abs() < 1e-9,
                         "{closes:?}, {volume}, {scale}: {got}"

@@ -147,6 +147,15 @@ impl PatternType {
             Self::Bearish => "Bearish",
         }
     }
+
+    /// Whether this choice marks patterns of `side`; neutral ones only with both sides.
+    fn marks(self, side: Side) -> bool {
+        match self {
+            Self::Both => true,
+            Self::Bullish => side == Bullish,
+            Self::Bearish => side == Bearish,
+        }
+    }
 }
 
 mod rules;
@@ -465,15 +474,10 @@ impl Indicator for CandlestickPatterns {
                     state.candles.pop_front();
                 }
                 let candles = state.candles.make_contiguous();
-                let marked = |side| match self.pattern_type {
-                    PatternType::Both => true,
-                    PatternType::Bullish => side == Bullish,
-                    PatternType::Bearish => side == Bearish,
-                };
                 let mut bits = 0;
                 for (bit, pattern) in PATTERNS.iter().enumerate() {
                     if self.patterns[bit]
-                        && marked(pattern.side)
+                        && self.pattern_type.marks(pattern.side)
                         && candles.len() >= pattern.bars
                         && (pattern.found)(&candles[candles.len() - pattern.bars..])
                     {
@@ -516,6 +520,23 @@ impl Indicator for CandlestickPatterns {
 
     fn line_names(&self) -> Vec<String> {
         vec!["Bullish".into(), "Bearish".into(), "Neutral".into()]
+    }
+
+    // A side holds values only while the pattern type marks it and one of its patterns is on.
+    fn alert_outputs(&self) -> Vec<(usize, String)> {
+        [Bullish, Bearish, Neutral]
+            .into_iter()
+            .zip(self.line_names())
+            .enumerate()
+            .filter(|(_, (side, _))| {
+                self.pattern_type.marks(*side)
+                    && PATTERNS
+                        .iter()
+                        .zip(self.patterns)
+                        .any(|(pattern, on)| on && pattern.side == *side)
+            })
+            .map(|(output, (_, name))| (output, name))
+            .collect()
     }
 
     fn is_visible(&self) -> bool {
