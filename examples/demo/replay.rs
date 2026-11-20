@@ -749,7 +749,10 @@ impl DemoApp {
             return vec![self.replay_interval];
         }
         let mut intervals = vec![self.state.timeframe];
-        if self.state.timeframe.duration_ms() > Timeframe::Day1.duration_ms() {
+        if matches!(
+            self.state.timeframe,
+            Timeframe::Week1 | Timeframe::Month1 | Timeframe::Weeks(_) | Timeframe::Months(_)
+        ) {
             intervals.push(Timeframe::Day1);
         }
         if self.state.timeframe.duration_ms() > Timeframe::Min1.duration_ms() {
@@ -787,7 +790,10 @@ impl DemoApp {
         {
             interval = common_replay_interval(interval, other);
         }
-        if interval.duration_ms() > Timeframe::Day1.duration_ms() {
+        if matches!(
+            interval,
+            Timeframe::Week1 | Timeframe::Month1 | Timeframe::Weeks(_) | Timeframe::Months(_)
+        ) {
             Timeframe::Day1
         } else {
             interval
@@ -1403,9 +1409,14 @@ fn common_replay_interval(a: Timeframe, b: Timeframe) -> Timeframe {
     if a.is_trade_based() || b.is_trade_based() {
         return Timeframe::Ticks(NonZeroU64::MIN);
     }
-    let day = Timeframe::Day1.duration_ms();
-    let mut left = a.duration_ms().min(day);
-    let mut right = b.duration_ms().min(day);
+    let duration = |interval: Timeframe| match interval {
+        Timeframe::Week1 | Timeframe::Month1 | Timeframe::Weeks(_) | Timeframe::Months(_) => {
+            Timeframe::Day1.duration_ms()
+        }
+        _ => interval.duration_ms(),
+    };
+    let mut left = duration(a);
+    let mut right = duration(b);
     while right != 0 {
         (left, right) = (right, left % right);
     }
@@ -1415,8 +1426,11 @@ fn common_replay_interval(a: Timeframe, b: Timeframe) -> Timeframe {
         .into_iter()
         .find(|interval| interval.duration_ms() == left)
         .unwrap_or_else(|| {
-            NonZeroU64::new((left / 1000) as u64)
-                .map_or(Timeframe::Ticks(NonZeroU64::MIN), Timeframe::Custom)
+            if left % 1000 == 0 {
+                Timeframe::Custom(NonZeroU64::new((left / 1000) as u64).unwrap())
+            } else {
+                Timeframe::Ticks(NonZeroU64::MIN)
+            }
         })
 }
 
@@ -2172,6 +2186,9 @@ mod tests {
             ("2min", "17min", Timeframe::Min1),
             ("4min", "6min", "2min".parse().unwrap()),
             ("1W", "1M", Timeframe::Day1),
+            ("25h", "1h", Timeframe::Hour1),
+            ("25h", "25h", "25h".parse().unwrap()),
+            ("100ms", "250ms", Timeframe::Ticks(NonZeroU64::MIN)),
         ] {
             assert_eq!(
                 common_replay_interval(a.parse().unwrap(), b.parse().unwrap()),
