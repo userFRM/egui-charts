@@ -4,7 +4,7 @@
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::localization as l10n;
-use crate::styles::{icons, stroke};
+use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
@@ -251,7 +251,7 @@ impl RightPanelTabs {
             }
 
             // Draw icon
-            let icon_size = icons::SM;
+            let icon_size = DESIGN_TOKENS.sizing.icon_sm;
             let icon_rect = Rect::from_center_size(btn_rect.center(), Vec2::splat(icon_size));
 
             // Get icon color based on state

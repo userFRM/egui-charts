@@ -167,7 +167,8 @@ pub use sync::VisibleTimeRange;
 #[cfg(feature = "drawings")]
 pub(crate) mod tool_interaction;
 
-pub use keyboard::{ShortcutMap, ShortcutRequest};
+pub use crate::config::shortcut_map::ShortcutMap;
+pub use keyboard::ShortcutRequest;
 pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 
 /// The main bars' revision, length and last high, low and close, and the pending sizes, that
@@ -429,6 +430,9 @@ pub struct Chart {
         std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
     overnight_hours: bool,
+    /// The futures data choices the chart settings applied, which the host's history follows.
+    back_adjust_futures: bool,
+    settlement_as_close: bool,
     conversion: Option<String>,
     pub(crate) measured_axis_width: f32,
     /// Last usable widget width and its first frame, including discarded sizing passes.
