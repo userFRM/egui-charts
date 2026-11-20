@@ -3114,7 +3114,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 45] = [
+        let cases: [(Spoil, &str); 46] = [
             (
                 |s| {
                     first(s)
