@@ -1267,7 +1267,12 @@ mod tests {
             panel.stories.push(story);
         }
         let mut h = Harness::builder()
-            .with_context_setup(egui_extras::install_image_loaders)
+            .with_context_setup(|ctx| {
+                egui_extras::install_image_loaders(ctx);
+                ctx.global_style_mut(|style| {
+                    style.scroll_animation = egui::style::ScrollAnimation::none()
+                });
+            })
             .build_ui_state(
                 |ui, panel: &mut NewsPanel| {
                     panel.show(ui);
@@ -1319,6 +1324,32 @@ mod tests {
         assert!(h.state().open.is_none());
         assert!(
             h.get_by_role_and_label(egui::Role::Button, "Second")
+                .is_focused()
+        );
+
+        // With more than a page of rows, paging reaches an interior story, rather than one row
+        // down or the end, and paging back returns to the first row.
+        for number in 4..=9 {
+            let title = format!("Story {number}");
+            h.state_mut()
+                .stories
+                .push(NewsStory::new(&title, DateTime::UNIX_EPOCH, &title));
+        }
+        h.set_size(egui::vec2(320.0, 300.0));
+        h.key_press(egui::Key::Home);
+        h.run();
+        h.key_press(egui::Key::PageDown);
+        h.run();
+        let middle = std::iter::once("Third".to_owned())
+            .chain((4..9).map(|number| format!("Story {number}")));
+        assert!(middle.into_iter().any(|title| {
+            h.query_by_role_and_label(egui::Role::Button, &title)
+                .is_some_and(|node| node.is_focused())
+        }));
+        h.key_press(egui::Key::PageUp);
+        h.run();
+        assert!(
+            h.get_by_role_and_label(egui::Role::Button, "First")
                 .is_focused()
         );
     }
