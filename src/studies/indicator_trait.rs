@@ -1016,6 +1016,17 @@ pub trait Indicator: Send {
         vec![self.name().to_string()]
     }
 
+    /// The outputs an alert can test, with the names shown after the study's name. Read each
+    /// output through [`plot_value`](Self::plot_value). Defaults to every line of
+    /// [`line_names`](Self::line_names). Omit lines that cannot hold values with the current
+    /// settings, such as lines that only style zones, candles or drawings. Values drawn in
+    /// other forms, such as levels, may use outputs past
+    /// [`line_count`](Self::line_count), which renderers do not draw. Keep an output's number
+    /// while it means the same value, since saved alerts identify outputs by number.
+    fn alert_outputs(&self) -> Vec<(usize, String)> {
+        self.line_names().into_iter().enumerate().collect()
+    }
+
     /// Whether this indicator should currently be rendered.
     ///
     /// Defaults to `true`. Toggle with [`set_visible`](Indicator::set_visible).

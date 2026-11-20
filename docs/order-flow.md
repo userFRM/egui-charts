@@ -466,10 +466,20 @@ sets them; [`DetectorSettings::validate`](https://userfrm.github.io/egui-charts/
 [`set_settings`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.OrderFlowDetectors.html#method.set_settings) applies them. Alert delivery is a host integration; these choices do not
 themselves send notifications.
 
-Stop runs require five same-side fills, each no more than 20 ms after its predecessor, travelling
-at least three ticks without reversing. When any aggressor ids are known, three distinct ids are
-required. A continuing burst updates its marker at the last fill, with fill count, distance,
-size and duration in the tooltip. Unknown-side fills are excluded.
+Big trades ([`BigTradeRule`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.BigTradeRule.html)) come in three kinds, each with its own switch: aggressive orders, the
+fills of one explicit aggressor order id in a row or a single fill without one, on by default;
+fills without aggressor ids that share an exchange timestamp and side, combined as the time and
+sales panel combines them, off by default; and passive orders, the fills against one resting
+order id across aggressive orders, off by default. A marker's label gives the size and the
+kind, as in `600 passive`. A passive order is marked at the resting order's price, coloured by
+its side, and its zone ends when a trade passes beyond it on the far side from that order.
+
+Stop runs ([`StopRunRule`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.StopRunRule.html)) require by default five same-side fills, each no more than 20 ms after its
+predecessor, travelling at least three ticks without reversing. When any aggressor ids are
+known, three distinct ids are required. The rule sets each of these limits and a minimum total
+size, none by default, and the Order flow panel edits them. A continuing burst updates its
+marker at the last fill, with fill count, distance, size and duration in the tooltip.
+Unknown-side fills are excluded.
 
 Stop sweeps use closed bars of the latest subscribed time interval: directional delta at least
 25% of volume, three diagonal imbalances at 3:1, a body at least 60% of range, and volume at least
