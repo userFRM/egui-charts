@@ -479,7 +479,8 @@ impl Chart {
     ///
     /// ```no_run
     /// # fn capture(chart: &egui_charts::Chart, ctx: &egui::Context) -> Result<(), egui_charts::widget::ExportError> {
-    /// let options = egui_charts::widget::ImageExportOptions::default();
+    /// let mut options = egui_charts::widget::ImageExportOptions::default();
+    /// options.pixel_density = egui_charts::widget::PixelDensity::Two;
     /// let image = chart.export_layout_image(ctx, &options, |ui, snapshot| {
     ///     ui.horizontal(|ui| {
     ///         ui.label(snapshot.symbol());
