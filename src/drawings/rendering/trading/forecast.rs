@@ -360,18 +360,19 @@ mod tests {
         let saved: Drawing = serde_json::from_str(r#"{"label":null,"pane":null,"selectable":true,"saveable":true,"listed":true,"user_edit_enabled":true,"group":null,"folder":[],"custom_tool":null,"custom_settings":null,"tool_type":"Forecast","screen_anchor":null,"color":[41,98,255,255],"stroke_width":2.0,"text":null,"post":null,"line_style":"Solid","fill_color":[12,34,56,80],"locked":false,"visible":true,"font_size":14.0,"font_weight":"Normal","italic":false,"text_color":null,"background":true,"border":true,"border_color":null,"text_wrap":false,"text_wrap_width":200.0,"text_follows_zoom":false,"text_zoom_spacing":null,"note_text_style":null,"extend_left":false,"extend_right":false,"arrow_start_style":"None","arrow_end_style":"None","timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"price_axis_label":true,"time_axis_label":true,"line_measurements":{"persistent":false,"price_change":false,"percent_change":false,"pip_change":false,"bar_count":false,"elapsed_time":false,"length":false,"inclination":false,"midpoint":false,"price_labels":false,"position":"Right","text_horizontal_align":"Center","text_vertical_align":"Bottom","text_orientation":"Vertical","across_panes":false},"range_settings":{"price_change":true,"percent_change":true,"pip_change":true,"bar_count":true,"elapsed_time":true,"volume":true,"text_color":null,"font_size":12.0,"background":true,"background_color":null,"border":true,"border_color":null,"border_width":null,"border_style":null,"extend_top":false,"extend_bottom":false},"position_size":null,"position_sizing":{"point_value":1.0,"lot_size":1.0,"quantity_step":0.0,"leverage":1.0},"position_readout":{"persistent":false,"condensed":false,"account_currency":null,"conversion_rate":null,"quantity_decimals":null},"position_target_color":null,"position_stop_color":null,"position_style":{"line_color":null,"line_width":1.0,"text_color":null,"font_size":12.0,"label_background":true,"label_color":null,"fill":true,"border":false,"border_color":[102,123,139,255]},"marker":{"show_text":true,"glyph":"🙂","show_glyph":false,"glyph_color":null},"fib_config":null,"volume_profile":null,"regression_trend":null,"vwap":null,"gann":null,"ghost_feed":null,"channel_midline":false,"anchor_price_style":null,"middle_line":{"color":null,"width":1.0,"line_style":"Dashed"},"theme_shade":true,"image":null,"glyph_angle":0.0,"closed":false,"pitchfork":null,"elliott_degree":"Minor","elliott_show_wave":true,"bars_pattern":null,"projection":null,"z_order":0}"#).unwrap();
         assert_eq!(saved.forecast, None);
         let (rgb, rgba) = (Color32::from_rgb, Color32::from_rgba_unmultiplied);
-        let mut every = ForecastStyle::default();
-        every.start_background = Some([10, 20, 30, 255]);
-        every.start_text = Some([70, 80, 90, 255]);
-        every.start_border = Some([40, 50, 60, 255]);
-        every.target_background = Some([100, 110, 120, 255]);
-        every.target_text = Some([160, 170, 180, 255]);
-        every.target_border = Some([130, 140, 150, 255]);
-        every.success_background = Some([190, 200, 210, 255]);
-        every.success_text = Some([220, 230, 240, 255]);
-        every.failure_background = Some([1, 2, 3, 255]);
-        every.failure_text = Some([4, 5, 6, 255]);
-        every.transparency = 0;
+        let every = ForecastStyle {
+            start_background: Some([10, 20, 30, 255]),
+            start_text: Some([70, 80, 90, 255]),
+            start_border: Some([40, 50, 60, 255]),
+            target_background: Some([100, 110, 120, 255]),
+            target_text: Some([160, 170, 180, 255]),
+            target_border: Some([130, 140, 150, 255]),
+            success_background: Some([190, 200, 210, 255]),
+            success_text: Some([220, 230, 240, 255]),
+            failure_background: Some([1, 2, 3, 255]),
+            failure_text: Some([4, 5, 6, 255]),
+            transparency: 0,
+        };
         let configured = |edit: fn(&mut ForecastStyle)| {
             let mut style = every;
             edit(&mut style);

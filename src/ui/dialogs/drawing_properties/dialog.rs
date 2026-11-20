@@ -952,8 +952,10 @@ mod tests {
             for (width, peer) in [(3.0, 3.0), (20.0, 4.0), (5.0, 5.0)] {
                 dialog.props.line_width = width;
                 dialog.props.color = Color32::GREEN;
-                let mut forecast = crate::drawings::ForecastStyle::default();
-                forecast.start_border = Some([4, 5, 6, 255]);
+                let forecast = crate::drawings::ForecastStyle {
+                    start_border: Some([4, 5, 6, 255]),
+                    ..Default::default()
+                };
                 let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;
                 settings.forecast = Some(forecast);
                 settings.position_target_color = Some([40, 100, 220, 255]);

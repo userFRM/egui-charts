@@ -1585,12 +1585,13 @@ mod tests {
                 }],
                 ..Default::default()
             });
-            let mut forecast = crate::drawings::ForecastStyle::default();
-            forecast.start_text = None;
-            forecast.target_border = Some([11, 12, 13, 14]);
-            forecast.failure_text = Some([15, 16, 17, 18]);
-            forecast.transparency = 35;
-            drawing.forecast = Some(forecast);
+            drawing.forecast = Some(crate::drawings::ForecastStyle {
+                start_text: None,
+                target_border: Some([11, 12, 13, 14]),
+                failure_text: Some([15, 16, 17, 18]),
+                transparency: 35,
+                ..Default::default()
+            });
             drawing.channel_midline = true;
             drawing.closed = true;
             drawing.elliott_degree = ElliottDegree::Submicro;
