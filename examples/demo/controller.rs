@@ -4812,6 +4812,53 @@ mod tests {
         assert!(header.top() >= size.y - 42.0 && header.bottom() <= size.y);
     }
 
+    /// Changing brokers through the account menu opens the demo's picker while keeping the
+    /// paper account connected until another broker is chosen.
+    #[test]
+    fn account_panel_change_broker_opens_the_picker_without_disconnecting() {
+        use eframe::App;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.connect_paper();
+        let size = egui::vec2(1440.0, 900.0);
+        let draw =
+            |app: &mut DemoApp, ui: &mut egui::Ui| app.ui(ui, &mut eframe::Frame::_new_kittest());
+        for _ in 0..3 {
+            ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        }
+        assert!(!app.broker_picker.is_open());
+        assert!(app.trading.has_broker());
+        let texts = ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        // The broker selector is below the account header's copy of the same name.
+        let broker = texts
+            .iter()
+            .filter(|(text, _)| text == "Paper Trading")
+            .max_by(|(_, a), (_, b)| a.top().total_cmp(&b.top()))
+            .expect("paper broker selector")
+            .1
+            .center();
+        ui_click(&ctx, size, broker, |ui| draw(&mut app, ui));
+        for _ in 0..3 {
+            ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        }
+        let texts = ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        let change = texts
+            .iter()
+            .find(|(text, _)| text == "Change broker")
+            .expect("Change broker menu row")
+            .1
+            .center();
+        ui_click(&ctx, size, change, |ui| draw(&mut app, ui));
+        ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        assert!(app.broker_picker.is_open());
+        assert!(app.trading.has_broker());
+    }
+
     /// Bulk removal waits for a lock decision, saves only remembered decisions, and restores
     /// the exact drawings and study ids together in one undo step without removing price series.
     #[test]
