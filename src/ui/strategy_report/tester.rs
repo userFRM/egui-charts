@@ -819,7 +819,7 @@ impl StrategyTester {
         timeframe: Timeframe,
     ) -> Result<StrategyTesterAction, &'static str> {
         super::properties::validate(&self.settings)?;
-        self.check_run(false)?;
+        self.check_run(timeframe, false)?;
         Ok(StrategyTesterAction::AddAlert {
             strategy: self.name.clone(),
             inputs: self
