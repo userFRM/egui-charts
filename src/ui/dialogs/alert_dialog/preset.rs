@@ -491,7 +491,10 @@ pub(super) fn from_document(
                             expiry: alert.expires.is_none(),
                             ..PresetFields::default()
                         };
-                        (name, AlertPreset::capture(&alert, &[], fields, now))
+                        let mut preset = AlertPreset::capture(&alert, &[], fields, now);
+                        // Creation inputs in older presets never changed the applied session.
+                        preset.hours = None;
+                        (name, preset)
                     })
                     .collect()
             })
@@ -955,23 +958,23 @@ mod tests {
         assert_eq!(hours(&alert), Some((true, true)));
         assert_eq!(alert.condition, AlertCondition::Crossing(100.0));
         // A preset stored before presets kept the session leaves the alert's.
-        let mut alert = opened();
-        from_document(
+        for document in [
             r#"{"version":3,"presets":{"P":{"fields":{"condition":false,"interval":true,
             "frequency":false,"expiry":false,"text":false,"delivery":false,"schedule":false},
             "rules":[],"source_names":[],"timeframe":"Hour1","additional_timeframes":[],
             "frequency":"Once","expires_after":null,"name":"","message":"","delivery":{"popup":true,
             "sound":true,"email":false,"push":false,"webhook":false,"webhook_url":""},
-            "schedule":null}},"last_schedule":null}"#,
-            saved_at,
-        )
-        .unwrap()
-        .0["P"]
-            .apply(&mut alert, &[], now);
-        assert_eq!(
-            (alert.timeframe, hours(&alert)),
-            (Some(Timeframe::Hour1), Some((true, false)))
-        );
+            "schedule":null}},"last_schedule":null}"#
+                .to_owned(),
+            serde_json::json!({"version": 1, "presets": {"P": saved}}).to_string(),
+        ] {
+            let mut alert = opened();
+            from_document(&document, saved_at).unwrap().0["P"].apply(&mut alert, &[], now);
+            assert_eq!(
+                (alert.timeframe, hours(&alert)),
+                (Some(Timeframe::Hour1), Some((true, false)))
+            );
+        }
         blank.interval = false;
         blank.frequency = true;
         assert_eq!(apply(&saved, blank).frequency, AlertFrequency::OncePerBar);
