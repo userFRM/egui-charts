@@ -25,7 +25,7 @@ pub struct StudyTemplate {
     /// was kept do.
     #[serde(default)]
     pub scale: Option<StudyScale>,
-    /// A scalar metric's host key, display name, unit and format. Restored without requiring a
+    /// A metric's host key, display name, unit, format and declared plot and colours. Restored without requiring a
     /// catalogue entry; its history is requested again from the host. Absent in older saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric: Option<crate::data::MetricSeries>,
@@ -724,6 +724,22 @@ impl StudyTemplate {
                     ("show_developing", InputValue::Toggle(true)),
                     ("projections", InputValue::Toggle(false)),
                     ("as_drawings", InputValue::Toggle(false)),
+                ] {
+                    if !has(id) {
+                        template.inputs.push((id.to_owned(), value));
+                    }
+                }
+            }
+            // Seasonality tables saved before placement inputs sat at the lower right and
+            // drew falling months in their original red.
+            "Seasonality" if !has("table_position") => {
+                for (id, value) in [
+                    ("start_year", InputValue::Integer(1900)),
+                    ("table_position", InputValue::Choice(8)),
+                    (
+                        "negative_color",
+                        InputValue::Color(egui::Color32::from_rgb(242, 55, 69)),
+                    ),
                 ] {
                     if !has(id) {
                         template.inputs.push((id.to_owned(), value));
@@ -1789,6 +1805,46 @@ mod tests {
             }
         }
 
+        // A literal Seasonality saved before its display inputs keeps its year, plot and band
+        // colours and lower-right table position.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Seasonality","inputs":[["start_year",{"Integer":1900}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Seasonality.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[1,10,8,16],"untagged_plots":[0,1,2,3,4],"price_line_plots":[],"plot_variants":[[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,31,26,51],"inverted_color":[48,11,14,51],"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let mut study = saved.create().unwrap();
+        let inputs = study.inputs();
+        for (id, value) in [
+            ("start_year", InputValue::Integer(1900)),
+            (
+                "negative_color",
+                InputValue::Color(Color32::from_rgb(242, 55, 69)),
+            ),
+        ] {
+            assert_eq!(
+                inputs
+                    .iter()
+                    .find(|input| input.id == id)
+                    .map(|input| &input.value),
+                Some(&value),
+                "Seasonality {id}"
+            );
+        }
+        assert_eq!(study.settings(), saved.settings);
+        let bars = [(2020, 12, 100.0), (2021, 1, 112.0)].map(|(year, month, close)| {
+            Bar::new(
+                Utc.with_ymd_and_hms(year, month, 28, 0, 0, 0).unwrap(),
+                close,
+                close,
+                close,
+                close,
+                1.0,
+            )
+        });
+        study.calculate(&bars);
+        let table = study.table().unwrap();
+        assert_eq!(
+            (table.position, table.width, table.height),
+            (crate::studies::TablePosition::BottomRight, None, None)
+        );
+        assert_eq!(table.cell_colors[1][1], Color32::from_rgb(41, 98, 255));
+
         let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Periodic","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["period_count",{"Length":1}],["period",{"Choice":1}],["restart_yearly",{"Toggle":false}],["width",{"Number":30.0}],["extend_poc",{"Toggle":false}],["extend_vah",{"Toggle":false}],["extend_val",{"Toggle":false}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfilePeriodic.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
         for legacy in [
             saved.clone(),
@@ -1949,6 +2005,31 @@ mod tests {
     /// input labels retain the ids, values and styles of the saved studies.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
+        // A metric descriptor saved before plot declarations and the Symbol input keeps its look.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Open interest","inputs":[],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":null,"plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent","metric":{"id":"oi","name":"Open interest","unit":"","format":"Volume"}}"#,
+        ).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.settings(), saved.settings);
+        assert_eq!(Some(restored.scale()), saved.scale);
+        assert_eq!(
+            restored.metric().unwrap().plot,
+            crate::data::MetricPlot::StepLine
+        );
+        assert_eq!(restored.metric().unwrap().colors, None);
+        assert_eq!(restored.data_requests()[0].symbol, "");
+        let symbol = restored
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == "symbol")
+            .unwrap();
+        assert_eq!(symbol.value, InputValue::Symbol(String::new()));
+        assert_eq!(symbol.default, symbol.value);
+        let again = StudyTemplate::from_study(restored.as_ref())
+            .create()
+            .unwrap();
+        assert_eq!(again.settings(), saved.settings);
+
         // This Knoxville template was saved before price lines and before the window rule. It
         // keeps its inputs and styles, without pivot sides and on the price scale, with lines
         // off; enabling them and saving again retains that choice.
