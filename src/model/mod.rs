@@ -128,8 +128,9 @@ pub use session::{
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
 pub use strategy::{
-    EquityRange, StrategyComparison, StrategyExcursion, StrategyExit, StrategyHolding,
-    StrategyPerformance, StrategyReport, StrategyTrade, StrategyTradeStats,
+    EquityRange, StrategyAnalysis, StrategyComparison, StrategyExcursion, StrategyExit,
+    StrategyHolding, StrategyPerformance, StrategyPeriod, StrategyReport, StrategyResultBin,
+    StrategyTrade, StrategyTradeGroup, StrategyTradeStats,
 };
 #[cfg(feature = "ui")]
 pub(crate) use strategy::{SummaryUnit, run_figures, trade_figures};
@@ -141,8 +142,8 @@ pub use timescale::{LogicalRange, NumericPositions, TimeScale};
 pub use timezone::{TimezoneId, TimezoneOffset};
 pub(crate) use timezone::{local_instant, local_time};
 pub use tpo::{
-    ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLetter, TPOProfile,
-    TPOProfilePeriod, derive_tick_size, to_tpo_profiles,
+    ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLabels, TPOLetter,
+    TPOProfile, TPOProfilePeriod, derive_tick_size, to_tpo_profiles,
 };
 pub(crate) use trading::rounding_tolerance;
 pub use trading::{

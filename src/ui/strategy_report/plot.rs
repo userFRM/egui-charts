@@ -76,18 +76,37 @@ pub(super) fn show(
             theme.ui.text_muted,
         );
     }
-    for (t, align) in [(first, Align2::LEFT_TOP), (last, Align2::RIGHT_TOP)] {
+    let count = ((plot.width() / 140.0) as usize).clamp(2, 6);
+    // A single instant gets one label with its date and time.
+    let (count, format) = if first == last {
+        (1, "%Y-%m-%d %H:%M")
+    } else if span >= (count - 1) as f64 * 86_400.0 {
+        (count, "%Y-%m-%d")
+    } else if span >= (count - 1) as f64 * 60.0 {
+        (count, "%Y-%m-%d %H:%M")
+    } else {
+        (count, "%H:%M:%S%.f")
+    };
+    for k in 0..count {
+        let fraction = k as f64 / (count - 1).max(1) as f64;
+        let offset =
+            chrono::TimeDelta::from_std(std::time::Duration::from_secs_f64(fraction * span))
+                .expect("span between equity points");
+        let t = first.checked_add_signed(offset).unwrap_or(last);
+        let align = if k == 0 {
+            Align2::LEFT_TOP
+        } else if k == count - 1 {
+            Align2::RIGHT_TOP
+        } else {
+            Align2::CENTER_TOP
+        };
         painter.text(
             Pos2::new(
-                if align == Align2::LEFT_TOP {
-                    plot.left()
-                } else {
-                    plot.right()
-                },
+                plot.left() + fraction as f32 * plot.width(),
                 plot.bottom() + 5.0,
             ),
             align,
-            t.format("%Y-%m-%d %H:%M").to_string(),
+            t.format(format).to_string(),
             font.clone(),
             theme.ui.text_muted,
         );
