@@ -2176,6 +2176,56 @@ mod tests {
     }
 
     #[test]
+    fn consecutive_undos_wait_for_host_supplied_interval_bars() {
+        use crate::widget::test_frames::frame;
+
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let last = chart.bars(SeriesId::MAIN).last().unwrap().time;
+        let minute_bars: Vec<_> = chart
+            .bars(SeriesId::MAIN)
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, mut bar)| {
+                bar.time = last - chrono::Duration::minutes((99 - i) as i64);
+                bar
+            })
+            .collect();
+        chart.set_timeframe(Timeframe::Min1);
+        chart.set_data(SeriesId::MAIN, minute_bars.clone());
+        for i in 0..4 {
+            frame(&ctx, &mut chart, f64::from(i) * 0.02, vec![]);
+        }
+        chart.apply_synced_time_scale(8.0, -30.0);
+        let before = chart.get_time_scale_state();
+        chart.user_action(|chart| chart.apply_synced_time_scale(9.0, -45.0));
+        chart.user_action(|chart| chart.set_timeframe(Timeframe::Min15));
+        let mut interval_bars = minute_bars.clone();
+        for (i, bar) in interval_bars.iter_mut().enumerate() {
+            bar.time = last - chrono::Duration::minutes((99 - i) as i64 * 15);
+        }
+        chart.set_data(SeriesId::MAIN, interval_bars);
+        chart.apply_synced_time_scale(4.0, 0.5);
+        for i in 4..8 {
+            frame(&ctx, &mut chart, f64::from(i) * 0.02, vec![]);
+        }
+
+        assert!(chart.undo());
+        assert!(chart.undo());
+        // A host without a feed can render several frames before delivering the old interval.
+        for i in 8..12 {
+            frame(&ctx, &mut chart, f64::from(i) * 0.02, vec![]);
+        }
+        chart.set_data(SeriesId::MAIN, minute_bars);
+        for i in 12..16 {
+            frame(&ctx, &mut chart, f64::from(i) * 0.02, vec![]);
+        }
+        assert_eq!(chart.timeframe(), Some(Timeframe::Min1));
+        assert_eq!(chart.get_time_scale_state(), before);
+    }
+
+    #[test]
     fn pointer_navigation_ends_a_waiting_view_restoration() {
         use crate::widget::test_frames::frame;
         use egui::{Event, Modifiers, PointerButton};

@@ -10375,66 +10375,32 @@ mod tests {
 
     #[test]
     fn undo_after_a_preset_twice_keeps_the_view_until_bars_arrive() {
-        let mut failures = Vec::new();
-        for view_step in [false, true] {
-            let ctx = egui::Context::default();
-            let mut app = DemoApp::new_at(
-                &eframe::CreationContext::_new_kittest(ctx.clone()),
-                "2026-11-12T15:00:00Z".parse().unwrap(),
-                true,
-            );
-            settle(&mut app, &ctx);
-            app.chart.apply_synced_time_scale(7.0, -30.0);
-            settle(&mut app, &ctx);
-            app.chart.user_action(|chart| {
-                if view_step {
-                    chart.apply_synced_time_scale(9.0, -45.0);
-                } else {
-                    chart.set_chart_type(ChartType::Line);
-                }
-            });
-            settle(&mut app, &ctx);
-            assert!(app.chart.undo());
-            settle(&mut app, &ctx);
-            let before = app.chart.get_time_scale_state();
-            assert!(app.chart.redo());
-            settle(&mut app, &ctx);
-            app.handle_timeframe_toolbar(TimeframeToolbarAction::DateRangeChanged(
-                DateRange::Year5,
-            ));
-            settle(&mut app, &ctx);
-            assert_eq!(app.chart.timeframe(), Some(Timeframe::Week1));
-            assert!(app.chart.undo());
-            assert!(app.chart.undo());
-            if view_step {
-                // A host can show several frames before delivering the restored bars.
-                for _ in 0..4 {
-                    let _ = ctx.run_ui(
-                        egui::RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                egui::vec2(1440.0, 900.0),
-                            )),
-                            ..Default::default()
-                        },
-                        |ui| {
-                            app.chart.show(ui);
-                        },
-                    );
-                }
-            }
-            settle(&mut app, &ctx);
-            assert_eq!(app.chart.timeframe(), Some(Timeframe::Min1));
-            assert_eq!(app.chart.chart_type(), ChartType::Candles);
-            let after = app.chart.get_time_scale_state();
-            if after != before {
-                failures.push((view_step, before, after));
-            }
-        }
-        assert!(
-            failures.is_empty(),
-            "(view step, before, after): {failures:?}"
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
         );
+        settle(&mut app, &ctx);
+        app.chart.apply_synced_time_scale(7.0, -30.0);
+        settle(&mut app, &ctx);
+        app.chart
+            .user_action(|chart| chart.set_chart_type(ChartType::Line));
+        settle(&mut app, &ctx);
+        assert!(app.chart.undo());
+        settle(&mut app, &ctx);
+        let before = app.chart.get_time_scale_state();
+        assert!(app.chart.redo());
+        settle(&mut app, &ctx);
+        app.handle_timeframe_toolbar(TimeframeToolbarAction::DateRangeChanged(DateRange::Year5));
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.timeframe(), Some(Timeframe::Week1));
+        assert!(app.chart.undo());
+        assert!(app.chart.undo());
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.timeframe(), Some(Timeframe::Min1));
+        assert_eq!(app.chart.chart_type(), ChartType::Candles);
+        assert_eq!(app.chart.get_time_scale_state(), before);
     }
 
     #[test]
