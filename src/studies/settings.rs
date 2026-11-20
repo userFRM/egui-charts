@@ -1794,8 +1794,8 @@ impl Indicator for ConfiguredStudy {
         }
         let mut edited = self.clone();
         let mut inputs: Vec<_> = inputs.iter().collect();
-        // Close-wait precedes clearing its interval. Clear an available Offset before own
-        // inputs; otherwise apply it after them, once they decide whether it is offered.
+        // Close-wait precedes clearing its interval. Symbol waits for own inputs that enable
+        // it. Clear an available Offset before own inputs; otherwise apply it after them.
         if (edited.study.source().is_none() && edited.runs_on_other_bars())
             || edited.calculation_timeframe.is_some()
             || inputs.iter().any(|(id, value)| {
@@ -1804,8 +1804,10 @@ impl Indicator for ConfiguredStudy {
             })
         {
             let offers_offset = edited.offers_offset();
+            let offers_symbol = edited.runs_on_other_symbol(&edited.study.inputs());
             inputs.sort_by_key(|(id, value)| match (id.as_str(), value) {
                 ("wait_for_close", _) => 0,
+                ("calculation_symbol", _) if !offers_symbol => 3,
                 ("calculation_symbol" | "calculation_timeframe", _) => 1,
                 ("plot_offset", InputValue::Integer(0)) if offers_offset => 1,
                 ("plot_offset", _) => 3,
@@ -2388,13 +2390,36 @@ mod tests {
                 .find(|input| input.id == "calculation_timeframe")
                 .map(|input| input.value);
             let template = crate::studies::StudyTemplate::from_study(&study);
-            let restored = template.create().unwrap();
-            assert!(
-                restored
-                    .inputs()
-                    .iter()
-                    .any(|input| { input.id == "calculation_timeframe" && input.value == chosen })
-            );
+            // Saved own inputs can enable Symbol, such as an empty Performance Symbol list.
+            for symbol in ["", "OTHER"] {
+                for reverse in [false, true] {
+                    let mut saved = template.clone();
+                    saved
+                        .inputs
+                        .iter_mut()
+                        .find(|(id, _)| id == "calculation_symbol")
+                        .unwrap()
+                        .1 = InputValue::Symbol(symbol.into());
+                    if reverse {
+                        saved.inputs.reverse();
+                    }
+                    let restored = saved.create().unwrap_or_else(|error| {
+                        panic!("{name}, symbol {symbol:?}, reverse {reverse}: {error}")
+                    });
+                    let restored = crate::studies::StudyTemplate::from_study(restored.as_ref());
+                    let mut expected = saved.inputs.clone();
+                    let mut actual = restored.inputs;
+                    expected.sort_by(|a, b| a.0.cmp(&b.0));
+                    actual.sort_by(|a, b| a.0.cmp(&b.0));
+                    assert_eq!(
+                        actual, expected,
+                        "{name}, symbol {symbol:?}, reverse {reverse}"
+                    );
+                    assert_eq!(restored.settings, saved.settings, "{name}");
+                    assert_eq!(restored.visible, saved.visible, "{name}");
+                    assert_eq!(restored.scale, saved.scale, "{name}");
+                }
+            }
             let saved = template
                 .inputs
                 .into_iter()
