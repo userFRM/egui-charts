@@ -1036,6 +1036,7 @@ impl Indicator for OptionsVolumeProfile {
             right_aligned,
             strip: Some(0.3),
             width,
+            volume_decimals: None,
         }]
     }
     fn colors(&self) -> Vec<Color32> {
@@ -2021,6 +2022,7 @@ mod tests {
                                         right_aligned: true,
                                         strip: true,
                                         width: 0.9,
+                                        volume_decimals: None,
                                     },
                                     &|price| 300.0 + direction * (price - 105.0) as f32,
                                 );

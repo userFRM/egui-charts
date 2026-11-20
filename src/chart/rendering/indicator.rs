@@ -374,6 +374,7 @@ impl IndicatorRenderer {
                     right_aligned: plot.right_aligned,
                     strip: plot.strip.is_some(),
                     width: plot.width,
+                    volume_decimals: plot.volume_decimals,
                 },
                 &|price| price_scale.price_to_y(price),
             );

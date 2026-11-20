@@ -27,6 +27,8 @@ pub(crate) enum ProfileStyle {
         strip: bool,
         /// Share of the span that the row with the most volume takes.
         width: f32,
+        /// Decimals of the row values, two without.
+        volume_decimals: Option<u8>,
     },
     #[cfg(feature = "drawings")]
     Drawing {
@@ -88,11 +90,12 @@ pub(crate) fn paint_profile(
         return;
     }
     let options = profile.source() == ProfileSource::Options;
-    let (drawing, right_aligned, strip, share, poc_width) = match style {
+    let (drawing, right_aligned, strip, share, poc_width, volume_decimals) = match style {
         ProfileStyle::Study {
             right_aligned,
             strip,
             width,
+            volume_decimals,
         } => (
             false,
             right_aligned,
@@ -103,12 +106,13 @@ pub(crate) fn paint_profile(
             } else {
                 stroke::THICK
             },
+            volume_decimals,
         ),
         #[cfg(feature = "drawings")]
         ProfileStyle::Drawing {
             anchored,
             poc_width,
-        } => (true, anchored, false, 0.3, poc_width),
+        } => (true, anchored, false, 0.3, poc_width, None),
     };
     if profile.exposure.is_some() {
         paint_exposure(painter, profile, config, span, share, price_to_y);
@@ -294,7 +298,9 @@ pub(crate) fn paint_profile(
 
     if config.show_values && !drawing && !options {
         use crate::scales::PriceFormatter;
-        let formatter = crate::scales::VolumeFormatter { precision: 2 };
+        let formatter = crate::scales::VolumeFormatter {
+            precision: volume_decimals.map_or(2, usize::from),
+        };
         let font = egui::FontId::proportional(typography::XS);
         let text_color = painter.ctx().active_theme().ui.text;
         for (row, &volume) in profile.volume.iter().enumerate() {
@@ -736,6 +742,7 @@ mod tests {
                             right_aligned: false,
                             strip: false,
                             width: 0.9,
+                            volume_decimals: None,
                         }
                     },
                     &|price| (price - 100.0) as f32 * 10.0,
@@ -831,6 +838,7 @@ mod tests {
                         right_aligned,
                         strip: right_aligned,
                         width: if right_aligned { 1.0 } else { 0.9 },
+                        volume_decimals: None,
                     },
                     &|price| (price - 100.0) as f32 * 10.0,
                 );

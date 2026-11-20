@@ -11,7 +11,8 @@ use std::sync::Arc;
 ///
 /// Build a profile beside its bars, as a custom study can return from
 /// `Indicator::volume_profiles`. Set `strip: Some(0.3)` with `right_aligned: true` to
-/// place it in the plot's rightmost 30% instead.
+/// place it in the plot's rightmost 30% instead. A study that writes row values keeps the
+/// volume decimals of the instrument `Indicator::set_instrument` gives it.
 ///
 /// ```
 /// use egui_charts::data::{StudyProfile, VolumeProfile, VolumeProfileConfig};
@@ -28,6 +29,7 @@ use std::sync::Arc;
 ///     right_aligned: false,
 ///     strip: None,
 ///     width: 0.8,
+///     volume_decimals: None,
 /// };
 /// assert_eq!(profile.bars, 0..1);
 /// assert_eq!(profile.strip, None);
@@ -58,6 +60,11 @@ pub struct StudyProfile {
     /// Share of the span, from 0 to 1, that the row with the most volume takes. An options
     /// exposure overlay's largest bar takes half of it on each side of its centre.
     pub width: f32,
+    /// Decimals of the row values that [`VolumeProfileConfig::show_values`] writes, abbreviated
+    /// K, M and B values included, as
+    /// [`Instrument::volume_decimals`](crate::model::Instrument::volume_decimals) sets them;
+    /// `None` writes two decimals.
+    pub volume_decimals: Option<u8>,
 }
 
 /// A level of a finished study profile carried right past the profile's bars: from the bar
@@ -1508,6 +1515,7 @@ mod tests {
                             right_aligned,
                             strip: right_aligned,
                             width: 0.9,
+                            volume_decimals: None,
                         },
                         &|price| price as f32 * direction,
                     );

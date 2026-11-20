@@ -386,7 +386,13 @@ fn render_profiles(
                 && let Some(colors) = &colors
                 && (y0 - y1).abs() >= *height
             {
-                let text = super::footprint::cell_text(value_mode(mode), row, true, true);
+                let text = super::footprint::cell_text(
+                    value_mode(mode),
+                    row,
+                    true,
+                    true,
+                    config.volume_decimals,
+                );
                 let (lo, hi) = (x + 2.0, (x + session_width).min(mapping.rect.right()) - 2.0);
                 let galley = painter.layout_no_wrap(text, font.clone(), colors.values);
                 let size = galley.size();
