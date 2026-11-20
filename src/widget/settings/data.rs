@@ -390,7 +390,9 @@ pub struct ScalesAndLinesSettings {
     pub show_currency: bool,
     /// Display host-supplied price unit metadata.
     pub show_unit: bool,
-    /// Show the currency and unit only while the pointer is over the price scale.
+    /// Show the currency and unit only while the pointer is over the price scale. Settings saved
+    /// without this field keep them always visible.
+    #[serde(default)]
     pub currency_unit_on_hover: bool,
     /// Display Auto, Log and Percent navigation buttons.
     pub show_scale_mode_buttons: bool,
@@ -491,7 +493,7 @@ impl Default for ScalesAndLinesSettings {
             axis_layout: Default::default(),
             show_currency: true,
             show_unit: true,
-            currency_unit_on_hover: false,
+            currency_unit_on_hover: true,
             show_scale_mode_buttons: true,
             show_plus_button: true,
             allow_label_overlap: false,
