@@ -1,6 +1,6 @@
 //! Actions that can be returned from bottom panel interactions
 
-use super::DateRange;
+use crate::model::DateRange;
 
 /// Actions returned from bottom panel interactions
 #[derive(Debug, Clone, PartialEq)]

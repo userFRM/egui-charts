@@ -1544,7 +1544,7 @@ mod tests {
         rules.point_value = 50.0;
         rules.leverage = Some(20.0);
         rules.time_in_force = vec![
-            TimeInForce::Day,
+            TimeInForce::GoodTillDate,
             TimeInForce::ImmediateOrCancel,
             TimeInForce::GoodTillCancelled,
         ];
@@ -3364,7 +3364,9 @@ mod tests {
     #[test]
     fn immediate_orders_fill_at_once_or_are_cancelled_and_session_orders_are_refused() {
         use OrderSide::{Buy, Sell};
-        use TimeInForce::{Day, FillOrKill, GoodTillCancelled, ImmediateOrCancel, Month, Week};
+        use TimeInForce::{
+            Day, FillOrKill, GoodTillCancelled, GoodTillDate, ImmediateOrCancel, Month, Week,
+        };
         let paper = PaperAccount::new("USD", 1_000.0);
         paper.set_price("SYM", 100.0);
         assert_eq!(
@@ -3376,8 +3378,17 @@ mod tests {
         let id = place(&paper, request.clone()).unwrap();
         let before = snapshot(&paper);
         let inbox = Arc::new(Inbox::default());
-        for tif in [Day, Week, Month, ImmediateOrCancel, FillOrKill] {
+        for tif in [
+            Day,
+            Week,
+            Month,
+            GoodTillDate,
+            ImmediateOrCancel,
+            FillOrKill,
+        ] {
             request.time_in_force = tif;
+            request.expires =
+                (tif == GoodTillDate).then(|| "2026-12-01T21:00:00Z".parse().unwrap());
             paper.modify(id.clone(), request.clone(), inbox.reply(0));
             let result = *inbox
                 .drain()
@@ -3448,11 +3459,14 @@ mod tests {
             (Day, OrderType::Market, Buy, None),
             (Week, OrderType::Market, Buy, None),
             (Month, OrderType::Market, Buy, None),
+            (GoodTillDate, OrderType::Market, Buy, None),
         ] {
             let paper = PaperAccount::new("USD", 1_000.0);
             paper.set_price("SYM", 100.0);
             let mut request = OrderRequest::new("SYM", side, 1.0, kind);
             request.time_in_force = tif;
+            request.expires =
+                (tif == GoodTillDate).then(|| "2026-12-01T21:00:00Z".parse().unwrap());
             paper.place(request, inbox.reply(0));
             let result = *inbox
                 .drain()
