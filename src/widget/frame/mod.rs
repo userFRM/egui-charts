@@ -408,6 +408,7 @@ impl Chart {
         if self.prev_width.is_some() && !ui.ctx().will_discard() {
             self.pending_visible_range = None;
         }
+        self.restore_history_view(ui.ctx());
         self.record_host_events(ui);
         let needs_info = response.clicked()
             || response.double_clicked()
@@ -915,6 +916,7 @@ impl Chart {
             ),
         );
 
+        let view_before_input = self.time_scale_view();
         // Handle double-click to reset axes
         self.handle_double_click(&time_response, time_axis_rect);
 
@@ -972,6 +974,10 @@ impl Chart {
             chart_width,
             self.zoom_mode_active,
         );
+        if self.time_scale_view() != view_before_input {
+            // Pointer navigation replaces an undo still waiting for its bars or axis width.
+            self.history.clear_view_restore();
+        }
         // Box zoom applies to one selection.
         if self.zoom_just_applied {
             self.zoom_mode_active = false;
