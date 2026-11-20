@@ -176,7 +176,10 @@ pub struct AlertsPanel {
     next_reply: u64,
     sources: Vec<(AlertSource, AlertSourceName)>,
     symbol: String,
+    last_price: Option<f64>,
     draft: Alert,
+    draft_level_text: String,
+    draft_level_edited: bool,
     inputs: Option<(crate::model::AlertInputs, Option<crate::model::Timeframe>)>,
     draft_saving: bool,
     pending: usize,
@@ -250,7 +253,10 @@ impl AlertsPanel {
             next_reply: DRAFT_REPLY - 1,
             sources: Vec::new(),
             symbol: String::new(),
-            draft: Alert::new("", AlertCondition::Crossing(0.0)),
+            last_price: None,
+            draft: Alert::new("", AlertCondition::Crossing(f64::NAN)),
+            draft_level_text: String::new(),
+            draft_level_edited: false,
             inputs: None,
             draft_saving: false,
             pending: 0,
@@ -382,6 +388,40 @@ impl AlertsPanel {
         if self.symbol != symbol {
             self.symbol = symbol.to_owned();
             self.draft.symbol = symbol.to_owned();
+            self.last_price = None;
+            self.seed_draft_price();
+        }
+    }
+
+    /// Supply the chart symbol's current price and optional tick size for Quick alert. Call
+    /// every frame, including while hidden, so a saved form starts again at the latest price.
+    /// A user-entered level stays until a successful save. Without a finite price, an unedited
+    /// level is empty and cannot be saved. Invalid tick sizes use the price's display decimals.
+    pub fn set_price(&mut self, symbol: &str, price: Option<f64>, tick_size: Option<f64>) {
+        self.set_symbol(symbol);
+        self.last_price = price
+            .map(|price| {
+                crate::scales::snap_price(price, tick_size, crate::scales::price_decimals(price))
+            })
+            .filter(|price| price.is_finite());
+        self.seed_draft_price();
+    }
+
+    fn seed_draft_price(&mut self) {
+        if !self.draft_level_edited && self.draft.source == AlertSource::Price {
+            let price = self.last_price.filter(|_| self.draft.symbol == self.symbol);
+            match &mut self.draft.condition {
+                AlertCondition::Crossing(level)
+                | AlertCondition::CrossingUp(level)
+                | AlertCondition::CrossingDown(level)
+                | AlertCondition::Above(level)
+                | AlertCondition::Below(level) => {
+                    *level = price.unwrap_or(f64::NAN);
+                    self.draft_level_text =
+                        price.map(|price| price.to_string()).unwrap_or_default();
+                }
+                _ => {}
+            }
         }
     }
 
@@ -689,7 +729,9 @@ impl AlertsPanel {
                         self.error = None;
                         if key == DRAFT_REPLY {
                             self.draft =
-                                Alert::new(self.symbol.clone(), AlertCondition::Crossing(0.0));
+                                Alert::new(self.symbol.clone(), AlertCondition::Crossing(f64::NAN));
+                            self.draft_level_edited = false;
+                            self.seed_draft_price();
                         }
                     }
                     Err(error) => {
@@ -1167,13 +1209,15 @@ impl AlertsPanel {
                     ui.text_edit_singleline(&mut self.draft.symbol)
                         .accessible_name(l10n::text(ui.ctx(), "Symbol"));
                 });
-                rule_form(
+                self.seed_draft_price();
+                self.draft_level_edited |= rule_form(
                     ui,
                     &mut self.draft.source,
                     &mut self.draft.condition,
                     &self.sources,
                     &[],
                     true,
+                    Some(&mut self.draft_level_text),
                 );
                 if self.draft_saving {
                     ui.label(l10n::text(ui.ctx(), "Saving…"));
@@ -2140,10 +2184,14 @@ mod tests {
             })
             .drop_without_applying_deltas();
         };
-        panel.set_symbol("SIM");
-        panel.draft.condition = AlertCondition::CrossingUp(10.0);
+        panel.set_price("SIM", Some(98.9137), Some(0.25));
+        assert_eq!(panel.draft.condition, AlertCondition::Crossing(99.0));
         panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY).is_some();
         assert_eq!((panel.pending, panel.draft_saving), (1, true));
+        assert_eq!(
+            host.saved.lock().unwrap().last().unwrap().condition,
+            AlertCondition::Crossing(99.0)
+        );
         host.reply
             .lock()
             .unwrap()
@@ -2155,12 +2203,68 @@ mod tests {
         assert_eq!(panel.error, Some(FeedError::NotSupported));
         assert_eq!(panel.draft.symbol, "SIM");
         panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY).is_some();
+        panel.set_price("SIM", Some(100.127), Some(0.25));
         host.reply.lock().unwrap().take().unwrap().send(Ok(()));
         frame(&mut panel);
         assert_eq!(panel.error, None);
         assert_eq!(panel.draft.symbol, "SIM");
-        assert_eq!(panel.draft.condition, AlertCondition::Crossing(0.0));
+        assert_eq!(panel.draft.condition, AlertCondition::Crossing(100.25));
+        panel.set_price("NEXT", Some(200.137), Some(0.25));
+        assert_eq!(panel.draft.symbol, "NEXT");
+        assert_eq!(panel.draft.condition, AlertCondition::Crossing(200.25));
+        panel.set_symbol("UNKNOWN");
+        assert!(panel.draft.condition.level().unwrap().is_nan());
+        assert!(!panel.draft.is_valid());
         assert!(panel.alerts().is_empty());
+    }
+
+    /// Guards #3737: an unknown price cannot save an accidental zero, and a typed level
+    /// survives subsequent quotes and a chart symbol change.
+    #[test]
+    fn inline_level_is_empty_without_a_quote_and_keeps_user_input() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut panel = AlertsPanel::default();
+        panel.set_symbol("SIM");
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(400.0, 400.0))
+            .build_ui_state(|ui, panel: &mut AlertsPanel| panel.draft_form(ui), panel);
+        h.get_by_label("Quick alert").click();
+        h.run();
+        assert!(
+            h.get_by_label("Create alert")
+                .accesskit_node()
+                .is_disabled()
+        );
+        assert!(
+            h.get_by_label("Level")
+                .value()
+                .is_none_or(|value| value.is_empty())
+        );
+        h.state_mut().set_price("SIM", Some(98.9137), Some(0.25));
+        h.run();
+        assert_eq!(h.state().draft.condition, AlertCondition::Crossing(99.0));
+        h.state_mut().set_price("SIM", None, Some(0.25));
+        h.run();
+        assert!(
+            h.get_by_label("Create alert")
+                .accesskit_node()
+                .is_disabled()
+        );
+        h.get_by_label("Level").click();
+        h.run();
+        h.get_by_label("Level").type_text("123.45");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(h.state().draft.condition, AlertCondition::Crossing(123.45));
+        assert!(
+            !h.get_by_label("Create alert")
+                .accesskit_node()
+                .is_disabled()
+        );
+        h.state_mut().set_price("SIM", Some(99.0), Some(0.25));
+        h.state_mut().set_price("NEXT", Some(200.0), Some(0.25));
+        h.run();
+        assert_eq!(h.state().draft.condition, AlertCondition::Crossing(123.45));
     }
 
     #[cfg(feature = "alert-engine")]

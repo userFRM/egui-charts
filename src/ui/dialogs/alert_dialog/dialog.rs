@@ -1020,6 +1020,7 @@ impl AlertDialog {
                     &self.sources,
                     &self.strategy_runs,
                     true,
+                    None,
                 );
             } else {
                 let index = self.editing_condition - 1;
@@ -1039,6 +1040,7 @@ impl AlertDialog {
                     &self.sources,
                     &[],
                     false,
+                    None,
                 );
                 if ui
                     .button(l10n::text(ui.ctx(), "Remove condition"))
@@ -1379,6 +1381,7 @@ fn drawing_position(
     })
 }
 
+/// Returns whether the optional text editor changed the single threshold.
 pub(crate) fn rule_form(
     ui: &mut Ui,
     source: &mut AlertSource,
@@ -1386,7 +1389,9 @@ pub(crate) fn rule_form(
     sources: &[(AlertSource, AlertSourceName)],
     runs: &[(String, String)],
     offer_position: bool,
-) {
+    level_text: Option<&mut String>,
+) -> bool {
+    let mut level_edited = false;
     ui.add_enabled_ui(
         !matches!(condition, AlertCondition::VolumeAboveAverage { .. }) && !condition.is_event(),
         |ui| source_picker(ui, "source", source, sources),
@@ -1556,8 +1561,16 @@ pub(crate) fn rule_form(
         | AlertCondition::Above(v)
         | AlertCondition::Below(v) => {
             ui.label(l10n::text(ui.ctx(), "Level"));
-            ui.add(egui::DragValue::new(v).speed(0.01))
-                .accessible_name(l10n::text(ui.ctx(), "Level"));
+            if let Some(text) = level_text {
+                level_edited = ui
+                    .text_edit_singleline(text)
+                    .accessible_name(l10n::text(ui.ctx(), "Level"))
+                    .changed();
+                *v = text.trim().parse().unwrap_or(f64::NAN);
+            } else {
+                ui.add(egui::DragValue::new(v).speed(0.01))
+                    .accessible_name(l10n::text(ui.ctx(), "Level"));
+            }
         }
         AlertCondition::EnteringChannel { lower, upper }
         | AlertCondition::ExitingChannel { lower, upper }
@@ -1641,6 +1654,7 @@ pub(crate) fn rule_form(
                 .accessible_name(l10n::text(ui.ctx(), "Comparison"));
         }
     });
+    level_edited
 }
 
 #[cfg(test)]

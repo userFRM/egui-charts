@@ -32,6 +32,6 @@ pub(crate) use rendering::{
 };
 pub use rendering::{
     PnlUnit, RenderContext, TradingLabelAlignment, TradingLineAction, TradingLineAppearance,
-    TradingLineOptions, TradingLines, alert_shortcut_price, render_alert_levels,
-    render_axis_currency, render_crosshair_full, render_event_band, render_trading_lines,
+    TradingLineOptions, TradingLines, render_alert_levels, render_axis_currency,
+    render_crosshair_full, render_event_band, render_trading_lines,
 };
