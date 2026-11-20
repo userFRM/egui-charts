@@ -661,6 +661,22 @@ pub struct TradeProfileSettings {
     pub value_area_up_color: Option<egui::Color32>,
     /// Colour of down volume inside the value area; `None` follows the chart theme.
     pub value_area_down_color: Option<egui::Color32>,
+    /// Grow each histogram from the right edge of its session instead of the left. The edge a
+    /// histogram grows from stays in view while its session runs past the viewport.
+    pub right_aligned: bool,
+    /// Share of the session's width that the longest row spans, from 0.01 to 1. Values outside
+    /// are clamped, and NaN spans the whole session.
+    pub width: f64,
+    /// Write each row's volume beside its bar when the row is at least as tall as the text:
+    /// `bid × ask` for bid/ask stacks, the total for total volume and the signed delta for delta,
+    /// abbreviated as footprint numbers are.
+    pub values: bool,
+    /// Colour of the row values; `None` follows the chart theme.
+    pub values_color: Option<egui::Color32>,
+    /// Draw the box behind each session.
+    pub session_box: bool,
+    /// Colour of the session box, painted with its own opacity; `None` follows the chart theme.
+    pub session_box_color: Option<egui::Color32>,
 }
 
 impl Default for TradeProfileSettings {
@@ -687,6 +703,12 @@ impl Default for TradeProfileSettings {
             down_volume_color: None,
             value_area_up_color: None,
             value_area_down_color: None,
+            right_aligned: false,
+            width: 1.0,
+            values: false,
+            values_color: None,
+            session_box: true,
+            session_box_color: None,
         }
     }
 }
@@ -1335,6 +1357,9 @@ mod tests {
                 "value_area_low_color": [0, 0, 100, 128], "up_volume_color": [60, 0, 0, 60],
                 "down_volume_color": [0, 60, 0, 60], "value_area_up_color": [0, 0, 120, 120],
                 "value_area_down_color": [120, 120, 0, 120],
+                "right_aligned": true, "width": 0.5, "values": true,
+                "values_color": [1, 2, 3, 255], "session_box": false,
+                "session_box_color": [4, 5, 6, 128],
                 "nodes": {"smoothing": 2, "prominence": 0.1}});
         let settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
@@ -1427,11 +1452,16 @@ mod tests {
             restored.restore(&saved.charts[0]).unwrap();
             assert_eq!(restored.chart_type_params(), &applied);
         }
-        // A profile saved before level styles existed, including its enabled guides.
+        // A profile saved before level styles existed, including its enabled guides, and one
+        // saved before histogram placement, width, values and box options existed.
         for (saved, guides) in [
             (r#"{"tpo_row_ticks":2}"#, false),
             (
                 r#"{"tpo_row_ticks":2,"profile":{"session":"Chart","rows":"Feed","mode":"BidAsk","developing_poc":false,"developing_value_area":false,"extend_poc":false,"extend_vah":false,"extend_val":false,"nodes":null,"value_area":0.7,"value_area_guides":true}}"#,
+                true,
+            ),
+            (
+                r#"{"tpo_row_ticks":2,"profile":{"session":"Chart","rows":"Feed","mode":"BidAsk","developing_poc":false,"developing_value_area":false,"extend_poc":false,"extend_vah":false,"extend_val":false,"nodes":null,"value_area":0.7,"value_area_guides":true,"poc":true,"poc_color":null,"value_area_high":true,"value_area_high_color":null,"value_area_low":true,"value_area_low_color":null,"up_volume_color":null,"down_volume_color":null,"value_area_up_color":null,"value_area_down_color":null}}"#,
                 true,
             ),
         ] {

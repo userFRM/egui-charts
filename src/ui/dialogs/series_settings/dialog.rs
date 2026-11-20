@@ -587,6 +587,108 @@ mod tests {
         assert_eq!(restored.chart_type_params(), &settings.chart_type_params);
     }
 
+    /// Each placement, width, values and box control of the session profile edits only the draft:
+    /// Cancel drops the edit, and Ok applies it as one undoable step.
+    #[test]
+    fn session_profile_layout_controls_apply_on_ok_only_and_undo() {
+        use egui::Color32;
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        use serde_json::json;
+        let picked =
+            serde_json::to_value(Color32::from_rgba_unmultiplied(49, 27, 146, 128)).unwrap();
+        // Colour wells are found by their seeded colour, so their label is unused.
+        let cases = [
+            ("Placement", Role::ComboBox, "right_aligned", json!(true)),
+            ("Width", Role::SpinButton, "width", json!(0.99)),
+            ("Volume values", Role::CheckBox, "values", json!(true)),
+            ("", Role::ColorWell, "values_color", picked.clone()),
+            ("Session box", Role::CheckBox, "session_box", json!(false)),
+            ("", Role::ColorWell, "session_box_color", picked),
+        ];
+        for (label, role, field, value) in cases {
+            for accept in [false, true] {
+                let mut chart = crate::ChartBuilder::new().build();
+                chart.set_chart_type(ChartType::SessionVolumeProfile);
+                // Theme colours can repeat across rows; seeded ones label each well apart.
+                let mut params = chart.chart_type_params().clone();
+                params.profile.values_color =
+                    Some(Color32::from_rgba_unmultiplied(10, 20, 30, 128));
+                params.profile.session_box_color =
+                    Some(Color32::from_rgba_unmultiplied(40, 50, 60, 128));
+                chart.set_chart_type_params(params);
+                let seeded = chart.trade_profile_settings().clone();
+                let saved = serde_json::to_value(&seeded).unwrap();
+                let mut expected = saved.clone();
+                expected[field] = value.clone();
+                let label = if role == Role::ColorWell {
+                    let color: Color32 = serde_json::from_value(saved[field].clone()).unwrap();
+                    let [r, g, b, _] = color.to_srgba_unmultiplied();
+                    format!("#{r:02X}{g:02X}{b:02X}")
+                } else {
+                    label.to_owned()
+                };
+                let mut dialog = SeriesSettingsDialog::new();
+                dialog.open(SeriesId::MAIN, chart.series_settings());
+                let mut harness = Harness::builder()
+                    .with_context_setup(|ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                    })
+                    .with_size(Vec2::new(1440.0, 900.0))
+                    .build_ui_state(
+                        |ui, (dialog, chart): &mut (SeriesSettingsDialog, crate::Chart)| {
+                            if let SeriesSettingsAction::Apply(_, settings) = dialog.show(ui.ctx())
+                            {
+                                chart.user_action(|c| c.apply_series_settings(&settings));
+                            }
+                        },
+                        (dialog, chart),
+                    );
+                harness.run();
+                // The profile section is taller than the dialog.
+                harness.get_by_role_and_label(role, &label).scroll_to_me();
+                harness.run();
+                let control = harness.get_by_role_and_label(role, &label);
+                match role {
+                    Role::SpinButton => control.decrement_accesskit(),
+                    _ => control.click(),
+                }
+                harness.run();
+                match role {
+                    Role::ComboBox => harness.get_by_label("Right").click(),
+                    Role::ColorWell => harness
+                        .get_by_role_and_label(Role::ColorWell, "#311B92")
+                        .click(),
+                    _ => {}
+                }
+                harness.run();
+                assert_eq!(
+                    harness.state().1.trade_profile_settings(),
+                    &seeded,
+                    "{field}: draft only"
+                );
+                harness
+                    .get_by_label(if accept { "Ok" } else { "Cancel" })
+                    .click();
+                harness.run();
+                let chart = &mut harness.state_mut().1;
+                let current = |chart: &crate::Chart| {
+                    serde_json::to_value(chart.trade_profile_settings()).unwrap()
+                };
+                if accept {
+                    assert_eq!(current(chart), expected, "{field}");
+                    assert!(chart.undo(), "{field}");
+                    assert_eq!(current(chart), saved, "{field}");
+                    assert!(chart.redo(), "{field}");
+                    assert_eq!(current(chart), expected, "{field}");
+                } else {
+                    assert_eq!(current(chart), saved, "{field}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn type_controls_leave_the_footer_inside_short_and_narrow_windows() {
         for dark in [false, true] {
