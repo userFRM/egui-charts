@@ -3179,4 +3179,97 @@ pub(super) mod tests {
         assert_eq!(StudyTemplate::from_study(study).inputs, saved.inputs);
         check("Ratio: restored", &mut restored, id);
     }
+
+    /// Bar studies read the host's other-symbol history by time, keep a gap for a missing bar,
+    /// and shift Ichimoku's leading and lagging plots on the chart's bars.
+    #[test]
+    fn bar_studies_on_another_symbol_draw_its_bars_by_time() {
+        use crate::studies::{IchimokuCloud, Indicator, OHLC4};
+        type Make = fn() -> Box<dyn Indicator>;
+        let cases: [(&str, Make, bool); 2] = [
+            ("Average Price", || Box::new(OHLC4::new()), true),
+            ("Ichimoku", || Box::new(IchimokuCloud::new(2, 3, 4)), false),
+        ];
+        let other: Vec<_> = [10.0, 13.0, 11.0, 15.0, 12.0, 16.0, 14.0, 18.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| {
+                Bar::new(
+                    DateTime::UNIX_EPOCH + Duration::minutes(30 * i as i64),
+                    p,
+                    p + 2.0,
+                    p - 1.0,
+                    p + 1.0,
+                    1.0,
+                )
+            })
+            .collect();
+        for (name, make, gap) in cases {
+            let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&[100.0; 8], 30)));
+            chart.set_timeframe(Timeframe::Min30);
+            let id = chart.add_indicator(make());
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
+                .unwrap();
+            let request = StudyDataRequest {
+                symbol: "OTHER".into(),
+                timeframe: Some(Timeframe::Min30),
+                metric: None,
+            };
+            assert_eq!(
+                chart.study_data_requests(),
+                std::slice::from_ref(&request),
+                "{name}"
+            );
+            let history: Vec<_> = other
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !gap || *i != 2)
+                .map(|(_, bar)| bar.clone())
+                .collect();
+            chart.set_study_data(request, history.clone(), None);
+            crate::widget::test_frames::frame(
+                &egui::Context::default(),
+                &mut chart,
+                0.0,
+                Vec::new(),
+            );
+            let study = chart.indicators().next().unwrap().1;
+            if gap {
+                assert_eq!(
+                    (0..8).map(|i| study.plot_value(0, i)).collect::<Vec<_>>(),
+                    [
+                        Some(10.5),
+                        Some(13.5),
+                        None,
+                        Some(15.5),
+                        Some(12.5),
+                        Some(16.5),
+                        Some(14.5),
+                        Some(18.5),
+                    ]
+                );
+            } else {
+                let mut expected = make();
+                expected.calculate(&history);
+                for line in 0..5 {
+                    for bar in 0..10 {
+                        assert_eq!(
+                            study.plot_value(line, bar),
+                            expected.plot_value(line, bar),
+                            "{name}: line {line}, bar {bar}"
+                        );
+                    }
+                }
+                // Highest high 20, lowest low 13 over the last two/three bars; over four,
+                // lowest low 11. Displacement 3 shifts spans two bars; the last close is 19.
+                assert_eq!(study.plot_value(0, 7), Some(16.5));
+                assert_eq!(study.plot_value(2, 9), Some(16.5));
+                assert_eq!(study.plot_value(3, 9), Some(15.5));
+                assert_eq!(study.plot_value(4, 5), Some(19.0));
+            }
+        }
+    }
 }
