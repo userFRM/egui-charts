@@ -19,7 +19,7 @@ pub struct PitchforkLevel {
     pub width: Option<f32>,
 }
 
-/// The pitchfork's level lines and the fill between adjacent levels.
+/// The pitchfork's level lines, the fill between adjacent levels and their reach.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PitchforkConfig {
     /// Levels, ordered by distance when rendered; negative and non-finite values are ignored.
@@ -28,6 +28,12 @@ pub struct PitchforkConfig {
     pub show_background: bool,
     /// Band opacity, from 0 to 255.
     pub background_opacity: u8,
+    /// Whether levels and bands run forward to the pane edge. Off ends each at the median's
+    /// length past its start: from the median's origin to the second and third anchors' midpoint,
+    /// or for the inside fork from the first leg's midpoint to the third anchor. Extend left and
+    /// right still reach back to the pane edge. The pitchfan ignores it. Older saves extend.
+    #[serde(default = "super::drawing::enabled")]
+    pub extend_lines: bool,
 }
 
 impl Default for PitchforkConfig {
@@ -57,6 +63,7 @@ impl Default for PitchforkConfig {
             ],
             show_background: true,
             background_opacity: 51,
+            extend_lines: true,
         }
     }
 }
@@ -89,6 +96,7 @@ impl PitchforkConfig {
                 .to_vec(),
             show_background: true,
             background_opacity: 20,
+            extend_lines: true,
         }
     }
 }

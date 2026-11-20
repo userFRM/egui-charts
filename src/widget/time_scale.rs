@@ -478,6 +478,7 @@ impl Chart {
 
     /// Ends pending scrolls, animations and momentum, so a programmatic view replaces them.
     pub(super) fn cancel_view_motion(&mut self) {
+        self.history.clear_view_restore();
         self.pending_scroll_time = None;
         self.pending_start_idx = None;
         self.scroll_animation = None;
@@ -1708,6 +1709,8 @@ mod tests {
                             })
                             .collect();
                         let mut chart = Chart::new(BarData::from_bars(bars));
+                        chart.config_mut().navigation_buttons =
+                            crate::config::NavigationButtons::Never;
                         let series = if added {
                             let series = chart.add_series(crate::widget::SeriesOptions {
                                 chart_type,
