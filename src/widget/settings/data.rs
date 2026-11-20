@@ -676,6 +676,10 @@ pub struct OrderFlowSettings {
     pub show_heatmap: bool,
     /// Brightness and resting-size range, retained while the heatmap is off.
     pub heatmap: crate::chart::overlays::LiquidityHeatmapConfig,
+    /// How long to keep depth columns, see
+    /// [`DepthHistoryConfig::retention`](crate::data::DepthHistoryConfig::retention). `None`, the
+    /// default, keeps the full history, including for settings saved without this field.
+    pub heatmap_retention: Option<chrono::TimeDelta>,
     /// Draw the live book's side profile independently of the heatmap.
     pub show_order_book: bool,
     /// Live book measure, order filter and size highlights.
