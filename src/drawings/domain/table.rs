@@ -91,6 +91,75 @@ impl TableConfig {
             .unwrap_or_default()
     }
 
+    /// Sets the style of the cell at `row` and `column`. Default styles at the end of a row, and
+    /// rows without styles at the end of the table, are not kept.
+    pub(crate) fn set_cell(&mut self, row: usize, column: usize, style: TableCellStyle) {
+        if self.cell(row, column) == style {
+            return;
+        }
+        if self.cells.len() <= row {
+            self.cells.resize(row + 1, Vec::new());
+        }
+        let cells = &mut self.cells[row];
+        if cells.len() <= column {
+            cells.resize(column + 1, TableCellStyle::default());
+        }
+        cells[column] = style;
+        while cells.last() == Some(&TableCellStyle::default()) {
+            cells.pop();
+        }
+        while self.cells.last().is_some_and(Vec::is_empty) {
+            self.cells.pop();
+        }
+    }
+
+    /// Makes room for a row inserted at `at`: the heights and styles of the rows from `at` on
+    /// move down with them.
+    pub(crate) fn insert_row(&mut self, at: usize) {
+        if at < self.row_heights.len() {
+            self.row_heights.insert(at, None);
+        }
+        if at < self.cells.len() {
+            self.cells.insert(at, Vec::new());
+        }
+    }
+
+    /// Drops the height and styles of the row at `at`; those of the rows below move up.
+    pub(crate) fn remove_row(&mut self, at: usize) {
+        if at < self.row_heights.len() {
+            self.row_heights.remove(at);
+        }
+        if at < self.cells.len() {
+            self.cells.remove(at);
+        }
+    }
+
+    /// Makes room for a column inserted at `at`: the widths and styles of the columns from `at`
+    /// on move right with them.
+    pub(crate) fn insert_column(&mut self, at: usize) {
+        if at < self.column_widths.len() {
+            self.column_widths.insert(at, None);
+        }
+        for cells in &mut self.cells {
+            if at < cells.len() {
+                cells.insert(at, TableCellStyle::default());
+            }
+        }
+    }
+
+    /// Drops the width and styles of the column at `at`; those of the columns to its right move
+    /// left.
+    pub(crate) fn remove_column(&mut self, at: usize) {
+        if at < self.column_widths.len() {
+            self.column_widths.remove(at);
+        }
+        for cells in &mut self.cells {
+            if at < cells.len() {
+                cells.remove(at);
+            }
+        }
+    }
+
     /// Whether every set width and height is one a table can be drawn with.
     pub(crate) fn is_valid(&self) -> bool {
         (self.column_widths.iter().chain(&self.row_heights))

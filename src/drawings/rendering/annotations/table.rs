@@ -3,7 +3,9 @@
 //! A table keeps its cells in the drawing's text: one row per line and one cell per
 //! tab-separated field.
 
-use crate::drawings::domain::{Drawing, LineTextHorizontalAlign, LineTextVerticalAlign};
+use crate::drawings::domain::{
+    Drawing, LineTextHorizontalAlign, LineTextVerticalAlign, TableCellStyle, TableConfig,
+};
 use crate::localization as l10n;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, CornerRadius, Pos2, Rect, epaint::StrokeKind};
@@ -70,19 +72,34 @@ impl Drawing {
         cells(&self.table_text()) == cells(draft)
     }
 
-    /// Edits table text as a grid of single-line cells, with buttons that add and remove rows
-    /// and columns while keeping at least one of each. Wide grids scroll horizontally.
-    /// Returns the first cell's response.
-    pub(crate) fn edit_table(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> egui::Response {
+    /// Edits table text as a grid of single-line cells, and the settings of the focused cell:
+    /// buttons insert a row above or below it or a column left or right of it and delete its row
+    /// or column, keeping at least one of each, and a row of controls sets its text colour,
+    /// background and alignment. `colors` are the table's text and background colours, shown for
+    /// a cell without its own. Wide grids scroll horizontally. Returns the first cell's response.
+    pub(crate) fn edit_table(
+        ui: &mut egui::Ui,
+        text: &mut String,
+        table: &mut TableConfig,
+        colors: [Color32; 2],
+        id: egui::Id,
+    ) -> egui::Response {
+        use LineTextHorizontalAlign as H;
+        use LineTextVerticalAlign as V;
         let mut grid = cells(text);
+        // Remembered, so that the cell stays chosen while a button takes the click.
+        let focus_key = id.with("focused_cell");
+        let (mut row, mut column) = ui
+            .data(|d| d.get_temp::<(usize, usize)>(focus_key))
+            .unwrap_or_default();
         let mut first = None;
         egui::ScrollArea::horizontal().show(ui, |ui| {
             // Without a minimum, the first frame's narrow columns would stay narrow.
             egui::Grid::new(id.with("cells"))
                 .min_col_width(DESIGN_TOKENS.sizing.annotation.table_cell_width)
                 .show(ui, |ui| {
-                    for (r, row) in grid.iter_mut().enumerate() {
-                        for (c, cell) in row.iter_mut().enumerate() {
+                    for (r, fields) in grid.iter_mut().enumerate() {
+                        for (c, cell) in fields.iter_mut().enumerate() {
                             let field = if r == 0 && c == 0 {
                                 id
                             } else {
@@ -94,6 +111,9 @@ impl Drawing {
                                 ));
                             // Tabs and line breaks separate the cells in the saved text.
                             cell.retain(|ch| !matches!(ch, '\t' | '\n' | '\r'));
+                            if response.has_focus() {
+                                (row, column) = (r, c);
+                            }
                             first.get_or_insert(response);
                         }
                         ui.end_row();
@@ -101,34 +121,105 @@ impl Drawing {
                 });
         });
         let (rows, cols) = (grid.len(), grid[0].len());
+        (row, column) = (row.min(rows - 1), column.min(cols - 1));
         ui.horizontal_wrapped(|ui| {
-            if ui.button(l10n::text(ui.ctx(), "Add row")).clicked() {
-                grid.push(vec![String::new(); cols]);
+            let mut button = |label: &str, enabled: bool| {
+                ui.add_enabled(enabled, egui::Button::new(l10n::text(ui.ctx(), label)))
+                    .clicked()
+            };
+            if button("Insert row above", true) {
+                grid.insert(row, vec![String::new(); cols]);
+                table.insert_row(row);
             }
-            if ui
-                .add_enabled(
-                    rows > 1,
-                    egui::Button::new(l10n::text(ui.ctx(), "Remove row")),
-                )
-                .clicked()
-            {
-                grid.pop();
+            if button("Insert row below", true) {
+                grid.insert(row + 1, vec![String::new(); cols]);
+                table.insert_row(row + 1);
             }
-            if ui.button(l10n::text(ui.ctx(), "Add column")).clicked() {
-                grid.iter_mut().for_each(|row| row.push(String::new()));
+            if button("Insert column left", true) {
+                grid.iter_mut()
+                    .for_each(|fields| fields.insert(column, String::new()));
+                table.insert_column(column);
             }
-            if ui
-                .add_enabled(
-                    cols > 1,
-                    egui::Button::new(l10n::text(ui.ctx(), "Remove column")),
-                )
-                .clicked()
-            {
-                grid.iter_mut().for_each(|row| {
-                    row.pop();
+            if button("Insert column right", true) {
+                grid.iter_mut()
+                    .for_each(|fields| fields.insert(column + 1, String::new()));
+                table.insert_column(column + 1);
+            }
+            if button("Delete row", rows > 1) {
+                grid.remove(row);
+                table.remove_row(row);
+            }
+            if button("Delete column", cols > 1) {
+                grid.iter_mut().for_each(|fields| {
+                    fields.remove(column);
                 });
+                table.remove_column(column);
             }
         });
+        let (rows, cols) = (grid.len(), grid[0].len());
+        (row, column) = (row.min(rows - 1), column.min(cols - 1));
+        ui.data_mut(|d| d.insert_temp(focus_key, (row, column)));
+
+        let opened = table.cell(row, column);
+        let mut style = opened;
+        ui.horizontal_wrapped(|ui| {
+            for (label, color, unset) in [
+                ("Text color", &mut style.text_color, colors[0]),
+                ("Background", &mut style.background, colors[1]),
+            ] {
+                let label = ui.label(l10n::text(ui.ctx(), label));
+                let mut shown = color.map_or(unset, rgba);
+                if egui::color_picker::color_edit_button_srgba(
+                    ui,
+                    &mut shown,
+                    egui::color_picker::Alpha::OnlyBlend,
+                )
+                .labelled_by(label.id)
+                .changed()
+                {
+                    *color = Some(shown.to_srgba_unmultiplied());
+                }
+            }
+            // The table's own alignment is stored as no setting, as on a cell never aligned.
+            let across = style.horizontal_align.unwrap_or(H::Left);
+            for (align, name) in [
+                (H::Left, "Left"),
+                (H::Center, "Center"),
+                (H::Right, "Right"),
+            ] {
+                if ui
+                    .selectable_label(across == align, l10n::text(ui.ctx(), name))
+                    .clicked()
+                {
+                    style.horizontal_align = (align != H::Left).then_some(align);
+                }
+            }
+            let down = style.vertical_align.unwrap_or(V::Middle);
+            for (align, name) in [
+                (V::Top, "Top"),
+                (V::Middle, "Middle"),
+                (V::Bottom, "Bottom"),
+            ] {
+                if ui
+                    .selectable_label(down == align, l10n::text(ui.ctx(), name))
+                    .clicked()
+                {
+                    style.vertical_align = (align != V::Middle).then_some(align);
+                }
+            }
+            if ui
+                .add_enabled(
+                    style != TableCellStyle::default(),
+                    egui::Button::new(l10n::text(ui.ctx(), "Reset cell")),
+                )
+                .clicked()
+            {
+                style = TableCellStyle::default();
+            }
+        });
+        if style != opened {
+            table.set_cell(row, column, style);
+        }
         *text = join(&grid);
         first.expect("a table has at least one cell")
     }
@@ -471,7 +562,6 @@ mod tests {
     fn table_settings_reach_the_painted_cells() {
         use crate::drawings::{
             DrawingToolType, LineTextHorizontalAlign as H, LineTextVerticalAlign as V,
-            TableCellStyle, TableConfig,
         };
         type Case = (&'static str, &'static str, fn(&mut Drawing), fn(&Painted));
         let cases: [Case; 5] = [
@@ -640,5 +730,51 @@ mod tests {
             eprintln!("{name}");
             check(&paint(&table));
         }
+    }
+
+    /// Guards #3581: the editor inserts a row below the focused middle cell and deletes its
+    /// column, moving each column's width, each row's height and each cell's style with its
+    /// cells, and styles the cell that keeps the focus.
+    #[test]
+    fn editor_inserts_and_deletes_at_the_focused_cell() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let plain = TableCellStyle::default();
+        let red = TableCellStyle {
+            background: Some([255, 0, 0, 255]),
+            ..plain
+        };
+        let mut table = TableConfig::default();
+        table.column_widths = vec![None, Some(90.0), Some(120.0)];
+        table.row_heights = vec![None, Some(30.0), Some(40.0)];
+        table.cells = vec![vec![], vec![], vec![plain, plain, red]];
+        let mut harness = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(600.0, 400.0))
+            .build_ui_state(
+                |ui, (text, table): &mut (String, TableConfig)| {
+                    let colors = [Color32::WHITE, Color32::BLACK];
+                    Drawing::edit_table(ui, text, table, colors, egui::Id::new("table"));
+                },
+                ("a\tb\tc\nd\te\tf\ng\th\ti".to_owned(), table),
+            );
+        harness.run();
+        harness.get_by_value("e").click();
+        harness.run();
+        for button in ["Insert row below", "Delete column", "Right"] {
+            harness.get_by_label(button).click();
+            harness.run();
+        }
+        let (text, table) = harness.state();
+        assert_eq!(text, "a\tc\nd\tf\n\t\ng\ti");
+        assert_eq!(table.column_widths, [None, Some(120.0)]);
+        assert_eq!(table.row_heights, [None, Some(30.0), None, Some(40.0)]);
+        let right = TableCellStyle {
+            horizontal_align: Some(LineTextHorizontalAlign::Right),
+            ..plain
+        };
+        assert_eq!(
+            table.cells,
+            [vec![], vec![plain, right], vec![], vec![plain, red]]
+        );
     }
 }

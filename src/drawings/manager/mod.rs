@@ -4,7 +4,7 @@
 //! composing your own renderer. Direct users synchronize screen coordinates with
 //! [`DrawingManager::update_all_screen_coords`] after changing the viewport.
 
-use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType, HandlePos};
+use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType, HandlePos, TableConfig};
 use crate::drawings::services::{
     HandleConfig, HistoryService, SelectionService, SnapOptions, SnapService,
 };
@@ -189,6 +189,8 @@ pub(crate) struct TextEditState {
     pub inline: bool,
     /// A retracement level whose custom text is being edited.
     pub fib_level: Option<usize>,
+    /// The table settings being edited with a table's cells; the defaults for other tools.
+    pub table: TableConfig,
 }
 
 impl TextEditState {

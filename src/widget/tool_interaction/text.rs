@@ -1,7 +1,7 @@
 //! Inline editing for text annotations.
 
 use crate::drawings::manager::TextEditState;
-use crate::drawings::{DrawingManager, DrawingToolType};
+use crate::drawings::{DrawingManager, DrawingToolType, TableConfig};
 use crate::localization as l10n;
 use crate::model::PostLink;
 use egui::{Id, Key, Modifiers, Rect, Ui};
@@ -46,6 +46,7 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize, placed: bool) 
         placed,
         inline: edits_in_place(drawing.tool_type),
         fib_level: None,
+        table: drawing.table_config().into_owned(),
     });
     manager.select(id);
 }
@@ -114,6 +115,7 @@ pub(super) fn begin_fibonacci_edit(
             placed: false,
             inline: true,
             fib_level: Some(index),
+            table: TableConfig::default(),
         });
         manager.select(id);
     }
@@ -222,6 +224,7 @@ fn open_shape_edit(ui: &Ui, manager: &mut DrawingManager, id: usize, pos: egui::
             placed: false,
             inline: true,
             fib_level: None,
+            table: TableConfig::default(),
         });
     }
 }
@@ -415,6 +418,7 @@ pub(super) fn show_editor(
         DrawingToolType::Idea => "Title on the first line, then the idea",
         _ => "",
     };
+    let box_colors = drawing.text_box_colors(ui.ctx());
     let mut outside = false;
     egui::Area::new(id)
         .order(egui::Order::Foreground)
@@ -438,7 +442,13 @@ pub(super) fn show_editor(
                     .max_height((height - 48.0).max(1.0))
                     .show(ui, |ui| {
                         if table {
-                            crate::drawings::Drawing::edit_table(ui, &mut editor.draft, field_id)
+                            crate::drawings::Drawing::edit_table(
+                                ui,
+                                &mut editor.draft,
+                                &mut editor.table,
+                                [box_colors.text, box_colors.fill],
+                                field_id,
+                            )
                         } else {
                             ui.add(
                                 egui::TextEdit::multiline(&mut editor.draft)
@@ -459,14 +469,19 @@ pub(super) fn show_editor(
                     "Ctrl/Cmd+Enter to save, Esc to cancel",
                 ));
             });
-            outside = frame > opened_frame && response.response.clicked_elsewhere();
+            // A click in a colour popup the table editor opened is outside its frame.
+            outside = frame > opened_frame
+                && response.response.clicked_elsewhere()
+                && !egui::Popup::is_any_open(ui.ctx());
         });
     if cancel || commit || outside {
         ui.memory_mut(|memory| memory.surrender_focus(id.with("field")));
         let address = editor.draft.trim();
         let unchanged = match &drawing.post {
             Some(post) => post.link.trim() == address,
-            None if table => drawing.same_table_cells(&editor.draft),
+            None if table => {
+                drawing.same_table_cells(&editor.draft) && *drawing.table_config() == editor.table
+            }
             None => drawing.text.as_deref() == Some(editor.draft.as_str()),
         };
         if !cancel && !unchanged {
@@ -482,6 +497,10 @@ pub(super) fn show_editor(
             let _ = manager.edit_drawing(editor.id, |drawing| {
                 drawing.text = post.is_none().then_some(editor.draft);
                 drawing.post = post;
+                if table {
+                    drawing.table =
+                        (editor.table != TableConfig::default()).then_some(editor.table);
+                }
             });
         }
     } else {
