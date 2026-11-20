@@ -42,6 +42,12 @@ impl Drawing {
             .unwrap_or_else(|| join(&vec![vec![String::new(); NEW_TABLE.1]; NEW_TABLE.0]))
     }
 
+    /// Whether `draft` holds the same cells as the table's text, so that closing its editor
+    /// changes nothing. Padding a short row or writing out an empty table is no change.
+    pub(crate) fn same_table_cells(&self, draft: &str) -> bool {
+        cells(&self.table_text()) == cells(draft)
+    }
+
     /// Edits table text as a grid of single-line cells, with buttons that add and remove rows
     /// and columns while keeping at least one of each. Wide grids scroll horizontally.
     /// Returns the first cell's response.

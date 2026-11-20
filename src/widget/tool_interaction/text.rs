@@ -466,6 +466,7 @@ pub(super) fn show_editor(
         let address = editor.draft.trim();
         let unchanged = match &drawing.post {
             Some(post) => post.link.trim() == address,
+            None if table => drawing.same_table_cells(&editor.draft),
             None => drawing.text.as_deref() == Some(editor.draft.as_str()),
         };
         if !cancel && !unchanged {
@@ -1087,6 +1088,47 @@ mod tests {
                 );
                 assert!(!manager.can_undo());
             }
+        }
+    }
+
+    /// Closing a table's editor without typing leaves the table as it was and records no edit:
+    /// a table placed without text, whose editor writes out its empty cells, and one whose rows
+    /// hold different numbers of cells, whose editor pads the short row.
+    #[test]
+    fn unedited_table_drafts_leave_the_table_alone() {
+        use crate::drawings::{Drawing, DrawingManager};
+        use egui::{Id, RawInput, Rect};
+        for text in [None, Some("a\tb\nc")] {
+            let ctx = Context::default();
+            let pane = Rect::from_min_max(pos2(20.0, 20.0), pos2(620.0, 380.0));
+            let mut manager = DrawingManager::new();
+            let mut drawing = Drawing::new(7, DrawingToolType::Table);
+            drawing.points = vec![pos2(60.0, 60.0)];
+            drawing.text = text.map(Into::into);
+            manager.drawings.push(drawing);
+            super::begin_edit(&mut manager, 7, false);
+            let save = Event::Key {
+                key: Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            };
+            for (time, events) in [vec![], vec![], vec![], vec![save]].into_iter().enumerate() {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0))),
+                        time: Some(time as f64 * 0.1),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| super::show_editor(ui, &mut manager, Id::new("chart"), pane, false),
+                )
+                .drop_without_applying_deltas();
+            }
+            assert!(manager.text_editor.is_none(), "{text:?}");
+            assert_eq!(manager.drawings[0].text.as_deref(), text);
+            assert!(!manager.can_undo(), "{text:?}");
         }
     }
 
