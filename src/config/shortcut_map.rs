@@ -246,7 +246,7 @@ pub(crate) fn pressed(event: &Event) -> Option<(egui::Key, egui::Modifiers)> {
         } => Some((*key, *modifiers)),
         Event::Copy => Some((egui::Key::C, egui::Modifiers::COMMAND)),
         Event::Cut => Some((egui::Key::X, egui::Modifiers::COMMAND)),
-        Event::Paste(_) => Some((egui::Key::V, egui::Modifiers::COMMAND)),
+        Event::Paste(_) | Event::PasteImage(_) => Some((egui::Key::V, egui::Modifiers::COMMAND)),
         _ => None,
     }
 }
