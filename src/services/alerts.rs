@@ -27,7 +27,9 @@ use crate::model::{Alert, AlertId, AlertTrigger};
 /// conditions [`InsideChannel`](crate::model::AlertCondition::InsideChannel) and
 /// [`OutsideChannel`](crate::model::AlertCondition::OutsideChannel) hold on every evaluation
 /// while the value is in that state, so pair them with a frequency that limits repeats, whereas
-/// entering and exiting hold only on the evaluation that crosses a boundary.
+/// entering and exiting hold only on the evaluation that crosses a boundary. A crossing,
+/// entering or exiting rule of an alert created or changed by [`save`](Alerts::save) needs a
+/// value observed after the save on the side it leaves: a move made before the save never fires it.
 /// [`AlertFrequency::OncePerMinute`](crate::model::AlertFrequency::OncePerMinute) allows one
 /// trigger per UTC clock minute, from `hh:mm:00` up to but excluding the next minute, whatever the
 /// chart's interval. An alert's [`schedule`](crate::model::Alert::schedule) allows triggers only when

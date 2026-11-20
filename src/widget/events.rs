@@ -624,10 +624,11 @@ impl Chart {
     }
 
     pub(super) fn data_loaded(&mut self, series: SeriesId) {
-        self.push_event(ChartEvent::DataLoaded {
-            series,
-            bars: self.series_len(series),
-        });
+        let bars = self.series_len(series);
+        if series == SeriesId::MAIN {
+            self.history.data_loaded(bars);
+        }
+        self.push_event(ChartEvent::DataLoaded { series, bars });
     }
 
     pub(super) fn data_set(&mut self, series: SeriesId) {

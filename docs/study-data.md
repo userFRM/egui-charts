@@ -57,12 +57,15 @@ the viewport.
 
 Up/Down Volume, Volume Delta and Cumulative Volume Delta need actual intrabars from the host.
 Their [`data_requests`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.data_requests) declaration uses one second on second charts, one minute on minute and
-hour charts, five minutes on daily charts and one hour on longer intervals. A custom interval
-that cannot contain whole candles of that size uses one-second intrabars. The Lower interval
-input chooses another interval; one that is not shorter than the chart's or does not divide it
-reads the automatic one. Subsecond and tick-count charts have no request. 24-hour Volume
-requests the automatic interval only where chart bars cannot hold exactly 24 hours, on intervals
-longer than a day or that do not divide one, and sums chart bars until it is supplied. Its Units input sums the supplied volume (default) or, for
+hour charts, five minutes on charts of whole days such as 1D and 2D, and one hour on weekly,
+monthly and other longer intervals. A custom interval that cannot contain whole candles of that
+size uses one-second intrabars. The Lower interval input, shown as Auto with the interval it
+picks while unset, chooses another interval: one no longer than the chart's is read as chosen,
+also when it does not divide the chart interval, and a longer or trade-based one is not read and
+the study shows a table saying so. Subsecond and tick-count charts have no request. 24-hour
+Volume uses the same length-based rule, keeping one hour on whole-day custom charts, only
+where chart bars cannot hold exactly 24 hours: on intervals longer than a day or that do not
+divide one. It sums chart bars until those candles are supplied. Its Units input sums the supplied volume (default) or, for
 volume in base units, an estimate of the quote amount: each candle's volume times its own price,
 close unless the Price source input says otherwise, labelled with [`Instrument::currency`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Instrument.html#structfield.currency), which the host must set.
 The Target currency input converts each candle's amount at the rate in effect at its open; the
@@ -71,10 +74,11 @@ like any metric. Without the currency or a rate, or with a non-finite or
 negative value in the window, the quote amount is missing. A study calculated on another
 Interval requests that Interval's bars first and, once they are supplied, the candles and
 exchange rates it reads with them, as on a chart of that interval, so read the request again
-after supplying them. Supply
-the same symbol and session as the chart. A study set to another Symbol, with or without a
-price source, requests that symbol's bars instead. Its additional histories of the chart's
-symbol, such as Technical Ratings' table intervals, also use the chosen symbol. A study such as Ratio, Spread or Correlation
+after supplying them. A study calculated on another Symbol requests that symbol's bars first
+and, once they are supplied, the bars of other intervals it reads with them for that symbol.
+Supply each requested symbol with its own session. A study set to another Symbol, with or
+without a price source, also requests its additional chart-symbol histories, such as Technical
+Ratings' table intervals, on the chosen symbol. A study such as Ratio, Spread or Correlation
 Coefficient that names another symbol also requests that symbol's bars on the Interval, with
 the Interval's bars. Read the request again after a symbol, interval or input change:
 

@@ -64,7 +64,8 @@
 //! Accumulation/Distribution bar with a high equal to its low adds nothing, a Balance of Power bar with a high equal
 //! to its low has no value and its average skips it, the Price Momentum Oscillator's smoothings
 //! and signal seed with the mean of their first inputs, the Relative Volatility Index and SMI Ergodic EMAs seed with
-//! their first input and an unchanged close counts as a falling bar in the Relative Volatility Index,
+//! their first input, an unchanged close counts as a falling bar in the Relative Volatility Index
+//! and as a down body in Bollinger Bars,
 //! the Money Flow Index assigns the first bar's flow to both positive and negative sums, and Parabolic
 //! SAR reverses when the price crosses it, not on a touch), otherwise a published one (Wilder's first true range is high minus
 //! low, Keltner's EMA seeds with the SMA of the first closes, Supertrend starts in a down trend on
