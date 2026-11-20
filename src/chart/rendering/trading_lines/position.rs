@@ -1,8 +1,8 @@
 use super::{
     Button, COVERAGE_CELL, ExitButtons, HEIGHT, LABEL_INSET, Level, NODE_INSET, PADDING, PnlUnit,
     TradingLabelAlignment, TradingLineAction, TradingLineOptions, coverage_text, direction,
-    exit_buttons_width, label_fill, menu_entry, offered_exits, paint_coverage, paint_glyph,
-    pnl_text,
+    exit_buttons_width, label_fill, line_left, line_width, menu_entry, offered_exits,
+    paint_coverage, paint_glyph, pnl_text,
 };
 use crate::chart::coords::ChartMapping;
 use crate::chart::rendering::render_price_line;
@@ -48,7 +48,11 @@ pub(super) fn show_position(
         return None;
     }
     let painter = ui.painter().with_clip_rect(mapping.rect);
-    let line = PriceLine::new(entry, color).with_style(
+    let width = line_width(
+        look.and_then(|look| look.line_width)
+            .unwrap_or(options.line_width),
+    );
+    let line = PriceLine::new(entry, color).with_width(width).with_style(
         look.and_then(|look| look.line_style)
             .unwrap_or(LineStyle::Solid),
     );
@@ -131,16 +135,19 @@ pub(super) fn show_position(
         (left, left + label_width)
     };
     let label = Rect::from_min_max(pos2(left, y - HEIGHT / 2.0), pos2(right, y + HEIGHT / 2.0));
+    let line_left = line_left(
+        mapping.rect,
+        label.left(),
+        options.extend_lines,
+        look.and_then(|look| look.line_length)
+            .unwrap_or(options.line_length),
+    );
     render_price_line(
         &painter,
         mapping.rect,
         &mapping.price,
         &line,
-        if options.extend_lines {
-            mapping.rect.left()
-        } else {
-            label.left()
-        },
+        line_left,
         false,
         f32::INFINITY,
     );
@@ -194,7 +201,10 @@ pub(super) fn show_position(
                 key.with("reverse"),
                 Sense::click(),
             )
-            .on_hover_text(l10n::text(ui.ctx(), "Reverse position"));
+            .on_hover_text(
+                look.and_then(|look| look.reverse_hover_text.clone())
+                    .unwrap_or_else(|| l10n::text(ui.ctx(), "Reverse position")),
+            );
         painter.rect(
             rect,
             4.0,
@@ -217,11 +227,7 @@ pub(super) fn show_position(
         x: right - total,
         y,
         entry,
-        line_left: if options.extend_lines {
-            mapping.rect.left()
-        } else {
-            label.left()
-        },
+        line_left,
         preview_right: right,
         pnl: &|unit, price| result(unit, (price - entry) * direction(side)).0,
     }
@@ -316,7 +322,10 @@ pub(super) fn show_position(
                 key.with("close"),
                 Sense::click(),
             )
-            .on_hover_text(l10n::text(ui.ctx(), "Close position"));
+            .on_hover_text(
+                look.and_then(|look| look.close_hover_text.clone())
+                    .unwrap_or_else(|| l10n::text(ui.ctx(), "Close position")),
+            );
         painter.vline(rect.left(), rect.y_range(), stroke);
         if response.hovered() {
             painter.rect_filled(rect.shrink(1.0), 1.0, color.gamma_multiply(0.2));
