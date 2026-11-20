@@ -3236,6 +3236,8 @@ mod tests {
             last_fill: None,
             pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
+            account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         // The action, the text labels and the outlines with their stroke colours.
         let frame = |ctx: &egui::Context, ladder: &mut Ladder, events| {
