@@ -1276,6 +1276,7 @@ mod tests {
             show_single_prints: false,
             show_statistics: false,
             show_opening_range: true,
+            labels: crate::model::TPOLabels::default(),
             show_closing_price: false,
             show_volume_profile: false,
             split_sessions: false,
