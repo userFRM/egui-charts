@@ -451,7 +451,7 @@ impl DemoApp {
                 return;
             }
             "date" => {
-                self.date_picker.open();
+                self.date_picker.open_for_chart(&self.chart);
                 return;
             }
             "reset" => {

@@ -1259,6 +1259,11 @@ impl DemoApp {
         self.settings_state = self.chart_settings_state();
         self.settings_dialog
             .offer_apply_to_all(self.layout_has_other_charts());
+        self.settings_dialog.set_depth_history_config(
+            self.chart
+                .depth_history(SeriesId::MAIN)
+                .map(DepthHistory::config),
+        );
         self.settings_dialog.open(self.settings_state.clone());
     }
 
@@ -1332,6 +1337,7 @@ impl DemoApp {
             SettingsAction::PreviewSound { name, volume } => {
                 self.play_sound(ctx, &name, volume, true)
             }
+            SettingsAction::ClearDepthHistory => self.chart.clear_depth_history(),
             SettingsAction::Cancel => {}
             _ => {}
         }
@@ -1419,8 +1425,15 @@ impl DemoApp {
 
         // Date picker (opened from the bottom toolbar): jump the visible window.
         match self.date_picker.show(ctx) {
-            DatePickerAction::GoToDate(date) => self.go_to_date(date),
-            DatePickerAction::SetRange(start, end) => self.set_date_range(start, end),
+            DatePickerAction::GoToDate { date, time } => self.go_to_date(date, time),
+            DatePickerAction::SetRange {
+                start,
+                start_time,
+                end,
+                end_time,
+            } => {
+                self.set_date_range(start, start_time, end, end_time);
+            }
             DatePickerAction::Cancel | DatePickerAction::None => {}
             _ => {}
         }
@@ -1573,33 +1586,27 @@ impl DemoApp {
         });
     }
 
-    /// Shows the days `start` to `end`, both included, as the active chart's time axis counts
-    /// them.
-    fn set_date_range(&mut self, start: chrono::NaiveDate, end: chrono::NaiveDate) {
-        let Some((from, next)) = day_start(&self.chart, start)
-            .zip(end.succ_opt().and_then(|next| day_start(&self.chart, next)))
-        else {
-            return;
-        };
-        let range =
-            egui_charts::widget::VisibleTimeRange::new(from, next - chrono::TimeDelta::seconds(1));
+    /// Shows the days `start` to `end`, both included, or the times on them, in the active
+    /// chart's zone.
+    fn set_date_range(
+        &mut self,
+        start: chrono::NaiveDate,
+        start_time: Option<chrono::NaiveTime>,
+        end: chrono::NaiveDate,
+        end_time: Option<chrono::NaiveTime>,
+    ) {
         let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
         charts.insert(self.layout_slot, &mut self.chart);
-        self.layout.apply_date_range(&mut charts, range);
+        self.layout
+            .apply_local_date_range(&mut charts, start, start_time, end, end_time);
     }
 
-    /// Scrolls to the first bar of `date` on the chart's time axis.
-    fn go_to_date(&mut self, date: chrono::NaiveDate) {
-        let Some(start) = day_start(&self.chart, date) else {
-            return;
-        };
-        let target = self
-            .bars
-            .iter()
-            .find(|bar| bar.time >= start)
-            .or_else(|| self.bars.last())
-            .map_or(start, |bar| bar.time);
-        self.chart.scroll_to_time(target);
+    /// Goes to `time` on `date`, or to its start, on the active chart and the charts that share
+    /// date ranges with it.
+    fn go_to_date(&mut self, date: chrono::NaiveDate, time: Option<chrono::NaiveTime>) {
+        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        charts.insert(self.layout_slot, &mut self.chart);
+        self.layout.go_to_local_time(&mut charts, date, time);
     }
 
     fn run_export(
@@ -3404,7 +3411,7 @@ impl DemoApp {
                     self.layout.apply_date_range(&mut charts, range);
                 }
             }
-            TimeframeToolbarAction::OpenDatePicker => self.date_picker.open(),
+            TimeframeToolbarAction::OpenDatePicker => self.date_picker.open_for_chart(&self.chart),
             TimeframeToolbarAction::OpenTimezoneMenu => {
                 // On own data the zone of the profile is offered too, to return to it.
                 let mut zones = default_time_zones();
@@ -4186,7 +4193,7 @@ impl DemoApp {
                 self.interval_entry = Some(String::new());
                 self.interval_focus = true;
             }
-            A::GoToDate => self.date_picker.open(),
+            A::GoToDate => self.date_picker.open_for_chart(&self.chart),
             A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
             A::SaveLayout => self.handle_top_toolbar(ctx, TopToolbarAction::Save),
             A::OpenLayout => {
@@ -4485,35 +4492,6 @@ fn load_view(chart: &mut Chart, live: &LiveFeed, session: SessionType, adjusted:
     chart.reload_feed();
     chart.set_instrument(Some(live.instrument()));
     chart.set_extended_hours(session != SessionType::RTH);
-}
-
-/// The first instant of `date` on the chart's time axis. Where a clock change skips midnight
-/// the day starts at the first time that exists, and a repeated midnight counts the first time.
-fn day_start(chart: &Chart, date: chrono::NaiveDate) -> Option<chrono::DateTime<chrono::Utc>> {
-    use chrono::TimeZone;
-    use egui_charts::config::TimezoneMode;
-    let zone = match &chart.chart_options().time_scale.timezone {
-        TimezoneMode::Local => None,
-        // An instrument with a zone of its own is shown in it.
-        TimezoneMode::Exchange(fallback) => Some(
-            chart
-                .instrument()
-                .and_then(|instrument| instrument.time_zone.clone())
-                .unwrap_or_else(|| fallback.clone()),
-        ),
-        zone => Some(zone.to_tz().unwrap_or_default()),
-    };
-    let midnight = date.and_time(chrono::NaiveTime::MIN);
-    (0..=24 * 60 * 60).find_map(|second| {
-        let time = midnight.checked_add_signed(chrono::TimeDelta::seconds(second))?;
-        Some(match &zone {
-            Some(zone) => zone.from_local_datetime(&time).earliest()?.to_utc(),
-            None => chrono::Local
-                .from_local_datetime(&time)
-                .earliest()?
-                .to_utc(),
-        })
-    })
 }
 
 fn apply_timezone(chart: &mut Chart, toolbar: &mut TimeframeToolbar, name: &str) {
@@ -7767,9 +7745,16 @@ mod tests {
             );
             let shaded = |app: &mut DemoApp| {
                 settle(app, &ctx);
-                app.chart.config_mut().extended_hours_color = shading;
+                // This fixture detects the shared fill, independent of fresh phase defaults.
+                let config = app.chart.config_mut();
+                config.extended_hours_color = shading;
+                config.premarket_color = None;
+                config.postmarket_color = None;
                 for extra in &mut app.extra_charts {
-                    extra.chart.config_mut().extended_hours_color = shading;
+                    let config = extra.chart.config_mut();
+                    config.extended_hours_color = shading;
+                    config.premarket_color = None;
+                    config.postmarket_color = None;
                 }
                 let output = ctx.run_ui(
                     egui::RawInput {
@@ -10014,7 +9999,7 @@ mod tests {
                         for sync in [false, true] {
                             app.layout.sync.sync_date_range = sync;
                             let before = app.extra_charts[0].chart.get_time_scale_state();
-                            app.set_date_range(day, day);
+                            app.set_date_range(day, None, day, None);
                             frame(&mut app);
                             assert_date_range(&app.chart);
                             if sync {
@@ -10220,12 +10205,12 @@ mod tests {
             let expected: chrono::DateTime<chrono::Utc> = expected.parse().unwrap();
             (time - expected).abs() <= chrono::TimeDelta::minutes(5)
         };
-        app.go_to_date(day(10));
+        app.go_to_date(day(10), None);
         settle(&mut app, &ctx);
         let span = app.chart.visible_time_range().unwrap();
         let centre = span.from + (span.to - span.from) / 2;
         assert!(near(centre, "2026-11-10T05:00:00Z"), "{span:?}");
-        app.set_date_range(day(9), day(10));
+        app.set_date_range(day(9), None, day(10), None);
         settle(&mut app, &ctx);
         let span = app.chart.visible_time_range().unwrap();
         assert!(near(span.from, "2026-11-09T05:00:00Z"), "{span:?}");

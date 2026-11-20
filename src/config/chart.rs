@@ -394,7 +394,9 @@ pub struct ChartConfig {
     pub show_horizontal_grid: bool,
     /// Whether to show vertical grid lines
     pub show_vertical_grid: bool,
-    /// Whether to show volume bars
+    /// Whether to show volume bars. With the `studies` feature it adds a Volume study on the next
+    /// frame unless one is on the chart, and a user action that turns it on at the chart's study
+    /// cap without one leaves it off.
     pub show_volume: bool,
     /// Volume height as a fraction of the price pane above `volume_baseline_inset`
     pub volume_height_fraction: f32,
@@ -439,7 +441,7 @@ pub struct ChartConfig {
     /// Show the host-supplied price unit above the price ticks.
     pub show_unit: bool,
     /// Show the currency and unit only while the pointer is over the price scale or their menu
-    /// is open. Off by default: they stay visible.
+    /// is open. On by default; layouts saved without this field keep them always visible.
     #[serde(default)]
     pub currency_unit_on_hover: bool,
     /// Show Auto, Log and Percent buttons in chart navigation.
@@ -595,12 +597,12 @@ pub struct ChartConfig {
     pub price_target_negative_color: Color32,
     /// Fill of the pre-market: extended hours that regular hours of the same trading date
     /// follow. `None` uses [`extended_hours_color`](Self::extended_hours_color).
-    /// Default: None
+    /// New charts use orange (#FF9800) at 8% opacity; older saved configurations keep the fallback.
     #[serde(default)]
     pub premarket_color: Option<Color32>,
     /// Fill of the post-market: extended hours that no regular hours of the same trading date
     /// follow. `None` uses [`extended_hours_color`](Self::extended_hours_color).
-    /// Default: None
+    /// New charts use blue (#2962FF) at 8% opacity; older saved configurations keep the fallback.
     #[serde(default)]
     pub postmarket_color: Option<Color32>,
     /// Shade the pre-market while [`show_extended_hours`](Self::show_extended_hours) is on.
@@ -728,7 +730,7 @@ impl Default for ChartConfig {
             indicator_backdrop_opacity: 0.6,
             show_currency: true,
             show_unit: true,
-            currency_unit_on_hover: false,
+            currency_unit_on_hover: true,
             show_scale_mode_buttons: true,
             show_plus_button: true,
             show_extended_session_price: true,
@@ -785,8 +787,8 @@ impl Default for ChartConfig {
             extended_hours_color: Color32::PLACEHOLDER,
             price_target_positive_color: Color32::PLACEHOLDER,
             price_target_negative_color: Color32::PLACEHOLDER,
-            premarket_color: None,
-            postmarket_color: None,
+            premarket_color: Some(Color32::from_rgba_unmultiplied(255, 152, 0, 20)),
+            postmarket_color: Some(Color32::from_rgba_unmultiplied(41, 98, 255, 20)),
             shade_premarket: true,
             shade_postmarket: true,
             overnight_hours_color: Color32::PLACEHOLDER,
