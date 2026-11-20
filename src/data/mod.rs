@@ -96,7 +96,8 @@ pub use options_volume::{
 };
 #[cfg(feature = "studies")]
 pub(crate) use volume_profile::{
-    DevelopingVolume, ExposureProfile, StrikeExposure, grid_row, price_span, whole_tick_rows,
+    DevelopingVolume, ExposureProfile, OptionWalls, StrikeExposure, grid_row, price_span,
+    whole_tick_rows,
 };
 #[cfg_attr(
     not(any(test, feature = "widget")),

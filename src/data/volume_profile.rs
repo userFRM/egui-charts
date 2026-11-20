@@ -341,6 +341,16 @@ pub(crate) struct ExpiryParts {
     pub rows: Vec<Vec<f64>>,
 }
 
+/// The call and put walls of an options profile drawn at its expiration, marked across its span.
+#[cfg(any(feature = "studies", feature = "widget"))]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct OptionWalls {
+    /// Call and put wall strikes; `None` for a side without one.
+    pub strikes: [Option<f64>; 2],
+    /// Call and put wall colours, unmultiplied RGBA.
+    pub colors: [[u8; 4]; 2],
+}
+
 /// Volume traded at each price row of bars or host-supplied option strikes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VolumeProfile {
@@ -368,6 +378,12 @@ pub struct VolumeProfile {
     // Each row holds its strike's puts over calls, for an options profile of put/call ratios.
     #[cfg(any(feature = "studies", feature = "widget"))]
     pub(crate) ratio_rows: bool,
+    // The walls of an options profile drawn at its expiration.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) walls: Option<OptionWalls>,
+    // The expiration date an options profile is drawn at and the colour of its time scale tag.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) expiry_tag: Option<(chrono::NaiveDate, [u8; 4])>,
 }
 
 fn valid_bar(bar: &Bar) -> bool {
@@ -687,6 +703,10 @@ impl VolumeProfile {
             expiry_parts: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             ratio_rows: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            walls: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_tag: None,
         };
         let mut total = 0.0;
         let rows = data
@@ -762,6 +782,10 @@ impl VolumeProfile {
             expiry_parts: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             ratio_rows: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            walls: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_tag: None,
         };
         for (&level, row) in &bar.levels {
             let i = (level - first) as usize;
@@ -878,6 +902,10 @@ impl VolumeProfile {
             expiry_parts: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             ratio_rows: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            walls: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_tag: None,
         })
     }
 

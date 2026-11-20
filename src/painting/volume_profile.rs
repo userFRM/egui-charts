@@ -111,7 +111,8 @@ pub(crate) fn paint_profile(
         } => (true, anchored, false, 0.3, poc_width),
     };
     if profile.exposure.is_some() {
-        paint_exposure(painter, profile, config, span, share, price_to_y);
+        paint_exposure(painter, profile, config, span.clone(), share, price_to_y);
+        paint_option_walls(painter, profile, span, right_aligned, price_to_y);
         return;
     }
     let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(config.value_area()) else {
@@ -356,6 +357,7 @@ pub(crate) fn paint_profile(
 
     if !drawing {
         draw_lines();
+        paint_option_walls(painter, profile, span, right_aligned, price_to_y);
     }
     if let Some(parts) = &profile.expiry_parts {
         paint_expiry_key(painter, &parts.labels, rect, !right_aligned);
@@ -370,6 +372,39 @@ pub(crate) fn paint_profile(
         color
     };
     paint_source_note(painter, profile.source(), rect, note_right, note_color);
+}
+
+fn paint_option_walls(
+    painter: &egui::Painter,
+    profile: &VolumeProfile,
+    span: Range<f32>,
+    right_aligned: bool,
+    price_to_y: &dyn Fn(f64) -> f32,
+) {
+    let Some(walls) = &profile.walls else {
+        return;
+    };
+    for (side, label) in ["Call wall", "Put wall"].into_iter().enumerate() {
+        let Some(strike) = walls.strikes[side] else {
+            continue;
+        };
+        let [r, g, b, a] = walls.colors[side];
+        let color = Color32::from_rgba_unmultiplied(r, g, b, a);
+        let y = price_to_y(strike);
+        painter.hline(span.start..=span.end, y, Stroke::new(1.0, color));
+        let (x, align) = if right_aligned {
+            (span.end - 2.0, egui::Align2::RIGHT_BOTTOM)
+        } else {
+            (span.start + 2.0, egui::Align2::LEFT_BOTTOM)
+        };
+        painter.text(
+            Pos2::new(x, y - 2.0),
+            align,
+            crate::localization::text(painter.ctx(), label),
+            egui::FontId::proportional(typography::XS),
+            color,
+        );
+    }
 }
 
 // Both painting and selection use these signed rectangles, including inverted price scales.
