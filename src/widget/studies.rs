@@ -261,6 +261,7 @@ impl Chart {
     /// The caption the host set for study `id` with
     /// [`set_indicator_inputs`](Self::set_indicator_inputs), empty if none. Copies and saved
     /// layouts keep this one, so that a copy derives its own.
+    #[cfg(feature = "studies")]
     pub(crate) fn host_indicator_inputs(&self, id: SeriesId) -> Option<&str> {
         self.study_ids
             .iter()
