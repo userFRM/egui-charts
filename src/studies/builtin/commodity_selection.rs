@@ -155,6 +155,10 @@ impl Indicator for CommoditySelectionIndex {
         false
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }
@@ -289,6 +293,10 @@ impl Indicator for TrendDetectionIndex {
 
     fn is_overlay(&self) -> bool {
         false
+    }
+
+    fn draws_only_plots(&self) -> bool {
+        true
     }
 
     fn is_visible(&self) -> bool {

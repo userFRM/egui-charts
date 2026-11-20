@@ -369,7 +369,7 @@ impl Chart {
         chart_rect_min_x: f32,
         has_active_drawing_tool: bool,
     ) {
-        // CRITICAL: Skip panning if box zoom is active (right-click drag)
+        // A box-zoom selection in progress owns the drag, so it does not pan.
         let box_zoom_active = self.box_zoom.active;
         // The frame clock times the samples, as it times the input they come from.
         let (is_touch, multi_touch, now) = ui.input(|i| {
@@ -664,10 +664,14 @@ impl Chart {
         chart_width: f32,
         zoom_mode_active: bool,
     ) -> bool {
-        // Use left-click (primary) when zoom mode is active, otherwise don't trigger
-        let btn_pressed = zoom_mode_active && ui.input(|i| i.pointer.primary_pressed());
-        let btn_down = zoom_mode_active && ui.input(|i| i.pointer.primary_down());
-        let btn_released = zoom_mode_active && ui.input(|i| i.pointer.primary_released());
+        // A selection in progress ends with the mode.
+        if !zoom_mode_active {
+            self.box_zoom.reset();
+            return false;
+        }
+        let btn_pressed = ui.input(|i| i.pointer.primary_pressed());
+        let btn_down = ui.input(|i| i.pointer.primary_down());
+        let btn_released = ui.input(|i| i.pointer.primary_released());
 
         if btn_pressed
             && let Some(pos) = response.interact_pointer_pos()
@@ -3001,6 +3005,95 @@ mod tests {
                     assert_eq!(chart.drawings.drawings.len(), 1, "{label}");
                 }
             }
+        }
+    }
+
+    /// Box-zoom mode takes one selection, and a drawing tool or the eraser owns the plot's
+    /// drags while it is on: a drag either zooms or draws, never both.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn box_zoom_mode_ends_after_one_zoom_and_yields_to_drawing_modes() {
+        use crate::drawings::DrawingToolType;
+        for (tool, eraser) in [
+            (None, false),
+            (Some(DrawingToolType::TrendLine), false),
+            (None, true),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[200.0]);
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            chart.set_zoom_mode(true);
+            chart.drawings_mut().set_active_tool(tool);
+            chart.drawings_mut().set_eraser_mode(eraser);
+            let rect = chart.last_rendered_price_rect;
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            let mut t = 0.0;
+            let mut drag = |chart: &mut Chart, start: Pos2, end: Pos2| {
+                for events in [
+                    vec![Event::PointerMoved(start)],
+                    vec![button(start, true)],
+                    vec![Event::PointerMoved(start.lerp(end, 0.5))],
+                    vec![Event::PointerMoved(end)],
+                    vec![button(end, false)],
+                ] {
+                    t += 0.1;
+                    frame(&ctx, chart, t, events);
+                }
+                t += 0.1;
+                frame(&ctx, chart, t, Vec::new())
+            };
+            let view = chart.get_time_scale_state();
+            let start = rect.center() - egui::vec2(50.0, 50.0);
+            if tool.is_none() && !eraser {
+                // A selection of 20 points or less zooms nothing and keeps the mode.
+                drag(&mut chart, start, start + egui::vec2(20.0, 100.0));
+                assert!(chart.is_zoom_mode_active(), "a selection too small to zoom");
+                assert_eq!(chart.get_time_scale_state(), view);
+                assert!(!chart.state.has_zoom_history());
+            }
+            let cursor = drag(&mut chart, start, start + egui::vec2(100.0, 100.0));
+            let row = format!("tool {tool:?}, eraser {eraser}");
+            assert_eq!(
+                chart.drawings().drawings.len(),
+                usize::from(tool.is_some()),
+                "{row}"
+            );
+            if tool.is_some() {
+                assert_eq!(
+                    chart.get_time_scale_state(),
+                    view,
+                    "{row}: view after the drawing"
+                );
+            }
+            if tool.is_some() || eraser {
+                // The eraser keeps its own drag, which pans over an empty plot, but never zooms.
+                assert_eq!(chart.get_time_scale_state().0, view.0, "{row}: spacing");
+                assert!(!chart.state.has_zoom_history(), "{row}");
+            }
+            assert!(
+                !chart.is_zoom_mode_active(),
+                "{row}: zoom mode after the first drag"
+            );
+            assert_ne!(cursor, egui::CursorIcon::ZoomIn, "{row}");
+            if tool.is_some() || eraser {
+                continue;
+            }
+            let zoomed = chart.get_time_scale_state();
+            assert!(zoomed.0 > view.0, "{row}: the first drag zooms");
+            drag(&mut chart, start, start + egui::vec2(100.0, 100.0));
+            let panned = chart.get_time_scale_state();
+            assert_eq!(
+                panned.0, zoomed.0,
+                "{row}: the second drag keeps the spacing"
+            );
+            assert_ne!(panned.1, zoomed.1, "{row}: the second drag pans");
+            assert!(chart.zoom_back(), "{row}");
+            assert!(!chart.zoom_back(), "{row}: one zoom step");
         }
     }
 
