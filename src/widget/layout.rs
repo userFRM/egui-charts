@@ -1846,6 +1846,9 @@ impl ChartLayout {
             chart.keyboard.layout_keys = keys.filter(|_| index < count).map(|keys| (pass, keys));
         }
         self.active = self.active.min(count - 1);
+        if let Some((_, target)) = &mut self.focus_range {
+            *target = (*target).min(count - 1);
+        }
         // Tabs already show one chart at a time and use their strip to select the others.
         if self.mode == ChartLayoutMode::Tabs || self.maximized.is_some_and(|index| index >= count)
         {
@@ -5166,6 +5169,17 @@ mod tests {
         assert_eq!((layout.maximized(), layout.active()), (Some(1), 1));
         assert_eq!(charts[1].get_time_scale_state().0, other_group_spacing);
         assert!(charts[1].get_rendered_price_rect().width() > tiles[1].width() * 1.8);
+        let range = charts[1].visible_time_range().unwrap();
+        layout.set_active(5);
+        frame(&mut layout, &mut charts, false, false);
+        frame(&mut layout, &mut charts, false, false);
+        assert_eq!((layout.maximized(), layout.active()), (Some(3), 3));
+        let selected = charts[3].visible_time_range().unwrap();
+        assert!(
+            (selected.from - range.from).num_milliseconds().abs() <= 1
+                && (selected.to - range.to).num_milliseconds().abs() <= 1,
+            "clamped activation changed the UTC span from {range:?} to {selected:?}"
+        );
         layout.mode = ChartLayoutMode::Tabs;
         frame(&mut layout, &mut charts, false, false);
         assert_eq!(layout.maximized(), None);
