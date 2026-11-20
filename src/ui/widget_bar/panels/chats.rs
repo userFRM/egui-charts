@@ -20,8 +20,11 @@ use crate::ui_kit::filter::FilterWidget;
 use crate::ui_kit::status_message::{MessageKind, translated_status_message};
 use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
 
-/// Messages kept at most across the rooms; older ones are dropped.
+/// Messages kept at most across the rooms; past it the room holding the most loses its oldest.
 const KEPT: usize = 5_000;
+
+/// Messages kept at most of one room; past it the room loses its oldest.
+const ROOM_KEPT: usize = 1_000;
 
 /// Inbox key of the answers to [`Chats::send`]; streams and other requests use keys from 1.
 const SENT: u64 = 0;
@@ -62,13 +65,14 @@ fn allowed(kind: NewChatRoomKind, capabilities: &ChatCapabilities) -> bool {
 /// Chat rooms pushed by the host's [`Chats`] service.
 ///
 /// The user picks a room, reads its messages and posts; a posted message appears once the host
-/// pushes it. Where the service's [`capabilities`](Chats::capabilities) allow, the header offers
-/// to start a direct message or create a private or group room, choosing the recipients from
-/// the service's [`find_users`](Chats::find_users), and to add or remove the members of a room
-/// whose members the service pushes. Each action shows while it is pending and its failure, and
-/// attaching another service clears them. Call [`poll`](Self::poll) each frame, even while the
-/// panel is hidden, then [`show`](Self::show) while it is open. Accounts and moderation are the
-/// host's.
+/// pushes it. It keeps the newest 1,000 messages of each room and 5,000 in all; past that the
+/// room holding the most loses its oldest. Where the service's
+/// [`capabilities`](Chats::capabilities) allow, the header offers to start a direct message or
+/// create a private or group room, choosing the recipients from the service's
+/// [`find_users`](Chats::find_users), and to add or remove the members of a room whose members
+/// the service pushes. Each action shows while it is pending and its failure, and attaching
+/// another service clears them. Call [`poll`](Self::poll) each frame, even while the panel is
+/// hidden, then [`show`](Self::show) while it is open. Accounts and moderation are the host's.
 #[derive(Default)]
 pub struct ChatsPanel {
     service: Option<Arc<dyn Chats>>,
@@ -79,7 +83,8 @@ pub struct ChatsPanel {
     generation: u64,
     rooms: Vec<String>,
     room: usize,
-    messages: VecDeque<ChatMessage>,
+    /// Each room's messages, oldest first.
+    messages: HashMap<String, VecDeque<ChatMessage>>,
     members: HashMap<String, Vec<ChatUser>>,
     draft: FilterWidget,
     error: Option<FeedError>,
@@ -167,6 +172,31 @@ impl ChatsPanel {
         }
     }
 
+    /// Bounds the messages after `room` grew: `room` keeps its newest [`ROOM_KEPT`], then while
+    /// the rooms hold more than [`KEPT`] the room holding the most loses its oldest, the first
+    /// listed among equals.
+    fn bound(&mut self, room: &str) {
+        if let Some(log) = self.messages.get_mut(room)
+            && log.len() > ROOM_KEPT
+        {
+            log.drain(..log.len() - ROOM_KEPT);
+        }
+        while self.messages.values().map(VecDeque::len).sum::<usize>() > KEPT {
+            let Some(largest) = self
+                .rooms
+                .iter()
+                .filter_map(|name| self.messages.get(name).map(|log| (name, log.len())))
+                .min_by_key(|(_, len)| std::cmp::Reverse(*len))
+                .map(|(name, _)| name.clone())
+            else {
+                break;
+            };
+            if let Some(log) = self.messages.get_mut(&largest) {
+                log.pop_front();
+            }
+        }
+    }
+
     /// Receive the service's pushes and answers, and watch again after a lagged stream.
     pub fn poll(&mut self, ctx: &egui::Context) {
         let repaint = ctx.clone();
@@ -220,10 +250,10 @@ impl ChatsPanel {
                 Ok(ChatEvent::Room(room)) => self.add_room(&room),
                 Ok(ChatEvent::Message(message)) => {
                     self.add_room(&message.room);
-                    self.messages.push_back(message);
-                    if self.messages.len() > KEPT {
-                        self.messages.pop_front();
-                    }
+                    let room = message.room.clone();
+                    let log = self.messages.entry(room.clone()).or_default();
+                    log.push_back(message);
+                    self.bound(&room);
                 }
                 Ok(ChatEvent::Members { room, members }) => {
                     self.add_room(&room);
@@ -373,7 +403,7 @@ impl ChatsPanel {
             .auto_shrink([false, false])
             .stick_to_bottom(true)
             .show(ui, |ui| {
-                for message in self.messages.iter().filter(|m| m.room == room) {
+                for message in self.messages.get(&room).into_iter().flatten() {
                     ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::hover()), |ui| {
                         let hovered = ui.response().hovered();
                         egui::Frame::new()
@@ -692,5 +722,70 @@ mod tests {
         panel.composer.recipients = vec![ChatUser::new("u1", "Ada")];
         panel.set_service(Arc::new(Host::default()));
         assert!(panel.composer.recipients.is_empty() && panel.view == View::Room);
+    }
+
+    /// Guards the bounds on held messages: each room keeps its newest, and past the total the
+    /// room holding the most loses its oldest, so the traffic of a busy room never empties a
+    /// quiet one.
+    #[test]
+    fn a_busy_room_keeps_its_newest_messages_and_never_empties_a_quiet_one() {
+        let host = Arc::new(Host::default());
+        let mut panel = ChatsPanel::new();
+        panel.set_service(host.clone());
+        let events = host.events.lock().unwrap().clone().unwrap();
+        let push = |room: &str, count: usize| {
+            for i in 0..count {
+                let time = chrono::DateTime::UNIX_EPOCH;
+                let message = ChatMessage::new(room, "Ann", time, format!("{room} {i}"));
+                events.push(ChatEvent::Message(message));
+            }
+        };
+        let ctx = egui::Context::default();
+        push("quiet", 10);
+        push("busy", 6_000);
+        panel.poll(&ctx);
+        let mut h = Harness::builder()
+            .with_size(Vec2::new(320.0, 800.0))
+            .with_context_setup(|ctx| {
+                crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                egui_extras::install_image_loaders(ctx);
+            })
+            .build_ui_state(|ui, panel: &mut ChatsPanel| panel.show(ui), panel);
+        h.run();
+        for i in 0..10 {
+            h.get_by_label(&format!("quiet {i}"));
+        }
+        let busy = &h.state().messages["busy"];
+        assert_eq!(
+            (busy.len(), busy[0].text.as_str(), busy[999].text.as_str()),
+            (1_000, "busy 5000", "busy 5999")
+        );
+
+        // The last ten messages of r4 pass 5,000 in all: busy, r1, r2 and r3 lose one each in
+        // list order, twice, then r4, holding the most, loses two.
+        for room in ["r1", "r2", "r3", "r4"] {
+            push(room, 1_000);
+        }
+        h.state_mut().poll(&ctx);
+        let panel = h.state();
+        let held: Vec<_> = panel
+            .rooms
+            .iter()
+            .map(|room| {
+                let log = &panel.messages[room];
+                (log.len(), log[0].text.as_str())
+            })
+            .collect();
+        assert_eq!(
+            held,
+            [
+                (10, "quiet 0"),
+                (998, "busy 5002"),
+                (998, "r1 2"),
+                (998, "r2 2"),
+                (998, "r3 2"),
+                (998, "r4 2"),
+            ]
+        );
     }
 }
