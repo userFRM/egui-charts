@@ -705,8 +705,9 @@ impl InputsTab {
     }
 }
 
-/// The size of a table, the width of each column and the height of each row, as the chart
-/// paints them. A new table size scales every column or every row.
+/// The Anchor to screen switch of a table, its size, and the width of each column and the
+/// height of each row, as the chart paints them. A new table size scales every column or every
+/// row.
 fn table(ui: &mut Ui, drawing: &mut Drawing) {
     /// A size of `cells` columns or rows, from 1 point each, so that a size a host set below
     /// what a drag sets shows unchanged.
@@ -723,6 +724,13 @@ fn table(ui: &mut Ui, drawing: &mut Drawing) {
         |edges: &[f32]| -> Vec<f32> { edges.windows(2).map(|pair| pair[1] - pair[0]).collect() };
     let (widths, heights) = (sizes(&layout.xs), sizes(&layout.ys));
     FormGrid::new("table_inputs").show(ui, |ui| {
+        let label = ui.label(l10n::text(ui.ctx(), "Position"));
+        ui.checkbox(
+            &mut config.screen_anchored,
+            l10n::text(ui.ctx(), "Anchor to screen"),
+        )
+        .labelled_by(label.id);
+        ui.end_row();
         let (width, height) = (widths.iter().sum::<f32>(), heights.iter().sum::<f32>());
         let (mut new_width, mut new_height) = (width, height);
         let label = ui.label(l10n::text(ui.ctx(), "Table size"));

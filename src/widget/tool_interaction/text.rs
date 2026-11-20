@@ -1664,19 +1664,28 @@ mod tests {
     }
 
     /// Pane-relative anchors survive pan and zoom, and scale with pane size rather than data. A
-    /// pin saved with one appears where it was shown, and then stays on its bar.
+    /// pin saved with one appears where it was shown, and then stays on its bar. A table anchored
+    /// to the screen keeps its place as anchored text does; taken off the screen, it stays where
+    /// it is shown and then follows its bar.
     #[test]
     fn anchored_annotations_keep_their_pane_position() {
-        use crate::drawings::{ChartPoint, Drawing};
-        for tool in [
-            DrawingToolType::AnchoredText,
-            DrawingToolType::AnchoredNote,
-            DrawingToolType::TextLabel,
+        use crate::drawings::{ChartPoint, Drawing, TableConfig};
+        for (tool, pinned) in [
+            (DrawingToolType::AnchoredText, true),
+            (DrawingToolType::AnchoredNote, false),
+            (DrawingToolType::TextLabel, false),
+            (DrawingToolType::Table, false),
+            (DrawingToolType::Table, true),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
             let mut drawing = Drawing::new(7, tool);
             drawing.chart_points.push(ChartPoint::new(50.0, 15.0));
+            if tool == DrawingToolType::Table && pinned {
+                let mut table = TableConfig::default();
+                table.screen_anchored = true;
+                drawing.table = Some(table);
+            }
             chart.drawings_mut().drawings.push(drawing);
             frame(&ctx, &mut chart, 0.0, vec![]);
             let original = chart.drawings().drawings[0].points[0];
@@ -1684,8 +1693,26 @@ mod tests {
             chart.set_start_idx(20);
             frame(&ctx, &mut chart, 0.1, vec![]);
             let moved = chart.drawings().drawings[0].points[0];
-            if tool != DrawingToolType::AnchoredText {
-                assert_ne!(moved, original);
+            if !pinned {
+                assert_ne!(moved, original, "{tool:?}");
+            } else if tool == DrawingToolType::Table {
+                assert_eq!(moved, original, "{tool:?}");
+                assert!(chart.drawings().drawings[0].screen_anchor.is_some());
+                chart
+                    .drawings_mut()
+                    .edit_drawing(7, |d| d.table = None)
+                    .unwrap();
+                frame(&ctx, &mut chart, 0.2, vec![]);
+                let table = &chart.drawings().drawings[0];
+                assert_eq!(table.screen_anchor, None);
+                assert!(
+                    table.points[0].distance(moved) < 0.5,
+                    "{:?}",
+                    table.points[0]
+                );
+                chart.set_start_idx(10);
+                frame(&ctx, &mut chart, 0.3, vec![]);
+                assert_ne!(chart.drawings().drawings[0].points[0], moved);
             } else {
                 assert_eq!(moved, original, "{tool:?}");
                 let mut fixed = Drawing::new(9, tool);

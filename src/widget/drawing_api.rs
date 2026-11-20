@@ -66,9 +66,9 @@ impl Chart {
 
     /// Returns a drawing's UTC anchors and prices, or `None` for an unknown id or an index
     /// without a time mapping. Retains exact supplied times between bars and in whitespace.
-    /// An anchored text reports the time and price under the point it was last drawn at, which
-    /// change as the chart scrolls and zooms; while a text moved outside the view waits to be
-    /// drawn inside its pane, the point it was given.
+    /// An anchored text, or a table anchored to the screen, reports the time and price under the
+    /// point it was last drawn at, which change as the chart scrolls and zooms; while one moved
+    /// outside the view waits to be drawn inside its pane, the point it was given.
     pub fn drawing_points(&self, id: usize) -> Option<Vec<(DateTime<Utc>, f64)>> {
         self.drawings()
             .drawings
@@ -82,8 +82,8 @@ impl Chart {
 
     /// Replaces a drawing's anchors as one undoable edit. Invalid points and locked drawings
     /// leave the original untouched. Screen positions are rebuilt on the next frame.
-    /// An anchored text moves to the new point and keeps its place in the pane from the first
-    /// frame that draws that point inside the pane.
+    /// An anchored text, or a table anchored to the screen, moves to the new point and keeps its
+    /// place in the pane from the first frame that draws that point inside the pane.
     pub fn set_drawing_points(
         &mut self,
         id: usize,

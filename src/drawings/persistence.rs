@@ -1588,6 +1588,20 @@ mod tests {
                 }],
                 ..Default::default()
             });
+            let mut table = crate::drawings::TableConfig::default();
+            table.column_widths = vec![None, Some(120.5)];
+            table.row_heights = vec![Some(30.0)];
+            table.cells = vec![
+                vec![],
+                vec![crate::drawings::TableCellStyle {
+                    text_color: Some([1, 2, 3, 4]),
+                    background: Some([5, 6, 7, 8]),
+                    horizontal_align: Some(crate::drawings::LineTextHorizontalAlign::Right),
+                    vertical_align: Some(crate::drawings::LineTextVerticalAlign::Top),
+                }],
+            ];
+            table.screen_anchored = true;
+            drawing.table = Some(table);
             drawing.channel_midline = true;
             drawing.closed = true;
             drawing.elliott_degree = ElliottDegree::Submicro;

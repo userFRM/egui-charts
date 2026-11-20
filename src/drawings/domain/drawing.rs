@@ -925,6 +925,17 @@ impl Drawing {
         }
     }
 
+    /// Whether the drawing keeps its place in its pane while the chart scrolls and zooms:
+    /// anchored text, and a table anchored to the screen.
+    pub(crate) fn pins_to_pane(&self) -> bool {
+        self.tool_type == DrawingToolType::AnchoredText
+            || (self.tool_type == DrawingToolType::Table
+                && self
+                    .table
+                    .as_ref()
+                    .is_some_and(|table| table.screen_anchored))
+    }
+
     /// The table settings in use: its own, or the defaults.
     pub(crate) fn table_config(&self) -> std::borrow::Cow<'_, TableConfig> {
         match &self.table {
@@ -1111,16 +1122,18 @@ impl Drawing {
         }
     }
 
-    /// Rebuilds anchored text coordinates relative to the pane. Call after
-    /// `update_screen_coords`; other tools retain their chart coordinates. A text without a pane
-    /// position, such as an older drawing or one just moved, takes one the first time its point
-    /// is drawn inside `pane`, and stays on its bar and price until then. Resizing preserves the
-    /// width and height fractions.
+    /// Rebuilds the pane position of anchored text and of a table anchored to the screen. Call
+    /// after `update_screen_coords`; other tools retain their chart coordinates. A text or table
+    /// without a pane position, such as an older drawing or one just moved, takes one the first
+    /// time its point is drawn inside `pane`, and stays on its bar and price until then. Resizing
+    /// preserves the width and height fractions. A table not anchored to the screen drops the
+    /// pane position it still holds.
     pub fn update_pane_coords(&mut self, pane: egui::Rect) {
-        if self.tool_type != DrawingToolType::AnchoredText
-            || !pane.is_finite()
-            || pane.width() <= 0.0
-            || pane.height() <= 0.0
+        // A table taken off the screen keeps the bar and price it was last drawn at.
+        if self.tool_type == DrawingToolType::Table && !self.pins_to_pane() {
+            self.screen_anchor = None;
+        }
+        if !self.pins_to_pane() || !pane.is_finite() || pane.width() <= 0.0 || pane.height() <= 0.0
         {
             return;
         }
