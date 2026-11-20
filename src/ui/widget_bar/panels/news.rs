@@ -4,12 +4,13 @@
 use crate::localization as l10n;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Offset, Utc};
 use egui::{Label, RichText, Sense, Ui};
 
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, NewsQuery, NewsStory};
 use crate::icons::icons;
+use crate::model::TimezoneId;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::status_message::{MessageKind, status_message, translated_status_message};
@@ -40,8 +41,9 @@ pub enum NewsAction {
 /// add symbols, and with [`set_topics`](Self::set_topics) and
 /// [`set_providers`](Self::set_providers) narrow the stories by topic and provider; offering the
 /// values again keeps the choices still offered. Each change asks the feed again with the
-/// complete selection, and only the answer to the latest request is shown. A story opens to its text, with actions to show the chart at its time and to open its
-/// link. Call [`poll`](Self::poll) each frame, then
+/// complete selection, and only the answer to the latest request is shown. A story opens to its
+/// text, with actions to show the chart at its time and to open its link. Publication times show
+/// in the zone given to [`set_timezone`](Self::set_timezone), UTC until set. Call [`poll`](Self::poll) each frame, then
 /// [`show`](Self::show) while the panel is open.
 pub struct NewsPanel {
     highlights: bool,
@@ -51,6 +53,7 @@ pub struct NewsPanel {
     more_symbols: Vec<(String, bool)>,
     topics: Vec<(String, bool)>,
     providers: Vec<(String, bool)>,
+    timezone: TimezoneId,
     stories: Vec<NewsStory>,
     open: Option<String>,
     error: Option<FeedError>,
@@ -68,6 +71,7 @@ impl std::fmt::Debug for NewsPanel {
             .field("more_symbols", &self.more_symbols)
             .field("topics", &self.topics)
             .field("providers", &self.providers)
+            .field("timezone", &self.timezone)
             .field("stories", &self.stories)
             .field("open", &self.open)
             .field("error", &self.error)
@@ -94,6 +98,7 @@ impl NewsPanel {
             more_symbols: Vec::new(),
             topics: Vec::new(),
             providers: Vec::new(),
+            timezone: TimezoneId::utc(),
             stories: Vec::new(),
             open: None,
             error: None,
@@ -149,6 +154,11 @@ impl NewsPanel {
         if offer(&mut self.providers, providers) {
             self.refresh();
         }
+    }
+
+    /// Show publication times in `timezone`, such as the chart's. UTC until set.
+    pub fn set_timezone(&mut self, timezone: TimezoneId) {
+        self.timezone = timezone;
     }
 
     /// Ask the feed again, such as when the host learns of new stories.
@@ -240,7 +250,7 @@ impl NewsPanel {
                             .strong(),
                     );
                     ui.label(
-                        RichText::new(l10n::text(ui.ctx(), meta(story)))
+                        RichText::new(l10n::text(ui.ctx(), meta(story, &self.timezone)))
                             .size(theme.text.small)
                             .color(theme.ui.text_secondary),
                     );
@@ -414,7 +424,7 @@ impl NewsPanel {
                                     ui.set_min_height(26.0);
                                     ui.style_mut().interaction.selectable_labels = false;
                                     ui.label(
-                                        RichText::new(l10n::text(ui.ctx(), meta(story)))
+                                        RichText::new(l10n::text(ui.ctx(), meta(story, &self.timezone)))
                                             .size(theme.text.small)
                                             .color(theme.ui.text_secondary),
                                     );
@@ -467,9 +477,14 @@ fn chosen(choices: &[(String, bool)]) -> impl Iterator<Item = &String> {
     choices.iter().filter(|(_, on)| *on).map(|(value, _)| value)
 }
 
-/// The publication time in UTC and the source.
-fn meta(story: &NewsStory) -> String {
-    let time = story.time.format("%b %-d, %H:%M UTC").to_string();
+/// The publication time in `zone`, with its offset on that date, and the source.
+fn meta(story: &NewsStory, zone: &TimezoneId) -> String {
+    let local = story.time.with_timezone(zone);
+    let time = format!(
+        "{} {}",
+        local.format("%b %-d, %H:%M"),
+        super::symbol_details::zone_label(local.offset().fix().local_minus_utc()),
+    );
     if story.source.is_empty() {
         time
     } else {
@@ -497,9 +512,10 @@ mod tests {
 
     /// Guards which stories show: a new symbol asks for its stories, the market scope asks
     /// without a symbol and ignores later symbol changes, and an answer to an earlier request
-    /// never replaces the latest one, which an answer arriving late would otherwise do.
+    /// never replaces the latest one, which an answer arriving late would otherwise do. Story
+    /// times show in the panel's zone, with the offset on their date.
     #[test]
-    fn only_the_latest_request_answers_and_the_scope_follows_the_symbol() {
+    fn latest_request_scope_and_time_zone_decide_what_shows() {
         let feed = Arc::new(Feed::default());
         let mut panel = NewsPanel::new();
         panel.set_symbol("AAA");
@@ -516,6 +532,30 @@ mod tests {
         earlier.send(Ok(vec![story("a")]));
         panel.poll(&ctx);
         assert_eq!(panel.stories, [story("b")]);
+        let shown = |panel: &mut NewsPanel| {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                panel.show(ui);
+            });
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            texts
+        };
+        assert!(shown(&mut panel).contains(&"Jan 1, 00:00 UTC".to_owned()));
+        // 1970-01-01T00:00Z is 20:30 the evening before at three and a half hours west of UTC.
+        panel.set_timezone(TimezoneId::fixed_offset(-(3 * 3600 + 30 * 60)).unwrap());
+        assert!(feed.0.lock().unwrap().is_empty());
+        let texts = shown(&mut panel);
+        assert!(
+            texts.contains(&"Dec 31, 20:30 GMT-3:30".to_owned()),
+            "{texts:?}"
+        );
 
         panel.set_topics(["tech".into(), "fx".into()]);
         panel.set_providers(["wire".into()]);
@@ -554,4 +594,5 @@ mod tests {
         assert!(panel.stories.is_empty());
         assert_eq!(panel.error, Some(FeedError::NotSupported));
     }
+
 }

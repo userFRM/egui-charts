@@ -925,7 +925,7 @@ Workspace,"News, calendar and social",News alerts,unverified,host,;src/services/
 Workspace,"News, calendar and social",Private chats,incomplete,host,src/services/chats.rs;src/ui/widget_bar/panels/chats.rs;terminal/src/panels.rs,
 Workspace,"News, calendar and social","Profiles, following and social notifications",unverified,host,src/services/profiles.rs;src/services/profile_directory.rs;src/services/notifications.rs;src/ui/profile/mod.rs;src/ui/widget_bar/panels/notifications.rs;terminal/src/panels.rs,
 Workspace,"News, calendar and social",Publish an idea from the chart,unverified,host,src/ui/top_toolbar/toolbar.rs;src/ui/ideas.rs;src/widget/export.rs,
-Workspace,"News, calendar and social",Symbol news in the right panel,unverified,host,src/ui/widget_bar/panels/news.rs;terminal/src/panels.rs,
+Workspace,"News, calendar and social",Symbol news in the right panel,unverified,host,src/ui/widget_bar/panels/news.rs;terminal/src/panels.rs,3586
 Workspace,Templates and layouts,Autosave,unverified,library,src/ui/top_toolbar/components/layout_menu.rs;terminal/src/layouts.rs,3220
 Workspace,Templates and layouts,Chart settings templates,incomplete,library,src/ui/dialogs/chart_settings/mod.rs;src/widget/settings/apply.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs,2517;2141;2504
 Workspace,Templates and layouts,Cloud sync of layouts and settings across devices,incomplete,host,src/services/storage.rs;src/services/document.rs;src/ui/top_toolbar/components/layout_menu.rs;src/services/settings.rs;src/ui/dialogs/storage_conflict.rs;terminal/src/core.rs;src/services/revisions.rs,3223
