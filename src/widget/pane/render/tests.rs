@@ -933,6 +933,119 @@ fn study_pane_legend_buttons_stay_under_the_pointer() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
+/// A study that takes a removed study's legend row draws its own buttons after its title, and a
+/// second click where the removed study's Remove was does not reach it.
+#[test]
+fn legend_row_taken_after_a_removal_draws_its_own_buttons() {
+    use crate::studies::{CustomIndicator, IndicatorValue, SMA};
+
+    /// Remove buttons, study rows and painted `title` texts with their clip, from one frame.
+    fn legend(
+        ctx: &Context,
+        chart: &mut crate::widget::Chart,
+        title: &str,
+        at: Option<Pos2>,
+    ) -> (Vec<Rect>, Vec<Rect>, Vec<(Rect, Rect)>) {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+            time: Some(ctx.input(|input| input.time) + 0.1),
+            events: at.into_iter().map(Event::PointerMoved).collect(),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                chart.show(ui);
+            });
+        });
+        output.textures_delta.clear();
+        let nodes = &output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes;
+        let bounds = |label| {
+            nodes
+                .iter()
+                .filter(|(_, node)| node.label() == Some(label))
+                .filter_map(|(_, node)| node.bounds())
+                .map(|b| {
+                    Rect::from_min_max(
+                        Pos2::new(b.x0 as f32, b.y0 as f32),
+                        Pos2::new(b.x1 as f32, b.y1 as f32),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let (remove, rows) = (bounds("Remove study"), bounds("Study controls"));
+        let titles = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == title => Some((
+                    Rect::from_min_size(text.pos, text.galley.size()),
+                    clipped.clip_rect,
+                )),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        (remove, rows, titles)
+    }
+
+    let title = "Legend study with a much longer title";
+    let ctx = Context::default();
+    ctx.enable_accesskit();
+    let mut chart = chart(&[100.0, 102.0, 99.0], &[101.0, 104.0, 100.0]);
+    let short = chart.add_indicator(Box::new(SMA::new(2)));
+    let long = chart.add_indicator(Box::new(
+        CustomIndicator::new(title, |bars| {
+            (0..bars.len())
+                .map(|_| IndicatorValue::Single(1.0))
+                .collect()
+        })
+        .with_overlay(true),
+    ));
+    let row = legend(&ctx, &mut chart, title, None)
+        .1
+        .into_iter()
+        .min_by(|a, b| a.top().total_cmp(&b.top()))
+        .expect("study rows");
+    let start = Pos2::new(row.left() + 2.0, row.top() + 10.0);
+    legend(&ctx, &mut chart, title, Some(start));
+    let [removed] = legend(&ctx, &mut chart, title, Some(start)).0[..] else {
+        panic!("one Remove on the hovered first row");
+    };
+    let at = removed.center();
+    click(&ctx, &mut chart, at);
+    assert!(
+        !chart.indicators().any(|(id, _)| id == short),
+        "Remove missed the first study"
+    );
+
+    legend(&ctx, &mut chart, title, Some(at));
+    let (remove, _, titles) = legend(&ctx, &mut chart, title, Some(at));
+    // The legend's title, not a tooltip or label elsewhere on the chart.
+    let (text, clip) = *titles
+        .iter()
+        .find(|(text, _)| (row.top()..=row.bottom()).contains(&text.center().y))
+        .expect("the remaining study's title on the first row");
+    assert!(
+        matches!(remove[..], [remove] if remove.left() >= text.right()),
+        "Remove {remove:?} is not after the title {text:?}"
+    );
+    assert!(
+        clip.right() >= text.right(),
+        "title {text:?} clipped at {clip:?}"
+    );
+
+    click(&ctx, &mut chart, at);
+    assert!(
+        chart.indicators().any(|(id, _)| id == long),
+        "a second click where the removed study's Remove was removed the next study"
+    );
+}
+
 #[test]
 fn merged_panes_share_scales_and_studies_can_return_to_the_main_pane() {
     use crate::scales::PriceScaleMode;

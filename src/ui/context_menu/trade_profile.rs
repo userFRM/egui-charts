@@ -278,13 +278,18 @@ mod tests {
                     Shape::LineSegment { points, .. } if *points == [a, b])
                 })
             };
+            let step = |a: Pos2, b: Pos2| {
+                let corner = Pos2::new(b.x, a.y);
+                [[a, corner], [corner, b]]
+            };
             // Session 1 totals [4, 7] at [100, 101]: its cumulative POC moves from
             // 100 (4 > 1) to 101 (7 > 4), independent of its deltas [+4, +5].
-            assert!(has_line(
-                &painted,
+            for [a, b] in step(
                 Pos2::new(map.idx_to_x(2), map.price_to_y(100.0)),
-                Pos2::new(map.idx_to_x(3), map.price_to_y(101.0))
-            ));
+                Pos2::new(map.idx_to_x(3), map.price_to_y(101.0)),
+            ) {
+                assert!(has_line(&painted, a, b));
+            }
             for label in ["HVN", "LVN"] {
                 assert!(
                     painted
@@ -318,11 +323,12 @@ mod tests {
                 settings.value_area_guides = false;
                 chart.set_trade_profile_settings(settings);
                 let (_, hidden) = frame(&mut chart, &mut menus, vec![]);
-                assert!(!has_line(
-                    &hidden,
+                for [a, b] in step(
                     Pos2::new(map.idx_to_x(2), map.price_to_y(100.0)),
-                    Pos2::new(map.idx_to_x(3), map.price_to_y(101.0))
-                ));
+                    Pos2::new(map.idx_to_x(3), map.price_to_y(101.0)),
+                ) {
+                    assert!(!has_line(&hidden, a, b));
+                }
                 assert!(!hidden.iter().any(|s| matches!(&s.shape, Shape::Text(t) if ["HVN", "LVN"].contains(&t.galley.text()))));
                 assert!(!has_line(
                     &hidden,
@@ -471,11 +477,12 @@ mod tests {
             let session_one_alone = |chart: &mut Chart, menus: &mut ChartMenus| {
                 let (_, split) = frame(chart, menus, vec![]);
                 let map = chart.get_chart_mapping();
-                assert!(has_line(
-                    &split,
+                for [a, b] in step(
                     Pos2::new(map.idx_to_x(2), map.price_to_y(100.0)),
-                    Pos2::new(map.idx_to_x(3), map.price_to_y(101.0))
-                ));
+                    Pos2::new(map.idx_to_x(3), map.price_to_y(101.0)),
+                ) {
+                    assert!(has_line(&split, a, b));
+                }
                 let left = (map.idx_to_x(2) - map.bar_spacing * 0.45).max(map.rect.left());
                 let width = map.idx_to_x(3) + map.bar_spacing * 0.5 - left;
                 let centre = left + width * 0.5;

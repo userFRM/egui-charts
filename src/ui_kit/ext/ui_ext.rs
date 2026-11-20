@@ -22,8 +22,6 @@ use egui::{Color32, Rect, Response, RichText, Sense, TextEdit, Ui, Vec2, Widget}
 
 #[cfg(feature = "icons")]
 use crate::icons::Icon;
-#[cfg(feature = "icons")]
-use crate::styles::icons;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 
@@ -364,17 +362,17 @@ impl UiExt for Ui {
 
     #[cfg(feature = "icons")]
     fn small_icon(&mut self, icon: &Icon) -> Response {
-        self.icon_with_size(icon, icons::SMALL)
+        self.icon_with_size(icon, DESIGN_TOKENS.sizing.icon_sm)
     }
 
     #[cfg(feature = "icons")]
     fn medium_icon(&mut self, icon: &Icon) -> Response {
-        self.icon_with_size(icon, icons::MEDIUM)
+        self.icon_with_size(icon, DESIGN_TOKENS.sizing.icon_md)
     }
 
     #[cfg(feature = "icons")]
     fn large_icon(&mut self, icon: &Icon) -> Response {
-        self.icon_with_size(icon, icons::LARGE)
+        self.icon_with_size(icon, DESIGN_TOKENS.sizing.icon_lg)
     }
 
     #[cfg(feature = "icons")]
@@ -440,7 +438,7 @@ impl UiExt for Ui {
     #[cfg(feature = "icons")]
     fn label_with_icon(&mut self, icon: &Icon, text: impl Into<String>) -> Response {
         let text = l10n::text(self.ctx(), Into::<String>::into(text));
-        let icon_size = icons::SMALL;
+        let icon_size = DESIGN_TOKENS.sizing.icon_sm;
 
         self.horizontal(|ui| {
             let tint = ui.style().visuals.widgets.noninteractive.fg_stroke.color;
@@ -475,7 +473,7 @@ impl UiExt for Ui {
     #[cfg(feature = "icons")]
     fn icon_button(&mut self, icon: &Icon) -> Response {
         let size = DESIGN_TOKENS.sizing.button_md;
-        let icon_size = icons::MEDIUM;
+        let icon_size = DESIGN_TOKENS.sizing.icon_md;
         let (rect, response) = self.allocate_exact_size(Vec2::splat(size), Sense::click());
         crate::styles::focus::draw_focus_ring(self, &response, self.active_theme().radius.sm);
 
@@ -547,7 +545,7 @@ impl UiExt for Ui {
         text: impl Into<String>,
     ) -> Response {
         let text = l10n::text(self.ctx(), Into::<String>::into(text));
-        let icon_size = icons::SMALL;
+        let icon_size = DESIGN_TOKENS.sizing.icon_sm;
         let total_width = self.available_width();
 
         let (rect, response) = self.allocate_exact_size(
