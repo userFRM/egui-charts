@@ -6185,8 +6185,8 @@ mod tests {
         let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
         drawing.completed = true;
         drawing.chart_points = vec![
-            ChartPoint::new((n - 20) as f64, price),
-            ChartPoint::new((n - 5) as f64, price),
+            ChartPoint::new((n - 20) as f32, price),
+            ChartPoint::new((n - 5) as f32, price),
         ];
         let source = drawing.alert_source(0);
         app.chart.drawings_mut().drawings.push(drawing);
