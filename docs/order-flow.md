@@ -313,8 +313,8 @@ rows count as zero, and endpoints and ties are not nodes. The renderer selects b
 total volume or signed delta through the first [`FootprintConfig::modes`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/overlays/struct.FootprintConfig.html#structfield.modes) entry. It draws the
 value area, POC, developing POC and volume nodes on the host's price mapping.
 [`developing_value_area`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfile.html#method.developing_value_area) returns the inclusive value area rows after each
-contributing bar of the footprint the profile came from, by the final area's share and tie rules. The Profile section of the Symbol settings can trace that area and extend each
-completed session's POC, VAH and VAL to the first later bar that trades in their row; all are off by default, and sessions labelled "Partial executions" do not extend. The same section can hide the POC, choose the value area edges its guides draw, and colour the POC, each edge and the up and down volume inside and outside the value area; a level's colour also paints its extension.
+contributing bar of the footprint the profile came from, by the final area's share and tie rules. The Profile section of the Symbol settings can trace that area and the developing POC as steps that hold until the next bar, and extend each
+completed session's POC, VAH and VAL to the first later bar that trades in their row; all are off by default, and sessions labelled "Partial executions" do not extend. The same section can hide the POC, choose the value area edges its guides draw, and colour the POC, each edge and the up and down volume inside and outside the value area; a level's colour also paints its extension. It can also grow each session's histogram from the right edge of the session, give it a share of the session's width, write each row's volume beside its bar when the row is tall enough for the text, and hide or recolour the box behind each session.
 
 ## Stream studies
 
@@ -494,7 +494,13 @@ Footprint conditions read the same bars. [`FootprintRule`](https://userfrm.githu
 imbalance, or a stack of the rule's number of adjacent ones, using the rule's ratio, comparison
 and minimum volume on rows of one tick whatever grouping the chart displays;
 [`FootprintRule::follow_chart`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.FootprintRule.html#method.follow_chart) copies these from the chart's settings, as the demo does for its
-active chart. A buy volume, sell volume or delta level fires on the execution that takes the
+active chart. A buy or sell zone rejection fires on a closed bar that trades into an active
+stacked imbalance zone of an earlier bar without closing beyond its far edge, below a buy
+zone's lowest row or above a sell zone's highest row; the first bar closing beyond it ends the
+zone without firing. Detector zones use one-tick rows, retaining the newest 1,000 zones. A closed
+bar skipped because conditions are disabled or its retained footprint is incomplete or missing
+ends all active detector zones. Disabling and enabling inside a bar keeps them if its close is
+read. A buy volume, sell volume or delta level fires on the execution that takes the
 forming bar's value past it, from zero at the bar's open: a sell volume level of 100 fires on the
 101st unit sold. Each condition alerts at most once per bar and rebuilds with the stop sweeps on
 interval changes. Bars that opened before the bar of the first live event since tracking, such

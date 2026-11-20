@@ -1344,10 +1344,10 @@ pub enum LineTextOrientation {
     Horizontal,
 }
 
-/// Independent readouts of a trend line, ray, extended line, info line or trend angle, and the
-/// placement of the text of those tools and of a horizontal line or ray or a vertical line,
-/// which have no readouts. Readouts start hidden except on an info line, see [`Self::for_tool`];
-/// saves from before these settings read the same way.
+/// Independent readouts of a trend line, ray, extended line, info line, trend angle or arrow,
+/// and the placement of the text of those tools and of a horizontal line or ray or a vertical
+/// line, which have no readouts. Readouts start hidden except on an info line, see
+/// [`Self::for_tool`]; saves from before these settings read the same way.
 /// Price changes follow anchor order; lengths and elapsed time are unsigned.
 ///
 /// ```
@@ -1403,8 +1403,9 @@ thread_local! {
 impl LineMeasurements {
     /// The settings a new drawing of `tool` starts with: an info line keeps every readout visible
     /// in the middle of the line, a horizontal or vertical line writes its text on the line and a
-    /// vertical line runs through every pane, other tools keep their readouts hidden and their text
-    /// above the line.
+    /// vertical line runs through every pane, a parallel channel, flat top/bottom or disjoint
+    /// channel starts its text at the left end of its first line, and other tools keep their
+    /// readouts hidden and their text above the middle of the line.
     pub fn for_tool(tool: super::DrawingToolType) -> Self {
         if tool == super::DrawingToolType::VerticalLine {
             return Self {
@@ -1416,6 +1417,17 @@ impl LineMeasurements {
         if tool == super::DrawingToolType::HorizontalLine {
             return Self {
                 text_vertical_align: LineTextVerticalAlign::Middle,
+                ..Self::default()
+            };
+        }
+        if matches!(
+            tool,
+            super::DrawingToolType::ParallelChannel
+                | super::DrawingToolType::FlatTopBottom
+                | super::DrawingToolType::DisjointChannel
+        ) {
+            return Self {
+                text_horizontal_align: LineTextHorizontalAlign::Left,
                 ..Self::default()
             };
         }
@@ -1463,9 +1475,9 @@ thread_local! {
 }
 
 /// Readouts, readout card, box border and vertical reach of a date range and a date and price
-/// range; other tools ignore these settings. A new drawing shows every readout on a card in the
-/// theme's tooltip colours, draws its box edges in its line colour, width and pattern and keeps
-/// its time edges to its box.
+/// range; other tools ignore these settings. Missing saved fields keep the readouts on a card
+/// in the theme's tooltip colours and the box edges in the drawing's line colour, width and
+/// pattern. New drawings start from [`Self::for_tool`].
 ///
 /// ```
 /// use egui_charts::drawings::RangeSettings;
@@ -1501,6 +1513,9 @@ pub struct RangeSettings {
     pub background: bool,
     /// Colour of the card, whose alpha is its opacity; `None` takes the theme's tooltip colour.
     pub background_color: Option<[u8; 4]>,
+    /// Colour of the card's shadow, whose alpha is its opacity. Missing saved fields are
+    /// transparent; new range cards start with black at 20% opacity.
+    pub shadow_color: [u8; 4],
     /// Whether the box edges are drawn: at the measured times and, on a date and price range,
     /// at the measured prices.
     pub border: bool,
@@ -1529,6 +1544,7 @@ impl Default for RangeSettings {
             font_size: 12.0,
             background: true,
             background_color: None,
+            shadow_color: [0; 4],
             border: true,
             border_color: None,
             border_width: None,
@@ -1540,6 +1556,23 @@ impl Default for RangeSettings {
 }
 
 impl RangeSettings {
+    /// Settings for a new range, with a black card shadow at 20% opacity. A date and price
+    /// range starts without box edges; enabling them draws a 1 px border in the line colour.
+    pub fn for_tool(tool: super::DrawingToolType) -> Self {
+        let mut settings = Self::default();
+        if matches!(
+            tool,
+            super::DrawingToolType::DateRange | super::DrawingToolType::DateAndPriceRange
+        ) {
+            settings.shadow_color = [0, 0, 0, 51];
+        }
+        if tool == super::DrawingToolType::DateAndPriceRange {
+            settings.border = false;
+            settings.border_width = Some(1.0);
+        }
+        settings
+    }
+
     /// Whether the font size lies in 1 to 256 points and a set border width above 0 and at
     /// most 100 points.
     pub fn is_valid(&self) -> bool {

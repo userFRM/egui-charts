@@ -59,7 +59,7 @@ mod watchlist;
 pub use alert::{
     Alert, AlertCalendar, AlertChannelComparison, AlertComparison, AlertCondition, AlertDelivery,
     AlertFrequency, AlertId, AlertInputs, AlertPositionProgress, AlertRule, AlertSource,
-    AlertSourceName, AlertStatus, AlertStudy, CustomAlertEvent, NotificationSchedule,
+    AlertSourceName, AlertStatus, AlertStudy, AlertTrigger, CustomAlertEvent, NotificationSchedule,
     NotificationWindow,
 };
 pub use bar::{Bar, BarColors, BarData};
@@ -128,8 +128,9 @@ pub use session::{
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
 pub use strategy::{
-    StrategyComparison, StrategyExcursion, StrategyExit, StrategyHolding, StrategyPerformance,
-    StrategyReport, StrategyTrade, StrategyTradeStats,
+    StrategyAnalysis, StrategyComparison, StrategyExcursion, StrategyExit, StrategyHolding,
+    StrategyPerformance, StrategyPeriod, StrategyReport, StrategyResultBin, StrategyTrade,
+    StrategyTradeGroup, StrategyTradeStats,
 };
 #[cfg(feature = "ui")]
 pub(crate) use strategy::{SummaryUnit, run_figures, trade_figures};
