@@ -237,9 +237,13 @@ impl ChatsPanel {
         }
     }
 
-    /// Lets a room whose history ended ask again after it lost messages.
+    /// Lets a room that lost messages ask again: a history that ended has older ones again, and
+    /// a page on its way, asked before a message the room no longer holds, would leave a hole.
     fn reopen(&mut self, room: &str) {
-        if matches!(self.paging.get(room), Some(Paging::Ended)) {
+        if matches!(
+            self.paging.get(room),
+            Some(Paging::Ended | Paging::Loading(_))
+        ) {
             self.paging.remove(room);
         }
     }
@@ -1096,5 +1100,45 @@ mod tests {
         h.get_by_label("No older messages");
         to_top(&mut h);
         assert!(host.asked.lock().unwrap().is_empty());
+    }
+
+    /// Guards a room's history against a hole: a page asked before a message the room has since
+    /// lost to the bounds is dropped, and the next request asks before the new oldest message.
+    #[test]
+    fn a_page_asked_before_a_message_the_room_lost_is_dropped() {
+        let host = Arc::new(Host::default());
+        let mut panel = ChatsPanel::new();
+        panel.set_service(host.clone());
+        let events = host.events.lock().unwrap().clone().unwrap();
+        let push = |room: &str, count: usize| {
+            for i in 0..count {
+                let text = format!("{room} {i}");
+                let time = chrono::DateTime::UNIX_EPOCH;
+                let message = ChatMessage::new(room, "Ann", time, text.clone()).with_id(text);
+                events.push(ChatEvent::Message(message));
+            }
+        };
+        let ctx = egui::Context::default();
+        for room in ["desk", "r1", "r2", "r3", "r4"] {
+            push(room, 999);
+        }
+        panel.poll(&ctx);
+        panel.ask("desk");
+        let (_, before, _, reply) = host.asked.lock().unwrap().pop().unwrap();
+        assert_eq!(before.as_deref(), Some("desk 0"));
+
+        // Past 5,000 in all, desk, the first of the rooms holding the most, loses "desk 0".
+        push("r5", 6);
+        panel.poll(&ctx);
+        let older = chrono::DateTime::UNIX_EPOCH - chrono::TimeDelta::minutes(1);
+        reply.send(Ok(vec![
+            ChatMessage::new("desk", "Bo", older, "page").with_id("page"),
+        ]));
+        panel.poll(&ctx);
+        assert_eq!(panel.messages["desk"][0].text, "desk 1");
+
+        panel.ask("desk");
+        let (_, before, _, _) = host.asked.lock().unwrap().pop().unwrap();
+        assert_eq!(before.as_deref(), Some("desk 1"));
     }
 }
