@@ -58,6 +58,9 @@ use egui::{Pos2, Rect, Vec2};
 #[cfg(feature = "ui")]
 pub(crate) use export::ColumnId;
 pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
+pub use feed::checkpoint::{
+    TradeReplayCheckpoint, TradeReplayCheckpointError, TradeReplayCheckpointPlan,
+};
 pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
 #[cfg(feature = "ui")]
 pub(crate) use readout::SeriesFingerprint;

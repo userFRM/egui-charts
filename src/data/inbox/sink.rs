@@ -115,6 +115,8 @@ impl Inbox {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let id = SubscriptionId(NEXT.fetch_add(1, Ordering::Relaxed));
         let live = Live {
+            #[cfg(feature = "widget")]
+            non_trade: false,
             symbol,
             clock,
             placement: Placement::default(),
@@ -141,7 +143,9 @@ impl Inbox {
             queued_from: Some(TradeBars::default()),
             updates: Updates::new(Trades::new(trade_capacity)),
         };
-        self.state().subscriptions.insert(id, live);
+        let mut state = self.state();
+        state.subscriptions.insert(id, live);
+        state.changed();
         Sink {
             inbox: Arc::clone(self),
             id,
@@ -205,6 +209,10 @@ impl Sink {
     /// before dispatching `ReplayClock::seek`. Keep using the same subscription and sampler grid.
     pub fn reset_replay(&self, time: DateTime<Utc>) {
         self.update(|live| {
+            #[cfg(feature = "widget")]
+            {
+                live.non_trade = false;
+            }
             live.forming = None;
             live.count_bar = None;
             live.delta = 0.0;
@@ -250,21 +258,14 @@ impl Sink {
     /// so its candles do not depend on where its frames land; a live heartbeat opens only its
     /// own slot, since a stream that was away cannot tell a quiet market from a lost connection.
     pub(crate) fn open_quiet_slots(&self, now: DateTime<Utc>) {
-        self.inbox
-            .push(|state| match state.subscriptions.get_mut(&self.id) {
-                Some(live) => live.open_quiet_slots(now),
-                None => false,
-            });
+        self.push(|live| live.open_quiet_slots(now));
     }
 
     /// [`Self::advance_time`] for a replay frame that stayed at `now`: the slot of `now` was
     /// settled when the replay got there, and finding it again allocates on a clock with a
     /// session.
     pub(crate) fn hold_time(&self, now: DateTime<Utc>) {
-        self.inbox.push(|state| {
-            let Some(live) = state.subscriptions.get_mut(&self.id) else {
-                return false;
-            };
+        self.push(|live| {
             let sampled = live.sample_book(now);
             if live
                 .clock
@@ -293,6 +294,7 @@ impl Sink {
                 live.updates.rejected += 1;
                 return;
             }
+            live.note_non_trade();
             let regroups = live.clock.timeframe().is_some_and(|tf| tf.is_trade_based())
                 && live.forming.is_none_or(|last| slot >= last);
             if regroups {
@@ -357,10 +359,7 @@ impl Sink {
     /// timestamps. Heartbeats also close due depth-history periods, including on count intervals.
     pub fn advance_time(&self, now: DateTime<Utc>) {
         let system = Utc::now();
-        self.inbox.push(|state| {
-            let Some(live) = state.subscriptions.get_mut(&self.id) else {
-                return false;
-            };
+        self.push(|live| {
             let sampled = live.sample_book(now);
             if live
                 .clock
@@ -492,6 +491,7 @@ impl Sink {
                 .as_ref()
                 .is_none_or(|old| quote.ts >= old.ts)
             {
+                live.note_non_trade();
                 if let Some(tick) = live.tick_size {
                     for input in &live.study_inputs {
                         input.push_quote(&live.clock, &quote, tick);
@@ -517,8 +517,10 @@ impl Sink {
     pub fn set_server_time(&self, now: DateTime<Utc>) {
         let offset = now - Utc::now();
         // Not a push: the chart shows nothing new, so it is not woken.
-        if let Some(live) = self.inbox.state().subscriptions.get_mut(&self.id) {
+        let mut state = self.inbox.state();
+        if let Some(live) = state.subscriptions.get_mut(&self.id) {
             live.offset = offset;
+            state.changed();
         }
     }
 
@@ -569,15 +571,25 @@ impl Sink {
     }
 
     pub(super) fn update(&self, update: impl FnOnce(&mut Live)) {
-        self.inbox
-            .push(|state| match state.subscriptions.get_mut(&self.id) {
-                Some(live) => {
-                    update(live);
-                    live.bound_bars();
-                    true
-                }
-                None => false,
-            });
+        self.push(|live| {
+            update(live);
+            live.bound_bars();
+            true
+        });
+    }
+
+    fn push(&self, update: impl FnOnce(&mut Live) -> bool) {
+        self.inbox.push(|state| {
+            let Some(live) = state.subscriptions.get_mut(&self.id) else {
+                return false;
+            };
+            let wake = update(live);
+            if !wake && !state.woken {
+                // A heartbeat that need not wake the chart still invalidates its prior plan.
+                state.changed();
+            }
+            wake
+        });
     }
 }
 
@@ -616,6 +628,14 @@ pub(crate) struct TradeBars {
 }
 
 impl TradeBars {
+    /// The grouping can be copied without retaining or allocating host data.
+    #[cfg(feature = "widget")]
+    pub(crate) fn is_plain(&self) -> bool {
+        self.current
+            .as_ref()
+            .is_none_or(|(bar, _)| bar.colors.is_none() && bar.payload.is_none())
+    }
+
     pub(crate) fn push(
         &mut self,
         timeframe: crate::model::Timeframe,
@@ -718,6 +738,37 @@ impl TradeBars {
 }
 
 impl Live {
+    fn note_non_trade(&mut self) {
+        #[cfg(feature = "widget")]
+        {
+            self.non_trade = true;
+        }
+    }
+
+    /// After a drain the queued anchor and the live grouping are one state. Do not copy either
+    /// until we know they agree and there is no heap-owned bar data.
+    #[cfg(feature = "widget")]
+    pub(super) fn checkpoint_grouping(&self) -> Option<&TradeBars> {
+        self.queued_from.as_ref().filter(|group| {
+            group.is_plain()
+                && group.current == self.count_bar
+                && group.forming == self.forming
+                && group.delta.to_bits() == self.delta.to_bits()
+                && group.closed == self.event_closed
+                && group.last == self.last_trade
+        })
+    }
+
+    #[cfg(feature = "widget")]
+    pub(super) fn restore_grouping(&mut self, group: &TradeBars) {
+        self.forming = group.forming;
+        self.count_bar.clone_from(&group.current);
+        self.delta = group.delta;
+        self.event_closed = group.closed;
+        self.last_trade = group.last;
+        self.queued_from = Some(group.clone());
+    }
+
     #[cfg(any(feature = "widget", feature = "alert-engine"))]
     pub(super) fn connect_study_inputs(&mut self, inputs: Vec<crate::data::OrderFlowInput>) {
         let trade_based = self.clock.timeframe().is_some_and(|tf| tf.is_trade_based());
@@ -1046,6 +1097,7 @@ impl Live {
     }
 
     fn depth_result(&mut self, ts: DateTime<Utc>, result: Result<(), Lost>) {
+        self.note_non_trade();
         let lost = result.is_err();
         match result {
             // The book holds a snapshot newer than any loss, so a pending request is moot.

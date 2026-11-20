@@ -21,6 +21,11 @@ use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
+#[cfg(feature = "widget")]
+mod checkpoint;
+#[cfg(feature = "widget")]
+pub(crate) use checkpoint::PackedTrades;
+
 /// Size taken from one resting order, or from an unidentified one, at one price.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -162,6 +167,11 @@ pub(crate) struct OrderSizes {
 }
 
 impl OrderSizes {
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    pub(crate) fn checkpoint_empty(&self) -> bool {
+        self.at.is_none() && self.sizes.is_empty()
+    }
+
     /// Whether `fill` is at the timestamp of the orders held.
     pub(crate) fn holds(&self, fill: &Tick) -> bool {
         self.at == Some(fill.ts)
@@ -242,7 +252,7 @@ pub(crate) struct Trades {
     /// First revision of this store, unchanged by paging, pushes and evictions.
     #[cfg(feature = "widget")]
     pub(crate) generation: u64,
-    /// Changes whenever a trade is added or evicted.
+    /// Changes when the held trades or their history coverage changes.
     revision: u64,
     /// Whether the sink dropped live trades since the subscription began, after which no more are
     /// kept apart.
@@ -364,6 +374,7 @@ impl Trades {
         expect(dead_code, reason = "only the chart widget consumes a feed")
     )]
     pub(crate) fn reanchor(&mut self) {
+        self.revision = next_revision();
         // No page reached the first instant of the stream, which may lack trades that traded
         // before the stream began.
         if self.paged == 0
@@ -479,8 +490,13 @@ impl Trades {
             && let Some(at) = trade.id.and_then(|id| self.ids.get(&id))
         {
             let held = &mut self.trades[at.wrapping_sub(self.front)];
-            held.aggressor_order_id = held.aggressor_order_id.or(trade.aggressor_order_id);
-            held.resting_order_id = held.resting_order_id.or(trade.resting_order_id);
+            if (held.aggressor_order_id.is_none() && trade.aggressor_order_id.is_some())
+                || (held.resting_order_id.is_none() && trade.resting_order_id.is_some())
+            {
+                held.aggressor_order_id = held.aggressor_order_id.or(trade.aggressor_order_id);
+                held.resting_order_id = held.resting_order_id.or(trade.resting_order_id);
+                self.revision = next_revision();
+            }
         }
     }
 
@@ -488,10 +504,11 @@ impl Trades {
     /// added, and keeps apart those left to a page at the first instant where one is. Calls
     /// `changed` with each trade added (`true`) or evicted (`false`).
     pub(crate) fn append(&mut self, newer: Trades, changed: &mut impl FnMut(&Tick, bool)) {
-        self.lost_until = self.lost_until.max(newer.lost_until);
         // The sink drops its oldest live trades, at or after the stream's first instant: kept
         // trades the loss reaches guard nothing, and no later instant is the stream's first.
         if let Some(lost) = newer.lost_until {
+            self.revision = next_revision();
+            self.lost_until = self.lost_until.max(Some(lost));
             self.live_lost = true;
             if (self.unheld_live.as_ref()).is_some_and(|(at, _)| lost >= *at) {
                 self.unheld_live = None;
@@ -535,6 +552,8 @@ impl Trades {
         mut page: Vec<Tick>,
         changed: &mut impl FnMut(&Tick, bool),
     ) -> u64 {
+        // Even an empty page may complete the front of the live stream.
+        self.revision = next_revision();
         let received = page.len();
         page.retain(valid);
         let rejected = (received - page.len()) as u64;

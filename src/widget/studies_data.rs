@@ -167,6 +167,10 @@ impl StudyDataCache {
         self.series.retain(|series| series.stream.is_none());
         self.generation += 1;
     }
+    /// Auxiliary series still connected to a feed, including ones the next pump will detach.
+    pub(super) fn has_feed_stream(&self) -> bool {
+        self.series.iter().any(|series| series.stream.is_some())
+    }
     pub(super) fn generation(&self) -> u64 {
         self.generation
     }

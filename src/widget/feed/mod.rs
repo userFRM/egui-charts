@@ -5,6 +5,8 @@
 //! outside any egui closure: a feed may answer or push inline, and that runs the waker, which
 //! takes the egui context's lock.
 
+pub(super) mod checkpoint;
+mod checkpoint_key;
 mod footprints;
 mod pump;
 
@@ -66,6 +68,8 @@ pub(crate) struct FeedLink {
     /// history lacks or holds with other values, which stands for the first live execution while
     /// none is held.
     pushed_from: Option<chrono::DateTime<chrono::Utc>>,
+    /// Host-supplied or paged candles cannot resume a trade-built partial candle.
+    pub(super) non_trade_bars: bool,
     pub(super) paused: bool,
     /// The pause last set with [`Chart::set_feed_paused`]. `paused` also holds while the main
     /// bars take no data or a replay runs.
@@ -222,6 +226,7 @@ impl FeedLink {
             resumed: false,
             resumed_from: None,
             pushed_from: None,
+            non_trade_bars: self.non_trade_bars,
             paused: true,
             host_paused: true,
             next_key: 0,
@@ -619,6 +624,7 @@ impl Chart {
             resumed: false,
             resumed_from: None,
             pushed_from: None,
+            non_trade_bars: false,
             paused: false,
             host_paused: false,
             next_key: 0,
