@@ -23,6 +23,17 @@ use crate::studies::{Indicator, IndicatorValues, palette};
 use egui::Color32;
 
 /// Analyst price forecast: the data feed's analyst price targets, drawn by the chart.
+///
+/// ```
+/// # #[cfg(feature = "widget")]
+/// # {
+/// use egui_charts::{ChartBuilder, studies::AnalystPriceForecast};
+///
+/// let mut chart = ChartBuilder::new().build();
+/// chart.add_indicator(Box::new(AnalystPriceForecast::default()));
+/// assert!(chart.price_targets_visible());
+/// # }
+/// ```
 #[derive(Clone, Debug)]
 pub struct AnalystPriceForecast {
     positive: Color32,
