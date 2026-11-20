@@ -2222,7 +2222,10 @@ mod tests {
     /// survives subsequent quotes and a chart symbol change.
     #[test]
     fn inline_level_is_empty_without_a_quote_and_keeps_user_input() {
-        use egui_kittest::{Harness, kittest::Queryable};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
         let mut panel = AlertsPanel::default();
         panel.set_symbol("SIM");
         let mut h = Harness::builder()
