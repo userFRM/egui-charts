@@ -1205,6 +1205,8 @@ impl DemoApp {
             self.timeframe_toolbar.state.adjust_for_dividends,
         );
         self.loading_bars = true;
+        // New prices may keep the bar times, such as after a dividend adjustment: rate them anew.
+        self.symbol_details.set_bars(self.state.timeframe, &[]);
         self.bars = self.live.snapshot(
             self.state.timeframe,
             self.chart.bar_clock(),
@@ -2834,6 +2836,8 @@ impl DemoApp {
                             .frame(egui::Frame::NONE)
                             .show(ui, |ui| self.symbol_details.show(ui));
                     }
+                    let action = self.symbol_details.take_news_action();
+                    self.handle_news(ui.ctx(), action);
                     self.show_watchlist(ui);
                 }
                 SidePanel::TimeAndSales => self.time_and_sales.show(ui),
@@ -3108,6 +3112,12 @@ impl DemoApp {
                 .cloned()
                 .unwrap_or_else(|| egui_charts::model::Instrument::new(&chart_symbol)),
         );
+        if let Some(timeframe) = self.chart.timeframe()
+            && !self.loading_bars
+        {
+            self.symbol_details
+                .set_bars(timeframe, self.chart.bars(SeriesId::MAIN));
+        }
         if let Some(quote) = self.live.quote(now) {
             self.symbol_details.set_quote(quote.clone());
             self.trading.set_quote(&chart_symbol, quote);
