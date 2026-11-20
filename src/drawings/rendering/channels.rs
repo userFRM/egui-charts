@@ -561,9 +561,8 @@ mod tests {
             assert!(outline.lines.contains(&line), "missing {line:?}");
         }
         assert_eq!(outline.areas.len(), 1);
-        let hit = crate::drawings::services::DrawingInteraction::new();
         assert_eq!(
-            hit.hit_test(Pos2::new(80.0, 45.0), &[restored.clone()], "1m"),
+            crate::drawings::services::hit_test(Pos2::new(80.0, 45.0), &[restored.clone()], "1m"),
             Some(1)
         );
         // Left and right are chart directions, independent of anchor order.

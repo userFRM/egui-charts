@@ -28,7 +28,7 @@ pub use price_formatter::{
     instrument_price_precision,
 };
 #[cfg(feature = "widget")]
-pub(crate) use price_formatter::{group_thousands, price_decimals, to_step};
+pub(crate) use price_formatter::{format_decimal, group_thousands, price_decimals, to_step};
 pub use pricescale::{
     PriceMap, PriceRange, PriceScale, PriceScaleId, PriceScaleMargins, PriceScaleMode,
     PriceScaleOptions, PriceTransform,

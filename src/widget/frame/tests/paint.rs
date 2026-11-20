@@ -2666,3 +2666,86 @@ fn quote_panel_trades_like_the_legend_and_keeps_its_place() {
         );
     }
 }
+
+/// Footprint cells and the row values of a session volume profile follow the instrument's
+/// volume decimals, as the chart's other volume readouts do (#3738). Each of ten minute bars
+/// trades 0.375 on the bid and 123.456 on the ask at 105 and spreads a volume of 456.789 evenly
+/// over 100 to 110, so each of the profile's five two-point rows holds 10 × 456.789 / 5 =
+/// 913.578, apart from the legend's bar volume.
+#[cfg(feature = "studies")]
+#[test]
+fn footprint_and_session_profile_write_the_instrument_volume_decimals() {
+    use crate::chart::overlays::{FootprintConfig, FootprintMode};
+    use crate::data::Footprint;
+    use crate::model::{
+        Bar, BarClock, BarData, FootprintStatistic, Instrument, OrderSide, Tick, Timeframe,
+    };
+    use crate::studies::{InputValue, VolProfileSession};
+    // Decimals, the bid-by-ask cell, a profile row value and the bar volume of the statistics,
+    // 0.375 + 123.456; without decimals they read `0.375 × 123`, `913.58` and `124`. The trade
+    // count of the statistics stays `2`.
+    for (decimals, cell, row, volume) in [
+        (0, "0 × 123", "914", "124"),
+        (3, "0.375 × 123.456", "913.578", "123.831"),
+    ] {
+        let bars = (0..10)
+            .map(|minute| {
+                let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(minute);
+                Bar::new(time, 100.0, 110.0, 100.0, 110.0, 456.789)
+            })
+            .collect();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        chart.set_symbol("FLOW");
+        chart.set_instrument(Some(Instrument::new("FLOW").with_volume_decimals(decimals)));
+        let mut profile = VolProfileSession::new(5);
+        for (id, value) in [
+            ("show_values", InputValue::Toggle(true)),
+            ("display", InputValue::Choice(0)),
+        ] {
+            crate::studies::Indicator::set_input(&mut profile, id, value).unwrap();
+        }
+        chart.add_indicator(Box::new(profile));
+        chart.apply_synced_time_scale(150.0, 1.0);
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for bar in chart.bars(crate::widget::SeriesId::MAIN).to_vec() {
+            for (size, side) in [(0.375, OrderSide::Sell), (123.456, OrderSide::Buy)] {
+                flow.push(&Tick::new(bar.time, 105.0, size, Some(side)))
+                    .unwrap();
+            }
+        }
+        let config = FootprintConfig {
+            modes: vec![FootprintMode::BidAsk],
+            statistics: true,
+            statistics_rows: vec![FootprintStatistic::Volume, FootprintStatistic::Trades],
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut texts = Vec::new();
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 500.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show_footprint(ui, &flow, &config);
+                },
+            );
+            output.textures_delta.clear();
+            texts = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+        }
+        for expected in [cell, row, volume, "2"] {
+            assert!(
+                texts.iter().any(|text| text == expected),
+                "volume decimals {decimals}: {expected} not in {texts:?}"
+            );
+        }
+    }
+}
