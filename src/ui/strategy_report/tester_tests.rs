@@ -92,11 +92,13 @@ fn a_run_continues_on_new_bars_and_rebuilds_after_corrections() {
         .0
         .request_run("TEST", Timeframe::Min1, &source[..100], true)
         .unwrap();
+    h.state_mut().0.report.selected = Some(0);
     h.state_mut().1 = source[..101].to_vec();
     h.run();
     let tester = &h.state().0;
     assert!(!tester.is_stale());
     assert_eq!(tester.report(), Some(&fresh(tester, &source[..101], &[])));
+    assert_eq!(tester.report.selected, Some(0));
     let report = tester.report().unwrap();
     assert_eq!(report.trades.len(), 2);
     let exit = report.trades[0].exit.as_ref().unwrap();

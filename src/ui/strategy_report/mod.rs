@@ -159,7 +159,15 @@ impl StrategyReportPanel {
             report.trades.iter().position(|trade| {
                 trade.side == old.side
                     && trade.entry_time == old.entry_time
-                    && trade.label == old.label
+                    && (trade.label == old.label
+                        // A closing exit appends " / {exit}" to the label of the open trade.
+                        || (old.exit.is_none()
+                            && trade
+                                .label
+                                .as_deref()
+                                .zip(old.label.as_deref())
+                                .and_then(|(label, entry)| label.strip_prefix(entry))
+                                .is_some_and(|exit| exit.starts_with(" / "))))
             })
         });
         self.data = Some(ReportData::new(report, bars));
