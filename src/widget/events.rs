@@ -1641,18 +1641,43 @@ mod tests {
     }
 
     /// Renumbering drawings after a study or bar series leaves or crosses them is observable,
-    /// including undo and redo, while drawings whose layers stay put report nothing.
+    /// including undo and redo, while drawings whose layers stay put report nothing. A drawing
+    /// that a removed study owned changes owner and layer in one edit, reported once.
     #[cfg(all(feature = "studies", feature = "drawings"))]
     #[test]
     fn restacked_drawings_reach_the_host_once() {
         use crate::drawings::{ChartPoint, Drawing, DrawingEventKind, DrawingToolType};
-        use crate::studies::SMA;
+        use crate::studies::{RSI, SMA};
         use crate::widget::{SeriesOptions, VisualOrder};
 
+        let drawing_places = |chart: &Chart| {
+            chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| {
+                    (
+                        d.id,
+                        d.pane,
+                        d.series_layer,
+                        d.z_order,
+                        d.chart_points.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
         type Row = (&'static str, bool, fn(&mut Chart, SeriesId), bool);
-        let rows: [Row; 6] = [
+        let rows: [Row; 7] = [
             (
                 "remove study",
+                false,
+                |c, id| {
+                    assert!(c.remove_series(id));
+                },
+                true,
+            ),
+            (
+                "remove study sharing its pane",
                 false,
                 |c, id| {
                     assert!(c.remove_series(id));
@@ -1704,8 +1729,15 @@ mod tests {
         for (name, bars, edit, changes) in rows {
             let mut chart = chart(&[100.0], &[200.0]);
             chart.config.show_volume = false;
+            let shared = name == "remove study sharing its pane";
             let id = if bars {
                 chart.add_series(SeriesOptions::default())
+            } else if shared {
+                // Pane: study, its drawings, other study; the other study takes the drawings.
+                let id = chart.add_indicator(Box::new(RSI::new(14)));
+                let other = chart.add_indicator(Box::new(RSI::new(7)));
+                assert!(chart.move_indicator_to_pane(other, id));
+                id
             } else {
                 let id = chart.add_indicator(Box::new(SMA::new(3)));
                 assert!(chart.reorder_indicator(id, VisualOrder::SendToBack));
@@ -1720,9 +1752,11 @@ mod tests {
                     vec![ChartPoint::new(0.0, 120.0), ChartPoint::new(1.0, 150.0)];
                 drawing.series_layer = Some(layer);
                 drawing.z_order = if at == 2 { -1 } else { at as i32 };
+                drawing.pane = (shared && at < 2).then_some(id.0);
                 chart.drawings_mut().add_drawing(drawing).unwrap();
             }
             chart.drain_events().for_each(drop);
+            let before = drawing_places(&chart);
             let expected = if changes {
                 vec![
                     ChartEvent::Drawing {
@@ -1740,7 +1774,7 @@ mod tests {
             chart.user_action(|c| edit(c, id));
             let events: Vec<_> = chart.drain_events().collect();
             let mut ordered = Vec::new();
-            if name == "remove study" {
+            if name.starts_with("remove study") {
                 ordered.push(ChartEvent::Study {
                     id,
                     kind: StudyEventKind::Removed,
@@ -1750,14 +1784,32 @@ mod tests {
             }
             ordered.extend(expected.clone());
             assert_eq!(events, ordered, "{name}");
+            let after = drawing_places(&chart);
             if changes {
                 for redo in [false, true] {
                     assert!(if redo { chart.redo() } else { chart.undo() }, "{name}");
-                    let drawings: Vec<_> = chart
-                        .drain_events()
-                        .filter(|event| matches!(event, ChartEvent::Drawing { .. }))
-                        .collect();
-                    assert_eq!(drawings, expected, "{name}: redo {redo}");
+                    let events: Vec<_> = chart.drain_events().collect();
+                    let mut ordered = Vec::new();
+                    if name.starts_with("remove study") {
+                        ordered.push(ChartEvent::Study {
+                            id,
+                            kind: if redo {
+                                StudyEventKind::Removed
+                            } else {
+                                StudyEventKind::Added
+                            },
+                        });
+                    } else if name == "remove bar series" {
+                        ordered.push(if redo {
+                            ChartEvent::SeriesRemoved(id)
+                        } else {
+                            ChartEvent::SeriesAdded(id)
+                        });
+                    }
+                    ordered.extend(expected.clone());
+                    assert_eq!(events, ordered, "{name}: redo {redo}");
+                    let restored = if redo { &after } else { &before };
+                    assert_eq!(&drawing_places(&chart), restored, "{name}: redo {redo}");
                 }
             }
         }
