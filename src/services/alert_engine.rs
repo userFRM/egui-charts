@@ -84,7 +84,8 @@ use crate::model::{
 /// minute. When the evaluated bar opened at or before that time, or for an alert at bar close
 /// the bar after it did, a once-per-bar or once-per-bar-close alert does not fire on that bar,
 /// and a crossing, entering or exiting rule needs a new transition, since this evaluation only
-/// records the values. Saving the alert again ends this, so it starts afresh.
+/// records the values. A save that changes what the alert watches or its status ends this, so
+/// it starts afresh; display and delivery edits keep its restart handling.
 ///
 /// *Schedule.* An alert's `schedule` restricts notifications. Outside it the engine keeps
 /// observing values for crossings and records each trigger as a silent
@@ -101,9 +102,9 @@ use crate::model::{
 /// *Expiry.* Every `update` and [`tick`](Self::tick) first marks active alerts whose expiry has
 /// passed as [`Expired`](AlertStatus::Expired), so an alert never fires at or after its expiry
 /// and expires without data. Disabled, triggered and expired alerts are not evaluated, and
-/// saving or removing an alert discards its evaluation state, so a resumed alert starts afresh,
-/// and a watchlist alert's member record is cleared unless the save changes only its display or
-/// delivery.
+/// saving changes to what an alert watches or its status, or removing it, discards its evaluation
+/// state, so a resumed alert starts afresh. Display and delivery edits keep a watchlist alert's
+/// member record.
 ///
 /// ```
 /// use chrono::{DateTime, Utc};
@@ -149,8 +150,8 @@ struct State {
     runs: HashMap<(AlertId, String), Run>,
     /// The custom event sources the host connected.
     routes: std::collections::HashSet<String>,
-    /// Alerts restored by `with_alerts`, or saved under an id the engine did not hold, and not
-    /// saved since: a run's first evaluation counts their saved last firing.
+    /// Alerts restored by `with_alerts`, or saved under an id the engine did not hold, whose
+    /// monitoring has not changed since: a run's first evaluation counts their saved last firing.
     restored: std::collections::HashSet<AlertId>,
 }
 
@@ -900,9 +901,9 @@ impl State {
         }
         let existing = self.alerts.iter().find(|old| old.id == alert.id);
         if let Some(id) = &alert.id {
-            if existing.is_some() {
+            if existing.is_some_and(|old| !old.same_monitoring(&alert)) {
                 self.restored.remove(id);
-            } else if restoring {
+            } else if existing.is_none() && restoring {
                 self.restored.insert(id.clone());
             }
         }
@@ -2104,7 +2105,23 @@ mod tests {
                 assert_eq!(host.fired(), fired, "row {row}, step {step}");
             }
         }
-        // Saving the alert again starts it afresh.
+        // A display-only save before the first evaluation keeps the saved last firing.
+        for list in [false, true] {
+            let mut saved = restored(Above(100.0), OncePerBar);
+            if list {
+                saved.symbol = String::new();
+                saved.watchlist = Some("tech".into());
+                saved.member_triggered_at.insert("SYM".into(), time(36_300));
+            }
+            let host = Host::new(vec![saved]);
+            host.engine.set_watchlist("tech", vec!["SYM".into()]);
+            let mut edited = host.engine.alerts().remove(0);
+            edited.extend_line = false;
+            assert_eq!(host.save(edited), Ok(()));
+            update(&host, "SYM", (9, &[99.0, 101.0]), 37_200);
+            assert!(host.fired().is_empty(), "display-only save, watchlist: {list}");
+        }
+        // Changing what the alert watches starts it afresh.
         let host = Host::new(vec![restored(Above(100.0), OncePerBar)]);
         update(&host, "SYM", (9, &[99.0, 101.0]), 37_200);
         assert!(host.fired().is_empty());
