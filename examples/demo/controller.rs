@@ -385,6 +385,15 @@ impl ChartAppState for DemoAppState {
     }
 }
 
+/// A preset waits for its interval and bars, then confirms the fit across a plot layout.
+#[derive(Clone, Copy)]
+enum RangeFit {
+    Interval,
+    Bars,
+    Fitting,
+    Confirming,
+}
+
 /// The full demo application.
 pub struct DemoApp {
     pub chart: Chart,
@@ -406,8 +415,8 @@ pub struct DemoApp {
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
     loading_bars: bool,
-    /// A preset waiting for its new bars, and whether its interval change was reported.
-    range_fit: Option<(DateRange, bool)>,
+    /// The preset and displayed interval, with its load and plot-fitting state.
+    range_fit: Option<(DateRange, Timeframe, RangeFit)>,
     pub theme: Theme,
     /// No explicit choice follows the system appearance without saving its current value.
     theme_choice: Option<String>,
@@ -1033,6 +1042,7 @@ impl DemoApp {
         if !self.chart.take_history_changed() {
             return;
         }
+        self.range_fit = None;
         self.state.chart_type = self.chart.chart_type();
         let clock = self.timeframe_toolbar.state.timezone.clone();
         self.timeframe_toolbar
@@ -3470,17 +3480,18 @@ impl DemoApp {
         self.range_fit = None;
         if offered && self.state.timeframe != timeframe {
             self.switch_timeframe(timeframe);
-            self.range_fit = Some((range, false));
+            self.range_fit = Some((range, timeframe, RangeFit::Interval));
         } else {
             self.fit_date_range(range);
+            if self.own_data.is_none() {
+                self.explain_history_limit(range);
+            }
+            self.range_fit = Some((range, self.state.timeframe, RangeFit::Fitting));
         }
     }
 
     /// Fits the lookback to the plot and sends its span to the linked charts.
     fn fit_date_range(&mut self, range: DateRange) {
-        if self.own_data.is_none() {
-            self.explain_history_limit(range);
-        }
         let visible = visible_bars_for_range(range, self.chart.bars(SeriesId::MAIN));
         let width = self.chart.get_rendered_price_rect().width();
         // Include the latest slot in the scale's exclusive data range.
@@ -3802,9 +3813,17 @@ impl DemoApp {
                     // Skip older queued switches; after ours, another interval cancels the fit.
                     self.range_fit = self
                         .range_fit
-                        .filter(|(range, reported)| !*reported || range.timeframe() == timeframe)
-                        .map(|(range, reported)| {
-                            (range, reported || range.timeframe() == timeframe)
+                        .filter(|(_, interval, stage)| {
+                            matches!(stage, RangeFit::Interval) || *interval == timeframe
+                        })
+                        .map(|(range, interval, stage)| {
+                            let stage =
+                                if interval == timeframe && matches!(stage, RangeFit::Interval) {
+                                    RangeFit::Bars
+                                } else {
+                                    stage
+                                };
+                            (range, interval, stage)
                         });
                     self.last_chart_click = None;
                     self.pointer_readout = None;
@@ -3825,7 +3844,7 @@ impl DemoApp {
                     series: SeriesId::MAIN,
                     bars,
                 } if bars > 0 => {
-                    fit |= matches!(self.range_fit, Some((_, true)));
+                    fit |= matches!(self.range_fit, Some((_, _, RangeFit::Bars)));
                     if let Some(own) = &mut self.own_data
                         && std::mem::take(&mut own.sizing)
                     {
@@ -3850,11 +3869,28 @@ impl DemoApp {
         if size {
             self.size_range_interval();
         }
-        if fit
+        if let Some((range, interval, stage)) = self.range_fit
             && !self.chart.bars(SeriesId::MAIN).is_empty()
-            && let Some((range, _)) = self.range_fit.take()
+            && (fit || matches!(stage, RangeFit::Fitting | RangeFit::Confirming))
         {
+            let before = self.chart.get_time_scale_state();
             self.fit_date_range(range);
+            if fit && self.own_data.is_none() {
+                self.explain_history_limit(range);
+            }
+            let unchanged = before == self.chart.get_time_scale_state();
+            if unchanged && matches!(stage, RangeFit::Confirming) {
+                self.range_fit = None;
+            } else {
+                // Fitting can widen the price-axis gutter on the next frame.
+                let stage = if unchanged {
+                    RangeFit::Confirming
+                } else {
+                    RangeFit::Fitting
+                };
+                self.range_fit = Some((range, interval, stage));
+                ctx.request_repaint();
+            }
         }
         if let Some(index) = replay_click.and_then(|pos| self.replay_start_bar(pos)) {
             let time = self.chart.state().shown()[index].time;
@@ -10262,12 +10298,16 @@ mod tests {
         assert_eq!(app.chart.timeframe(), Some(Timeframe::Min1));
         assert_eq!(app.chart.get_time_scale_state(), before);
         assert!(!app.chart.undo(), "a preset records exactly one step");
-        app.handle_timeframe_toolbar(TimeframeToolbarAction::DateRangeChanged(DateRange::Day1));
-        settle(&mut app, &ctx);
-        assert!(app.chart.undo());
-        settle(&mut app, &ctx);
-        assert_eq!(app.chart.timeframe(), Some(Timeframe::Min1));
-        assert_eq!(app.chart.get_time_scale_state(), before);
+        for finish_fit in [true, false] {
+            app.handle_timeframe_toolbar(TimeframeToolbarAction::DateRangeChanged(DateRange::Day1));
+            if finish_fit {
+                settle(&mut app, &ctx);
+            }
+            assert!(app.chart.undo());
+            settle(&mut app, &ctx);
+            assert_eq!(app.chart.timeframe(), Some(Timeframe::Min1));
+            assert_eq!(app.chart.get_time_scale_state(), before);
+        }
     }
 
     /// A size entered in the chart settings is the user's: no chart type, interval or symbol
