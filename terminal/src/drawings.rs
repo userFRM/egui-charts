@@ -22,6 +22,7 @@ use egui_charts::ui::widget_bar::panels::object_tree::{
 };
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBarAction};
 use egui_charts::widget::{ChartEvent, ChartPointer, SeriesId, ShortcutRequest};
+use std::collections::HashMap;
 
 /// Object tree id of the main series.
 const MAIN_SERIES_ID: usize = usize::MAX;
@@ -77,9 +78,6 @@ impl Terminal {
             self.chart_mut()
                 .user_action(|chart| chart.drawings_mut().end_drag_handle());
         }
-        // A default written on one chart (toolbar colour, properties dialog)
-        // reaches every chart; this also catches writes the toolbar never sees.
-        self.sync_drawing_defaults();
     }
 
     pub(super) fn drawings_show(&mut self, ui: &mut egui::Ui, region: Region) {
@@ -192,7 +190,7 @@ impl Terminal {
     pub(super) fn drawings_settings(&mut self, settings: &mut UserSettings, direction: Direction) {
         match direction {
             Direction::Load => {
-                let defaults: Vec<_> = settings
+                let defaults: HashMap<DrawingToolType, DrawingTemplate> = settings
                     .drawing_defaults
                     .iter()
                     .filter_map(|(tool, template)| {
@@ -202,9 +200,10 @@ impl Terminal {
                         ))
                     })
                     .collect();
-                for chart in &mut self.charts {
-                    chart.drawings_mut().tool_defaults = defaults.iter().cloned().collect();
-                }
+                // The loaded set reaches the charts parked in other tabs as well,
+                // not only the ones on show; otherwise a tab switch would spread
+                // the shown tab's older set.
+                self.apply_drawing_defaults(&defaults);
                 self.drawings.toolbar.state.magnet_hint_dismissed |= settings.magnet_hint_dismissed;
             }
             Direction::Save => {
@@ -553,9 +552,32 @@ impl Terminal {
 
     fn show_drawing_properties(&mut self, ctx: &egui::Context) {
         let chart = &mut self.charts[self.active];
+        // The dialog writes a save-as-default into the active chart only, on
+        // whichever frame it lands: the live preview consumes the flag the same
+        // frame the menu item is clicked, while Ok applies and closes on its own
+        // frame. Snapshot the active chart's defaults while the dialog is open,
+        // so either write is caught and carried to every chart.
+        let before = self
+            .drawings
+            .properties
+            .is_open
+            .then(|| chart.drawings().tool_defaults.clone());
         let action = self.drawings.properties.show_and_apply(ctx, chart);
+        let wrote_default = before.is_some_and(|before| {
+            let after = &chart.drawings().tool_defaults;
+            before.len() != after.len()
+                || before.iter().any(|(tool, template)| {
+                    after.get(tool).is_none_or(|current| {
+                        serde_json::to_value(template).unwrap_or(serde_json::Value::Null)
+                            != serde_json::to_value(current).unwrap_or(serde_json::Value::Null)
+                    })
+                })
+        });
         if !matches!(action, DrawingPropertiesAction::None) {
             self.emit(Action::DrawingProperties(action));
+        }
+        if wrote_default {
+            self.sync_drawing_defaults();
         }
     }
 
@@ -966,7 +988,6 @@ mod tests {
         );
         assert_eq!(terminal.charts.len(), 2);
         let green = [76, 175, 80, 255];
-        let purple = [156, 39, 176, 255];
         terminal.activate_slot(0);
         terminal
             .chart_mut()
@@ -978,10 +999,6 @@ mod tests {
             .drawings()
             .new_drawing(1, DrawingToolType::Rect);
         assert_eq!(second.color, green, "second chart");
-        assert_ne!(
-            second.color, purple,
-            "second chart is not the built-in default"
-        );
         // The settings keep the pick while the second chart is active.
         terminal.activate_slot(1);
         let saved = terminal.user_settings();
@@ -995,21 +1012,24 @@ mod tests {
             .drawings()
             .new_drawing(1, DrawingToolType::Rect);
         assert_eq!(second.color, green, "active second chart");
-        // A default saved on the active chart, as the drawing properties dialog saves
-        // one (it inserts into the active chart's tool defaults), reaches the other
-        // chart after a frame.
-        let mut template = DrawingTemplate::from_drawing(
-            &terminal
-                .chart()
-                .drawings()
-                .new_drawing(0, DrawingToolType::TrendLine),
-        );
-        template.settings.color = [242, 54, 69, 255];
+        // A default saved from the drawing properties dialog on the active
+        // chart reaches the other chart: open the dialog on a red trend line,
+        // save it as the default for its tool, and run a frame.
+        let mut drawing = line(0);
+        drawing.color = [242, 54, 69, 255];
         terminal
             .chart_mut()
             .drawings_mut()
-            .tool_defaults
-            .insert(DrawingToolType::TrendLine, template);
+            .add_synced_drawing(drawing)
+            .unwrap();
+        let id = terminal.chart().drawings().drawings[0].id;
+        assert!(
+            terminal
+                .drawings
+                .properties
+                .open_for_chart(&terminal.charts[1], DrawingId(id))
+        );
+        terminal.drawings.properties.props.save_as_default = true;
         frame(&mut terminal, SIZE, vec![]);
         let first = terminal.charts[0]
             .drawings()
@@ -1028,7 +1048,6 @@ mod tests {
     fn drawing_defaults_survive_a_restart_into_a_saved_layout() {
         let storage = Arc::new(MemoryStorage::default());
         let green = [76, 175, 80, 255];
-        let purple = [156, 39, 176, 255];
         {
             let mut terminal = Terminal::new(Arc::new(TestFeed))
                 .with_symbol("AAPL")
@@ -1074,10 +1093,6 @@ mod tests {
         for (slot, chart) in terminal.charts.iter().enumerate() {
             let drawing = chart.drawings().new_drawing(1, DrawingToolType::Rect);
             assert_eq!(drawing.color, green, "chart {slot} after restart");
-            assert_ne!(
-                drawing.color, purple,
-                "chart {slot} is not the built-in default"
-            );
         }
         // And the stored settings still hold it after the restart.
         let kept = terminal.user_settings();

@@ -242,33 +242,12 @@ impl Terminal {
         self.top_toolbar.chart_grid_selector.set_layout(mode);
     }
 
-    /// The drawing defaults every chart agrees on, with the active chart winning where
-    /// charts disagree. Settings hold one set, so a pick made on one chart is the
-    /// terminal's default everywhere.
+    /// The terminal's drawing defaults: every write syncs all charts, so the
+    /// active chart's set is the set every chart holds. Reading the active
+    /// chart keeps a stale entry parked elsewhere from coming back, for
+    /// example after the host loads settings without it.
     pub(super) fn merged_drawing_defaults(&self) -> HashMap<DrawingToolType, DrawingTemplate> {
-        let mut merged: HashMap<DrawingToolType, DrawingTemplate> = HashMap::new();
-        let take = |merged: &mut HashMap<DrawingToolType, DrawingTemplate>, chart: &Chart| {
-            for (tool, template) in &chart.drawings().tool_defaults {
-                merged.entry(*tool).or_insert_with(|| template.clone());
-            }
-        };
-        for chart in &self.charts {
-            take(&mut merged, chart);
-        }
-        for tab in &self.layouts.tabs {
-            if let Some(workspace) = &tab.workspace {
-                for chart in &workspace.charts {
-                    take(&mut merged, chart);
-                }
-            }
-        }
-        // A pick just made on the active chart wins over a stale default parked elsewhere.
-        if let Some(chart) = self.charts.get(self.active) {
-            for (tool, template) in &chart.drawings().tool_defaults {
-                merged.insert(*tool, template.clone());
-            }
-        }
-        merged
+        self.chart().drawings().tool_defaults.clone()
     }
 
     /// Gives every chart, on show and parked in a layout tab, the same drawing defaults.
