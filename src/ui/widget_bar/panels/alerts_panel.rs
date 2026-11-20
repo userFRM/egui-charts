@@ -16,6 +16,7 @@ use crate::services::{AlertEvent, Alerts, Listener, Notification, Notifications}
 use crate::theme::ThemeExt;
 use crate::ui::dialogs::alert_dialog::rule_form;
 use crate::ui_kit::buttons::Button;
+use crate::ui_kit::modal::dialogs::ConfirmDialog;
 use crate::ui_kit::notifications::{Toast, Toasts};
 use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
 
@@ -143,7 +144,9 @@ const LOG_BOUND: usize = 10_000;
 /// Call [`poll`](Self::poll) each frame even while hidden, so triggers produce notifications.
 /// Creation returns an intent to open the shared alert dialog. Only host pushes change the list;
 /// successful saves and removals never invent local state. Accounts, evaluation and delivery
-/// outside the application remain the host's responsibility.
+/// outside the application remain the host's responsibility. The Log tab narrows the log to one
+/// alert or one symbol and clears the entries it shows after a confirmation, also from the
+/// built-in engine's history.
 pub struct AlertsPanel {
     config: AlertsPanelConfig,
     service: Option<Arc<dyn Alerts>>,
@@ -152,6 +155,11 @@ pub struct AlertsPanel {
     generation: u64,
     alerts: Vec<Alert>,
     log: VecDeque<AlertTrigger>,
+    /// The alert and the symbol the Log tab narrows to.
+    log_alert: Option<AlertId>,
+    log_symbol: Option<String>,
+    /// The confirmation of clearing the log is open.
+    clearing: bool,
     error: Option<FeedError>,
     show_log: bool,
     notification_seconds: f32,
@@ -219,6 +227,9 @@ impl AlertsPanel {
             generation: 0,
             alerts: Vec::new(),
             log: VecDeque::new(),
+            log_alert: None,
+            log_symbol: None,
+            clearing: false,
             error: None,
             show_log: false,
             notification_seconds: 20.0,
@@ -424,6 +435,9 @@ impl AlertsPanel {
         self.service = Some(service);
         self.alerts.clear();
         self.log.clear();
+        self.log_alert = None;
+        self.log_symbol = None;
+        self.clearing = false;
         self.marks.clear();
         self.undo.clear();
         self.redo.clear();
@@ -900,8 +914,12 @@ impl AlertsPanel {
     /// Export the retained trigger log, times in the panel's time zone. Text fields are quoted and
     /// embedded quotes doubled.
     pub fn log_csv(&self) -> String {
+        self.csv(self.log.iter())
+    }
+
+    fn csv<'a>(&self, triggers: impl Iterator<Item = &'a AlertTrigger>) -> String {
         let mut csv = String::from("id,name,symbol,time,price,message,silent\r\n");
-        for trigger in &self.log {
+        for trigger in triggers {
             let id = trigger.id.0.replace('"', "\"\"");
             let name = trigger.name.replace('"', "\"\"");
             let symbol = trigger.symbol.replace('"', "\"\"");
@@ -925,6 +943,67 @@ impl AlertsPanel {
             AlertStatus::Disabled => theme.ui.text_disabled,
             AlertStatus::Expired => theme.ui.error,
         }
+    }
+
+    /// The boxes that narrow the Log tab to one alert, named by its newest entry, or one symbol.
+    fn log_filters(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
+        let label = |trigger: &AlertTrigger| {
+            if trigger.name.is_empty() {
+                trigger.id.0.clone()
+            } else {
+                l10n::text(&ctx, &trigger.name)
+            }
+        };
+        ui.horizontal_wrapped(|ui| {
+            let all = l10n::text(ui.ctx(), "All alerts");
+            let selected = match &self.log_alert {
+                Some(id) => {
+                    let newest = self.log.iter().rev().find(|t| t.id == *id);
+                    newest.map_or_else(|| id.0.clone(), label)
+                }
+                None => all.clone(),
+            };
+            egui::ComboBox::from_id_salt("alert_log_alert")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.log_alert, None, all);
+                    let mut seen = std::collections::HashSet::new();
+                    let mut alerts: Vec<_> = self
+                        .log
+                        .iter()
+                        .rev()
+                        .filter(|t| seen.insert(&t.id))
+                        .map(|t| (label(t), t.id.clone()))
+                        .collect();
+                    alerts.sort_by_cached_key(|(text, id)| (text.to_lowercase(), id.0.clone()));
+                    for (text, id) in alerts {
+                        ui.selectable_value(&mut self.log_alert, Some(id), text);
+                    }
+                })
+                .response
+                .accessible_name(l10n::text(ui.ctx(), "Filter by alert"));
+            let all = l10n::text(ui.ctx(), "All symbols");
+            egui::ComboBox::from_id_salt("alert_log_symbol")
+                .selected_text(self.log_symbol.clone().unwrap_or_else(|| all.clone()))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.log_symbol, None, all);
+                    let mut symbols: Vec<_> = self
+                        .log
+                        .iter()
+                        .map(|t| t.symbol.as_str())
+                        .filter(|symbol| !symbol.is_empty())
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
+                        .collect();
+                    symbols.sort_by_cached_key(|symbol| symbol.to_lowercase());
+                    for symbol in symbols {
+                        ui.selectable_value(&mut self.log_symbol, Some(symbol.to_owned()), symbol);
+                    }
+                })
+                .response
+                .accessible_name(l10n::text(ui.ctx(), "Filter by symbol"));
+        });
     }
 
     fn sort_controls(&mut self, ui: &mut Ui) {
@@ -1078,17 +1157,28 @@ impl AlertsPanel {
             );
         }
         if self.show_log {
-            if Button::new("Export CSV…")
-                .enabled(!self.log.is_empty())
-                .show(ui)
-                .clicked()
-            {
-                action = AlertPanelAction::ExportLog(self.log_csv());
-            }
+            self.log_filters(ui);
+            let (alert, symbol) = (self.log_alert.clone(), self.log_symbol.clone());
+            let shown = move |trigger: &AlertTrigger| {
+                alert.as_ref().is_none_or(|id| *id == trigger.id)
+                    && symbol
+                        .as_ref()
+                        .is_none_or(|symbol| *symbol == trigger.symbol)
+            };
+            let any = self.log.iter().any(&shown);
+            ui.horizontal(|ui| {
+                if Button::new("Export CSV…").enabled(any).show(ui).clicked() {
+                    action =
+                        AlertPanelAction::ExportLog(self.csv(self.log.iter().filter(|t| shown(t))));
+                }
+                if Button::new("Clear log…").enabled(any).show(ui).clicked() {
+                    self.clearing = true;
+                }
+            });
             egui::ScrollArea::vertical()
                 .max_height(self.config.max_height)
                 .show(ui, |ui| {
-                    for trigger in self.log.iter().rev() {
+                    for trigger in self.log.iter().rev().filter(|t| shown(t)) {
                         let mut parts = vec![if trigger.name.is_empty() {
                             trigger.id.0.clone()
                         } else {
@@ -1112,11 +1202,31 @@ impl AlertsPanel {
                         ui.separator();
                     }
                 });
-            if self.log.is_empty() {
+            if !any {
                 EmptyState::new("No triggers yet")
                     .icon(&icons::ALERTS)
                     .fill_height()
                     .show(ui);
+            }
+            if self.clearing
+                && ConfirmDialog::new(
+                    "alert_log_clear",
+                    "Clear log",
+                    "Remove the log entries shown? This cannot be undone.",
+                )
+                .confirm_text("Clear")
+                .danger()
+                .show(ui.ctx(), &mut self.clearing)
+                .is_confirmed()
+            {
+                self.log.retain(|trigger| !shown(trigger));
+                // Otherwise the engine would restore the entries after a restart.
+                #[cfg(feature = "alert-engine")]
+                if let Some(engine) = self.service.as_ref().and_then(|service| service.engine()) {
+                    engine.retain_triggers(|trigger| !shown(trigger));
+                }
+                self.log_alert = None;
+                self.log_symbol = None;
             }
         } else if self.alerts.is_empty() {
             self.draft_form(ui);
@@ -2147,6 +2257,87 @@ mod tests {
         h.state_mut().0.save(resumed);
         engine.tick(Utc::now());
         assert_eq!(status(), [Active, Active, Disabled]);
+    }
+
+    #[cfg(feature = "alert-engine")]
+    #[test]
+    fn the_log_narrows_to_an_alert_or_a_symbol_and_clears_what_it_shows() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let alert = |id: &str, name: &str, symbol: &str, condition| {
+            let mut alert = Alert::new(symbol, condition);
+            alert.id = Some(AlertId(id.into()));
+            alert.name = name.into();
+            alert
+        };
+        let trigger = |id: &str, name: &str, symbol: &str, time: &str| {
+            let mut trigger = AlertTrigger::new(AlertId(id.into()), symbol, time.parse().unwrap());
+            trigger.name = name.into();
+            trigger
+        };
+        let dip = trigger("3", "Dip", "MSFT", "2026-10-23T12:02:00Z");
+        let engine = Arc::new(
+            crate::services::AlertEngine::new()
+                .with_alerts(vec![
+                    alert("1", "Breakout", "AAPL", AlertCondition::Above(100.0)),
+                    alert("2", "", "AAPL", AlertCondition::Above(100.0)),
+                    alert("3", "Dip", "MSFT", AlertCondition::Below(50.0)),
+                ])
+                .with_triggers(vec![
+                    trigger("1", "Breakout", "AAPL", "2026-10-23T12:00:00Z"),
+                    trigger("2", "", "AAPL", "2026-10-23T12:01:00Z"),
+                    dip.clone(),
+                ]),
+        );
+        let mut panel = AlertsPanel::new(AlertsPanelConfig { max_height: 600.0 });
+        panel.set_service(engine.clone());
+        panel.set_timezone("+05:45".parse().unwrap());
+        let mut toasts = Toasts::new();
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(400.0, 800.0))
+            .build_ui_state(
+                move |ui, panel: &mut AlertsPanel| {
+                    panel.poll(ui.ctx(), &mut toasts);
+                    panel.show(ui);
+                },
+                panel,
+            );
+        h.run_steps(3);
+        h.get_by_label("Log").click();
+        h.run_steps(3);
+        // 12:00 UTC is 17:45 at +05:45; the unnamed alert is named by its condition on arrival.
+        let rows = [
+            "Breakout · AAPL · 2026-10-23 17:45:00 +05:45",
+            "Greater than 100 · AAPL · 2026-10-23 17:46:00 +05:45",
+            "Dip · MSFT · 2026-10-23 17:47:00 +05:45",
+        ];
+        let shown = |h: &Harness<'_, AlertsPanel>| rows.map(|row| h.query_by_label(row).is_some());
+        assert_eq!(shown(&h), [true; 3]);
+        for (filter, entry, expected) in [
+            ("Filter by symbol", "AAPL", [true, true, false]),
+            ("Filter by alert", "Breakout", [true, false, false]),
+            ("Filter by alert", "All alerts", [true, true, false]),
+        ] {
+            h.get_by_label(filter).click();
+            h.run_steps(3);
+            h.get_by_label(entry).click();
+            h.run_steps(3);
+            assert_eq!(shown(&h), expected, "{filter}: {entry}");
+        }
+        // Clearing removes the entries shown, also from the engine, and shows the whole log again.
+        for (answer, kept, expected) in [
+            ("Cancel", 3, [true, true, false]),
+            ("Clear", 1, [false, false, true]),
+        ] {
+            h.get_by_label("Clear log…").click();
+            h.run_steps(3);
+            h.get_by_label(answer).click();
+            h.run_steps(3);
+            assert_eq!(engine.triggers().len(), kept, "{answer}");
+            assert_eq!(shown(&h), expected, "{answer}");
+        }
+        assert_eq!(h.state().log(), &[dip.clone()]);
+        assert_eq!(engine.triggers(), [dip]);
     }
 
     #[test]
