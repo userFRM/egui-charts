@@ -1686,6 +1686,40 @@ impl ChartLayout {
             .unwrap_or(from)
     }
 
+    /// Activates the chart that the queued Tab and Shift+Tab requests of the first `count` charts
+    /// move to, handing it any maximized place; reports whether the active chart moved.
+    fn cycle_charts(&mut self, ui: &Ui, charts: &mut [&mut Chart], count: usize) -> bool {
+        let mut moved = false;
+        for (index, chart) in charts.iter_mut().take(count).enumerate() {
+            let mut steps = Vec::new();
+            chart.keyboard.requests.retain(|request| match request {
+                ShortcutRequest::Action(KeyboardAction::CycleChartFocus) => {
+                    steps.push(true);
+                    false
+                }
+                ShortcutRequest::Action(KeyboardAction::CycleChartFocusBack) => {
+                    steps.push(false);
+                    false
+                }
+                _ => true,
+            });
+            // A discarded pass replays its input, so only the last one moves.
+            if steps.is_empty() || ui.ctx().will_discard() {
+                continue;
+            }
+            let target = steps.into_iter().fold(index, |slot, forward| {
+                self.cycled_slot(slot, forward, count)
+            });
+            if self.maximized.is_some() && !self.detached[target] {
+                self.maximized = Some(target);
+            }
+            self.set_active(target);
+            ui.ctx().request_repaint();
+            moved = true;
+        }
+        moved
+    }
+
     /// Shows the preset and synchronizes its charts. Click or scroll a panel to activate it;
     /// chart shortcuts and typed entry go to the active chart, while a focused text field or
     /// dialog keeps its keys.
@@ -1730,6 +1764,12 @@ impl ChartLayout {
         });
         for (index, chart) in charts.iter_mut().enumerate() {
             chart.keyboard.layout_keys = keys.filter(|_| index < count).map(|keys| (pass, keys));
+        }
+        // A Tab the host dispatched before `show` moves before the charts are drawn, as a host's
+        // own `set_active` would, so the chart it reaches takes the focus in this pass and egui
+        // does not also move the focus on from the chart that had it.
+        if count > 1 && self.cycle_charts(ui, charts, count) {
+            ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
         }
         self.active = self.active.min(count - 1);
         // Tabs already show one chart at a time and use their strip to select the others.
@@ -2114,34 +2154,9 @@ impl ChartLayout {
                 }
             }
         }
-        // Tab activates a neighbour and hands any maximized place to it; a lone chart yields.
+        // Tab from a chart that dispatched while drawn; a lone chart leaves it to the host.
         if count > 1 {
-            for (index, chart) in charts.iter_mut().take(count).enumerate() {
-                let mut steps = Vec::new();
-                chart.keyboard.requests.retain(|request| match request {
-                    ShortcutRequest::Action(KeyboardAction::CycleChartFocus) => {
-                        steps.push(true);
-                        false
-                    }
-                    ShortcutRequest::Action(KeyboardAction::CycleChartFocusBack) => {
-                        steps.push(false);
-                        false
-                    }
-                    _ => true,
-                });
-                // A discarded pass replays its input, so only the last one moves.
-                if steps.is_empty() || ui.ctx().will_discard() {
-                    continue;
-                }
-                let target = steps.into_iter().fold(index, |slot, forward| {
-                    self.cycled_slot(slot, forward, count)
-                });
-                if self.maximized.is_some() && !self.detached[target] {
-                    self.maximized = Some(target);
-                }
-                self.set_active(target);
-                ui.ctx().request_repaint();
-            }
+            self.cycle_charts(ui, charts, count);
         }
         // Apply gestures from the source after it has handled this frame's input.
         let sync_range = charts[self.active].visible_time_range() != before_range
