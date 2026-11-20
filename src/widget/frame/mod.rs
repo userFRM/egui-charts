@@ -1872,10 +1872,14 @@ impl Chart {
 
         // Both paint paths and the summary box mix their shades with what the chart paints.
         let plot_background = self.plot_background(rect, rect.center());
+        let volume_decimals = self
+            .instrument()
+            .and_then(|instrument| instrument.volume_decimals);
         let host_config = footprint
             .filter(|_| time_based)
             .map(|(_, config)| FootprintConfig {
                 background: config.background.or(plot_background),
+                volume_decimals: config.volume_decimals.or(volume_decimals),
                 ..config.clone()
             });
         let host = footprint.map(|(flow, _)| flow).zip(host_config.as_ref());
@@ -1893,6 +1897,7 @@ impl Chart {
             });
         let feed_config = feed.map(|_| FootprintConfig {
             background: plot_background,
+            volume_decimals,
             ..FootprintConfig::from_chart_params(
                 &self.chart_type_params,
                 [colors.bullish, colors.bearish, colors.text, colors.text],
@@ -2480,6 +2485,7 @@ impl Chart {
                             profiles,
                             flow,
                             self.trade_profile_settings(),
+                            volume_decimals,
                         );
                     }
                 }
