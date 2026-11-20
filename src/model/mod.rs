@@ -78,8 +78,8 @@ pub use chart_style::{
 };
 pub use chart_type::{
     BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams, CustomProfileSession,
-    FootprintColor, FootprintMode, FootprintStatistic, NodeSensitivity, ProfileRows,
-    ProfileSession, TradeProfileSettings,
+    FootprintColor, FootprintIntensity, FootprintMode, FootprintStatistic, NodeSensitivity,
+    ProfileRows, ProfileSession, TradeProfileSettings,
 };
 pub use clock::BarClock;
 pub(crate) use clock::Placement;
@@ -88,8 +88,8 @@ pub use date_range::DateRange;
 #[cfg(any(feature = "studies", feature = "drawings", feature = "strategies"))]
 pub(crate) use instrument::same_currency;
 pub use instrument::{
-    DataStatus, FeedService, Instrument, OverrideWindow, ProfileResolution, Session,
-    SessionOverride, SessionWindow, SymbolType,
+    DataStatus, FeedService, IdentifierKind, Instrument, OverrideWindow, ProfileResolution,
+    Session, SessionOverride, SessionWindow, SymbolType,
 };
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{

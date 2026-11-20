@@ -1038,11 +1038,9 @@ mod tests {
         dialog.poll_metrics(&ctx);
         let mut replies = feed.0.lock().unwrap();
         for (reply, name) in replies.drain(..).zip(["Stale metric", "Funding rate"]) {
-            reply.send(Ok(vec![MetricSeries {
-                id: "funding".into(),
-                name: name.into(),
+            reply.send(Ok(vec![crate::data::MetricSeries {
                 unit: "%".into(),
-                format: StudyFormat::Percent,
+                ..crate::data::MetricSeries::new("funding", name, StudyFormat::Percent)
             }]));
         }
         dialog.poll_metrics(&ctx);
@@ -2099,9 +2097,19 @@ mod tests {
                     "Knoxville Divergence",
                     "Intraday Pivot Points",
                     "Missed Pivot Levels",
+                    "Booker Reversal",
+                    "Ziv Ghost Pivots",
                 ],
                 &["Pivot Points Standard"],
             ),
+            ("Rob Booker Reversal", &["Booker Reversal"], &["Reversal"]),
+            ("Booker Reversal", &["Booker Reversal"], &["Reversal"]),
+            (
+                "Rob Booker Ziv Ghost Pivots",
+                &["Ziv Ghost Pivots"],
+                &["Projected Pivot Points"],
+            ),
+            ("Ziv Ghost Pivots", &["Ziv Ghost Pivots"], &[]),
             ("CRSI", &["Connors RSI"], &[]),
             ("DC", &["Donchian"], &[]),
             ("ADR", &["Average Daily Range"], &[]),
