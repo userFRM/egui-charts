@@ -52,8 +52,9 @@
 //!
 //! ## Support / resistance
 //! [`PivotPoints`], [`IntradayPivotPoints`], [`ProjectedPivotPoints`], [`PivotPointsHighLow`],
-//! [`MissedPivots`], [`KeyLevels`], [`AutoKeyLevels`], [`ElliottWave`], [`Reversal`],
-//! [`RisingWedge`], [`FallingWedge`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`], [`PriceChannel`]
+//! [`MissedPivots`], [`KeyLevels`], [`AutoKeyLevels`], [`ElliottWave`], [`Reversal`], [`BookerReversal`],
+//! [`ZivGhostPivots`], [`RisingWedge`], [`FallingWedge`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
+//! [`PriceChannel`]
 //!
 //! ## Patterns
 //! [`CandlestickPatterns`], [`ChartPatterns`]
@@ -171,6 +172,7 @@ mod auto_key_levels;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod auto_trend_lines;
+mod booker_reversal;
 mod elliott_wave;
 mod gaps;
 mod intraday_pivot_points;
@@ -187,6 +189,7 @@ mod swings;
 mod wedge;
 mod williams_fractals;
 mod zigzag;
+mod ziv_ghost_pivots;
 
 // Oscillator/Momentum indicators (additional)
 mod connors_rsi;
@@ -398,6 +401,7 @@ pub use auto_key_levels::AutoKeyLevels;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use auto_trend_lines::AutoTrendLines;
+pub use booker_reversal::BookerReversal;
 pub use elliott_wave::ElliottWave;
 pub use gaps::Gaps;
 pub use intraday_pivot_points::IntradayPivotPoints;
@@ -413,6 +417,7 @@ pub use rsi_divergence::RsiDivergence;
 pub use wedge::{FallingWedge, RisingWedge, Wedge};
 pub use williams_fractals::WilliamsFractals;
 pub use zigzag::{ZigZag, ZigZagChange, ZigZagMode, ZigZagPivot};
+pub use ziv_ghost_pivots::ZivGhostPivots;
 
 // Re-exports - Additional Oscillator/Momentum indicators
 pub use connors_rsi::ConnorsRSI;
