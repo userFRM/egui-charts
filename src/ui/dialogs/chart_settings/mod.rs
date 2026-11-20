@@ -263,7 +263,9 @@ impl SettingsDialog {
         self.price_targets_offered = declared(FeedService::PriceTargets);
         self.hours_offered = (
             crate::ui::timeframe_toolbar::state::has_trading_hours(instrument),
-            crate::ui::timeframe_toolbar::state::has_overnight_windows(instrument),
+            crate::ui::timeframe_toolbar::state::has_overnight_windows(
+                instrument.and_then(|instrument| instrument.session.as_ref()),
+            ),
         );
         if !self.order_flow_layers.iter().any(|available| *available)
             && self.active_tab == SettingsTab::OrderFlow

@@ -17,6 +17,7 @@ use crate::model::{
 };
 use crate::services::revisions::{Revisions, Settled, Written};
 use crate::services::{ConflictChoice, Storage, StoreKind};
+use crate::ui::timeframe_toolbar::state::has_overnight_windows;
 use crate::ui_kit::FormGrid;
 use crate::ui_kit::dialog::{DialogFooter, dialog_header};
 use crate::ui_kit::modal::Modal;
@@ -790,17 +791,12 @@ impl AlertDialog {
                 );
                 let overnight = list
                     || saved.1
-                    || inputs
-                        .calendar
-                        .as_ref()
-                        .and_then(|calendar| calendar.session.as_ref())
-                        .is_some_and(|session| {
-                            !session.overnight_windows.is_empty()
-                                || session
-                                    .overrides
-                                    .iter()
-                                    .any(|date| !date.overnight_windows.is_empty())
-                        });
+                    || has_overnight_windows(
+                        inputs
+                            .calendar
+                            .as_ref()
+                            .and_then(|calendar| calendar.session.as_ref()),
+                    );
                 let choices = [
                     ((false, false), "Regular hours"),
                     ((true, false), "Extended hours"),

@@ -2119,7 +2119,10 @@ mod tests {
             edited.extend_line = false;
             assert_eq!(host.save(edited), Ok(()));
             update(&host, "SYM", (9, &[99.0, 101.0]), 37_200);
-            assert!(host.fired().is_empty(), "display-only save, watchlist: {list}");
+            assert!(
+                host.fired().is_empty(),
+                "display-only save, watchlist: {list}"
+            );
         }
         // Changing what the alert watches starts it afresh.
         let host = Host::new(vec![restored(Above(100.0), OncePerBar)]);

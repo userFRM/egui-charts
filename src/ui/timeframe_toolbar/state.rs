@@ -107,16 +107,14 @@ pub(crate) fn has_trading_hours(instrument: Option<&crate::model::Instrument>) -
 }
 
 /// Whether weekly or date-specific overnight windows exist.
-pub(crate) fn has_overnight_windows(instrument: Option<&crate::model::Instrument>) -> bool {
-    instrument
-        .and_then(|instrument| instrument.session.as_ref())
-        .is_some_and(|session| {
-            !session.overnight_windows.is_empty()
-                || session
-                    .overrides
-                    .iter()
-                    .any(|date| !date.overnight_windows.is_empty())
-        })
+pub(crate) fn has_overnight_windows(session: Option<&crate::model::Session>) -> bool {
+    session.is_some_and(|session| {
+        !session.overnight_windows.is_empty()
+            || session
+                .overrides
+                .iter()
+                .any(|date| !date.overnight_windows.is_empty())
+    })
 }
 
 /// Bottom panel state
