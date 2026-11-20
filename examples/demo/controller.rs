@@ -64,7 +64,7 @@ use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::overlays::{BookProfile, OrderBookView};
 use egui_charts::data::{DepthHistory, DepthHistoryConfig, OrderFilter, OrderSizeTiers};
-use egui_charts::model::{Alert, AlertCondition};
+use egui_charts::model::{Alert, AlertCondition, Watchlist};
 use egui_charts::model::{Bar, BarData, BoxSizeMethod, ChartType, Tick, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
@@ -93,16 +93,14 @@ use egui_charts::ui::top_toolbar::components::indicator_dialog::{
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
 use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
-use egui_charts::ui::widget_bar::panels::object_tree::{
-    DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
-};
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{
     CalendarAction, CalendarPanel, ChatsPanel, HotlistsAction, HotlistsPanel, NewsAction,
     NewsPanel, NotificationsAction, NotificationsPanel, Product, ProductsAction, ProductsPanel,
-    ScreenerAction, ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel, Watchlist,
-    WatchlistAction, WatchlistPanel, WidgetBarSection, WidgetBarWidget,
+    ScreenerAction, ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel, WatchlistAction,
+    WatchlistPanel, WidgetBarSection, WidgetBarWidget,
 };
+use egui_charts::ui::widget_bar::{DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::EmptyState;
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
@@ -491,7 +489,7 @@ pub struct DemoApp {
     // Symbol search is open for the watchlist's add button: the pick joins the list.
     watchlist_search: bool,
     time_and_sales: TimeAndSalesPanel,
-    depth: egui_charts::ui::widget_bar::DepthPanel,
+    depth: egui_charts::ui::trading::DepthPanel,
     order_flow: egui_charts::ui::widget_bar::OrderFlowPanel,
     // Below the watchlist: the chart symbol's synthetic details and notes kept in app storage.
     symbol_details: SymbolDetailsPanel,
@@ -1318,6 +1316,10 @@ impl DemoApp {
         self.settings_state = self.chart_settings_state();
         self.settings_dialog
             .offer_apply_to_all(self.layout_has_other_charts());
+        // Only the synthetic contracts have futures history to reload.
+        self.settings_dialog.offer_futures_data(
+            self.own_data.is_none() && DemoSymbol::find(self.chart.symbol()).exchange == "Futures",
+        );
         self.settings_dialog.set_depth_history_config(
             self.chart
                 .depth_history(SeriesId::MAIN)
@@ -1506,6 +1508,11 @@ impl DemoApp {
     }
 
     fn apply_chart_settings(&mut self, state: ChartSettingsState) {
+        let futures = |chart: &Chart| {
+            let settings = ChartSettingsState::from_chart(chart);
+            (settings.back_adjust_futures, settings.settlement_as_close)
+        };
+        let futures_before = futures(&self.chart);
         let news_changed = state.events.show_news_notifications
             != self.chart.event_visibility().show_news_notifications;
         self.chart.begin_user_action();
@@ -1531,7 +1538,10 @@ impl DemoApp {
         let dividends_changed =
             state.adjust_for_dividends != self.timeframe_toolbar.state.adjust_for_dividends;
         self.timeframe_toolbar.state.adjust_for_dividends = state.adjust_for_dividends;
-        self.follow_chart_session(dividends_changed);
+        let futures_changed = futures(&self.chart) != futures_before;
+        // shortcut: the synthetic contracts have no settlement prices or rolls, so the reload
+        // serves the same bars; model both if the demo gains a continuous contract.
+        self.follow_chart_session(dividends_changed || futures_changed);
     }
 
     /// Whether the current preset shows other charts to copy to.
@@ -2214,7 +2224,7 @@ impl DemoApp {
                         panel_action = Some(SidePanel::OrderFlow);
                         ui.close();
                     }
-                    if egui_charts::ui::widget_bar::DepthPanel::is_available(&self.chart)
+                    if egui_charts::ui::trading::DepthPanel::is_available(&self.chart)
                         && menu_item(ui, "Depth", &icons::FIXED_RANGE_VOLUME_PROFILE, None)
                             .clicked()
                     {
@@ -2780,7 +2790,7 @@ impl DemoApp {
         }
         self.widget_bar.show_panel(ui);
         if self.open_panel == Some(SidePanel::Depth)
-            && !egui_charts::ui::widget_bar::DepthPanel::is_available(&self.chart)
+            && !egui_charts::ui::trading::DepthPanel::is_available(&self.chart)
         {
             return;
         }
@@ -2903,12 +2913,11 @@ impl DemoApp {
                     self.handle_news(ui.ctx(), action);
                 }
                 SidePanel::DataWindow => {
-                    self.data_window_expanded =
-                        egui_charts::ui::widget_bar::panels::object_tree::show_data_window(
-                            ui,
-                            &self.build_data_window(),
-                            self.data_window_expanded,
-                        );
+                    self.data_window_expanded = egui_charts::ui::widget_bar::show_data_window(
+                        ui,
+                        &self.build_data_window(),
+                        self.data_window_expanded,
+                    );
                 }
             });
     }
@@ -4595,9 +4604,9 @@ fn apply_settings_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_charts::model::DateRange;
     use egui_charts::model::{AlertSource, LineStyle};
     use egui_charts::ui::dialogs::DrawingProps;
-    use egui_charts::ui::timeframe_toolbar::DateRange;
 
     /// The menu actions reach the other chart, which lacks nothing, without a prompt; a chart
     /// without bars is named first, and the copy waits for the answer.
@@ -7753,6 +7762,89 @@ mod tests {
         );
     }
 
+    /// The settings offer the futures data choices on the demo's futures contracts only;
+    /// a changed choice reloads the bars, while Ok without a change keeps them.
+    #[test]
+    fn futures_data_choices_show_for_futures_and_reload_the_bars() {
+        const ROWS: [&str; 2] = ["Back-adjust continuous futures", "Settlement as close"];
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        let size = egui::vec2(1440.0, 900.0);
+        // Search from the top even when an earlier opening left the tab scrolled down.
+        let scroll_to = |app: &mut DemoApp, label: &str| -> Option<egui::Pos2> {
+            let wheel = |dy: f32| {
+                vec![egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    source: egui::MouseWheelSource::Wheel,
+                    phase: egui::TouchPhase::Move,
+                    delta: egui::vec2(0.0, dy),
+                    modifiers: Default::default(),
+                }]
+            };
+            let show = |app: &mut DemoApp, events| {
+                ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+            };
+            show(
+                app,
+                vec![egui::Event::PointerMoved(egui::pos2(900.0, 450.0))],
+            );
+            show(app, wheel(5000.0));
+            for _ in 0..20 {
+                for _ in 0..10 {
+                    show(app, vec![]);
+                }
+                if let Some((_, rect)) = show(app, vec![])
+                    .into_iter()
+                    .find(|(text, _)| text == label)
+                {
+                    return Some(rect.center());
+                }
+                show(app, wheel(-150.0));
+            }
+            None
+        };
+        for (symbol, offered) in [("STOCKA", false), (live::ORDER_LEVEL_SYMBOL, true)] {
+            app.switch_symbol(symbol);
+            app.open_chart_settings_dialog();
+            assert!(
+                scroll_to(&mut app, "Adjust data for dividends").is_some(),
+                "{symbol}"
+            );
+            for row in ROWS {
+                app.open_chart_settings_dialog();
+                assert_eq!(
+                    scroll_to(&mut app, row).is_some(),
+                    offered,
+                    "{symbol}: {row}"
+                );
+            }
+            app.settings_dialog.close();
+        }
+        // One bar makes a reload observable without inspecting the feed's internals.
+        for (row, reloaded) in [(None, false), (Some(ROWS[1]), true)] {
+            let last = app.chart.bars(SeriesId::MAIN).last().unwrap().clone();
+            app.chart.set_data(SeriesId::MAIN, vec![last]);
+            app.open_chart_settings_dialog();
+            if let Some(row) = row {
+                let at = scroll_to(&mut app, row).expect(row);
+                ui_click(&ctx, size, at, |ui| app.show_dialogs(ui.ctx()));
+            }
+            let ok = scroll_to(&mut app, "Ok").expect("Ok");
+            ui_click(&ctx, size, ok, |ui| app.show_dialogs(ui.ctx()));
+            assert!(!app.settings_dialog.is_open, "{row:?}");
+            assert_eq!(
+                app.chart.bars(SeriesId::MAIN).len() > 1,
+                reloaded,
+                "{row:?}"
+            );
+        }
+        assert!(!ChartSettingsState::from_chart(&app.chart).settlement_as_close);
+    }
+
     /// Bars outside regular hours are shaded only in the extended session, and a saved layout
     /// returns in the session it was saved in. A layout saved before the session was recorded
     /// returns its extended hours choice as the 24/7 session.
@@ -9831,7 +9923,7 @@ mod tests {
             );
             assert_eq!(info.prev_close, bars[index - 1].close, "{kind:?}");
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                egui_charts::ui::widget_bar::panels::object_tree::show_data_window(ui, &info, true);
+                egui_charts::ui::widget_bar::show_data_window(ui, &info, true);
             });
             let text: Vec<_> = output
                 .shapes

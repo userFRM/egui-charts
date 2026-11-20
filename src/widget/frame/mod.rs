@@ -231,6 +231,8 @@ impl Chart {
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
+        #[cfg(feature = "studies")]
+        self.sync_price_target_studies();
         #[cfg(feature = "drawings")]
         self.sync_stored_drawings(ui.ctx());
         self.frame_clock = Some(super::change_marks::FrameClock::shown_in(ui.ctx()));
@@ -3685,6 +3687,7 @@ impl Chart {
                 let raw_price_formatter = self.series_price_formatter(super::SeriesId::MAIN);
                 legend.formatters = self.value_formatters(raw_price_formatter.as_deref());
                 legend.study_formatters = &study_formatters;
+                legend.study_ids = &self.study_ids;
                 legend.thousands_sep = price_map.thousands_sep();
                 legend.price_decimals = self.readout_price_decimals();
                 legend.instrument = self.instrument();

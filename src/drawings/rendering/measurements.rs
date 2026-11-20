@@ -205,6 +205,7 @@ impl Drawing {
                 galley.clone(),
                 size,
                 Some(painter.ctx().active_theme().chart.bg_tooltip),
+                Color32::TRANSPARENT,
             );
             if self.tool_type == DrawingToolType::InfoLine
                 && self.font_weight == crate::drawings::FontWeight::Bold
@@ -765,7 +766,15 @@ impl Drawing {
                 .background_color
                 .map_or(theme.chart.bg_tooltip, rgba)
         });
-        paint_stats_card(painter, align, pos, galley, size, fill);
+        paint_stats_card(
+            painter,
+            align,
+            pos,
+            galley,
+            size,
+            fill,
+            rgba(settings.shadow_color),
+        );
     }
 }
 
@@ -788,12 +797,24 @@ fn paint_stats_card(
     galley: std::sync::Arc<egui::Galley>,
     size: egui::Vec2,
     fill: Option<Color32>,
+    shadow_color: Color32,
 ) -> Rect {
     let theme = painter.ctx().active_theme();
     let chart = theme.chart;
     let card = card_rect(painter.clip_rect(), align, pos, size);
     // The border keeps the white light-theme card visible on the white chart.
     if let Some(fill) = fill {
+        if shadow_color.a() > 0 {
+            painter.add(
+                egui::Shadow {
+                    offset: [0, 2],
+                    blur: 8,
+                    spread: 0,
+                    color: shadow_color,
+                }
+                .as_shape(card, DESIGN_TOKENS.rounding.md),
+            );
+        }
         painter.rect(
             card,
             DESIGN_TOKENS.rounding.md,
@@ -841,9 +862,28 @@ pub(super) fn boxed_label(
     color: Color32,
     bg: Color32,
 ) -> Rect {
+    framed_label(painter, align, pos, text, color, bg, Stroke::NONE)
+}
+
+/// [`boxed_label`] framed by `border`, drawn inside its edge so the box keeps its size.
+pub(super) fn framed_label(
+    painter: &egui::Painter,
+    align: egui::Align2,
+    pos: Pos2,
+    text: String,
+    color: Color32,
+    bg: Color32,
+    border: Stroke,
+) -> Rect {
     let galley = painter.layout_no_wrap(text, egui::FontId::proportional(typography::XS), color);
     let rect = align.anchor_size(pos, galley.size() + egui::vec2(8.0, 2.0));
-    painter.rect_filled(rect, DESIGN_TOKENS.rounding.sm, bg);
+    painter.rect(
+        rect,
+        DESIGN_TOKENS.rounding.sm,
+        bg,
+        border,
+        egui::StrokeKind::Inside,
+    );
     painter.galley(rect.center() - galley.size() / 2.0, galley, color);
     rect
 }
@@ -1046,6 +1086,28 @@ mod tests {
             drawing.stroke_width = 2.0;
             drawing.fill_color = None;
             drawing.theme_shade = false;
+            for theme in [Theme::light(), Theme::dark()] {
+                let mut saved = serde_json::to_value(&drawing).unwrap();
+                saved["range_settings"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("shadow_color");
+                let mut restored: Drawing = serde_json::from_value(saved).unwrap();
+                restored.points = drawing.points.clone();
+                restored.chart_points = drawing.chart_points.clone();
+                for (card, shadow) in [(&drawing, true), (&restored, false)] {
+                    let shapes = paint(card, &theme);
+                    let shadow_index = shapes.iter().position(|shape| {
+                        matches!(shape, Shape::Rect(rect) if rect.fill == Color32::from_black_alpha(51) && rect.blur_width > 0.0)
+                    });
+                    assert_eq!(shadow_index.is_some(), shadow, "{tool:?}: shadow {shadow}");
+                    if let Some(index) = shadow_index {
+                        assert!(
+                            matches!(&shapes[index + 1], Shape::Rect(rect) if rect.blur_width == 0.0)
+                        );
+                    }
+                }
+            }
             // -50 / 300 = -16.666...%; -50 / 0.5 = -100 ticks. Bars 1..=4 sum to 900.
             for (i, &(edit, price, date)) in rows.iter().enumerate() {
                 drawing.range_settings = RangeSettings::default();

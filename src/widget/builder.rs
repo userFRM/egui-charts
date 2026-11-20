@@ -57,8 +57,8 @@ impl Chart {
     /// Creates a new chart with default configuration.
     ///
     /// Initializes the chart with the provided OHLCV data and sensible defaults:
-    /// candlestick chart type, default bar spacing and tracking mode off. The
-    /// bars are cleaned as by [`Chart::set_data`].
+    /// candlestick chart type, default bar spacing, tracking mode off, and 10% of the pane
+    /// free above the prices and 8% below. The bars are cleaned as by [`Chart::set_data`].
     ///
     /// # Arguments
     ///
@@ -67,6 +67,8 @@ impl Chart {
         let chart_options = ChartOptions::default();
         let (bars, rejected_bars) = super::series::clean(data.bars, &BarClock::exact());
         let mut state = ChartState::new(BarData::from_bars(bars));
+        state.price_scale_mut().options_mut().scale_margins =
+            crate::scales::PriceScaleMargins::CHART;
 
         // Initialize TimeScale with defaults (apply all constraints)
         {
@@ -138,6 +140,8 @@ impl Chart {
             volume_setting: false,
             #[cfg(feature = "studies")]
             volume_study: None,
+            #[cfg(feature = "studies")]
+            price_target_colors: None,
             main_series_visible: true,
             indicators_hidden: false,
             main_series_present: true,
@@ -207,6 +211,8 @@ impl Chart {
             study_formatters: Default::default(),
             extended_hours: false,
             overnight_hours: false,
+            back_adjust_futures: false,
+            settlement_as_close: true,
             conversion: None,
             measured_axis_width: 0.0,
             last_layout: None,
