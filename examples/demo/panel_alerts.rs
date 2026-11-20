@@ -40,6 +40,10 @@ impl DemoAlerts {
 }
 
 impl Alerts for DemoAlerts {
+    fn engine(&self) -> Option<&AlertEngine> {
+        Some(&self.engine)
+    }
+
     fn watch(&self, events: Events<AlertEvent>) {
         self.engine.watch(events);
     }

@@ -567,6 +567,31 @@ mod tests {
                 assert_eq!(app.alert_dialog.alert.id.as_ref(), Some(&trigger.id));
             }
         }
+        app.alert_dialog.close();
+        frames(&mut app, &ctx);
+        // Clearing through the wrapper must also clear the history saved for the next session.
+        for label in ["Log", "Clear log…", "Clear"] {
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = ui_frame(&ctx, SIZE, vec![], |ui| {
+                    app.alerts.show(ui);
+                });
+            }
+            let at = texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap()
+                .1
+                .center();
+            ui_click(&ctx, SIZE, at, |ui| {
+                app.alerts.show(ui);
+            });
+        }
+        assert!(app.alert_host.engine().triggers().is_empty());
+        app.save(&mut storage);
+        let mut app = restart(&ctx, &storage);
+        frames(&mut app, &ctx);
+        assert!(app.alerts.log().is_empty());
     }
 
     #[test]
