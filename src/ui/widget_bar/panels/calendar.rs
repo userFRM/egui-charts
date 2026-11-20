@@ -903,8 +903,13 @@ mod tests {
             ),
         ] {
             let Some(timezone) = TimezoneId::named(zone) else {
-                assert!(!cfg!(feature = "timezones"), "{zone}");
-                continue;
+                #[cfg(feature = "timezones")]
+                panic!("unknown time zone {zone}");
+                #[cfg(not(feature = "timezones"))]
+                {
+                    assert!(zone.contains('/'), "unknown fixed time zone {zone}");
+                    continue;
+                }
             };
             assert_eq!(
                 range.bounds(at(now), &timezone),
