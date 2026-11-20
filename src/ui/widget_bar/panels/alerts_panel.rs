@@ -2394,7 +2394,7 @@ mod tests {
             assert_eq!(engine.triggers().len(), kept, "{answer}");
             assert_eq!(shown(&h), expected, "{answer}");
         }
-        assert_eq!(h.state().log(), &[dip.clone()]);
+        assert_eq!(h.state().log(), std::slice::from_ref(&dip));
         assert_eq!(engine.triggers(), [dip]);
     }
 
