@@ -523,6 +523,11 @@ impl SymbolTab {
                 ui.add(egui::DragValue::new(&mut params.footprint_stack).range(1..=1000))
                     .labelled_by(label.id);
                 ui.end_row();
+                Self::switch(
+                    ui,
+                    "Zones end only when broken",
+                    &mut params.footprint_zones_until_broken,
+                );
             }
             if params.footprint_stacked_imbalances
                 || params.footprint_naked_poc
@@ -1121,6 +1126,39 @@ impl SymbolTab {
                 ui.checkbox(&mut params.tpo_statistics, "")
                     .labelled_by(label.id);
                 ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Labels"));
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        let labels = &mut params.tpo_labels;
+                        for (caption, name, shown) in [
+                            ("POC", "Point of control", &mut labels.poc),
+                            ("VAH", "Value area high", &mut labels.value_area_high),
+                            ("VAL", "Value area low", &mut labels.value_area_low),
+                            ("Mid", "Midpoint", &mut labels.midpoint),
+                            (
+                                "IBH",
+                                "Initial balance high",
+                                &mut labels.initial_balance_high,
+                            ),
+                            (
+                                "IBL",
+                                "Initial balance low",
+                                &mut labels.initial_balance_low,
+                            ),
+                            ("Open", "Opening price", &mut labels.opening_price),
+                            ("Close", "Closing price", &mut labels.closing_price),
+                            ("PH", "Poor high", &mut labels.poor_high),
+                            ("PL", "Poor low", &mut labels.poor_low),
+                            ("SP", "Single prints", &mut labels.single_prints),
+                        ] {
+                            ui.checkbox(shown, l10n::text(ui.ctx(), caption))
+                                .on_hover_text(l10n::text(ui.ctx(), name));
+                        }
+                    })
+                });
+                ui.end_row();
+                Self::switch(ui, "Label prices", &mut params.tpo_labels.prices);
+                Self::switch(ui, "Price scale tags", &mut params.tpo_level_tags);
             }
             ChartType::Baseline => {
                 let label = ui.label(l10n::text(ui.ctx(), "Base level"));
