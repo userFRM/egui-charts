@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 #[path = "live.rs"]
 mod live;
 pub use live::StrategyFill;
+#[cfg(feature = "ui")]
+pub(crate) use live::same_bars;
 
 use crate::data::StudyDataRequest;
 use crate::model::range_bar::price_path;
@@ -1072,17 +1074,6 @@ impl<'a> Run<'a> {
             report.margin.push((time, 0.0));
             report.peak_margin.push((time, 0.0));
         }
-    }
-
-    fn closed_bar(
-        &mut self,
-        bars: &'a [Bar],
-        index: usize,
-        lower: &[&Bar],
-        report: &mut StrategyReport,
-        walk: bool,
-    ) {
-        finish_now(self.closed_bar_inner(bars, index, lower, report, walk, &mut None));
     }
 
     async fn closed_bar_inner(
