@@ -894,7 +894,7 @@ mod tests {
         let create = |name: &str| factory.create(name).unwrap();
         // An offered output that holds no value on these bars.
         let offered = |output: usize, name: &str| -> Output { (output, name.to_owned(), vec![]) };
-        // Each bar closes at its open, which counts as up.
+        // Each bar closes at its open, which counts as down in Bollinger Bars and up in Volume.
         let closes: Vec<_> = level_bars().iter().map(|bar| Some(bar.close)).collect();
         let volumes: Vec<_> = level_bars().iter().map(|bar| Some(bar.volume)).collect();
         let rows: Vec<Row> = vec![
@@ -948,7 +948,7 @@ mod tests {
             // Wicks only colours the candle blocks.
             (
                 create("Bollinger Bars"),
-                vec![(1, "Up".into(), closes), offered(2, "Down")],
+                vec![offered(1, "Up"), (2, "Down".into(), closes)],
                 2,
             ),
             // The moving average is off by default.

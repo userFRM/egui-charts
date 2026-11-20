@@ -555,9 +555,9 @@ pub(super) fn completed<'a>(bars: &'a [Bar], clock: &BarClock, time: DateTime<Ut
 }
 
 /// When the bar of `clock` opening at `open` closes in bar replay: at its next open, or for a
-/// daily, weekly or monthly bar of a clock with an exchange session when its last trading window
-/// closes. A bar without a trading window closes at its next open. `ReplayController::cutoff`
-/// and `seek_cutoff` close bars here too.
+/// daily, multi-day, weekly or monthly bar of a clock with an exchange session when its last
+/// trading window closes. A bar without a trading window closes at its next open.
+/// `ReplayController::cutoff` and `seek_cutoff` close bars here too.
 pub(crate) fn bar_close(clock: &BarClock, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
     (clock.timeframe())
         .filter(|timeframe| {
