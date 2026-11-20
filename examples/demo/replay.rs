@@ -743,14 +743,22 @@ impl DemoApp {
     }
 
     /// The update intervals the replay bar offers, from coarse to fine: the chart interval, one
-    /// minute and one trade where they apply, and always the active one.
+    /// day, minute, second and one trade where they apply, and always the active one.
     fn replay_update_intervals(&self) -> Vec<Timeframe> {
         if self.recording_files.opened {
             return vec![self.replay_interval];
         }
         let mut intervals = vec![self.state.timeframe];
+        if self.state.timeframe.duration_ms() > Timeframe::Day1.duration_ms() {
+            intervals.push(Timeframe::Day1);
+        }
         if self.state.timeframe.duration_ms() > Timeframe::Min1.duration_ms() {
             intervals.push(Timeframe::Min1);
+        }
+        if (Timeframe::Sec1.duration_ms() + 1..Timeframe::Day1.duration_ms())
+            .contains(&self.state.timeframe.duration_ms())
+        {
+            intervals.push(Timeframe::Sec1);
         }
         // The feed holds its recent trades, so replay can also advance one trade at a time.
         if !self.state.timeframe.is_trade_based() {
@@ -768,6 +776,35 @@ impl DemoApp {
         intervals
     }
 
+    /// Chooses a common time step for every replayed chart. Calendar charts use daily updates;
+    /// fixed intervals use their greatest common divisor, never an approximate month length.
+    fn automatic_replay_interval(&self) -> Timeframe {
+        let mut interval = self.state.timeframe;
+        for other in self
+            .extra_charts
+            .iter()
+            .filter_map(|extra| extra.chart.timeframe())
+        {
+            interval = common_replay_interval(interval, other);
+        }
+        if interval.duration_ms() > Timeframe::Day1.duration_ms() {
+            Timeframe::Day1
+        } else {
+            interval
+        }
+    }
+
+    pub(super) fn set_automatic_replay_interval(&mut self) {
+        if self.recording_files.opened {
+            return;
+        }
+        let interval = self.automatic_replay_interval();
+        self.set_replay_interval(interval);
+        if self.replay_interval == interval {
+            self.replay_control.set_automatic_update_interval(true);
+        }
+    }
+
     /// Carries the replay over a change of the chart interval. An update interval that is finer
     /// than the new chart interval and divides it stays, with its source rebuilt for the new
     /// chart; any other is replaced by the chart interval. Without history of the new interval
@@ -777,6 +814,9 @@ impl DemoApp {
         if self.replay.is_none() {
             // The bar may be open to pick a start, which begins at the chart interval.
             self.replay_interval = timeframe;
+        }
+        if self.replay_control.uses_automatic_update_interval() && !self.recording_files.opened {
+            self.replay_interval = self.automatic_replay_interval();
         }
         // A recording and a trade-by-trade replay play their executions on any chart interval.
         let candles = !self.recording_files.opened && self.chart.replay_driver().is_none();
@@ -1076,6 +1116,7 @@ impl DemoApp {
         }
         self.replay = Some(next);
         self.replay_interval = interval;
+        self.replay_control.set_automatic_update_interval(false);
         // One-trade updates move the cutoff back only to just after the last trade before it.
         self.push_replay_window(matches!(interval, Timeframe::Ticks(count) if count.get() == 1));
         self.chart.set_replay_source(bars, clock);
@@ -1276,6 +1317,7 @@ impl DemoApp {
             }
             return;
         }
+        let automatic = self.replay_control.uses_automatic_update_interval();
         let interval = self.replay.is_some().then_some(self.replay_interval);
         self.stop_replay();
         self.start_replay();
@@ -1283,7 +1325,9 @@ impl DemoApp {
             replay.handle_action(ReplayAction::JumpToBar(index));
         }
         self.push_replay_window_to_chart();
-        if let Some(interval) = interval {
+        if automatic {
+            self.set_automatic_replay_interval();
+        } else if let Some(interval) = interval {
             self.set_replay_interval(interval);
         }
     }
@@ -1352,6 +1396,28 @@ fn replay_source(
         bars.drain(..end);
     }
     (bars, clock)
+}
+
+/// A fixed common step of two chart intervals, capped at a day for calendar charts.
+fn common_replay_interval(a: Timeframe, b: Timeframe) -> Timeframe {
+    if a.is_trade_based() || b.is_trade_based() {
+        return Timeframe::Ticks(NonZeroU64::MIN);
+    }
+    let day = Timeframe::Day1.duration_ms();
+    let mut left = a.duration_ms().min(day);
+    let mut right = b.duration_ms().min(day);
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    // Keep a preset's identity as well as its duration. Unsupported subsecond common steps
+    // use individual executions instead.
+    Timeframe::all()
+        .into_iter()
+        .find(|interval| interval.duration_ms() == left)
+        .unwrap_or_else(|| {
+            NonZeroU64::new((left / 1000) as u64)
+                .map_or(Timeframe::Ticks(NonZeroU64::MIN), Timeframe::Custom)
+        })
 }
 
 /// Whether replay can step by `update` on a chart of `chart` bars: a finer time interval, of a
@@ -1970,7 +2036,10 @@ mod tests {
 
         app.switch_timeframe(Timeframe::Min1);
         assert_eq!(app.replay_interval, Timeframe::Min1);
-        assert_eq!(app.replay_update_intervals(), [Timeframe::Min1, trade]);
+        assert_eq!(
+            app.replay_update_intervals(),
+            [Timeframe::Min1, Timeframe::Sec1, trade]
+        );
         assert_eq!(app.chart.replay_time(), Some(cutoff), "the cursor stays");
         let shown = app.chart.bars(SeriesId::MAIN).len();
         assert!(shown > 1);
@@ -1999,6 +2068,116 @@ mod tests {
         assert_eq!(stepped.time, forming.time);
         assert_eq!(stepped.volume, forming.volume + hours[at + 1].volume);
         assert_eq!(stepped.close, hours[at + 1].close);
+    }
+
+    /// The bar offers daily and second updates where supported, with Automatic on every time
+    /// chart. A daily update grows a weekly bar from completed daily bars only.
+    #[test]
+    fn replay_update_choices_and_weekly_daily_steps() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .allow_missing_glyphs()
+            .with_accessibility_check(false)
+            .build_eframe(|cc| *DemoApp::new_at(cc, "2026-11-12T15:00:00Z".parse().unwrap(), true));
+        let ctx = harness.ctx.clone();
+        super::super::tests::settle(harness.state_mut(), &ctx);
+        let mut offered = Vec::new();
+        for timeframe in [
+            Timeframe::Min1,
+            Timeframe::Hour1,
+            Timeframe::Day1,
+            Timeframe::Week1,
+            Timeframe::Month1,
+        ] {
+            let app = harness.state_mut();
+            app.stop_replay();
+            app.switch_timeframe(timeframe);
+            super::super::tests::settle(app, &ctx);
+            app.start_replay_at(10);
+            harness.run();
+            harness
+                .get_by_value(&format!("{timeframe} updates"))
+                .click();
+            harness.run();
+            offered.push((
+                harness.query_by_label("Automatic").is_some(),
+                harness.query_by_label("1D updates").is_some(),
+                harness.query_by_label("1s updates").is_some(),
+            ));
+            harness.key_press(egui::Key::Escape);
+            harness.run();
+        }
+        assert_eq!(
+            offered,
+            [
+                (true, false, true),
+                (true, false, true),
+                (true, true, false),
+                (true, true, false),
+                (true, true, false)
+            ]
+        );
+
+        let app = harness.state_mut();
+        app.stop_replay();
+        app.switch_timeframe(Timeframe::Week1);
+        super::super::tests::settle(app, &ctx);
+        app.start_replay_at(10);
+        let days = replay_source(&app.live, Timeframe::Day1, &app.chart).0;
+        harness.run();
+        harness.get_by_value("1W updates").click();
+        harness.run();
+        harness.get_by_label("1D updates").click();
+        harness.run();
+        assert_eq!(harness.state().replay_interval, Timeframe::Day1);
+        harness.get_by_label("Next bar (Right arrow)").click();
+        harness.run();
+        let first = harness.state().replay.as_ref().unwrap().state.curr_bar;
+        harness.get_by_label("Next bar (Right arrow)").click();
+        harness.run();
+        let shown = harness.state().chart.bars(SeriesId::MAIN).last().unwrap();
+        let (a, b) = (&days[first], &days[first + 1]);
+        assert_eq!(
+            (shown.open, shown.high, shown.low, shown.close, shown.volume),
+            (
+                a.open,
+                a.high.max(b.high),
+                a.low.min(b.low),
+                b.close,
+                a.volume + b.volume
+            )
+        );
+
+        harness.get_by_value("1D updates").click();
+        harness.run();
+        harness.get_by_label("Automatic").click();
+        harness.run();
+        assert!(
+            harness
+                .state()
+                .replay_control
+                .uses_automatic_update_interval()
+        );
+        // Automatic follows both changes; a fixed hourly step would have stayed hourly.
+        harness.state_mut().switch_timeframe(Timeframe::Hour1);
+        super::super::tests::settle(harness.state_mut(), &ctx);
+        assert_eq!(harness.state().replay_interval, Timeframe::Hour1);
+        harness.state_mut().switch_timeframe(Timeframe::Day1);
+        super::super::tests::settle(harness.state_mut(), &ctx);
+        assert_eq!(harness.state().replay_interval, Timeframe::Day1);
+
+        // Hand values: gcd(2,17)=1 minute, gcd(4,6)=2 minutes; calendar periods use a day.
+        for (a, b, expected) in [
+            ("2min", "17min", Timeframe::Min1),
+            ("4min", "6min", "2min".parse().unwrap()),
+            ("1W", "1M", Timeframe::Day1),
+        ] {
+            assert_eq!(
+                common_replay_interval(a.parse().unwrap(), b.parse().unwrap()),
+                expected
+            );
+        }
     }
 
     /// A chart interval whose history starts after the replay cursor moves the replay to its

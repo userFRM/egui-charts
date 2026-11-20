@@ -133,6 +133,10 @@ pub enum ReplayControlAction {
     SetSpeed(f32),
     /// Change the source interval used to advance the replay cursor.
     SetUpdateInterval(crate::model::Timeframe),
+    /// Let the host choose the chart interval, or the largest common compatible interval of
+    /// the replayed charts, and follow subsequent chart interval changes. Confirm the choice
+    /// with [`FloatingReplayControl::set_automatic_update_interval`].
+    SetAutomaticUpdateInterval,
     /// Close the control (but don't stop replay)
     Close,
     /// Start, or restart, the replay from this choice of the start control.
@@ -168,6 +172,7 @@ pub struct FloatingReplayControl {
     at_end: bool,
     update_intervals: Vec<crate::model::Timeframe>,
     update_interval: Option<crate::model::Timeframe>,
+    automatic_update_interval: bool,
     /// The replay account the start menu offers
     account: ReplayAccountSettings,
     /// The text of the start menu's currency field, which may be blank while the user edits it
@@ -203,6 +208,7 @@ impl FloatingReplayControl {
             at_end: false,
             update_intervals: Vec::new(),
             update_interval: None,
+            automatic_update_interval: false,
             currency: account.currency.clone(),
             account,
         }
@@ -259,6 +265,19 @@ impl FloatingReplayControl {
     ) {
         self.update_interval = Some(current);
         self.update_intervals = available;
+    }
+
+    /// Shows Automatic as the selected update interval. The host supplies its resolved interval
+    /// through [`Self::set_update_intervals`] and follows chart interval changes while this is
+    /// on. Manual selection emits [`ReplayControlAction::SetUpdateInterval`]; confirm it with
+    /// `false`. Defaults to `false`, preserving hosts that supply only a fixed source interval.
+    pub fn set_automatic_update_interval(&mut self, automatic: bool) {
+        self.automatic_update_interval = automatic;
+    }
+
+    /// Whether the host confirmed Automatic as the current update interval.
+    pub fn uses_automatic_update_interval(&self) -> bool {
+        self.automatic_update_interval
     }
 
     /// The replay account the start menu offers: read it when the user picks a start, and save
@@ -609,27 +628,37 @@ impl FloatingReplayControl {
                             }
 
                             if !self.update_intervals.is_empty()
-                                && let Some(mut interval) = self.update_interval
-                                && ui
+                                && let Some(current) = self.update_interval
+                            {
+                                let mut interval =
+                                    (!self.automatic_update_interval).then_some(current);
+                                let changed = ui
                                     .add_enabled_ui(!self.selecting, |ui| {
                                         let ctx = ui.ctx().clone();
                                         ui.combo_select_width(
                                             "replay_update_interval",
                                             &mut interval,
-                                            self.update_intervals.iter().copied(),
-                                            |interval| {
-                                                l10n::format_text(
+                                            std::iter::once(None).chain(
+                                                self.update_intervals.iter().copied().map(Some),
+                                            ),
+                                            |interval| match interval {
+                                                None => l10n::text(&ctx, "Automatic"),
+                                                Some(interval) => l10n::format_text(
                                                     &ctx,
                                                     "{count} updates",
                                                     &[("count", interval.to_string())],
-                                                )
+                                                ),
                                             },
                                             110.0,
                                         )
                                     })
-                                    .inner
-                            {
-                                action = ReplayControlAction::SetUpdateInterval(interval);
+                                    .inner;
+                                if changed {
+                                    action = interval.map_or(
+                                        ReplayControlAction::SetAutomaticUpdateInterval,
+                                        ReplayControlAction::SetUpdateInterval,
+                                    );
+                                }
                             }
 
                             ui.separator();

@@ -4165,6 +4165,7 @@ impl DemoApp {
             }
             ReplayControlAction::SetSpeed(s) => replay.handle_action(ReplayAction::SetSpeed(s)),
             ReplayControlAction::SetUpdateInterval(interval) => self.set_replay_interval(interval),
+            ReplayControlAction::SetAutomaticUpdateInterval => self.set_automatic_replay_interval(),
             ReplayControlAction::Stop => self.stop_replay(),
             ReplayControlAction::Close => {
                 self.replay_selecting = false;
