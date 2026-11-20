@@ -1279,7 +1279,15 @@ mod tests {
                     );
                     let mut labelled = drawing.clone();
                     labelled.gann.as_mut().unwrap().show_labels = true;
-                    assert!(painted(&labelled).iter().any(is_text), "{tool:?}");
+                    let labels = painted(&labelled).iter().filter(|s| is_text(s)).count();
+                    assert!(
+                        if tool == DrawingToolType::GannFan {
+                            labels == 2
+                        } else {
+                            labels > 0
+                        },
+                        "{tool:?}: {labels} labels"
+                    );
                 }
                 Want::Strokes(want) => {
                     let got = strokes(&shapes);
