@@ -435,6 +435,15 @@ pub struct DemoApp {
     account_panel_height: f32,
     // The account settings ask whether to reset the paper account.
     paper_reset: bool,
+    // The account of the running replay session, built from the replay bar's start menu. The
+    // account above is not traded, priced or reset while it exists.
+    pub(crate) replay_paper: Option<Arc<egui_charts::services::PaperAccount>>,
+    // Asks before a replay move leaves orders or trades of the replay account behind, and
+    // holds that move until the answer.
+    replay_prompt: egui_charts::ui::replay::ReplayTradingPrompt,
+    replay_move: Option<replay::ReplayMove>,
+    // Keep the report data off the controller's construction stack.
+    pub(crate) replay_results: Box<egui_charts::ui::replay::ReplayResults>,
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
     watchlist: WatchlistPanel,
     quotes: Arc<feeds::DemoQuotes>,
@@ -775,6 +784,10 @@ impl DemoApp {
             account_panel: AccountPanelSize::Normal,
             account_panel_height: 320.0,
             paper_reset: false,
+            replay_paper: None,
+            replay_prompt: Default::default(),
+            replay_move: None,
+            replay_results: Default::default(),
             watchlist: WatchlistPanel::new(
                 cc.storage
                     .and_then(|storage| eframe::get_value(storage, "watchlists"))
@@ -1913,6 +1926,7 @@ impl eframe::App for DemoApp {
         }
         self.show_replay_control(&ctx);
         self.show_replay_start(&ctx);
+        self.show_replay_trading(&ctx);
         self.show_annotation_editor(&ctx);
         self.show_dialogs(&ctx);
         self.show_watchlist_import(&ctx);
@@ -3308,9 +3322,14 @@ impl DemoApp {
         self.live.set_paused(true);
     }
 
+    /// The paper account that trades: the replay session's during replay, else the live one.
+    pub(crate) fn active_paper(&self) -> &Arc<egui_charts::services::PaperAccount> {
+        self.replay_paper.as_ref().unwrap_or(&self.paper)
+    }
+
     /// Connects the paper account and opens its panel, as its tile in the broker picker does.
     pub(crate) fn connect_paper(&mut self) {
-        self.trading.set_service(self.paper.clone());
+        self.trading.set_service(self.active_paper().clone());
         self.trading.account_panel.broker = "Paper Trading".to_owned();
         self.trading.account_panel.accounts = vec!["Paper 1".to_owned()];
         self.account_panel = AccountPanelSize::Normal;
@@ -3336,13 +3355,13 @@ impl DemoApp {
             let result = egui_charts::ui_kit::modal::dialogs::ConfirmDialog::new(
                 "paper_reset",
                 "Reset paper account",
-                "Close every position, cancel every order and return the balance to 100,000 USD?",
+                "Close every position, cancel every order and return the balance to its starting amount?",
             )
             .confirm_text("Reset")
             .show(ui.ctx(), &mut self.paper_reset);
             if result.is_confirmed() {
-                self.paper.reset();
-                self.trading.set_service(self.paper.clone());
+                self.active_paper().reset();
+                self.trading.set_service(self.active_paper().clone());
                 self.paper_reset = false;
             }
         }
@@ -3652,7 +3671,8 @@ impl DemoApp {
                         .iter()
                         .rfind(|bar| !bar.is_whitespace())
                 {
-                    self.paper.set_price(self.chart.symbol(), bar.close);
+                    self.active_paper()
+                        .set_price(self.chart.symbol(), bar.close);
                     // Replay has no historical spread; its close prices both broker and ticket.
                     self.trading.set_quote(
                         self.chart.symbol(),
@@ -4175,6 +4195,19 @@ impl DemoApp {
             }
             _ => {}
         }
+        // A move back ends on the bar before the cursor's, or on the first bar.
+        let back = self.replay.as_ref().and_then(|replay| match action {
+            ReplayControlAction::StepBackward | ReplayControlAction::PreviousBar => {
+                replay.visible_bars().iter().rev().nth(1)
+            }
+            ReplayControlAction::GoToStart => replay.visible_bars().first(),
+            _ => None,
+        });
+        if let Some(time) = back.map(|bar| bar.time)
+            && self.hold_replay_move(replay::ReplayMove::Control(action.clone()), Some(time))
+        {
+            return;
+        }
         let play = matches!(action, ReplayControlAction::Play);
         let endpoint = match action {
             ReplayControlAction::GoToStart => Some(false),
@@ -4264,6 +4297,8 @@ impl DemoApp {
             || self.date_picker.is_open
             || self.replay_start.is_open
             || self.replay_selecting
+            || self.replay_prompt.is_open
+            || self.replay_results.is_open
             || self.data_source.is_open()
     }
 
