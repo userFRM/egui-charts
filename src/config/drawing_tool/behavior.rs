@@ -628,7 +628,7 @@ mod tests {
                 continue;
             }
             let drawing = &manager.drawings[0];
-            let handles = crate::drawings::services::DrawingInteraction::new().get_handles(drawing);
+            let handles = crate::drawings::services::HandleService::get_handles(drawing);
             for point in &drawing.points {
                 assert!(
                     handles.iter().any(|(_, p)| p == point),
