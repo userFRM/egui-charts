@@ -72,15 +72,18 @@ pub(super) fn show(
         );
     }
     let count = ((plot.width() / 140.0) as usize).clamp(2, 6);
-    let format = if span >= (count - 1) as f64 * 86_400.0 {
-        "%Y-%m-%d"
+    // A single instant gets one label with its date and time.
+    let (count, format) = if first == last {
+        (1, "%Y-%m-%d %H:%M")
+    } else if span >= (count - 1) as f64 * 86_400.0 {
+        (count, "%Y-%m-%d")
     } else if span >= (count - 1) as f64 * 60.0 {
-        "%Y-%m-%d %H:%M"
+        (count, "%Y-%m-%d %H:%M")
     } else {
-        "%H:%M:%S%.f"
+        (count, "%H:%M:%S%.f")
     };
     for k in 0..count {
-        let fraction = k as f64 / (count - 1) as f64;
+        let fraction = k as f64 / (count - 1).max(1) as f64;
         let offset =
             chrono::TimeDelta::from_std(std::time::Duration::from_secs_f64(fraction * span))
                 .expect("span between equity points");

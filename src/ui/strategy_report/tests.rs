@@ -140,19 +140,41 @@ fn report_replacement_selection_export_and_clear() {
 }
 
 #[test]
-fn equity_curve_uses_the_full_width_at_every_time_resolution() {
-    for step in [
-        chrono::TimeDelta::nanoseconds(500),
-        chrono::TimeDelta::milliseconds(500),
-        chrono::TimeDelta::days(365 * 300),
-    ] {
-        let start = DateTime::UNIX_EPOCH;
-        let values = [(start, 100.0), (start + step, 110.0)];
+fn equity_curve_fills_the_width_with_distinct_time_labels() {
+    let start = DateTime::UNIX_EPOCH;
+    for (step, width) in [
+        None,
+        Some(chrono::TimeDelta::nanoseconds(500)),
+        Some(chrono::TimeDelta::milliseconds(500)),
+        Some(chrono::TimeDelta::days(365 * 300)),
+    ]
+    .into_iter()
+    .flat_map(|step| [320.0, 1440.0].map(|width| (step, width)))
+    {
+        let values: Vec<_> = std::iter::once((start, 100.0))
+            .chain(step.map(|step| (start + step, 110.0)))
+            .collect();
         let color = egui::Color32::GREEN;
         let mut h = Harness::builder()
-            .with_size(Vec2::new(320.0, 200.0))
+            .with_size(Vec2::new(width, 200.0))
             .build_ui(|ui| plot::show(ui, &values, &[], color, 175.0));
         h.run();
+        let texts: Vec<_> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text()),
+                _ => None,
+            })
+            .collect();
+        let distinct: std::collections::BTreeSet<_> = texts.iter().collect();
+        assert_eq!(distinct.len(), texts.len(), "{texts:?}");
+        let Some(step) = step else {
+            // A single instant has no width to fill: one label gives its date.
+            assert!(texts.contains(&"1970-01-01 00:00"), "{texts:?}");
+            continue;
+        };
         let points = h
             .output()
             .shapes
