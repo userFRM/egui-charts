@@ -2433,8 +2433,8 @@ mod tests {
         assert!(host.events().is_empty());
     }
 
-    /// An alert stored before names and messages had limits, here with a 4001-character
-    /// message, loads with `with_alerts` and keeps working.
+    /// Saved trigger history survives restoration and is pushed once, including silent entries,
+    /// while the retained history stays bounded.
     #[test]
     fn restored_triggers_are_pushed_on_the_first_watch_only() {
         let mut watched = alert(AlertCondition::Above(100.0), AlertFrequency::EveryTime);
@@ -2492,6 +2492,8 @@ mod tests {
         );
     }
 
+    /// An alert stored before names and messages had limits, here with a 4001-character
+    /// message, loads with `with_alerts` and keeps working.
     #[test]
     fn an_alert_stored_with_a_long_message_keeps_firing_and_can_be_paused() {
         let message = "é".repeat(Alert::MAX_MESSAGE_CHARS + 1);
