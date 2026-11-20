@@ -128,9 +128,9 @@ fn custom_controls_report_names_roles_and_states() {
         (Role::Button, "1M", |ui, selected| {
             let mut ranges = super::timeframe_toolbar::RangeSwitcher::new();
             ranges.set_sel(if selected {
-                super::timeframe_toolbar::DateRange::Month1
+                crate::model::DateRange::Month1
             } else {
-                super::timeframe_toolbar::DateRange::Day1
+                crate::model::DateRange::Day1
             });
             ranges.show(ui);
         }),

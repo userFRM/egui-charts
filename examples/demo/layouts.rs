@@ -7,7 +7,7 @@ use egui_charts::model::Timeframe;
 use egui_charts::services::UserSettings;
 use egui_charts::studies::IndicatorFactory;
 use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
-use egui_charts::ui::widget_bar::panels::object_tree::ObjectTreeAction;
+use egui_charts::ui::widget_bar::ObjectTreeAction;
 use egui_charts::widget::{Chart, ChartLayout, ChartLayoutMode, SavedLayout, SeriesId};
 use std::sync::Arc;
 
