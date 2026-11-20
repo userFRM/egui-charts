@@ -44,10 +44,10 @@ pub enum BackgroundStyle {
 pub enum NavigationButtons {
     /// Always show the buttons.
     Always,
-    /// Show the buttons while the pointer is over the main pane, price and volume.
-    OnHover,
-    /// Hide the buttons (the default).
+    /// Show the buttons while the pointer is over the main pane, price and volume (the default).
     #[default]
+    OnHover,
+    /// Hide the buttons.
     Never,
 }
 
@@ -556,7 +556,7 @@ pub struct ChartConfig {
     pub realtime_button_hover_color: Color32,
     /// Text or icon color for the realtime button; `PLACEHOLDER` follows the theme.
     pub realtime_button_text_color: Color32,
-    /// When to show the navigation buttons.
+    /// When to show the navigation buttons. Default: [`NavigationButtons::OnHover`].
     pub navigation_buttons: NavigationButtons,
     /// When to show the maximize and menu buttons of the panes.
     #[serde(default = "pane_buttons_on_hover")]
