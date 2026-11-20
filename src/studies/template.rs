@@ -772,16 +772,48 @@ impl StudyTemplate {
                     }
                 }
             }
-            // Seasonality tables saved before placement inputs sat at the lower right and
-            // drew falling months in their original red.
-            "Seasonality" if !has("table_position") => {
+            // Seasonality saved before its Positive colour input coloured rising months with its
+            // Expected plot. One saved before placement inputs also counted from 1900, sat at the
+            // lower right and drew falling months in their original red.
+            "Seasonality" if !has("positive_color") => {
+                let positive = self
+                    .settings
+                    .plots
+                    .first()
+                    .map_or(crate::studies::palette::UP, |plot| plot.color);
+                let mut added = vec![("positive_color", InputValue::Color(positive))];
+                if !has("table_position") {
+                    added.extend([
+                        ("start_year", InputValue::Integer(1900)),
+                        ("table_position", InputValue::Choice(8)),
+                        (
+                            "negative_color",
+                            InputValue::Color(egui::Color32::from_rgb(242, 55, 69)),
+                        ),
+                    ]);
+                }
+                for (id, value) in added {
+                    if !has(id) {
+                        template.inputs.push((id.to_owned(), value));
+                    }
+                }
+            }
+            // Performance saved before it took inputs showed the chart symbol alone over the six
+            // standard periods, fitted at the lower right, falling changes in the palette red.
+            "Performance" if !has("periods") => {
                 for (id, value) in [
-                    ("start_year", InputValue::Integer(1900)),
-                    ("table_position", InputValue::Choice(8)),
+                    ("symbols", InputValue::Text(String::new())),
+                    (
+                        "periods",
+                        InputValue::Text("1W, 1M, 3M, 6M, YTD, 1Y".into()),
+                    ),
                     (
                         "negative_color",
-                        InputValue::Color(egui::Color32::from_rgb(242, 55, 69)),
+                        InputValue::Color(crate::studies::palette::DOWN),
                     ),
+                    ("table_position", InputValue::Choice(8)),
+                    ("table_width", InputValue::Number(0.0)),
+                    ("table_height", InputValue::Number(0.0)),
                 ] {
                     if !has(id) {
                         template.inputs.push((id.to_owned(), value));
@@ -994,6 +1026,34 @@ impl StudyTemplate {
                 let declared = crate::studies::VolProfileSession::default();
                 template.settings.plots = (0..3).map(|line| declared.plot_style(line)).collect();
                 template.settings.untagged_plots.clear();
+                changed = true;
+            }
+        }
+        // A single candlestick pattern study saved while it drew the bullish, bearish and
+        // neutral lines of All Candlestick Patterns, and took the trend rule whatever its rule
+        // reads, keeps the style of its side's line and drops a rule it now ignores.
+        if let Some(line) = crate::studies::CandlestickPatterns::pattern_line(study) {
+            if has("trend") && !declares("trend") {
+                template.inputs.retain(|(id, _)| id != "trend");
+                changed = true;
+            }
+            if self.settings.plots.len() == 3 {
+                let settings = &mut template.settings;
+                settings.plots = vec![self.settings.plots[line]];
+                settings.plot_variants = vec![
+                    self.settings
+                        .plot_variants
+                        .get(line)
+                        .cloned()
+                        .unwrap_or_default(),
+                ];
+                for flagged in [&mut settings.untagged_plots, &mut settings.price_line_plots] {
+                    *flagged = if flagged.contains(&line) {
+                        vec![0]
+                    } else {
+                        Vec::new()
+                    };
+                }
                 changed = true;
             }
         }
@@ -1862,45 +1922,62 @@ mod tests {
             }
         }
 
-        // A literal Seasonality saved before its display inputs keeps its year, plot and band
-        // colours and lower-right table position.
-        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Seasonality","inputs":[["start_year",{"Integer":1900}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Seasonality.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[1,10,8,16],"untagged_plots":[0,1,2,3,4],"price_line_plots":[],"plot_variants":[[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,31,26,51],"inverted_color":[48,11,14,51],"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
-        let mut study = saved.create().unwrap();
-        let inputs = study.inputs();
-        for (id, value) in [
-            ("start_year", InputValue::Integer(1900)),
+        // Literal Seasonality saves keep their year, colours and table position: one from before
+        // its display inputs at the lower right, one from before its Positive colour input, whose
+        // Expected plot coloured rising months.
+        for (text, year, positive, negative, position) in [
             (
-                "negative_color",
-                InputValue::Color(Color32::from_rgb(242, 55, 69)),
+                r#"{"name":"Seasonality","inputs":[["start_year",{"Integer":1900}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Seasonality.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[1,10,8,16],"untagged_plots":[0,1,2,3,4],"price_line_plots":[],"plot_variants":[[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,31,26,51],"inverted_color":[48,11,14,51],"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                1900,
+                Color32::from_rgb(41, 98, 255),
+                Color32::from_rgb(242, 55, 69),
+                crate::studies::TablePosition::BottomRight,
+            ),
+            (
+                r#"{"name":"Seasonality","inputs":[["start_year",{"Integer":2015}],["ignored_months",{"Text":""}],["negative_color",{"Color":[242,54,69,255]}],["color_cutoff",{"Number":10.0}],["show_averages",{"Toggle":true}],["show_std_dev",{"Toggle":true}],["show_positive",{"Toggle":true}],["table_position",{"Choice":7}],["table_width",{"Number":0.0}],["table_height",{"Number":0.0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Seasonality.html","plots":[{"color":[255,0,255,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[1,10,8,16],"untagged_plots":[0,1,2,3,4],"price_line_plots":[],"plot_variants":[[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,31,26,51],"inverted_color":[48,11,14,51],"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                2015,
+                Color32::from_rgb(255, 0, 255),
+                Color32::from_rgb(242, 54, 69),
+                crate::studies::TablePosition::BottomCenter,
             ),
         ] {
+            let saved: StudyTemplate = serde_json::from_str(text).unwrap();
+            let mut study = saved.create().unwrap();
+            let inputs = study.inputs();
+            for (id, value) in [
+                ("start_year", InputValue::Integer(year)),
+                ("positive_color", InputValue::Color(positive)),
+                ("negative_color", InputValue::Color(negative)),
+            ] {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == id)
+                        .map(|input| &input.value),
+                    Some(&value),
+                    "Seasonality from {year} {id}"
+                );
+            }
+            assert_eq!(study.settings(), saved.settings);
+            // January 2021 rises 12%, past the cutoff: the full positive colour.
+            let bars = [(2020, 12, 100.0), (2021, 1, 112.0)].map(|(year, month, close)| {
+                Bar::new(
+                    Utc.with_ymd_and_hms(year, month, 28, 0, 0, 0).unwrap(),
+                    close,
+                    close,
+                    close,
+                    close,
+                    1.0,
+                )
+            });
+            study.calculate(&bars);
+            let table = study.table().unwrap();
             assert_eq!(
-                inputs
-                    .iter()
-                    .find(|input| input.id == id)
-                    .map(|input| &input.value),
-                Some(&value),
-                "Seasonality {id}"
+                (table.position, table.width, table.height),
+                (position, None, None)
             );
+            assert_eq!(table.cell_colors[1][1], positive);
         }
-        assert_eq!(study.settings(), saved.settings);
-        let bars = [(2020, 12, 100.0), (2021, 1, 112.0)].map(|(year, month, close)| {
-            Bar::new(
-                Utc.with_ymd_and_hms(year, month, 28, 0, 0, 0).unwrap(),
-                close,
-                close,
-                close,
-                close,
-                1.0,
-            )
-        });
-        study.calculate(&bars);
-        let table = study.table().unwrap();
-        assert_eq!(
-            (table.position, table.width, table.height),
-            (crate::studies::TablePosition::BottomRight, None, None)
-        );
-        assert_eq!(table.cell_colors[1][1], Color32::from_rgb(41, 98, 255));
 
         let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Periodic","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["period_count",{"Length":1}],["period",{"Choice":1}],["restart_yearly",{"Toggle":false}],["width",{"Number":30.0}],["extend_poc",{"Toggle":false}],["extend_vah",{"Toggle":false}],["extend_val",{"Toggle":false}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfilePeriodic.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
         for legacy in [

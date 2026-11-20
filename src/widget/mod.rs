@@ -91,6 +91,7 @@ mod targets;
 pub use events::ImageRequest;
 pub use events::{
     ChartEvent, ChartPointer, CursorDataPolicy, DataOperation, PointerKind, PointerTarget,
+    StudyEventKind,
 };
 mod export;
 mod format;
@@ -166,7 +167,8 @@ pub use sync::VisibleTimeRange;
 #[cfg(feature = "drawings")]
 pub(crate) mod tool_interaction;
 
-pub use keyboard::{ShortcutMap, ShortcutRequest};
+pub use crate::config::shortcut_map::ShortcutMap;
+pub use keyboard::ShortcutRequest;
 pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 
 /// The main bars' revision, length and last high, low and close, and the pending sizes, that
@@ -327,6 +329,10 @@ pub struct Chart {
     volume_setting: bool,
     #[cfg(feature = "studies")]
     volume_study: Option<SeriesId>,
+    /// The colours last given to or taken from the Analyst price forecast studies, positive then
+    /// negative; `None` gives them the configured colours on the next frame.
+    #[cfg(feature = "studies")]
+    price_target_colors: Option<[egui::Color32; 2]>,
     /// Id of each study in `studies`.
     pub(crate) study_ids: Vec<SeriesId>,
     /// The most studies the chart takes through the interface, if capped.
@@ -1209,12 +1215,14 @@ pub(crate) mod test_frames {
         Chart::new(BarData::from_bars(bars))
     }
 
-    fn run(
+    /// Runs one frame at `time` seconds with `events` and returns the shapes it painted, each
+    /// with its clip rect, and the cursor it asked for.
+    pub(crate) fn run(
         ctx: &Context,
         chart: &mut Chart,
         time: f64,
         events: Vec<Event>,
-    ) -> (Vec<Shape>, CursorIcon) {
+    ) -> (Vec<(Rect, Shape)>, CursorIcon) {
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
             time: Some(time),
@@ -1226,15 +1234,17 @@ pub(crate) mod test_frames {
                 chart.show(ui);
             });
         });
-        fn flatten(shape: Shape, out: &mut Vec<Shape>) {
+        fn flatten(clip: Rect, shape: Shape, out: &mut Vec<(Rect, Shape)>) {
             match shape {
-                Shape::Vec(shapes) => shapes.into_iter().for_each(|shape| flatten(shape, out)),
-                shape => out.push(shape),
+                Shape::Vec(shapes) => shapes
+                    .into_iter()
+                    .for_each(|shape| flatten(clip, shape, out)),
+                shape => out.push((clip, shape)),
             }
         }
         let mut shapes = Vec::new();
         for clipped in std::mem::take(&mut output.shapes) {
-            flatten(clipped.shape, &mut shapes);
+            flatten(clipped.clip_rect, clipped.shape, &mut shapes);
         }
         let cursor = output.platform_output.cursor_icon;
         output.drop_without_applying_deltas();
@@ -1248,7 +1258,11 @@ pub(crate) mod test_frames {
         time: f64,
         events: Vec<Event>,
     ) -> Vec<Shape> {
-        run(ctx, chart, time, events).0
+        run(ctx, chart, time, events)
+            .0
+            .into_iter()
+            .map(|(_, shape)| shape)
+            .collect()
     }
 
     /// The fill and stroke colours of `shapes`, mesh vertices included.

@@ -7,7 +7,7 @@ use egui_charts::model::Timeframe;
 use egui_charts::services::UserSettings;
 use egui_charts::studies::IndicatorFactory;
 use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
-use egui_charts::ui::widget_bar::panels::object_tree::ObjectTreeAction;
+use egui_charts::ui::widget_bar::ObjectTreeAction;
 use egui_charts::widget::{Chart, ChartLayout, ChartLayoutMode, SavedLayout, SeriesId};
 use std::sync::Arc;
 
@@ -138,7 +138,6 @@ impl DemoApp {
             .build();
         self.formatting.apply(&mut chart);
         chart.set_main_series_visible(source.is_main_series_visible());
-        chart.set_price_targets_visible(source.price_targets_visible());
         chart.set_signal_source(Some(if self.api_samples {
             live.clone() as Arc<dyn egui_charts::services::Signals>
         } else {
@@ -182,6 +181,8 @@ impl DemoApp {
                 chart.set_indicator_inputs(copy, inputs);
             }
         }
+        // After the studies, whose forecast study the setting would otherwise add a second time.
+        chart.set_price_targets_visible(source.price_targets_visible());
         chart.drawings_mut().drawings = source.drawings().drawings.clone();
         chart.drawings_mut().drawings.retain_mut(|drawing| {
             if let Some(pane) = drawing.pane {

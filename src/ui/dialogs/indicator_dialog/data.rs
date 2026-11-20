@@ -93,6 +93,7 @@ impl IndicatorInfo {
             "A/D" => &["Accumulation Distribution", "ADL"],
             "ADX Breakout" => &["Rob Booker - ADX Breakout"],
             "ASI" => &["Accumulative Swing Index"],
+            "Analyst price forecast" => &["Analyst price targets"],
             "Auto Fibonacci Extension" => &["Auto Fib Extension"],
             "Auto Fibonacci Retracement" => &["Auto Fib Retracement"],
             "Auto Trend Line" => &["Auto Trendlines"],
