@@ -541,25 +541,29 @@ mod tests {
         .collect()
     }
 
-    /// Guards #3658: zone studies offer alerts only on outputs that hold values, each read at
-    /// the bars it covers, and list no empty values in the legend.
+    /// Guards #3658: studies offer alerts only on outputs that can hold values, each read at
+    /// the bars it covers, and zone studies list no empty values in the legend.
     #[test]
-    fn zone_studies_offer_only_outputs_that_hold_values() {
+    fn studies_offer_only_outputs_that_hold_values() {
         // Feb 3: 3/4 volume at 30 in [30, 31), so POC=30.5, VAL=30, VAH=31.
         // The week ties endpoint rows at 4 each: lower POC=30.5, area [30, 53], since
         // adding the top row would exceed 70% of 8. Both periods have 24 rows of width 1.
-        type Output = (usize, String, Option<(f64, usize)>);
+        // An output's value at each of the six bars.
+        type Output = (usize, String, Vec<Option<f64>>);
         type Row = (Box<dyn Indicator>, Vec<Output>, usize);
+        let from = |price: f64, first: usize| -> Vec<Option<f64>> {
+            (0..6).map(|bar| (bar >= first).then_some(price)).collect()
+        };
         let levels: Vec<Output> = [
-            (7, "dPOC", Some((30.5, 4))),
-            (8, "dVAL", Some((30.0, 4))),
-            (9, "dVAH", Some((31.0, 4))),
-            (14, "wPOC", Some((30.5, 2))),
-            (15, "wVAL", Some((30.0, 2))),
-            (16, "wVAH", Some((53.0, 2))),
+            (7, "dPOC", 30.5, 4),
+            (8, "dVAL", 30.0, 4),
+            (9, "dVAH", 31.0, 4),
+            (14, "wPOC", 30.5, 2),
+            (15, "wVAL", 30.0, 2),
+            (16, "wVAH", 53.0, 2),
         ]
         .into_iter()
-        .map(|(output, name, value)| (output, name.to_owned(), value))
+        .map(|(output, name, price, first)| (output, name.to_owned(), from(price, first)))
         .collect();
         let mut hidden = AutoKeyLevels::new();
         hidden
@@ -589,10 +593,14 @@ mod tests {
                 .zip(prices)
                 .enumerate()
                 .map(move |(k, (tag, price))| {
-                    (output + k, format!("{prefix}{tag}"), Some((price, first)))
+                    (output + k, format!("{prefix}{tag}"), from(price, first))
                 })
         })
         .collect();
+        let factory = crate::studies::IndicatorFactory::new();
+        let create = |name: &str| factory.create(name).unwrap();
+        // An offered output that holds no value on these bars.
+        let offered = |output: usize, name: &str| -> Output { (output, name.to_owned(), vec![]) };
         let rows: Vec<Row> = vec![
             (Box::new(AutoKeyLevels::new()), levels.clone(), 0),
             (Box::new(all), all_outputs, 0),
@@ -609,7 +617,15 @@ mod tests {
             (Box::new(MissedPivots::default()), vec![], 0),
             (
                 Box::new(ChartPatterns::all()),
-                vec![(0, "Bullish".into(), None), (1, "Bearish".into(), None)],
+                vec![offered(0, "Bullish"), offered(1, "Bearish")],
+                2,
+            ),
+            // A one-sided formation fails on a break the other way.
+            (create("Double Top"), vec![offered(1, "Bearish")], 2),
+            (create("Double Bottom"), vec![offered(0, "Bullish")], 2),
+            (
+                create("Rectangle"),
+                vec![offered(0, "Bullish"), offered(1, "Bearish")],
                 2,
             ),
         ];
@@ -639,8 +655,7 @@ mod tests {
                     let expected = outputs
                         .iter()
                         .find(|(at, ..)| *at == output)
-                        .and_then(|(_, _, value)| *value)
-                        .and_then(|(price, first)| (first..6).contains(&bar).then_some(price));
+                        .and_then(|(_, _, values)| values.get(bar).copied().flatten());
                     assert_eq!(
                         chart.alert_value(&source, bar),
                         expected,

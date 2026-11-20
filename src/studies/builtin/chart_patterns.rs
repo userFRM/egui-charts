@@ -1341,8 +1341,24 @@ impl Indicator for ChartPatterns {
         vec![0, 1]
     }
 
+    // Developing holds no values, and a side holds values only while a formation that confirms
+    // that way is on: a one-sided formation fails on a break the other way.
     fn alert_outputs(&self) -> Vec<(usize, String)> {
-        self.line_names().into_iter().take(2).enumerate().collect()
+        [PatternDirection::Bullish, PatternDirection::Bearish]
+            .into_iter()
+            .zip(self.line_names())
+            .enumerate()
+            .filter(|(_, (side, _))| {
+                self.scope
+                    .kinds()
+                    .iter()
+                    .zip(self.enabled)
+                    .any(|(kind, on)| {
+                        on && kind.expected().is_none_or(|expected| expected == *side)
+                    })
+            })
+            .map(|(output, (_, name))| (output, name))
+            .collect()
     }
 
     fn is_visible(&self) -> bool {
