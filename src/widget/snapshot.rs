@@ -652,11 +652,12 @@ impl Chart {
             .collect();
         self.study_column_ids.extend(column_ids);
         for saved in snapshot.series.iter().flatten() {
-            let id = if saved.fed {
-                self.add_feed_series(saved.options.clone())
-            } else {
-                self.add_series(saved.options.clone())
-            };
+            // The restored drawings already count the restored series.
+            let id = self.add_series_keeping_layers(saved.options.clone());
+            if saved.fed {
+                self.price_series.last_mut().expect("added series").fed = self.feed_link.is_some();
+                self.fill_fed_series();
+            }
             self.set_series_visible(id, saved.visible);
             self.restore_annotations(id, &saved.annotations);
             self.restored_studies.insert(saved.id, id.0);
