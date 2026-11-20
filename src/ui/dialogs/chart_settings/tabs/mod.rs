@@ -45,6 +45,7 @@ impl SettingsDialog {
             "Right margin (bars)",
             "Visibility",
             "Timezone",
+            "Session",
         ]
         .iter()
         .map(|label| {
