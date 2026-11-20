@@ -365,6 +365,9 @@ pub struct VolumeProfile {
     // Each row split by expiry, for an options profile drawn by expiry.
     #[cfg(any(feature = "studies", feature = "widget"))]
     pub(crate) expiry_parts: Option<ExpiryParts>,
+    // Each row holds its strike's puts over calls, for an options profile of put/call ratios.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) ratio_rows: bool,
 }
 
 fn valid_bar(bar: &Bar) -> bool {
@@ -682,6 +685,8 @@ impl VolumeProfile {
             exposure: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             expiry_parts: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            ratio_rows: false,
         };
         let mut total = 0.0;
         let rows = data
@@ -755,6 +760,8 @@ impl VolumeProfile {
             exposure: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             expiry_parts: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            ratio_rows: false,
         };
         for (&level, row) in &bar.levels {
             let i = (level - first) as usize;
@@ -869,6 +876,8 @@ impl VolumeProfile {
             exposure: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             expiry_parts: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            ratio_rows: false,
         })
     }
 

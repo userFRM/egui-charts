@@ -292,7 +292,7 @@ pub(crate) fn paint_profile(
         }
     }
 
-    if config.show_values && !drawing && !options {
+    if config.show_values && !drawing {
         use crate::scales::PriceFormatter;
         let formatter = crate::scales::VolumeFormatter { precision: 2 };
         let font = egui::FontId::proportional(typography::XS);
@@ -304,21 +304,32 @@ pub(crate) fn paint_profile(
             } else {
                 volume
             };
-            if amount <= 0.0 {
+            // A strike's figures show while it has any, also where its calls and puts net out.
+            if (if options { volume } else { amount }) <= 0.0 {
                 continue;
             }
-            let text = match config.display {
-                ProfileDisplay::Total => formatter.format(volume),
-                ProfileDisplay::UpDown => format!(
-                    "{} / {}",
+            let text = if options && profile.ratio_rows {
+                format!("{:.2}", profile.up[row])
+            } else if options {
+                format!(
+                    "{} × {}",
                     formatter.format(profile.up[row]),
                     formatter.format(profile.down[row])
-                ),
-                ProfileDisplay::Delta => format!(
-                    "{}{}",
-                    if delta > 0.0 { "+" } else { "" },
-                    formatter.format(delta)
-                ),
+                )
+            } else {
+                match config.display {
+                    ProfileDisplay::Total => formatter.format(volume),
+                    ProfileDisplay::UpDown => format!(
+                        "{} / {}",
+                        formatter.format(profile.up[row]),
+                        formatter.format(profile.down[row])
+                    ),
+                    ProfileDisplay::Delta => format!(
+                        "{}{}",
+                        if delta > 0.0 { "+" } else { "" },
+                        formatter.format(delta)
+                    ),
+                }
             };
             let galley = painter.layout_no_wrap(text, font.clone(), text_color);
             let (a, b) = (y_at_row(row), y_at_row(row + 1));

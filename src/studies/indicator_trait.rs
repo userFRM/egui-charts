@@ -395,50 +395,7 @@ pub trait Indicator: Send {
 
     /// Current applied presentation, initialized from the study's own defaults.
     fn settings(&self) -> super::StudySettings {
-        let (levels, fill_between_levels, level_fill_color) =
-            super::settings::declared_levels(self);
-        super::StudySettings {
-            show_legend_values: true,
-            user_edit_enabled: Some(self.user_edit_enabled()),
-            help_url: self.help_url().map(str::to_owned),
-            plots: (0..self.line_count())
-                .map(|line| self.plot_style(line))
-                .collect(),
-            precision: self.precision(),
-            hidden_intervals: Vec::new(),
-            timeframe_visibility: crate::model::TimeframeVisibility::all(),
-            levels,
-            fill_between_levels,
-            level_fill_color,
-            mfi_auto_range: false,
-            untagged_plots: (0..self.line_count())
-                .filter(|&line| !self.plot_tagged(line))
-                .collect(),
-            price_line_plots: (0..self.line_count())
-                .filter(|&line| self.plot_price_line(line))
-                .collect(),
-            plot_variants: (0..self.line_count())
-                .map(|line| self.plot_variants(line))
-                .collect(),
-            gradients: self
-                .gradients()
-                .iter()
-                .map(|fill| super::GradientStyle {
-                    colors: fill.colors,
-                    visible: true,
-                })
-                .collect(),
-            background: self.background(),
-            background_visible: true,
-            fills: self
-                .fills()
-                .iter()
-                .map(|fill| super::FillStyle {
-                    inverted_color: fill.inverted_color,
-                    ..super::FillStyle::new(fill.color)
-                })
-                .collect(),
-        }
+        super::settings::declared_settings(self)
     }
 
     /// Capture editable inputs and presentation without copying calculated values.
