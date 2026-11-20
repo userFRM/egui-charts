@@ -1604,6 +1604,13 @@ mod tests {
                 }],
                 ..Default::default()
             });
+            drawing.forecast = Some(crate::drawings::ForecastStyle {
+                start_text: None,
+                target_border: Some([11, 12, 13, 14]),
+                failure_text: Some([15, 16, 17, 18]),
+                transparency: 35,
+                ..Default::default()
+            });
             drawing.channel_midline = true;
             drawing.closed = true;
             drawing.elliott_degree = ElliottDegree::Submicro;
@@ -1772,11 +1779,24 @@ mod tests {
         for saved in [
             include_str!("fixtures/storage_v2.json"),
             include_str!("fixtures/storage_v10_channels.json"),
+            // A forecast saved on main before its card settings, with a shared translucent fill.
+            r#"{"version":10,"symbol":"LEGACY","drawings":[{"id":"7","points":[{"ts_ms":1704067200000,"price":1.1},{"ts_ms":1704326400000,"price":1.10055}],"drawing":{"label":null,"pane":null,"selectable":true,"saveable":true,"listed":true,"user_edit_enabled":true,"group":null,"folder":[],"custom_tool":null,"custom_settings":null,"tool_type":"Forecast","screen_anchor":null,"color":[41,98,255,255],"stroke_width":2.0,"text":null,"post":null,"line_style":"Solid","fill_color":[12,34,56,80],"locked":false,"visible":true,"font_size":14.0,"font_weight":"Normal","italic":false,"text_color":null,"background":true,"border":true,"border_color":null,"text_wrap":false,"text_wrap_width":200.0,"text_follows_zoom":false,"text_zoom_spacing":null,"note_text_style":null,"extend_left":false,"extend_right":false,"arrow_start_style":"None","arrow_end_style":"None","timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"price_axis_label":true,"time_axis_label":true,"line_measurements":{"persistent":false,"price_change":false,"percent_change":false,"pip_change":false,"bar_count":false,"elapsed_time":false,"length":false,"inclination":false,"midpoint":false,"price_labels":false,"position":"Right","text_horizontal_align":"Center","text_vertical_align":"Bottom","text_orientation":"Vertical","across_panes":false},"range_settings":{"price_change":true,"percent_change":true,"pip_change":true,"bar_count":true,"elapsed_time":true,"volume":true,"text_color":null,"font_size":12.0,"background":true,"background_color":null,"border":true,"border_color":null,"border_width":null,"border_style":null,"extend_top":false,"extend_bottom":false},"position_size":null,"position_sizing":{"point_value":1.0,"lot_size":1.0,"quantity_step":0.0,"leverage":1.0},"position_readout":{"persistent":false,"condensed":false,"account_currency":null,"conversion_rate":null,"quantity_decimals":null},"position_target_color":null,"position_stop_color":null,"position_style":{"line_color":null,"line_width":1.0,"text_color":null,"font_size":12.0,"label_background":true,"label_color":null,"fill":true,"border":false,"border_color":[102,123,139,255]},"marker":{"show_text":true,"glyph":"🙂","show_glyph":false,"glyph_color":null},"fib_config":null,"volume_profile":null,"regression_trend":null,"vwap":null,"gann":null,"ghost_feed":null,"channel_midline":false,"anchor_price_style":null,"middle_line":{"color":null,"width":1.0,"line_style":"Dashed"},"theme_shade":true,"image":null,"glyph_angle":0.0,"closed":false,"pitchfork":null,"elliott_degree":"Minor","elliott_show_wave":true,"bars_pattern":null,"projection":null,"z_order":0},"created_at":1704067200000,"modified_at":1704067200000}],"metadata":{"created_at":1704067200000,"modified_at":1704067200000,"app_version":null}}"#,
         ] {
             let (storage, skipped) = DrawingStorage::from_json(saved).unwrap();
             assert!(skipped.is_empty(), "{skipped:?}");
             for stored in storage.drawings() {
-                assert_eq!(restore(stored, 1).series_layer, None);
+                let restored = restore(stored, 1);
+                assert_eq!(restored.series_layer, None);
+                if restored.tool_type == DrawingToolType::Forecast {
+                    assert_eq!(restored.forecast, None);
+                    let style = restored.forecast_style();
+                    assert_eq!(style.start_background, Some([12, 34, 56, 80]));
+                    assert_eq!(style.target_background, style.start_background);
+                    assert_eq!(style.success_background, style.start_background);
+                    assert_eq!(style.failure_background, style.start_background);
+                    assert_eq!((style.start_border, style.target_border), (None, None));
+                    assert_eq!(style.transparency, 0);
+                }
                 assert!(
                     !serde_json::to_string(&stored.drawing)
                         .unwrap()
