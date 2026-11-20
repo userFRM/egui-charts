@@ -11,7 +11,8 @@
 //! ```
 //! Both use the window of [`Aroon`]: the current bar and the `length` bars before it, a tie
 //! counting the most recent bar. The value ranges from -100 to 100. Guides at 90 and -90 mark
-//! a strong uptrend or downtrend.
+//! a strong uptrend or downtrend. The line is shaded to zero in the rising and falling colours
+//! at a tenth of full opacity.
 //!
 //! # Example
 //! ```
@@ -138,13 +139,23 @@ impl Indicator for AroonOscillator {
         }
     }
 
+    /// Shade to zero with the same sign colours as the line.
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        vec![crate::studies::StudyFill {
+            first: crate::studies::FillBoundary::Plot(0),
+            second: crate::studies::FillBoundary::Level(0.0),
+            color: self.colors[0].gamma_multiply_u8(26),
+            inverted_color: Some(self.colors[1].gamma_multiply_u8(26)),
+        }]
+    }
+
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             range: Some((-100.0, 100.0)),
             levels: vec![
-                (90.0, palette::GRAY, "Upper guide"),
-                (0.0, palette::GRAY, "Zero"),
-                (-90.0, palette::GRAY, "Lower guide"),
+                (90.0, palette::GRAY, "Upper level"),
+                (0.0, palette::GRAY, "Center"),
+                (-90.0, palette::GRAY, "Lower level"),
             ],
             ..Default::default()
         }
