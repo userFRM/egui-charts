@@ -4957,6 +4957,11 @@ mod tests {
         app.paper.set_price(&symbol, last);
         app.trading.set_service(app.paper.clone());
         app.trading.poll(&ctx, &mut app.toasts);
+        ui_frame(&ctx, size, vec![], |ui| {
+            app.chart.show(ui);
+            app.trading.show(ui, &mut app.chart);
+        });
+        app.trading.poll(&ctx, &mut app.toasts);
         app.trading.display.instant_orders = true;
         app.trading.trade(symbol.clone(), OrderSide::Buy);
         app.trading.poll(&ctx, &mut app.toasts);
