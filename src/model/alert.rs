@@ -13,6 +13,58 @@ pub struct AlertId(
     pub String,
 );
 
+/// One trigger as the alert log keeps it, also after its alert is removed. `AlertEngine` keeps
+/// the newest ones for the host to store beside the alerts.
+///
+/// ```
+/// use chrono::{TimeZone, Utc};
+/// use egui_charts::model::{AlertId, AlertTrigger};
+///
+/// let time = Utc.with_ymd_and_hms(2026, 10, 23, 12, 0, 0).unwrap();
+/// let mut trigger = AlertTrigger::new(AlertId("1".into()), "AAPL", time);
+/// trigger.name = "Breakout".into();
+/// trigger.price = Some(101.0);
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct AlertTrigger {
+    /// Host alert identifier.
+    pub id: AlertId,
+    /// The alert's [`display_name`](Alert::display_name) when the trigger arrived, empty if its
+    /// alert was not yet supplied.
+    #[serde(default)]
+    pub name: String,
+    /// Symbol as known when the trigger arrived, empty if its alert was not yet supplied.
+    #[serde(default)]
+    pub symbol: String,
+    /// Host trigger time, including triggers missed while the application was closed.
+    pub time: DateTime<Utc>,
+    /// Finite trigger price, if supplied.
+    #[serde(default)]
+    pub price: Option<f64>,
+    /// The alert's message with its placeholders filled in, empty if there is none.
+    #[serde(default)]
+    pub message: String,
+    /// The trigger fell outside the alert's notification schedule: logged without a popup.
+    #[serde(default)]
+    pub silent: bool,
+}
+
+impl AlertTrigger {
+    /// A trigger of `id` on `symbol` at `time`, without a name, price or message, and not silent.
+    pub fn new(id: AlertId, symbol: impl Into<String>, time: DateTime<Utc>) -> Self {
+        Self {
+            id,
+            name: String::new(),
+            symbol: symbol.into(),
+            time,
+            price: None,
+            message: String::new(),
+            silent: false,
+        }
+    }
+}
+
 /// An alert as the host stores and evaluates it. The library creates and edits alerts through
 /// [`Alerts::save`](crate::services::Alerts::save) and shows the ones the host pushes. It evaluates
 /// them only through the host's service; `AlertEngine` (feature `alert-engine`) is one.
@@ -1155,6 +1207,16 @@ impl Alert {
                 .starts
                 .zip(self.expires)
                 .is_none_or(|(starts, expires)| starts < expires)
+    }
+
+    /// The alert's name, or its condition when the name is blank, as the alert log and trigger
+    /// popups name it.
+    pub fn display_name(&self) -> String {
+        if self.name.trim().is_empty() {
+            self.condition.to_string()
+        } else {
+            self.name.clone()
+        }
     }
 }
 
