@@ -40,7 +40,9 @@ pub enum AlertPanelAction {
     None,
     /// Open the shared alert creation dialog; submit its result with [`AlertsPanel::save`].
     CreateAlert,
-    /// Edit this host-owned alert in the shared dialog.
+    /// Edit this host-owned alert in the shared dialog. Enable on an alert whose expiry has passed
+    /// returns it too, already marked active, so the user chooses a later expiry or none before it
+    /// is saved.
     EditAlert(Box<Alert>),
     /// Stage this copy of an alert, without an identifier and active, in the shared dialog
     /// with [`AlertDialog::edit`](crate::ui::dialogs::alert_dialog::AlertDialog::edit).
@@ -1231,7 +1233,13 @@ impl AlertsPanel {
                                     } else {
                                         AlertStatus::Active
                                     };
-                                    toggle = Some(changed);
+                                    // Enabled as it is, an alert past its expiry would expire
+                                    // again at the next tick.
+                                    if !active && alert.expires.is_some_and(|at| at <= Utc::now()) {
+                                        action = AlertPanelAction::EditAlert(Box::new(changed));
+                                    } else {
+                                        toggle = Some(changed);
+                                    }
                                 }
                                 ui.add_enabled_ui(self.pending == 0, |ui| {
                                     ui.menu_button("...", |ui| {
@@ -2044,6 +2052,67 @@ mod tests {
             let restored: Alert = serde_json::from_value(saved()).unwrap();
             assert_eq!(serde_json::to_value(restored).unwrap(), saved());
         }
+    }
+
+    /// Enable on an alert past its expiry, expired or paused, opens it in the editor instead of
+    /// saving it, since the engine would expire it again at the next tick. An alert without an
+    /// expiry is enabled at once.
+    #[cfg(feature = "alert-engine")]
+    #[test]
+    fn enable_opens_an_alert_past_its_expiry_in_the_editor() {
+        use AlertStatus::{Active, Disabled, Expired};
+        use egui_kittest::{Harness, kittest::Queryable};
+        let now = Utc::now();
+        let yesterday = Some(now - chrono::TimeDelta::days(1));
+        let alerts = [
+            ("1", Expired, yesterday),
+            ("2", Disabled, None),
+            ("3", Disabled, yesterday),
+        ]
+        .map(|(id, status, expires)| {
+            let mut alert = Alert::new("AAPL", AlertCondition::Above(100.0));
+            alert.id = Some(AlertId(id.into()));
+            alert.status = status;
+            alert.expires = expires;
+            alert
+        });
+        let engine = Arc::new(crate::services::AlertEngine::new().with_alerts(alerts.to_vec()));
+        let mut panel = AlertsPanel::new(AlertsPanelConfig { max_height: 800.0 });
+        panel.set_service(engine.clone());
+        let mut toasts = Toasts::new();
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(400.0, 1000.0))
+            .build_ui_state(
+                move |ui, (panel, actions): &mut (AlertsPanel, Vec<AlertPanelAction>)| {
+                    panel.poll(ui.ctx(), &mut toasts);
+                    let action = panel.show(ui);
+                    if action != AlertPanelAction::None {
+                        actions.push(action);
+                    }
+                },
+                (panel, Vec::new()),
+            );
+        h.run_steps(3);
+        // The list is ordered by id; enabling the second alert turns its button into Pause.
+        for row in [0, 2, 1] {
+            h.get_all_by_label("Enable").nth(row).unwrap().click();
+            h.run_steps(3);
+        }
+        let [mut resumed, _, mut paused] = alerts;
+        resumed.status = Active;
+        paused.status = Active;
+        assert_eq!(
+            h.state().1,
+            [resumed.clone(), paused].map(|alert| AlertPanelAction::EditAlert(Box::new(alert)))
+        );
+        let status = || engine.alerts().iter().map(|a| a.status).collect::<Vec<_>>();
+        assert_eq!(status(), [Expired, Active, Disabled]);
+        // Saved from the editor with a later expiry, it stays active through the next tick.
+        resumed.expires = Some(now + chrono::TimeDelta::days(1));
+        h.state_mut().0.save(resumed);
+        engine.tick(Utc::now());
+        assert_eq!(status(), [Active, Active, Disabled]);
     }
 
     #[test]
