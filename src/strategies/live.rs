@@ -627,42 +627,157 @@ mod tests {
         assert!(engine.update(&mut strategy, &bars, &[]).is_empty());
     }
 
-    /// A fill carries no study output, so a plot placeholder in a fill message is missing.
+    /// Fill fields belong to the execution, stay unknown on price alerts and expand only once.
     #[test]
     #[cfg(feature = "alert-engine")]
-    fn strategy_fill_message_reads_no_study_value() {
+    fn fill_fields_fill_fill_messages_and_stay_as_written_elsewhere() {
         use crate::model::{Alert, AlertCondition};
         use crate::services::{AlertEngine, AlertEvent};
         use std::sync::{Arc, Mutex};
-        let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
-        alert.message = "{{value}} rsi {{plot_3_0}}".into();
+        let fill = StrategyFill {
+            sequence: 1,
+            time: DateTime::UNIX_EPOCH,
+            order_id: "Reverse".into(),
+            side: OrderSide::Sell,
+            price: 180.0,
+            quantity: 7.0,
+            position: -3.0,
+        };
+        for (template, order, expected, price_expected) in [
+            ("{{order_id}}", "Reverse", "Reverse", "{{order_id}}"),
+            ("{{side}}", "Reverse", "Sell", "{{side}}"),
+            ("{{quantity}}", "Reverse", "7", "{{quantity}}"),
+            ("{{position}}", "Reverse", "-3", "{{position}}"),
+            (
+                "{{value}} rsi {{plot_3_0}}",
+                "Reverse",
+                "180 rsi NaN",
+                "101.5 rsi NaN",
+            ),
+            ("{{order_id}}", "{{close}}", "{{close}}", "{{order_id}}"),
+        ] {
+            let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
+            alert.message = template.into();
+            let delivered = Arc::new(Mutex::new(Vec::new()));
+            let sink = delivered.clone();
+            let engine = AlertEngine::new()
+                .with_alerts(vec![alert.clone()])
+                .on_trigger(move |_, event| sink.lock().unwrap().push(event.clone()));
+            let mut fill = fill.clone();
+            fill.order_id = order.into();
+            engine.strategy_fills(
+                "run-1",
+                "SYM",
+                None,
+                Timeframe::Min1,
+                &[fill],
+                DateTime::UNIX_EPOCH,
+            );
+            let events = delivered.lock().unwrap();
+            let [AlertEvent::TriggeredForSymbol { message, .. }] = events.as_slice() else {
+                panic!("one fill");
+            };
+            assert_eq!(message, expected, "{template}");
+            let bar = Bar::new(DateTime::UNIX_EPOCH, 99.0, 102.0, 98.0, 101.5, 1000.0);
+            alert.condition = AlertCondition::Above(100.0);
+            assert_eq!(
+                alert.expand_message("SYM", None, Timeframe::Min1, &bar, bar.time, |source| {
+                    (*source == crate::model::AlertSource::Price).then_some(bar.close)
+                }),
+                price_expected
+            );
+        }
+    }
+
+    /// The tester intent contains everything a host needs to run the same decisions live.
+    #[test]
+    #[cfg(all(feature = "alert-engine", feature = "ui"))]
+    fn a_run_started_from_the_add_alert_intent_alerts_on_its_fills() {
+        use crate::model::{Alert, AlertCondition};
+        use crate::services::{AlertEngine, AlertEvent};
+        use crate::ui::strategy_report::{StrategyTester, StrategyTesterAction};
+        use egui_kittest::{Harness, kittest::Queryable};
+        use std::sync::{Arc, Mutex};
+        let bars: Vec<_> = [100.0, 101.0, 102.0, 103.0, 100.0, 99.0, 98.0, 101.0, 101.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, close)| bar(i as i64, close))
+            .collect();
+        let mut tester = StrategyTester::default();
+        tester.select_strategy("Consecutive Up/Down").unwrap();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .build_ui_state(
+                |ui, (tester, actions): &mut (StrategyTester, Vec<StrategyTesterAction>)| {
+                    actions.extend(tester.show(ui, "SYM", Timeframe::Min1, &bars[..8]));
+                },
+                (tester, Vec::new()),
+            );
+        h.get_by_label("Add alert").click();
+        h.run();
+        let StrategyTesterAction::AddAlert {
+            strategy,
+            inputs,
+            settings,
+            symbol,
+            timeframe,
+        } = h.state_mut().1.pop().expect("alert intent")
+        else {
+            panic!("alert intent");
+        };
+        let mut script = StrategyFactory::new().create(&strategy).unwrap();
+        for (id, value) in inputs {
+            script.set_input(&id, value).unwrap();
+        }
+        let mut run = Backtest::new(&strategy, &symbol, timeframe, settings.initial_capital);
+        run.settings = settings;
+        let mut alert = Alert::new(&symbol, AlertCondition::StrategyFills("run-1".into()));
+        alert.timeframe = Some(timeframe);
         let delivered = Arc::new(Mutex::new(Vec::new()));
         let sink = delivered.clone();
         let engine = AlertEngine::new()
             .with_alerts(vec![alert])
             .on_trigger(move |_, event| sink.lock().unwrap().push(event.clone()));
-        let fill = StrategyFill {
-            sequence: 1,
-            time: DateTime::UNIX_EPOCH,
-            order_id: "Long".into(),
-            side: OrderSide::Buy,
-            price: 187.5,
-            quantity: 2.0,
-            position: 2.0,
-        };
-        engine.strategy_fills(
-            "run-1",
-            "SYM",
-            None,
-            Timeframe::Min1,
-            &[fill],
-            DateTime::UNIX_EPOCH,
+        for count in 1..=bars.len() {
+            let fills = run.update(script.as_mut(), &bars[..count], &[]);
+            engine.strategy_fills(
+                "run-1",
+                &symbol,
+                None,
+                timeframe,
+                &fills,
+                bars[count - 1].time,
+            );
+        }
+        let actual: Vec<_> = delivered
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                AlertEvent::TriggeredForSymbol {
+                    time,
+                    price,
+                    message,
+                    ..
+                } => Some((*time, *price, message.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    bars[4].time,
+                    Some(100.0),
+                    "Buy 1 at 100.00, position 1".into()
+                ),
+                (
+                    bars[7].time,
+                    Some(101.0),
+                    "Sell 2 at 101.00, position -1".into()
+                ),
+            ]
         );
-        let events = delivered.lock().unwrap();
-        let [AlertEvent::TriggeredForSymbol { message, .. }] = events.as_slice() else {
-            panic!("one fill");
-        };
-        assert_eq!(message, "187.5 rsi NaN");
     }
 
     #[test]
