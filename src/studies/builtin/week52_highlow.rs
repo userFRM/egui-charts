@@ -90,6 +90,10 @@ impl Indicator for Week52HighLow {
         false
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }
@@ -175,6 +179,10 @@ impl Indicator for Week52HighLowLevels {
     }
 
     fn is_overlay(&self) -> bool {
+        true
+    }
+
+    fn draws_only_plots(&self) -> bool {
         true
     }
 

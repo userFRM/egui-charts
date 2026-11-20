@@ -125,6 +125,7 @@ fn profile_line_colors() -> [[u8; 4]; 2] {
 #[serde(try_from = "VolumeProfileFields")]
 pub struct VolumeProfileConfig {
     row_size: Option<f64>,
+    row_ticks: Option<usize>,
     rows: usize,
     value_area: f64,
     /// Volume displayed in each row. Totals still determine POC and value area.
@@ -158,6 +159,8 @@ pub struct VolumeProfileConfig {
 struct VolumeProfileFields {
     #[serde(default)]
     row_size: Option<f64>,
+    #[serde(default)]
+    row_ticks: Option<usize>,
     rows: usize,
     value_area: f64,
     #[serde(default)]
@@ -206,13 +209,18 @@ impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
         config.extend_right = fields.extend_right;
         config
             .with_row_size(fields.row_size)
-            .ok_or("volume profile row height must be finite and positive")
+            .ok_or("volume profile row height must be finite and positive")?
+            .with_row_ticks(fields.row_ticks)
+            .ok_or("volume profile ticks per row out of bounds")
     }
 }
 
 impl VolumeProfileConfig {
     /// Price rows a profile may have.
     pub const ROWS: RangeInclusive<usize> = 1..=1000;
+
+    /// Ticks per row a volume profile drawing may have, as the studies' Height in ticks input.
+    pub const ROW_TICKS: RangeInclusive<usize> = 1..=100_000;
 
     /// A profile of `rows` equal price rows whose value area holds the
     /// `value_area` share of its volume (above 0, at most 1); `None` when
@@ -227,18 +235,73 @@ impl VolumeProfileConfig {
 
     /// Fix each row to a price height, aligned to multiples of that height.
     /// `None` restores equal rows over the span. Rejects nonpositive or nonfinite heights.
-    /// Profiles spanning more than 10,000 fixed rows are not drawn.
+    /// Profiles spanning more than 10,000 fixed rows are not drawn. Clears [`Self::row_ticks`].
     pub fn with_row_size(mut self, height: Option<f64>) -> Option<Self> {
         if height.is_some_and(|h| !h.is_finite() || h <= 0.0) {
             return None;
         }
         self.row_size = height;
+        self.row_ticks = None;
         Some(self)
     }
 
     /// Fixed price height per row, or equal rows over the span when absent.
     pub fn row_size(&self) -> Option<f64> {
         self.row_size
+    }
+
+    /// Rows `ticks` ticks of the chart instrument high, on multiples of that height, for a
+    /// volume profile drawing, which on an instrument without a tick size draws [`Self::rows`]
+    /// equal rows instead. [`VolumeProfile::from_bars`] and the volume profile studies, which
+    /// size rows in ticks through their own inputs, use the row count too. Clears
+    /// [`Self::row_size`]; `None` leaves the row count or price height. Rejects a count outside
+    /// [`Self::ROW_TICKS`].
+    ///
+    /// ```
+    /// use egui_charts::data::VolumeProfileConfig;
+    ///
+    /// let ticks = VolumeProfileConfig::default().with_row_ticks(Some(4)).unwrap();
+    /// assert_eq!((ticks.row_ticks(), ticks.row_size()), (Some(4), None));
+    /// let height = ticks.with_row_size(Some(2.0)).unwrap();
+    /// assert_eq!((height.row_ticks(), height.row_size()), (None, Some(2.0)));
+    /// let ticks = height.with_row_ticks(Some(4)).unwrap();
+    /// assert_eq!((ticks.row_ticks(), ticks.row_size()), (Some(4), None));
+    /// assert!(ticks.with_row_ticks(Some(0)).is_none());
+    /// ```
+    pub fn with_row_ticks(mut self, ticks: Option<usize>) -> Option<Self> {
+        if ticks.is_some_and(|ticks| !Self::ROW_TICKS.contains(&ticks)) {
+            return None;
+        }
+        self.row_ticks = ticks;
+        if ticks.is_some() {
+            self.row_size = None;
+        }
+        Some(self)
+    }
+
+    /// Ticks of the chart instrument per row of a volume profile drawing, when set.
+    pub fn row_ticks(&self) -> Option<usize> {
+        self.row_ticks
+    }
+
+    /// Price height of [`Self::row_ticks`] ticks of `tick_size`; `None` without row ticks,
+    /// without a tick size, or when the height is not finite and positive.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn tick_height(&self, tick_size: Option<f64>) -> Option<f64> {
+        let height = self.row_ticks? as f64 * tick_size?;
+        (height.is_finite() && height > 0.0).then_some(height)
+    }
+
+    /// `self` with the row layout and value area of `layout`, keeping every display setting.
+    #[cfg(feature = "ui")]
+    pub(crate) fn with_layout(self, layout: Self) -> Self {
+        Self {
+            row_size: layout.row_size,
+            row_ticks: layout.row_ticks,
+            rows: layout.rows,
+            value_area: layout.value_area,
+            ..self
+        }
     }
 
     /// Number of price rows.
@@ -269,6 +332,7 @@ impl Default for VolumeProfileConfig {
     fn default() -> Self {
         Self {
             row_size: None,
+            row_ticks: None,
             rows: 24,
             value_area: 0.7,
             display: ProfileDisplay::Total,
@@ -341,6 +405,16 @@ pub(crate) struct ExpiryParts {
     pub rows: Vec<Vec<f64>>,
 }
 
+/// The call and put walls of an options profile drawn at its expiration, marked across its span.
+#[cfg(any(feature = "studies", feature = "widget"))]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct OptionWalls {
+    /// Call and put wall strikes; `None` for a side without one.
+    pub strikes: [Option<f64>; 2],
+    /// Call and put wall colours, unmultiplied RGBA.
+    pub colors: [[u8; 4]; 2],
+}
+
 /// Volume traded at each price row of bars or host-supplied option strikes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VolumeProfile {
@@ -365,6 +439,15 @@ pub struct VolumeProfile {
     // Each row split by expiry, for an options profile drawn by expiry.
     #[cfg(any(feature = "studies", feature = "widget"))]
     pub(crate) expiry_parts: Option<ExpiryParts>,
+    // Each row holds its strike's puts over calls, for an options profile of put/call ratios.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) ratio_rows: bool,
+    // The walls of an options profile drawn at its expiration.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) walls: Option<OptionWalls>,
+    // The expiration date an options profile is drawn at and the colour of its time scale tag.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) expiry_tag: Option<(chrono::NaiveDate, [u8; 4])>,
 }
 
 fn valid_bar(bar: &Bar) -> bool {
@@ -682,6 +765,12 @@ impl VolumeProfile {
             exposure: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             expiry_parts: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            ratio_rows: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            walls: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_tag: None,
         };
         let mut total = 0.0;
         let rows = data
@@ -755,6 +844,12 @@ impl VolumeProfile {
             exposure: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             expiry_parts: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            ratio_rows: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            walls: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_tag: None,
         };
         for (&level, row) in &bar.levels {
             let i = (level - first) as usize;
@@ -869,6 +964,12 @@ impl VolumeProfile {
             exposure: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             expiry_parts: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            ratio_rows: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            walls: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_tag: None,
         })
     }
 
@@ -1507,6 +1608,7 @@ mod tests {
                         crate::painting::volume_profile::ProfileStyle::Study {
                             right_aligned,
                             strip: right_aligned,
+                            walls_visible: [true; 2],
                             width: 0.9,
                         },
                         &|price| price as f32 * direction,
