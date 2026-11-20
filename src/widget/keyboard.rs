@@ -1022,6 +1022,52 @@ mod tests {
         }
     }
 
+    /// The Toggle volume shortcut adds a study, so at the study cap it leaves the setting off and
+    /// the chart and its history unchanged, while a volume study already on the chart still
+    /// serves the setting.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn volume_shortcut_stays_off_at_the_study_cap() {
+        use crate::studies::{SMA, Volume};
+        use crate::widget::test_frames::frame;
+        let mut failures = Vec::new();
+        for (cap, with_volume, shown, count) in [
+            (Some(2), false, false, 2),
+            (Some(3), false, true, 3),
+            (None, false, true, 3),
+            (Some(2), true, true, 2),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[200.0]);
+            chart.config_mut().show_volume = false;
+            chart.add_indicator(Box::new(SMA::new(2)));
+            if with_volume {
+                chart.add_indicator(Box::new(Volume::default()));
+            } else {
+                chart.add_indicator(Box::new(SMA::new(5)));
+            }
+            chart.set_study_limit(cap);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.apply_keyboard_action(
+                KeyboardAction::ToggleVolume,
+                chart.get_rendered_price_rect(),
+            );
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let observed = (
+                chart.config().show_volume,
+                chart.indicators().count(),
+                chart.indicators().any(|(_, study)| study.is_volume()),
+                chart.can_undo(),
+            );
+            if observed != (shown, count, shown, shown) {
+                failures.push(format!(
+                    "cap {cap:?}, volume study {with_volume}: {observed:?}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
     #[test]
     fn reset_chart_restores_time_and_every_price_scale() {
         use crate::model::SeriesScale;
