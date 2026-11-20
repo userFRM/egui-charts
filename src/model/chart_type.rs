@@ -1033,6 +1033,13 @@ pub struct ChartTypeParams {
     pub tpo_split_periods: bool,
     /// TPO: draw the initial balance marker. On by default; its period and extensions apply either way.
     pub tpo_initial_balance: bool,
+    /// TPO: captions, as in [`TPOConfig::labels`](super::TPOConfig::labels). Settings
+    /// saved without this field keep the point of control, value area and midpoint captions.
+    pub tpo_labels: super::TPOLabels,
+    /// TPO: tag captioned levels of the profile holding the last bar on the price scale,
+    /// in their caption colours, while the profile is drawn. Single prints take no tag.
+    /// Off by default.
+    pub tpo_level_tags: bool,
     /// TPO: colour, underline and caption the point of control. On by default.
     pub tpo_poc: bool,
     /// TPO: draw and caption the value area high and low and dim blocks outside it. On by default.
@@ -1162,6 +1169,8 @@ impl Default for ChartTypeParams {
             tpo_profile_period: super::TPOProfilePeriod::Session,
             tpo_split_periods: false,
             tpo_initial_balance: true,
+            tpo_labels: super::TPOLabels::default(),
+            tpo_level_tags: false,
             tpo_poc: true,
             tpo_value_area_levels: true,
             tpo_open_price: true,
@@ -1183,6 +1192,7 @@ impl ChartTypeParams {
             period_minutes: self.tpo_period_minutes,
             initial_balance_minutes: self.tpo_initial_balance_minutes,
             show_initial_balance: self.tpo_initial_balance,
+            labels: self.tpo_labels,
             show_poc: self.tpo_poc,
             show_value_area: self.tpo_value_area_levels,
             show_opening_range: self.tpo_open_price,
@@ -1384,7 +1394,7 @@ mod tests {
                 "down_volume_color": [0, 60, 0, 60], "value_area_up_color": [0, 0, 120, 120],
                 "value_area_down_color": [120, 120, 0, 120],
                 "nodes": {"smoothing": 2, "prominence": 0.1}});
-        let settings = serde_json::json!({
+        let mut settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
             "footprint_intensity": {"Volume": 2500.0},
             "footprint_extend_bars": 8,
@@ -1415,6 +1425,11 @@ mod tests {
             "tpo_volume_profile": true,
             "profile": profile
         });
+        settings["tpo_labels"] = serde_json::json!({"poc": false, "value_area_high": true, "value_area_low": false,
+                "midpoint": true, "initial_balance_high": true, "initial_balance_low": false,
+                "opening_price": true, "closing_price": true, "poor_high": false, "poor_low": true,
+                "single_prints": true, "prices": true});
+        settings["tpo_level_tags"] = true.into();
         let params: ChartTypeParams = serde_json::from_value(settings.clone()).unwrap();
         let saved = serde_json::to_value(&params).unwrap();
         for (name, expected) in settings.as_object().unwrap() {
@@ -1581,6 +1596,15 @@ mod tests {
             assert_eq!(legacy["tpo_extend_poor"], false);
             assert_eq!(legacy["tpo_volume_profile"], false);
             assert_eq!(
+                legacy["tpo_labels"],
+                serde_json::json!({
+                    "poc": true, "value_area_high": true, "value_area_low": true, "midpoint": true,
+                    "initial_balance_high": false, "initial_balance_low": false, "opening_price": false, "closing_price": false,
+                    "poor_high": false, "poor_low": false, "single_prints": false, "prices": false
+                })
+            );
+            assert_eq!(legacy["tpo_level_tags"], false);
+            assert_eq!(
                 legacy["footprint_colors"],
                 serde_json::json!([null, null, null, null])
             );
@@ -1610,6 +1634,10 @@ mod tests {
                 assert_eq!(legacy["profile"][field], false);
             }
         }
+        let partial: ChartTypeParams =
+            serde_json::from_str(r#"{"tpo_labels":{"prices":true}}"#).unwrap();
+        assert!(partial.tpo_labels.prices);
+        assert!(partial.tpo_labels.poc);
     }
 
     /// Rows from the average true range take the last `footprint_row_atr_length` complete bars,

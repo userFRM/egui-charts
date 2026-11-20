@@ -172,9 +172,10 @@ impl Drawing {
         self.range_card(painter, rect, view);
     }
 
-    /// Readout card beside a trend line, ray, extended line, trend angle or info line, which writes
-    /// it in its text settings; the midpoint and price labels are independent of selection and
-    /// readout visibility. Its screen midpoint remains on the line on logarithmic scales.
+    /// Readout card beside a trend line, ray, extended line, trend angle, info line or arrow,
+    /// which writes it in its text settings; the midpoint and price labels are independent of
+    /// selection and readout visibility. Its screen midpoint remains on the line on logarithmic
+    /// scales. Readouts keep clear of the end markers drawn at their anchors.
     pub(super) fn render_line_measurements(
         &self,
         painter: &egui::Painter,
@@ -269,13 +270,21 @@ impl Drawing {
         let size = galley.size() + CARD_PADDING * 2.0;
         let (left, right) = if a.x <= b.x { (a, b) } else { (b, a) };
         let gap = DESIGN_TOKENS.spacing.sm + self.stroke_width / 2.0;
+        let [first_gap, second_gap] = self.readout_gaps(clip);
+        let (left_gap, right_gap) = if a.x <= b.x {
+            (first_gap, second_gap)
+        } else {
+            (second_gap, first_gap)
+        };
+        // A short line's card can span both ends.
+        let card_gap = first_gap.max(second_gap);
         // Side readouts sit away from the line's continuation; beside a trend angle's first
         // right-hand anchor they take the side away from its arc instead.
         let rising = right.y < left.y;
         let right_rising = rising != (self.tool_type == DrawingToolType::TrendAngle && a.x > b.x);
         let place = |position| match position {
             P::Left => (
-                left + egui::vec2(-gap, if rising { -gap } else { gap }),
+                left + egui::vec2(-left_gap, if rising { -left_gap } else { left_gap }),
                 if rising {
                     Align2::RIGHT_BOTTOM
                 } else {
@@ -300,7 +309,7 @@ impl Drawing {
                     LineTextVerticalAlign::Top => (0.0, gap + height),
                 };
                 let at = |(normal, taken): (egui::Vec2, f32)| {
-                    a.lerp(b, 0.5) + normal * (gap + taken + normal.abs().dot(size) / 2.0)
+                    a.lerp(b, 0.5) + normal * (card_gap + taken + normal.abs().dot(size) / 2.0)
                 };
                 let (free, other) = if below < above {
                     ((-normal, below), (normal, above))
@@ -316,7 +325,7 @@ impl Drawing {
                 (pos, Align2::CENTER_CENTER)
             }
             P::Right => (
-                right + egui::vec2(gap, if right_rising { gap } else { -gap }),
+                right + egui::vec2(right_gap, if right_rising { right_gap } else { -right_gap }),
                 if right_rising {
                     Align2::LEFT_TOP
                 } else {
@@ -339,6 +348,36 @@ impl Drawing {
         Some((galley, align, pos, size))
     }
 
+    /// How far readouts beside the first and second anchors keep from them: the spacing past half
+    /// the line's width, or past the end marker painted at that anchor. A line extended past an
+    /// anchor paints that end's marker at the pane's edge instead.
+    fn readout_gaps(&self, clip: Rect) -> [f32; 2] {
+        let line = DESIGN_TOKENS.spacing.sm + self.stroke_width / 2.0;
+        let (&[a, b, ..], Some((left, right))) =
+            (self.points.as_slice(), self.trend_line_ends(clip))
+        else {
+            return [line; 2];
+        };
+        // The painted ends in anchor order, as `render_end_markers` pairs them with the styles.
+        let (first, second) = if b.x < a.x {
+            (right, left)
+        } else {
+            (left, right)
+        };
+        [
+            (first == a, self.arrow_start_style),
+            (second == b, self.arrow_end_style),
+        ]
+        .map(|(at_anchor, style)| {
+            if at_anchor {
+                DESIGN_TOKENS.spacing.sm
+                    + (self.stroke_width / 2.0).max(self.end_marker_reach(style))
+            } else {
+                line
+            }
+        })
+    }
+
     /// Paints each anchor's price away from the other anchor, except a trend angle's first
     /// right-hand anchor, whose label sits between the anchors on the side away from its arc.
     fn render_anchor_prices(&self, painter: &egui::Painter, a: Pos2, b: Pos2, view: &ChartView) {
@@ -346,8 +385,11 @@ impl Drawing {
             return;
         };
         let chart = painter.ctx().active_theme().chart;
-        let gap = DESIGN_TOKENS.spacing.sm + self.stroke_width / 2.0;
-        for (point, other, price) in [(a, b, first.price), (b, a, second.price)] {
+        let [first_gap, second_gap] = self.readout_gaps(painter.clip_rect());
+        for (point, other, price, gap) in [
+            (a, b, first.price, first_gap),
+            (b, a, second.price, second_gap),
+        ] {
             let Some(text) = super::annotations::price_text(price, view) else {
                 continue;
             };
@@ -1484,6 +1526,7 @@ mod tests {
             DrawingToolType::Ray,
             DrawingToolType::InfoLine,
             DrawingToolType::TrendAngle,
+            DrawingToolType::Arrow,
         ];
         for ((reverse, pip, time_axis, want), tool) in cases
             .into_iter()
@@ -1680,6 +1723,83 @@ mod tests {
                 );
             }
             drawing.line_measurements = Default::default();
+        }
+    }
+
+    /// The statistics card and price labels of a wide trend line keep clear of the square at its
+    /// first anchor and the arrowhead at its second, beside the anchor of a steep line and above
+    /// the middle of a short level one.
+    #[test]
+    fn line_readouts_clear_the_end_markers() {
+        use crate::drawings::{ArrowStyle, LineMeasurementPosition as P};
+        let x = |bar: f32| bar;
+        let y = |price: f64| 400.0 - price as f32;
+        let inverse = |y: f32| f64::from(400.0 - y);
+        let view = ChartView {
+            instrument: None,
+            price_formatter: None,
+            thousands_sep: None,
+            time_formatter: None,
+            bar_seconds: 0,
+            bars: &[],
+            revision: 0,
+            bar_to_x: &x,
+            bar_spacing: 1.0,
+            price_to_y: &y,
+            y_to_price: &inverse,
+            time_axis: false,
+            executions: None,
+            timeframe: None,
+            finer: &[],
+        };
+        // At width 5 the square at (200, 300) is 15 wide and each arrowhead 20 long and wide.
+        let square = Rect::from_center_size(Pos2::new(200.0, 300.0), egui::Vec2::splat(15.0));
+        for (to, position, head) in [
+            (
+                (202.0, 300.0),
+                P::Right,
+                Rect::from_min_max(Pos2::new(191.8, 100.0), Pos2::new(211.9, 120.2)),
+            ),
+            (
+                (230.0, 100.0),
+                P::Center,
+                Rect::from_min_max(Pos2::new(210.0, 290.0), Pos2::new(230.0, 310.0)),
+            ),
+        ] {
+            let mut drawing = Drawing::new(1, DrawingToolType::TrendLine);
+            drawing.completed = true;
+            drawing.stroke_width = 5.0;
+            drawing.arrow_start_style = ArrowStyle::Square;
+            drawing.arrow_end_style = ArrowStyle::Arrow;
+            drawing.chart_points = vec![ChartPoint::new(200.0, 100.0), ChartPoint::new(to.0, to.1)];
+            drawing.update_screen_coords(x, y);
+            drawing.line_measurements.bar_count = true;
+            drawing.line_measurements.price_labels = true;
+            drawing.line_measurements.position = position;
+            let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
+                drawing.render_with_selection(
+                    ui.painter(),
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0)),
+                    &view,
+                    true,
+                );
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            // The readout card and the two price labels; the square is the start marker.
+            let boxes: Vec<_> = (shapes.iter())
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.rect != square => Some(rect.rect),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(boxes.len(), 3, "{position:?}: {boxes:?}");
+            for rect in boxes {
+                assert!(
+                    !rect.intersects(head) && !rect.intersects(square),
+                    "{position:?}: {rect:?}"
+                );
+            }
         }
     }
 
