@@ -18,8 +18,8 @@
 //! latest close, and a column for each period of the Timeframe list. With Include chart symbol
 //! off, a listed chart symbol has a row of its own. The six plots keep the chart symbol's
 //! standard periods. A new study compares `AAPL, NASDAQ:AMZN, EURUSD, ES1!, BTCUSD` over
-//! `1W, 1M, 3M, 6M, 12M, YTD, 5Y` in a table at the middle centre, 100% of the pane wide and 95%
-//! high, with falling changes in `#F23745`.
+//! `1W, 1M, 3M, 6M, 12M, YTD, 5Y` in a pane of its own, in a table at the middle centre, 100%
+//! of that pane wide and 95% high, with falling changes in `#F23745`.
 //!
 //! A row is labelled with the description of its symbol's instrument when the host gives one,
 //! and with the ticker otherwise. Each change is written in its sign's colour, the Positive
@@ -79,7 +79,7 @@ impl Period {
 }
 
 /// Latest close's percentage change over calendar periods, of the chart symbol and of listed
-/// symbols, shown as a table.
+/// symbols, shown as a table. The study opens in a pane of its own.
 #[derive(Clone, Debug)]
 pub struct Performance {
     days: ExchangeDays,
@@ -416,7 +416,36 @@ pub(super) fn share(percent: f64) -> Option<f32> {
     (percent > 0.0).then_some((percent / 100.0) as f32)
 }
 
+/// The pane height that shows `table` whole at its text size: its rows under the title and
+/// the headings, the 40 points the table leaves around itself, at most 420 points.
+pub(super) fn table_pane_height(table: &StudyTable) -> f32 {
+    let content = 2.0 * table.text_size.points() * (table.rows.len() + 2) as f32;
+    // Fitted tables use at most half the pane, so leave room for their full content.
+    let minimum = if table.height.is_none() {
+        2.0 * content
+    } else {
+        0.0
+    };
+    (content + 40.0).max(minimum).min(420.0)
+}
+
 impl Indicator for Performance {
+    fn is_overlay(&self) -> bool {
+        false
+    }
+
+    /// The table has no value axis: the six plots are hidden until the user shows them.
+    fn scale(&self) -> crate::studies::StudyScale {
+        crate::studies::StudyScale::None
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: Some(table_pane_height(&self.table)),
+            ..Default::default()
+        }
+    }
+
     crate::studies::inputs::study_inputs!(self;
         symbols: text("Symbol list"),
         include_chart_symbol: toggle("Include chart symbol"),
@@ -615,6 +644,44 @@ mod tests {
     use crate::model::Bar;
     use crate::studies::*;
     use chrono::{TimeZone, Utc};
+
+    /// A new table fills its own pane below the candles, and can still move to the price pane.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn performance_opens_in_a_pane_of_its_own() {
+        use crate::widget::{PaneId, test_frames};
+
+        let mut chart = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+        let id = chart.add_indicator(Box::new(Performance::new()));
+        let ctx = egui::Context::default();
+        test_frames::shapes(&ctx, &mut chart, 0.0, Vec::new());
+        let painted = test_frames::shapes(&ctx, &mut chart, 0.1, Vec::new());
+        assert_eq!(chart.panes().len(), 2);
+        let pane = chart.series_pane(id).unwrap();
+        assert_ne!(pane, PaneId::MAIN);
+        assert_eq!(chart.pane_series(pane), [id]);
+        let heading_y = painted
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Text(text) if text.galley.text() == "Symbol" => Some(text.pos.y),
+                _ => None,
+            })
+            .unwrap();
+        let candle_bottom = test_frames::candle_ys(&painted, palette::UP)
+            .into_iter()
+            .reduce(f32::max)
+            .unwrap();
+        assert!(heading_y > candle_bottom);
+        // Six rows, headings and title at 22 points per row, with 40 points around the table.
+        assert!((chart.pane_height(pane).unwrap() - 216.0).abs() < 0.5);
+        assert_eq!(
+            chart.indicators().next().unwrap().1.scale(),
+            StudyScale::None
+        );
+        assert!(chart.move_series_to_pane(id, PaneId::MAIN));
+        assert_eq!(chart.panes().len(), 1);
+        assert_eq!(chart.series_pane(id), Some(PaneId::MAIN));
+    }
 
     /// Calendar lookbacks use the last close on or before the target date, not bar counts, and
     /// a study saved before Performance had inputs shows the chart symbol alone over the six

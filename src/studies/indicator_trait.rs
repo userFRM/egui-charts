@@ -933,6 +933,15 @@ pub trait Indicator: Send {
         false
     }
 
+    /// Draw the plots, their fills and the [`projections`](Self::projections) on the main price
+    /// chart, in the main series' price scale, also when the study has its own pane, which then
+    /// shows the study's [`table`](Self::table) and legend alone, without a value axis. The price
+    /// scale fits them as it fits an overlay's. They are selected from the study's pane, not on
+    /// the price chart. Off by default.
+    fn plots_on_price(&self) -> bool {
+        false
+    }
+
     /// Straight lines on the main price chart, in the main series' price scale, also when the
     /// study has its own pane. Each uses the colour, width and pattern of its
     /// [`plot`](super::StudySegment::plot) while that output is visible. Empty by default. Keep
