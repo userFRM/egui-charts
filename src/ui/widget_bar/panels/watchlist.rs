@@ -195,6 +195,9 @@ enum Row {
     Group(Option<String>),
 }
 
+/// Reads the instrument detail used as a group heading, absent without that detail.
+type GroupKey<'a> = &'a dyn Fn(&str) -> Option<String>;
+
 /// The source list and row index, so separate panels cannot exchange row indices.
 struct RowDrag(egui::Id, usize);
 
@@ -629,7 +632,7 @@ impl WatchlistPanel {
             self.sort.as_ref().map(|(c, d)| (c, *d)),
             |c, s| table_value(c, s, &self.quotes, &self.host_columns),
             (self.wide && self.grouping != WatchlistGrouping::Sections)
-                .then_some(&group as &dyn Fn(&str) -> Option<String>),
+                .then_some(&group as GroupKey<'_>),
             |_| false,
         )
         .into_iter()
@@ -1230,7 +1233,7 @@ impl WatchlistPanel {
             &list.items,
             sort.as_ref().map(|(c, d)| (c, *d)),
             value,
-            grouped.then_some(&group as &dyn Fn(&str) -> Option<String>),
+            grouped.then_some(&group as GroupKey<'_>),
             |row| {
                 ui.data(|data| match row {
                     Row::Item(i) => match &list.items[*i] {
@@ -2032,7 +2035,7 @@ fn display_rows(
     items: &[WatchlistItem],
     sort: Option<(&TableColumn, bool)>,
     value: impl Fn(&TableColumn, &str) -> Option<f64>,
-    group: Option<&dyn Fn(&str) -> Option<String>>,
+    group: Option<GroupKey<'_>>,
     collapsed: impl Fn(&Row) -> bool,
 ) -> Vec<Row> {
     let symbol = |i: usize| match &items[i] {
