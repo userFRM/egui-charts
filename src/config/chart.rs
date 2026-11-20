@@ -596,12 +596,12 @@ pub struct ChartConfig {
     pub price_target_negative_color: Color32,
     /// Fill of the pre-market: extended hours that regular hours of the same trading date
     /// follow. `None` uses [`extended_hours_color`](Self::extended_hours_color).
-    /// Default: None
+    /// New charts use orange (#FF9800) at 8% opacity; older saved configurations keep the fallback.
     #[serde(default)]
     pub premarket_color: Option<Color32>,
     /// Fill of the post-market: extended hours that no regular hours of the same trading date
     /// follow. `None` uses [`extended_hours_color`](Self::extended_hours_color).
-    /// Default: None
+    /// New charts use blue (#2962FF) at 8% opacity; older saved configurations keep the fallback.
     #[serde(default)]
     pub postmarket_color: Option<Color32>,
     /// Shade the pre-market while [`show_extended_hours`](Self::show_extended_hours) is on.
@@ -786,8 +786,8 @@ impl Default for ChartConfig {
             extended_hours_color: Color32::PLACEHOLDER,
             price_target_positive_color: Color32::PLACEHOLDER,
             price_target_negative_color: Color32::PLACEHOLDER,
-            premarket_color: None,
-            postmarket_color: None,
+            premarket_color: Some(Color32::from_rgba_unmultiplied(255, 152, 0, 20)),
+            postmarket_color: Some(Color32::from_rgba_unmultiplied(41, 98, 255, 20)),
             shade_premarket: true,
             shade_postmarket: true,
             overnight_hours_color: Color32::PLACEHOLDER,
