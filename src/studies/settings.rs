@@ -377,12 +377,17 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         let declared = study.plot_variants(line);
         if variants.len() != declared.len() {
             *variants = declared;
-            // Saved before this plot had alternate states, all its bars used the plot's width,
-            // and a Trend Strength Index saved with one colour drew every value in it.
+            // Saved before this plot had alternate states, all its bars used the plot's width.
             if let Some(plot) = settings.plots.get(line) {
                 for variant in variants.iter_mut() {
                     variant.width = plot.width;
-                    if study.name() == "Trend Strength Index" {
+                    // These older single-colour styles drew every value in the plot colour.
+                    let one_colour = match study.name() {
+                        "Trend Strength Index" => true,
+                        "Aroon Oscillator" => plot.color != super::palette::GREEN,
+                        _ => false,
+                    };
+                    if one_colour {
                         variant.color = plot.color;
                     }
                 }
@@ -4153,6 +4158,7 @@ mod tests {
             visible: false,
             ..FillStyle::new(palette::GREEN.gamma_multiply_u8(26))
         }];
+        expected.plot_variants = vec![vec![PlotVariant::new("Below zero", palette::HISTOGRAM_RED)]];
         assert_eq!(older.settings(), expected);
         assert_eq!(
             older.pane().levels,
@@ -4441,6 +4447,10 @@ mod tests {
                             ..FillStyle::new(fill.color)
                         })
                         .collect();
+                    if saved.name == "Aroon Oscillator" {
+                        expected.plot_variants =
+                            vec![vec![PlotVariant::new("Below zero", palette::HISTOGRAM_RED)]];
+                    }
                 }
                 _ => {}
             }
