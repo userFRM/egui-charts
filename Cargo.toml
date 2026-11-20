@@ -18,9 +18,8 @@ readme = "README.md"
 # example set is declared explicitly instead.
 autoexamples = false
 exclude = [
-    "plan.md",
     ".github/",
-    "tests/",
+    "src/widget/frame/tests/",
     "benches/",
     "docs/*",
     "!docs/builder-guide.md",
