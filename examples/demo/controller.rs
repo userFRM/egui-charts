@@ -3995,7 +3995,11 @@ impl DemoApp {
             SeriesContextMenuAction::AddIndicator => {
                 self.indicator_dialog.open_for_chart(&self.chart, None);
             }
-            SeriesContextMenuAction::AddAlert => self.open_alert(None),
+            SeriesContextMenuAction::AddAlert => {
+                // The row names the price of the click.
+                let price = self.menus.series_click_price();
+                self.open_alert(price.is_finite().then_some(price));
+            }
             _ => {}
         }
     }
@@ -10482,6 +10486,102 @@ mod tests {
         let time = app.chart.format_time(now);
         assert!(time.ends_with(&clock[..5]), "{clock} against {time}");
         assert!(clock.ends_with(" America/New_York"), "{clock}");
+    }
+
+    /// The series menu's alert row names the clicked price, and the dialog opens at it and not
+    /// at the last close: #3793.
+    #[test]
+    fn series_menu_alert_starts_at_the_clicked_price() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-10T19:29:50Z".parse().unwrap(),
+            true,
+        );
+        app.switch_symbol("STOCKA");
+        settle(&mut app, &ctx);
+        let frame = |app: &mut DemoApp, events| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest()),
+            );
+            let texts: Vec<(String, egui::Pos2)> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.pos + text.galley.size() / 2.0,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            texts
+        };
+        let click = |app: &mut DemoApp, button, pos| {
+            frame(app, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    app,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button,
+                        pressed,
+                        modifiers: Default::default(),
+                    }],
+                );
+            }
+        };
+        for _ in 0..3 {
+            frame(&mut app, vec![]);
+        }
+        // A candle whose body lies clear of the last close, clicked at the middle of its body.
+        let mapping = app.chart.get_chart_mapping();
+        let plot = app.chart.get_rendered_price_rect();
+        let bars = app.chart.bars(SeriesId::MAIN);
+        let last = bars.last().expect("the demo has bars").close;
+        let (pos, low, high) = bars
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, bar)| {
+                let (low, high) = (bar.open.min(bar.close), bar.open.max(bar.close));
+                let pos = egui::pos2(
+                    mapping.idx_to_x(index),
+                    mapping.price_to_y((low + high) / 2.0),
+                );
+                ((last < low || last > high)
+                    && mapping.price_to_y(low) - mapping.price_to_y(high) >= 8.0
+                    && plot.shrink(40.0).contains(pos))
+                .then_some((pos, low, high))
+            })
+            .expect("a visible candle away from the last close");
+        click(&mut app, egui::PointerButton::Secondary, pos);
+        let texts = frame(&mut app, vec![]);
+        let row = texts
+            .iter()
+            .find(|(text, _)| text.starts_with("Add alert on STOCKA at "))
+            .unwrap_or_else(|| panic!("the series menu offers an alert: {texts:?}"))
+            .1;
+        click(&mut app, egui::PointerButton::Primary, row);
+        frame(&mut app, vec![]);
+        assert!(
+            app.alert_dialog.is_open,
+            "the series row opens the alert dialog"
+        );
+        let AlertCondition::Crossing(price) = app.alert_dialog.alert.condition else {
+            panic!("{:?}", app.alert_dialog.alert.condition);
+        };
+        assert_eq!(price, app.menus.series_click_price());
+        assert!((low..=high).contains(&price), "{price} in {low}..{high}");
     }
 
     /// The demo published every subscribed quote once per frame, and the first push after a drain
