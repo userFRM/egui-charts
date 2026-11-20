@@ -845,7 +845,7 @@ impl NewsPanel {
     /// The views row: switch to a view, and save, rename or delete one under the written name.
     fn show_views(&mut self, ui: &mut Ui) -> bool {
         let mut views = self.views();
-        let old_alerts = views.alerts.clone();
+        let mut old_alerts = views.alerts.clone();
         let ready = self.saved.ready();
         let mut switch = None;
         let (mut save, mut rename, mut delete, mut alert) = (false, false, false, false);
@@ -928,9 +928,31 @@ impl NewsPanel {
             if let Some(view) = views.views.remove(&old) {
                 views.views.insert(name.clone(), view);
             }
-            if let Some(alert) = views.alerts.remove(&old) {
+            let moved = views.alerts.remove(&old);
+            let replaced = views.alerts.remove(&name);
+            changed = moved.is_some() || replaced.is_some();
+            old_alerts.remove(&old);
+            old_alerts.remove(&name);
+            if let Some(alert) = moved {
+                old_alerts.insert(name.clone(), alert.clone());
                 views.alerts.insert(name.clone(), alert);
-                changed = true;
+                let seen = self.alert_seen.remove(&old);
+                self.alert_seen.remove(&name);
+                if let Some(seen) = seen {
+                    self.alert_seen.insert(name.clone(), seen);
+                }
+                let error = self.alert_errors.remove(&old);
+                self.alert_errors.remove(&name);
+                if let Some(error) = error {
+                    self.alert_errors.insert(name.clone(), error);
+                }
+                self.alert_requests
+                    .retain(|_, (pending, _)| pending != &name);
+                for (pending, _) in self.alert_requests.values_mut() {
+                    if *pending == old {
+                        pending.clone_from(&name);
+                    }
+                }
             }
             views.current = Some(name);
             self.write(views);
@@ -1462,6 +1484,35 @@ mod tests {
             Some(&FeedError::NotSupported)
         );
         assert!(!h.state().alert_errors.contains_key("Beta"));
+
+        for label in ["Beta", "Alpha"] {
+            h.get_by_role_and_label(egui::Role::Button, label).click();
+            h.run_steps(3);
+        }
+        let mut pending = None;
+        for (query, reply) in std::mem::take(&mut *feed.0.lock().unwrap()) {
+            if query.symbols == ["AAA"] {
+                pending = Some(reply);
+            } else {
+                reply.send(Ok(vec![]));
+            }
+        }
+        let mut during_rename = NewsStory::new("a3", Utc::now(), "During rename");
+        during_rename.symbols = vec!["AAA".into()];
+        *h.state_mut().name.query_mut() = "Alpha EU".into();
+        h.run_steps(3);
+        h.get_by_label("Rename").click();
+        h.run_steps(3);
+        pending.unwrap().send(Ok(vec![during_rename]));
+        h.run_steps(3);
+        let notifications = h.state_mut().take_notifications();
+        assert_eq!(notifications.len(), 1, "a rename keeps an in-flight story");
+        assert_eq!(notifications[0].title, "Alpha EU");
+        assert_eq!(notifications[0].body, "During rename");
+        *h.state_mut().name.query_mut() = "Alpha".into();
+        h.run_steps(3);
+        h.get_by_label("Rename").click();
+        h.run_steps(3);
 
         h.get_by_label("Alert: Beta").click();
         h.run_steps(3);
