@@ -373,6 +373,7 @@ pub(super) fn draw_styled_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chart::hit_test::point_to_segment_distance;
 
     /// The uniform Catmull-Rom segment from p1 to p2 is at (-p0 + 9 p1 + 9 p2 - p3) / 16 halfway,
     /// which for these points is (15, 3.75) between (10, 10) and (20, 0).
@@ -390,11 +391,7 @@ mod tests {
         let distance = |target: Pos2| {
             curve
                 .windows(2)
-                .map(|pair| {
-                    let (a, b) = (pair[0], pair[1]);
-                    let t = ((target - a).dot(b - a) / (b - a).length_sq()).clamp(0.0, 1.0);
-                    target.distance(a + (b - a) * t)
-                })
+                .map(|pair| point_to_segment_distance(target, pair[0], pair[1]))
                 .fold(f32::INFINITY, f32::min)
         };
         assert!(distance(Pos2::new(15.0, 3.75)) <= 0.25);
