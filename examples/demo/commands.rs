@@ -827,6 +827,7 @@ mod tests {
                     egui_charts::ui::export::ExportConfig {
                         format: super::super::ExportFormat::Png,
                         image: options,
+                        ..Default::default()
                     },
                     Some(png_path.clone()),
                 );

@@ -814,6 +814,7 @@ mod tests {
                 config: ExportConfig {
                     format,
                     image: small.clone(),
+                    ..ExportConfig::default()
                 },
                 save_path: Some("out".into()),
             })
@@ -918,7 +919,11 @@ mod tests {
                 let mut image = ImageExportOptions::default();
                 image.size = [200, 120];
                 terminal.run(Action::Export(ExportResponse::Export {
-                    config: ExportConfig { format, image },
+                    config: ExportConfig {
+                        format,
+                        image,
+                        ..ExportConfig::default()
+                    },
                     save_path: Some("chart.out".into()),
                 }));
                 frame(&mut terminal, SIZE, vec![]);
