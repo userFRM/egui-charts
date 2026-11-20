@@ -267,6 +267,53 @@ pub(super) fn declared_levels<S: Indicator + ?Sized>(
     (levels, pane.fill_between_levels, study.level_fill_color())
 }
 
+/// The presentation a study declares, as the defaults of its settings.
+pub(super) fn declared_settings<S: Indicator + ?Sized>(study: &S) -> StudySettings {
+    let (levels, fill_between_levels, level_fill_color) = declared_levels(study);
+    StudySettings {
+        show_legend_values: true,
+        user_edit_enabled: Some(study.user_edit_enabled()),
+        help_url: study.help_url().map(str::to_owned),
+        plots: (0..study.line_count())
+            .map(|line| study.plot_style(line))
+            .collect(),
+        precision: study.precision(),
+        hidden_intervals: Vec::new(),
+        timeframe_visibility: TimeframeVisibility::all(),
+        levels,
+        fill_between_levels,
+        level_fill_color,
+        mfi_auto_range: false,
+        untagged_plots: (0..study.line_count())
+            .filter(|&line| !study.plot_tagged(line))
+            .collect(),
+        price_line_plots: (0..study.line_count())
+            .filter(|&line| study.plot_price_line(line))
+            .collect(),
+        plot_variants: (0..study.line_count())
+            .map(|line| study.plot_variants(line))
+            .collect(),
+        gradients: study
+            .gradients()
+            .iter()
+            .map(|fill| GradientStyle {
+                colors: fill.colors,
+                visible: true,
+            })
+            .collect(),
+        background: study.background(),
+        background_visible: true,
+        fills: study
+            .fills()
+            .iter()
+            .map(|fill| FillStyle {
+                inverted_color: fill.inverted_color,
+                ..FillStyle::new(fill.color)
+            })
+            .collect(),
+    }
+}
+
 /// Missing style lists inherit the study's declared presentation.
 fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
     let (levels, fill, color) = declared_levels(study);

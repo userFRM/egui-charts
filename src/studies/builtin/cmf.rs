@@ -56,11 +56,6 @@ impl ChaikinMoneyFlow {
         }
     }
 
-    /// Create with default param (20)
-    pub fn default_params() -> Self {
-        Self::new(20)
-    }
-
     /// Set colors for positive and negative values
     pub fn with_colors(mut self, positive: Color32, negative: Color32) -> Self {
         self.positive_color = positive;

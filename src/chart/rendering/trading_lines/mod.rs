@@ -14,9 +14,9 @@ use crate::chart::rendering::{draw_dashed_polyline, render_price_line};
 use crate::localization as l10n;
 use crate::model::{
     Capabilities, LineStyle, Order, OrderId, OrderRequest, OrderSide, OrderType, Position,
-    PositionBracket, PriceLine,
+    PositionBracket, PriceLine, TimeInForce,
 };
-use crate::scales::{decimals, to_step};
+use crate::scales::{TimezoneMode, decimals, to_step};
 use crate::theme::{Theme, ThemeExt};
 
 /// What the user asked for on a trading line. Confirm a change with the user, then send it to
@@ -201,6 +201,8 @@ pub struct TradingLineOptions<'a> {
     pub currency: &'a str,
     /// The positive tick size used to round dragged prices.
     pub tick_size: f64,
+    /// The zone in which good-till-date order labels write their expiry.
+    pub timezone: TimezoneMode,
 }
 
 impl<'a> TradingLineOptions<'a> {
@@ -238,6 +240,7 @@ impl<'a> TradingLineOptions<'a> {
             point_value: 1.0,
             currency,
             tick_size,
+            timezone: TimezoneMode::Utc,
         }
     }
 }
@@ -506,17 +509,38 @@ pub fn render_trading_lines<'a>(
                 if level == Level::Limit {
                     return l10n::text(&ctx, "Limit");
                 }
-                if let Some(text) = look.and_then(|look| look.text.as_ref()) {
-                    return text.clone();
-                }
-                match (appearance, options.bracket_pnl, entry) {
-                    (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
-                        let gain = (price - entry)
-                            * parent.map_or(direction(request.side), |p| p.quantity.signum());
-                        let money = gain * quantity * options.point_value;
-                        pnl_text(&ctx, unit, money, gain, entry, options).0
+                let body = if let Some(text) = look.and_then(|look| look.text.as_ref()) {
+                    text.clone()
+                } else {
+                    match (appearance, options.bracket_pnl, entry) {
+                        (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
+                            let gain = (price - entry)
+                                * parent.map_or(direction(request.side), |p| p.quantity.signum());
+                            let money = gain * quantity * options.point_value;
+                            pnl_text(&ctx, unit, money, gain, entry, options).0
+                        }
+                        _ => name.clone(),
                     }
-                    _ => name.clone(),
+                };
+                match request.expires.filter(|_| {
+                    level == Level::Entry && request.time_in_force == TimeInForce::GoodTillDate
+                }) {
+                    Some(expires) => l10n::format_text(
+                        &ctx,
+                        "{kind} until {expiry}",
+                        &[
+                            ("kind", body),
+                            (
+                                "expiry",
+                                options
+                                    .timezone
+                                    .wall_time(expires)
+                                    .format("%Y-%m-%d %H:%M")
+                                    .to_string(),
+                            ),
+                        ],
+                    ),
+                    None => body,
                 }
             };
             let line = PriceLine::new(price, color).with_style(
@@ -2015,6 +2039,7 @@ mod tests {
             let position = Position::new("SYM", 1.0, 95.0);
             for (submit, is_position) in [(false, false), (true, false), (false, true)] {
                 let options = TradingLineOptions {
+                    timezone: TimezoneMode::Utc,
                     show_orders: true,
                     show_positions: true,
                     extend_lines: true,

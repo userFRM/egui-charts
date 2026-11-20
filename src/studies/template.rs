@@ -1029,6 +1029,30 @@ impl StudyTemplate {
                 changed = true;
             }
         }
+        // Options profile inputs added since a save, set to draw what it drew: every strike
+        // unless a limit was saved, and no current price line, whose style it lacks.
+        if study == "Options Volume Profile" && declares("current_price") {
+            for (id, value) in [
+                ("strikes_around_price", InputValue::Length(0)),
+                ("current_price", InputValue::Toggle(false)),
+            ] {
+                if !has(id) {
+                    template.inputs.push((id.to_owned(), value));
+                    changed = true;
+                }
+            }
+            if template.settings.plots.len() == 8 {
+                template.settings.plots.push(crate::studies::PlotStyle {
+                    visible: true,
+                    color: crate::studies::palette::GRAY,
+                    width: 1.0,
+                    pattern: crate::model::LineStyle::Dotted,
+                    plot_type: crate::studies::PlotType::Line,
+                });
+                template.settings.untagged_plots.push(8);
+                changed = true;
+            }
+        }
         // A single candlestick pattern study saved while it drew the bullish, bearish and
         // neutral lines of All Candlestick Patterns, and took the trend rule whatever its rule
         // reads, keeps the style of its side's line and drops a rule it now ignores.

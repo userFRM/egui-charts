@@ -69,9 +69,9 @@ impl AutoAnchor {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Auto => "Auto",
-            Self::HighestHigh => "Highest High",
-            Self::LowestLow => "Lowest Low",
-            Self::HighestVolume => "Highest Volume",
+            Self::HighestHigh => "Highest high",
+            Self::LowestLow => "Lowest low",
+            Self::HighestVolume => "Highest volume",
             Self::Session => "Session",
             Self::Week => "Week",
             Self::Month => "Month",

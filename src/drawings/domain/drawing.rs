@@ -10,10 +10,10 @@
 
 use super::{
     AnnotationMarker, ArrowStyle, BarsPatternConfig, BarsPatternMode, ChartPoint, DrawingToolType,
-    ElliottDegree, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig,
-    ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig,
-    PositionReadout, PositionSize, PositionSizing, PositionStyle, ProjectionConfig, RangeSettings,
-    RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    ElliottDegree, FibonacciConfig, FontWeight, ForecastStyle, GANN_SQUARE_UNITS, GannConfig,
+    GhostFeedConfig, ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle,
+    PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
+    ProjectionConfig, RangeSettings, RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -295,8 +295,10 @@ pub struct Drawing {
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
-    /// info line, trend angle or arrow, the text placement of a horizontal line or ray or a
-    /// vertical line, and the reach of a vertical line. Other tools ignore these settings.
+    /// info line, trend angle or arrow, the text placement of a horizontal line or ray, a
+    /// vertical line, a cross line, a channel or a regression trend, the prices of a flat
+    /// top/bottom or disjoint channel, and the reach of a vertical line. Other tools ignore
+    /// these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
     /// Readouts, card, box border and vertical reach of a date range or date and price range.
@@ -349,7 +351,7 @@ pub struct Drawing {
     pub gann: Option<GannConfig>,
     /// Average range and noise, in ticks, and colours of the candles a Ghost Feed projects. New
     /// feeds start from [`GhostFeedConfig::drawing_default`]; `None` uses the defaults, the
-    /// colours of feeds saved before these settings.
+    /// range, noise and colours of feeds saved before these settings.
     #[serde(default)]
     pub ghost_feed: Option<GhostFeedConfig>,
     /// Whether a rectangle or parallel channel draws its halfway line; a channel's takes
@@ -407,6 +409,12 @@ pub struct Drawing {
     /// colour with a zone in the fill colour and no coefficients. Other tools ignore it.
     #[serde(default)]
     pub projection: Option<ProjectionConfig>,
+    /// Card and badge colours and the background transparency of the forecast tool. New
+    /// forecasts start from [`ForecastStyle::default`]; `None`, as on forecasts saved before
+    /// these settings, draws the theme's colours without borders, with the fill colour, when
+    /// set, as the background of every card and badge. Other tools ignore it.
+    #[serde(default)]
+    pub forecast: Option<ForecastStyle>,
 
     // === Z-Order (rendering layer) ===
     /// Z-order among the drawings of the same `series_layer` (higher = drawn on top).
@@ -440,10 +448,10 @@ pub(super) const PINK: [u8; 4] = [233, 30, 99, 255];
 pub(super) const PURPLE: [u8; 4] = [156, 39, 176, 255];
 pub(super) const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
 pub(super) const GREY: [u8; 4] = [128, 128, 128, 255];
-const WHITE: [u8; 4] = [255, 255, 255, 255];
+pub(super) const WHITE: [u8; 4] = [255, 255, 255, 255];
 
 /// `color` at `alpha` of 255.
-const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
+pub(super) const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
     [color[0], color[1], color[2], alpha]
 }
 
@@ -573,7 +581,11 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             width: 1.0,
             ..LINE
         },
-        T::AnchoredVWAP => DefaultStyle { width: 1.0, ..LINE },
+        T::AnchoredVWAP => DefaultStyle {
+            color: [30, 136, 229, 255],
+            width: 1.0,
+            ..LINE
+        },
         // The colour of the range tint, the same cyan as the rows of rising volume.
         T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile => colored([83, 196, 216, 255]),
         T::XABCDPattern | T::CypherPattern => DefaultStyle {
@@ -760,7 +772,7 @@ impl Drawing {
             price_axis_label: true,
             time_axis_label: true,
             line_measurements: LineMeasurements::for_tool(tool_type),
-            range_settings: RangeSettings::default(),
+            range_settings: RangeSettings::for_tool(tool_type),
             position_size: matches!(
                 tool_type,
                 DrawingToolType::LongPos | DrawingToolType::ShortPos
@@ -843,6 +855,7 @@ impl Drawing {
             }),
             projection: (tool_type == DrawingToolType::ProjectionTool)
                 .then(ProjectionConfig::default),
+            forecast: (tool_type == DrawingToolType::Forecast).then(ForecastStyle::default),
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
             series_layer: None,
@@ -959,6 +972,7 @@ impl Drawing {
     pub(crate) fn former_default_color(tool: DrawingToolType) -> Option<[u8; 4]> {
         use DrawingToolType as T;
         match tool {
+            T::AnchoredVWAP => Some(BLUE),
             T::Circle | T::RegressionTrend => Some(RED),
             T::SineLine => Some(TEAL),
             T::ElliottTriangle | T::ElliottDoubleCombo | T::ElliottTripleCombo => {
@@ -1551,7 +1565,9 @@ mod tests {
     /// Elliott wave has its colour and starts at the Intermediate degree; a regression trend
     /// draws a 1 px line in red at 30% opacity (77 of 255) under opaque red text, with 2 px bands
     /// in blue at 30% opacity; a price label is bold; a position risks 25% of an account of
-    /// 1,000 in lots of 1, over a green target and a red stop zone at 20% opacity (51). The
+    /// 1,000 in lots of 1, over a green target and a red stop zone at 20% opacity (51). A
+    /// parallel channel, flat top/bottom or disjoint channel starts its text at the left end of
+    /// its first line, and one saved without line measurements keeps it in the middle. The
     /// triangle, ellipse and double curve keep the styles they shared before.
     #[test]
     fn new_drawings_start_in_their_tool_style() {
@@ -1721,6 +1737,37 @@ mod tests {
             );
         }
         assert_eq!(Drawing::new(1, T::PriceLabel).font_weight, FontWeight::Bold);
+        let placed = Drawing::new(1, T::DateAndPriceRange);
+        assert_eq!(
+            (
+                placed.range_settings.border,
+                placed.range_settings.border_width
+            ),
+            (false, Some(1.0))
+        );
+        assert_eq!(placed.range_settings.border_color, None);
+        let mut saved = serde_json::to_value(&placed).unwrap();
+        saved.as_object_mut().unwrap().remove("range_settings");
+        let read: Drawing = serde_json::from_value(saved).unwrap();
+        assert!(read.range_settings.border);
+        assert_eq!(read.range_settings.border_width, None);
+        // Channels write their text from the left end of their first line; a channel saved
+        // without line measurements keeps it in the middle.
+        use crate::drawings::LineTextHorizontalAlign as H;
+        for tool in [T::ParallelChannel, T::FlatTopBottom, T::DisjointChannel] {
+            let placed = Drawing::new(1, tool);
+            let mut saved = serde_json::to_value(&placed).unwrap();
+            saved.as_object_mut().unwrap().remove("line_measurements");
+            let read: Drawing = serde_json::from_value(saved).unwrap();
+            assert_eq!(
+                (
+                    placed.line_measurements.text_horizontal_align,
+                    read.line_measurements.text_horizontal_align
+                ),
+                (H::Left, H::Center),
+                "{tool:?}"
+            );
+        }
         let config = Drawing::new(1, T::RegressionTrend)
             .regression_trend
             .unwrap();
