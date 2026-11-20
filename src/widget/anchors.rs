@@ -252,6 +252,7 @@ impl Chart {
         manager.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
         manager.eraser_mode = self.drawings.eraser_mode;
         manager.set_hidden(self.drawings.is_hidden());
+        manager.set_locked(self.drawings.is_locked());
         manager.curr_timeframe = self.drawings.curr_timeframe.clone();
         let refused = drawings
             .into_iter()
@@ -719,6 +720,7 @@ mod tests {
         restored.drawings_mut().stay_in_drawing_mode = true;
         restored.drawings_mut().eraser_mode = true;
         restored.drawings_mut().set_hidden(true);
+        restored.drawings_mut().set_locked(true);
         let skipped = restored.load_drawings(&json.to_string()).unwrap();
         assert_eq!(skipped.iter().map(|s| s.index).collect::<Vec<_>>(), [1, 2]);
         assert!(restored.drawings().pending_sync.lock().unwrap().is_empty());
@@ -726,6 +728,7 @@ mod tests {
         assert!(restored.drawings().stay_in_drawing_mode);
         assert!(restored.drawings().eraser_mode);
         assert!(restored.drawings().is_hidden());
+        assert!(restored.drawings().is_locked());
         // Timestamp-only drawings can be saved while history is still pending.
         assert_eq!(
             serde_json::to_value(&restored.save_drawings().unwrap().drawings[0].points).unwrap(),

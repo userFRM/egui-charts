@@ -355,6 +355,8 @@ pub struct DrawingManager {
     pub(crate) eraser_mode: bool,
     /// Whether every drawing is hidden as a group; see [`Self::set_hidden`].
     hidden: bool,
+    /// Whether every drawing is locked as a group; see [`Self::set_locked`].
+    locked: bool,
 
     /// Changes to the stored drawings, oldest first, for the host to drain, for example
     /// with `std::mem::take(&mut *manager.pending_sync.lock().unwrap())`. See
@@ -450,6 +452,7 @@ impl DrawingManager {
             curr_timeframe: String::from("1D"),
             eraser_mode: false,
             hidden: false,
+            locked: false,
             pending_sync: Arc::new(Mutex::new(Vec::new())),
             sync_enabled: true,
             events: std::collections::VecDeque::new(),
@@ -498,12 +501,12 @@ impl DrawingManager {
             .or_else(|| self.selected_ids().next())
     }
 
-    /// Whether drawing `id` exists and [accepts user edits](Drawing::accepts_user_edits).
+    /// Whether drawing `id` exists and the user can edit it; see [`Self::accepts_user_edits`].
     #[cfg(feature = "ui")]
     pub(crate) fn user_can_edit(&self, id: usize) -> bool {
         self.drawings
             .iter()
-            .any(|d| d.id == id && d.accepts_user_edits())
+            .any(|d| d.id == id && self.accepts_user_edits(d))
     }
 
     /// Selects the drawing with the given ID (deselects all others).
@@ -544,7 +547,8 @@ impl DrawingManager {
         }
     }
 
-    /// Apply a style edit to every selected drawing that accepts user edits as one undo step.
+    /// Apply a style edit to every selected drawing the user can edit
+    /// ([`Self::accepts_user_edits`]) as one undo step.
     /// An edit after which saving would refuse one of them, as [`Self::edit_drawing`] describes,
     /// changes none of them, records no undo step and returns the reason.
     pub fn edit_selected(&mut self, edit: impl FnMut(&mut Drawing)) -> Result<(), &'static str> {
@@ -562,7 +566,7 @@ impl DrawingManager {
             .iter()
             .enumerate()
             .filter(|(_, d)| {
-                d.selectable && self.selection.is_selected(d.id) && d.accepts_user_edits()
+                d.selectable && self.selection.is_selected(d.id) && self.accepts_user_edits(d)
             })
             .map(|(index, d)| (index, d.clone()))
             .collect();
@@ -1282,7 +1286,8 @@ mod tests {
     }
 
     /// User commands leave protected drawings alone, while id-based host edits and their
-    /// history still work. Permissions survive undo, and user copies are editable.
+    /// history still work. Permissions survive undo, and user copies are editable. Lock all
+    /// holds an editable drawing too, except for commands that act on locked drawings.
     #[test]
     fn user_commands_leave_a_drawing_without_user_edits_alone() {
         fn fixture(enabled: bool) -> DrawingManager {
@@ -1336,7 +1341,6 @@ mod tests {
                 m.edit_selected(|d| d.font_size = 30.0).unwrap();
             }),
             ("delete selected", |m| m.delete_selected()),
-            ("lock all", |m| m.toggle_lock_all()),
             ("clear all", |m| m.clear_all()),
             ("clear all with locked", |m| m.clear_all_with_locked(true)),
             ("set selected locked", |m| m.set_selected_locked(true)),
@@ -1352,10 +1356,20 @@ mod tests {
                     !enabled,
                     "{name}, enabled {enabled}"
                 );
-                if matches!(name, "lock all" | "clear all" | "clear all with locked") {
+                if matches!(name, "clear all" | "clear all with locked") {
                     assert_ne!(state(&manager, 4), neighbour, "{name}");
                 }
             }
+            // Lock all holds drawing 3 like its own lock, except for commands on locked drawings.
+            let mut manager = fixture(true);
+            manager.set_locked(true);
+            let before = state(&manager, 3);
+            command(&mut manager);
+            assert_eq!(
+                state(&manager, 3) == before,
+                !matches!(name, "clear all with locked" | "set selected locked"),
+                "{name}, all locked"
+            );
         }
         let mut manager = fixture(false);
         manager.edit_drawing(3, |d| d.font_size = 30.0).unwrap();
@@ -1531,7 +1545,7 @@ mod tests {
             ),
             (|m| m.clear_all(), &["Delete(a1b2)"]),
             (|m| m.set_hidden(true), &[]),
-            (|m| m.toggle_lock_all(), &["Update(0)"]),
+            (|m| m.set_locked(true), &[]),
             (|m| m.bring_to_front(0), &["Update(0)"]),
             (|m| m.send_to_back(0), &["Update(0)"]),
             (
@@ -1589,7 +1603,7 @@ mod tests {
                         m.edit_drawing(0, |d| d.stroke_width = 2.0 + (i % 2) as f32)
                             .unwrap();
                     }
-                    m.toggle_lock_all();
+                    m.edit_drawings(&[0], |d| d.locked = true).unwrap();
                 },
                 &["Update(0)"],
             ),
@@ -1632,11 +1646,14 @@ mod tests {
                 })
                 .collect();
             assert_eq!(queued, expected);
-            if case == 3 {
-                assert_eq!(before, after, "group hiding is not a drawing edit");
+            if matches!(case, 3 | 4) {
+                assert_eq!(
+                    before, after,
+                    "group hiding and locking are not drawing edits"
+                );
                 assert!(!manager.can_undo());
             }
-            if matches!(case, 0 | 2 | 4..=6 | 10 | 11) {
+            if matches!(case, 0 | 2 | 5 | 6 | 10 | 11) {
                 assert!(manager.undo(), "case {case} must be undoable");
                 assert_eq!(
                     manager

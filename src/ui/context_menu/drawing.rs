@@ -22,7 +22,8 @@ use std::collections::HashSet;
 pub(crate) const DRAWING_MENU_OFFSET: f32 = 6.0;
 
 /// The panes of `chart` other than the one drawing `drawing_id`, the price pane last, by their
-/// stable ids and titles. Empty for a drawing that does not accept user edits.
+/// stable ids and titles. Empty for a drawing the user cannot edit, as while every drawing
+/// is locked.
 pub(crate) fn move_targets(
     ctx: Option<&Context>,
     chart: &Chart,
@@ -32,7 +33,7 @@ pub(crate) fn move_targets(
         .drawings()
         .drawings
         .iter()
-        .any(|d| d.id == drawing_id && !d.accepts_user_edits())
+        .any(|d| d.id == drawing_id && !chart.drawings().accepts_user_edits(d))
     {
         return Vec::new();
     }
@@ -186,7 +187,8 @@ impl DrawingContextMenu {
             .drawings
             .iter()
             .find(|d| d.id == drawing_id);
-        self.user_edit_enabled = drawing.is_none_or(|d| d.user_edit_enabled);
+        self.user_edit_enabled =
+            drawing.is_none_or(|d| d.user_edit_enabled) && !chart.drawings().is_locked();
         if let Some(drawing) = drawing {
             self.set_context(
                 chart.drawings().registry.tool_name(drawing),
@@ -633,7 +635,14 @@ mod tests {
         chart.drawings_mut().drawings.push(drawing);
         let pane = chart.add_pane();
         let mut menu = DrawingContextMenu::new();
-        for (locked, user_edit) in [(false, true), (true, true), (false, false), (false, true)] {
+        for (locked, user_edit, all_locked) in [
+            (false, true, false),
+            (true, true, false),
+            (false, false, false),
+            (false, true, true),
+            (false, true, false),
+        ] {
+            chart.drawings_mut().set_locked(all_locked);
             chart.drawings_mut().drawings[0].locked = locked;
             chart.drawings_mut().drawings[0].user_edit_enabled = user_edit;
             menu.open_on(&Context::default(), &chart, Pos2::ZERO, 7);
@@ -641,7 +650,7 @@ mod tests {
                 menu.build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default());
             assert!(items.iter().any(|entry| {
                 matches!(entry, MenuEntry::Item(item)
-                    if item.action == DrawingContextMenuAction::Lock && item.enabled == user_edit)
+                    if item.action == DrawingContextMenuAction::Lock && item.enabled == (user_edit && !all_locked))
             }));
             let enabled = items
                 .iter()
@@ -652,10 +661,14 @@ mod tests {
                     _ => None,
                 })
                 .expect("Delete row");
-            assert_eq!(enabled, !locked && user_edit, "locked {locked}");
+            assert_eq!(
+                enabled,
+                !locked && user_edit && !all_locked,
+                "locked {locked}"
+            );
             assert_eq!(
                 menu.panes.iter().any(|(id, _)| *id == pane),
-                !locked && user_edit,
+                !locked && user_edit && !all_locked,
                 "Move to, locked {locked}"
             );
         }

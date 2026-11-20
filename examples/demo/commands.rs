@@ -366,7 +366,12 @@ impl DemoApp {
                 Some(DrawingToolbarAction::HideAllDrawings)
             }
             "remove-drawings" => Some(DrawingToolbarAction::RemoveAllDrawings),
-            "lock-drawings" => Some(DrawingToolbarAction::LockAllDrawings),
+            "lock-drawings" => {
+                // The toolbar's lock button flips its state before it reports the click.
+                let state = &mut self.drawing_toolbar.state;
+                state.lock_all = !state.lock_all;
+                Some(DrawingToolbarAction::LockAllDrawings)
+            }
             "magnet" => Some(DrawingToolbarAction::ToggleMagnet),
             "remove-indicators" => Some(DrawingToolbarAction::RemoveAllIndicators),
             _ => None,
