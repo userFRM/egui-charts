@@ -317,10 +317,13 @@ impl Drawing {
                 (rect, uri.to_owned())
             });
         let (first, rest) = self.content(ctx, empty, prompt);
+        // Keep the default 14 and 11 px proportions for the first line and smaller text.
+        let size = typography::font_size(self.font_size);
+        let small = typography::font_size(size * typography::SM / typography::LG);
         let first = ctx.fonts_mut(|fonts| {
             fonts.layout(
                 first,
-                egui::FontId::proportional(typography::LG),
+                egui::FontId::proportional(size),
                 theme.ui.text,
                 column,
             )
@@ -330,7 +333,7 @@ impl Drawing {
         let rest = ctx.fonts_mut(|fonts| {
             fonts.layout(
                 rest,
-                egui::FontId::proportional(typography::SM),
+                egui::FontId::proportional(small),
                 theme.ui.text_secondary,
                 column,
             )
@@ -343,7 +346,7 @@ impl Drawing {
             let galley = ctx.fonts_mut(|fonts| {
                 fonts.layout(
                     label,
-                    egui::FontId::proportional(typography::SM),
+                    egui::FontId::proportional(small),
                     theme.ui.info,
                     column,
                 )
@@ -352,10 +355,18 @@ impl Drawing {
             y += row.1.size().y;
             row
         });
+        // Wrapping breaks inside a word too; only a glyph wider than the column widens the card.
+        let widest = [first.1.size().x, rest.1.size().x]
+            .into_iter()
+            .chain(open.as_ref().map(|(_, galley)| galley.size().x))
+            .fold(column, f32::max);
         Some(Card {
             rect: Rect::from_min_size(
                 pos,
-                egui::vec2(width, min_height.max(y + spacing.lg - pos.y)),
+                egui::vec2(
+                    width - column + widest,
+                    min_height.max(y + spacing.lg - pos.y),
+                ),
             ),
             first,
             rest,
@@ -690,6 +701,14 @@ mod tests {
                     None,
                     None,
                 ),
+                // At 256 px a W is wider than the idea's 132 px column, and the card holds it.
+                (
+                    DrawingToolType::Idea,
+                    Some("W\nM"),
+                    vec!["W", "M"],
+                    None,
+                    None,
+                ),
                 (
                     DrawingToolType::Tweet,
                     None,
@@ -768,6 +787,9 @@ mod tests {
                 }
                 drawing.text = text.map(Into::into);
                 drawing.post = post.clone();
+                if text == Some("W\nM") {
+                    drawing.font_size = 256.0;
+                }
                 let ctx = Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 crate::localization::set_translator(&ctx, |key| {
@@ -786,11 +808,25 @@ mod tests {
                 let shapes = std::mem::take(&mut output.shapes);
                 output.drop_without_applying_deltas();
                 if tool != DrawingToolType::Image {
-                    assert!(shapes.iter().any(|shape| matches!(&shape.shape,
-                    Shape::Rect(rect) if rect.rect.min == Pos2::ZERO && rect.fill == theme.ui.panel_bg
-                )), "cards follow the theme");
+                    let card = shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            Shape::Rect(rect)
+                                if rect.rect.min == Pos2::ZERO
+                                    && rect.fill == theme.ui.panel_bg =>
+                            {
+                                Some(rect.rect)
+                            }
+                            _ => None,
+                        })
+                        .expect("cards follow the theme");
                     for shape in &shapes {
                         if let Shape::Text(text) = &shape.shape {
+                            assert!(
+                                card.contains_rect(text.visual_bounding_rect()),
+                                "{tool:?} {:?} outside {card:?}",
+                                text.galley.text()
+                            );
                             let expected = if text.galley.text() == texts[0] {
                                 theme.ui.text
                             } else if text.galley.text() == "Open" {
