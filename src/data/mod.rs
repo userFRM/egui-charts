@@ -99,7 +99,8 @@ pub use options_volume::{
 };
 #[cfg(feature = "studies")]
 pub(crate) use volume_profile::{
-    DevelopingVolume, ExposureProfile, StrikeExposure, grid_row, price_span, whole_tick_rows,
+    DevelopingVolume, ExposureProfile, OptionWalls, StrikeExposure, grid_row, price_span,
+    whole_tick_rows,
 };
 #[cfg_attr(
     not(any(test, feature = "widget")),
@@ -112,6 +113,8 @@ pub use inbox::{
     aggregate_trades_with_tick_size,
 };
 pub use order_flow::{BarBook, OrderFlowBars, OrderFlowFootprints, OrderFlowInput, OrderFlowKind};
+#[cfg(all(feature = "widget", feature = "studies"))]
+pub(crate) use order_flow::{PackedTradeRate, RateGuard};
 pub use orders::{
     OrderEvent, OrderFilter, OrderFilterUnavailable, OrderQueue, OrderSizeTier, OrderSizeTiers,
     RestingOrder,
