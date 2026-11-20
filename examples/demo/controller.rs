@@ -3606,7 +3606,7 @@ impl DemoApp {
                 charts.insert(self.layout_slot, &mut self.chart);
                 // Symbol-specific controls must not change the canvas ids and lose chart focus.
                 ui.scope_builder(
-                    egui::UiBuilder::new().scope_id(egui::Id::new("demo_charts")),
+                    egui::UiBuilder::new().scope_id(egui::Id::unique("demo_charts")),
                     |ui| self.layout.show(ui, &mut charts),
                 );
                 // A chart that follows a linked symbol change shows the bars it would show had
