@@ -621,7 +621,7 @@ impl SymbolDetailsPanel {
                         }
                         match result {
                             Ok(mut stories) => {
-                                stories.sort_by(|a, b| b.time.cmp(&a.time));
+                                stories.sort_by_key(|story| std::cmp::Reverse(story.time));
                                 stories.truncate(HEADLINES);
                                 self.headlines = stories;
                             }
