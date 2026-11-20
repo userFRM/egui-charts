@@ -4,9 +4,9 @@ use crate::chart::overlays::SessionColors;
 use crate::chart::series::SeriesSettings;
 use crate::localization as l10n;
 use crate::model::{
-    BaselineLevel, BoxSizeMethod, ChartType, ChartTypeParams, FootprintColor, FootprintMode,
-    FootprintStatistic, HighLowStyle, LinePlotStyle, LineStyle, PriceBasedSource, PriceSource,
-    ProfileRows, ProfileSession, TPOProfilePeriod, TimezoneId, TradeProfileSettings,
+    BaselineLevel, BoxSizeMethod, ChartType, ChartTypeParams, FootprintColor, FootprintIntensity,
+    FootprintMode, FootprintStatistic, HighLowStyle, LinePlotStyle, LineStyle, PriceBasedSource,
+    PriceSource, ProfileRows, ProfileSession, TPOProfilePeriod, TimezoneId, TradeProfileSettings,
 };
 use crate::theme::ThemeExt;
 use crate::ui_kit::color_picker::keep_opacity;
@@ -228,12 +228,12 @@ impl SymbolTab {
         ui.end_row();
     }
 
-    fn optional_number(
+    fn optional_number<N: egui::emath::Numeric>(
         ui: &mut Ui,
         name: &str,
-        value: &mut Option<f64>,
-        default: f64,
-        range: std::ops::RangeInclusive<f64>,
+        value: &mut Option<N>,
+        default: N,
+        range: std::ops::RangeInclusive<N>,
         suffix: &str,
     ) {
         let mut enabled = value.is_some();
@@ -242,9 +242,11 @@ impl SymbolTab {
             *value = enabled.then_some(default);
         }
         if let Some(value) = value {
+            // Whole-bar limits may be zero in host settings; opening the dialog keeps them.
             ui.add(
                 egui::DragValue::new(value)
                     .range(range)
+                    .clamp_existing_to_range(!N::INTEGRAL)
                     .speed(0.1)
                     .suffix(suffix),
             )
@@ -335,6 +337,42 @@ impl SymbolTab {
                 );
             });
             ui.end_row();
+            let label = ui.label(l10n::text(ui.ctx(), "Shading scale"));
+            let mut scale = match params.footprint_intensity {
+                FootprintIntensity::Visible => 1,
+                FootprintIntensity::Volume(_) => 2,
+                _ => 0,
+            };
+            let previous = scale;
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select("footprint_intensity", &mut scale, [0, 1, 2], |scale| {
+                    match scale {
+                        0 => "Each bar",
+                        1 => "Bars in view",
+                        _ => "Fixed volume",
+                    }
+                    .to_owned()
+                });
+            });
+            if scale != previous {
+                params.footprint_intensity = match scale {
+                    0 => FootprintIntensity::Bar,
+                    1 => FootprintIntensity::Visible,
+                    _ => FootprintIntensity::Volume(100.0),
+                };
+            }
+            ui.end_row();
+            if let FootprintIntensity::Volume(volume) = &mut params.footprint_intensity {
+                let label = ui.label(l10n::text(ui.ctx(), "Full shade volume"));
+                ui.add(
+                    egui::DragValue::new(volume)
+                        .range(0.001..=f64::MAX)
+                        .clamp_existing_to_range(false)
+                        .speed(1.0),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
+            }
             let text = ui.active_theme().chart.axis_text;
             for (i, (name, default)) in [
                 ("Buy colour", up),
@@ -383,17 +421,36 @@ impl SymbolTab {
                 }
             }
             ui.end_row();
-            if method == 1 {
+            if method == 0 {
+                let label = ui.label(l10n::text(ui.ctx(), "Automatic row height"));
+                ui.add(
+                    egui::DragValue::new(&mut params.footprint_auto_row_height)
+                        .range(10.0..=40.0)
+                        .clamp_existing_to_range(false)
+                        .suffix(l10n::text(ui.ctx(), " pt")),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
+            } else if method == 1 {
                 let label = ui.label(l10n::text(ui.ctx(), "Ticks per row"));
                 ui.add(egui::DragValue::new(&mut params.footprint_row_ticks).range(1..=1_000_000))
                     .labelled_by(label.id);
                 ui.end_row();
-            } else if method == 2 {
+            } else {
                 let label = ui.label(l10n::text(ui.ctx(), "ATR length"));
                 ui.add(egui::DragValue::new(&mut params.footprint_row_atr_length).range(1..=200))
                     .labelled_by(label.id);
                 ui.end_row();
             }
+            let label = ui.label(l10n::text(ui.ctx(), "Smallest row with numbers"));
+            ui.add(
+                egui::DragValue::new(&mut params.footprint_min_text_height)
+                    .range(10.0..=40.0)
+                    .clamp_existing_to_range(false)
+                    .suffix(l10n::text(ui.ctx(), " pt")),
+            )
+            .labelled_by(label.id);
+            ui.end_row();
         });
         Self::section(ui, "Levels", true, |ui| {
             Self::switch(ui, "Point of control", &mut params.footprint_poc);
@@ -466,6 +523,24 @@ impl SymbolTab {
                 ui.add(egui::DragValue::new(&mut params.footprint_stack).range(1..=1000))
                     .labelled_by(label.id);
                 ui.end_row();
+                Self::switch(
+                    ui,
+                    "Zones end only when broken",
+                    &mut params.footprint_zones_until_broken,
+                );
+            }
+            if params.footprint_stacked_imbalances
+                || params.footprint_naked_poc
+                || params.footprint_unfinished_auctions
+            {
+                Self::optional_number(
+                    ui,
+                    "Expire after bars",
+                    &mut params.footprint_extend_bars,
+                    50,
+                    1..=100_000,
+                    "",
+                );
             }
             let mut cluster = params.footprint_cluster_share.map(|share| share * 100.0);
             Self::optional_number(ui, "Volume clusters", &mut cluster, 25.0, 0.0..=100.0, "%");
@@ -1089,6 +1164,39 @@ impl SymbolTab {
                 ui.checkbox(&mut params.tpo_statistics, "")
                     .labelled_by(label.id);
                 ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Labels"));
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        let labels = &mut params.tpo_labels;
+                        for (caption, name, shown) in [
+                            ("POC", "Point of control", &mut labels.poc),
+                            ("VAH", "Value area high", &mut labels.value_area_high),
+                            ("VAL", "Value area low", &mut labels.value_area_low),
+                            ("Mid", "Midpoint", &mut labels.midpoint),
+                            (
+                                "IBH",
+                                "Initial balance high",
+                                &mut labels.initial_balance_high,
+                            ),
+                            (
+                                "IBL",
+                                "Initial balance low",
+                                &mut labels.initial_balance_low,
+                            ),
+                            ("Open", "Opening price", &mut labels.opening_price),
+                            ("Close", "Closing price", &mut labels.closing_price),
+                            ("PH", "Poor high", &mut labels.poor_high),
+                            ("PL", "Poor low", &mut labels.poor_low),
+                            ("SP", "Single prints", &mut labels.single_prints),
+                        ] {
+                            ui.checkbox(shown, l10n::text(ui.ctx(), caption))
+                                .on_hover_text(l10n::text(ui.ctx(), name));
+                        }
+                    })
+                });
+                ui.end_row();
+                Self::switch(ui, "Label prices", &mut params.tpo_labels.prices);
+                Self::switch(ui, "Price scale tags", &mut params.tpo_level_tags);
             }
             ChartType::Baseline => {
                 let label = ui.label(l10n::text(ui.ctx(), "Base level"));

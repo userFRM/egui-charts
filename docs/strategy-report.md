@@ -80,7 +80,9 @@ Supply [`Backtest::exchange_rates`](https://userfrm.github.io/egui-charts/docs/a
 point's close applies from its time until the next point. The initial capital, cash order sizes
 and per-unit and per-order commissions are account amounts already. A run that needs a rate where
 none applies, or where it is not finite and positive, reports [`StrategyReport::unavailable`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.unavailable)
-instead of trades and equity. Excursions and the buy-and-hold benchmark stay unconverted.
+instead of trades and equity. Each trade records the rate its profit converted at, and an open
+trade the latest rate, in [`StrategyTrade::exchange_rate`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyTrade.html#structfield.exchange_rate);
+its excursions convert at it. The buy-and-hold benchmark stays unconverted.
 
 Long and short exposure fund separately. [`long_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.long_funding) and [`short_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.short_funding)
 are the fractions of absolute position market value that equity must cover, one over leverage
@@ -303,16 +305,18 @@ the strategy's exposure.
 Excursions use entry price `E`, source low `L` and high `H` over the held bars, and quantity
 `Q`, including entry and exit fills in the extrema. Long MAE is `max(E-L, 0)*Q` and MFE is
 `max(H-E, 0)*Q`; short MAE is `max(H-E, 0)*Q` and MFE is `max(E-L, 0)*Q`. Values are nonnegative,
-before fees, in price times quantity units. They require host conversion for point values,
-inverse contracts or different account currencies. With low 85 and high 115, a long entry
-at 100 of 2 units has MAE/MFE 30/30; a short entry at 110 of 3 units has 15/75.
+before fees: price moves times quantity, times the trade's `exchange_rate` into the report's
+currency. They require host conversion for point values or inverse contracts. At rate 1, with
+low 85 and high 115, a long entry at 100 of 2 units has MAE/MFE 30/30; a short entry at 110
+of 3 units has 15/75.
 
 The bar containing entry and subsequent bars opening strictly before exit participate, so
 an exit at a bar's open does not include that bar's later range. Time bars end after their
 interval, using calendar months for monthly bars. Execution bars end at the next source
 open; the final execution bar is assumed to cover the run's remaining fills.
 Open trades use all remaining source bars.
-At least one held bar is required, and an invalid held bar makes the excursion unavailable.
+At least one held bar is required. An invalid held bar, or an `exchange_rate` that is not
+finite and positive, makes the excursion unavailable.
 OHLC cannot resolve movement on either side of an intrabar fill: these are bar-resolution
 estimates in that case. Use fills at bar boundaries for exact spans, or finer source data
 in host analytics when exact intrabar excursions are required.

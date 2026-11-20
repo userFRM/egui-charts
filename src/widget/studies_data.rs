@@ -796,6 +796,7 @@ pub(super) mod tests {
         sinks: Mutex<Vec<(String, Sink)>>,
         correction: Mutex<f64>,
         metrics: Mutex<Vec<MetricSubscription>>,
+        metric_symbols: Mutex<Vec<String>>,
     }
     impl Datafeed for Feed {
         fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
@@ -809,13 +810,16 @@ pub(super) mod tests {
             };
             reply.send(Ok(HistoryPage::new(bars(&prices, minutes), true)));
         }
-        fn metric_history(&self, _: MetricRequest, reply: Reply<MetricPage>) {
+        fn metric_history(&self, request: MetricRequest, reply: Reply<MetricPage>) {
+            self.metric_symbols.lock().unwrap().push(request.symbol);
             reply.send(Ok(MetricPage {
                 points: [(15, 10.0), (75, 20.0)]
                     .into_iter()
-                    .map(|(minute, value)| crate::data::MetricPoint {
-                        time: DateTime::UNIX_EPOCH + Duration::minutes(minute),
-                        value,
+                    .map(|(minute, value)| {
+                        crate::data::MetricPoint::new(
+                            DateTime::UNIX_EPOCH + Duration::minutes(minute),
+                            value,
+                        )
                     })
                     .collect(),
                 end_of_history: true,
@@ -1081,10 +1085,7 @@ pub(super) mod tests {
                         points: page
                             .bars
                             .into_iter()
-                            .map(|bar| crate::data::MetricPoint {
-                                time: bar.time,
-                                value: bar.close,
-                            })
+                            .map(|bar| crate::data::MetricPoint::new(bar.time, bar.close))
                             .collect(),
                         end_of_history: page.end_of_history,
                     }
@@ -1118,10 +1119,12 @@ pub(super) mod tests {
                 if metric {
                     chart.add_indicator(Box::new(crate::studies::MetricStudy::new(
                         crate::data::MetricSeries {
-                            id: "oi".into(),
-                            name: "Open interest".into(),
                             unit: "contracts".into(),
-                            format: crate::scales::StudyFormat::Volume,
+                            ..crate::data::MetricSeries::new(
+                                "oi",
+                                "Open interest",
+                                crate::scales::StudyFormat::Volume,
+                            )
                         },
                     )));
                 } else {
@@ -1428,11 +1431,13 @@ pub(super) mod tests {
         assert_eq!(closes(&chart), [10.0, 14.0, 20.0]);
     }
 
-    /// Metric streams keep exact publication times, refresh dependent studies, and use
+    /// Metric streams give each bar the last point before its close, update the live bar,
+    /// hold points until the next, refresh dependent studies, and use
     /// the normal subscription lifetime when the chart's instrument changes.
+    #[cfg(feature = "ui")]
     #[test]
     fn metric_history_and_live_points_refresh_the_pane_and_its_consumers() {
-        use crate::data::{MetricPoint, MetricSeries};
+        use crate::data::MetricPoint;
         use crate::scales::StudyFormat;
         use crate::studies::{MetricStudy, StudySource};
         let feed = Arc::new(Feed::default());
@@ -1441,11 +1446,9 @@ pub(super) mod tests {
             .with_symbol("MAIN")
             .with_timeframe(Timeframe::Min30)
             .build();
-        let metric = chart.add_indicator(Box::new(MetricStudy::new(MetricSeries {
-            id: "oi".into(),
-            name: "Open interest".into(),
+        let metric = chart.add_indicator(Box::new(MetricStudy::new(crate::data::MetricSeries {
             unit: "contracts".into(),
-            format: StudyFormat::Volume,
+            ..crate::data::MetricSeries::new("oi", "Open interest", StudyFormat::Volume)
         })));
         let average = chart.add_indicator(Box::new(SMA::new(2)));
         chart
@@ -1472,18 +1475,18 @@ pub(super) mod tests {
         settle(&mut chart);
         assert_eq!(
             output(&chart, metric),
-            [None, Some(10.0), Some(10.0), Some(20.0), Some(20.0)]
+            [Some(10.0), Some(10.0), Some(20.0), Some(20.0), Some(20.0)]
         );
         assert_eq!(
             output(&chart, average),
-            [None, None, Some(10.0), Some(15.0), Some(20.0)]
+            [None, Some(10.0), Some(15.0), Some(20.0), Some(20.0)]
         );
         let sink = feed.metrics.lock().unwrap()[0].sink.clone();
-        for (minutes, value) in [(15, 14.0), (110, 30.0)] {
-            sink.push_metric(MetricPoint {
-                time: DateTime::UNIX_EPOCH + Duration::minutes(minutes),
+        for (minutes, value) in [(15, 14.0), (110, 30.0), (125, 40.0)] {
+            sink.push_metric(MetricPoint::new(
+                DateTime::UNIX_EPOCH + Duration::minutes(minutes),
                 value,
-            });
+            ));
         }
         for frame in 0..60 {
             let mut last = bars(&[1.0; 5], 30).pop().unwrap();
@@ -1494,15 +1497,47 @@ pub(super) mod tests {
         }
         assert_eq!(
             output(&chart, metric),
-            [None, Some(14.0), Some(14.0), Some(20.0), Some(30.0)]
+            [Some(14.0), Some(14.0), Some(20.0), Some(30.0), Some(40.0)]
         );
         assert_eq!(
             output(&chart, average),
-            [None, None, Some(14.0), Some(17.0), Some(25.0)]
+            [None, Some(14.0), Some(17.0), Some(25.0), Some(35.0)]
         );
         chart.set_symbol("OTHER");
         settle(&mut chart);
         assert!(!sink.is_active());
+        for (symbol, requested) in [("PERP", "PERP"), ("", "OTHER")] {
+            feed.metric_symbols.lock().unwrap().clear();
+            chart
+                .indicator_mut(metric)
+                .unwrap()
+                .set_input("symbol", InputValue::Symbol(symbol.into()))
+                .unwrap();
+            settle(&mut chart);
+            assert_eq!(*feed.metric_symbols.lock().unwrap(), [requested]);
+            assert_eq!(
+                feed.metrics
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|sub| sub.sink.is_active())
+                    .map(|sub| sub.symbol.clone())
+                    .collect::<Vec<_>>(),
+                [requested]
+            );
+            let saved =
+                serde_json::from_str(&serde_json::to_string(&chart.snapshot().unwrap()).unwrap())
+                    .unwrap();
+            let mut restored = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("OTHER")
+                .with_timeframe(Timeframe::Min30)
+                .build();
+            restored.restore(&saved).unwrap();
+            feed.metric_symbols.lock().unwrap().clear();
+            settle(&mut restored);
+            assert_eq!(*feed.metric_symbols.lock().unwrap(), [requested]);
+        }
         drop(chart);
         assert!(
             feed.metrics
@@ -1511,6 +1546,90 @@ pub(super) mod tests {
                 .iter()
                 .all(|sub| !sub.sink.is_active())
         );
+    }
+
+    /// Declarations paint per bar, held values keep their colour, and Style edits survive saves.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn declared_metric_styles_paint_per_bar_until_a_style_edit() {
+        use crate::data::{MetricColors, MetricPlot, MetricSeries};
+        use crate::scales::StudyFormat;
+        use crate::studies::MetricStudy;
+        use crate::widget::test_frames::painted_colors;
+        use egui::Color32;
+        let positive = Color32::from_rgb(10, 160, 120);
+        let negative = Color32::from_rgb(230, 50, 60);
+        let rising = Color32::from_rgb(20, 120, 240);
+        let falling = Color32::from_rgb(250, 150, 10);
+        let edited = Color32::from_rgb(140, 40, 200);
+        let mut chart = ChartBuilder::new().with_timeframe(Timeframe::Min30).build();
+        chart.set_data(super::super::SeriesId::MAIN, bars(&[1.0; 5], 30));
+        let mut funding = MetricSeries::new("funding", "Funding rate", StudyFormat::Percent);
+        funding.plot = MetricPlot::Columns;
+        funding.colors = Some(MetricColors::Sign { positive, negative });
+        let funding = chart.add_indicator(Box::new(MetricStudy::new(funding)));
+        let mut interest = MetricSeries::new("oi", "Open interest", StudyFormat::Volume);
+        interest.plot = MetricPlot::Line;
+        interest.colors = Some(MetricColors::Change { rising, falling });
+        let interest = chart.add_indicator(Box::new(MetricStudy::new(interest)));
+        let supply = |chart: &mut Chart| {
+            for (id, values) in [
+                ("funding", [1.0, -1.0, 0.0, -2.0, 3.0]),
+                ("oi", [10.0, 20.0, 15.0, 15.0, 30.0]),
+            ] {
+                chart.set_study_data(
+                    StudyDataRequest {
+                        symbol: String::new(),
+                        timeframe: None,
+                        metric: Some(id.into()),
+                    },
+                    bars(&values, 30),
+                    None,
+                );
+            }
+        };
+        supply(&mut chart);
+        let ctx = egui::Context::default();
+        let paint = |chart: &mut Chart| {
+            let mut painted = Vec::new();
+            for frame in 0..12 {
+                painted = shapes(&ctx, chart, frame as f64, Vec::new());
+            }
+            painted_colors(&painted)
+        };
+        let colors = paint(&mut chart);
+        for color in [positive, negative, rising, falling] {
+            assert!(colors.contains(&color), "declared colour {color:?}");
+        }
+        for (id, expected) in [
+            (funding, [None, Some(negative), None, Some(negative), None]),
+            (interest, [None, None, Some(falling), Some(falling), None]),
+        ] {
+            let study = chart.indicators().find(|(key, _)| *key == id).unwrap().1;
+            assert_eq!(
+                (0..5)
+                    .map(|bar| study.plot_color(0, bar))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+        let study = chart.indicator_mut(funding).unwrap();
+        let mut settings = study.settings();
+        settings.plot_variants[0][0].color = edited;
+        study.apply_settings(&[], settings).unwrap();
+        let saved =
+            serde_json::from_str(&serde_json::to_string(&chart.snapshot().unwrap()).unwrap())
+                .unwrap();
+        let mut restored = ChartBuilder::new().with_timeframe(Timeframe::Min30).build();
+        restored.set_data(super::super::SeriesId::MAIN, bars(&[1.0; 5], 30));
+        restored.restore(&saved).unwrap();
+        supply(&mut restored);
+        for chart in [&mut chart, &mut restored] {
+            let colors = paint(chart);
+            assert!(colors.contains(&edited));
+            assert!(colors.contains(&positive));
+            assert!(!colors.contains(&negative));
+        }
     }
 
     #[test]
@@ -1986,7 +2105,7 @@ pub(super) mod tests {
         let dropped = FeedError::Network("stream dropped".into());
         for (shared, error) in [(false, None), (true, None), (false, Some(dropped))] {
             let (mut chart, daily) = minute_chart(|day| Bar::new(day, 50.0, 50.0, 50.0, 50.0, 1.0));
-            let id = chart.add_indicator(Box::new(crate::studies::Performance::new()));
+            let id = chart.add_indicator(chart_performance());
             if shared {
                 let mut average = crate::studies::ConfiguredStudy::new(Box::new(SMA::new(2)));
                 average
@@ -2058,6 +2177,17 @@ pub(super) mod tests {
         pages
     }
 
+    /// Performance of the chart symbol alone over the six standard periods, whose daily history
+    /// reaches one year back.
+    fn chart_performance() -> Box<dyn crate::studies::Indicator> {
+        use crate::studies::Indicator;
+        let mut study = crate::studies::Performance::new();
+        for (id, text) in [("symbols", ""), ("periods", "1W, 1M, 3M, 6M, YTD, 1Y")] {
+            study.set_input(id, InputValue::Text(text.into())).unwrap();
+        }
+        Box::new(study)
+    }
+
     /// 390 one-minute bars of 2024-03-15 at 100 on MAIN, and daily bars at 00:00 UTC on every
     /// weekday of the two years before, from `bar`.
     fn minute_chart(bar: impl Fn(DateTime<chrono::Utc>) -> Bar) -> (Chart, Vec<Bar>) {
@@ -2093,9 +2223,7 @@ pub(super) mod tests {
     /// of Projected Pivot Points are the same levels.
     #[test]
     fn yearly_pivots_read_the_whole_previous_year_of_paged_daily_bars() {
-        use crate::studies::{
-            Indicator, Performance, PivotPoints, PivotTimeframe, ProjectedPivotPoints,
-        };
+        use crate::studies::{Indicator, PivotPoints, PivotTimeframe, ProjectedPivotPoints};
         let spike: DateTime<chrono::Utc> = "2023-01-10T00:00:00Z".parse().unwrap();
         let pivots = || -> Box<dyn Indicator> {
             Box::new(
@@ -2129,7 +2257,7 @@ pub(super) mod tests {
                 Bar::new(day, 100.0, high, low, 100.0, 1.0)
             });
             if after_performance {
-                chart.add_indicator(Box::new(Performance::new()));
+                chart.add_indicator(chart_performance());
             }
             let id = chart.add_indicator(study);
             let feed = Arc::new(RetryFeed::default());
@@ -2190,7 +2318,7 @@ pub(super) mod tests {
         ] {
             let (mut chart, daily) = minute_chart(|day| Bar::new(day, 50.0, 50.0, 50.0, 50.0, 1.0));
             chart.set_chart_type(chart_type);
-            let id = chart.add_indicator(Box::new(crate::studies::Performance::new()));
+            let id = chart.add_indicator(chart_performance());
             let pages = page_daily(&mut chart, &daily, None);
             let study = chart.indicators().find(|(at, _)| *at == id).unwrap().1;
             let changes: Vec<_> = (0..6).map(|line| study.values().value(line, 389)).collect();
@@ -2325,7 +2453,7 @@ pub(super) mod tests {
     #[test]
     fn live_daily_bars_refresh_only_their_studies_and_keep_them_drawn() {
         use crate::model::ChartType;
-        use crate::studies::{Indicator, IndicatorValues, Performance};
+        use crate::studies::{Indicator, IndicatorValues};
         use std::sync::atomic::{AtomicUsize, Ordering};
         /// A study counting its calculations from the first bar.
         struct Counted(Box<dyn Indicator>, Arc<AtomicUsize>);
@@ -2394,7 +2522,7 @@ pub(super) mod tests {
             chart.set_chart_type(chart_type);
             let counts = [(); 2].map(|_| Arc::new(AtomicUsize::new(0)));
             let mut studies = [
-                Counted(Box::new(Performance::new()), counts[0].clone()),
+                Counted(chart_performance(), counts[0].clone()),
                 Counted(Box::new(SMA::new(3)), counts[1].clone()),
             ]
             .map(Some);

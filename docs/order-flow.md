@@ -54,7 +54,7 @@ estimating their aggressor from candles. Replay chronological historical trades 
 new executions with [`push`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.push); rebuild on corrections. Unknown aggressors contribute to total
 volume and remain outside bid/ask delta. [`Chart::show_footprint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show_footprint) draws volume, delta, trade count and
 average size columns, profiles, grouped rows, imbalances, POC and value area in place of the price series. Its
-[`FootprintConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/overlays/struct.FootprintConfig.html) controls the presentation: cell colour, number abbreviation and zero display,
+[`FootprintConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/overlays/struct.FootprintConfig.html) controls the presentation: cell colour and whether its shades and value-sized fonts compare within each bar, across the bars in view or to a set volume, number abbreviation and zero display,
 value-sized fonts, extreme ask/bid ratios, the pullback range and the summary below each bar. Automatic grouping affects
 display only. By default a bar is a ladder: sell volume left and buy volume right of a narrow candle body, each
 side shaded in four strengths by where its volume falls in that side's range. The POC row is filled, a side that
@@ -143,7 +143,21 @@ trade-driven studies still require individual executions.
 
 Call [`Chart::set_liquidity_heatmap(true)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_liquidity_heatmap) on a chart with a feed and an instrument tick size.
 It starts the default [`DepthHistory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistory.html) if the host has not configured one. Call
-[`Chart::set_depth_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_depth_history) first to choose cadence, grouping and retention. The book is sampled
+[`Chart::set_depth_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_depth_history) first to choose cadence and grouping.
+[`DepthHistoryConfig::with_retention`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistoryConfig.html#method.with_retention)
+chooses the fewest columns that span a retention time. Columns outside it leave on samples and
+pages, and the chart requests no depth page before its start. The cutoff follows the newest
+column's end, so an idle feed keeps its history.
+[`Chart::set_depth_retention`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_depth_retention)
+applies the choice to the chart's history, as the Order flow settings tab does. `None` restores
+600 columns per tier. The config's `span` reports its coverage and `max_memory` estimates its
+maximum column memory.
+[`Chart::clear_depth_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.clear_depth_history)
+empties held columns and heatmap textures, as the tab's Release memory button requests; live
+samples and historical pages within the retention fill it again. Hosts pass the chart's sampling
+with [`SettingsDialog::set_depth_history_config`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/dialogs/chart_settings/struct.SettingsDialog.html#method.set_depth_history_config) when opening the dialog, and handle its
+[`SettingsAction::ClearDepthHistory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/top_toolbar/components/settings_menu/actions/enum.SettingsAction.html#variant.ClearDepthHistory) by calling `Chart::clear_depth_history`. The dialog stays
+open after that action; edited settings still apply only with Ok. The book is sampled
 where depth arrives, independently of UI frames. No column covers a period that ends while the
 aggregate or order-level book waits for a snapshot, so merging never averages an outage into the
 sizes beside it. A merged historical column averages size over its span and uses its best
@@ -276,7 +290,8 @@ by skipping updates silently:
   resolution. Memory stays bounded.
 - A frame uploads only new or changed columns, in tiles no larger than the backend's texture
   limit (256 at most), and an unchanged history uploads nothing.
-- The library never changes these settings by itself. A host that cannot afford the budget on its
+- The library changes `columns` and `retention` only for a retention chosen in the Order flow
+  tab, as `with_retention` does. A host that cannot afford the budget on its
   machines raises [`cadence`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistoryConfig.html#structfield.cadence), lowers [`rows`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistoryConfig.html#structfield.rows) or [`columns`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistoryConfig.html#structfield.columns), or raises [`ticks_per_row`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistoryConfig.html#structfield.ticks_per_row).
 
 ## Execution profiles
@@ -451,10 +466,20 @@ sets them; [`DetectorSettings::validate`](https://userfrm.github.io/egui-charts/
 [`set_settings`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.OrderFlowDetectors.html#method.set_settings) applies them. Alert delivery is a host integration; these choices do not
 themselves send notifications.
 
-Stop runs require five same-side fills, each no more than 20 ms after its predecessor, travelling
-at least three ticks without reversing. When any aggressor ids are known, three distinct ids are
-required. A continuing burst updates its marker at the last fill, with fill count, distance,
-size and duration in the tooltip. Unknown-side fills are excluded.
+Big trades ([`BigTradeRule`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.BigTradeRule.html)) come in three kinds, each with its own switch: aggressive orders, the
+fills of one explicit aggressor order id in a row or a single fill without one, on by default;
+fills without aggressor ids that share an exchange timestamp and side, combined as the time and
+sales panel combines them, off by default; and passive orders, the fills against one resting
+order id across aggressive orders, off by default. A marker's label gives the size and the
+kind, as in `600 passive`. A passive order is marked at the resting order's price, coloured by
+its side, and its zone ends when a trade passes beyond it on the far side from that order.
+
+Stop runs ([`StopRunRule`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.StopRunRule.html)) require by default five same-side fills, each no more than 20 ms after its
+predecessor, travelling at least three ticks without reversing. When any aggressor ids are
+known, three distinct ids are required. The rule sets each of these limits and a minimum total
+size, none by default, and the Order flow panel edits them. A continuing burst updates its
+marker at the last fill, with fill count, distance, size and duration in the tooltip.
+Unknown-side fills are excluded.
 
 Stop sweeps use closed bars of the latest subscribed time interval: directional delta at least
 25% of volume, three diagonal imbalances at 3:1, a body at least 60% of range, and volume at least
@@ -469,7 +494,13 @@ Footprint conditions read the same bars. [`FootprintRule`](https://userfrm.githu
 imbalance, or a stack of the rule's number of adjacent ones, using the rule's ratio, comparison
 and minimum volume on rows of one tick whatever grouping the chart displays;
 [`FootprintRule::follow_chart`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.FootprintRule.html#method.follow_chart) copies these from the chart's settings, as the demo does for its
-active chart. A buy volume, sell volume or delta level fires on the execution that takes the
+active chart. A buy or sell zone rejection fires on a closed bar that trades into an active
+stacked imbalance zone of an earlier bar without closing beyond its far edge, below a buy
+zone's lowest row or above a sell zone's highest row; the first bar closing beyond it ends the
+zone without firing. Detector zones use one-tick rows, retaining the newest 1,000 zones. A closed
+bar skipped because conditions are disabled or its retained footprint is incomplete or missing
+ends all active detector zones. Disabling and enabling inside a bar keeps them if its close is
+read. A buy volume, sell volume or delta level fires on the execution that takes the
 forming bar's value past it, from zero at the bar's open: a sell volume level of 100 fires on the
 101st unit sold. Each condition alerts at most once per bar and rebuilds with the stop sweeps on
 interval changes. Bars that opened before the bar of the first live event since tracking, such
