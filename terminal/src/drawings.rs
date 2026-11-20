@@ -17,7 +17,7 @@ use egui_charts::ui::drawing_toolbar::{
     DrawingToolbar, DrawingToolbarAction, DrawingToolbarDomainState, MagnetType,
 };
 use egui_charts::ui::floating_toolbar::FloatingSelectionToolbar;
-use egui_charts::ui::widget_bar::panels::object_tree::{
+use egui_charts::ui::widget_bar::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem, show_data_window,
 };
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBarAction};
