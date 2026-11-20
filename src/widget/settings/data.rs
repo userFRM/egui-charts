@@ -311,7 +311,7 @@ impl Default for ScalesAppearanceSettings {
     }
 }
 
-/// Canvas tab: Buttons visibility settings
+/// Canvas tab: Buttons visibility settings. Both groups show on mouse over by default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ButtonsSettings {
     /// Visibility of chart navigation controls.
@@ -323,7 +323,7 @@ pub struct ButtonsSettings {
 impl Default for ButtonsSettings {
     fn default() -> Self {
         Self {
-            navigation: ButtonVisibility::Hidden,
+            navigation: ButtonVisibility::VisibleOnMouseOver,
             pane: ButtonVisibility::VisibleOnMouseOver,
         }
     }
@@ -622,6 +622,9 @@ pub struct TradingSettings {
     /// saved without this field keep labels off, as they were drawn when saved.
     #[serde(default)]
     pub show_execution_labels: bool,
+    /// Add the quantity-weighted average fill price to each mark's label, as in "Buy 2 @ 101.25".
+    /// Off by default, including for settings saved without this field.
+    pub show_execution_prices: bool,
 }
 
 impl Default for TradingSettings {
@@ -646,6 +649,7 @@ impl Default for TradingSettings {
             bracket_pnl_unit: PnlUnit::Money,
             show_executions: true,
             show_execution_labels: true,
+            show_execution_prices: false,
         }
     }
 }

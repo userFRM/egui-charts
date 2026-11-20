@@ -18,7 +18,7 @@ pub(crate) const MAX_TEXT_WRAP_WIDTH: f32 = 10_000.0;
 /// drawn. Larger levels lie far outside the chart, and near `f32::MAX` overflow its geometry.
 pub(crate) const MAX_PITCHFORK_LEVEL: f32 = 100.0;
 
-/// The largest projection coefficient, as a multiple of the measured move, that is drawn.
+/// The largest projection coefficient, as a multiple of the sector's radius, that is drawn.
 /// Larger levels lie far outside the chart.
 pub(crate) const MAX_PROJECTION_LEVEL: f32 = 100.0;
 

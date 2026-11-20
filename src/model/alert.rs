@@ -128,8 +128,9 @@ pub struct Alert {
     #[serde(default)]
     pub frequency: AlertFrequency,
     /// The alert starts monitoring at this time; `None` monitors from the moment it is saved.
-    /// Before it, evaluation ignores the alert, so its first evaluation after the start compares
-    /// with the value one bar earlier, as for a new alert. Earlier than `expires` when both are set.
+    /// Before it, evaluation ignores the alert, so its first evaluation after the start is its
+    /// first one: for a new or edited alert a crossing then needs a value observed from the start
+    /// on. Earlier than `expires` when both are set.
     #[serde(default)]
     pub starts: Option<DateTime<Utc>>,
     /// The alert expires at this time; `None` never expires.
