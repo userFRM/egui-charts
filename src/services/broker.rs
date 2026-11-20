@@ -140,9 +140,8 @@ pub trait Broker: MaybeSend + 'static {
     /// or after that answer.
     fn cancel(&self, id: OrderId, reply: Reply<()>);
 
-    /// Replaces the working order `id` with `order`, which differs in its prices or brackets,
-    /// after the user dragged one of its lines, added or removed a take profit or stop loss, and
-    /// confirmed. Called only for an account whose [`Capabilities::modify`](crate::model::Capabilities::modify) is set. Answer
+    /// Replaces the working order `id` after a confirmed change to its quantity, prices,
+    /// brackets, time in force or expiry in the ticket or on the chart. Called only for an account whose [`Capabilities::modify`](crate::model::Capabilities::modify) is set. Answer
     /// once the broker accepted the change; push the changed order as an [`AccountEvent::Order`].
     /// By default every change is refused as [`FeedError::NotSupported`].
     fn modify(&self, id: OrderId, order: OrderRequest, reply: Reply<()>) {
@@ -165,6 +164,13 @@ pub trait Broker: MaybeSend + 'static {
     fn rules(&self, symbol: &str, reply: Reply<TradingRules>) {
         let _ = symbol;
         reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Names this account, such as its broker account number, so the order ticket offers only
+    /// its presets. Keep the id stable across sessions: hosts persist presets by it. Brokers
+    /// that keep the empty default share one list.
+    fn account_id(&self) -> &str {
+        ""
     }
 
     /// Answers one page of finished history older than what [`connect`](Self::connect) pushed, for

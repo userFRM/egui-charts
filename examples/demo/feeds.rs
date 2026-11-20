@@ -221,10 +221,7 @@ impl super::DemoApp {
     }
 
     /// Range presets fit available bars and state a limit when the selected detail cannot reach it.
-    pub(super) fn explain_history_limit(
-        &mut self,
-        range: egui_charts::ui::timeframe_toolbar::DateRange,
-    ) {
+    pub(super) fn explain_history_limit(&mut self, range: egui_charts::model::DateRange) {
         let bars = self.chart.bars(egui_charts::widget::SeriesId::MAIN);
         if let (Some(first), Some(last)) = (bars.first(), bars.last())
             && crate::sampledata::range_start(range, last.time)
@@ -1223,8 +1220,9 @@ mod tests {
 
     #[test]
     fn chart_quotes_follow_slots_tabs_and_symbols_outside_the_watchlist() {
+        use egui_charts::model::Watchlist;
         use egui_charts::ui::top_toolbar::LayoutAction;
-        use egui_charts::ui::widget_bar::{Watchlist, WatchlistPanel};
+        use egui_charts::ui::widget_bar::WatchlistPanel;
         let ctx = egui::Context::default();
         let now = "2026-10-23T15:00:00Z".parse().unwrap();
         let mut app = super::super::DemoApp::new_at(
@@ -1393,8 +1391,9 @@ mod tests {
 
     #[test]
     fn paper_orders_fill_after_switching_away_and_stay_frozen_during_replay() {
+        use egui_charts::model::Watchlist;
         use egui_charts::model::{OrderRequest, OrderSide, OrderType};
-        use egui_charts::ui::widget_bar::{Watchlist, WatchlistPanel};
+        use egui_charts::ui::widget_bar::WatchlistPanel;
         let ctx = egui::Context::default();
         let now = "2026-10-23T15:00:00Z".parse().unwrap();
         let mut app = super::super::DemoApp::new_at(
