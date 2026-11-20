@@ -1638,4 +1638,157 @@ mod tests {
             .high_to_close_fill;
         assert_eq!(picked.to_srgba_unmultiplied(), [255, 255, 255, 51]);
     }
+
+    /// Every footprint edit is staged until Ok; Cancel leaves the opening settings intact.
+    #[test]
+    fn footprint_symbol_settings_apply_only_when_accepted() {
+        use crate::model::{ChartTypeParams, FootprintIntensity};
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let seeded = ChartTypeParams {
+            footprint_intensity: FootprintIntensity::Volume(500.0),
+            footprint_naked_poc: true,
+            footprint_extend_bars: Some(5),
+            ..Default::default()
+        };
+        for accept in [false, true] {
+            for edit in [
+                "Shading scale",
+                "Full shade volume",
+                "Automatic row height",
+                "Smallest row with numbers",
+                "Expiry value",
+                "Expiry off",
+                "Keep host values",
+                "Fixed volume default",
+                "Expiry on",
+            ] {
+                let mut seeded = seeded.clone();
+                if edit == "Fixed volume default" {
+                    seeded.footprint_intensity = FootprintIntensity::Bar;
+                }
+                if edit == "Expiry on" {
+                    seeded.footprint_extend_bars = None;
+                }
+                if edit == "Keep host values" {
+                    seeded.footprint_intensity = FootprintIntensity::Volume(-1.0);
+                    seeded.footprint_auto_row_height = 0.0;
+                    seeded.footprint_min_text_height = 100.0;
+                    seeded.footprint_extend_bars = Some(0);
+                }
+                let mut dialog = SettingsDialog::new();
+                dialog.set_control_visible(crate::ui::Control::Templates, false);
+                dialog.open(ChartSettingsState {
+                    chart_type: ChartType::VolumeFootprint,
+                    chart_type_params: Some(seeded.clone()),
+                    ..Default::default()
+                });
+                let theme = Theme::light();
+                let setup_theme = theme.clone();
+                let mut harness = Harness::builder()
+                    .with_context_setup(move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &setup_theme);
+                    })
+                    .with_size(Vec2::new(1440.0, 900.0))
+                    .build_ui_state(
+                        move |ui, (dialog, accepted): &mut (SettingsDialog, _)| {
+                            if let SettingsAction::Apply(settings) = dialog.show(ui.ctx(), &theme) {
+                                *accepted = Some(settings);
+                            }
+                        },
+                        (dialog, None),
+                    );
+                harness.run();
+                let mut expected = seeded.clone();
+                match edit {
+                    "Shading scale" | "Fixed volume default" => {
+                        let label = "Shading scale";
+                        harness
+                            .get_by_role_and_label(Role::ComboBox, label)
+                            .scroll_to_me();
+                        harness.run();
+                        harness.get_by_role_and_label(Role::ComboBox, label).click();
+                        harness.run();
+                        let fixed = edit == "Fixed volume default";
+                        harness
+                            .get_by_role_and_label(
+                                Role::Button,
+                                if fixed {
+                                    "Fixed volume"
+                                } else {
+                                    "Bars in view"
+                                },
+                            )
+                            .click();
+                        expected.footprint_intensity = if fixed {
+                            FootprintIntensity::Volume(100.0)
+                        } else {
+                            FootprintIntensity::Visible
+                        };
+                    }
+                    "Automatic row height" | "Smallest row with numbers" => {
+                        let value = if edit == "Automatic row height" {
+                            24.0
+                        } else {
+                            10.0
+                        };
+                        harness
+                            .get_by_role_and_label(Role::SpinButton, edit)
+                            .set_value_accesskit(value);
+                        if edit == "Automatic row height" {
+                            expected.footprint_auto_row_height = value as f32;
+                        } else {
+                            expected.footprint_min_text_height = value as f32;
+                        }
+                    }
+                    "Keep host values" => {
+                        harness.get_by_label("Annotations").scroll_to_me();
+                        harness.run();
+                        harness.get_by_label("Annotations").click();
+                    }
+                    "Expiry value" | "Expiry off" | "Expiry on" => {
+                        harness.get_by_label("Annotations").scroll_to_me();
+                        harness.run();
+                        harness.get_by_label("Annotations").click();
+                        harness.run();
+                        if edit == "Expiry value" {
+                            harness
+                                .get_by_role_and_label(Role::SpinButton, "Expire after bars")
+                                .set_value_accesskit(8.0);
+                            expected.footprint_extend_bars = Some(8);
+                        } else {
+                            harness
+                                .get_by_role_and_label(Role::CheckBox, "Expire after bars")
+                                .scroll_to_me();
+                            harness.run();
+                            harness
+                                .get_by_role_and_label(Role::CheckBox, "Expire after bars")
+                                .click();
+                            expected.footprint_extend_bars =
+                                if edit == "Expiry on" { Some(50) } else { None };
+                        }
+                    }
+                    _ => {
+                        harness
+                            .get_by_role_and_label(Role::SpinButton, edit)
+                            .set_value_accesskit(2000.0);
+                        expected.footprint_intensity = FootprintIntensity::Volume(2000.0);
+                    }
+                }
+                harness.run();
+                harness
+                    .get_by_label(if accept { "Ok" } else { "Cancel" })
+                    .click();
+                harness.run();
+                let (_, accepted) = harness.state();
+                assert_eq!(
+                    accepted.as_ref().and_then(|s| s.chart_type_params.as_ref()),
+                    accept.then_some(&expected),
+                    "{edit}, accept {accept}"
+                );
+            }
+        }
+    }
 }

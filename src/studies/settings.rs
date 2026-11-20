@@ -2912,12 +2912,11 @@ mod tests {
         .map(|name| factory.create_registered(name).unwrap())
         .collect();
         excluded.push(Box::new(super::super::MetricStudy::new(
-            crate::data::MetricSeries {
-                id: "oi".into(),
-                name: "Open interest".into(),
-                unit: "contracts".into(),
-                format: crate::scales::StudyFormat::Volume,
-            },
+            crate::data::MetricSeries::new(
+                "oi",
+                "Open interest",
+                crate::scales::StudyFormat::Volume,
+            ),
         )));
         for inner in excluded {
             let mut study = ConfiguredStudy::new(inner);
