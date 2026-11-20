@@ -1,4 +1,4 @@
-//! Host replay wiring: source history, start selection, checkpoints and layout groups.
+//! Host replay wiring: source history, start selection, checkpoints and layout scope.
 
 use super::{DemoApp, live::LiveFeed};
 use chrono::{DateTime, Utc};
@@ -1010,6 +1010,9 @@ impl DemoApp {
         if let Some(bar) = replay.visible_bars().last() {
             self.paper.set_replay_time(Some(bar.time));
             self.paper.set_price(self.chart.symbol(), bar.close);
+        }
+        if let Some(replay) = &mut self.replay {
+            replay.state.scope = scope;
         }
         self.checkpoint_replay();
     }
@@ -2159,6 +2162,10 @@ mod tests {
         app.switch_timeframe(Timeframe::Week1);
         super::super::tests::settle(&mut app, &ctx);
         app.start_replay_at(2);
+        assert_eq!(
+            app.replay_session.as_ref().unwrap().0.scope,
+            ReplayScope::AllCharts
+        );
         let days = replay_source(&app.live, Timeframe::Day1, &app.chart).0;
         click(&mut app, "1W updates");
         click(&mut app, "1D updates");
