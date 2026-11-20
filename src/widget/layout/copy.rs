@@ -140,7 +140,12 @@ impl CopiedStudies {
             .collect();
         let captions: Vec<_> = source
             .indicators()
-            .map(|(id, _)| source.indicator_inputs(id).unwrap_or_default().to_owned())
+            .map(|(id, _)| {
+                source
+                    .host_indicator_inputs(id)
+                    .unwrap_or_default()
+                    .to_owned()
+            })
             .collect();
         match copy {
             LayoutCopy::Study(id) => {

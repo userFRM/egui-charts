@@ -383,7 +383,10 @@ fn duplicate(chart: &mut Chart, source: &SourceItem) {
             .map(|(id, i)| {
                 (
                     i.clone_box(),
-                    chart.indicator_inputs(id).unwrap_or_default().to_owned(),
+                    chart
+                        .host_indicator_inputs(id)
+                        .unwrap_or_default()
+                        .to_owned(),
                 )
             });
         if let Some((copy, inputs)) = copy
