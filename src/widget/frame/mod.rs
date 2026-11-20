@@ -1031,6 +1031,7 @@ impl Chart {
             self.last_rendered_price_rect = layout.price_rect;
             self.last_rendered_volume_rect = Rect::NOTHING;
             self.last_vertical_grid_x.clear();
+            self.last_session_break_x.clear();
             let scale = self.state.price_scale();
             self.last_price_map = scale
                 .map(scale.transform(), chart_rect.top(), chart_rect.bottom())
@@ -1700,24 +1701,21 @@ impl Chart {
         // horizontal scales and from daily and longer bars.
         let intraday = host_scale.is_none()
             && session_tf.duration_ms() < crate::model::Timeframe::Day1.duration_ms();
-        if self.config.show_session_breaks && intraday {
+        self.last_session_break_x = if self.config.show_session_breaks && intraday {
             let provider = self
                 .session_provider
                 .as_deref()
                 .unwrap_or(&exchange_session);
-            rendering::SessionBreakRenderer::new(rendering::SessionBreakRenderConfig {
-                line_color: self.config.session_break_color,
-                line_width: self.config.session_break_width,
-                style: self.config.session_break_style,
-            })
-            .render(
+            self.session_break_renderer().render(
                 &session_ctx,
                 time_data,
                 provider,
                 &time_coords,
                 time_coords.start_idx,
-            );
-        }
+            )
+        } else {
+            Vec::new()
+        };
         let extended_hours = if time_based && intraday && self.config.show_extended_hours {
             let accent = ui.active_theme().ui.accent;
             let shade = |color: egui::Color32, opacity| {
