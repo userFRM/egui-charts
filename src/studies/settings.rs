@@ -2266,6 +2266,15 @@ mod tests {
     use super::*;
     use crate::studies::BollingerBands;
 
+    /// Performance comparing no symbols, which requests the chart symbol's daily bars alone.
+    fn performance_alone() -> super::super::Performance {
+        let mut study = super::super::Performance::new();
+        study
+            .set_input("symbols", InputValue::Text(String::new()))
+            .unwrap();
+        study
+    }
+
     /// Guards #2112: clearing the calculation interval hands the study the chart's interval,
     /// whether the chart passed it before the input was set, as a template does, or moved on
     /// while it was set, and whether the edit comes directly or from the settings dialog.
@@ -2282,7 +2291,7 @@ mod tests {
             (Some(Timeframe::Day1), false),
             (Some(Timeframe::Day1), true),
         ] {
-            let mut study = ConfiguredStudy::new(Box::new(super::super::Performance::new()));
+            let mut study = ConfiguredStudy::new(Box::new(performance_alone()));
             if let Some(timeframe) = added_on {
                 study.set_timeframe(timeframe);
             }
@@ -2327,11 +2336,7 @@ mod tests {
         let days: Vec<_> = (0..21).map(|day| flat(hour(24 * day))).collect();
         // Each study, the Interval set on it, and the hours between the bars of that Interval.
         let cases: [(Box<dyn Indicator>, Timeframe, i64); 3] = [
-            (
-                Box::new(super::super::Performance::new()),
-                Timeframe::Hour1,
-                1,
-            ),
+            (Box::new(performance_alone()), Timeframe::Hour1, 1),
             (
                 Box::new(super::super::PivotPoints::new().with_daily_bars(true)),
                 Timeframe::Hour1,
