@@ -191,6 +191,8 @@ mod tests {
                         20
                     ];
                     let mut hotlist = HotlistsPanel::new(vec!["Gainers".into()]);
+                    hotlist.set_exchanges(["NYSE".into(), "NASDAQ".into()]);
+                    hotlist.set_countries(["US".into(), "DE".into()]);
                     hotlist.set_feed(std::sync::Arc::new(Feed));
                     hotlist.poll(&ctx);
                     let mut screener = ScreenerPanel::new(vec![ScreenerColumnSet::new(
@@ -293,7 +295,16 @@ mod tests {
                                 );
                             }
                             assert!(!bounds("+12.34%").intersects(bounds("123.4M")), "{texts:?}");
-                            for label in ["Symbol", "Chg%", "Volume", "+12.34%", "123.4M"] {
+                            for label in [
+                                "Symbol",
+                                "Chg%",
+                                "Volume",
+                                "+12.34%",
+                                "123.4M",
+                                "All exchanges",
+                                "All countries",
+                            ] {
+                                bounds(label);
                                 assert!(!elided.contains(&label.to_owned()), "{label}: {elided:?}");
                             }
                         }
