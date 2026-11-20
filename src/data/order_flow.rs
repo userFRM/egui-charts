@@ -10,6 +10,11 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ops::RangeBounds;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+#[cfg(all(feature = "widget", feature = "studies"))]
+mod checkpoint;
+#[cfg(all(feature = "widget", feature = "studies"))]
+pub(crate) use checkpoint::{PackedTradeRate, RateGuard};
+
 /// Fixed stream aggregation performed before a feed coalesces its updates for painting.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -626,7 +631,14 @@ impl OrderFlowInput {
     /// instead of an unfiltered one. Other aggregations ignore it. A filter that accepts every
     /// order is the same as none.
     pub fn with_order_filter(self, filter: OrderFilter) -> Self {
-        self.state().filter = (filter != OrderFilter::default()).then_some(filter);
+        {
+            let mut state = self.state();
+            let filter = (filter != OrderFilter::default()).then_some(filter);
+            if state.filter != filter {
+                state.filter = filter;
+                state.rate_state_changed();
+            }
+        }
         self
     }
 
@@ -641,8 +653,9 @@ impl OrderFlowInput {
             let mut state = self.state();
             if state.basis != basis {
                 state.pending = PendingParts::default();
+                state.basis = basis;
+                state.rate_state_changed();
             }
-            state.basis = basis;
         }
         self
     }
@@ -722,6 +735,7 @@ impl OrderFlowInput {
             return;
         }
         state.tick_size = tick_size;
+        state.rate_state_changed();
         if state.footprint.take().is_some() {
             state.changes.clear();
             state.revision = state.revision.wrapping_add(1);
@@ -981,7 +995,9 @@ impl OrderFlowInput {
     pub(crate) fn set_trade_bar(&self, open: DateTime<Utc>) {
         let mut state = self.state();
         state.discard_paged_rate();
-        state.trade_bars.forming = Some(open);
+        if state.trade_bars.forming.replace(open) != Some(open) {
+            state.rate_state_changed();
+        }
     }
 
     /// Leaves out queued executions that cannot be allocated again, as after a store loss.
@@ -1029,7 +1045,10 @@ impl OrderFlowInput {
     /// the sink allocated to before. Sources it does not rebuild keep their values.
     #[cfg(feature = "widget")]
     pub(crate) fn forget_trade_bar(&self) {
-        self.state().trade_bars.forming = None;
+        let mut state = self.state();
+        if state.trade_bars.forming.take().is_some() {
+            state.rate_state_changed();
+        }
     }
 
     /// Expires rolling rates and movement during an idle part of a bar with stream data.
@@ -1245,6 +1264,7 @@ impl OrderFlowInput {
             {
                 let mut state = self.state();
                 let lost = lost.max(left_out);
+                state.rate_state_changed();
                 state.window.lost_until = lost;
                 state.instant.lost_until = lost;
                 state.extremes.lost_until = lost;
@@ -1260,6 +1280,10 @@ impl OrderFlowInput {
                     let first = previous.is_none_or(|previous| !std::ptr::eq(previous, trade));
                     state.add_trade(trade, open, size, first);
                     previous = Some(trade);
+                }
+                if previous.is_none() {
+                    // The grouping changes even when the rebuild had no rows to `finish`.
+                    state.rate_state_changed();
                 }
                 state.trade_bars = bars;
             } else if !trade_based || lost.is_none() {
@@ -1289,6 +1313,7 @@ impl OrderFlowInput {
                 state.pending = PendingParts::default();
                 state.changes.retain(|open, _| *open > cut);
                 state.cut = Some(cut);
+                state.rate_state_changed();
             }
         }
         if let Some(now) = as_of {
@@ -1825,6 +1850,15 @@ fn balance([bid, ask]: [f64; 2]) -> f64 {
 }
 
 impl State {
+    /// A Trade Rate plan also observes the grouping, rolling windows and source settings.
+    /// A change to these can invalidate the plan without adding a visible bar row in `finish`.
+    fn rate_state_changed(&mut self) {
+        #[cfg(all(feature = "widget", feature = "studies"))]
+        if matches!(self.source, Source::Fixed(OrderFlowKind::TradeRate { .. })) {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
     /// The revision from which readers start over: the latest reset or drop.
     #[cfg(any(feature = "studies", feature = "widget"))]
     fn restart_revision(&self) -> u64 {
@@ -2001,6 +2035,7 @@ impl State {
         let latest = self.last.map_or(trade.ts, |t| t.max(trade.ts));
         if self.cut.is_some_and(|cut| open <= cut) {
             self.last = Some(latest);
+            self.rate_state_changed();
             return;
         }
         self.bars.insert(open, (row, 0));
