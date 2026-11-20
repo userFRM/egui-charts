@@ -2305,25 +2305,28 @@ fn drawings_keep_their_place_when_the_series_and_studies_change() {
         }
     }
 
-    // A host that restores a layout without its series adds them again outside a user action,
-    // and the restored drawings already count them.
-    let mut saved = chart(&[100.0, 100.0], &[110.0, 104.0]);
-    saved.add_indicator(Box::new(SMA::new(2)));
-    saved.add_series(SeriesOptions::default());
-    // Over the candles, under the added series and SMA(2).
-    let id = add_rect(&mut saved, None, [109.0, 101.0], FILL);
-    for _ in 0..2 {
-        assert!(saved.reorder_drawing(id, VisualOrder::SendBackward));
-    }
-    let mut snapshot = saved.snapshot().unwrap();
-    snapshot.series = None;
-    let mut restored = chart(&[100.0, 100.0], &[110.0, 104.0]);
-    restored.restore(&snapshot).unwrap();
-    restored.add_series(SeriesOptions::default());
-    let layer = |chart: &crate::widget::Chart| chart.drawings().drawings[0].series_layer;
-    let layers = (layer(&saved), layer(&restored));
-    if layers != (Some(1), Some(1)) {
-        failures.push(format!("series added again after a restore: {layers:?}"));
+    #[cfg(feature = "ui")]
+    {
+        // A host that restores a layout without its series adds them again outside a user action,
+        // and the restored drawings already count them.
+        let mut saved = chart(&[100.0, 100.0], &[110.0, 104.0]);
+        saved.add_indicator(Box::new(SMA::new(2)));
+        saved.add_series(SeriesOptions::default());
+        // Over the candles, under the added series and SMA(2).
+        let id = add_rect(&mut saved, None, [109.0, 101.0], FILL);
+        for _ in 0..2 {
+            assert!(saved.reorder_drawing(id, VisualOrder::SendBackward));
+        }
+        let mut snapshot = saved.snapshot().unwrap();
+        snapshot.series = None;
+        let mut restored = chart(&[100.0, 100.0], &[110.0, 104.0]);
+        restored.restore(&snapshot).unwrap();
+        restored.add_series(SeriesOptions::default());
+        let layer = |chart: &crate::widget::Chart| chart.drawings().drawings[0].series_layer;
+        let layers = (layer(&saved), layer(&restored));
+        if layers != (Some(1), Some(1)) {
+            failures.push(format!("series added again after a restore: {layers:?}"));
+        }
     }
 
     let ctx = egui::Context::default();

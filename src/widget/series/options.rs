@@ -447,8 +447,8 @@ impl Chart {
     /// In a [`user_action`](Self::user_action), drawings of the pane it joins stay over and
     /// under the same series and studies, and the series goes under a drawing where its place
     /// leaves the choice, as under a drawing placed there. Outside one, as when the host adds
-    /// its series again after a [`restore`](Self::restore) that left them out, drawings keep
-    /// their stored count of items under them, which already includes the series.
+    /// its series again after restoring a layout that left them out, drawings keep their stored
+    /// count of items under them, which already includes the series.
     pub fn add_series(&mut self, options: SeriesOptions) -> SeriesId {
         #[cfg(feature = "drawings")]
         let stack = self.pane_stack(SeriesId(self.next_series));
