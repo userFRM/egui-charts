@@ -3020,12 +3020,13 @@ mod tests {
     }
 
     /// Requests added after another symbol's bars arrive follow that symbol, including when a
-    /// chart interval change makes the study need bars of a stated interval.
+    /// chart interval change makes the study need bars of a stated interval. Studies that already
+    /// request their own data stay excluded by the same rule as the Symbol input.
     #[test]
     fn bar_study_on_another_symbol_reads_its_own_bars_on_that_symbol() {
         use super::super::{Performance, PivotPoints, StudyData, StudyDataRequest, Volume24h};
         use crate::model::BarClock;
-        let cases: [(Box<dyn Indicator>, Timeframe, Timeframe); 3] = [
+        let cases: [(Box<dyn Indicator>, Timeframe, Timeframe); 4] = [
             (
                 Box::new(Volume24h::new()),
                 Timeframe::Week1,
@@ -3033,6 +3034,11 @@ mod tests {
             ),
             (
                 Box::new(Performance::new()),
+                Timeframe::Min5,
+                Timeframe::Day1,
+            ),
+            (
+                Box::new(performance_alone()),
                 Timeframe::Min5,
                 Timeframe::Day1,
             ),
@@ -3051,6 +3057,24 @@ mod tests {
             let mut study = ConfiguredStudy::new(inner);
             study.set_timeframe(Timeframe::Day1);
             study.set_bar_clock(&BarClock::new(Timeframe::Day1));
+            if !study.runs_on_other_symbol() {
+                assert!(
+                    !study
+                        .inputs()
+                        .iter()
+                        .any(|input| input.id == "calculation_symbol"),
+                    "{}",
+                    study.name()
+                );
+                assert!(
+                    study
+                        .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
+                        .is_err(),
+                    "{}",
+                    study.name()
+                );
+                continue;
+            }
             assert!(study.data_requests().is_empty(), "{}", study.name());
             study
                 .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
