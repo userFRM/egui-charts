@@ -1340,9 +1340,9 @@ mod tests {
         h.run();
         h.key_press(egui::Key::PageDown);
         h.run();
-        let middle = std::iter::once("Third".to_owned())
+        let mut middle = std::iter::once("Third".to_owned())
             .chain((4..9).map(|number| format!("Story {number}")));
-        assert!(middle.into_iter().any(|title| {
+        assert!(middle.any(|title| {
             h.query_by_role_and_label(egui::Role::Button, &title)
                 .is_some_and(|node| node.is_focused())
         }));
