@@ -1,14 +1,15 @@
-//! Card and badge colours of the forecast tool.
+//! Card, badge and anchor colours of the forecast tool.
 
 use super::Drawing;
 use crate::theme::ChartColors;
 use egui::Color32;
 use serde::{Deserialize, Serialize};
 
-/// Colours of a forecast's start and target cards and of its SUCCESS and FAILED badges, as
-/// unmultiplied RGBA, and how far their backgrounds fade. The default is the look of a new
-/// forecast: blue cards with a blue border and white text, a green SUCCESS and a red FAILED
-/// badge with white text, and backgrounds at 90% opacity. An unset colour takes the active
+/// Colours of a forecast's start and target cards, its SUCCESS, FAILED and PENDING badges and
+/// its anchor dots, as unmultiplied RGBA, and how far their backgrounds fade. The default is
+/// blue cards with a blue border and white text, a green SUCCESS and a red FAILED badge with
+/// white text, a pale yellow PENDING badge with brown text while undecided, dark grey anchor
+/// dots and backgrounds at 90% opacity. An unset card or badge colour takes the active
 /// theme's: the cards write in the axis text colour, the success badge in the rising candle
 /// colour and the failure badge in the falling candle colour, all on the axis background. A
 /// card has a border only while its border colour is set. The forecast's line keeps the
@@ -50,6 +51,12 @@ pub struct ForecastStyle {
     pub failure_background: Option<[u8; 4]>,
     /// Text colour of the FAILED badge.
     pub failure_text: Option<[u8; 4]>,
+    /// Background of the PENDING badge, shown while the target bar is still ahead or forming.
+    pub pending_background: Option<[u8; 4]>,
+    /// Text colour of the PENDING badge.
+    pub pending_text: Option<[u8; 4]>,
+    /// Fill of the dots at the start and target anchors; `None` takes the forecast's line colour.
+    pub anchor_color: Option<[u8; 4]>,
     /// How far the card and badge backgrounds fade, in percent: 0 paints them as they are and
     /// 100, or more, hides them. Borders and text keep their colours.
     pub transparency: u8,
@@ -57,7 +64,8 @@ pub struct ForecastStyle {
 
 impl Default for ForecastStyle {
     /// Blue cards with a blue border and white text, a green SUCCESS and a red FAILED badge
-    /// with white text, and backgrounds at 90% opacity.
+    /// with white text, a pale yellow PENDING badge with brown text while undecided, dark grey
+    /// anchor dots and backgrounds at 90% opacity.
     fn default() -> Self {
         use super::drawing::{BLUE, GREEN, RED, WHITE, tint};
         Self {
@@ -71,6 +79,9 @@ impl Default for ForecastStyle {
             success_text: Some(WHITE),
             failure_background: Some(tint(RED, 230)),
             failure_text: Some(WHITE),
+            pending_background: Some([234, 210, 137, 230]),
+            pending_text: Some([109, 77, 34, 255]),
+            anchor_color: Some([32, 32, 32, 255]),
             transparency: 0,
         }
     }
@@ -87,7 +98,8 @@ pub(crate) struct CardColors {
 impl ForecastStyle {
     /// The settings a forecast saved without them is drawn with: the theme's colours, no
     /// borders and no fading, with its fill colour, when set, as the background of every card
-    /// and badge, as such forecasts were drawn.
+    /// and decided badge, as such forecasts were drawn, and the default pending badge and
+    /// anchor colours, which these forecasts did not have.
     pub(crate) fn legacy(drawing: &Drawing) -> Self {
         let fill = drawing.fill_color;
         Self {
@@ -102,12 +114,13 @@ impl ForecastStyle {
             failure_background: fill,
             failure_text: None,
             transparency: 0,
+            ..Self::default()
         }
     }
 
-    /// The colours of the start card, the target card, the success badge and the failure
-    /// badge, in this order, with unset ones taken from `chart`. Badges have no border.
-    pub(crate) fn cards(&self, chart: &ChartColors) -> [CardColors; 4] {
+    /// The colours of the start card, the target card, the success, failure and pending badges,
+    /// in this order, with unset ones taken from `chart`. Badges have no border.
+    pub(crate) fn cards(&self, chart: &ChartColors) -> [CardColors; 5] {
         let color = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
         let card =
             |background: Option<[u8; 4]>, text: Option<[u8; 4]>, border, theme_text| CardColors {
@@ -140,13 +153,19 @@ impl ForecastStyle {
                 None,
                 chart.candle_down,
             ),
+            card(
+                self.pending_background,
+                self.pending_text,
+                None,
+                chart.axis_text,
+            ),
         ]
     }
 }
 
 impl Drawing {
-    /// The card and badge colours this forecast is drawn with: its own, or for one saved
-    /// without them, the colours that draw it as it was drawn.
+    /// The card, badge and anchor colours this forecast is drawn with: its own, or for one
+    /// saved without them, its former cards and decided badges with the new defaults otherwise.
     pub(crate) fn forecast_style(&self) -> ForecastStyle {
         self.forecast.unwrap_or_else(|| ForecastStyle::legacy(self))
     }

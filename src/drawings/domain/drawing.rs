@@ -409,10 +409,11 @@ pub struct Drawing {
     /// colour with a zone in the fill colour and no coefficients. Other tools ignore it.
     #[serde(default)]
     pub projection: Option<ProjectionConfig>,
-    /// Card and badge colours and the background transparency of the forecast tool. New
+    /// Card, badge and anchor colours and the background transparency of the forecast tool. New
     /// forecasts start from [`ForecastStyle::default`]; `None`, as on forecasts saved before
     /// these settings, draws the theme's colours without borders, with the fill colour, when
-    /// set, as the background of every card and badge. Other tools ignore it.
+    /// set, as the background of its cards and decided badges, and the default pending badge
+    /// and anchor dots. Other tools ignore it.
     #[serde(default)]
     pub forecast: Option<ForecastStyle>,
 

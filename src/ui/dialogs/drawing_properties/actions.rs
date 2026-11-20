@@ -1591,6 +1591,7 @@ mod tests {
                         failure_background: fill,
                         failure_text: None,
                         transparency: 0,
+                        ..ForecastStyle::default()
                     });
                 },
             ),
