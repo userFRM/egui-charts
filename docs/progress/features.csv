@@ -16,10 +16,10 @@ Alerts,Alerts,Indicator alerts on study plots and declared conditions,unverified
 Alerts,Alerts,Inline alert creation forms in the alerts panel,unverified,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs;src/services/alerts.rs;terminal/src/alerts.rs,
 Alerts,Alerts,Moving up / moving down operators,unverified,library,src/ui/dialogs/alert_dialog/dialog.rs,
 Alerts,Alerts,Multi-condition alerts,verified,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs,2064;2163;2164;2165
-Alerts,Alerts,Notification: email and plain-text email,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,1134
+Alerts,Alerts,Notification: email and plain-text email,unverified,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/ui/dialogs/alert_dialog/preset.rs;src/services/alerts.rs;src/services/alert_engine.rs,1134;3593
 Alerts,Alerts,Notification: in-app popup when an alert fires,incomplete,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
-Alerts,Alerts,Notification: mobile app push,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,1134
-Alerts,Alerts,Notification: webhook,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,1134
+Alerts,Alerts,Notification: mobile app push,unverified,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alerts.rs;src/services/alert_engine.rs,1134;3593
+Alerts,Alerts,Notification: webhook,unverified,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alerts.rs;src/services/alert_engine.rs,1134;3593
 Alerts,Alerts,"Price operators: crossing, crossing up, crossing down, greater than, less than",unverified,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
 Alerts,Alerts,Quick alert from the price-scale '+' or the chart context menu,incomplete,library,src/ui/context_menu/mod.rs;src/chart/rendering/overlays/crosshair.rs;src/chart/rendering/axes/mod.rs;src/config/chart.rs;src/widget/settings/apply.rs;src/ui/context_menu/chart_menus/mod.rs;src/widget/keyboard.rs;terminal/src/alerts.rs;src/widget/frame/mod.rs;examples/demo/controller.rs,2028;2225;2489;3427;3737;3793;3794
 Alerts,Alerts,Server-side evaluation,unverified,host,src/services/alerts.rs;src/ui/widget_bar/panels/alerts_panel.rs,

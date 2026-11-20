@@ -92,17 +92,61 @@ use crate::model::{
 /// saving or removing an alert discards its evaluation state, so a resumed alert starts afresh.
 ///
 /// ```
+/// use std::sync::{Arc, Mutex};
+///
 /// use chrono::{DateTime, Utc};
 /// use egui_charts::model::{Alert, AlertCondition, Bar, Timeframe};
-/// use egui_charts::services::AlertEngine;
+/// use egui_charts::services::{AlertEngine, AlertNotice};
 ///
 /// let mut alert = Alert::new("AAPL", AlertCondition::CrossingUp(100.0));
 /// alert.timeframe = Some(Timeframe::Min1);
-/// let engine = AlertEngine::new().with_alerts(vec![alert]);
+/// alert.message = r#"{"symbol": "{{symbol}}", "close": {{close}}}"#.into();
+/// alert.delivery.email = true;
+/// alert.delivery.plain_text = true;
+/// alert.delivery.plain_text_address = "pager@example.com".into();
+/// alert.delivery.push = true;
+/// alert.delivery.webhook = true;
+/// alert.delivery.webhook_url = "https://example.com/hook".into();
+/// // What the host hands to its mail, push and web clients, which must not block the callback.
+/// let sent = Arc::new(Mutex::new(Vec::new()));
+/// let outbox = Arc::clone(&sent);
+/// let engine = AlertEngine::new()
+///     .with_alerts(vec![alert])
+///     .on_trigger(move |alert, event| {
+///         let Some(notice) = AlertNotice::new(alert, event) else {
+///             return;
+///         };
+///         let delivery = &alert.delivery;
+///         let mut outbox = outbox.lock().unwrap();
+///         if delivery.email {
+///             outbox.push(format!("email: {}", notice.subject));
+///         }
+///         if delivery.plain_text {
+///             // An empty address sends to the account's alternative address.
+///             let to = delivery.plain_text_address.trim();
+///             outbox.push(format!("plain text to {to}: {}", notice.subject));
+///         }
+///         if delivery.push {
+///             outbox.push(format!("push: {}", notice.push_title));
+///         }
+///         if delivery.webhook {
+///             let url = delivery.webhook_url.trim();
+///             outbox.push(format!("POST {url} {}: {}", notice.content_type, notice.body));
+///         }
+///     });
 /// let time = |seconds| DateTime::<Utc>::from_timestamp(seconds, 0).unwrap();
 /// let bar = |seconds, close| Bar::new(time(seconds), close, close, close, close, 1.0);
 /// // The close rises through 100 on the second bar; `update` also takes the chart's source values.
 /// engine.update("AAPL", None, Timeframe::Min1, &[bar(0, 99.0), bar(60, 101.0)], time(61), |_, _| None);
+/// assert_eq!(
+///     *sent.lock().unwrap(),
+///     [
+///         "email: AAPL: Crossing up 100",
+///         "plain text to pager@example.com: AAPL: Crossing up 100",
+///         "push: AAPL: Crossing up 100",
+///         r#"POST https://example.com/hook application/json: {"symbol": "AAPL", "close": 101}"#,
+///     ]
+/// );
 /// ```
 pub struct AlertEngine {
     state: Mutex<State>,
@@ -220,8 +264,8 @@ impl AlertEngine {
 
     /// Calls `deliver` with the alert and its [`AlertEvent::TriggeredForSymbol`] on every trigger,
     /// after the event is pushed, so the host can send email, push notifications or web requests.
-    /// The call comes from the thread that fed the engine and must return at once; it may use
-    /// the engine.
+    /// [`AlertNotice::new`](super::AlertNotice::new) builds what each of them sends. The call
+    /// comes from the thread that fed the engine and must return at once; it may use the engine.
     pub fn on_trigger(
         mut self,
         deliver: impl Fn(&Alert, &AlertEvent) + MaybeSend + 'static,
