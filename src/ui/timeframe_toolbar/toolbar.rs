@@ -4,9 +4,10 @@
 //! session controls, and dividend adjustment.
 //! Narrow bars keep date ranges in a menu beside the clock and session controls.
 
-use super::{DateRange, SessionType, TimeframeToolbarAction, TimeframeToolbarState};
+use super::{SessionType, TimeframeToolbarAction, TimeframeToolbarState};
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
+use crate::model::DateRange;
 use crate::model::TimezoneId;
 use crate::scales::TimezoneMode;
 use crate::styles::{icons as icon_sizes, stroke};

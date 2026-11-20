@@ -187,6 +187,9 @@ pub struct OrderRequest {
     pub stop_loss: Option<f64>,
     /// How long the order stays working.
     pub time_in_force: TimeInForce,
+    /// When a [`GoodTillDate`](TimeInForce::GoodTillDate) order expires, in UTC. `None` for
+    /// every other time in force.
+    pub expires: Option<DateTime<Utc>>,
     /// Explicit link to the net position in this symbol. Ordinary opposite-side orders are
     /// not brackets. Brokers should preserve this role on updates.
     pub position_bracket: Option<PositionBracket>,
@@ -209,6 +212,7 @@ impl OrderRequest {
             take_profit_levels: Vec::new(),
             stop_loss: None,
             time_in_force: TimeInForce::Day,
+            expires: None,
             position_bracket: None,
         }
     }
@@ -229,6 +233,8 @@ pub enum TimeInForce {
     Month,
     /// Until it fills or is cancelled.
     GoodTillCancelled,
+    /// Until it fills, is cancelled or reaches [`OrderRequest::expires`].
+    GoodTillDate,
     /// Fills what it can at once and cancels the rest.
     ImmediateOrCancel,
     /// Fills in full at once, or not at all.
@@ -243,6 +249,7 @@ impl TimeInForce {
             Self::Week => "WEEK",
             Self::Month => "MONTH",
             Self::GoodTillCancelled => "GTC",
+            Self::GoodTillDate => "GTD",
             Self::ImmediateOrCancel => "IOC",
             Self::FillOrKill => "FOK",
         }
@@ -643,6 +650,8 @@ pub struct TradingRules {
     /// [`point_value`](Self::point_value), and shows no pip value for an instrument without pips.
     pub pip_value: Option<f64>,
     /// The times in force the broker accepts for the symbol, the default first. Never empty.
+    /// The first is never [`GoodTillDate`](TimeInForce::GoodTillDate), which needs an entered
+    /// expiry: orders sent without the ticket, such as Buy and Sell, take the first.
     pub time_in_force: Vec<TimeInForce>,
     /// The trade value per unit of margin, such as 20 for 20:1, if the broker trades the symbol
     /// on margin. The order ticket estimates the margin an order needs from it.

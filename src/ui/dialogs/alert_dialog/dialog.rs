@@ -397,13 +397,6 @@ impl AlertDialog {
         self.is_open = false;
     }
 
-    /// Follow an external close flag.
-    pub fn sync_open_state(&mut self, should_be_open: bool) {
-        if !should_be_open {
-            self.close();
-        }
-    }
-
     fn poll(&mut self, ctx: &Context) {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
