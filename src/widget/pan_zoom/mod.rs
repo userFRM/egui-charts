@@ -369,7 +369,7 @@ impl Chart {
         chart_rect_min_x: f32,
         has_active_drawing_tool: bool,
     ) {
-        // CRITICAL: Skip panning if box zoom is active (right-click drag)
+        // A box-zoom selection in progress owns the drag, so it does not pan.
         let box_zoom_active = self.box_zoom.active;
         // The frame clock times the samples, as it times the input they come from.
         let (is_touch, multi_touch, now) = ui.input(|i| {

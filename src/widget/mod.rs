@@ -392,7 +392,7 @@ pub struct Chart {
     /// Original column ids of restored studies, retained for snapshots from earlier restores.
     #[cfg(feature = "drawings")]
     study_column_ids: std::collections::HashMap<usize, usize>,
-    /// Right-click box zoom state
+    /// Box-zoom selection in progress
     pub(crate) box_zoom: BoxZoomState,
     /// Whether box-zoom mode is on: set by [`Chart::set_zoom_mode`], ended by a completed zoom
     /// and by an active drawing tool or the eraser.
