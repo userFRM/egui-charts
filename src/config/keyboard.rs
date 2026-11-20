@@ -55,7 +55,17 @@ pub enum KeyboardAction {
     InvertScale,
     /// Copy the selected drawing.
     CopyDrawing,
-    /// Paste a copied drawing.
+    /// Paste a copied drawing. The chart reports clipboard text as
+    /// [`ShortcutRequest::PasteDrawing`](crate::widget::ShortcutRequest::PasteDrawing), and a
+    /// paste without text as [`ShortcutRequest::Action`](crate::widget::ShortcutRequest::Action)
+    /// with this action: there a host looks for a picture on its clipboard.
+    #[cfg_attr(
+        feature = "drawings",
+        doc = "A picture the platform read comes as \
+               [`ShortcutRequest::PasteImage`](crate::widget::ShortcutRequest::PasteImage) \
+               instead. A host places a picture with \
+               [`Chart::paste_image`](crate::Chart::paste_image)."
+    )]
     PasteDrawing,
     /// Hide or show drawings.
     ToggleDrawings,
@@ -180,6 +190,15 @@ pub enum KeyboardAction {
     /// Show the previous symbol of the active watchlist (Up or Shift+Space), as
     /// [`NextWatchlistSymbol`](Self::NextWatchlistSymbol) does the next one.
     PreviousWatchlistSymbol,
+
+    // Trading
+    /// A buy limit order at the pointer's price (Alt+Shift+B). `ChartMenus::show` returns the
+    /// order of the chart menu's buy limit row there, and nothing where the menu has no such
+    /// row. Without the `ui` feature the host receives it as a shortcut request.
+    BuyLimitAtPointer,
+    /// A sell limit order at the pointer's price (Alt+Shift+S), as
+    /// [`BuyLimitAtPointer`](Self::BuyLimitAtPointer) is for buying.
+    SellLimitAtPointer,
 }
 
 impl KeyboardAction {
@@ -280,6 +299,8 @@ impl KeyboardAction {
             Self::CycleChartFocusBack => "Previous chart",
             Self::NextWatchlistSymbol => "Next watchlist symbol",
             Self::PreviousWatchlistSymbol => "Previous watchlist symbol",
+            Self::BuyLimitAtPointer => "Buy limit at pointer price",
+            Self::SellLimitAtPointer => "Sell limit at pointer price",
         }
     }
 
@@ -435,6 +456,22 @@ impl KeyboardAction {
                     ]
                 }
             }
+            Self::BuyLimitAtPointer => {
+                const {
+                    &[KeyboardShortcut::new(
+                        Modifiers::ALT.plus(Modifiers::SHIFT),
+                        Key::B,
+                    )]
+                }
+            }
+            Self::SellLimitAtPointer => {
+                const {
+                    &[KeyboardShortcut::new(
+                        Modifiers::ALT.plus(Modifiers::SHIFT),
+                        Key::S,
+                    )]
+                }
+            }
             _ => &[],
         }
     }
@@ -483,6 +520,10 @@ impl KeyboardAction {
             Self::ShowKeyboardHelp => "Ctrl+/ / ? / F1",
             Self::CycleChartFocus => "Tab",
             Self::CycleChartFocusBack => "Shift+Tab",
+            Self::NextWatchlistSymbol => "↓ / Space",
+            Self::PreviousWatchlistSymbol => "↑ / Shift+Space",
+            Self::BuyLimitAtPointer => "Alt+Shift+B",
+            Self::SellLimitAtPointer => "Alt+Shift+S",
             Self::DrawingTool(crate::config::DrawingToolType::TrendLine) => "Alt+T",
             Self::DrawingTool(crate::config::DrawingToolType::HorizontalLine) => "Alt+H",
             Self::DrawingTool(crate::config::DrawingToolType::VerticalLine) => "Alt+V",
@@ -490,8 +531,6 @@ impl KeyboardAction {
             Self::DrawingTool(crate::config::DrawingToolType::HorizontalRay) => "Alt+J",
             Self::DrawingTool(crate::config::DrawingToolType::FibonacciRetracement) => "Alt+F",
             Self::DrawingTool(crate::config::DrawingToolType::Rect) => "Alt+Shift+R",
-            Self::NextWatchlistSymbol => "↓ / Space",
-            Self::PreviousWatchlistSymbol => "↑ / Shift+Space",
             _ => "",
         }
     }
@@ -571,6 +610,10 @@ impl KeyboardAction {
             (
                 "Watchlist",
                 vec![Self::NextWatchlistSymbol, Self::PreviousWatchlistSymbol],
+            ),
+            (
+                "Trading",
+                vec![Self::BuyLimitAtPointer, Self::SellLimitAtPointer],
             ),
         ]
     }

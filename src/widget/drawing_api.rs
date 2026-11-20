@@ -18,8 +18,8 @@ pub enum DrawingError {
         /// The index of the anchor.
         point: usize,
     },
-    /// The drawing manager refused the drawing; the text says why, such as a disabled or
-    /// unknown tool or anchors the tool cannot use.
+    /// The drawing was refused; the text says why, such as a disabled or unknown tool,
+    /// anchors the tool cannot use or a picture without an address.
     Invalid(&'static str),
 }
 
@@ -501,19 +501,7 @@ impl Chart {
             return Err("Drawing is not an image");
         }
         let uri = uri.into();
-        if uri.trim().is_empty() {
-            return Err("Image address is empty");
-        }
-        if !(size.x > 0.0 && size.y > 0.0 && size.is_finite()) {
-            return Err("Image size must be positive and finite");
-        }
-        let sizing = &crate::tokens::DESIGN_TOKENS.sizing.media;
-        let limit = egui::vec2(
-            2.0 * sizing.image_default_width,
-            2.0 * sizing.image_default_height,
-        );
-        let scale = 1.0_f32.min(limit.x / size.x).min(limit.y / size.y);
-        let frame = (size * scale).max(egui::Vec2::splat(1.0)).min(limit);
+        let frame = image_frame(&uri, size)?;
         self.user_action(|chart| {
             let manager = chart.drawings_mut();
             if manager
@@ -528,6 +516,60 @@ impl Chart {
                 drawing.image.get_or_insert_with(Default::default).size = Some(frame.into());
             })
         })
+    }
+
+    /// Places a picture as a new image drawing and returns its id: the host's answer to a
+    /// [`ShortcutRequest::PasteImage`](crate::widget::ShortcutRequest::PasteImage), or to a
+    /// paste without drawing text after it found a picture on its clipboard. The picture's
+    /// top-left corner is at the bar slot and price under the pointer when the pointer is over
+    /// the price pane, and otherwise at the centre of the price pane as last drawn. `uri` and
+    /// `size` are as for [`Self::set_drawing_image`], which sizes the frame the same way. The
+    /// drawing is selected, the call is one undoable step and no
+    /// [`ChartEvent::ImageRequested`](crate::widget::ChartEvent::ImageRequested) follows.
+    ///
+    /// Changes nothing and returns [`DrawingError::Invalid`] with the reason for an empty
+    /// address, a size that is not positive and finite, a chart not drawn yet, a chart without
+    /// bars to date the anchor and a disabled Image tool.
+    pub fn paste_image(
+        &mut self,
+        uri: impl Into<String>,
+        size: egui::Vec2,
+    ) -> Result<usize, DrawingError> {
+        let uri = uri.into();
+        let frame = image_frame(&uri, size).map_err(DrawingError::Invalid)?;
+        let plot = self.last_rendered_price_rect;
+        if !plot.is_positive() {
+            return Err(DrawingError::Invalid("Chart has not been drawn"));
+        }
+        let pos = (self.host_events.pointer.as_ref())
+            .map(|pointer| pointer.pos)
+            .filter(|pos| plot.contains(*pos))
+            .unwrap_or_else(|| plot.center());
+        let (time, price) = self
+            .price_pane_point(pos)
+            .ok_or(DrawingError::Invalid("Chart has no bars to date the image"))?;
+        let mut drawing = self
+            .drawings
+            .new_drawing(0, crate::drawings::DrawingToolType::Image);
+        drawing.z_order = self.drawings.top_z_order();
+        drawing.text = Some(uri);
+        drawing.image.get_or_insert_with(Default::default).size = Some(frame.into());
+        let id = self.user_action(|chart| chart.create_drawing(drawing, &[(time, price)]))?;
+        self.drawings.select(id);
+        Ok(id)
+    }
+
+    /// The time and price at `pos` on the price pane as last drawn, the time at the nearest bar
+    /// slot. `None` without bars to date it.
+    pub(super) fn price_pane_point(&self, pos: egui::Pos2) -> Option<(DateTime<Utc>, f64)> {
+        let plot = self.last_rendered_price_rect;
+        let index = self
+            .state
+            .time_scale()
+            .coord_to_idx_precise(pos.x, plot.left(), plot.width())
+            .round();
+        let time = crate::model::time_at(self.state.shown(), index)?;
+        Some((time, self.last_price_map.y_to_price(pos.y)))
     }
 
     /// The pane that draws drawing `id`, or `None` for an unknown drawing.
@@ -762,6 +804,25 @@ impl Chart {
     }
 }
 
+/// The frame of a picture of `size` pixels, scaled down to fit twice the default image frame
+/// with each side at least one point. Refuses an empty address and a size that is not
+/// positive and finite.
+fn image_frame(uri: &str, size: egui::Vec2) -> Result<egui::Vec2, &'static str> {
+    if uri.trim().is_empty() {
+        return Err("Image address is empty");
+    }
+    if !(size.x > 0.0 && size.y > 0.0 && size.is_finite()) {
+        return Err("Image size must be positive and finite");
+    }
+    let sizing = &crate::tokens::DESIGN_TOKENS.sizing.media;
+    let limit = egui::vec2(
+        2.0 * sizing.image_default_width,
+        2.0 * sizing.image_default_height,
+    );
+    let scale = 1.0_f32.min(limit.x / size.x).min(limit.y / size.y);
+    Ok((size * scale).max(egui::Vec2::splat(1.0)).min(limit))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -769,6 +830,124 @@ mod tests {
     use crate::drawings::manager::DrawingSyncAction;
     use crate::model::{Bar, BarData};
     use crate::studies::{CustomIndicator, IndicatorValue};
+
+    /// A pasted picture is one selected, undoable image drawing at the pointer over the price
+    /// pane, else at the pane's centre; refusals change nothing.
+    #[test]
+    fn pasted_pictures_land_at_the_pointer_or_the_price_pane_centre() {
+        use crate::drawings::ToolAvailability;
+        use crate::widget::ChartEvent;
+        use crate::widget::test_frames::{chart, frame};
+        use egui::{Context, Event, pos2, vec2};
+
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        chart.add_indicator(Box::new(
+            CustomIndicator::new("Pane", |bars| {
+                vec![IndicatorValue::Single(50.0); bars.len()]
+            })
+            .with_overlay(false),
+        ));
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let map = chart.get_chart_mapping();
+        let plot = chart.last_rendered_price_rect;
+        let over = pos2(map.idx_to_x(30), map.price_to_y(16.0));
+        let study = &chart.last_rendered_indicator_panes[0];
+        let study = pos2(study.mapping.idx_to_x(30), study.chart_rect.center().y);
+        for (time, pointer, at, expected) in [
+            (0.1, Event::PointerMoved(over), over, 16.0),
+            (0.2, Event::PointerMoved(study), plot.center(), 15.0),
+            (0.3, Event::PointerGone, plot.center(), 15.0),
+        ] {
+            frame(&ctx, &mut chart, time, vec![pointer]);
+            chart.drain_events().for_each(drop);
+            let id = chart.paste_image("test://a", vec2(1920.0, 1080.0)).unwrap();
+            let image = chart
+                .drawings()
+                .drawings
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap();
+            assert_eq!(image.tool_type, DrawingToolType::Image);
+            assert_eq!(image.text.as_deref(), Some("test://a"));
+            assert_eq!(image.image.unwrap().size, Some([240.0, 135.0]));
+            assert_eq!(chart.drawings().sel_drawing(), Some(id));
+            assert!(
+                !chart
+                    .drain_events()
+                    .any(|event| matches!(event, ChartEvent::ImageRequested(_)))
+            );
+            let [(anchor, price)] = chart.drawing_points(id).unwrap()[..] else {
+                panic!("one anchor");
+            };
+            let seconds = anchor.timestamp() - 1_700_000_000;
+            assert_eq!(seconds % 86_400, 0, "{anchor}");
+            let x = map.idx_to_x((seconds / 86_400) as usize);
+            assert!(
+                (x - at.x).abs() <= map.bar_spacing / 2.0 + 1e-3,
+                "{x} {at:?}"
+            );
+            assert!((price - expected).abs() < 1e-6, "{price} {at:?}");
+            assert!(chart.undo());
+            assert!(chart.drawings().drawings.is_empty());
+        }
+
+        let drawn = |bars: bool| {
+            let ctx = Context::default();
+            let mut chart = if bars {
+                crate::widget::test_frames::chart(&[10.0], &[20.0])
+            } else {
+                Chart::new(BarData::default())
+            };
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart
+        };
+        let mut disabled = drawn(true);
+        disabled.drawings_mut().registry.set_availability(
+            DrawingToolType::Image,
+            ToolAvailability {
+                visible: true,
+                enabled: false,
+            },
+        );
+        let size = "Image size must be positive and finite";
+        for (mut chart, uri, picture, error) in [
+            (
+                drawn(true),
+                "  ",
+                vec2(10.0, 10.0),
+                "Image address is empty",
+            ),
+            (drawn(true), "test://a", vec2(0.0, 10.0), size),
+            (drawn(true), "test://a", vec2(10.0, f32::INFINITY), size),
+            (
+                crate::widget::test_frames::chart(&[10.0], &[20.0]),
+                "test://a",
+                vec2(10.0, 10.0),
+                "Chart has not been drawn",
+            ),
+            (
+                drawn(false),
+                "test://a",
+                vec2(10.0, 10.0),
+                "Chart has no bars to date the image",
+            ),
+            (
+                disabled,
+                "test://a",
+                vec2(10.0, 10.0),
+                "Drawing tool is disabled",
+            ),
+        ] {
+            assert!(!chart.can_undo(), "{error}");
+            assert_eq!(
+                chart.paste_image(uri, picture),
+                Err(DrawingError::Invalid(error))
+            );
+            assert!(chart.drawings().drawings.is_empty(), "{error}");
+            assert!(!chart.can_undo(), "{error}");
+        }
+    }
 
     /// Round-family host updates share the saved config, reject invalid widths and remain one
     /// undoable edit.

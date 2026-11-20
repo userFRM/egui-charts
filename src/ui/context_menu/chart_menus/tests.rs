@@ -2995,6 +2995,118 @@ fn study_and_series_panes_offer_no_main_symbol_alerts_or_orders() {
     }
 }
 
+/// Alt+Shift+B and Alt+Shift+S return the order of the chart menu's buy or sell limit row at the
+/// pointer, rounded to the tick, once, and nothing where the menu offers no such row.
+#[test]
+fn limit_order_keys_return_the_menu_limit_row_at_the_pointer() {
+    use crate::model::{Bar, Instrument, OrderRequest, OrderSide, OrderType};
+    use egui::Key::{B, S};
+    type Setup = fn(&mut Chart, &mut ChartMenus);
+    // (case, setup, pointer, key, the side of the order returned)
+    type Row = (&'static str, Setup, Pos2, egui::Key, Option<OrderSide>);
+    let none: Setup = |_, _| {};
+    // The last bar closes at 40, below the pointer's price.
+    let market_below: Setup = |chart, _| {
+        let time = chart.bars(SeriesId::MAIN).last().unwrap().time;
+        chart.update(SeriesId::MAIN, Bar::new(time, 30.0, 40.0, 30.0, 40.0, 1.0));
+    };
+    // y 250 lies in the price pane, at a price between 50 and 150, and y 530 in a study pane.
+    let price = egui::pos2(350.0, 250.0);
+    let rows: [Row; 9] = [
+        ("below the market", none, price, B, Some(OrderSide::Buy)),
+        ("sell below the market", none, price, S, None),
+        (
+            "above the market",
+            market_below,
+            price,
+            S,
+            Some(OrderSide::Sell),
+        ),
+        ("buy above the market", market_below, price, B, None),
+        (
+            "study pane",
+            |chart, _| {
+                chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            },
+            egui::pos2(350.0, 530.0),
+            B,
+            None,
+        ),
+        ("price axis", none, egui::pos2(795.0, 250.0), B, None),
+        (
+            "trading hidden",
+            |_, menus| menus.set_control_visible(Control::Trading, false),
+            price,
+            B,
+            None,
+        ),
+        (
+            "limit orders refused",
+            |_, menus| {
+                let stop = Capabilities {
+                    stop: true,
+                    ..Capabilities::default()
+                };
+                menus.set_order_entries(1.0, stop);
+            },
+            price,
+            B,
+            None,
+        ),
+        (
+            "menus hidden",
+            |_, menus| menus.set_control_visible(Control::ContextMenus, false),
+            price,
+            B,
+            None,
+        ),
+    ];
+    for (case, setup, pos, key, side) in rows {
+        let ctx = Context::default();
+        // TEST trades between 100 and 110, so with a tick of 100 the pointer's price is 100.
+        let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+        chart.set_symbol("TEST");
+        chart.set_instrument(Some(Instrument::new("TEST").with_tick_size(100.0)));
+        let mut menus = ChartMenus::default();
+        setup(&mut chart, &mut menus);
+        let mut frame = |chart: &mut Chart, events| {
+            let mut action = None;
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                    action = menus.show(ui.ctx(), chart);
+                },
+            )
+            .drop_without_applying_deltas();
+            action
+        };
+        for _ in 0..3 {
+            frame(&mut chart, vec![]);
+        }
+        for _ in 0..3 {
+            frame(&mut chart, vec![Event::PointerMoved(pos)]);
+        }
+        let press = Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::ALT.plus(Modifiers::SHIFT),
+        };
+        let expected = side.map(|side| {
+            let order = OrderRequest::new("TEST", side, 1.0, OrderType::Limit(100.0));
+            ChartContextAction::Chart(ContextMenuAction::Order(order))
+        });
+        assert_eq!(frame(&mut chart, vec![press]), expected, "{case}");
+        assert_eq!(frame(&mut chart, vec![]), None, "{case}: the next pass");
+    }
+}
+
 /// Guards #3427: the chart and series menus write the clicked price, and the order rows their
 /// price, as the chart's price scale writes prices: at the instrument's precision, with the
 /// chart's thousands separator or the host's price formatter, and as a price on a percentage
