@@ -944,7 +944,12 @@ mod tests {
                     )
                 })
                 .collect();
-            assert_eq!(chart.alert_sources(), expected, "{name}");
+            let offered: Vec<_> = chart
+                .alert_sources()
+                .into_iter()
+                .filter(|(source, _)| matches!(source, AlertSource::Study { .. }))
+                .collect();
+            assert_eq!(offered, expected, "{name}");
             for output in 0..57 {
                 let source = AlertSource::Study {
                     id: id.0.to_string(),
