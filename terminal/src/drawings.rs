@@ -208,11 +208,10 @@ impl Terminal {
             }
             Direction::Save => {
                 settings.magnet_hint_dismissed = self.drawings.toolbar.state.magnet_hint_dismissed;
-                // The settings hold one set of defaults, so they take the merged
-                // set, not only the active chart's: a pick made on another chart
-                // must survive whichever chart is active when settings are saved.
                 settings.drawing_defaults = self
-                    .merged_drawing_defaults()
+                    .chart()
+                    .drawings()
+                    .tool_defaults
                     .iter()
                     .filter_map(|(tool, template)| {
                         let serde_json::Value::String(tool) = serde_json::to_value(tool).ok()?
@@ -741,7 +740,7 @@ impl Terminal {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{MemoryStorage, SIZE, TestFeed, frame};
+    use super::super::test_support::{MemoryStorage, SIZE, TestFeed, click, frame};
     use super::*;
     use egui::{Event, pos2};
     use egui_charts::drawings::{ChartPoint, Drawing};
@@ -832,6 +831,30 @@ mod tests {
         for _ in 0..4 {
             frame(terminal, SIZE, vec![]);
         }
+    }
+
+    /// Centre of the first rendered text `value`, from a fresh frame.
+    fn rendered_text_at(terminal: &mut Terminal, value: &str) -> egui::Pos2 {
+        let ctx = terminal.ctx().clone();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                time: Some(ctx.input(|i| i.time) + 0.1),
+                ..Default::default()
+            },
+            |ui| {
+                terminal.show(ui);
+            },
+        );
+        let found = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == value => {
+                Some(text.visual_bounding_rect().center())
+            }
+            _ => None,
+        });
+        output.textures_delta.clear();
+        output.drop_without_applying_deltas();
+        found.unwrap_or_else(|| panic!("{value} not rendered"))
     }
 
     /// A new tool's fill follows toolbar colours at its own opacity, except independent fills.
@@ -1007,14 +1030,29 @@ mod tests {
             .get("Rect")
             .expect("rect default saved");
         assert_eq!(template["settings"]["color"], serde_json::json!(green));
-        let second = terminal
+        // A slot added after the pick starts from the pick, and the settings
+        // keep it while that slot is active.
+        apply_layout(
+            &mut terminal,
+            LayoutAction::SelectGrid(ChartLayoutMode::Four),
+        );
+        assert_eq!(terminal.charts.len(), 4);
+        terminal.activate_slot(2);
+        let added = terminal
             .chart()
             .drawings()
             .new_drawing(1, DrawingToolType::Rect);
-        assert_eq!(second.color, green, "active second chart");
+        assert_eq!(added.color, green, "slot added after the pick");
+        let saved = terminal.user_settings();
+        let template = saved
+            .drawing_defaults
+            .get("Rect")
+            .expect("rect default saved");
+        assert_eq!(template["settings"]["color"], serde_json::json!(green));
         // A default saved from the drawing properties dialog on the active
         // chart reaches the other chart: open the dialog on a red trend line,
-        // save it as the default for its tool, and run a frame.
+        // click Template and then Save as default for this tool, and run a frame.
+        terminal.activate_slot(1);
         let mut drawing = line(0);
         drawing.color = [242, 54, 69, 255];
         terminal
@@ -1029,7 +1067,12 @@ mod tests {
                 .properties
                 .open_for_chart(&terminal.charts[1], DrawingId(id))
         );
-        terminal.drawings.properties.props.save_as_default = true;
+        // Let the dialog's window settle before clicking through it.
+        frame(&mut terminal, SIZE, vec![]);
+        let template_at = rendered_text_at(&mut terminal, "Template");
+        let _ = click(&mut terminal, SIZE, template_at);
+        let save_at = rendered_text_at(&mut terminal, "Save as default for this tool");
+        let _ = click(&mut terminal, SIZE, save_at);
         frame(&mut terminal, SIZE, vec![]);
         let first = terminal.charts[0]
             .drawings()
