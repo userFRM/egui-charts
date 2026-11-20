@@ -180,6 +180,11 @@ impl From<WatchlistColumn> for TableColumn {
 }
 
 impl TableColumn {
+    /// Whether this view shows the column and can apply its sort.
+    fn is_shown(&self, wide: bool, compact_columns: &[WatchlistColumn]) -> bool {
+        wide || matches!(self, Self::Quote(column) if *column == WatchlistColumn::Symbol || compact_columns.contains(column))
+    }
+
     fn label(&self) -> &str {
         match self {
             Self::Quote(column) => column_label(*column),
@@ -202,11 +207,19 @@ type GroupKey<'a> = &'a dyn Fn(&str) -> Option<String>;
 struct RowDrag(egui::Id, usize);
 
 /// An edit of the list at `list` that undo reverts while the list still holds `after`, so undo
-/// never discards a later change.
+/// never discards a later change. Section moves carry current collapse states back, while
+/// clearing restores the removed sections' states.
 struct ListEdit {
     list: usize,
     before: Vec<WatchlistItem>,
     after: Vec<WatchlistItem>,
+    sections: SectionUndo,
+}
+
+/// Only clearing removes section states; moves undo their swap of the current states.
+enum SectionUndo {
+    Clear(Vec<bool>),
+    Move { at: usize, down: bool },
 }
 
 /// Watchlists fed by host quotes.
@@ -229,7 +242,8 @@ struct ListEdit {
 /// [`select_previous_symbol`](Self::select_previous_symbol), which wrap at the ends. Column headers
 /// cycle through ascending, descending and list order; sorting keeps symbols inside their section.
 /// Dragging the left edge of a quote column header resizes the column and a double click restores
-/// its width. Clicking a section collapses or expands its symbols. Unsorted rows are dragged to
+/// its width. Clicking a section collapses or expands its symbols independently; its state
+/// follows renames, moves and sorting. Unsorted rows are dragged to
 /// reorder, and rows are right-clicked to flag, rename or remove, and sections to move them with
 /// their symbols. The list menu stars lists, which it then shows first, clears the active list and
 /// undoes a clear or a section move; the more menu shows the descriptions given with
@@ -277,6 +291,11 @@ pub struct WatchlistPanel {
     import_note: Option<(usize, SkippedEntries)>,
     /// Scrolls the selected row into view on the next draw.
     reveal: bool,
+    /// The list as it was when Save a copy was chosen, which the host's answer adds.
+    copy_source: Option<Watchlist>,
+    /// Per list, whether each section, by its position among the sections, is collapsed.
+    /// A missing entry is expanded; section moves and removals carry the states along.
+    collapsed_sections: Vec<Vec<bool>>,
 }
 
 impl std::fmt::Debug for WatchlistPanel {
@@ -347,22 +366,19 @@ impl WatchlistPanel {
             undo: Vec::new(),
             import_note: None,
             reveal: false,
+            copy_source: None,
+            collapsed_sections: Vec::new(),
         }
     }
 
     /// Shows these columns after the symbol, in order; the default is
     /// [`WatchlistColumn::DEFAULT`]. A quote without a column's figure shows a dash, apart from a
-    /// symbol without a quote, which shows nothing. A sort by a column no longer shown is dropped.
+    /// symbol without a quote, which shows nothing.
     pub fn set_columns(&mut self, columns: impl IntoIterator<Item = WatchlistColumn>) {
         self.columns = columns
             .into_iter()
             .filter(|column| *column != WatchlistColumn::Symbol)
             .collect();
-        if self.sort.as_ref().is_some_and(|(column, _)| {
-            matches!(column, TableColumn::Quote(c) if *c != WatchlistColumn::Symbol && !self.columns.contains(c))
-        }) {
-            self.sort = None;
-        }
     }
 
     /// The flag whose symbols the panel shows across every list, if any.
@@ -538,19 +554,21 @@ impl WatchlistPanel {
     }
 
     /// Offers copy-link and save-a-copy on the active list, as `sharing` reports them for
-    /// [`ShareKind::Watchlist`]. A saved copy is added to the lists under the name the host
-    /// answers and, like a duplicate, is not starred. [`poll`](Self::poll) receives the answers.
+    /// [`ShareKind::Watchlist`]. A saved copy holds the list as it was when Save a copy was
+    /// chosen, whatever its name or place when the host answers, and is added under the name
+    /// the host answers; like a duplicate, it is not starred. [`poll`](Self::poll) receives the
+    /// answers.
     pub fn set_sharing(&mut self, sharing: Arc<dyn Sharing>) {
         self.share.set_service(sharing);
+        self.copy_source = None;
     }
 
     /// Subscribes again when the symbols to quote changed or the stream lagged, and applies the
     /// quotes the service pushed. The quotes of symbols no longer subscribed are dropped.
     pub fn poll(&mut self, ctx: &egui::Context) {
-        if let Some((source, name)) = self.share.poll(ctx)
-            && let Some(list) = self.lists.iter().find(|list| list.name == source)
+        if let Some(name) = self.share.poll(ctx)
+            && let Some(mut copy) = self.copy_source.take()
         {
-            let mut copy = list.clone();
             (copy.name, copy.favorite) = (name, false);
             self.lists.push(copy);
         }
@@ -629,7 +647,10 @@ impl WatchlistPanel {
         let group = |symbol: &str| group_key(&self.groups, self.grouping, symbol);
         let symbols: Vec<&str> = display_rows(
             &items,
-            self.sort.as_ref().map(|(c, d)| (c, *d)),
+            self.sort
+                .as_ref()
+                .filter(|(column, _)| column.is_shown(self.wide, &self.columns))
+                .map(|(c, d)| (c, *d)),
             |c, s| table_value(c, s, &self.quotes, &self.host_columns),
             (self.wide && self.grouping != WatchlistGrouping::Sections)
                 .then_some(&group as GroupKey<'_>),
@@ -698,7 +719,8 @@ impl WatchlistPanel {
     /// fills for the [`symbols`](Self::symbols) shown. The sections list the rows of the
     /// selected symbol, or of every shown symbol while none of them is selected. Selection,
     /// sorting, the active list and the flag filter are those of [`show`](Self::show), so
-    /// switching views keeps them. Returns [`WatchlistAction::CompactView`] from its view button.
+    /// switching views keeps them; while sorted by a column the compact view hides, that view
+    /// shows the list in its own order. Returns [`WatchlistAction::CompactView`] from its view button.
     pub fn show_wide(&mut self, ui: &mut Ui, details: &WatchlistDetails) -> WatchlistAction {
         self.show_with(ui, Some(details))
     }
@@ -727,6 +749,8 @@ impl WatchlistPanel {
             undo,
             import_note,
             reveal: reveal_next,
+            copy_source,
+            collapsed_sections,
             ..
         } = self;
         let theme = ui.active_theme();
@@ -860,7 +884,11 @@ impl WatchlistPanel {
                     .accessible_name(l10n::text(ui.ctx(), "Name"));
             });
             if ui.button(l10n::text(ui.ctx(), "New list")).clicked() {
-                lists.push(Watchlist::new(format!("Watchlist {}", lists.len() + 1)));
+                let name = (2..)
+                    .map(|n| format!("Watchlist {n}"))
+                    .find(|name| lists.iter().all(|list| list.name != *name))
+                    .expect("an unused name exists");
+                lists.push(Watchlist::new(name));
                 (*active, *flag_filter) = (lists.len() - 1, None);
             }
             if ui.button(l10n::text(ui.ctx(), "Duplicate list")).clicked() {
@@ -875,10 +903,18 @@ impl WatchlistPanel {
                 )
                 .clicked()
             {
-                record(undo, lists, *active, |list| {
-                    list.items.clear();
-                    true
-                });
+                record(
+                    undo,
+                    lists,
+                    SectionUndo::Clear(
+                        collapsed_sections.get(*active).cloned().unwrap_or_default(),
+                    ),
+                    *active,
+                    |list| {
+                        list.items.clear();
+                        true
+                    },
+                );
             }
             let undoable = undo.last().is_some_and(|edit| {
                 lists
@@ -891,6 +927,13 @@ impl WatchlistPanel {
                 && let Some(edit) = undo.pop()
             {
                 lists[edit.list].items = edit.before;
+                let states = section_states(collapsed_sections, edit.list);
+                match edit.sections {
+                    SectionUndo::Clear(collapsed) => *states = collapsed,
+                    SectionUndo::Move { at, down } => {
+                        states.swap(at, if down { at + 1 } else { at - 1 });
+                    }
+                }
                 (*active, *flag_filter) = (edit.list, None);
             }
             if ui
@@ -900,6 +943,9 @@ impl WatchlistPanel {
                 )
                 .clicked()
             {
+                if *active < collapsed_sections.len() {
+                    collapsed_sections.remove(*active);
+                }
                 lists.remove(*active);
                 *active = active.saturating_sub(1);
                 // The recorded edits and the import note name lists by position.
@@ -930,7 +976,9 @@ impl WatchlistPanel {
                     text: lists[*active].to_text(),
                 };
             }
-            share.show(ui, ShareKind::Watchlist, &lists[*active].name);
+            if share.show(ui, ShareKind::Watchlist, &lists[*active].name) {
+                *copy_source = Some(lists[*active].clone());
+            }
         });
         if let Some((list, skipped)) = *import_note
             && list == *active
@@ -1030,6 +1078,11 @@ impl WatchlistPanel {
                     .map(|c| TableColumn::Host(c.name.clone())),
             );
         }
+        // Keep hidden columns' sorts for the wide view; compact rows keep list order.
+        let shown_sort = sort
+            .as_ref()
+            .filter(|(column, _)| column.is_shown(wide.is_some(), compact_columns))
+            .cloned();
         let numbers = shown_columns.len();
         let columns =
             |rect: egui::Rect, widths: &(BTreeMap<WatchlistColumn, f32>, BTreeMap<String, f32>)| {
@@ -1093,7 +1146,7 @@ impl WatchlistPanel {
                 font.clone(),
                 theme.ui.text_muted,
             );
-            if let Some((sorted, descending)) = sort.as_ref()
+            if let Some((sorted, descending)) = shown_sort.as_ref()
                 && sorted == column
             {
                 // A painted triangle beside the label: the fonts lack arrow glyphs.
@@ -1133,7 +1186,7 @@ impl WatchlistPanel {
                     &translated_label,
                 )
             });
-            if let Some((sorted, descending)) = sort.as_ref()
+            if let Some((sorted, descending)) = shown_sort.as_ref()
                 && sorted == column
             {
                 ui.ctx().accesskit_node_builder(response.id, |node| {
@@ -1221,29 +1274,36 @@ impl WatchlistPanel {
             None => &mut lists[*active],
         };
         let grouped = wide.is_some() && *grouping != WatchlistGrouping::Sections;
-        let reorderable = sort.is_none() && !filtered && !grouped;
+        let reorderable = shown_sort.is_none() && !filtered && !grouped;
 
-        // Keyed by title, so a section stays collapsed when rows move or the list is sorted.
-        let collapsed_id = |title: &str| list_id.with(("collapsed", title));
+        let sections: Vec<usize> = (0..list.items.len())
+            .filter(|&i| matches!(list.items[i], WatchlistItem::Section(_)))
+            .collect();
+        // Positions among sections keep equal titles apart and survive renames and sorts.
+        // The flag view has no sections and leaves the active list's states alone.
+        let states = section_states(collapsed_sections, *active);
+        if !filtered {
+            states.resize(sections.len(), false);
+        }
+        let collapsed: HashSet<usize> = sections
+            .iter()
+            .zip(states.iter())
+            .filter_map(|(&index, &hidden)| hidden.then_some(index))
+            .collect();
         let group_id = |label: &Option<String>| list_id.with(("collapsed_group", *grouping, label));
         let group = |symbol: &str| group_key(groups, *grouping, symbol);
         let value =
             |column: &TableColumn, symbol: &str| table_value(column, symbol, quotes, host_columns);
         let order = display_rows(
             &list.items,
-            sort.as_ref().map(|(c, d)| (c, *d)),
+            shown_sort.as_ref().map(|(c, d)| (c, *d)),
             value,
             grouped.then_some(&group as GroupKey<'_>),
-            |row| {
-                ui.data(|data| match row {
-                    Row::Item(i) => match &list.items[*i] {
-                        WatchlistItem::Section(title) => {
-                            data.get_temp(collapsed_id(title)).unwrap_or(false)
-                        }
-                        _ => false,
-                    },
-                    Row::Group(label) => data.get_temp(group_id(label)).unwrap_or(false),
-                })
+            |row| match row {
+                Row::Item(i) => collapsed.contains(i),
+                Row::Group(label) => {
+                    ui.data(|data| data.get_temp(group_id(label)).unwrap_or(false))
+                }
             },
         );
         // Arrow keys move the selection instead of the keyboard focus.
@@ -1299,9 +1359,6 @@ impl WatchlistPanel {
         let mut moved = None;
         let mut removed = None;
         let mut section_move = None;
-        let sections: Vec<usize> = (0..list.items.len())
-            .filter(|&i| matches!(list.items[i], WatchlistItem::Section(_)))
-            .collect();
         let show_summary = wide.is_some() && *summary;
         let summaries: Vec<_> = shown_columns
             .iter()
@@ -1403,11 +1460,13 @@ impl WatchlistPanel {
                     let painter = ui.painter().clone();
                     match &mut list.items[index] {
                         WatchlistItem::Section(title) => {
-                            let id = collapsed_id(title);
-                            let is_collapsed = ui.data(|d| d.get_temp(id).unwrap_or(false));
+                            let is_collapsed = collapsed.contains(&index);
                             heading(ui, rect, &response, title, is_collapsed, &theme);
-                            if response.clicked() {
-                                ui.data_mut(|data| data.insert_temp(id, !is_collapsed));
+                            if response.clicked()
+                                && let Some(at) =
+                                    sections.iter().position(|&section| section == index)
+                            {
+                                states[at] = !states[at];
                             }
                             response.context_menu(|ui| {
                                 ui.text_edit_singleline(title)
@@ -1658,30 +1717,60 @@ impl WatchlistPanel {
         if let Some((from, to)) = moved {
             let item = list.items.remove(from);
             list.items.insert(to, item);
+            // A dragged heading takes its state to its new place among the sections.
+            if let Some(at) = sections.iter().position(|&section| section == from) {
+                let state = states.remove(at);
+                let to_at = list.items[..to]
+                    .iter()
+                    .filter(|item| matches!(item, WatchlistItem::Section(_)))
+                    .count();
+                states.insert(to_at, state);
+            }
         }
         if let Some(index) = removed
             && !filtered
         {
+            if let Some(at) = sections.iter().position(|&section| section == index) {
+                states.remove(at);
+            }
             list.items.remove(index);
         }
         if let (Some(view), Some(filter)) = (flagged, *flag_filter) {
             apply_flag_view(lists, filter, &view.items, removed);
         }
-        if let Some((index, down)) = section_move {
-            record(undo, lists, *active, |list| list.move_section(index, down));
+        if let Some((index, down)) = section_move
+            && let Some(at) = sections.iter().position(|&section| section == index)
+            && record(
+                undo,
+                lists,
+                SectionUndo::Move { at, down },
+                *active,
+                |list| list.move_section(index, down),
+            )
+        {
+            states.swap(at, if down { at + 1 } else { at - 1 });
         }
         action
     }
 }
 
+/// The section states of the list at `list` in `all`, growing `all` to reach it.
+fn section_states(all: &mut Vec<Vec<bool>>, list: usize) -> &mut Vec<bool> {
+    if all.len() <= list {
+        all.resize_with(list + 1, Vec::new);
+    }
+    &mut all[list]
+}
+
 /// Applies `edit` to the list at `list` as one step that undo reverts, if `edit` reports a
-/// change. The oldest of 100 steps is dropped.
+/// change. The oldest of 100 steps is dropped. Returns whether it did.
 fn record(
     undo: &mut Vec<ListEdit>,
     lists: &mut [Watchlist],
+    sections: SectionUndo,
     list: usize,
     edit: impl FnOnce(&mut Watchlist) -> bool,
-) {
+) -> bool {
     let before = lists[list].items.clone();
     if edit(&mut lists[list]) {
         if undo.len() == 100 {
@@ -1691,7 +1780,11 @@ fn record(
             list,
             before,
             after: lists[list].items.clone(),
+            sections,
         });
+        true
+    } else {
+        false
     }
 }
 
@@ -2444,6 +2537,279 @@ mod tests {
         assert_eq!(texts(&h), ["A,###Two,C,###One,B,D", "X"]);
     }
 
+    /// New list avoids names still in use after deletion, and Save a copy holds the chosen
+    /// list's contents at the time of the choice even across equal names and later edits.
+    #[test]
+    fn equally_named_lists_stay_apart() {
+        use crate::data::Reply;
+        use crate::services::{ShareLink, ShareOffer};
+        use egui_kittest::{Harness, kittest::Queryable};
+        use std::sync::Mutex;
+
+        #[derive(Default)]
+        struct Host(Mutex<Vec<Reply<String>>>);
+        impl Sharing for Host {
+            fn offers(&self, _: ShareKind) -> ShareOffer {
+                ShareOffer::new(false, true)
+            }
+            fn link(&self, _: ShareKind, _: &str, _: Reply<ShareLink>) {
+                unreachable!();
+            }
+            fn copy(&self, _: ShareKind, _: &str, reply: Reply<String>) {
+                self.0.lock().unwrap().push(reply);
+            }
+        }
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 600.0))
+            .build_ui_state(
+                |ui, panel: &mut WatchlistPanel| {
+                    panel.poll(ui.ctx());
+                    panel.show(ui);
+                },
+                WatchlistPanel::new(vec![
+                    Watchlist::new("Watchlist"),
+                    Watchlist::new("Watchlist 2"),
+                ]),
+            );
+        let press = |h: &mut Harness<'_, WatchlistPanel>, menu: &str, item: &str| {
+            h.get_by_label(menu).click();
+            h.run();
+            h.get_by_label(item).click();
+            h.run();
+        };
+        press(&mut h, "Watchlist", "Delete list");
+        press(&mut h, "Watchlist 2", "New list");
+        assert_eq!(
+            h.state()
+                .lists()
+                .iter()
+                .map(|list| list.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Watchlist 2", "Watchlist 3"]
+        );
+
+        let host = Arc::new(Host::default());
+        let mut panel = WatchlistPanel::new(vec![
+            Watchlist::from_text("Dup", "A"),
+            Watchlist::from_text("Dup", "B"),
+        ]);
+        panel.set_sharing(host.clone());
+        panel.active = 1;
+        panel.lists[1].favorite = true;
+        *h.state_mut() = panel;
+        h.run();
+        press(&mut h, "More", "Save a copy");
+        h.state_mut().lists[1].name = "Renamed".into();
+        h.state_mut().lists[1].add_symbol("C");
+        host.0
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap()
+            .send(Ok("Dup copy".into()));
+        h.run();
+        assert_eq!(
+            h.state()
+                .lists()
+                .iter()
+                .map(|list| (list.name.as_str(), list.to_text()))
+                .collect::<Vec<_>>(),
+            [
+                ("Dup", "A".into()),
+                ("Renamed", "B,C".into()),
+                ("Dup copy", "B".into())
+            ]
+        );
+        assert!(!h.state().lists()[2].favorite);
+    }
+
+    /// Equal section titles collapse separately, and rename, move, undo, heading drag and
+    /// removal keep the collapse state with the section rather than its title or old position.
+    #[test]
+    fn sections_collapse_on_their_own_and_keep_their_state() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 600.0))
+            .build_ui_state(
+                |ui, panel: &mut WatchlistPanel| {
+                    panel.show(ui);
+                },
+                WatchlistPanel::new(vec![Watchlist::from_text(
+                    "Main",
+                    "A,###New section,B,###New section,C",
+                )]),
+            );
+        let shown = |h: &Harness<'_, WatchlistPanel>| {
+            ["A", "B", "C"]
+                .into_iter()
+                .filter(|label| {
+                    h.query_by_role_and_label(egui::Role::ListBoxOption, label)
+                        .is_some()
+                })
+                .collect::<Vec<_>>()
+        };
+        let press = |h: &mut Harness<'_, WatchlistPanel>, menu: &str, item: &str| {
+            if menu == "Main" {
+                h.get_by_label(menu).click();
+            } else {
+                h.get_by_label(menu).click_secondary();
+            }
+            h.run();
+            h.get_by_label(item).click();
+            h.run();
+        };
+        h.get_all_by_label("New section").next().unwrap().click();
+        h.run();
+        assert_eq!(shown(&h), ["A", "C"]);
+        h.state_mut().lists[0].items[1] = WatchlistItem::Section("Renamed".into());
+        h.run();
+        assert_eq!(shown(&h), ["A", "C"]);
+        press(&mut h, "Renamed", "Move section down");
+        assert_eq!(
+            h.state().lists()[0].to_text(),
+            "A,###New section,C,###Renamed,B"
+        );
+        assert_eq!(shown(&h), ["A", "C"]);
+        h.get_by_label("New section").click();
+        h.run();
+        assert_eq!(shown(&h), ["A"]);
+        h.get_by_label("Renamed").click();
+        h.run();
+        assert_eq!(shown(&h), ["A", "B"]);
+        press(&mut h, "Main", "Undo");
+        assert_eq!(
+            h.state().lists()[0].to_text(),
+            "A,###Renamed,B,###New section,C"
+        );
+        assert_eq!(shown(&h), ["A", "B"], "the later toggles survive undo");
+        h.get_by_label("Renamed").click();
+        h.run();
+        h.get_by_label("New section").click();
+        h.run();
+        assert_eq!(shown(&h), ["A", "C"]);
+        let from = h.get_by_label("New section").rect().center();
+        h.drag_at(from);
+        h.run();
+        h.hover_at(from + vec2(0.0, 12.0));
+        h.run();
+        let to = h
+            .get_by_role_and_label(egui::Role::ListBoxOption, "A")
+            .rect()
+            .center();
+        h.hover_at(to);
+        h.run();
+        h.drop_at(to);
+        h.run();
+        assert_eq!(
+            h.state().lists()[0].to_text(),
+            "###New section,A,###Renamed,B,C"
+        );
+        assert_eq!(shown(&h), ["A"]);
+        press(&mut h, "New section", "Remove section");
+        assert_eq!(h.state().lists()[0].to_text(), "A,###Renamed,B,C");
+        assert_eq!(shown(&h), ["A"]);
+    }
+
+    /// A sort by a column hidden in the compact view leaves its rows in list order and
+    /// draggable, with chart navigation in that order, while the wide view keeps its sort.
+    #[test]
+    fn compact_view_keeps_list_order_under_a_wide_sort() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for (label, column) in [
+            ("Vol", WatchlistColumn::Volume.into()),
+            ("Rating", TableColumn::Host("Rating".into())),
+        ] {
+            let details = WatchlistDetails::default();
+            let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "AAA,BBB")]);
+            panel.add_column("Rating", 1);
+            panel.set_column_value("Rating", "AAA", Some(5.0));
+            panel.set_column_value("Rating", "BBB", Some(9.0));
+            let time = Default::default();
+            panel.set_quote("AAA", Quote::new(10.0, 9.0, time).with_volume(5.0));
+            panel.set_quote("BBB", Quote::new(20.0, 19.0, time).with_volume(9.0));
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(vec2(1000.0, 600.0))
+                .build_ui_state(
+                    |ui, (panel, wide): &mut (WatchlistPanel, bool)| {
+                        if *wide {
+                            panel.show_wide(ui, &details);
+                        } else {
+                            panel.show(ui);
+                        }
+                    },
+                    (panel, true),
+                );
+            for _ in 0..2 {
+                h.get_by_label(label).click();
+                h.run();
+            }
+            assert!(
+                h.get_by_role_and_label(egui::Role::ListBoxOption, "BBB")
+                    .rect()
+                    .min
+                    .y
+                    < h.get_by_role_and_label(egui::Role::ListBoxOption, "AAA")
+                        .rect()
+                        .min
+                        .y
+            );
+            assert_eq!(
+                h.state_mut().0.select_next_symbol(),
+                WatchlistAction::SelectSymbol("BBB".into())
+            );
+            h.state_mut().1 = false;
+            h.run();
+            assert!(
+                h.get_by_role_and_label(egui::Role::ListBoxOption, "AAA")
+                    .rect()
+                    .min
+                    .y
+                    < h.get_by_role_and_label(egui::Role::ListBoxOption, "BBB")
+                        .rect()
+                        .min
+                        .y
+            );
+            assert_eq!(
+                h.state_mut().0.select_next_symbol(),
+                WatchlistAction::SelectSymbol("AAA".into()),
+                "chart navigation follows compact list order under a hidden sort"
+            );
+            let from = h
+                .get_by_role_and_label(egui::Role::ListBoxOption, "BBB")
+                .rect()
+                .center();
+            h.drag_at(from);
+            h.run();
+            h.hover_at(from + vec2(0.0, 12.0));
+            h.run();
+            let to = h
+                .get_by_role_and_label(egui::Role::ListBoxOption, "AAA")
+                .rect()
+                .center();
+            h.hover_at(to);
+            h.run();
+            h.drop_at(to);
+            h.run();
+            assert_eq!(h.state().0.lists()[0].to_text(), "BBB,AAA");
+            h.state_mut().1 = true;
+            h.run();
+            assert_eq!(h.state().0.sort, Some((column, true)));
+            assert!(
+                h.get_by_role_and_label(egui::Role::ListBoxOption, "BBB")
+                    .rect()
+                    .min
+                    .y
+                    < h.get_by_role_and_label(egui::Role::ListBoxOption, "AAA")
+                        .rect()
+                        .min
+                        .y
+            );
+        }
+    }
+
     /// Sorting stays inside each section, puts symbols without a value last in both directions
     /// and keeps list order on ties. A collapsed section keeps its title and hides its symbols.
     #[test]
@@ -2659,7 +3025,11 @@ mod tests {
         );
         panel.sort = Some((WatchlistColumn::Volume.into(), false));
         panel.set_columns([WatchlistColumn::Last]);
-        assert_eq!(panel.sort, None, "a sort by a hidden column is dropped");
+        assert_eq!(
+            panel.sort,
+            Some((WatchlistColumn::Volume.into(), false)),
+            "the advanced view keeps its sort when compact columns change"
+        );
     }
 
     #[test]
