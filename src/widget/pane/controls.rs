@@ -140,9 +140,18 @@ impl Chart {
                     && (!self.study_ids.contains(id) || self.indicator_user_edit_enabled(*id))
             })
             .collect();
-        if movable.is_empty() || !hovered {
+        let pane = self
+            .has_panes()
+            .then(|| {
+                let id = self.main_series_pane();
+                self.pane_layout.panes.iter().position(|pane| pane.id == id)
+            })
+            .flatten();
+        if (movable.is_empty() && pane.is_none()) || !hovered {
             return;
         }
+        let [above, below] =
+            [false, true].map(|down| pane.and_then(|at| self.drawn_neighbour(at, down)));
         let button = Rect::from_min_size(
             Pos2::new(plot.right() - 42.0, rect.top() + 2.0),
             egui::vec2(20.0, 20.0),
@@ -153,10 +162,29 @@ impl Chart {
                 .max_rect(button),
         );
         let mut moved = None;
+        let mut command = None;
         egui::containers::menu::MenuButton::from_button(
             egui::Button::new("...").frame_when_inactive(false),
         )
         .ui(&mut child, |ui| {
+            if pane.is_some() {
+                for (label, enabled, pick) in [
+                    ("Move pane up", above.is_some(), 0),
+                    ("Move pane down", below.is_some(), 1),
+                    ("Collapse pane", true, 2),
+                ] {
+                    if ui
+                        .add_enabled(enabled, egui::Button::new(l10n::text(ui.ctx(), label)))
+                        .clicked()
+                    {
+                        command = Some(pick);
+                        ui.close();
+                    }
+                }
+                if !movable.is_empty() {
+                    ui.separator();
+                }
+            }
             for id in movable {
                 ui.menu_button(l10n::text(ui.ctx(), self.member_name(id)), |ui| {
                     if ui
@@ -189,6 +217,14 @@ impl Chart {
                 });
             }
         });
+        if let (Some(at), Some(command)) = (pane, command) {
+            self.user_action(|chart| match command {
+                0 => chart.shift_pane(at, above.unwrap()),
+                1 => chart.shift_pane(at, below.unwrap()),
+                _ => chart.pane_layout.panes[at].collapsed = Some(true),
+            });
+            ui.ctx().request_repaint();
+        }
         if let Some((id, pane)) = moved {
             self.user_action(|chart| match pane {
                 Some(pane) => chart.move_series_to_pane(id, pane),
@@ -362,9 +398,8 @@ impl Chart {
             self.begin_user_action();
         }
         match action {
-            // Hidden panes in between keep their place next to the panes not moved.
-            Some(0) => self.pane_layout.panes[drawn_above.unwrap()..=pane_idx].rotate_right(1),
-            Some(1) => self.pane_layout.panes[pane_idx..=drawn_below.unwrap()].rotate_left(1),
+            Some(0) => self.shift_pane(pane_idx, drawn_above.unwrap()),
+            Some(1) => self.shift_pane(pane_idx, drawn_below.unwrap()),
             Some(2) => self.pane_layout.panes[pane_idx].collapsed = Some(!collapsed),
             Some(3 | 4) => {
                 let target = if action == Some(3) {
@@ -393,6 +428,17 @@ impl Chart {
         if action.is_some() {
             self.end_user_action();
             ui.ctx().request_repaint();
+        }
+    }
+
+    /// Moves the pane at `at` to its nearest drawn neighbour at `to`. Hidden panes between
+    /// them keep their place next to the panes not moved.
+    fn shift_pane(&mut self, at: usize, to: usize) {
+        let panes = &mut self.pane_layout.panes;
+        if to < at {
+            panes[to..=at].rotate_right(1);
+        } else {
+            panes[at..=to].rotate_left(1);
         }
     }
 
@@ -481,6 +527,89 @@ impl Chart {
 mod tests {
     use super::*;
     use egui::{Context, Event, Modifiers, PointerButton, RawInput};
+
+    /// The price pane's own menu moves and collapses it in one undoable step and follows the
+    /// pane button visibility setting; the collapsed header expands it again.
+    #[test]
+    fn price_pane_moves_and_collapses_from_its_own_menu() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        for visibility in [NavigationButtons::Never, NavigationButtons::OnHover] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0, 105.0], &[110.0, 115.0]);
+            let rsi = chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            let rsi_pane = chart.series_pane(rsi).unwrap();
+            chart.config_mut().show_volume = false;
+            chart.config_mut().pane_buttons = visibility;
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(800.0, 600.0))
+                .allow_missing_glyphs()
+                .with_accessibility_check(false)
+                .build_ui_state(
+                    |ui, chart: &mut Chart| {
+                        chart.show(ui);
+                    },
+                    chart,
+                );
+            harness.run();
+            let rect = harness.state().pane_layout.panes[0].rect;
+            harness.hover_at(rect.center());
+            harness.run();
+            let menus: Vec<_> = harness
+                .query_all_by_label("...")
+                .filter(|node| rect.contains(node.rect().center()))
+                .collect();
+            if visibility == NavigationButtons::Never {
+                assert!(menus.is_empty());
+                continue;
+            }
+            assert_eq!(menus.len(), 1);
+            menus[0].click();
+            harness.run();
+            assert!(
+                harness
+                    .get_by_label("Move pane up")
+                    .accesskit_node()
+                    .is_disabled()
+            );
+            harness.get_by_label("Move pane down").click();
+            harness.run();
+            assert_eq!(harness.state().panes(), [rsi_pane, PaneId::MAIN]);
+            assert!(harness.state_mut().undo());
+            assert_eq!(harness.state().panes(), [PaneId::MAIN, rsi_pane]);
+            assert!(!harness.state_mut().undo());
+            assert!(harness.state_mut().redo());
+            harness.run();
+            assert_eq!(harness.state().panes(), [rsi_pane, PaneId::MAIN]);
+            let rect = harness.state().pane_layout.panes[1].rect;
+            harness.hover_at(rect.center());
+            harness.run();
+            harness
+                .query_all_by_label("...")
+                .find(|node| rect.contains(node.rect().center()))
+                .unwrap()
+                .click();
+            harness.run();
+            // The study header also announces Collapse pane; select the popup entry.
+            harness
+                .query_all_by_label("Collapse pane")
+                .find(|node| node.rect().left() > rect.center().x)
+                .unwrap()
+                .click();
+            harness.run();
+            harness.run();
+            assert!(harness.state().pane_height(PaneId::MAIN).unwrap() <= 24.0);
+            assert!(harness.state_mut().undo());
+            harness.run();
+            assert!(harness.state().pane_height(PaneId::MAIN).unwrap() > 24.0);
+            assert!(harness.state_mut().redo());
+            harness.run();
+            harness.get_by_label("Expand pane").click();
+            harness.run();
+            assert!(harness.state().pane_height(PaneId::MAIN).unwrap() > 24.0);
+        }
+    }
 
     /// Pane controls respect study permissions while host pane operations remain available.
     #[test]
