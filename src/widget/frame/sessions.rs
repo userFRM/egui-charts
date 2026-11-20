@@ -477,14 +477,16 @@ mod tests {
             "2024-03-11T23:59:00Z",
             "2024-03-12T00:00:00Z",
         ];
-        for (shade, custom, metadata, overnight, pre, post, expected) in [
-            (true, false, false, false, true, true, vec![2]),
-            (false, false, false, false, true, true, vec![2]),
-            (true, true, false, false, true, true, vec![1, 6]),
-            (true, false, true, false, true, true, vec![3]),
-            (true, false, true, true, true, true, vec![1, 7]),
-            (true, false, true, false, false, true, vec![3]),
-            (true, false, true, false, true, false, vec![3]),
+        for (shade, custom, metadata, overnight, pre, post, defaults, expected) in [
+            (true, false, false, false, true, true, false, vec![2]),
+            (false, false, false, false, true, true, false, vec![2]),
+            (true, true, false, false, true, true, false, vec![1, 6]),
+            (true, false, true, false, true, true, false, vec![3]),
+            (true, false, true, true, true, true, false, vec![1, 7]),
+            (true, false, true, false, false, true, false, vec![3]),
+            (true, false, true, false, true, false, false, vec![3]),
+            (true, false, true, false, true, true, true, vec![3]),
+            (false, false, true, false, true, true, true, vec![3]),
         ] {
             let ctx = egui::Context::default();
             let bars = times
@@ -535,8 +537,17 @@ mod tests {
                 egui::Color32::from_rgba_unmultiplied(90, 40, 170, 30);
             chart.config.overnight_hours_color =
                 egui::Color32::from_rgba_unmultiplied(170, 90, 40, 30);
-            chart.config.show_extended_hours = shade;
-            chart.config.premarket_color = Some(PREMARKET);
+            if !defaults {
+                chart.config.premarket_color = Some(PREMARKET);
+                chart.config.postmarket_color = None;
+            }
+            let mut settings = crate::widget::settings::ChartSettingsState::from_chart(&chart);
+            settings
+                .session_background
+                .as_mut()
+                .unwrap()
+                .show_extended_hours = shade;
+            settings.apply_to_chart(&mut chart).unwrap();
             chart.config.shade_premarket = pre;
             chart.config.shade_postmarket = post;
             if custom {
@@ -564,10 +575,15 @@ mod tests {
                     .map(|index| map.idx_to_x(*index))
                     .collect::<Vec<_>>()
             );
-            // The pre-market has its own colour; the post-market uses the shared fallback.
+            // Defaults use distinct phase colours at round(255 * 0.08) = 20 alpha; explicit
+            // pre-market and shared post-market colours remain independent of those defaults.
             for (color, spans) in [
                 (
-                    PREMARKET,
+                    if defaults {
+                        egui::Color32::from_rgba_unmultiplied(255, 152, 0, 20)
+                    } else {
+                        PREMARKET
+                    },
                     if shade && pre {
                         vec![(if metadata { 3 } else { 2 }, 4)]
                     } else {
@@ -575,7 +591,11 @@ mod tests {
                     },
                 ),
                 (
-                    chart.config.extended_hours_color,
+                    if defaults {
+                        egui::Color32::from_rgba_unmultiplied(41, 98, 255, 20)
+                    } else {
+                        chart.config.extended_hours_color
+                    },
                     if shade && post {
                         vec![(0, 1), (5, 7)]
                     } else {

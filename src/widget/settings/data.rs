@@ -9,6 +9,43 @@ use egui::Color32;
 // Settings State
 // ============================================================================
 
+/// Backgrounds of supplied extended and overnight bars. Colours include opacity; absent phase
+/// colours use the shared extended-session colour, whose placeholder follows the theme.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct SessionBackgroundSettings {
+    /// Highlight extended and overnight sessions on intraday charts.
+    pub show_extended_hours: bool,
+    /// Shared extended-session fill; `PLACEHOLDER` follows the theme at 8% opacity.
+    pub extended_hours_color: Color32,
+    /// Pre-market fill, or the shared fill when absent.
+    pub premarket_color: Option<Color32>,
+    /// Post-market fill, or the shared fill when absent.
+    pub postmarket_color: Option<Color32>,
+    /// Highlight the pre-market while session highlighting is enabled.
+    pub shade_premarket: bool,
+    /// Highlight the post-market while session highlighting is enabled.
+    pub shade_postmarket: bool,
+    /// Overnight fill; `PLACEHOLDER` follows the theme at 16% opacity.
+    pub overnight_hours_color: Color32,
+}
+
+impl Default for SessionBackgroundSettings {
+    fn default() -> Self {
+        let config = crate::config::ChartConfig::default();
+        Self {
+            show_extended_hours: config.show_extended_hours,
+            extended_hours_color: config.extended_hours_color,
+            premarket_color: config.premarket_color,
+            postmarket_color: config.postmarket_color,
+            shade_premarket: config.shade_premarket,
+            shade_postmarket: config.shade_postmarket,
+            overnight_hours_color: config.overnight_hours_color,
+        }
+    }
+}
+
 /// Candle color configuration (body, border, wick for up/down candles) and which parts are drawn.
 /// Saved settings without a field take its default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -738,6 +775,7 @@ pub struct OrderFlowSettings {
 /// settings.status_line.show_logo = false;
 /// settings.trading.instant_orders = true;
 /// settings.alerts.play_sound = false;
+/// settings.session_background = Some(egui_charts::widget::settings::SessionBackgroundSettings::default());
 /// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
@@ -786,6 +824,15 @@ pub struct ChartSettingsState {
     /// `None` keeps the chart's choice, as do settings saved without this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extended_hours: Option<bool>,
+    /// Include overnight hours, as [`Chart::set_overnight_hours`](crate::widget::Chart::set_overnight_hours)
+    /// requests them. Applied before extended hours, so regular hours turn both off.
+    /// `None` keeps the chart's choice, as do settings saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overnight_hours: Option<bool>,
+    /// Session highlights, independent of the hours requested from the feed. Absent in older
+    /// settings, which keep the chart's current backgrounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_background: Option<SessionBackgroundSettings>,
     /// Ask the host for continuous futures history back-adjusted at each roll. The host owns
     /// the data, so [`apply_to_chart`](Self::apply_to_chart) leaves reloading to the host;
     /// [`from_chart`](Self::from_chart) leaves this off.
@@ -892,6 +939,8 @@ impl Default for ChartSettingsState {
             price_target_negative_color: None,
             adjust_for_dividends: false,
             extended_hours: None,
+            overnight_hours: None,
+            session_background: None,
             back_adjust_futures: false,
             settlement_as_close: true,
 

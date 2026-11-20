@@ -12,7 +12,7 @@ pub use data::{
     AlertsSettings, ButtonsSettings, CandleColorConfig, ChartBasicStylesSettings,
     ChartSettingsState, CrosshairSettings, CrosshairVisibility, DateFormat, GridLinesSettings,
     MarginsSettings, OrderFlowSettings, ScalesAndLinesSettings, ScalesAppearanceSettings,
-    StatusLineOptions, ThousandsSeparator, TradingNotifications, TradingSettings,
-    WatermarkSettings,
+    SessionBackgroundSettings, StatusLineOptions, ThousandsSeparator, TradingNotifications,
+    TradingSettings, WatermarkSettings,
 };
 pub use types::{BackgroundType, ButtonVisibility, GridLinesMode, PrecisionMode, WatermarkMode};
