@@ -97,16 +97,23 @@ impl OrderFlowPanel {
                 ui.push_id("big_trades", |ui| {
                     detector(ui, "Big trades", &mut settings.big_trades, |ui, rule| {
                         threshold(ui, "Size", &mut rule.threshold);
+                        check(ui, "Aggressive orders", &mut rule.aggressive_orders);
+                        check(ui, "Same-time fills", &mut rule.same_time_fills);
+                        check(ui, "Passive orders", &mut rule.passive_orders);
                         check(ui, "Body zones", &mut rule.body_zones);
                         check(ui, "Wick zones", &mut rule.wick_zones);
                     });
                 });
                 ui.push_id("stop_runs", |ui| {
-                    detector(ui, "Stop runs", &mut settings.stop_runs, |ui, _| {
-                        ui.label(l10n::text(
-                            ui.ctx(),
-                            "5 fills, 3 ticks, at most 20 ms apart",
-                        ));
+                    detector(ui, "Stop runs", &mut settings.stop_runs, |ui, rule| {
+                        number(ui, "Minimum fills", &mut rule.min_fills, 1..=u64::MAX);
+                        number(ui, "Maximum gap (ms)", &mut rule.max_gap_ms, 0..=u32::MAX);
+                        number(ui, "Minimum ticks", &mut rule.min_ticks, 0..=u64::MAX);
+                        number(ui, "Minimum aggressors", &mut rule.min_aggressors, 0..=u8::MAX);
+                        number(ui, "Minimum size", &mut rule.min_size, 0.0..=f64::MAX);
+                        if !rule.min_size.is_finite() {
+                            rule.min_size = 0.0;
+                        }
                     });
                     self.counts(
                         ui,
@@ -154,11 +161,7 @@ impl OrderFlowPanel {
                 });
                 ui.push_id("icebergs", |ui| {
                     detector(ui, "Icebergs", &mut settings.icebergs, |ui, rule| {
-                        ui.horizontal_wrapped(|ui| {
-                            let label = ui.label(l10n::text(ui.ctx(), "Minimum refills"));
-                            ui.add(egui::DragValue::new(&mut rule.refills).range(1..=u32::MAX))
-                                .labelled_by(label.id);
-                        });
+                        number(ui, "Minimum refills", &mut rule.refills, 1..=u32::MAX);
                     });
                     self.counts(
                         ui,
@@ -230,11 +233,7 @@ impl OrderFlowPanel {
             *alert = enabled.then(CountAlert::default);
         }
         if let Some(alert) = alert {
-            ui.horizontal_wrapped(|ui| {
-                let label = ui.label(l10n::text(ui.ctx(), "Minimum count"));
-                ui.add(egui::DragValue::new(&mut alert.minimum).range(1..=u64::MAX))
-                    .labelled_by(label.id);
-            });
+            number(ui, "Minimum count", &mut alert.minimum, 1..=u64::MAX);
             egui::ComboBox::from_id_salt("count_window")
                 .selected_text(l10n::text(ui.ctx(), alert.window.label()))
                 .show_ui(ui, |ui| {
@@ -257,6 +256,20 @@ impl OrderFlowPanel {
 
 fn check(ui: &mut Ui, label: &str, value: &mut bool) -> bool {
     ui.checkbox(value, l10n::text(ui.ctx(), label)).changed()
+}
+
+/// A labelled number kept within `range`.
+fn number<N: egui::emath::Numeric>(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut N,
+    range: std::ops::RangeInclusive<N>,
+) {
+    ui.horizontal_wrapped(|ui| {
+        let label = ui.label(l10n::text(ui.ctx(), label));
+        ui.add(egui::DragValue::new(value).range(range))
+            .labelled_by(label.id);
+    });
 }
 
 fn detector<R>(
@@ -328,6 +341,62 @@ mod tests {
     use crate::theme::{Theme, apply_to_egui};
 
     #[test]
+    fn panel_edits_trade_kinds_and_stop_run_limits_that_save_and_restore() {
+        use crate::services::{DetectorSettings, StopRunRule};
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let service = Arc::new(OrderFlowDetectors::new());
+        service
+            .track(&Instrument::new("ES").with_tick_size(0.25))
+            .unwrap();
+        let now = DateTime::from_timestamp(0, 0).unwrap();
+        let mut harness = Harness::builder()
+            .with_context_setup(|ctx| apply_to_egui(ctx, &Theme::dark()))
+            .with_size(egui::vec2(300.0, 2000.0))
+            .build_ui_state(
+                |ui, panel| {
+                    panel.show(ui, "ES", now);
+                },
+                OrderFlowPanel::new(service.clone()),
+            );
+        harness.run();
+        for label in ["Aggressive orders", "Same-time fills", "Passive orders"] {
+            harness.get_by_role_and_label(Role::CheckBox, label).click();
+            harness.run();
+        }
+        for (label, value) in [
+            ("Minimum fills", 7.0),
+            ("Maximum gap (ms)", 50.0),
+            ("Minimum ticks", 4.0),
+            ("Minimum aggressors", 2.0),
+            ("Minimum size", 12.5),
+        ] {
+            harness
+                .get_by_role_and_label(Role::SpinButton, label)
+                .set_value_accesskit(value);
+            harness.run();
+        }
+        let mut expected = DetectorSettings::default();
+        expected.big_trades.rule.aggressive_orders = false;
+        expected.big_trades.rule.same_time_fills = true;
+        expected.big_trades.rule.passive_orders = true;
+        expected.stop_runs.rule = StopRunRule {
+            min_fills: 7,
+            max_gap_ms: 50,
+            min_ticks: 4,
+            min_aggressors: 2,
+            min_size: 12.5,
+        };
+        assert_eq!(service.settings(), expected);
+        let saved = serde_json::to_string(&expected).unwrap();
+        assert_eq!(
+            serde_json::from_str::<DetectorSettings>(&saved).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
     fn panel_edits_control_next_detections_and_poll_delivers_each_alert_once() {
         for width in [220.0, 300.0] {
             let ctx = egui::Context::default();
@@ -354,7 +423,7 @@ mod tests {
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
-                            egui::vec2(width, 1500.0),
+                            egui::vec2(width, 2000.0),
                         )),
                         events,
                         ..Default::default()
