@@ -2790,13 +2790,13 @@ mod tests {
         h.get_by_role_and_label(Role::ListBoxOption, "AAPL: First")
             .click_secondary();
         h.run();
-        h.get_by_role_and_label(Role::MenuItem, "Pause").click();
+        h.get_by_role(Role::Menu).get_by_label("Pause").click();
         h.run();
         assert_eq!(engine.alerts()[0].status, AlertStatus::Disabled);
         h.get_by_role_and_label(Role::ListBoxOption, "AAPL: Second")
             .click_secondary();
         h.run();
-        h.get_by_role_and_label(Role::MenuItem, "Enable").click();
+        h.get_by_role(Role::Menu).get_by_label("Enable").click();
         h.run();
         second.status = AlertStatus::Active;
         assert_eq!(
@@ -2807,7 +2807,7 @@ mod tests {
         h.get_by_role_and_label(Role::ListBoxOption, "AAPL: First")
             .click_secondary();
         h.run();
-        h.get_by_role_and_label(Role::MenuItem, "Duplicate").click();
+        h.get_by_role(Role::Menu).get_by_label("Duplicate").click();
         h.run();
         first.id = None;
         first.created_at = None;
@@ -2819,7 +2819,7 @@ mod tests {
         h.get_by_role_and_label(Role::ListBoxOption, "AAPL: Second")
             .click_secondary();
         h.run();
-        h.get_by_role_and_label(Role::MenuItem, "Remove").click();
+        h.get_by_role(Role::Menu).get_by_label("Remove").click();
         h.run();
         assert_eq!(engine.alerts().len(), 1);
     }
