@@ -63,7 +63,13 @@ const TRIGGER_HISTORY: usize = 5_000;
 /// alert again.
 ///
 /// *Crossings.* On every interval the previous value is the value at the alert's previous
-/// evaluation, within a bar and across bars, and on the first evaluation the value one bar earlier.
+/// evaluation, within a bar and across bars. The first evaluation on a symbol of an alert saved
+/// through [`save`](Alerts::save), new or with a change to what it watches or its status, only
+/// records the values, so a crossing, entering or exiting rule needs a transition observed after
+/// the save, and a move made before the save never fires it. An alert restored by
+/// [`with_alerts`](Self::with_alerts), or saved under an id the engine did not hold, compares its
+/// first evaluation with the value one bar earlier, so a crossing made while the host was closed
+/// fires.
 /// A crossing on a longer interval therefore fires once whatever the shorter interval does, and
 /// one between two closes of the shorter interval is caught at the later close. Crossing up needs
 /// a previous value strictly below the level and a current value at or above it, crossing down the
@@ -189,6 +195,10 @@ struct State {
     triggers: VecDeque<AlertTrigger>,
     /// A stream was watched, so the history was pushed.
     watched: bool,
+    /// Alerts restored by `with_alerts`, or saved under an id the engine did not hold, whose
+    /// monitoring has not changed since: a run's first evaluation compares crossings with the
+    /// bar before.
+    restored: std::collections::HashSet<AlertId>,
 }
 
 /// What the engine remembers of one alert on one symbol.
@@ -285,14 +295,18 @@ impl AlertEngine {
     }
 
     /// Starts with `alerts` as [`alerts`](Self::alerts) returned them, giving those without an
-    /// id one after the others.
+    /// id one after the others. Their first evaluation on each symbol compares crossings with
+    /// the value one bar earlier, as the *Crossings* rule describes.
     pub fn with_alerts(self, alerts: Vec<Alert>) -> Self {
         {
             let mut state = self.lock();
             // Ids are given once every kept id is known, so that none is given twice.
             let (kept, new): (Vec<_>, Vec<_>) = alerts.into_iter().partition(|a| a.id.is_some());
             for alert in kept.into_iter().chain(new) {
-                state.insert(alert);
+                // Every alert the host restores compares its first evaluation with the bar before.
+                if let Some(id) = state.insert(alert).id {
+                    state.restored.insert(id);
+                }
             }
         }
         self
@@ -448,6 +462,7 @@ impl AlertEngine {
             watchlists,
             runs,
             triggers,
+            restored,
             ..
         } = &mut *state;
         for alert in alerts.iter_mut().filter(|alert| {
@@ -504,7 +519,9 @@ impl AlertEngine {
             if !matched || !ready {
                 continue;
             }
-            let Some((bar, messages, silent)) = evaluate(alert, run, symbol, exchange, now) else {
+            let Some((bar, messages, silent)) =
+                evaluate(alert, run, symbol, exchange, now, restored.contains(&id))
+            else {
                 continue;
             };
             let price = bar.close.is_finite().then_some(bar.close);
@@ -901,6 +918,7 @@ impl AlertEngine {
 impl State {
     /// Adds `alert` or replaces the one with its id, giving it an id if it has none.
     fn insert(&mut self, mut alert: Alert) -> Alert {
+        let restoring = alert.id.is_some();
         // A position alert made active again after its exit waits for the entry again.
         if alert.status == AlertStatus::Active
             && let AlertCondition::Position { progress, .. } = &mut alert.condition
@@ -924,6 +942,13 @@ impl State {
             }
         }
         let existing = self.alerts.iter().find(|old| old.id == alert.id);
+        if let Some(id) = &alert.id {
+            if existing.is_some_and(|old| !old.same_monitoring(&alert)) {
+                self.restored.remove(id);
+            } else if existing.is_none() && restoring {
+                self.restored.insert(id.clone());
+            }
+        }
         if let Some(old) = existing {
             alert.created_at = old.created_at;
             alert.last_triggered_at = old.last_triggered_at;
@@ -1026,6 +1051,7 @@ impl Alerts for AlertEngine {
     fn remove(&self, id: AlertId, reply: Reply<()>) {
         let mut state = self.lock();
         state.runs.retain(|(kept, _), _| *kept != id);
+        state.restored.remove(&id);
         state.alerts.retain(|a| a.id.as_ref() != Some(&id));
         state.push(AlertEvent::Remove(id));
         reply.send(Ok(()));
@@ -1176,13 +1202,15 @@ fn observe(
 
 /// Test one coherent set of interval observations and consume its occurrence. Returns the bar
 /// and messages to fire, one per trigger (a position can enter and exit on one evaluation), and
-/// whether they fall outside the schedule and are only logged.
+/// whether they fall outside the schedule and are only logged. `restored` tells whether the
+/// alert was restored, see [`State::restored`].
 fn evaluate(
     alert: &mut Alert,
     run: &mut Run,
     symbol: &str,
     exchange: Option<&str>,
     now: DateTime<Utc>,
+    restored: bool,
 ) -> Option<(Bar, Vec<String>, bool)> {
     let intervals = alert.timeframes();
     let anchor = run.intervals.get(&intervals[0])?;
@@ -1215,6 +1243,14 @@ fn evaluate(
         .eq(&run.joined)
     {
         return None;
+    }
+    // An alert saved in this session compares only values it observed, so its first evaluation
+    // records them: a crossing that happened before the save never fires.
+    if run.joined.is_empty() && !restored {
+        run.joined = joined
+            .iter()
+            .map(|observation| observation.seen.clone())
+            .collect();
     }
     let holds =
         joined
@@ -2280,6 +2316,67 @@ mod tests {
         }
     }
 
+    /// A saved alert compares only values it observed after the save: a crossing between the bar
+    /// before and the forming bar at the save is history. Each row saves the alert at 00:01:10 with
+    /// the 00:00 bar closed at `before` and feeds the forming 00:01 bar tick by tick.
+    #[test]
+    fn a_saved_alert_crosses_only_from_values_it_observed() {
+        type SavedRow = (AlertCondition, f64, Vec<f64>, Vec<usize>);
+        let (lower, upper) = (100.0, 110.0);
+        let rows: Vec<SavedRow> = vec![
+            (
+                AlertCondition::CrossingUp(100.0),
+                99.0,
+                vec![105.0, 99.0, 101.0],
+                vec![2],
+            ),
+            // The bell's default: crossing at the last close, the bar before on either side.
+            (
+                AlertCondition::Crossing(100.0),
+                99.0,
+                vec![100.0, 101.0, 99.0],
+                vec![2],
+            ),
+            (
+                AlertCondition::Crossing(100.0),
+                101.0,
+                vec![100.0, 99.0, 101.0],
+                vec![2],
+            ),
+            (
+                AlertCondition::EnteringChannel { lower, upper },
+                95.0,
+                vec![105.0, 111.0, 105.0],
+                vec![2],
+            ),
+            (
+                AlertCondition::ExitingChannel { lower, upper },
+                105.0,
+                vec![111.0, 105.0, 99.0],
+                vec![2],
+            ),
+        ];
+        for (row, (condition, before, ticks, expected)) in rows.into_iter().enumerate() {
+            let host = Host::new(Vec::new());
+            host.save(alert(condition, AlertFrequency::EveryTime))
+                .unwrap();
+            host.events();
+            let mut fired = Vec::new();
+            for (tick, close) in ticks.into_iter().enumerate() {
+                feed(
+                    &host,
+                    &[bar(0, before, 1.0), bar(1, close, 1.0)],
+                    &[],
+                    70 + tick as i64,
+                );
+                if !host.fired().is_empty() {
+                    fired.push(tick);
+                }
+            }
+            assert_eq!(fired, expected, "row {row}");
+        }
+    }
+
     #[test]
     fn independent_intervals_join_only_overlapping_observations() {
         for frequency in [
@@ -2852,7 +2949,8 @@ mod tests {
         feed(&host, &bars, &[], 1_000);
         assert_eq!(host.fired(), [101.0]);
 
-        // A disabled alert is ignored; saving it active again starts with a first observation.
+        // A disabled alert is ignored; saving it active again records a first observation,
+        // so the crossing from before the save does not fire.
         let mut paused = alert(AlertCondition::CrossingUp(100.0), AlertFrequency::Once);
         paused.status = AlertStatus::Disabled;
         let host = Host::new(vec![paused.clone()]);
@@ -2863,6 +2961,13 @@ mod tests {
         paused.status = AlertStatus::Active;
         host.save(paused).unwrap();
         host.events();
+        feed(&host, &bars, &[], 1_001);
+        assert!(
+            host.events().is_empty(),
+            "resumed: crossing before the save"
+        );
+        feed(&host, &[bars[0].clone(), bar(1, 99.5, 1.0)], &[], 1_001);
+        assert!(host.events().is_empty());
         feed(&host, &bars, &[], 1_001);
         // Once reports the new status before the trigger.
         let events = host.events();
