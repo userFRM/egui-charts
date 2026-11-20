@@ -27,6 +27,8 @@ pub(crate) enum ProfileStyle {
         strip: bool,
         /// Share of the span that the row with the most volume takes.
         width: f32,
+        /// Visibility of the option profile's call and put wall plots.
+        walls_visible: [bool; 2],
     },
     #[cfg(feature = "drawings")]
     Drawing {
@@ -88,11 +90,12 @@ pub(crate) fn paint_profile(
         return;
     }
     let options = profile.source() == ProfileSource::Options;
-    let (drawing, right_aligned, strip, share, poc_width) = match style {
+    let (drawing, right_aligned, strip, share, poc_width, walls_visible) = match style {
         ProfileStyle::Study {
             right_aligned,
             strip,
             width,
+            walls_visible,
         } => (
             false,
             right_aligned,
@@ -103,21 +106,36 @@ pub(crate) fn paint_profile(
             } else {
                 stroke::THICK
             },
+            walls_visible,
         ),
         #[cfg(feature = "drawings")]
         ProfileStyle::Drawing {
             anchored,
             poc_width,
-        } => (true, anchored, false, 0.3, poc_width),
+        } => (true, anchored, false, 0.3, poc_width, [true; 2]),
     };
     if profile.exposure.is_some() {
         paint_exposure(painter, profile, config, span.clone(), share, price_to_y);
-        paint_option_walls(painter, profile, span, right_aligned, price_to_y);
+        paint_option_walls(
+            painter,
+            profile,
+            span,
+            right_aligned,
+            price_to_y,
+            walls_visible,
+        );
         return;
     }
     let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(config.value_area()) else {
         if !drawing {
-            paint_option_walls(painter, profile, span, right_aligned, price_to_y);
+            paint_option_walls(
+                painter,
+                profile,
+                span,
+                right_aligned,
+                price_to_y,
+                walls_visible,
+            );
         }
         return;
     };
@@ -360,7 +378,14 @@ pub(crate) fn paint_profile(
 
     if !drawing {
         draw_lines();
-        paint_option_walls(painter, profile, span, right_aligned, price_to_y);
+        paint_option_walls(
+            painter,
+            profile,
+            span,
+            right_aligned,
+            price_to_y,
+            walls_visible,
+        );
     }
     if let Some(parts) = &profile.expiry_parts {
         paint_expiry_key(painter, &parts.labels, rect, !right_aligned);
@@ -383,12 +408,13 @@ fn paint_option_walls(
     span: Range<f32>,
     right_aligned: bool,
     price_to_y: &dyn Fn(f64) -> f32,
+    visible: [bool; 2],
 ) {
     let Some(walls) = &profile.walls else {
         return;
     };
     for (side, label) in ["Call wall", "Put wall"].into_iter().enumerate() {
-        let Some(strike) = walls.strikes[side] else {
+        let Some(strike) = walls.strikes[side].filter(|_| visible[side]) else {
             continue;
         };
         let [r, g, b, a] = walls.colors[side];
@@ -784,6 +810,7 @@ mod tests {
                         ProfileStyle::Study {
                             right_aligned: false,
                             strip: false,
+                            walls_visible: [true; 2],
                             width: 0.9,
                         }
                     },
@@ -879,6 +906,7 @@ mod tests {
                     ProfileStyle::Study {
                         right_aligned,
                         strip: right_aligned,
+                        walls_visible: [true; 2],
                         width: if right_aligned { 1.0 } else { 0.9 },
                     },
                     &|price| (price - 100.0) as f32 * 10.0,

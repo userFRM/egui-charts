@@ -2389,6 +2389,7 @@ mod tests {
                                     crate::painting::volume_profile::ProfileStyle::Study {
                                         right_aligned: true,
                                         strip: true,
+                                        walls_visible: [true; 2],
                                         width: 0.9,
                                     },
                                     &|price| 300.0 + direction * (price - 105.0) as f32,
@@ -4298,6 +4299,7 @@ mod tests {
                         crate::painting::volume_profile::ProfileStyle::Study {
                             right_aligned: left,
                             strip: false,
+                            walls_visible: [true; 2],
                             width: 0.9,
                         },
                         &|price| price as f32,
@@ -4322,6 +4324,43 @@ mod tests {
                     egui::Shape::LineSegment { points, stroke }
                     if points == &[egui::pos2(100.0, 100.0), egui::pos2(200.0, 100.0)]
                         && stroke.color == study.plot_style(3).color)));
+            }
+            #[cfg(feature = "widget")]
+            {
+                use crate::scales::{PriceRange, PriceTransform};
+                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 200.0));
+                let map = crate::scales::PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(95.0, 105.0),
+                    0.0,
+                    200.0,
+                    false,
+                );
+                let coords = crate::chart::coords::ChartMapping::new(rect, 10.0, 0, 60, 0.0, map);
+                let mut configured = crate::studies::ConfiguredStudy::new(Box::new(study.clone()));
+                for shown in [false, true] {
+                    let mut settings = configured.settings();
+                    settings.plots[3].visible = shown;
+                    configured.apply_settings(&[], settings).unwrap();
+                    let output = egui::Context::default().run_ui(Default::default(), |ui| {
+                        crate::chart::rendering::IndicatorRenderer::render_study(
+                            &crate::chart::rendering::RenderContext::new(ui.painter(), rect),
+                            &configured,
+                            &bars,
+                            0,
+                            &map,
+                            &coords,
+                        );
+                    });
+                    let labelled = output.shapes.iter().any(|shape| {
+                        matches!(
+                            &shape.shape,
+                            egui::Shape::Text(text) if text.galley.text() == "Call wall"
+                        )
+                    });
+                    output.drop_without_applying_deltas();
+                    assert_eq!(labelled, shown, "the wall follows its plot's visibility");
+                }
             }
             assert_eq!(study.plot_value(3, 0), None);
             assert!(!study.legend_visible(3));

@@ -1544,6 +1544,7 @@ mod tests {
                         crate::painting::volume_profile::ProfileStyle::Study {
                             right_aligned,
                             strip: right_aligned,
+                            walls_visible: [true; 2],
                             width: 0.9,
                         },
                         &|price| price as f32 * direction,
