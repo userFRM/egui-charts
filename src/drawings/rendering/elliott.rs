@@ -290,7 +290,7 @@ mod tests {
                 }
                 // Hidden legs do not select the drawing.
                 if let [.., a, b] = drawing.points[..] {
-                    let hit = crate::drawings::services::DrawingInteraction::new().hit_test(
+                    let hit = crate::drawings::services::hit_test(
                         a.lerp(b, 0.5),
                         std::slice::from_ref(&drawing),
                         "1m",
