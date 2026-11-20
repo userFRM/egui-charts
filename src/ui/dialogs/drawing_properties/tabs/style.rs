@@ -1478,19 +1478,54 @@ mod tests {
     /// A palette swatch picked in the Style tab of one drawing in a selection recolours every
     /// selected drawing and leaves each at its own opacity: a trend line stays opaque and a
     /// highlighter stays at 51. Text with its own colour also propagates a pick equal to its
-    /// drawing RGB, while accepting unchanged properties leaves every colour alone.
+    /// drawing RGB, while accepting unchanged properties leaves every colour alone. Only an
+    /// opacity edited in the custom editor changes the other Texts' text opacity.
     #[test]
     fn palette_colour_on_a_selection_keeps_each_line_opacity() {
+        use DrawingToolType::{AnchoredText, TextLabel};
+
+        let green = Some([8, 153, 129, 200]);
         let mut observed = Vec::new();
-        for (opened, alpha, text_tool, swatch) in [
-            (1, 51, DrawingToolType::TextLabel, MAIN_COLORS[3]),
-            (2, 51, DrawingToolType::TextLabel, MAIN_COLORS[3]),
-            (1, 0, DrawingToolType::TextLabel, MAIN_COLORS[3]),
-            (2, 0, DrawingToolType::TextLabel, MAIN_COLORS[3]),
-            (3, 51, DrawingToolType::TextLabel, MAIN_COLORS[6]),
-            (3, 51, DrawingToolType::AnchoredText, MAIN_COLORS[6]),
+        for (opened, alpha, text_tool, (peer_tool, peer_text), swatch) in [
+            (1, 51, TextLabel, (TextLabel, green), Some(MAIN_COLORS[3])),
+            (2, 51, TextLabel, (TextLabel, green), Some(MAIN_COLORS[3])),
+            (1, 0, TextLabel, (TextLabel, green), Some(MAIN_COLORS[3])),
+            (2, 0, TextLabel, (TextLabel, green), Some(MAIN_COLORS[3])),
+            (3, 51, TextLabel, (TextLabel, green), Some(MAIN_COLORS[6])),
+            (
+                3,
+                51,
+                AnchoredText,
+                (AnchoredText, green),
+                Some(MAIN_COLORS[6]),
+            ),
+            (3, 51, TextLabel, (TextLabel, green), Some(MAIN_COLORS[3])),
+            (
+                3,
+                51,
+                TextLabel,
+                (AnchoredText, green),
+                Some(MAIN_COLORS[3]),
+            ),
+            (
+                3,
+                51,
+                AnchoredText,
+                (TextLabel, green),
+                Some(MAIN_COLORS[3]),
+            ),
+            (
+                3,
+                51,
+                AnchoredText,
+                (AnchoredText, green),
+                Some(MAIN_COLORS[3]),
+            ),
+            (3, 51, TextLabel, (AnchoredText, green), None),
+            (3, 51, AnchoredText, (TextLabel, green), None),
+            (3, 51, TextLabel, (TextLabel, None), Some(MAIN_COLORS[3])),
+            (3, 51, TextLabel, (TextLabel, None), None),
         ] {
-            let [r, g, b, _] = swatch.to_srgba_unmultiplied();
             let ctx = Context::default();
             ctx.global_style_mut(|style| style.animation_time = 0.0);
             let mut chart = Chart::new(BarData::new());
@@ -1503,8 +1538,10 @@ mod tests {
             }
             let mut text = Drawing::new(3, text_tool);
             text.text_color = Some([242, 54, 69, 128]);
-            chart.drawings_mut().drawings = vec![highlighter, line, text];
-            chart.drawings_mut().select_drawings([1, 2, 3]);
+            let mut peer = Drawing::new(4, peer_tool);
+            peer.text_color = peer_text;
+            chart.drawings_mut().drawings = vec![highlighter, line, text, peer];
+            chart.drawings_mut().select_drawings([1, 2, 3, 4]);
             let target = chart.drawings().drawings[opened - 1].clone();
             let mut props = DrawingProps::from_drawing(&target, &chart);
             let original: Vec<_> = chart
@@ -1552,50 +1589,64 @@ mod tests {
                         )
                     },
                 );
-                let well = output.shapes.iter().find_map(|s| match &s.shape {
-                    Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
-                    _ => None,
-                });
+                let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
                 output.drop_without_applying_deltas();
-                well
+                shapes
             };
-            frame(vec![]);
-            let pos = frame(vec![]).expect("the palette shows the swatch");
-            frame(vec![
-                Event::PointerMoved(pos),
-                Event::PointerButton {
-                    pos,
-                    button: PointerButton::Primary,
-                    pressed: true,
-                    modifiers: Modifiers::NONE,
-                },
-                Event::PointerButton {
-                    pos,
-                    button: PointerButton::Primary,
-                    pressed: false,
-                    modifiers: Modifiers::NONE,
-                },
-            ]);
+            if let Some(swatch) = swatch {
+                frame(vec![]);
+                let pos = frame(vec![])
+                    .iter()
+                    .find_map(|s| match s {
+                        Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
+                        _ => None,
+                    })
+                    .expect("the palette shows the swatch");
+                frame(click(pos));
+            } else {
+                let shapes = open_custom_editor(
+                    &mut frame,
+                    Color32::from_rgba_unmultiplied(242, 54, 69, 128),
+                );
+                drag_alpha(&mut frame, &shapes, &[128, 64]);
+            }
             props
                 .apply_to_chart(
                     crate::ui::dialogs::drawing_properties::actions::DrawingId(opened),
                     &mut chart,
                 )
                 .unwrap();
+            let want = if let Some(swatch) = swatch {
+                let [r, g, b, _] = swatch.to_srgba_unmultiplied();
+                vec![
+                    [r, g, b, alpha],
+                    [r, g, b, 255],
+                    [r, g, b, 128],
+                    [r, g, b, peer_text.map_or(255, |color| color[3])],
+                ]
+            } else {
+                let [r, g, b, _] = peer_text.unwrap_or([41, 98, 255, 255]);
+                vec![
+                    [242, 54, 69, alpha],
+                    [242, 54, 69, 255],
+                    [242, 54, 69, 64],
+                    [r, g, b, 64],
+                ]
+            };
             observed.push((
                 chart
                     .drawings()
                     .drawings
                     .iter()
                     .map(|d| {
-                        if d.id == 3 {
-                            d.text_color.unwrap()
+                        if d.id >= 3 {
+                            d.text_color.unwrap_or(d.color)
                         } else {
                             d.color
                         }
                     })
                     .collect::<Vec<_>>(),
-                vec![[r, g, b, alpha], [r, g, b, 255], [r, g, b, 128]],
+                want,
             ));
             let mut custom =
                 DrawingProps::from_drawing(&chart.drawings().drawings[opened - 1], &chart);
@@ -1609,7 +1660,7 @@ mod tests {
             assert!(
                 chart.drawings().drawings.iter().all(|d| {
                     d.color == [255, 255, 255, 128]
-                        && (d.id != 3 || d.text_color == Some([255, 255, 255, 128]))
+                        && (d.id < 3 || d.text_color.unwrap_or(d.color) == [255, 255, 255, 128])
                 }),
                 "an edited opacity applies to the entire selection"
             );

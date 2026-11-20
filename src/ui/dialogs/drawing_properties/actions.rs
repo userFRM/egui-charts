@@ -278,6 +278,15 @@ impl DrawingProps {
                     drawing.text_color = drawing.text_color.map(|[r, g, b, _]| [r, g, b, a]);
                 }
             }
+            if let Some((picked, shown)) = text_pick
+                && picked[3] != shown[3]
+                && matches!(
+                    drawing.tool_type,
+                    DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+                )
+            {
+                drawing.text_color.as_mut().unwrap_or(&mut drawing.color)[3] = picked[3];
+            }
             if self.line_width != target.stroke_width {
                 drawing.stroke_width = self.line_width;
             }
@@ -323,11 +332,14 @@ impl DrawingProps {
                         })+
                     };
                 }
+                // Colour-row picks already keep each text opacity above unless it was edited.
+                if text_pick.is_none() {
+                    edited!(text_color);
+                }
                 edited!(
                     font_weight,
                     italic,
                     glyph_angle,
-                    text_color,
                     background,
                     border,
                     border_color,
