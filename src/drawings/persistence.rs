@@ -1190,6 +1190,10 @@ mod v1 {
         drawing.fib_config = None;
         drawing.pitchfork = None;
         drawing.volume_profile = None;
+        // Version 1 feeds keep the range and noise the former loader supplied.
+        if let Some(feed) = drawing.ghost_feed.as_mut() {
+            (feed.average_range_ticks, feed.noise_ticks) = (10.0, 5.0);
+        }
         drawing.line_style = LineStyle::Solid;
         // The released renderers used fixed sizes, not the constructor's unused 12 pt field.
         // Other tools had no stored text presentation; their added captions keep their defaults.
@@ -1213,7 +1217,10 @@ mod v1 {
         };
         drawing.font_weight = FontWeight::Normal;
         // Released measuring readouts used the fixed size above.
-        drawing.range_settings.font_size = drawing.font_size;
+        drawing.range_settings = crate::drawings::RangeSettings {
+            font_size: drawing.font_size,
+            ..Default::default()
+        };
         drawing.text_color = None;
         drawing.background = true;
         drawing.border = true;
@@ -1511,6 +1518,7 @@ mod tests {
             font_size: 18.0,
             background: false,
             background_color: Some([29, 30, 31, 32]),
+            shadow_color: [37, 38, 39, 40],
             border: false,
             border_color: Some([33, 34, 35, 36]),
             border_width: Some(2.5),
@@ -1657,7 +1665,12 @@ mod tests {
             };
             for &display in modes {
                 let config = drawing.volume_profile.as_mut().unwrap();
-                *config = config.with_row_size(Some(0.25)).unwrap();
+                *config = if display == UpDown {
+                    config.with_row_ticks(Some(4))
+                } else {
+                    config.with_row_size(Some(0.25))
+                }
+                .unwrap();
                 config.display = display;
                 config.up_color = [1, 2, 3, 240];
                 config.down_color = [4, 5, 6, 200];
@@ -1814,6 +1827,12 @@ mod tests {
                     assert_eq!((style.start_border, style.target_border), (None, None));
                     assert_eq!(style.transparency, 0);
                 }
+                // These literal older saves have no tick layout and keep their row count.
+                if let Some(config) = restored.volume_profile {
+                    assert_eq!(config.row_ticks(), None);
+                    assert_eq!((config.rows(), config.value_area()), (50, 0.68));
+                    assert_eq!(config.row_size(), None);
+                }
                 assert!(
                     !serde_json::to_string(&stored.drawing)
                         .unwrap()
@@ -1873,6 +1892,20 @@ mod tests {
             want.visible = tool != DrawingToolType::Arrow;
             assert_eq!(format!("{:?}", restore(stored, 1)), format!("{want:?}"));
         }
+        // A version 1 ghost feed keeps the range, noise and body colours the former loader gave it.
+        let mut value: serde_json::Value = serde_json::from_str(v1_json).unwrap();
+        let records = value["drawings"].as_array_mut().unwrap();
+        records.truncate(1);
+        records[0]["tool_type"] = "Ghost Feed".into();
+        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let feed = restore(&loaded.drawings[0], 1).ghost_feed.unwrap();
+        assert_eq!((feed.average_range_ticks, feed.noise_ticks), (10.0, 5.0));
+        assert_eq!(
+            (feed.body_up, feed.body_down),
+            ([172, 229, 220, 255], [250, 161, 164, 255])
+        );
+
         // A version 1 anchored VWAP stored one point and neither a line style nor bands: it
         // loads with a solid line and the default bands.
         let mut value: serde_json::Value = serde_json::from_str(v1_json).unwrap();
@@ -2629,6 +2662,12 @@ mod tests {
             }
             for storage in [&once, &twice] {
                 let drawing = &storage.drawings[0].drawing;
+                if matches!(tool, T::DateRange | T::DateAndPriceRange) {
+                    assert!(drawing.range_settings.border, "{tool:?}");
+                    assert_eq!(drawing.range_settings.border_width, None, "{tool:?}");
+                    assert_eq!(drawing.range_settings.border_color, None, "{tool:?}");
+                    assert_eq!(drawing.range_settings.shadow_color, [0; 4], "{tool:?}");
+                }
                 let tint = if prices[1] < prices[0] {
                     [242, 54, 69]
                 } else {
@@ -2899,7 +2938,8 @@ mod tests {
 
     /// The fixture is a parallel channel and a flat top/bottom as the release before their middle
     /// line and price settings saved them. They restore with the default middle line, a dashed
-    /// hairline in the line colour, and no price style, as they were drawn.
+    /// hairline in the line colour, no price style and their text in the middle of their first
+    /// line, as they were drawn.
     #[test]
     fn channels_saved_before_their_middle_line_and_price_settings_keep_their_look() {
         let saved = include_str!("fixtures/storage_v10_channels.json");
@@ -2914,6 +2954,11 @@ mod tests {
             assert_eq!(drawing.tool_type, tool);
             assert_eq!(drawing.middle_line, MiddleLineStyle::default(), "{tool:?}");
             assert_eq!(drawing.anchor_price_style, None, "{tool:?}");
+            assert_eq!(
+                drawing.line_measurements.text_horizontal_align,
+                LineTextHorizontalAlign::Center,
+                "{tool:?}"
+            );
             assert_eq!(
                 drawing.channel_midline,
                 tool == DrawingToolType::ParallelChannel
