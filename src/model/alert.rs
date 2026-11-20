@@ -105,7 +105,9 @@ fn alert_display_enabled() -> bool {
 }
 
 /// Where a firing is delivered. The alerts panel honours `popup` and `sound`; the host sends the
-/// others itself, reading them from the saved alert. The trigger log records every firing.
+/// others itself, reading them from the saved alert, and
+/// [`AlertNotice`](crate::services::AlertNotice) gives it what to send. The trigger log records
+/// every firing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -114,8 +116,16 @@ pub struct AlertDelivery {
     pub popup: bool,
     /// Play the sound chosen in the alert settings, if they turn sound on. Enabled by default.
     pub sound: bool,
-    /// Ask the host to send an email.
+    /// Ask the host to send an email to the account's address.
     pub email: bool,
+    /// Ask the host to send a plain-text email, without formatting, as pagers and mail-to-text
+    /// gateways need, to [`plain_text_address`](Self::plain_text_address). Independent of
+    /// `email`, so one alert can send both.
+    pub plain_text: bool,
+    /// Where the host sends the plain-text email, such as a pager or a mail-to-text gateway;
+    /// empty sends it to the alternative address the user's account holds. Send to it without
+    /// surrounding spaces. Presets leave it out.
+    pub plain_text_address: String,
     /// Ask the host to send a push notification to the user's mobile app.
     pub push: bool,
     /// Ask the host to post to [`webhook_url`](Self::webhook_url).
@@ -130,6 +140,8 @@ impl Default for AlertDelivery {
             popup: true,
             sound: true,
             email: false,
+            plain_text: false,
+            plain_text_address: String::new(),
             push: false,
             webhook: false,
             webhook_url: String::new(),
@@ -138,8 +150,32 @@ impl Default for AlertDelivery {
 }
 
 impl AlertDelivery {
-    /// Whether an enabled webhook has an `http` or `https` URL.
+    /// Whether an enabled plain-text email's address, when given, is one email address and an
+    /// enabled webhook has an `http` or `https` URL.
     pub fn is_valid(&self) -> bool {
+        self.plain_text_is_valid() && self.webhook_is_valid()
+    }
+
+    /// Whether an enabled plain-text email's address is empty or one `local@domain` address: a
+    /// domain of two or more labels, none empty, and no spaces, control characters or
+    /// `@,;:<>()[]\"` in either part. Surrounding spaces do not count.
+    pub(crate) fn plain_text_is_valid(&self) -> bool {
+        let address = self.plain_text_address.trim();
+        let forbidden =
+            |c: char| c.is_whitespace() || c.is_control() || "@,;:<>()[]\\\"".contains(c);
+        !self.plain_text
+            || address.is_empty()
+            || address.split_once('@').is_some_and(|(local, domain)| {
+                !local.is_empty()
+                    && domain.split('.').count() > 1
+                    && domain.split('.').all(|label| !label.is_empty())
+                    && !local.contains(forbidden)
+                    && !domain.contains(forbidden)
+            })
+    }
+
+    /// Whether an enabled webhook has an `http` or `https` URL.
+    pub(crate) fn webhook_is_valid(&self) -> bool {
         let url = self.webhook_url.trim();
         !self.webhook
             || url.split_once("://").is_some_and(|(scheme, rest)| {
@@ -417,8 +453,9 @@ impl Alert {
     /// joined by `, `, for a position the level reached last (the entry until its exit),
     /// and empty if it tests no drawing. `value` gives the value of a source at
     /// the bar. A value that is missing or not finite becomes `NaN`, a number is written in the
-    /// shortest form that reads back the same, and a placeholder the alert does not know stays as
-    /// written.
+    /// shortest form that reads back the same. A strategy fill alert also fills `{{order_id}}`,
+    /// `{{side}}`, `{{quantity}}` and `{{position}}`, as `AlertEngine::strategy_fills` describes.
+    /// A placeholder the alert does not know stays as written.
     ///
     /// ```
     /// use egui_charts::model::{Alert, AlertCondition, Bar, Timeframe};
@@ -440,6 +477,20 @@ impl Alert {
         bar: &Bar,
         trigger: DateTime<Utc>,
         value: impl Fn(&AlertSource) -> Option<f64>,
+    ) -> String {
+        self.expand_message_with(symbol, exchange, timeframe, bar, trigger, value, &[])
+    }
+
+    /// [`expand_message`](Self::expand_message) with occurrence fields; ordinary fields take precedence.
+    pub(crate) fn expand_message_with(
+        &self,
+        symbol: &str,
+        exchange: Option<&str>,
+        timeframe: Timeframe,
+        bar: &Bar,
+        trigger: DateTime<Utc>,
+        value: impl Fn(&AlertSource) -> Option<f64>,
+        extra: &[(&str, String)],
     ) -> String {
         let number = |number: Option<f64>| {
             number
@@ -493,12 +544,17 @@ impl Alert {
                     labels.join(", ")
                 }
                 _ => {
+                    if let Some((_, text)) = extra.iter().find(|(key, _)| *key == name) {
+                        return Some(text.clone());
+                    }
                     if let Some((id, output)) = plot_placeholder(name) {
                         return Some(study(id, output));
                     }
                     let output = name.strip_prefix("output_")?.parse().ok()?;
                     match &self.source {
-                        AlertSource::Study { id, .. } => study(id, output),
+                        AlertSource::Study { id, .. } | AlertSource::StudyCondition { id, .. } => {
+                            study(id, output)
+                        }
                         _ => String::new(),
                     }
                 }
@@ -667,6 +723,9 @@ pub enum AlertCondition {
         /// Number of preceding bars in the mean, at least one.
         bars: u32,
     },
+    /// The [`AlertSource::StudyCondition`] named by the source holds on this bar.
+    /// It tests only that source, which takes no other condition. An undefined value does not hold.
+    Holds,
 }
 
 /// A host-resolved value on a bar. Identifiers remain meaningful to the host across sessions.
@@ -682,6 +741,16 @@ pub enum AlertSource {
         id: String,
         /// Zero-based output line within the study.
         output: usize,
+    },
+    /// A study's declared condition, indexed by
+    /// [`Indicator::alert_conditions`](crate::studies::Indicator::alert_conditions).
+    /// Reads 1 where it holds, 0 where it does not, and no value where undefined;
+    /// `{{value}}` writes it as `1` or `0`. Only [`AlertCondition::Holds`] tests it.
+    StudyCondition {
+        /// Host's stable identifier for the study instance.
+        id: String,
+        /// Zero-based condition within the study.
+        condition: usize,
     },
     /// A drawing's price at the bar's time, resolved by the host.
     Drawing(String),
@@ -913,7 +982,9 @@ impl AlertRule {
 impl AlertSource {
     fn is_valid(&self) -> bool {
         match self {
-            Self::Study { id, .. } | Self::Drawing(id) => !id.trim().is_empty(),
+            Self::Study { id, .. } | Self::StudyCondition { id, .. } | Self::Drawing(id) => {
+                !id.trim().is_empty()
+            }
             _ => true,
         }
     }
@@ -939,9 +1010,15 @@ impl AlertCondition {
         )
     }
 
+    /// A declared study condition takes only `Holds`, which tests nothing else.
+    pub(crate) fn pairs_with(&self, source: &AlertSource) -> bool {
+        matches!(source, AlertSource::StudyCondition { .. }) == matches!(self, Self::Holds)
+    }
+
     /// Whether levels are finite and ordered, lookbacks positive, and referenced ids nonempty.
     pub fn is_valid(&self) -> bool {
         match self {
+            Self::Holds => true,
             Self::StrategyFills(name) | Self::DetectorSignals(name) | Self::CustomEvents(name) => {
                 !name.trim().is_empty()
             }
@@ -992,6 +1069,7 @@ impl AlertCondition {
 impl std::fmt::Display for AlertCondition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Holds => f.write_str("Condition met"),
             Self::StrategyFills(run) => write!(f, "Fills of strategy {run}"),
             Self::DetectorSignals(detector) => write!(f, "Signals of detector {detector}"),
             Self::CustomEvents(source) => write!(f, "Events of {source}"),
@@ -1054,6 +1132,14 @@ impl Alert {
                 let intervals = self.timeframes();
                 intervals.len() == 1 || intervals.iter().all(|interval| !interval.is_trade_based())
             }
+            && self.rules().all(|(source, condition, _)| {
+                condition.pairs_with(source)
+                    && !condition
+                        .partners()
+                        .into_iter()
+                        .flatten()
+                        .any(|source| matches!(source, AlertSource::StudyCondition { .. }))
+            })
             && self.source.is_valid()
             && self.condition.is_valid()
             && self
@@ -1278,6 +1364,7 @@ mod tests {
         let value = |source: &AlertSource| match source {
             AlertSource::Study { id, output: 0 } if id == "3" => Some(70.25),
             AlertSource::Study { id, output: 1 } if id == "3" => Some(3.0),
+            AlertSource::StudyCondition { id, condition: 0 } if id == "3" => Some(1.0),
             AlertSource::Price => Some(101.5),
             _ => None,
         };
@@ -1300,6 +1387,14 @@ mod tests {
                 "AAPL on NASDAQ at 2024-01-01T00:01:00+00:00",
             ),
             ("{{value}}/{{output_1}}", study.clone(), "70.25/3"),
+            (
+                "{{value}}/{{output_1}}",
+                AlertSource::StudyCondition {
+                    id: "3".into(),
+                    condition: 0,
+                },
+                "1/3",
+            ),
             ("{{output_2}}.", study.clone(), "NaN."),
             ("{{value}}{{output_1}}", AlertSource::Price, "101.5"),
             (
@@ -1421,7 +1516,65 @@ mod tests {
                 progress: AlertPositionProgress::AwaitingEntry,
             }
         }
-        let rows: [(Edit, bool); 41] = [
+        fn plain_text(a: &mut Alert, address: &str) {
+            a.delivery.plain_text = true;
+            a.delivery.plain_text_address = address.into();
+        }
+        let rows: [(Edit, bool); 57] = [
+            (
+                |a| {
+                    a.source = AlertSource::StudyCondition {
+                        id: "3".into(),
+                        condition: 0,
+                    };
+                    a.condition = AlertCondition::Holds;
+                },
+                true,
+            ),
+            (|a| a.condition = AlertCondition::Holds, false),
+            (
+                |a| {
+                    a.source = AlertSource::StudyCondition {
+                        id: "3".into(),
+                        condition: 0,
+                    }
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::Compare {
+                        other: AlertSource::StudyCondition {
+                            id: "3".into(),
+                            condition: 0,
+                        },
+                        comparison: AlertComparison::Above,
+                    }
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.source = AlertSource::StudyCondition {
+                        id: " ".into(),
+                        condition: 0,
+                    };
+                    a.condition = AlertCondition::Holds;
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.additional_conditions.push(AlertRule::new(
+                        AlertSource::StudyCondition {
+                            id: "3".into(),
+                            condition: 1,
+                        },
+                        AlertCondition::Holds,
+                    ))
+                },
+                true,
+            ),
             (|a| a.condition = position(), true),
             (
                 |a| {
@@ -1463,6 +1616,22 @@ mod tests {
                 },
                 false,
             ),
+            (|a| plain_text(a, "pager@example.com"), true),
+            (|a| plain_text(a, " pager@example.com "), true),
+            (|a| plain_text(a, ""), true),
+            (|a| plain_text(a, "José@exämple.com"), true),
+            (
+                |a| {
+                    a.delivery.email = true;
+                    a.delivery.plain_text_address = "pager".into();
+                },
+                true,
+            ),
+            (|a| plain_text(a, "pager@example"), false),
+            (|a| plain_text(a, "@example.com"), false),
+            (|a| plain_text(a, "pager@example..com"), false),
+            (|a| plain_text(a, "a@example.com, b@example.com"), false),
+            (|a| plain_text(a, "pager@example.com\r\nBcc: x@y.z"), false),
             (
                 |a| {
                     a.delivery.webhook = true;

@@ -95,13 +95,14 @@ impl Drawing {
             view.executions,
             from..to,
         )) {
-            let Some((vwap, unit)) = value else { continue };
             let x = (view.bar_to_x)((first + i) as f32);
             for (line, k) in lines.iter_mut().zip(&offsets) {
-                line.push(Pos2::new(x, (view.price_to_y)(vwap + k * unit)));
+                line.push(value.map_or(Pos2::NAN, |(vwap, unit)| {
+                    Pos2::new(x, (view.price_to_y)(vwap + k * unit))
+                }));
             }
         }
-        if lines[0].is_empty() {
+        if !lines[0].iter().any(|point| point.is_finite()) {
             return;
         }
 
@@ -123,12 +124,30 @@ impl Drawing {
                     .color
                     .unwrap_or(config.bands[0].upper.color),
             );
-            super::super::fibonacci::paint_band(
-                painter,
-                &lines[1],
-                &lines[2],
-                color.gamma_multiply(config.band_fill.opacity()),
-            );
+            let fill = |upper: &[Pos2], lower: &[Pos2]| {
+                super::super::fibonacci::paint_band(
+                    painter,
+                    upper,
+                    lower,
+                    color.gamma_multiply(config.band_fill.opacity()),
+                );
+            };
+            if config.bands[0].upper.plot_type.has_breaks()
+                || config.bands[0].lower.plot_type.has_breaks()
+            {
+                for (upper, lower) in lines[1]
+                    .split(|p| !p.is_finite())
+                    .zip(lines[2].split(|p| !p.is_finite()))
+                {
+                    if !upper.is_empty() {
+                        fill(upper, lower);
+                    }
+                }
+            } else {
+                lines[1].retain(|p| p.is_finite());
+                lines[2].retain(|p| p.is_finite());
+                fill(&lines[1], &lines[2]);
+            }
         }
         let vwap_line = lines.remove(0);
         let zero = (view.price_to_y)(0.0);
@@ -617,13 +636,32 @@ fn anchored_vwap<'a>(
 /// An area is its line over a fill of its colour at 20% of its opacity, as a study's area is.
 fn paint_vwap_line(
     painter: &egui::Painter,
-    points: Vec<Pos2>,
+    mut points: Vec<Pos2>,
     plot: VwapPlotType,
     style: LineStyle,
     stroke: Stroke,
     zero: f32,
     pitch: f32,
 ) {
+    if plot.has_breaks() {
+        let joined = match plot {
+            VwapPlotType::LineWithBreaks => VwapPlotType::Line,
+            VwapPlotType::StepLineWithBreaks => VwapPlotType::StepLine,
+            VwapPlotType::AreaWithBreaks => VwapPlotType::Area,
+            _ => plot,
+        };
+        for run in points
+            .split(|point| !point.is_finite())
+            .filter(|run| !run.is_empty())
+        {
+            paint_vwap_line(painter, run.to_vec(), joined, style, stroke, zero, pitch);
+        }
+        return;
+    }
+    points.retain(|point| point.is_finite());
+    if points.is_empty() {
+        return;
+    }
     let clip = painter.clip_rect();
     // Zero is usually far off the pane: plots from it start at the pane's edge.
     let zero = if zero.is_finite() {
@@ -641,8 +679,10 @@ fn paint_vwap_line(
         }
     };
     match plot {
-        VwapPlotType::Line => path(points),
-        VwapPlotType::StepLine => {
+        VwapPlotType::Line | VwapPlotType::LineWithBreaks => path(points),
+        VwapPlotType::StepLine
+        | VwapPlotType::StepLineWithBreaks
+        | VwapPlotType::StepLineWithDiamonds => {
             let mut steps = Vec::with_capacity(points.len() * 2);
             for (i, &point) in points.iter().enumerate() {
                 if i > 0 {
@@ -651,6 +691,23 @@ fn paint_vwap_line(
                 steps.push(point);
             }
             path(steps);
+            if plot == VwapPlotType::StepLineWithDiamonds {
+                for (i, &point) in points.iter().enumerate() {
+                    if i == 0 || point.y != points[i - 1].y {
+                        let half = stroke.width + 2.0;
+                        painter.add(Shape::convex_polygon(
+                            vec![
+                                point - egui::vec2(0.0, half),
+                                point + egui::vec2(half, 0.0),
+                                point + egui::vec2(0.0, half),
+                                point - egui::vec2(half, 0.0),
+                            ],
+                            color,
+                            Stroke::NONE,
+                        ));
+                    }
+                }
+            }
         }
         VwapPlotType::Histogram | VwapPlotType::Columns => {
             let half = if plot == VwapPlotType::Columns {
@@ -669,7 +726,7 @@ fn paint_vwap_line(
                 );
             }
         }
-        VwapPlotType::Area => {
+        VwapPlotType::Area | VwapPlotType::AreaWithBreaks => {
             let base: Vec<_> = points.iter().map(|p| Pos2::new(p.x, zero)).collect();
             let fill = color.gamma_multiply(0.2);
             super::super::fibonacci::paint_band(painter, &points, &base, fill);
@@ -795,6 +852,104 @@ mod tests {
 
     fn assert_close(got: f64, want: f64) {
         assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
+    }
+
+    /// Joined plots span a bar without volume; plots with breaks restart each line after it.
+    #[test]
+    fn anchored_vwap_plot_types_keep_or_break_missing_values() {
+        let bars: Vec<_> = [1.0, 2.0, f64::NAN, 1.0, 1.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, volume)| {
+                let price = 10.0 + i as f64;
+                Bar::new(
+                    DateTime::from_timestamp(i as i64 * 60, 0).unwrap(),
+                    price,
+                    price,
+                    price,
+                    price,
+                    volume,
+                )
+            })
+            .collect();
+        let mut failures = Vec::new();
+        for (name, label, paths, diamonds) in [
+            ("Line", "Line", 1, 0),
+            ("StepLine", "Step line", 1, 0),
+            ("Area", "Area", 1, 0),
+            ("LineWithBreaks", "Line with breaks", 2, 0),
+            ("StepLineWithBreaks", "Step line with breaks", 2, 0),
+            ("AreaWithBreaks", "Area with breaks", 2, 0),
+            ("StepLineWithDiamonds", "Step line with diamonds", 1, 4),
+        ] {
+            let Ok(plot) = serde_json::from_value::<VwapPlotType>(name.into()) else {
+                failures.push(format!("{name}: missing plot type"));
+                continue;
+            };
+            assert!(VwapPlotType::ALL.contains(&plot));
+            assert_eq!(plot.name(), label);
+            assert_eq!(serde_json::to_value(plot).unwrap(), serde_json::json!(name));
+            let mut config = VwapConfig {
+                plot_type: plot,
+                ..Default::default()
+            };
+            config.bands[0].upper.plot_type = plot;
+            config.bands[0].lower.plot_type = plot;
+            let shapes = render_vwap(&bars, 0.0, 1.0, LineStyle::Solid, Some(config));
+            let lines: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Path(line) if line.stroke.width > 0.0 => Some(line),
+                    _ => None,
+                })
+                .collect();
+            if lines.len() != paths * 3 {
+                failures.push(format!(
+                    "{name}: {} paths, expected {}",
+                    lines.len(),
+                    paths * 3
+                ));
+            }
+            for line in lines {
+                assert!(line.points.iter().all(|p| p.is_finite()), "{name}");
+                if paths == 2 {
+                    assert!(
+                        line.points.iter().all(|p| p.x <= 110.0)
+                            || line.points.iter().all(|p| p.x >= 130.0),
+                        "{name}: bridged gap"
+                    );
+                }
+            }
+            let fills: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Mesh(mesh) => Some(mesh),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                fills.len(),
+                paths * if name.starts_with("Area") { 4 } else { 1 },
+                "{name}: fills"
+            );
+            for fill in fills {
+                assert!(
+                    fill.vertices.iter().all(|v| v.pos.is_finite()),
+                    "{name}: fill"
+                );
+                if paths == 2 {
+                    assert!(
+                        fill.vertices.iter().all(|v| v.pos.x <= 110.0)
+                            || fill.vertices.iter().all(|v| v.pos.x >= 130.0),
+                        "{name}: fill bridged gap"
+                    );
+                }
+            }
+            assert_eq!(shapes.iter().filter(|shape| matches!(shape,
+                Shape::Path(line) if line.closed && line.points.len() == 4 && line.stroke.width == 0.0
+            )).count(), diamonds * 3, "{name}: diamonds");
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// The line keeps the drawing's width and line style and only the enabled bands are drawn,
