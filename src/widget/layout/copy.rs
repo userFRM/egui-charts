@@ -28,14 +28,15 @@ pub enum LayoutCopy {
     /// beside the kept ones, their additional scales numbered apart from those the kept studies
     /// use.
     Studies,
-    /// Applies these settings to every chart, the source included. Each other chart keeps its
-    /// symbol, interval and chart type, the sizes and other parameters of that type, its own
-    /// price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes, and
-    /// its bubble grouping when the source uses a price step. It keeps the precision of its
-    /// instrument unless the source was given another one. A chart without a feed has no order
-    /// flow to give: from it, each chart keeps its order-flow layers and settings. A chart that
-    /// has not been drawn yet fits its bars on its first frame, and a lock in the settings then
-    /// locks that view.
+    /// Applies these settings to every chart, the source included. Each other chart takes the
+    /// source's styles for every chart type and its footprint, session volume profile and TPO
+    /// colours, but keeps its symbol, interval and chart type, the sizes and other parameters of
+    /// that type, its own price-to-bar ratio when the settings lock it, its quantity unit and
+    /// order-flow sizes, and its bubble grouping when the source uses a price step. It keeps the
+    /// precision of its instrument unless the source was given another one. A chart without a
+    /// feed has no order flow to give: from it, each chart keeps its order-flow layers and
+    /// settings. A chart that has not been drawn yet fits its bars on its first frame, and a lock
+    /// in the settings then locks that view.
     Settings(Box<ChartSettingsState>),
 }
 
@@ -277,13 +278,14 @@ impl CopiedStudies {
 }
 
 /// Applies the settings of the chart with `from` as its configuration to another chart. That
-/// chart keeps the parameters of its chart type, whose sizes and base prices suit its own prices,
-/// its own price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes,
-/// and its bubble grouping when the source uses a price step, which suit its own instrument. It
-/// keeps all its order-flow settings when `from_feed` is false, since a chart without a feed
-/// holds none. It takes the colours of `from` for its candles when the settings describe another
-/// style of candles and so do not hold them. A precision left at its default follows each
-/// chart's instrument.
+/// chart takes the chart type styles and the footprint, session profile and TPO colours of the
+/// settings, but keeps the other parameters of its chart type, whose sizes and base prices suit
+/// its own prices, its own price-to-bar ratio when the settings lock it, its quantity unit and
+/// order-flow sizes, and its bubble grouping when the source uses a price step, which suit its
+/// own instrument. It keeps all its order-flow settings when `from_feed` is false, since a chart
+/// without a feed holds none. It takes the colours of `from` for its candles when the settings
+/// describe another style of candles and so do not hold them. A precision left at its default
+/// follows each chart's instrument.
 fn apply_to_other_chart(
     settings: &ChartSettingsState,
     from: &ChartConfig,
@@ -296,6 +298,16 @@ fn apply_to_other_chart(
         own.styles = params.styles;
         own.footprint_colors = params.footprint_colors;
         own.footprint_imbalance_colors = params.footprint_imbalance_colors;
+        let (profile, source) = (&mut own.profile, &params.profile);
+        profile.poc_color = source.poc_color;
+        profile.value_area_high_color = source.value_area_high_color;
+        profile.value_area_low_color = source.value_area_low_color;
+        profile.up_volume_color = source.up_volume_color;
+        profile.down_volume_color = source.down_volume_color;
+        profile.value_area_up_color = source.value_area_up_color;
+        profile.value_area_down_color = source.value_area_down_color;
+        own.tpo_block_colors = params.tpo_block_colors;
+        own.tpo_block_color = params.tpo_block_color;
         if &own != chart.chart_type_params() {
             chart.apply_chart_type_params(own);
         }
@@ -484,7 +496,7 @@ impl ChartLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Bar, BarData, Instrument, Timeframe};
+    use crate::model::{Bar, BarData, Instrument, ProfileRows, ProfileSession, Timeframe};
     use crate::studies::{RSI, SMA};
     use crate::widget::settings::PrecisionMode;
     use crate::widget::{ChartLayoutMode, PaneId};
@@ -984,19 +996,42 @@ mod tests {
         assert_eq!(names(charts[2]), ["SMA"]);
     }
 
-    /// Settings reach every chart whatever its style of candles, and leave its chart type, the
-    /// parameters of that type and the precision of its instrument alone.
+    /// Settings reach every chart whatever its style of candles, give it the source's profile and
+    /// TPO colours, and leave its chart type, the other parameters of that type and the precision
+    /// of its instrument alone.
     #[test]
     fn settings_copy_reaches_every_chart_and_reverses_as_one_edit() {
         let (mut a, mut b) = (chart(50), chart(50));
         b.set_chart_type(ChartType::HollowCandles);
         let mut params = b.chart_type_params().clone();
         params.renko_brick_size = 0.25;
+        params.profile.session = ProfileSession::Regular;
+        params.profile.rows = ProfileRows::Ticks(4);
+        params.profile.value_area = Some(0.6);
+        params.tpo_row_ticks = 3;
+        params.tpo_value_area = 60.0;
         b.set_chart_type_params(params);
         a.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.01)));
         b.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.0001)));
         a.config_mut().bullish_color = egui::Color32::RED;
         a.set_chart_type(ChartType::Heikin);
+        let mut params = a.chart_type_params().clone();
+        let profile = &mut params.profile;
+        profile.poc_color = Some(egui::Color32::RED);
+        profile.value_area_high_color = Some(egui::Color32::GREEN);
+        profile.value_area_low_color = Some(egui::Color32::BLUE);
+        profile.up_volume_color = Some(egui::Color32::YELLOW);
+        profile.down_volume_color = Some(egui::Color32::BROWN);
+        profile.value_area_up_color = Some(egui::Color32::DARK_GREEN);
+        profile.value_area_down_color = Some(egui::Color32::DARK_RED);
+        params.tpo_block_colors = [
+            egui::Color32::RED,
+            egui::Color32::GREEN,
+            egui::Color32::BLUE,
+            egui::Color32::WHITE,
+        ];
+        params.tpo_block_color = egui::Color32::BLACK;
+        a.set_chart_type_params(params);
         let mut settings = ChartSettingsState::from_chart(&a);
         settings.chart_basic_styles.background_color = egui::Color32::KHAKI;
         settings.candle_colors.body_up = egui::Color32::GOLD;
@@ -1007,6 +1042,7 @@ mod tests {
         };
         let mut charts = [&mut a, &mut b];
         let before = charts[1].config().background_color;
+        let params_before = charts[1].chart_type_params().clone();
         let copy = LayoutCopy::Settings(Box::new(settings));
         assert_eq!(layout.apply_copy(&mut charts, 0, &copy, &factory), []);
         for chart in &charts {
@@ -1019,6 +1055,60 @@ mod tests {
         }
         assert_eq!(charts[1].chart_type(), ChartType::HollowCandles);
         assert_eq!(charts[1].chart_type_params().renko_brick_size, 0.25);
+        let params = charts[1].chart_type_params();
+        let profile = &params.profile;
+        assert_eq!(
+            [
+                profile.poc_color,
+                profile.value_area_high_color,
+                profile.value_area_low_color,
+                profile.up_volume_color,
+                profile.down_volume_color,
+                profile.value_area_up_color,
+                profile.value_area_down_color,
+            ],
+            [
+                egui::Color32::RED,
+                egui::Color32::GREEN,
+                egui::Color32::BLUE,
+                egui::Color32::YELLOW,
+                egui::Color32::BROWN,
+                egui::Color32::DARK_GREEN,
+                egui::Color32::DARK_RED,
+            ]
+            .map(Some),
+            "the profile colours follow the source"
+        );
+        assert_eq!(
+            (params.tpo_block_colors, params.tpo_block_color),
+            (
+                [
+                    egui::Color32::RED,
+                    egui::Color32::GREEN,
+                    egui::Color32::BLUE,
+                    egui::Color32::WHITE,
+                ],
+                egui::Color32::BLACK,
+            ),
+            "the TPO block colours follow the source"
+        );
+        assert_eq!(
+            (
+                &profile.session,
+                profile.rows,
+                profile.value_area,
+                params.tpo_row_ticks,
+                params.tpo_value_area,
+            ),
+            (
+                &ProfileSession::Regular,
+                ProfileRows::Ticks(4),
+                Some(0.6),
+                3,
+                60.0
+            ),
+            "the profile and TPO content settings stay the chart's own"
+        );
         // Neither chose a precision, so each writes its own instrument's.
         let precision = |chart: &Chart| chart.state().price_scale().price_precision();
         assert_eq!(precision(charts[0]), Some(2));
@@ -1028,6 +1118,11 @@ mod tests {
         show(&mut layout, &mut charts);
         assert_eq!(charts[1].config().background_color, before);
         assert_eq!(charts[0].config().background_color, before);
+        assert_eq!(
+            charts[1].chart_type_params(),
+            &params_before,
+            "one undo restores every parameter"
+        );
     }
 
     /// Settings every chart already has change none of them and leave no step to undo.
