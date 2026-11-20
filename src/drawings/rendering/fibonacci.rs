@@ -1404,6 +1404,7 @@ fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f64, counterclockwise: bool
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::painting::point_to_segment_distance;
     use std::f32::consts::FRAC_PI_2;
 
     /// A quarter of A=200 to B=400 is 50 bars, projected from A for zones and C=500
@@ -1411,7 +1412,7 @@ mod tests {
     #[test]
     fn time_levels_keep_patterns_widths_alignment_and_hit_geometry() {
         use crate::drawings::ChartPoint;
-        use crate::drawings::services::DrawingInteraction;
+        use crate::drawings::services::hit_test;
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 700.0));
         for tool in [Tool::FibonacciTimeZones, Tool::TrendBasedFibTime] {
             for reverse in [false, true] {
@@ -1511,9 +1512,8 @@ mod tests {
                         "Middle" => assert!((bounds.center().y - 350.0).abs() < 0.01),
                         _ => assert!((bounds.bottom() - 696.0).abs() < 0.01),
                     }
-                    let hit = DrawingInteraction::default();
                     assert_eq!(
-                        hit.hit_test(
+                        hit_test(
                             Pos2::new(x + 18.0, 100.0),
                             std::slice::from_ref(&drawing),
                             "1D"
@@ -1522,7 +1522,7 @@ mod tests {
                     );
                     let second_x = origin + if reverse { -100.0 } else { 100.0 };
                     assert_eq!(
-                        hit.hit_test(
+                        hit_test(
                             Pos2::new(second_x + 18.0, 100.0),
                             std::slice::from_ref(&drawing),
                             "1D"
@@ -1540,13 +1540,10 @@ mod tests {
                         .iter_mut()
                         .for_each(|level| level.visible = false);
                     let middle = drawing.points[0].lerp(drawing.points[1], 0.5);
-                    assert_eq!(
-                        hit.hit_test(middle, std::slice::from_ref(&drawing), "1D"),
-                        None
-                    );
+                    assert_eq!(hit_test(middle, std::slice::from_ref(&drawing), "1D"), None);
                     drawing.fib_config.as_mut().unwrap().trend_visible = true;
                     assert_eq!(
-                        hit.hit_test(middle, std::slice::from_ref(&drawing), "1D"),
+                        hit_test(middle, std::slice::from_ref(&drawing), "1D"),
                         Some(7)
                     );
                 }
@@ -1680,7 +1677,7 @@ mod tests {
                         continue;
                     }
                     assert_eq!(
-                        crate::drawings::services::DrawingInteraction::new().hit_test(
+                        crate::drawings::services::hit_test(
                             drawing.points[0].lerp(drawing.points[1], 0.1),
                             std::slice::from_ref(&drawing),
                             "1h",
@@ -1912,10 +1909,7 @@ mod tests {
                 let apex = center + egui::vec2(0.0, axes.y * side);
                 if pane.contains(apex) {
                     assert!(pairs.windows(2).any(|w| {
-                        let (a, b) = (w[0][1].pos, w[1][1].pos);
-                        let chord = b - a;
-                        let t = ((apex - a).dot(chord) / chord.length_sq()).clamp(0.0, 1.0);
-                        apex.distance(a + chord * t) <= 0.25
+                        point_to_segment_distance(apex, w[0][1].pos, w[1][1].pos) <= 0.25
                     }));
                 }
                 for pair in pairs {
@@ -2057,10 +2051,7 @@ mod tests {
                 if tool == Tool::FibonacciSpeedResistanceArcs {
                     assert_eq!(filled_opposite, closed, "full-circle background");
                     assert_eq!(
-                        crate::drawings::services::DrawingInteraction::hit_test_painted(
-                            opposite,
-                            &output.shapes
-                        ),
+                        crate::drawings::services::hit_test_painted(opposite, &output.shapes),
                         closed,
                         "select the added half"
                     );
@@ -2330,10 +2321,7 @@ mod tests {
                     _ => None,
                 } {
                     assert!(
-                        crate::drawings::services::DrawingInteraction::hit_test_painted(
-                            at,
-                            &output.shapes
-                        ),
+                        crate::drawings::services::hit_test_painted(at, &output.shapes),
                         "{tool:?}: selectable painted level"
                     );
                 }
@@ -2669,15 +2657,22 @@ mod tests {
                         .count(),
                     if trend { 2 } else { 0 }
                 );
-                let interaction = crate::drawings::services::DrawingInteraction::new();
                 let at_radius =
                     |radius: f32| d.points[0] + egui::vec2(1.0, -1.0).normalized() * radius;
                 assert_eq!(
-                    interaction.hit_test(at_radius(112.0), std::slice::from_ref(&d), "1D"),
+                    crate::drawings::services::hit_test(
+                        at_radius(112.0),
+                        std::slice::from_ref(&d),
+                        "1D"
+                    ),
                     Some(7)
                 );
                 assert_eq!(
-                    interaction.hit_test(at_radius(212.0), std::slice::from_ref(&d), "1D"),
+                    crate::drawings::services::hit_test(
+                        at_radius(212.0),
+                        std::slice::from_ref(&d),
+                        "1D"
+                    ),
                     None,
                     "the wide inner arc must not enlarge the thin outer arc's hit area"
                 );
@@ -2964,7 +2959,7 @@ mod tests {
     #[test]
     fn fibonacci_bands_styles_and_extension_range_follow_settings() {
         use crate::drawings::ChartPoint;
-        use crate::drawings::services::DrawingInteraction;
+        use crate::drawings::services::hit_test;
         use crate::model::LineStyle;
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(900.0, 600.0));
         for tool in [
@@ -3059,9 +3054,8 @@ mod tests {
                         _ => false,
                     }));
                     if tool == Tool::FibonacciExtension {
-                        let interaction = DrawingInteraction::new();
                         assert_eq!(
-                            interaction.hit_test(
+                            hit_test(
                                 Pos2::new(500.0, 300.0),
                                 std::slice::from_ref(&drawing),
                                 "1D"
@@ -3069,7 +3063,7 @@ mod tests {
                             Some(7)
                         );
                         assert_eq!(
-                            interaction.hit_test(
+                            hit_test(
                                 Pos2::new(300.0, 300.0),
                                 std::slice::from_ref(&drawing),
                                 "1D"
@@ -3298,11 +3292,12 @@ mod tests {
             );
         }
         let mid = Pos2::new(35.35534, 35.35534);
-        assert!(outline.lines.iter().any(|[a, b]| {
-            let chord = *b - *a;
-            let t = ((mid - *a).dot(chord) / chord.length_sq()).clamp(0.0, 1.0);
-            mid.distance(*a + chord * t) <= 0.25
-        }));
+        assert!(
+            outline
+                .lines
+                .iter()
+                .any(|&[a, b]| point_to_segment_distance(mid, a, b) <= 0.25)
+        );
 
         assert!(
             wedge

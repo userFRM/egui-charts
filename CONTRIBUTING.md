@@ -165,7 +165,6 @@ The default build includes the chart widget, the icons, the built-in studies and
 - `strategies` (off): `strategies::Backtest`, which runs a `strategies::Strategy` over bars and returns a `StrategyReport`. Needs no egui.
 - `icons` (**default on**): compile-time embedded SVG icons. Required by `ui`.
 - `ui` (**default on**): application-level UI (toolbars, panels, sidebars, dialogs), the `ui_kit` widget library it is built on, and the `ui_kit::ext` helpers. Enables `icons`, `studies` and `drawings`.
-- `serde` (off): `Serialize` and `Deserialize` for `theme::Theme`.
 
 ## Contribution workflow
 
