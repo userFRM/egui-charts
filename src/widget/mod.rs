@@ -396,6 +396,8 @@ pub struct Chart {
     legend_instrument: Option<crate::model::Instrument>,
     currency_choices: Vec<String>,
     currency_choice: Option<String>,
+    unit_choices: Vec<String>,
+    unit_choice: Option<String>,
     legend_badge: Option<egui::ImageSource<'static>>,
     legend_statuses: Vec<(String, egui::Color32, egui::Color32)>,
     /// Current quote, independent of the historical readout.
@@ -664,6 +666,21 @@ impl Chart {
     /// Takes the selected currency. No prices change until the host supplies converted data.
     pub fn take_currency_choice(&mut self) -> Option<String> {
         self.currency_choice.take()
+    }
+
+    /// Supplies the price units the host can convert the chart into, such as `tonne` for a
+    /// symbol quoted per `barrel`. While
+    /// [`ChartConfig::show_unit`](crate::config::ChartConfig::show_unit) is on, the menu of the
+    /// currency and unit header above the price scale lists them under the currencies. Choosing
+    /// one emits an intent; the host replaces bars and instrument metadata together after
+    /// conversion.
+    pub fn set_unit_choices(&mut self, units: Vec<String>) {
+        self.unit_choices = units;
+    }
+
+    /// Takes the selected unit. No prices change until the host supplies converted data.
+    pub fn take_unit_choice(&mut self) -> Option<String> {
+        self.unit_choice.take()
     }
 
     /// Supplies an image for the legend's symbol mark in place of
@@ -1233,6 +1250,25 @@ pub(crate) mod test_frames {
         events: Vec<Event>,
     ) -> Vec<Shape> {
         run(ctx, chart, time, events).0
+    }
+
+    /// The fill and stroke colours of `shapes`, mesh vertices included.
+    #[cfg(feature = "ui")]
+    pub(crate) fn painted_colors(shapes: &[Shape]) -> Vec<egui::Color32> {
+        shapes
+            .iter()
+            .flat_map(|shape| match shape {
+                Shape::Vec(shapes) => painted_colors(shapes),
+                Shape::Rect(rect) => vec![rect.fill, rect.stroke.color],
+                Shape::LineSegment { stroke, .. } => vec![stroke.color],
+                Shape::Path(path) => match path.stroke.color {
+                    egui::epaint::ColorMode::Solid(color) => vec![path.fill, color],
+                    _ => vec![path.fill],
+                },
+                Shape::Mesh(mesh) => mesh.vertices.iter().map(|vertex| vertex.color).collect(),
+                _ => Vec::new(),
+            })
+            .collect()
     }
 
     /// The heights of the candles in `color` among `shapes`.

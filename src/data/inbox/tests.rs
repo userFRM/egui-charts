@@ -774,6 +774,7 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
         rows: 2,
         ticks_per_row: 2,
         columns: 10,
+        retention: None,
         orders: None,
     };
     inbox.sample_depth(sink.id, Some(config));
@@ -825,6 +826,39 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
     assert!(
         updates.depth_columns.is_empty(),
         "new settings discard pending old rows"
+    );
+}
+
+/// A short retention saves tier memory without shrinking the queue of an undrawn chart.
+#[test]
+fn waiting_depth_columns_keep_600_under_a_retention() {
+    let inbox = Arc::new(Inbox::default());
+    let sink = inbox.subscribe("ES".into(), BarClock::new(Timeframe::Min1), 100, Some(0.1));
+    let config = DepthHistoryConfig::default().with_retention(Some(TimeDelta::minutes(15)));
+    assert_eq!(config.columns, 5);
+    inbox.sample_depth(sink.id, Some(config));
+    let level = |price| OrderBookLevel {
+        price,
+        size: 1.0,
+        order_cnt: None,
+    };
+    sink.push_depth_snapshot(
+        1,
+        OrderBook {
+            ts: at(0, 0),
+            symbol: "ES".into(),
+            bids: vec![level(0.1)],
+            asks: vec![level(0.2)],
+        },
+    );
+    for second in 1..=700 {
+        sink.advance_time(at(0, 0) + TimeDelta::seconds(second));
+    }
+    let (_, updates) = inbox.drain().updates.pop().unwrap();
+    assert_eq!(updates.depth_columns.len(), 600);
+    assert_eq!(
+        updates.depth_columns.front().unwrap().time,
+        at(0, 0) + TimeDelta::seconds(100)
     );
 }
 

@@ -1318,6 +1318,11 @@ impl DemoApp {
         self.settings_state = self.chart_settings_state();
         self.settings_dialog
             .offer_apply_to_all(self.layout_has_other_charts());
+        self.settings_dialog.set_depth_history_config(
+            self.chart
+                .depth_history(SeriesId::MAIN)
+                .map(DepthHistory::config),
+        );
         self.settings_dialog.open(self.settings_state.clone());
     }
 
@@ -1397,6 +1402,7 @@ impl DemoApp {
             SettingsAction::PreviewSound { name, volume } => {
                 self.play_sound(ctx, &name, volume, true)
             }
+            SettingsAction::ClearDepthHistory => self.chart.clear_depth_history(),
             SettingsAction::Cancel => {}
             _ => {}
         }
@@ -7834,9 +7840,16 @@ mod tests {
             );
             let shaded = |app: &mut DemoApp| {
                 settle(app, &ctx);
-                app.chart.config_mut().extended_hours_color = shading;
+                // This fixture detects the shared fill, independent of fresh phase defaults.
+                let config = app.chart.config_mut();
+                config.extended_hours_color = shading;
+                config.premarket_color = None;
+                config.postmarket_color = None;
                 for extra in &mut app.extra_charts {
-                    extra.chart.config_mut().extended_hours_color = shading;
+                    let config = extra.chart.config_mut();
+                    config.extended_hours_color = shading;
+                    config.premarket_color = None;
+                    config.postmarket_color = None;
                 }
                 let output = ctx.run_ui(
                     egui::RawInput {

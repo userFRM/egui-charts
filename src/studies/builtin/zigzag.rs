@@ -92,8 +92,9 @@ pub struct ZigZagPivot {
 ///   and has no label, and there is none when that bar is the last pivot's or its close is not
 ///   finite. Without it the bars after the last pivot have no value.
 /// - Labels show each pivot's price, its change from the previous pivot as a price difference or
-///   a percentage, and the volume of the leg that ends at it. The last leg and the extension,
-///   whose ends still move, are drawn dashed.
+///   a percentage, and the volume of the leg that ends at it, written with the precision chosen
+///   in the study's settings or else the instrument's volume decimals. The last leg and the
+///   extension, whose ends still move, are drawn dashed.
 #[derive(Clone, Debug)]
 pub struct ZigZag {
     /// Min percentage change to register a swing
@@ -118,9 +119,11 @@ pub struct ZigZag {
     volume_labels: bool,
     /// Whether a last segment runs from the last pivot to the latest close.
     extend_to_last_bar: bool,
-    /// The instrument's decimals and those of the study's presentation settings.
+    /// The instrument's price decimals and those of the study's presentation settings.
     precision: Option<usize>,
     label_precision: Option<usize>,
+    /// The instrument's volume decimals, for leg volumes without a chosen precision.
+    volume_decimals: Option<usize>,
     labels: Vec<StudyLabel>,
 }
 
@@ -172,6 +175,7 @@ impl ZigZag {
             extend_to_last_bar: true,
             precision: None,
             label_precision: None,
+            volume_decimals: None,
             labels: Vec::new(),
         }
     }
@@ -233,6 +237,7 @@ impl ZigZag {
         });
         self.labels.truncate(kept);
         let precision = self.label_precision.or(self.precision);
+        let volume_precision = self.label_precision.or(self.volume_decimals);
         for (k, pivot) in self.pivots.iter().enumerate().skip(fixed) {
             let mut lines = Vec::new();
             if self.price_labels {
@@ -260,7 +265,7 @@ impl ZigZag {
                         .map(|&bar| data[bar].volume)
                         .filter(|volume| volume.is_finite())
                         .sum();
-                    lines.push(StudyFormat::Volume.format(volume, None));
+                    lines.push(StudyFormat::Volume.format(volume, volume_precision));
                 }
             }
             if !lines.is_empty() {
@@ -544,8 +549,12 @@ impl Indicator for ZigZag {
         let precision = instrument
             .and_then(crate::scales::instrument_price_precision)
             .map(usize::from);
-        let changed = precision != self.precision;
+        let volume_decimals = instrument
+            .and_then(|instrument| instrument.volume_decimals)
+            .map(usize::from);
+        let changed = (precision, volume_decimals) != (self.precision, self.volume_decimals);
         self.precision = precision;
+        self.volume_decimals = volume_decimals;
         changed
     }
 
@@ -604,19 +613,23 @@ impl Indicator for ZigZag {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Instrument;
     use crate::studies::test_support::make_range_bar as make_bar;
 
     /// Pivots of the "rises from the first bar" series: a low of 100 on bar 0, a high of 110 on
-    /// bar 3 and a low of 103 on bar 4, the last. The leg to bar 3 holds volumes 1200, 300 and
-    /// 500, and (103 - 110) / 110 = -6.36%.
+    /// bar 3 and a low of 103 on bar 4, the last. The leg to bar 3 holds volumes 1200.25, 300.25
+    /// and 500.25, 2000.75 in all, the leg to bar 4 holds 750.375, and (103 - 110) / 110 = -6.36%.
+    /// Without a chosen precision or volume decimals the volumes read 2.00K and 750; three volume
+    /// decimals give 2.001K and 750.375, and a chosen precision of 1 gives 2.0K and 750.4, with
+    /// prices such as 110.0, whatever the volume decimals.
     #[test]
     fn pivots_are_labelled_and_the_last_leg_is_provisional() {
         let data: Vec<Bar> = [
             (101.0, 100.0, 100.0),
-            (103.0, 102.0, 1200.0),
-            (106.0, 105.0, 300.0),
-            (110.0, 109.0, 500.0),
-            (104.0, 103.0, 750.0),
+            (103.0, 102.0, 1200.25),
+            (106.0, 105.0, 300.25),
+            (110.0, 109.0, 500.25),
+            (104.0, 103.0, 750.375),
             (105.0, 104.0, 40.0),
         ]
         .into_iter()
@@ -678,6 +691,51 @@ mod tests {
                 assert_eq!(label.placement, placement);
             }
         }
+
+        // A chosen precision sets the prices and the volume; without one the volume takes the
+        // instrument's volume decimals, and the prices keep two decimals, as COIN sets none.
+        let coin = Instrument::new("COIN").with_volume_decimals(3);
+        for (name, instrument, chosen, want) in [
+            (
+                "volume decimals",
+                Some(&coin),
+                None,
+                ["100.00", "110.00\n+10.00\n2.001K", "103.00\n-7.00\n750.375"],
+            ),
+            (
+                "chosen precision",
+                Some(&coin),
+                Some(1),
+                ["100.0", "110.0\n+10.0\n2.0K", "103.0\n-7.0\n750.4"],
+            ),
+            (
+                "chosen precision without volume decimals",
+                None,
+                Some(1),
+                ["100.0", "110.0\n+10.0\n2.0K", "103.0\n-7.0\n750.4"],
+            ),
+        ] {
+            let mut zigzag = study();
+            zigzag.set_instrument(instrument);
+            zigzag.set_label_precision(chosen);
+            zigzag.calculate(&data);
+            let got: Vec<_> = zigzag
+                .labels()
+                .iter()
+                .map(|label| label.text.as_str())
+                .collect();
+            assert_eq!(got, want, "{name}");
+        }
+        // Volume decimals alone change the labels, so the chart must calculate again; the same
+        // metadata again must not.
+        let mut zigzag = study();
+        assert_eq!(
+            [
+                zigzag.set_instrument(Some(&coin)),
+                zigzag.set_instrument(Some(&coin))
+            ],
+            [true, false]
+        );
 
         let mut zigzag = study();
         zigzag.calculate(&data[..4]);

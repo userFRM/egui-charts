@@ -233,6 +233,12 @@ pub(crate) struct KeyboardState {
     pub chart_id: Option<egui::Id>,
     pub last_pass: Option<u64>,
     pub focus_elsewhere: bool,
+    /// A limit-order key pressed this pass, for [`ChartMenus::show`] to turn into the chart
+    /// menu's limit row at the pointer.
+    ///
+    /// [`ChartMenus::show`]: crate::ui::context_menu::ChartMenus::show
+    #[cfg(feature = "ui")]
+    pub order_key: Option<KeyboardAction>,
 }
 
 pub(crate) fn shortcuts_suppressed(ctx: &Context) -> bool {
@@ -324,6 +330,11 @@ impl super::Chart {
         #[cfg(feature = "drawings")]
         {
             self.drawings.place_at_pointer = false;
+        }
+        // A limit-order key applies only in the pass of its press.
+        #[cfg(feature = "ui")]
+        {
+            self.keyboard.order_key = None;
         }
         // A drawing or eraser drag released while the chart was not shown ends once the pointer
         // is up, so undo and the drawing keys do not wait for a release the chart never sees.
@@ -564,6 +575,10 @@ impl super::Chart {
             }
             KeyboardAction::Redo => {
                 self.redo();
+            }
+            #[cfg(feature = "ui")]
+            KeyboardAction::BuyLimitAtPointer | KeyboardAction::SellLimitAtPointer => {
+                self.keyboard.order_key = Some(action);
             }
             _ => self.user_action(|chart| chart.apply_keyboard_edit(action, chart_rect)),
         }
@@ -1005,6 +1020,52 @@ mod tests {
                 assert!(!chart.can_undo(), "nothing removed, so no undo step");
             }
         }
+    }
+
+    /// The Toggle volume shortcut adds a study, so at the study cap it leaves the setting off and
+    /// the chart and its history unchanged, while a volume study already on the chart still
+    /// serves the setting.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn volume_shortcut_stays_off_at_the_study_cap() {
+        use crate::studies::{SMA, Volume};
+        use crate::widget::test_frames::frame;
+        let mut failures = Vec::new();
+        for (cap, with_volume, shown, count) in [
+            (Some(2), false, false, 2),
+            (Some(3), false, true, 3),
+            (None, false, true, 3),
+            (Some(2), true, true, 2),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[200.0]);
+            chart.config_mut().show_volume = false;
+            chart.add_indicator(Box::new(SMA::new(2)));
+            if with_volume {
+                chart.add_indicator(Box::new(Volume::default()));
+            } else {
+                chart.add_indicator(Box::new(SMA::new(5)));
+            }
+            chart.set_study_limit(cap);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.apply_keyboard_action(
+                KeyboardAction::ToggleVolume,
+                chart.get_rendered_price_rect(),
+            );
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let observed = (
+                chart.config().show_volume,
+                chart.indicators().count(),
+                chart.indicators().any(|(_, study)| study.is_volume()),
+                chart.can_undo(),
+            );
+            if observed != (shown, count, shown, shown) {
+                failures.push(format!(
+                    "cap {cap:?}, volume study {with_volume}: {observed:?}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     #[test]

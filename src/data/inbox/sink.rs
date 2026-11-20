@@ -1067,7 +1067,7 @@ impl Live {
                 return true;
             }
             let columns = &mut self.updates.depth_columns;
-            if columns.len() == sampler.config.columns {
+            if columns.len() == sampler.config.page_columns() {
                 columns.pop_front();
             }
             columns.push_back(column);

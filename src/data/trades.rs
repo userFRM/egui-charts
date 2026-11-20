@@ -252,7 +252,13 @@ pub(crate) struct Trades {
     /// First revision of this store, unchanged by paging, pushes and evictions.
     #[cfg(feature = "widget")]
     pub(crate) generation: u64,
-    /// Changes when the held trades or their history coverage changes.
+    /// Revision of the last page that added executions, independent of streamed appends.
+    #[cfg(feature = "widget")]
+    page_revision: u64,
+    /// Number of streamed executions admitted to this tape, including those since evicted.
+    #[cfg(feature = "widget")]
+    live_count: usize,
+    /// Changes whenever a trade is added or evicted.
     revision: u64,
     /// Whether the sink dropped live trades since the subscription began, after which no more are
     /// kept apart.
@@ -279,9 +285,21 @@ impl Trades {
             unheld_live: None,
             #[cfg(feature = "widget")]
             generation: revision,
+            #[cfg(feature = "widget")]
+            page_revision: revision,
+            #[cfg(feature = "widget")]
+            live_count: 0,
             revision,
             live_lost: false,
         }
+    }
+
+    /// Page identity and the index of the first newly streamed row still held.
+    #[cfg(feature = "widget")]
+    pub(crate) fn progress(&self, live_cursor: &mut usize) -> (u64, usize) {
+        let added = self.live_count.wrapping_sub(*live_cursor);
+        *live_cursor = self.live_count;
+        (self.page_revision, self.trades.len().saturating_sub(added))
     }
 
     /// Identifies the held trades: it differs after any trade was added or evicted.
@@ -539,6 +557,10 @@ impl Trades {
                 }
             }
             if held.is_some() || live {
+                #[cfg(feature = "widget")]
+                if held.is_none() {
+                    self.live_count = self.live_count.wrapping_add(1);
+                }
                 self.insert(trade, changed);
             }
         }
@@ -552,8 +574,8 @@ impl Trades {
         mut page: Vec<Tick>,
         changed: &mut impl FnMut(&Tick, bool),
     ) -> u64 {
-        // Even an empty page may complete the front of the live stream.
-        self.revision = next_revision();
+        #[cfg(feature = "widget")]
+        let before = self.revision;
         let received = page.len();
         page.retain(valid);
         let rejected = (received - page.len()) as u64;
@@ -625,6 +647,10 @@ impl Trades {
             self.front = self.front.wrapping_sub(1);
             self.paged += 1;
             self.trades.push_front(trade);
+        }
+        #[cfg(feature = "widget")]
+        if self.revision != before {
+            self.page_revision = self.revision;
         }
         rejected
     }
