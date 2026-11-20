@@ -2301,6 +2301,83 @@ mod tests {
         );
     }
 
+    /// A level chosen from a channel keeps its lower bound instead of a quote or stale text;
+    /// changing single-level operators alone still follows the quote until the level is entered.
+    #[test]
+    fn inline_channel_to_level_keeps_lower_bound() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        for (quote, typed) in [
+            (Some(99.0), None),
+            (None, None),
+            (Some(99.0), Some("120")),
+            (None, Some("120")),
+        ] {
+            let mut panel = AlertsPanel::default();
+            panel.set_price("SIM", quote, None);
+            let mut h = Harness::builder()
+                .with_size(egui::vec2(300.0, 500.0))
+                .build_ui_state(|ui, panel: &mut AlertsPanel| panel.draft_form(ui), panel);
+            h.get_by_label("Quick alert").click();
+            h.run();
+            if quote.is_some() && typed.is_none() {
+                h.get_by_label("Condition").click();
+                h.run();
+                h.get_by_label("Crossing up").click();
+                h.run();
+                h.state_mut().set_price("SIM", Some(101.0), None);
+                h.run();
+                assert_eq!(h.state().draft.condition, AlertCondition::CrossingUp(101.0));
+                h.state_mut().set_price("SIM", quote, None);
+                h.run();
+            }
+            if let Some(text) = typed {
+                h.get_by_role_and_label(egui::Role::TextInput, "Level")
+                    .click();
+                h.run();
+                h.get_by_role_and_label(egui::Role::TextInput, "Level")
+                    .type_text(text);
+                h.key_press(egui::Key::Enter);
+                h.run();
+                assert_eq!(h.state().draft.condition.level(), Some(120.0));
+            }
+            h.get_by_label("Condition").click();
+            h.run();
+            h.get_by_label("Entering channel").click();
+            h.run();
+            h.state_mut().draft.condition = AlertCondition::EnteringChannel {
+                lower: 95.0,
+                upper: 100.0,
+            };
+            h.run();
+            h.get_by_label("Condition").click();
+            h.run();
+            h.get_by_label("Crossing").click();
+            h.run();
+            assert_eq!(
+                h.state().draft.condition,
+                AlertCondition::Crossing(95.0),
+                "quote={quote:?}, typed={typed:?}"
+            );
+            assert_eq!(
+                h.get_by_role_and_label(egui::Role::TextInput, "Level")
+                    .value()
+                    .as_deref(),
+                Some("95")
+            );
+            assert!(
+                !h.get_by_label("Create alert")
+                    .accesskit_node()
+                    .is_disabled()
+            );
+            h.state_mut().set_price("SIM", Some(102.0), None);
+            h.run();
+            assert_eq!(h.state().draft.condition, AlertCondition::Crossing(95.0));
+        }
+    }
+
     #[cfg(feature = "alert-engine")]
     #[test]
     fn manager_fields_and_markers_can_be_changed_undone_and_redone() {

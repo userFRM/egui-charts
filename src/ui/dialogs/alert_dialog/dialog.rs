@@ -1381,7 +1381,7 @@ fn drawing_position(
     })
 }
 
-/// Returns whether the optional text editor changed the single threshold.
+/// Returns whether a single threshold was entered through the optional text editor or menu.
 pub(crate) fn rule_form(
     ui: &mut Ui,
     source: &mut AlertSource,
@@ -1389,7 +1389,7 @@ pub(crate) fn rule_form(
     sources: &[(AlertSource, AlertSourceName)],
     runs: &[(String, String)],
     offer_position: bool,
-    level_text: Option<&mut String>,
+    mut level_text: Option<&mut String>,
 ) -> bool {
     let mut level_edited = false;
     ui.add_enabled_ui(
@@ -1508,6 +1508,13 @@ pub(crate) fn rule_form(
                     {
                         *source = AlertSource::Price;
                     }
+                    if condition.level().is_none()
+                        && let Some(level) = value.level()
+                        && let Some(text) = level_text.as_deref_mut()
+                    {
+                        *text = level.to_string();
+                        level_edited = true;
+                    }
                     *condition = value;
                 }
             }
@@ -1563,7 +1570,7 @@ pub(crate) fn rule_form(
                         .set_char_range(Some(egui::text::CCursorRange::select_all(&field.galley)));
                     field.state.store(ui.ctx(), field.response.id);
                 }
-                level_edited = field
+                level_edited |= field
                     .response
                     .response
                     .accessible_name(l10n::text(ui.ctx(), "Level"))
