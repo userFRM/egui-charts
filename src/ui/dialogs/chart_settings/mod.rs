@@ -111,7 +111,7 @@ struct ColorPickerStates {
     price_target_positive: ColorPickerState,
     price_target_negative: ColorPickerState,
     prev_close_line: ColorPickerState,
-    session_background: [ColorPickerState; 4],
+    session_background: [ColorPickerState; 3],
 }
 
 impl Default for SettingsDialog {
@@ -2817,7 +2817,7 @@ mod tests {
                 .get_by_role_and_label(Role::ColorWell, "#311B92")
                 .click();
             harness.run();
-            harness.get_by_label("Show post-market").click();
+            harness.get_by_label("Post-market").click();
             harness.run();
             harness.get_by_label("Highlight extended sessions").click();
             harness.run();

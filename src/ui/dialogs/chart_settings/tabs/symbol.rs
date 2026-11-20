@@ -334,63 +334,72 @@ impl SettingsDialog {
                         }
                     };
                     let shared = background.extended_hours_color;
+                    let label_width = Self::label_width(ui, theme);
                     ui.add_enabled_ui(background.show_extended_hours, |ui| {
-                        for (index, label, mut color) in [
-                            (0, "Extended session", shared),
+                        for (index, label, mut color, mut shown) in [
                             (
-                                1,
+                                0,
                                 "Pre-market",
                                 background.premarket_color.unwrap_or(shared),
+                                Some(&mut background.shade_premarket),
                             ),
                             (
-                                2,
+                                1,
                                 "Post-market",
                                 background.postmarket_color.unwrap_or(shared),
+                                Some(&mut background.shade_postmarket),
                             ),
-                            (3, "Overnight", background.overnight_hours_color),
+                            (2, "Overnight", background.overnight_hours_color, None),
                         ] {
-                            self.draw_setting_row_with_controls(ui, label, theme, |ui, dialog| {
-                                let shown = match index {
-                                    1 => {
-                                        checkbox(
-                                            ui,
-                                            &mut background.shade_premarket,
-                                            RichText::new(l10n::text(ui.ctx(), "Show pre-market"))
-                                                .color(theme.ui.text),
-                                        );
-                                        background.shade_premarket
-                                    }
-                                    2 => {
-                                        checkbox(
-                                            ui,
-                                            &mut background.shade_postmarket,
-                                            RichText::new(l10n::text(ui.ctx(), "Show post-market"))
-                                                .color(theme.ui.text),
-                                        );
-                                        background.shade_postmarket
-                                    }
-                                    _ => true,
-                                };
-                                ui.add_enabled_ui(shown, |ui| {
-                                    let picker =
-                                        &mut dialog.color_picker_states.session_background[index];
-                                    picker.sel_color =
-                                        fallback(color, if index == 3 { 0.16 } else { 0.08 });
-                                    if pick_color(
-                                        ui,
-                                        picker,
-                                        &format!("session_background_{index}"),
-                                        &mut color,
-                                    ) {
-                                        match index {
-                                            0 => background.extended_hours_color = color,
-                                            1 => background.premarket_color = Some(color),
-                                            2 => background.postmarket_color = Some(color),
-                                            _ => background.overnight_hours_color = color,
-                                        }
-                                    }
+                            ui.horizontal(|ui| {
+                                let label = ui
+                                    .allocate_ui_with_layout(
+                                        egui::vec2(label_width, 42.0),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            ui.set_min_width(label_width);
+                                            ui.set_max_width(label_width);
+                                            let label = RichText::new(l10n::text(ui.ctx(), label))
+                                                .size(theme.text.title)
+                                                .color(theme.ui.text);
+                                            if let Some(shown) = shown.as_deref_mut() {
+                                                checkbox(ui, shown, label)
+                                            } else {
+                                                ui.label(label)
+                                            }
+                                        },
+                                    )
+                                    .inner;
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 8.0;
+                                    ui.spacing_mut().interact_size.y =
+                                        DESIGN_TOKENS.sizing.settings_dialog.button_height;
+                                    ui.add_enabled_ui(shown.is_none_or(|shown| *shown), |ui| {
+                                        ui.label_inputs_by(label.id, |ui| {
+                                            let picker = &mut self
+                                                .color_picker_states
+                                                .session_background[index];
+                                            picker.sel_color = fallback(
+                                                color,
+                                                if index == 2 { 0.16 } else { 0.08 },
+                                            );
+                                            if pick_color(
+                                                ui,
+                                                picker,
+                                                &format!("session_background_{index}"),
+                                                &mut color,
+                                            ) {
+                                                match index {
+                                                    0 => background.premarket_color = Some(color),
+                                                    1 => background.postmarket_color = Some(color),
+                                                    _ => background.overnight_hours_color = color,
+                                                }
+                                            }
+                                        });
+                                    });
                                 });
                             });
+                            ui.add_space(ui.active_theme().spacing.sm);
                         }
                     });
                     if background != before {
