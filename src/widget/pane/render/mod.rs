@@ -621,6 +621,13 @@ impl Chart {
                         )
                     }),
                 });
+                // As the grid, once in a pane: beneath every member.
+                if Some(entry) == first {
+                    panel.session_breaks = Some((
+                        self.session_break_renderer(),
+                        self.last_session_break_x.clone(),
+                    ));
+                }
                 panel.axis_options = crate::config::PriceAxisOptions {
                     show_study_values: self.config.price_axis.show_study_values,
                     ..self.config.price_axis
