@@ -2,14 +2,14 @@
 
 use super::widgets::grouped;
 
-/// Host text for the numbers of the order ticket, the depth ladder, the account tables and
-/// the order and fill notifications.
+/// Host text for the numbers of the order ticket, the depth ladder, the account tables, fill
+/// marks and the order and fill notifications.
 ///
 /// Every method receives the symbol the number belongs to, so differently formatted instruments
 /// keep their own text. Return `None` to keep the built-in text: the symbol's price decimals for
 /// prices, spreads and pip values, and for quantities the decimals of the quantity step in the
 /// ticket and the depth ladder, or the quantity's own decimals, up to eight, in the account
-/// tables, notifications and confirmations.
+/// tables, fill marks, notifications and confirmations.
 /// Install it with [`Trading::set_formatter`](super::Trading::set_formatter).
 pub trait TradingFormatter: Send + Sync {
     /// A price, such as a limit price, a bid or an average price.

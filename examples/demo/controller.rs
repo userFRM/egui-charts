@@ -64,7 +64,7 @@ use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::overlays::{BookProfile, OrderBookView};
 use egui_charts::data::{DepthHistory, DepthHistoryConfig, OrderFilter, OrderSizeTiers};
-use egui_charts::model::{Alert, AlertCondition, Watchlist};
+use egui_charts::model::{Alert, AlertCondition, DateRange, Watchlist};
 use egui_charts::model::{Bar, BarData, BoxSizeMethod, ChartType, Tick, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
@@ -112,65 +112,6 @@ use std::sync::Arc;
 use crate::sampledata::{
     DemoSymbol, SAMPLE_LOGO, SAMPLE_LOGO_SVG, us_equity_session, visible_bars_for_range,
 };
-
-/// The legend caption of a study: what identifies it at a glance, leaving out flags, colours,
-/// free text, zero offsets and values that only make sense next to their labels.
-fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
-    use egui_charts::studies::{InputKind, InputValue, StudySource};
-    let price = |source: &StudySource| match source {
-        StudySource::Price(price) => Some(format!("{price:?}").to_lowercase()),
-        // The caption has no name for another study's output.
-        _ => None,
-    };
-    let source = study.source();
-    let inputs = study.inputs();
-    let mut caption: Vec<_> = inputs
-        .iter()
-        // List sizes, painted widths and minutes after midnight mean nothing alone; the study's
-        // source goes below.
-        .filter(|input| {
-            input.is_shown(&inputs)
-                && !input.style
-                && !matches!(input.id.as_str(), "band_count" | "event_count" | "width")
-                && !matches!(input.kind, InputKind::Length(0, 1439))
-                && (source.is_none() || input.id != "source")
-        })
-        .filter_map(|input| match (&input.kind, &input.value) {
-            (InputKind::Choice(choices), InputValue::Choice(index)) => choices.get(*index).cloned(),
-            (_, InputValue::Length(value)) => (*value != 0).then(|| value.to_string()),
-            (_, InputValue::Integer(value)) => (*value != 0).then(|| value.to_string()),
-            // Single precision reads short and turns an open upper limit into infinity.
-            (_, InputValue::Number(value)) => {
-                let value = *value as f32;
-                (value != 0.0 && value.is_finite()).then(|| value.to_string())
-            }
-            (_, InputValue::Source(value)) => price(value),
-            (_, InputValue::Timeframe(Some(value))) => Some(value.to_string()),
-            (_, InputValue::Symbol(value)) if !value.is_empty() => Some(value.clone()),
-            _ => None,
-        })
-        .collect();
-    // An anchor or session choice identifies the study, which names its price only once edited.
-    // Flags, which the caption leaves out, can precede that choice.
-    let anchored = matches!(
-        inputs
-            .iter()
-            .map(|input| &input.kind)
-            .find(|kind| !matches!(kind, InputKind::Toggle)),
-        Some(InputKind::Choice(_))
-    );
-    let edited = inputs
-        .iter()
-        .any(|input| matches!(input.kind, InputKind::Source) && input.value != input.default);
-    if let Some(source) = source
-        .as_ref()
-        .filter(|_| !anchored || edited)
-        .and_then(price)
-    {
-        caption.insert(caption.len().min(1), source);
-    }
-    caption.join(" ")
-}
 
 /// Object-tree ids for studies and added series are offset into a high range so a single
 /// `usize` id space cleanly distinguishes series from drawings (which use
@@ -383,6 +324,15 @@ impl ChartAppState for DemoAppState {
     }
 }
 
+/// A preset waits for its interval and bars, then confirms the fit across a plot layout.
+#[derive(Clone, Copy)]
+enum RangeFit {
+    Interval,
+    Bars,
+    Fitting,
+    Confirming(u64),
+}
+
 /// The full demo application.
 pub struct DemoApp {
     pub chart: Chart,
@@ -404,6 +354,8 @@ pub struct DemoApp {
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
     loading_bars: bool,
+    /// The preset and displayed interval, with its load and plot-fitting state.
+    range_fit: Option<(DateRange, Timeframe, RangeFit)>,
     pub theme: Theme,
     /// No explicit choice follows the system appearance without saving its current value.
     theme_choice: Option<String>,
@@ -605,8 +557,6 @@ impl DemoApp {
         chart.config_mut().candle_width = 0.75;
         chart.config_mut().right_axis_width = 59.0;
         chart.config_mut().skip_background = true;
-        // The library hides the navigation row by default; the demo shows where it is.
-        chart.config_mut().navigation_buttons = egui_charts::config::NavigationButtons::OnHover;
         size_by_atr(&mut chart);
         chart.set_event_visibility(
             cc.storage
@@ -709,6 +659,7 @@ impl DemoApp {
             },
             bars: Vec::new(),
             loading_bars: false,
+            range_fit: None,
             theme,
             theme_choice,
             formatting: cc
@@ -1031,6 +982,7 @@ impl DemoApp {
         if !self.chart.take_history_changed() {
             return;
         }
+        self.range_fit = None;
         self.state.chart_type = self.chart.chart_type();
         let clock = self.timeframe_toolbar.state.timezone.clone();
         self.timeframe_toolbar
@@ -1362,9 +1314,7 @@ impl DemoApp {
             self.indicator_dialog.show(ctx, &self.theme)
         {
             self.chart.begin_user_action();
-            let inputs = study_input_summary(study.as_ref());
-            let id = self.chart.add_indicator(study);
-            self.chart.set_indicator_inputs(id, inputs);
+            self.chart.add_indicator(study);
             self.chart.end_user_action();
         }
 
@@ -1381,14 +1331,10 @@ impl DemoApp {
                 .and_then(|study| {
                     study
                         .apply_settings(&edit.inputs, edit.settings)
-                        .map_err(|error| format!("Study settings not applied: {error}"))?;
-                    Ok(study_input_summary(study))
+                        .map_err(|error| format!("Study settings not applied: {error}"))
                 });
-            match result {
-                Ok(inputs) => {
-                    self.chart.set_indicator_inputs(edit.id, inputs);
-                }
-                Err(error) => self.notify(error),
+            if let Err(error) = result {
+                self.notify(error);
             }
             self.chart.end_user_action();
         }
@@ -2426,9 +2372,7 @@ impl DemoApp {
             TopToolbarAction::AddIndicator(name) => {
                 if let Some(study) = self.indicator_dialog.factory().create(&name) {
                     self.chart.begin_user_action();
-                    let inputs = study_input_summary(study.as_ref());
-                    let id = self.chart.add_indicator(study);
-                    self.chart.set_indicator_inputs(id, inputs);
+                    self.chart.add_indicator(study);
                     self.chart.end_user_action();
                 }
             }
@@ -3466,26 +3410,47 @@ impl DemoApp {
             });
     }
 
+    /// Switches to the preset's interval when offered, then fits its newly loaded bars.
+    fn show_date_range(&mut self, range: DateRange) {
+        let timeframe = range.timeframe();
+        let offered = self
+            .own_data
+            .as_ref()
+            .is_none_or(|own| own.profile.service_interval(timeframe).is_some());
+        self.range_fit = None;
+        if offered && self.state.timeframe != timeframe {
+            self.switch_timeframe(timeframe);
+            self.range_fit = Some((range, timeframe, RangeFit::Interval));
+        } else {
+            self.fit_date_range(range);
+            if self.own_data.is_none() {
+                self.explain_history_limit(range);
+            }
+            self.range_fit = Some((range, self.state.timeframe, RangeFit::Fitting));
+        }
+    }
+
+    /// Fits the lookback to the plot and sends its span to the linked charts.
+    fn fit_date_range(&mut self, range: DateRange) {
+        let visible = visible_bars_for_range(range, self.chart.bars(SeriesId::MAIN));
+        let width = self.chart.get_rendered_price_rect().width();
+        // Include the latest slot in the scale's exclusive data range.
+        let spacing = (width - 1.0).max(1.0) / (visible.max(1) as f32 + 0.5);
+        self.chart.disable_tracking_mode();
+        self.chart.apply_synced_time_scale(spacing, 0.5);
+        if (self.layout.sync.sync_date_range || self.layout.sync.sync_time_axis)
+            && let Some(range) = self.chart.visible_time_range()
+        {
+            let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+            charts.insert(self.layout_slot, &mut self.chart);
+            self.layout.apply_date_range(&mut charts, range);
+        }
+    }
+
     fn handle_timeframe_toolbar(&mut self, action: TimeframeToolbarAction) {
         match action {
             TimeframeToolbarAction::DateRangeChanged(range) => {
-                if self.own_data.is_none() {
-                    self.explain_history_limit(range);
-                }
-                let visible = visible_bars_for_range(range, self.chart.bars(SeriesId::MAIN));
-                let width = self.chart.get_rendered_price_rect().width();
-                // Include the latest slot in the scale's exclusive data range.
-                let spacing = (width - 1.0).max(1.0) / (visible.max(1) as f32 + 0.5);
-                self.chart.disable_tracking_mode();
-                self.chart.apply_synced_time_scale(spacing, 0.5);
-                if (self.layout.sync.sync_date_range || self.layout.sync.sync_time_axis)
-                    && let Some(range) = self.chart.visible_time_range()
-                {
-                    let mut charts: Vec<_> =
-                        self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
-                    charts.insert(self.layout_slot, &mut self.chart);
-                    self.layout.apply_date_range(&mut charts, range);
-                }
+                self.user_action(|app| app.show_date_range(range));
             }
             TimeframeToolbarAction::OpenDatePicker => self.date_picker.open_for_chart(&self.chart),
             TimeframeToolbarAction::OpenTimezoneMenu => {
@@ -3749,6 +3714,7 @@ impl DemoApp {
         let mut open_settings = false;
         let mut drawing_settings = None;
         let mut size = false;
+        let mut fit = false;
         for event in self.chart.drain_events() {
             match event {
                 egui_charts::widget::ChartEvent::ImageRequested(request) => {
@@ -3783,8 +3749,29 @@ impl DemoApp {
                         drawing_settings = Some(id);
                     }
                 }
-                egui_charts::widget::ChartEvent::SymbolChanged(_)
-                | egui_charts::widget::ChartEvent::TimeframeChanged(_) => {
+                egui_charts::widget::ChartEvent::TimeframeChanged(timeframe) => {
+                    // Skip older queued switches; after ours, another interval cancels the fit.
+                    self.range_fit = self
+                        .range_fit
+                        .filter(|(_, interval, stage)| {
+                            matches!(stage, RangeFit::Interval) || *interval == timeframe
+                        })
+                        .map(|(range, interval, stage)| {
+                            let stage =
+                                if interval == timeframe && matches!(stage, RangeFit::Interval) {
+                                    RangeFit::Bars
+                                } else {
+                                    stage
+                                };
+                            (range, interval, stage)
+                        });
+                    self.last_chart_click = None;
+                    self.pointer_readout = None;
+                    if let Some(own) = &mut self.own_data {
+                        own.sizing = true;
+                    }
+                }
+                egui_charts::widget::ChartEvent::SymbolChanged(_) => {
                     self.last_chart_click = None;
                     self.pointer_readout = None;
                     if let Some(own) = &mut self.own_data {
@@ -3797,6 +3784,7 @@ impl DemoApp {
                     series: SeriesId::MAIN,
                     bars,
                 } if bars > 0 => {
+                    fit |= matches!(self.range_fit, Some((_, _, RangeFit::Bars)));
                     if let Some(own) = &mut self.own_data
                         && std::mem::take(&mut own.sizing)
                     {
@@ -3820,6 +3808,34 @@ impl DemoApp {
         }
         if size {
             self.size_range_interval();
+        }
+        if let Some((range, interval, stage)) = self.range_fit
+            && !self.chart.bars(SeriesId::MAIN).is_empty()
+            && (fit || matches!(stage, RangeFit::Fitting | RangeFit::Confirming(_)))
+        {
+            let before = self.chart.get_time_scale_state();
+            self.fit_date_range(range);
+            if fit && self.own_data.is_none() {
+                self.explain_history_limit(range);
+            }
+            let unchanged = before == self.chart.get_time_scale_state();
+            if unchanged
+                && matches!(stage, RangeFit::Confirming(previous) if previous != ctx.cumulative_frame_nr())
+            {
+                self.range_fit = None;
+            } else {
+                // Fitting can widen the price-axis gutter on the next frame.
+                let stage = if unchanged {
+                    match stage {
+                        RangeFit::Confirming(frame) => RangeFit::Confirming(frame),
+                        _ => RangeFit::Confirming(ctx.cumulative_frame_nr()),
+                    }
+                } else {
+                    RangeFit::Fitting
+                };
+                self.range_fit = Some((range, interval, stage));
+                ctx.request_repaint();
+            }
         }
         if let Some(index) = replay_click.and_then(|pos| self.replay_start_bar(pos)) {
             let time = self.chart.state().shown()[index].time;
@@ -10099,6 +10115,42 @@ mod tests {
 
     #[test]
     fn ranges_fit_displayed_history_in_both_themes_and_window_sizes() {
+        use chrono::{DateTime, Datelike, Duration, Months, TimeZone, Utc};
+        type Preset = (
+            DateRange,
+            Timeframe,
+            fn(DateTime<Utc>) -> Option<DateTime<Utc>>,
+        );
+        let presets: [Preset; 9] = [
+            (DateRange::Day1, Timeframe::Min1, |last| {
+                Some(last - Duration::days(1))
+            }),
+            (DateRange::Day5, Timeframe::Min5, |last| {
+                Some(last - Duration::days(5))
+            }),
+            (DateRange::Month1, Timeframe::Min30, |last| {
+                last.checked_sub_months(Months::new(1))
+            }),
+            (DateRange::Month3, Timeframe::Hour1, |last| {
+                last.checked_sub_months(Months::new(3))
+            }),
+            (
+                DateRange::Month6,
+                Timeframe::Custom(std::num::NonZeroU64::new(7200).unwrap()),
+                |last| last.checked_sub_months(Months::new(6)),
+            ),
+            (DateRange::YTD, Timeframe::Day1, |last| {
+                Utc.with_ymd_and_hms(last.year(), 1, 1, 0, 0, 0).single()
+            }),
+            (DateRange::Year1, Timeframe::Day1, |last| {
+                last.checked_sub_months(Months::new(12))
+            }),
+            (DateRange::Year5, Timeframe::Week1, |last| {
+                last.checked_sub_months(Months::new(60))
+            }),
+            (DateRange::All, Timeframe::Month1, |_| None),
+        ];
+        let mut wrong_intervals = Vec::new();
         for theme in [Theme::light(), Theme::dark()] {
             for size in [egui::vec2(1316.0, 871.0), egui::vec2(640.0, 450.0)] {
                 for (interval, replay) in [(Timeframe::Hour1, true), (Timeframe::Min1, false)] {
@@ -10130,28 +10182,42 @@ mod tests {
                         app.start_replay();
                         frame(&mut app);
                     }
-                    for range in [DateRange::Day1, DateRange::Month1, DateRange::All] {
-                        let bars = app.chart.bars(SeriesId::MAIN);
-                        let end = bars.len();
-                        let start = if range == DateRange::Day1 {
-                            let cutoff = bars.last().unwrap().time - chrono::Duration::days(1);
-                            bars.iter().position(|b| b.time >= cutoff).unwrap()
-                        } else {
-                            0
-                        };
+                    for (range, interval, cutoff) in presets {
                         app.handle_timeframe_toolbar(TimeframeToolbarAction::DateRangeChanged(
                             range,
                         ));
-                        frame(&mut app);
+                        for _ in 0..3 {
+                            frame(&mut app);
+                        }
+                        if app.chart.timeframe() != Some(interval)
+                            || app.state.timeframe != interval
+                        {
+                            wrong_intervals.push((range, app.chart.timeframe(), interval));
+                        }
+                        assert_eq!(app.replay.is_some(), replay);
+                        if replay {
+                            continue;
+                        }
+                        let bars = app.chart.bars(SeriesId::MAIN);
+                        assert!(!bars.is_empty(), "{range:?}");
+                        let end = bars.len();
+                        let start = cutoff(bars.last().unwrap().time)
+                            .map_or(0, |cutoff| bars.partition_point(|bar| bar.time < cutoff));
                         let (shown_start, shown_end) = app.chart.state().visible_range();
                         assert_eq!(shown_end, end, "{range:?}");
                         assert!(shown_start.abs_diff(start) <= 1, "{range:?}");
                         let expected = (app.chart.get_rendered_price_rect().width() - 1.0)
                             / ((end - start) as f32 + 0.5);
-                        assert!((app.chart.get_time_scale_state().0 - expected).abs() < 0.001);
-                        assert_eq!(app.replay.is_some(), replay);
+                        assert!(
+                            (app.chart.get_time_scale_state().0 - expected).abs() < 0.001,
+                            "{range:?}"
+                        );
                     }
                     if !replay {
+                        app.switch_timeframe(Timeframe::Hour1);
+                        for _ in 0..3 {
+                            frame(&mut app);
+                        }
                         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
                         app.extra_charts[0].chart.set_feed_paused(true);
                         app.layout.sync.sync_time_axis = false;
@@ -10189,6 +10255,133 @@ mod tests {
                     }
                 }
             }
+        }
+        assert!(wrong_intervals.is_empty(), "{wrong_intervals:?}");
+    }
+
+    #[test]
+    fn a_new_preset_replaces_an_undelivered_range_fit() {
+        for prior in [DateRange::Month1, DateRange::Year5] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                "2026-11-12T15:00:00Z".parse().unwrap(),
+                true,
+            );
+            settle(&mut app, &ctx);
+            app.handle_timeframe_toolbar(TimeframeToolbarAction::DateRangeChanged(prior));
+            // Both choices can arrive before the chart's next frame drains either switch.
+            app.handle_timeframe_toolbar(TimeframeToolbarAction::DateRangeChanged(DateRange::All));
+            settle(&mut app, &ctx);
+            assert_eq!(app.chart.timeframe(), Some(Timeframe::Month1));
+            let count = app.chart.bars(SeriesId::MAIN).len();
+            assert!(count > 0);
+            let expected =
+                (app.chart.get_rendered_price_rect().width() - 1.0) / (count as f32 + 0.5);
+            assert!(
+                (app.chart.get_time_scale_state().0 - expected).abs() < 0.001,
+                "{prior:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_preset_keeps_an_interval_the_data_source_does_not_offer() {
+        use owndata::feed::tests::{Server, pages, profile, until};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let server = Server::start(pages(vec![
+            r#"[{"t":1794268800,"o":10,"h":12,"l":9,"c":11,"v":100},{"t":1794355200,"o":11,"h":13,"l":10,"c":12,"v":100}]"#.into(),
+            "[]".into(),
+        ]));
+        let mut own = profile(&server.origin);
+        own.intervals
+            .retain(|interval| interval.chart == Timeframe::Day1);
+        app.connect_own_data(own, owndata::Secrets::new());
+        until(&ctx, &mut app.chart, "daily history", |chart| {
+            chart
+                .feed_state(SeriesId::MAIN)
+                .is_some_and(|feed| feed.history_complete)
+        });
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.bars(SeriesId::MAIN).len(), 2);
+        app.handle_timeframe_toolbar(TimeframeToolbarAction::DateRangeChanged(DateRange::Year5));
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.timeframe(), Some(Timeframe::Day1));
+        assert_eq!(app.state.timeframe, Timeframe::Day1);
+        let (start, end) = app.chart.state().visible_range();
+        assert!(start <= 1);
+        assert_eq!(end, 2);
+        let expected = (app.chart.get_rendered_price_rect().width() - 1.0) / 2.5;
+        assert!((app.chart.get_time_scale_state().0 - expected).abs() < 0.001);
+        assert!(
+            !app.toasts
+                .toasts()
+                .iter()
+                .any(|toast| toast.message.contains("has no interval"))
+        );
+    }
+
+    #[test]
+    fn undo_after_a_preset_twice_keeps_the_view_until_bars_arrive() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        app.chart.apply_synced_time_scale(7.0, -30.0);
+        settle(&mut app, &ctx);
+        app.chart
+            .user_action(|chart| chart.set_chart_type(ChartType::Line));
+        settle(&mut app, &ctx);
+        assert!(app.chart.undo());
+        settle(&mut app, &ctx);
+        let before = app.chart.get_time_scale_state();
+        assert!(app.chart.redo());
+        settle(&mut app, &ctx);
+        app.handle_timeframe_toolbar(TimeframeToolbarAction::DateRangeChanged(DateRange::Year5));
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.timeframe(), Some(Timeframe::Week1));
+        assert!(app.chart.undo());
+        assert!(app.chart.undo());
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.timeframe(), Some(Timeframe::Min1));
+        assert_eq!(app.chart.chart_type(), ChartType::Candles);
+        assert_eq!(app.chart.get_time_scale_state(), before);
+    }
+
+    #[test]
+    fn undo_after_a_preset_restores_interval_and_view() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        app.chart.apply_synced_time_scale(7.0, -30.0);
+        settle(&mut app, &ctx);
+        let before = app.chart.get_time_scale_state();
+        app.handle_timeframe_toolbar(TimeframeToolbarAction::DateRangeChanged(DateRange::Year5));
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.timeframe(), Some(Timeframe::Week1));
+        assert_ne!(app.chart.get_time_scale_state().0, before.0);
+        assert!(app.chart.undo());
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.timeframe(), Some(Timeframe::Min1));
+        assert_eq!(app.chart.get_time_scale_state(), before);
+        assert!(!app.chart.undo(), "a preset records exactly one step");
+        for finish_fit in [true, false] {
+            app.handle_timeframe_toolbar(TimeframeToolbarAction::DateRangeChanged(DateRange::Day1));
+            if finish_fit {
+                settle(&mut app, &ctx);
+            }
+            assert!(app.chart.undo());
+            settle(&mut app, &ctx);
+            assert_eq!(app.chart.timeframe(), Some(Timeframe::Min1));
+            assert_eq!(app.chart.get_time_scale_state(), before);
         }
     }
 
@@ -11090,48 +11283,5 @@ mod tests {
         settle(&mut app, &ctx);
         assert_eq!(app.chart.symbol(), "TOKENA");
         assert!(!app.chart.bars(SeriesId::MAIN).is_empty());
-    }
-
-    /// Captions name what identifies a study: no flags, empty fields, list sizes or open limits.
-    #[test]
-    fn legend_inputs_leave_out_flags() {
-        let factory = egui_charts::studies::IndicatorFactory::new();
-        let caption =
-            |name: &str| super::study_input_summary(factory.create(name).unwrap().as_ref());
-        for (name, expected) in [
-            ("RSI", "14 close SMA 14"),
-            ("VWAP", "Session 1"),
-            ("Vol Profile Session", "24 70 Up / down Trading day"),
-            ("Time Weighted Average Price", "Session"),
-            ("Trend Strength Index", "14 close"),
-            ("Higher Interval Candles", "1D"),
-            ("Accelerator Oscillator", "hl2"),
-        ] {
-            assert_eq!(caption(name), expected);
-        }
-        for name in factory.list() {
-            let caption = caption(&name);
-            assert_eq!(caption.trim(), caption, "{name}");
-            assert!(
-                !caption.contains("  ")
-                    && !caption.contains("true")
-                    && !caption.contains("false")
-                    && !caption.contains("00000"),
-                "{name}: {caption}"
-            );
-        }
-        let mut chart = Chart::new(egui_charts::model::BarData::new());
-        let vwap = chart.add_indicator(factory.create("VWAP").unwrap());
-        let study = chart.indicator_mut(vwap).unwrap();
-        assert_eq!(super::study_input_summary(study), "Session 1");
-        study
-            .set_input(
-                "source",
-                egui_charts::studies::InputValue::Source(egui_charts::studies::StudySource::Price(
-                    egui_charts::model::PriceSource::Close,
-                )),
-            )
-            .unwrap();
-        assert_eq!(super::study_input_summary(study), "Session close 1");
     }
 }

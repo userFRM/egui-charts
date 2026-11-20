@@ -1,4 +1,4 @@
-//! Controls for the demo's chart readouts and series annotations.
+//! Controls for the demo's chart readouts, scrolling and series annotations.
 
 use super::DemoApp;
 use egui_charts::config::{TooltipMode, TouchTrackingExitMode};
@@ -48,6 +48,18 @@ impl DemoApp {
             ui.checkbox(&mut options.show_volume_details, "Held volume details");
         }
         if chart_options.tooltip != previous {
+            self.chart.set_chart_options(chart_options);
+            ui.ctx().request_repaint();
+        }
+    }
+
+    pub(super) fn show_scrolling_controls(&mut self, ui: &mut egui::Ui) {
+        let mut chart_options = self.chart.chart_options().clone();
+        let previous = chart_options.kinetic_scroll;
+        let kinetic = &mut chart_options.kinetic_scroll;
+        ui.checkbox(&mut kinetic.enabled, "Coast after a touch swipe");
+        ui.checkbox(&mut kinetic.mouse, "Coast after a mouse drag");
+        if chart_options.kinetic_scroll != previous {
             self.chart.set_chart_options(chart_options);
             ui.ctx().request_repaint();
         }

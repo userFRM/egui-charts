@@ -2,8 +2,8 @@
 //!
 //! John Bollinger's Bollinger Bars redraw each price bar at full candle width, so the whole
 //! range traded in the period reads as a block: the body between open and close is coloured
-//! up (close at or above open) or down, and the parts above and below it, the wicks, are
-//! drawn at body width in a third colour, blue by default.
+//! up (close above open) or down (close at or below open), and the parts above and below it,
+//! the wicks, are drawn at body width in a third colour, blue by default.
 //!
 //! [`Indicator::candles`] holds two candles per bar: first a block from the high to the low on
 //! plot 0 ("Wicks"), then the body from the open to the close on plot 1 ("Up") or 2 ("Down"),
@@ -83,7 +83,7 @@ impl Indicator for BollingerBars {
             {
                 continue;
             }
-            let plot = if bar.close >= bar.open { 1 } else { 2 };
+            let plot = if bar.close > bar.open { 1 } else { 2 };
             self.values.set_value(plot, i, bar.close);
             let (top, bottom) = (bar.open.max(bar.close), bar.open.min(bar.close));
             self.candles.push(StudyCandle {
@@ -161,7 +161,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     /// Each bar paints its high-low block before its body, the body spans only open to close,
-    /// an unchanged close counts as up, and a bar with a non-finite price draws nothing.
+    /// an unchanged close counts as down, and a bar with a non-finite price draws nothing.
     #[test]
     fn each_bar_paints_a_block_then_its_body() {
         let bar = |i: i64, [o, h, l, c]: [f64; 4]| {
@@ -194,8 +194,12 @@ mod tests {
                 (1..2, 0, [11.5, 11.5, 8.0, 8.0]),
                 (1..2, 2, [11.0, 11.0, 9.0, 9.0]),
                 (3..4, 0, [10.5, 10.5, 9.5, 9.5]),
-                (3..4, 1, [10.0, 10.0, 10.0, 10.0]),
+                (3..4, 2, [10.0, 10.0, 10.0, 10.0]),
             ]
+        );
+        assert_eq!(
+            [study.values().value(1, 3), study.values().value(2, 3)],
+            [None, Some(10.0)]
         );
     }
 

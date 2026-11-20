@@ -2,13 +2,14 @@ use crate::{localization as l10n, theme::ThemeExt, ui_kit::EmptyState};
 use chrono::{DateTime, Utc};
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, Ui, vec2};
 
-/// Plot timestamps on a shared time axis, with a separate scale for each chart.
+/// Plot timestamps on a shared time axis. Multiply values by `scale` before plotting and labelling.
 pub(super) fn show(
     ui: &mut Ui,
     values: &[(DateTime<Utc>, f64)],
     comparison: &[(DateTime<Utc>, f64)],
     color: Color32,
     height: f32,
+    scale: f64,
 ) {
     if values.is_empty() && comparison.is_empty() {
         EmptyState::new("No usable equity curve").show(ui);
@@ -24,12 +25,16 @@ pub(super) fn show(
     let all = || values.iter().chain(comparison);
     let first = all().map(|p| p.0).min().unwrap();
     let last = all().map(|p| p.0).max().unwrap();
-    let low = all().map(|p| p.1).fold(f64::INFINITY, f64::min);
-    let high = all().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+    let low = all().map(|p| p.1 * scale).fold(f64::INFINITY, f64::min);
+    let high = all().map(|p| p.1 * scale).fold(f64::NEG_INFINITY, f64::max);
+    if !low.is_finite() || !high.is_finite() {
+        EmptyState::new("No usable equity curve").show(ui);
+        return;
+    }
     // Divide before subtracting so opposite finite extremes cannot overflow the value range.
-    let scale = low.abs().max(high.abs()).max(1.0);
-    let lower = low / scale;
-    let range = (high / scale - lower).max(f64::EPSILON);
+    let magnitude = low.abs().max(high.abs()).max(1.0);
+    let lower = low / magnitude;
+    let range = (high / magnitude - lower).max(f64::EPSILON);
     let flat = low == high;
     let span = (last - first).as_seconds_f64().max(f64::EPSILON);
     let point = |t: DateTime<Utc>, value: f64| {
@@ -39,7 +44,7 @@ pub(super) fn show(
                 - (if flat {
                     0.5
                 } else {
-                    ((value / scale - lower) / range) as f32
+                    ((value / magnitude - lower) / range) as f32
                 }) * plot.height(),
         )
     };
@@ -64,7 +69,7 @@ pub(super) fn show(
                 if flat {
                     low
                 } else {
-                    (lower + fraction * range) * scale
+                    (lower + fraction * range) * magnitude
                 }
             ),
             font.clone(),
@@ -111,10 +116,10 @@ pub(super) fn show(
         (comparison, Stroke::new(1.5, theme.ui.warning)),
     ] {
         if curve.len() == 1 {
-            painter.circle_filled(point(curve[0].0, curve[0].1), 3.0, stroke.color);
+            painter.circle_filled(point(curve[0].0, curve[0].1 * scale), 3.0, stroke.color);
         } else if !curve.is_empty() {
             painter.add(Shape::line(
-                curve.iter().map(|&(t, v)| point(t, v)).collect(),
+                curve.iter().map(|&(t, v)| point(t, v * scale)).collect(),
                 stroke,
             ));
         }
@@ -141,6 +146,7 @@ pub(super) fn show(
         response.on_hover_ui(|ui| {
             for (label, curve) in [("Value", values), ("Buy-and-hold", comparison)] {
                 if let Some((t, v)) = nearest(curve) {
+                    let v = v * scale;
                     ui.label(format!(
                         "{}: {v:.2} · {} UTC",
                         l10n::text(ui.ctx(), label),
