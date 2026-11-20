@@ -395,8 +395,12 @@ fn continuation_keeps_the_range_and_refreshes_its_figures() {
     panel.selected = Some(0);
 
     report.trades[0].exit = Some(StrategyExit::new(day(2), 110.0, 10.0));
-    report.trades.push(StrategyTrade::new(OrderSide::Sell, 1.0, day(3), 100.0));
-    report.equity.extend([(day(2), 1010.0), (day(3), 1020.0), (day(4), 1030.0)]);
+    report
+        .trades
+        .push(StrategyTrade::new(OrderSide::Sell, 1.0, day(3), 100.0));
+    report
+        .equity
+        .extend([(day(2), 1010.0), (day(3), 1020.0), (day(4), 1030.0)]);
     panel.continue_report(report.clone(), &bars);
 
     assert_eq!(panel.report(), Some(&report));
