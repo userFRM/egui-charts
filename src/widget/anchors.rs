@@ -238,7 +238,7 @@ impl Chart {
         &mut self,
         drawings: Vec<Drawing>,
     ) -> Vec<(usize, &'static str)> {
-        self.flush_drawing_events();
+        self.flush_change_events();
         let mut manager = DrawingManager::new();
         manager.set_sync_enabled(self.drawings.sync_enabled);
         manager.registry = self.drawings.registry.clone();
@@ -793,9 +793,10 @@ mod tests {
     /// stored. An SMI record with equal `smooth1` and `smooth2`, as written before an equal pair
     /// shared one input, matches the SMI that lists them as `smoothing`. A study restored under
     /// host defaults that set the missing input for new studies matches too. A Knoxville record
-    /// from before the window rule, with pivot sides, matches the study without them. An ADX
-    /// record from before the smoothing had an input matches the ADX whose smoothing equals its
-    /// period. Loading and pasting agree.
+    /// from before the window rule, with pivot sides, matches the study without them. A Doji
+    /// record from before the patterns without a trend condition dropped the trend rule matches
+    /// the Doji without it. An ADX record from before the smoothing had an input matches the ADX
+    /// whose smoothing equals its period. Loading and pasting agree.
     #[cfg(feature = "studies")]
     #[test]
     fn stored_pane_survives_a_new_study_input() {
@@ -824,6 +825,12 @@ mod tests {
             study.set_overlay(false);
             Box::new(study)
         };
+        let doji: Study = || {
+            // In a pane of its own, where drawings are stored with its inputs.
+            let mut study = ConfiguredStudy::new(IndicatorFactory::new().create("Doji").unwrap());
+            study.set_overlay(false);
+            Box::new(study)
+        };
         let pivots = |inputs: &mut Vec<serde_json::Value>| {
             inputs.retain(|input| input[0] != "left" && input[0] != "right");
             let side = serde_json::to_value(InputValue::Length(5)).unwrap();
@@ -834,6 +841,12 @@ mod tests {
                     serde_json::json!(["right", side]),
                 ],
             );
+        };
+        // A Doji record from before the trendless patterns dropped the trend rule.
+        let trend_rule = |inputs: &mut Vec<serde_json::Value>| {
+            inputs.retain(|input| input[0] != "trend");
+            let rule = serde_json::to_value(InputValue::Choice(2)).unwrap();
+            inputs.insert(0, serde_json::json!(["trend", rule]));
         };
         // Saved without `wait_for_close`, then restored by a factory whose defaults turn it off.
         let restored: Study = || {
@@ -919,7 +932,7 @@ mod tests {
             Option<(&'a str, InputValue)>,
             bool,
         );
-        let cases: [Case<'_>; 14] = [
+        let cases: [Case<'_>; 15] = [
             // From before an input existed: the last one, which the chart adds after the study's
             // own, or one of the study's own, which comes before the chart's.
             (rsi, &last, None, true),
@@ -927,6 +940,7 @@ mod tests {
             (rsi, &last, wait(false), false),
             (restored, &last, None, true),
             (knoxville, &pivots, None, true),
+            (doji, &trend_rule, None, true),
             // Before the ADX smoothing had an input, the DI period set it too.
             (adx, &no_smoothing, None, true),
             (rsi, &other_period, None, false),

@@ -941,12 +941,12 @@ mod tests {
                     }
                     if count <= 8 {
                         let range = map.price.range();
-                        // At 10% margins each side: 60.25 / 0.8 = 75.3125 for executed rows;
-                        // TPO rows of 2 span 99.875..161.875, so 62 / 0.8 = 77.5.
+                        // The span takes 82% of the pane, with 8% below and 10% above.
+                        // Executed rows span 99.875..160.125; TPO rows of 2 end at 161.875.
                         let (low, high) = if kind == ChartType::SessionVolumeProfile {
-                            (92.34375, 167.65625)
+                            (99.875 - 60.25 / 0.82 * 0.08, 160.125 + 60.25 / 0.82 * 0.1)
                         } else {
-                            (92.125, 169.625)
+                            (99.875 - 62.0 / 0.82 * 0.08, 161.875 + 62.0 / 0.82 * 0.1)
                         };
                         assert!(
                             (range.min - low).abs() < 1e-9 && (range.max - high).abs() < 1e-9,
@@ -1064,11 +1064,21 @@ mod tests {
                     for (prices, expected) in [
                         (
                             [100.0, 100.0],
-                            crate::scales::PriceRange::new(99.875, 100.125),
+                            // Flat data uses 1% of its price, so the margin span is 1 / 0.82.
+                            crate::scales::PriceRange::new(
+                                100.0 - 1.0 / 0.82 * 0.08,
+                                100.0 + 1.0 / 0.82 * 0.1,
+                            ),
                         ),
                         // Rows of 2 cover 7..73; rows of 2.5 cover 8.75..71.25. Starting over
-                        // would alternate between spans 66/0.8 = 82.5 and 62.5/0.8 = 78.125.
-                        ([8.9, 71.0], crate::scales::PriceRange::new(-1.25, 81.25)),
+                        // would alternate between spans 66/0.82 and 62.5/0.82.
+                        (
+                            [8.9, 71.0],
+                            crate::scales::PriceRange::new(
+                                7.0 - 66.0 / 0.82 * 0.08,
+                                73.0 + 66.0 / 0.82 * 0.1,
+                            ),
+                        ),
                     ] {
                         let mut chart =
                             crate::widget::Chart::new(crate::model::BarData::from_bars(
@@ -1086,10 +1096,11 @@ mod tests {
                         chart.set_visible_bars(8);
                         chart.set_start_idx(0);
                         draw(&mut chart, None);
-                        assert_eq!(
-                            chart.state.price_scale().range(),
-                            expected,
-                            "automatic rows converge and preserve flat-session bounds: {prices:?}"
+                        let range = chart.state.price_scale().range();
+                        assert!(
+                            (range.min - expected.min).abs() < 1e-9
+                                && (range.max - expected.max).abs() < 1e-9,
+                            "automatic rows converge and preserve flat-session bounds: {prices:?}, {range:?}, expected {expected:?}"
                         );
                     }
                 }
