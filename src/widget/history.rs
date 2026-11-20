@@ -2176,6 +2176,90 @@ mod tests {
     }
 
     #[test]
+    fn pointer_navigation_ends_a_waiting_view_restoration() {
+        use crate::widget::test_frames::frame;
+        use egui::{Event, Modifiers, PointerButton};
+
+        for drag in [true, false] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            chart.chart_options.kinetic_scroll.mouse = false;
+            chart.set_timeframe(Timeframe::Min1);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.apply_synced_time_scale(8.0, -30.0);
+            frame(&ctx, &mut chart, 0.02, vec![]);
+            frame(&ctx, &mut chart, 0.04, vec![]);
+            chart.user_action(|chart| chart.set_timeframe(Timeframe::Min15));
+            chart.apply_synced_time_scale(4.0, 0.5);
+            assert!(chart.undo());
+            let start = chart.get_rendered_price_rect().center();
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            frame(&ctx, &mut chart, 0.06, vec![Event::PointerMoved(start)]);
+            let expected = if drag {
+                frame(&ctx, &mut chart, 0.08, vec![button(start, true)]);
+                for i in 1..=2 {
+                    frame(
+                        &ctx,
+                        &mut chart,
+                        0.08 + f64::from(i) * 0.02,
+                        vec![Event::PointerMoved(
+                            start + egui::vec2(14.0 * i as f32, 0.0),
+                        )],
+                    );
+                }
+                (8.0, -30.0 - 42.0 / 8.0)
+            } else {
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.08,
+                    vec![Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, 120.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Wheel,
+                        modifiers: Modifiers::NONE,
+                    }],
+                );
+                let view = chart.get_time_scale_state();
+                assert_ne!(view.0, 8.0);
+                view
+            };
+            let bars = chart.bars(SeriesId::MAIN).to_vec();
+            chart.set_data(SeriesId::MAIN, bars);
+            let end = start + egui::vec2(42.0, 0.0);
+            frame(
+                &ctx,
+                &mut chart,
+                0.14,
+                if drag {
+                    vec![Event::PointerMoved(end)]
+                } else {
+                    vec![]
+                },
+            );
+            frame(&ctx, &mut chart, 0.16, vec![]);
+            frame(
+                &ctx,
+                &mut chart,
+                0.18,
+                if drag {
+                    vec![button(end, false)]
+                } else {
+                    vec![]
+                },
+            );
+            frame(&ctx, &mut chart, 0.20, vec![]);
+            assert_eq!(chart.get_time_scale_state(), expected, "drag: {drag}");
+        }
+    }
+
+    #[test]
     fn undoing_an_interval_change_restores_the_view() {
         let mut chart = chart(&[10.0], &[20.0]);
         let bars = chart.bars(SeriesId::MAIN)[..50].to_vec();

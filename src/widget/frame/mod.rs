@@ -909,6 +909,7 @@ impl Chart {
             ),
         );
 
+        let view_before_input = self.time_scale_view();
         // Handle double-click to reset axes
         self.handle_double_click(&time_response, time_axis_rect);
 
@@ -966,6 +967,10 @@ impl Chart {
             chart_width,
             self.zoom_mode_active,
         );
+        if self.time_scale_view() != view_before_input {
+            // Pointer navigation replaces an undo still waiting for its bars or axis width.
+            self.history.clear_view_restore();
+        }
         if self.zoom_just_applied {
             log::info!("Zoom applied - chart will auto-deactivate zoom mode");
         }
