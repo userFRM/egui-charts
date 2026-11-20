@@ -16,6 +16,8 @@ pub enum TimeframeToolbarAction {
     OpenDatePicker,
     /// Open timezone menu
     OpenTimezoneMenu,
-    /// Open session menu
+    /// The session control was clicked: set
+    /// [`session_menu_open`](super::TimeframeToolbarState::session_menu_open) and call
+    /// [`TimeframeToolbar::show_session_menu`](super::TimeframeToolbar::show_session_menu)
     OpenSessionMenu,
 }

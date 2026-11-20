@@ -34,6 +34,8 @@ pub struct TimeframeToolbar {
     time_zones: Vec<TimezoneId>,
     /// Where the clock was drawn, for the time zone menu to open beside it.
     clock: Option<(egui::LayerId, egui::PopupAnchor)>,
+    /// Where the session control was drawn, for its menu to open beside it.
+    session: Option<(egui::LayerId, egui::PopupAnchor)>,
 }
 
 /// Zone names [`default_time_zones`] offers: the main trading centres, west to east within the
@@ -264,6 +266,7 @@ impl TimeframeToolbar {
             hidden: HashSet::new(),
             time_zones: default_time_zones(),
             clock: None,
+            session: None,
         }
     }
 
@@ -276,6 +279,7 @@ impl TimeframeToolbar {
             hidden: HashSet::new(),
             time_zones: default_time_zones(),
             clock: None,
+            session: None,
         }
     }
 
@@ -343,6 +347,71 @@ impl TimeframeToolbar {
             self.state.timezone_menu_open = false;
         }
         chosen
+    }
+
+    /// Shows the session menu beside the control while
+    /// [`session_menu_open`](TimeframeToolbarState::session_menu_open) is set, as a host does on
+    /// [`TimeframeToolbarAction::OpenSessionMenu`]. Call after [`show`](Self::show) each frame.
+    /// Offers regular and extended hours, plus overnight hours when the instrument has overnight
+    /// windows or they are already chosen, as in the time axis menu. Instruments without session
+    /// windows or date-specific hours keep the menu closed.
+    ///
+    /// A choice applies to `chart` as one undo step, reloads history on the next chart frame when
+    /// the hours change, updates the control and closes the menu. Escape and a click elsewhere
+    /// also close it. Returns whether the chart's hours changed.
+    pub fn show_session_menu(
+        &mut self,
+        ctx: &egui::Context,
+        chart: &mut crate::widget::Chart,
+    ) -> bool {
+        let current = SessionType::from_chart(chart);
+        if current == SessionType::Full24x7 {
+            self.state.session_menu_open = false;
+        }
+        let Some((layer, anchor)) = self.session.filter(|_| self.state.session_menu_open) else {
+            return false;
+        };
+        let choices = SessionType::choices(
+            chart.overnight_hours() || super::state::has_overnight_windows(chart.instrument()),
+        );
+        let mut chosen = None;
+        egui::Popup::new(
+            egui::Id::unique("timeframe_toolbar_session_menu"),
+            ctx.clone(),
+            anchor,
+            layer,
+        )
+        .kind(egui::PopupKind::Menu)
+        .layout(egui::Layout::top_down_justified(egui::Align::Min))
+        .style(egui::containers::menu::menu_style)
+        .align(egui::RectAlign::TOP_END)
+        .open_bool(&mut self.state.session_menu_open)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            for &choice in choices {
+                if ui
+                    .selectable_label(
+                        choice == current,
+                        l10n::text(ui.ctx(), choice.choice_label()),
+                    )
+                    .clicked()
+                {
+                    chosen = Some(choice);
+                }
+            }
+        });
+        let Some((extended, overnight)) = chosen.and_then(SessionType::hours) else {
+            return false;
+        };
+        self.state.session_menu_open = false;
+        let before = (chart.extended_hours(), chart.overnight_hours());
+        // Overnight first, so regular hours leave overnight hours off.
+        chart.user_action(|chart| {
+            chart.set_overnight_hours(overnight);
+            chart.set_extended_hours(extended);
+        });
+        self.state.session_type = SessionType::from_chart(chart);
+        before != (chart.extended_hours(), chart.overnight_hours())
     }
 
     /// Update the current time display
@@ -483,18 +552,16 @@ impl TimeframeToolbar {
             }
 
             // RTH/Session button
+            self.session = None;
             if !self.hidden.contains(&Control::Session) {
-                let session_label = self.state.session_type.label();
-                let session_tooltip = self.state.session_type.tooltip();
-                if self
-                    .text_btn(
-                        ui,
-                        session_label,
-                        session_tooltip,
-                        self.state.session_type == SessionType::RTH,
-                    )
-                    .clicked()
-                {
+                let control = self.text_btn(
+                    ui,
+                    self.state.session_type.label(),
+                    self.state.session_type.tooltip(),
+                    self.state.session_type == SessionType::RTH,
+                );
+                self.session = Some((control.layer_id, egui::PopupAnchor::from(&control)));
+                if control.clicked() {
                     result_action = TimeframeToolbarAction::OpenSessionMenu;
                 }
             }
@@ -729,7 +796,7 @@ impl TimeframeToolbar {
         self.state.timezone = timezone;
     }
 
-    /// Set the session type
+    /// Set the session type, such as [`SessionType::from_chart`] of the chart the toolbar serves
     pub fn set_session(&mut self, session: SessionType) {
         self.state.session_type = session;
     }
@@ -748,6 +815,143 @@ impl TimeframeToolbar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The control offers the time axis hours and applies one undo step, follows undo, and
+    /// keeps always-open instruments at 24/7 without a menu: #3560.
+    #[test]
+    fn session_menu_offers_the_axis_hours_and_applies_one_undo_step() {
+        use crate::model::{Instrument, OverrideWindow, Session, SessionOverride, SessionWindow};
+        use chrono::{NaiveDate, NaiveTime, Weekday::Mon};
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        let regular = Session::new([SessionWindow::new([Mon], at(9), at(16))]);
+        let overnight =
+            regular
+                .clone()
+                .with_overnight_windows([SessionWindow::new([Mon], at(20), at(4))]);
+        let date = NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
+        let overridden =
+            regular.clone().with_overrides([SessionOverride::new(date)
+                .with_overnight_windows([OverrideWindow::new(at(20), at(4))])]);
+        let regular = Some(Instrument::new("A").with_session(regular));
+        for (instrument, start_overnight, offered_overnight, choice, expected) in [
+            (
+                regular.clone(),
+                false,
+                false,
+                Some("Extended trading hours"),
+                (true, false),
+            ),
+            (
+                Some(Instrument::new("A").with_session(overnight)),
+                false,
+                true,
+                Some("Overnight trading hours"),
+                (true, true),
+            ),
+            (
+                regular,
+                true,
+                true,
+                Some("Regular trading hours"),
+                (false, false),
+            ),
+            (
+                Some(Instrument::new("BTC")),
+                false,
+                false,
+                None,
+                (false, false),
+            ),
+            (
+                Some(Instrument::new("A").with_session(overridden)),
+                false,
+                true,
+                Some("Overnight trading hours"),
+                (true, true),
+            ),
+            (
+                None,
+                false,
+                false,
+                Some("Extended trading hours"),
+                (true, false),
+            ),
+        ] {
+            let mut chart = crate::Chart::new(crate::model::BarData::new());
+            chart.set_instrument(instrument);
+            chart.set_overnight_hours(start_overnight);
+            let start = (chart.extended_hours(), chart.overnight_hours());
+            let start_label = SessionType::from_chart(&chart).tooltip();
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .allow_missing_glyphs()
+                .with_size(egui::vec2(900.0, 600.0))
+                .build_ui_state(
+                    |ui, (toolbar, chart): &mut (TimeframeToolbar, crate::Chart)| {
+                        ui.add_space(540.0);
+                        toolbar.set_session(SessionType::from_chart(chart));
+                        if toolbar.show(ui) == TimeframeToolbarAction::OpenSessionMenu {
+                            toolbar.state.session_menu_open = true;
+                        }
+                        toolbar.show_session_menu(ui.ctx(), chart);
+                    },
+                    (TimeframeToolbar::new(), chart),
+                );
+            harness.run();
+            harness.get_by_label(start_label).click();
+            harness.run();
+            assert_eq!(
+                harness.query_by_label("Overnight trading hours").is_some(),
+                offered_overnight
+            );
+            let Some(choice) = choice else {
+                assert!(harness.query_by_label("Regular trading hours").is_none());
+                assert!(!harness.state().0.state.session_menu_open);
+                assert!(!harness.state().1.can_undo());
+                continue;
+            };
+            for row in ["Regular trading hours", "Extended trading hours"] {
+                assert!(harness.query_by_label(row).is_some());
+            }
+            // Picking the current choice and dismissing the menu leave the chart and history alone.
+            let current = SessionType::from_chart(&harness.state().1);
+            harness.get_by_label(current.choice_label()).click();
+            harness.run();
+            assert!(!harness.state().0.state.session_menu_open);
+            assert!(!harness.state().1.can_undo());
+            harness.get_by_label(start_label).click();
+            harness.run();
+            harness.key_press(egui::Key::Escape);
+            harness.run();
+            assert!(!harness.state().0.state.session_menu_open);
+            harness.get_by_label(start_label).click();
+            harness.run();
+            harness.get_by_label(choice).click();
+            harness.run();
+            let (toolbar, chart) = harness.state();
+            assert_eq!((chart.extended_hours(), chart.overnight_hours()), expected);
+            assert!(!toolbar.state.session_menu_open);
+            assert!(harness.query_by_label("Regular trading hours").is_none());
+            assert!(
+                harness
+                    .query_by_label(SessionType::from_chart(chart).tooltip())
+                    .is_some()
+            );
+            assert!(harness.state_mut().1.undo());
+            harness.run();
+            assert_eq!(
+                (
+                    harness.state().1.extended_hours(),
+                    harness.state().1.overnight_hours()
+                ),
+                start
+            );
+            assert!(harness.query_by_label(start_label).is_some());
+            assert!(!harness.state().1.can_undo());
+        }
+    }
 
     /// The clock opens a menu of UTC, exchange time, local time and the zones, which returns the
     /// row picked for the chart: #2887.
