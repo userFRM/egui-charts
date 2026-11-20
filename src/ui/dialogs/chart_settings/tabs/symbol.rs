@@ -7,6 +7,7 @@ use crate::scales::TimezoneMode;
 use crate::theme::Theme;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui::timeframe_toolbar::SessionType;
 use crate::widget::settings::PrecisionMode;
 use egui::{Color32, RichText, Ui};
 
@@ -261,36 +262,37 @@ impl SettingsDialog {
 
                 // DATA MODIFICATION
                 self.draw_section_header(ui, "DATA MODIFICATION", theme);
-                self.draw_setting_row_with_controls(ui, "Session", theme, |ui, dialog| {
-                    let extended = dialog.settings.extended_hours.unwrap_or(false);
-                    let label = |extended| {
-                        if extended {
-                            "Extended trading hours"
-                        } else {
-                            "Regular trading hours"
-                        }
-                    };
-                    styled_dropdown(
-                        ui,
-                        "session",
-                        DESIGN_TOKENS.sizing.settings_dialog.dropdown_width,
-                        theme.ui.text,
-                        &l10n::text(ui.ctx(), label(extended)),
-                        |ui| {
-                            for choice in [false, true] {
-                                if ui
-                                    .selectable_label(
-                                        extended == choice,
-                                        l10n::text(ui.ctx(), label(choice)),
-                                    )
-                                    .clicked()
-                                {
-                                    dialog.settings.extended_hours = Some(choice);
+                if self.hours_offered.0 {
+                    self.draw_setting_row_with_controls(ui, "Session", theme, |ui, dialog| {
+                        let current = SessionType::from_hours(
+                            dialog.settings.extended_hours.unwrap_or(false),
+                            dialog.settings.overnight_hours.unwrap_or(false),
+                        );
+                        let overnight = dialog.hours_offered.1 || current == SessionType::Overnight;
+                        styled_dropdown(
+                            ui,
+                            "session",
+                            DESIGN_TOKENS.sizing.settings_dialog.dropdown_width,
+                            theme.ui.text,
+                            current.choice_label(),
+                            |ui| {
+                                for &choice in SessionType::choices(overnight) {
+                                    if ui
+                                        .selectable_label(
+                                            choice == current,
+                                            l10n::text(ui.ctx(), choice.choice_label()),
+                                        )
+                                        .clicked()
+                                        && let Some((extended, overnight)) = choice.hours()
+                                    {
+                                        dialog.settings.extended_hours = Some(extended);
+                                        dialog.settings.overnight_hours = Some(overnight);
+                                    }
                                 }
-                            }
-                        },
-                    );
-                });
+                            },
+                        );
+                    });
+                }
                 styled_checkbox(
                     ui,
                     &mut self.settings.adjust_for_dividends,
@@ -312,6 +314,99 @@ impl SettingsDialog {
                     );
                 }
                 ui.add_space(ui.active_theme().spacing.xxl);
+
+                if self.hours_offered.0 {
+                    self.draw_section_header(ui, "SESSION BACKGROUNDS", theme);
+                    let mut background =
+                        self.settings.session_background.clone().unwrap_or_default();
+                    let before = background.clone();
+                    styled_checkbox(
+                        ui,
+                        &mut background.show_extended_hours,
+                        "Highlight extended sessions",
+                        theme.ui.text,
+                    );
+                    let fallback = |color, opacity| {
+                        if color == Color32::PLACEHOLDER {
+                            theme.ui.accent.linear_multiply(opacity)
+                        } else {
+                            color
+                        }
+                    };
+                    let shared = background.extended_hours_color;
+                    let label_width = Self::label_width(ui, theme);
+                    ui.add_enabled_ui(background.show_extended_hours, |ui| {
+                        for (index, label, mut color, mut shown) in [
+                            (
+                                0,
+                                "Pre-market",
+                                background.premarket_color.unwrap_or(shared),
+                                Some(&mut background.shade_premarket),
+                            ),
+                            (
+                                1,
+                                "Post-market",
+                                background.postmarket_color.unwrap_or(shared),
+                                Some(&mut background.shade_postmarket),
+                            ),
+                            (2, "Overnight", background.overnight_hours_color, None),
+                        ] {
+                            ui.horizontal(|ui| {
+                                let label = ui
+                                    .allocate_ui_with_layout(
+                                        egui::vec2(label_width, 42.0),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            ui.set_min_width(label_width);
+                                            ui.set_max_width(label_width);
+                                            let label = RichText::new(l10n::text(ui.ctx(), label))
+                                                .size(theme.text.title)
+                                                .color(theme.ui.text);
+                                            if let Some(shown) = shown.as_deref_mut() {
+                                                checkbox(ui, shown, label)
+                                            } else {
+                                                ui.label(label)
+                                            }
+                                        },
+                                    )
+                                    .inner;
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 8.0;
+                                    ui.spacing_mut().interact_size.y =
+                                        DESIGN_TOKENS.sizing.settings_dialog.button_height;
+                                    ui.add_enabled_ui(shown.is_none_or(|shown| *shown), |ui| {
+                                        ui.label_inputs_by(label.id, |ui| {
+                                            let picker = &mut self
+                                                .color_picker_states
+                                                .session_background[index];
+                                            picker.sel_color = fallback(
+                                                color,
+                                                if index == 2 { 0.16 } else { 0.08 },
+                                            );
+                                            if pick_color(
+                                                ui,
+                                                picker,
+                                                &format!("session_background_{index}"),
+                                                &mut color,
+                                            ) {
+                                                match index {
+                                                    0 => background.premarket_color = Some(color),
+                                                    1 => background.postmarket_color = Some(color),
+                                                    _ => background.overnight_hours_color = color,
+                                                }
+                                            }
+                                        });
+                                    });
+                                });
+                            });
+                            ui.add_space(ui.active_theme().spacing.sm);
+                        }
+                    });
+                    if background != before {
+                        self.settings.session_background = Some(background);
+                    }
+                    ui.add_space(ui.active_theme().spacing.xxl);
+                }
 
                 // PRECISION
                 self.draw_section_header(ui, "PRECISION", theme);
@@ -584,6 +679,124 @@ mod tests {
                 }],
                 &[],
             );
+        }
+    }
+
+    /// Accepting a session choice reloads its history and undoes in one step; continuously
+    /// traded instruments have no Session row.
+    #[test]
+    fn session_row_applies_reloads_and_undoes_the_hours() {
+        use crate::model::{Instrument, Session, SessionWindow, Timeframe};
+        struct Hours {
+            overnight_windows: bool,
+            requests: std::sync::Mutex<Vec<(bool, bool)>>,
+        }
+        impl crate::data::Datafeed for Hours {
+            fn resolve(&self, symbol: &str, reply: crate::data::Reply<Instrument>) {
+                let at = |hour| chrono::NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+                let mut session =
+                    Session::new([SessionWindow::new([chrono::Weekday::Mon], at(9), at(16))]);
+                if self.overnight_windows {
+                    session = session.with_overnight_windows([SessionWindow::new(
+                        [chrono::Weekday::Mon],
+                        at(20),
+                        at(4),
+                    )]);
+                }
+                reply.send(Ok(Instrument::new(symbol).with_session(session)));
+            }
+            fn history(
+                &self,
+                request: crate::data::HistoryRequest,
+                reply: crate::data::Reply<crate::data::HistoryPage>,
+            ) {
+                self.requests
+                    .lock()
+                    .unwrap()
+                    .push((request.extended_hours, request.overnight_hours));
+                reply.send(Ok(crate::data::HistoryPage::new(
+                    vec![Bar::new(
+                        chrono::DateTime::UNIX_EPOCH,
+                        100.0,
+                        110.0,
+                        90.0,
+                        105.0,
+                        1.0,
+                    )],
+                    true,
+                )));
+            }
+            fn subscribe(&self, _: crate::data::Subscription) {}
+        }
+        for (overnight_windows, label, expected) in [
+            (false, "Extended trading hours", (true, false)),
+            (true, "Overnight trading hours", (true, true)),
+        ] {
+            let feed = std::sync::Arc::new(Hours {
+                overnight_windows,
+                requests: Default::default(),
+            });
+            let mut chart = crate::ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("A")
+                .with_timeframe(Timeframe::Min1)
+                .build();
+            let ctx = Context::default();
+            let theme = Theme::dark();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut dialog = SettingsDialog::new();
+            for _ in 0..4 {
+                frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]);
+            }
+            assert_eq!(feed.requests.lock().unwrap().last(), Some(&(false, false)));
+            dialog.set_control_visible(
+                crate::ui::dialogs::chart_settings::Control::Templates,
+                false,
+            );
+            dialog.set_feed_capabilities(chart.feed_capabilities(), chart.instrument());
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            for _ in 0..3 {
+                frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]);
+            }
+            click(
+                &ctx,
+                &mut chart,
+                &mut dialog,
+                &theme,
+                "Regular trading hours",
+            );
+            click(&ctx, &mut chart, &mut dialog, &theme, label);
+            click(&ctx, &mut chart, &mut dialog, &theme, "Ok");
+            assert_eq!((chart.extended_hours(), chart.overnight_hours()), expected);
+            frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]);
+            assert_eq!(feed.requests.lock().unwrap().last(), Some(&expected));
+            assert!(chart.undo());
+            frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]);
+            assert_eq!(
+                (chart.extended_hours(), chart.overnight_hours()),
+                (false, false)
+            );
+            assert_eq!(feed.requests.lock().unwrap().last(), Some(&(false, false)));
+            assert!(!chart.can_undo());
+
+            dialog.set_feed_capabilities(None, Some(&Instrument::new("BTC")));
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            for _ in 0..2 {
+                let output = ctx.run_ui(RawInput::default(), |ui| {
+                    dialog.show(ui.ctx(), &theme);
+                });
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!texts.contains(&"Session"));
+                assert!(texts.contains(&"Adjust data for dividends"));
+                output.drop_without_applying_deltas();
+            }
         }
     }
 
