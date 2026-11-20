@@ -873,7 +873,6 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
- "thiserror 2.0.21",
  "web-time",
 ]
 
