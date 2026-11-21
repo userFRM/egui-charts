@@ -25,7 +25,7 @@ enum Scene {
     Export(scenes::recipes::Export),
     OrderFlow(Box<scenes::order_flow::ExecutionDepth>),
     RecordingReplay(scenes::recording_replay::RecordingReplay),
-    HostReport(scenes::host_report::HostReport),
+    HostReport(Box<scenes::host_report::HostReport>),
 }
 
 impl ExampleApp {
@@ -44,7 +44,7 @@ impl ExampleApp {
                 chart
             }
             "host-report" => {
-                scene = Scene::HostReport(scenes::host_report::HostReport::default());
+                scene = Scene::HostReport(Box::default());
                 first_chart::first_chart()
             }
             "series" => scenes::series::lifecycle(),
