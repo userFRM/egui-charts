@@ -358,6 +358,11 @@ impl StudyTemplate {
         } else {
             &template.settings
         };
+        // A study whose outputs cannot follow another symbol or interval restores on the chart's
+        // bars, without the inputs it saved for them.
+        if !study.draws_on_other_bars() {
+            inputs.retain(|(id, _)| !super::settings::CHART_INPUT_IDS[1..].contains(&id.as_str()));
+        }
         study.apply_settings(&inputs, settings.clone())?;
         study.set_visible(template.visible);
         if let Some(scale) = template.scale {
@@ -1558,6 +1563,18 @@ mod tests {
                 assert_eq!(Some(restored.scale()), saved.scale);
             }
             for (id, value) in &saved.inputs {
+                // The saved calculation controls no longer apply to the pattern's drawings.
+                if matches!(
+                    id.as_str(),
+                    "calculation_symbol" | "calculation_timeframe" | "wait_for_close"
+                ) {
+                    assert!(
+                        !inputs.iter().any(|input| input.id == *id),
+                        "{} {id}",
+                        saved.name
+                    );
+                    continue;
+                }
                 assert_eq!(
                     inputs
                         .iter()
@@ -1572,6 +1589,8 @@ mod tests {
     }
 
     /// Main templates without Symbol or Offset keep every saved input, style and value.
+    /// ZigZag and Trading Sessions, whose labels cannot follow another symbol or interval,
+    /// restore without those inputs.
     #[test]
     fn templates_saved_before_symbol_and_offset_restore_unchanged() {
         let factory = IndicatorFactory::new();
@@ -1609,7 +1628,21 @@ mod tests {
             let saved: StudyTemplate = serde_json::from_str(text).unwrap();
             let mut restored = saved.create().unwrap();
             let inputs = restored.inputs();
+            let follows = !matches!(saved.name.as_str(), "ZigZag" | "Trading Sessions");
             for (id, value) in &saved.inputs {
+                if !follows
+                    && matches!(
+                        id.as_str(),
+                        "calculation_symbol" | "calculation_timeframe" | "wait_for_close"
+                    )
+                {
+                    assert!(
+                        !inputs.iter().any(|input| input.id == *id),
+                        "{} {id}",
+                        saved.name
+                    );
+                    continue;
+                }
                 let expected = if saved.name == "Trading Sessions" {
                     let clock = |hour, minute| {
                         InputValue::TimeOfDay(
@@ -1644,16 +1677,20 @@ mod tests {
                     saved.name
                 );
             }
-            assert_eq!(
-                inputs
-                    .iter()
-                    .find(|input| input.id == "calculation_symbol")
-                    .unwrap()
-                    .value,
-                InputValue::Symbol(String::new()),
-                "{}",
-                saved.name
-            );
+            if follows {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == "calculation_symbol")
+                        .unwrap()
+                        .value,
+                    InputValue::Symbol(String::new()),
+                    "{}",
+                    saved.name
+                );
+            } else {
+                assert!(restored.data_requests().is_empty(), "{}", saved.name);
+            }
             if let Some(offset) = inputs.iter().find(|input| input.id == "plot_offset") {
                 assert_eq!(offset.value, InputValue::Integer(0), "{}", saved.name);
             }
@@ -1707,6 +1744,46 @@ mod tests {
                     .unwrap();
                 assert_eq!(again.plot_offset(0), 2);
             }
+        }
+    }
+
+    /// Guards #3898: a study whose outputs cannot follow another symbol or interval, saved with
+    /// one, restores on the chart's bars and requests no other series.
+    #[test]
+    fn templates_with_other_bars_inputs_restore_on_the_chart_bars() {
+        let factory = IndicatorFactory::new();
+        for name in ["Time Price Opportunity", "Analyst price forecast"] {
+            let mut saved =
+                StudyTemplate::from_study(&ConfiguredStudy::new(factory.create(name).unwrap()));
+            saved.inputs.retain(|(id, _)| {
+                !matches!(
+                    id.as_str(),
+                    "calculation_symbol" | "calculation_timeframe" | "wait_for_close"
+                )
+            });
+            let expected = saved.inputs.clone();
+            saved.inputs.extend([
+                ("calculation_symbol".into(), InputValue::Symbol("B".into())),
+                (
+                    "calculation_timeframe".into(),
+                    InputValue::Timeframe(Some(crate::model::Timeframe::Week1)),
+                ),
+                ("wait_for_close".into(), InputValue::Toggle(false)),
+            ]);
+            let restored = saved.create_with(&factory).unwrap();
+            assert!(restored.data_requests().is_empty(), "{name}");
+            assert!(
+                !restored.inputs().iter().any(|input| matches!(
+                    input.id.as_str(),
+                    "calculation_symbol" | "calculation_timeframe" | "wait_for_close"
+                )),
+                "{name}"
+            );
+            assert_eq!(
+                StudyTemplate::from_study(restored.as_ref()).inputs,
+                expected,
+                "{name}"
+            );
         }
     }
 

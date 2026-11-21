@@ -44,6 +44,8 @@ pub struct FilterResponse {
 pub struct FilterWidget {
     query: String,
     placeholder: String,
+    /// The placeholder is shown as given rather than translated.
+    placeholder_as_given: bool,
     show_clear_button: bool,
     show_icon: bool,
     icon_size: Option<f32>,
@@ -55,6 +57,7 @@ impl FilterWidget {
         Self {
             query: String::new(),
             placeholder: "Filter...".to_string(),
+            placeholder_as_given: false,
             show_clear_button: true,
             show_icon: true,
             icon_size: None,
@@ -72,6 +75,14 @@ impl FilterWidget {
     /// Set the placeholder text
     pub fn placeholder(mut self, text: impl Into<String>) -> Self {
         self.placeholder = text.into();
+        self.placeholder_as_given = false;
+        self
+    }
+
+    /// Set placeholder text that is already translated, or holds a name, and shows as given.
+    pub(crate) fn placeholder_as_given(mut self, text: impl Into<String>) -> Self {
+        self.placeholder = text.into();
+        self.placeholder_as_given = true;
         self
     }
 
@@ -124,10 +135,15 @@ impl FilterWidget {
     /// Show the filter widget
     pub fn show(&mut self, ui: &mut Ui) -> FilterResponse {
         let old_query = self.query.clone();
+        let placeholder = if self.placeholder_as_given {
+            self.placeholder.clone()
+        } else {
+            l10n::text(ui.ctx(), &self.placeholder)
+        };
         let response = search_field(
             ui,
             &mut self.query,
-            &self.placeholder,
+            &placeholder,
             self.show_icon
                 .then(|| self.icon_size.unwrap_or(DESIGN_TOKENS.sizing.icon_sm)),
             self.show_clear_button,
@@ -145,7 +161,7 @@ pub fn filter_input(ui: &mut Ui, query: &mut String) -> FilterResponse {
     let response = search_field(
         ui,
         query,
-        "Filter...",
+        &l10n::text(ui.ctx(), "Filter..."),
         Some(DESIGN_TOKENS.sizing.icon_sm),
         true,
     );
@@ -155,8 +171,9 @@ pub fn filter_input(ui: &mut Ui, query: &mut String) -> FilterResponse {
     }
 }
 
-/// A full-width text field with the search icon, of side `icon` when shown, and the clear
-/// button inside its frame. Escape clears the query while the field has focus.
+/// A full-width text field showing `placeholder` as given, with the search icon, of side `icon`
+/// when shown, and the clear button inside its frame. Escape clears the query while the field
+/// has focus.
 fn search_field(
     ui: &mut Ui,
     query: &mut String,
@@ -179,7 +196,7 @@ fn search_field(
 
             let margin = |icon: Option<f32>| icon.map_or(inset, |size| inset + size + gap) as i8;
             TextEdit::singleline(query)
-                .hint_text(l10n::text(ui.ctx(), placeholder))
+                .hint_text(placeholder)
                 .desired_width(f32::INFINITY)
                 .min_size(Vec2::new(0.0, ui.spacing().interact_size.y))
                 .align(Align2::LEFT_CENTER)
@@ -191,7 +208,7 @@ fn search_field(
                 .ui(ui)
         })
         .inner
-        .accessible_name(l10n::text(ui.ctx(), placeholder));
+        .accessible_name(placeholder);
 
     let icon_rect = |center_x: f32, size: f32| {
         Rect::from_center_size(pos2(center_x, response.rect.center().y), Vec2::splat(size))

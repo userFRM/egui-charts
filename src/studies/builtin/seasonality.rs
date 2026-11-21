@@ -626,6 +626,11 @@ impl Indicator for Seasonality {
         self.visible = visible;
     }
 
+    // Its remaining-month projection cannot follow source bars onto another symbol or interval.
+    fn draws_on_other_bars(&self) -> bool {
+        false
+    }
+
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
     }
