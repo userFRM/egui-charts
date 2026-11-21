@@ -396,9 +396,20 @@ pub enum FootprintColor {
     /// Sell and buy volume shaded separately, each in one of four strengths of its own colour by
     /// the quarter it falls in between the smallest and the largest volume of its side in the
     /// bar, or in the bars in view, or between zero and an entered volume, as
-    /// [`FootprintIntensity`] chooses. The POC row takes the text colour, the value area is two
+    /// [`FootprintIntensity`] chooses. A total-volume column instead uses one shade mixed from
+    /// the neutral colour, by the quarter of the total-volume range; chosen side shades do not
+    /// apply to it. The POC row takes the text colour, the value area is two
     /// dotted lines, and a side that dominates under the imbalance settings gets a strip along its outer edge.
     VolumeSteps,
+    /// The cell of the side that traded more in its row, in the buy or sell colour at half
+    /// opacity; the other cell, and every cell of a row whose sell and buy volumes are equal,
+    /// stays unfilled. Unknown-side volume takes no part. A column with one cell per row fills
+    /// its left half for sells and its right half for buys. Both numbers stay.
+    LargerSide,
+    /// Every sell cell in the sell colour and every buy cell in the buy colour at half opacity,
+    /// whatever was traded. A column with one cell per row fills its left half in the sell colour
+    /// and its right half in the buy colour.
+    Side,
 }
 
 /// What footprint cell shades and number sizes are measured against: the shades of
@@ -873,6 +884,11 @@ pub struct ChartTypeParams {
     /// Footprint: buy and sell colours of imbalance strips, imbalance colouring and stacked
     /// imbalance zones. None follows the buy or sell colour.
     pub footprint_imbalance_colors: [Option<egui::Color32>; 2],
+    /// Footprint: the four shades of the buy cells and of the sell cells under
+    /// [`FootprintColor::VolumeSteps`], weakest first. None mixes the shade from the buy or sell
+    /// colour and the chart background, as when the field is missing from a saved chart.
+    /// Total-volume cells mix their shade from the neutral colour and ignore these side shades.
+    pub footprint_step_colors: [[Option<egui::Color32>; 4]; 2],
     /// Footprint: instrument ticks per row; zero groups automatically with zoom. Rows sized by
     /// `footprint_row_atr` use it only until the chart holds a complete bar.
     pub footprint_row_ticks: u32,
@@ -1106,6 +1122,7 @@ impl Default for ChartTypeParams {
             footprint_intensity: FootprintIntensity::Bar,
             footprint_colors: [None; 4],
             footprint_imbalance_colors: [None; 2],
+            footprint_step_colors: [[None; 4]; 2],
             footprint_row_ticks: 0,
             footprint_row_atr: false,
             footprint_row_atr_length: 14,
@@ -1421,6 +1438,8 @@ mod tests {
                 "nodes": {"smoothing": 2, "prominence": 0.1}});
         let mut settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
+            "footprint_color_by": "LargerSide",
+            "footprint_step_colors": [[null, null, null, [1, 2, 3, 255]], [[4, 5, 6, 255], null, null, null]],
             "footprint_intensity": {"Volume": 2500.0},
             "footprint_extend_bars": 8,
             "footprint_auto_row_height": 24.0, "footprint_min_text_height": 10.0,
@@ -1530,6 +1549,7 @@ mod tests {
                     "footprint_auto_row_height",
                     "footprint_min_text_height",
                     "footprint_extend_bars",
+                    "footprint_step_colors",
                 ] {
                     assert!(fields.remove(name).is_some(), "{path}: {name}");
                 }
@@ -1539,6 +1559,7 @@ mod tests {
             expected.footprint_auto_row_height = 16.0;
             expected.footprint_min_text_height = 12.0;
             expected.footprint_extend_bars = None;
+            expected.footprint_step_colors = [[None; 4]; 2];
             // A sparse layout written and restored on main before these settings existed.
             let older = r#"{"charts":[{"bar_spacing":6.0,"chart_type":"VolumeFootprint","chart_type_params":{"footprint_color_by":"VolumeSteps","footprint_modes":["Ladder"],"footprint_naked_poc":true,"footprint_row_atr":false,"footprint_row_ticks":0},"drawings":{"drawings":[],"metadata":{"app_version":null,"created_at":1795116037269,"modified_at":1795116037269},"saved_by":17567378796323732970,"symbol":"","timeframe":null,"version":10},"extended_hours":false,"interval":null,"main_series_visible":true,"panes":[{"axes":{"hide_unused":true,"side":null},"collapsed":null,"main":true,"members":[0],"preserve":false,"scale":null,"scales":[],"stretch":3.0}],"right_offset":2.5,"settings":{"alerts":{"alert_color":[255,152,0,255],"close_toasts":true,"desktop_notifications":false,"notification_seconds":20,"play_sound":false,"show_active_only":true,"show_alert_labels":true,"show_alerts":true,"sound":"","sound_volume":1.0},"btns":{"navigation":"Hidden","pane":"VisibleOnMouseOver"},"candle_colors":{"body_down":[242,54,69,255],"body_up":[8,153,129,255],"border_down":[242,54,69,255],"border_up":[8,153,129,255],"color_by_previous_close":false,"show_body":true,"show_border":false,"show_wick":true,"wick_down":[242,54,69,255],"wick_up":[8,153,129,255]},"chart_basic_styles":{"background_color":[0,0,0,255],"background_gradient_bottom":[0,0,0,255],"background_gradient_top":[0,0,0,255],"background_type":"Solid"},"crosshair":{"color":[64,254,0,128],"line_style":"Dashed","line_width":1.0},"events":{"show_dividends":true,"show_earnings":false,"show_earnings_breaks":false,"show_economic_events":false,"show_ideas":true,"show_news":true,"show_news_notifications":false,"show_splits":true},"grid_lines":{"horizontal_color":[34,34,34,255],"mode":"Both","vertical_color":[34,34,34,255]},"margins":{"bottom_percent":10.0,"right_bars":2.5,"top_percent":10.0},"precision":"Default","scales_and_lines":{"allow_label_overlap":false,"auto_scale":true,"axis_layout":{"hide_unused":true,"side":null},"currency_unit_on_hover":false,"date_format":"Default","extended_session_price_color":[251,142,1,255],"indexed_to_100":false,"invert_scale":false,"lock_price_to_bar_ratio":false,"log_scale":false,"percentage_scale":false,"prev_close_line":{"color":null,"style":"Dotted","width":1.0},"price_line_source":"LastBar","price_line_style":"Dashed","price_line_width":1.0,"price_scale_left":false,"price_to_bar_ratio":1.0,"show_bid_ask":false,"show_bid_ask_lines":null,"show_countdown":true,"show_currency":true,"show_extended_session_price":true,"show_high_low":false,"show_high_low_lines":null,"show_last_price_change":false,"show_last_price_label":true,"show_plus_button":true,"show_prev_close":false,"show_prev_close_label":false,"show_price_line":true,"show_scale_mode_buttons":true,"show_study_names":false,"show_study_values":true,"show_symbol_name":false,"show_unit":true,"study_value_color":null,"symbol_price_color":null,"thousands_sep":"Comma","use_24_hour":true,"weekday_names":"Default"},"scales_appearance":{"font_family":"Proportional","font_size":12,"lines_color":[0,0,0,0],"text_color":[255,255,255,255]},"status_line":{"indicator_background_opacity":60,"show_change":true,"show_change_percent":true,"show_indicator_inputs":true,"show_indicator_titles":true,"show_indicator_values":true,"show_last_day_change":false,"show_logo":true,"show_market_status":true,"show_ohlc":true,"show_quote_boxes":true,"show_symbol":true,"show_volume":true,"title_as_description":true},"timezone":"UTC","trading":{"bid_ask_labels":false,"bracket_pnl":true,"bracket_pnl_unit":"Money","execution_sound":"","execution_sound_volume":1.0,"extend_lines":true,"include_in_image":false,"instant_orders":false,"label_alignment":"Right","notifications":"All","play_execution_sound":false,"position_pnl":true,"position_pnl_unit":"Money","reverse_button":true,"show_execution_labels":true,"show_executions":true,"show_orders":true,"show_positions":true},"watermark":{"color":[34,34,34,255],"mode":"ReplayMode"}},"studies":[],"symbol":""}],"mode":"Single","version":3}"#;
             let mut older_expected = ChartTypeParams {
@@ -1594,6 +1615,10 @@ mod tests {
             assert_eq!(legacy["footprint_extend_bars"], serde_json::Value::Null);
             assert_eq!(legacy["footprint_auto_row_height"], 16.0);
             assert_eq!(legacy["footprint_min_text_height"], 12.0);
+            assert_eq!(
+                legacy["footprint_step_colors"],
+                serde_json::json!([[null, null, null, null], [null, null, null, null]])
+            );
             assert_eq!(legacy["footprint_statistics"], false);
             assert_eq!(legacy["footprint_row_ticks"], 0);
             assert_eq!(legacy["footprint_row_atr"], false);

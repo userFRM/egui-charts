@@ -914,7 +914,7 @@ impl DemoApp {
         self.object_tree.state_mut().drawing_sort = settings
             .drawing_sort
             .iter()
-            .map(|(symbol, sort)| (DemoSymbol::current(symbol), sort.clone()))
+            .map(|(symbol, sort)| (DemoSymbol::current(symbol), *sort))
             .collect();
         self.update_theme(ctx);
         // Switching stops a replay the demo restored from its own storage.
@@ -1622,10 +1622,10 @@ mod tests {
             }
         };
         app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() / 2);
-        assert_eq!(app.replay_slots, [2]);
+        assert_eq!(app.replay_slots, [0, 1, 2, 3]);
         app.handle_layout_action(LayoutAction::SelectGrid(ChartLayoutMode::Single));
         assert!(app.replay.is_some(), "the replayed chart stays on screen");
-        assert_eq!(app.replay_slots, [0]);
+        assert_eq!(app.replay_slots, [2, 1, 0, 3]);
         assert_eq!((app.layout_slot, app.layout.active()), (0, 0));
         assert_eq!(app.chart.symbol(), "TOKENB");
         assert_eq!(app.state.symbol, "TOKENB");

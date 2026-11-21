@@ -301,6 +301,7 @@ impl CalendarPanel {
                 Vec::new()
             },
             importance: self.importance.filter(|_| economic),
+            symbols: Vec::new(),
         };
         feed.calendar(query, self.inbox.reply(self.request));
     }
