@@ -2,7 +2,7 @@
 //! stable, distinct content. A host answers these from its own data vendors.
 
 use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, TimeZone, Utc, Weekday};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use egui_charts::data::{
@@ -14,7 +14,7 @@ use egui_charts::model::{Bar, PostContent, Quote};
 use egui_charts::services::{
     ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, Events, NewChatRoom,
     NewChatRoomKind, Notification, NotificationTarget, Notifications, Posts, Profile, ProfileEvent,
-    ProfileId, Profiles, Quotes,
+    ProfileId, Profiles, Quotes, ShareKind, ShareLink, ShareOffer, Sharing,
 };
 
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
@@ -1228,6 +1228,35 @@ pub(super) fn seasonality(bars: &[Bar]) -> Seasonality {
         })
         .collect();
     Seasonality::new(years as u32, summaries)
+}
+
+/// Demo watchlist sharing, with placeholder links kept in memory until revoked.
+#[derive(Default)]
+pub(super) struct ListSharing(Mutex<(usize, HashSet<String>)>);
+
+impl Sharing for ListSharing {
+    fn offers(&self, kind: ShareKind) -> ShareOffer {
+        let mut offer = ShareOffer::new(kind == ShareKind::Watchlist, false);
+        offer.revoke = offer.link;
+        offer
+    }
+    fn shared(&self, kind: ShareKind, name: &str) -> bool {
+        kind == ShareKind::Watchlist && self.0.lock().unwrap().1.contains(name)
+    }
+    fn link(&self, _: ShareKind, name: &str, reply: Reply<ShareLink>) {
+        let mut state = self.0.lock().unwrap();
+        state.0 += 1;
+        state.1.insert(name.to_owned());
+        // There is no demo server; this reserved domain does not resolve.
+        reply.send(Ok(ShareLink::new(
+            format!("https://demo.invalid/watchlist/{}", state.0),
+            false,
+        )));
+    }
+    fn revoke(&self, _: ShareKind, name: &str, reply: Reply<()>) {
+        self.0.lock().unwrap().1.remove(name);
+        reply.send(Ok(()));
+    }
 }
 
 #[cfg(test)]

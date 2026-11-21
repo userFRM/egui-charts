@@ -964,7 +964,15 @@ impl DemoApp {
         app.top_toolbar.state.can_publish_ideas = true;
         app.top_toolbar.state.can_publish_image = true;
         app.watchlist.set_selected(symbol);
+        if let Some(active) = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, "watchlist_active"))
+        {
+            app.watchlist.set_active_list(active);
+        }
         app.watchlist.set_service(app.quotes.clone());
+        app.watchlist
+            .set_sharing(Arc::new(feeds::ListSharing::default()));
         app.watchlist.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.alert_evaluator.set_storage(app.storage.clone());
         app.alert_dialog.set_storage(app.alert_host.clone());
@@ -1840,6 +1848,7 @@ impl eframe::App for DemoApp {
             &self.chart.drawings().tool_defaults,
         );
         eframe::set_value(storage, "watchlists", &self.watchlist.lists());
+        eframe::set_value(storage, "watchlist_active", &self.watchlist.active_list());
         eframe::set_value(storage, "alerts", &self.alert_host.engine().alerts());
         eframe::set_value(
             storage,
@@ -4011,6 +4020,8 @@ impl DemoApp {
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
         self.menus
             .set_watchlists(self.watchlist.lists().iter().map(|list| list.name.as_str()));
+        self.menus
+            .set_active_watchlist(Some(self.watchlist.active_list()));
         self.hotlists
             .set_watchlists(self.watchlist.lists().iter().map(|list| list.name.as_str()));
         self.menus.set_layout_copies(self.layout_has_other_charts());
@@ -4710,6 +4721,14 @@ impl DemoApp {
                 self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::OpenLayout)
             }
             A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
+            A::AddToWatchlist => {
+                let symbol = self.chart.symbol().to_owned();
+                let list = self.watchlist.active_list();
+                self.handle_context_action(
+                    ctx,
+                    ChartContextAction::Chart(ContextMenuAction::AddToWatchlist { list, symbol }),
+                );
+            }
             A::NextWatchlistSymbol | A::PreviousWatchlistSymbol => {
                 let step = if action == A::NextWatchlistSymbol {
                     self.watchlist.select_next_symbol()
@@ -9420,6 +9439,133 @@ mod tests {
         }
     }
 
+    /// The real More menu exposes shared state and removes it once the demo host revokes it.
+    #[test]
+    fn watchlist_sharing_can_be_stopped_from_more() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.open_panel = Some(SidePanel::Watchlist);
+        let size = egui::vec2(1440.0, 900.0);
+        let click = |app: &mut DemoApp, label: &str| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+            let point = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .filter_map(|(_, node)| {
+                    (node.label() == Some(label) && node.role() != egui::accesskit::Role::Label)
+                        .then(|| node.bounds())
+                        .flatten()
+                })
+                .min_by(|a, b| a.y0.total_cmp(&b.y0))
+                .map(|rect| {
+                    egui::pos2(
+                        ((rect.x0 + rect.x1) / 2.0) as f32,
+                        ((rect.y0 + rect.y1) / 2.0) as f32,
+                    )
+                })
+                .unwrap_or_else(|| panic!("missing {label}"));
+            output.drop_without_applying_deltas();
+            ui_click(&ctx, size, point, |ui| {
+                app.ui(ui, &mut eframe::Frame::_new_kittest())
+            });
+        };
+        click(&mut app, "More");
+        click(&mut app, "Copy link");
+        let shown = ui_frame(&ctx, size, vec![], |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        assert!(shown.iter().any(|(text, _)| text == "Shared by link"));
+        click(&mut app, "Stop sharing");
+        let shown = ui_frame(&ctx, size, vec![], |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        assert!(shown.iter().any(|(text, _)| text == "Sharing stopped"));
+        assert!(!shown.iter().any(|(text, _)| text == "Stop sharing"));
+    }
+
+    /// The focused chart adds to the shown list, reports duplicates and restores that list.
+    #[test]
+    fn the_shown_watchlist_takes_alt_w_and_survives_a_restart() {
+        use eframe::App;
+        use egui::{Event, Key, Modifiers};
+        use egui_charts::model::Watchlist;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.watchlist = WatchlistPanel::new(vec![
+            Watchlist::from_text("One", "STOCKA"),
+            Watchlist::from_text("Two", "STOCKB"),
+        ]);
+        app.watchlist.set_active_list(1);
+        app.open_catalog_symbol("STOCKC");
+        settle(&mut app, &ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        ui_frame(&ctx, size, vec![], |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        let chart = app.chart.get_chart_mapping().rect.center();
+        ui_click(&ctx, size, chart, |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        for duplicate in [false, true] {
+            ui_frame(
+                &ctx,
+                size,
+                vec![
+                    Event::ModifiersChanged(Modifiers::ALT),
+                    Event::Key {
+                        key: Key::W,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::ALT,
+                    },
+                    Event::Key {
+                        key: Key::W,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers: Modifiers::ALT,
+                    },
+                ],
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+            assert_eq!(app.watchlist.lists()[0].to_text(), "STOCKA");
+            assert_eq!(app.watchlist.lists()[1].to_text(), "STOCKB,STOCKC");
+            if duplicate {
+                assert!(
+                    app.toasts
+                        .toasts()
+                        .iter()
+                        .any(|toast| toast.message == "STOCKC is already in that watchlist")
+                );
+            }
+        }
+        let mut storage = AppStorage::default();
+        app.save(&mut storage);
+        let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
+        cc.storage = Some(&storage);
+        let restored = DemoApp::new(&cc);
+        assert_eq!(restored.watchlist.active_list(), 1);
+        assert_eq!(
+            restored.watchlist.symbols().collect::<Vec<_>>(),
+            ["STOCKB", "STOCKC"]
+        );
+    }
+
     #[test]
     fn watchlist_shortcuts_follow_the_filtered_order_and_replay_keeps_its_keys() {
         use eframe::App;
@@ -9636,6 +9782,69 @@ mod tests {
             ),
             (SessionType::Full24x7, SessionType::Full24x7)
         );
+    }
+
+    /// The demo's chart settings reach the custom-session list and apply it to its chart.
+    #[test]
+    fn session_profile_custom_sessions_are_reachable_from_demo_settings() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.chart.set_chart_type(ChartType::SessionVolumeProfile);
+        app.open_chart_settings_dialog();
+        let size = egui::vec2(1440.0, 900.0);
+        let click = |app: &mut DemoApp, text: &str, scroll: bool| {
+            let show = |app: &mut DemoApp, events| {
+                ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+            };
+            for _ in 0..20 {
+                for _ in 0..5 {
+                    show(app, vec![]);
+                }
+                if let Some((_, rect)) = show(app, vec![]).into_iter().find(|(label, rect)| {
+                    label == text && (180.0..720.0).contains(&rect.center().y)
+                }) {
+                    ui_click(&ctx, size, rect.center(), |ui| app.show_dialogs(ui.ctx()));
+                    return;
+                }
+                assert!(scroll, "missing {text}");
+                show(
+                    app,
+                    vec![
+                        egui::Event::PointerMoved(egui::pos2(900.0, 450.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            source: egui::MouseWheelSource::Wheel,
+                            phase: egui::TouchPhase::Move,
+                            delta: egui::vec2(0.0, -100.0),
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+            }
+            panic!("missing {text}");
+        };
+        click(&mut app, "Chart hours", true);
+        click(&mut app, "Custom", false);
+        click(&mut app, "Add session", true);
+        // The footer is fixed and does not need scrolling.
+        let texts = ui_frame(&ctx, size, vec![], |ui| app.show_dialogs(ui.ctx()));
+        let point = texts
+            .iter()
+            .find(|(text, _)| text == "Ok")
+            .unwrap()
+            .1
+            .center();
+        ui_click(&ctx, size, point, |ui| app.show_dialogs(ui.ctx()));
+        let egui_charts::model::ProfileSession::Custom(custom) =
+            &app.chart.trade_profile_settings().session
+        else {
+            panic!("custom hours applied")
+        };
+        assert_eq!(custom.sessions.len(), 2);
     }
 
     /// The settings offer the futures data choices on the demo's futures contracts only;

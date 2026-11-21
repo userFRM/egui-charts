@@ -252,13 +252,15 @@ pub enum ExtendedSession {
     PreMarket,
     /// After the regular session closes.
     PostMarket,
+    /// Between the post-market close and the next pre-market open.
+    Overnight,
 }
 
 /// The latest trade of a symbol outside its regular session.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ExtendedHoursQuote {
-    /// Whether the trade was before or after the regular session.
+    /// Which extended session the trade was in.
     pub session: ExtendedSession,
     /// Last traded price. Its change is measured from the regular session's last price,
     /// [`Quote::last`].
