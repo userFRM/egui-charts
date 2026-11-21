@@ -4452,20 +4452,6 @@ impl DemoApp {
                 }
             },
             A::PasteDrawing => self.paste_drawing(),
-            A::CycleChartFocus | A::CycleChartFocusBack => {
-                let count = self
-                    .layout
-                    .mode
-                    .chart_count()
-                    .min(self.extra_charts.len() + 1);
-                let delta = if action == A::CycleChartFocus {
-                    1
-                } else {
-                    count - 1
-                };
-                self.activate_chart_slot((self.layout_slot + delta) % count);
-                self.layout.set_active(self.layout_slot);
-            }
             _ => {}
         }
     }
