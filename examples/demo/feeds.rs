@@ -2,12 +2,12 @@
 //! stable, distinct content. A host answers these from its own data vendors.
 
 use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, TimeZone, Utc, Weekday};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use egui_charts::data::{
     CalendarEvent, CalendarKind, CalendarQuery, FeedError, HistoryPage, HotlistEntry, HotlistQuery,
-    Importance, NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerOp,
+    Importance, NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerCondition,
     ScreenerQuery, ScreenerRow,
 };
 use egui_charts::model::{Bar, PostContent, Quote};
@@ -483,6 +483,14 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
     events
 }
 
+/// The distinct exchanges of the catalog, which the hotlists and the screener offer.
+pub(super) fn exchanges() -> BTreeSet<String> {
+    DemoSymbol::catalog()
+        .iter()
+        .map(|spec| spec.exchange.to_owned())
+        .collect()
+}
+
 /// The demo screener's column sets.
 pub(super) fn screener_sets() -> Vec<ScreenerColumnSet> {
     let column = ScreenerColumn::new;
@@ -493,6 +501,7 @@ pub(super) fn screener_sets() -> Vec<ScreenerColumnSet> {
                 column("price", "Price"),
                 column("change_percent", "Chg %"),
                 column("volume", "Volume"),
+                ScreenerColumn::text("exchange", "Exchange", exchanges()),
             ],
         ),
         ScreenerColumnSet::new(
@@ -517,23 +526,39 @@ pub(super) fn screen(
             _ => return None,
         })
     };
-    let known = |column: &String| value(&DemoSymbol::catalog()[0], column).is_some();
+    // Text needs no quote, so it filters before the quotes load.
+    let text = |spec: &DemoSymbol, column: &str| (column == "exchange").then_some(spec.exchange);
+    let known = |column: &String| {
+        let spec = &DemoSymbol::catalog()[0];
+        value(spec, column).is_some() || text(spec, column).is_some()
+    };
     if let Some(filter) = query.filters.iter().find(|filter| !known(&filter.column)) {
         return Err(FeedError::InvalidData(format!(
             "no column {} to filter",
             filter.column
         )));
     }
-    let mut rows: Vec<(f64, ScreenerRow)> = DemoSymbol::catalog()
+    let mut rows: Vec<((f64, &str), ScreenerRow)> = DemoSymbol::catalog()
         .iter()
         .filter(|spec| {
             query.filters.iter().all(|filter| {
-                value(spec, &filter.column).is_some_and(|v| match filter.op {
-                    ScreenerOp::Above => v > filter.value,
-                    ScreenerOp::Below => v < filter.value,
-                    // A comparison added later matches no row.
+                let number = value(spec, &filter.column);
+                let text = text(spec, &filter.column);
+                match &filter.condition {
+                    ScreenerCondition::Above(x) => number.is_some_and(|v| v > *x),
+                    ScreenerCondition::Below(x) => number.is_some_and(|v| v < *x),
+                    ScreenerCondition::Between(from, to) => {
+                        number.is_some_and(|v| (*from..=*to).contains(&v))
+                    }
+                    ScreenerCondition::Is(values) => {
+                        text.is_some_and(|t| values.iter().any(|v| v == t))
+                    }
+                    ScreenerCondition::IsNot(values) => {
+                        text.is_some_and(|t| values.iter().all(|v| v != t))
+                    }
+                    // A condition added later matches no row.
                     _ => false,
-                })
+                }
             })
         })
         .map(|spec| {
@@ -545,19 +570,21 @@ pub(super) fn screen(
                     ("price", Some(v)) => format!("{v:.decimals$}"),
                     ("change_percent", Some(v)) => format!("{v:+.2}%"),
                     ("volume" | "market_cap", Some(v)) => compact(v),
+                    ("exchange", _) => spec.exchange.to_owned(),
                     _ => String::new(),
                 })
                 .collect();
-            let key = query
-                .sort_by
-                .as_deref()
-                .and_then(|column| value(spec, column))
-                .unwrap_or(0.0);
+            let key = query.sort_by.as_deref().map_or((0.0, ""), |column| {
+                (
+                    value(spec, column).unwrap_or(0.0),
+                    text(spec, column).unwrap_or(""),
+                )
+            });
             (key, ScreenerRow::new(spec.symbol, values))
         })
         .collect();
     if query.sort_by.is_some() {
-        rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        rows.sort_by(|(a, _), (b, _)| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(b.1)));
         if query.descending {
             rows.reverse();
         }

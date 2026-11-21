@@ -967,12 +967,7 @@ impl DemoApp {
         app.screener.set_feed(app.live.clone());
         app.hotlists
             .set_refresh_interval(Some(std::time::Duration::from_secs(60)));
-        app.hotlists.set_exchanges(
-            DemoSymbol::catalog()
-                .iter()
-                .map(|spec| spec.exchange.to_owned())
-                .collect::<std::collections::BTreeSet<_>>(),
-        );
+        app.hotlists.set_exchanges(feeds::exchanges());
         app.hotlists
             .set_countries(feeds::COUNTRIES.map(String::from));
         app.hotlists.set_feed(app.live.clone());
@@ -5464,6 +5459,79 @@ mod tests {
             refreshed.iter().any(|(text, _)| text == &after),
             "{refreshed:?}"
         );
+    }
+
+    /// The demo screener filters its catalog by exchange: the host declares the text column and
+    /// its values, the filter row sends "is" and "is not" with the ticked values, and the feed
+    /// answers the matching symbols.
+    #[test]
+    fn demo_screener_filters_the_catalog_by_exchange() {
+        let ctx = egui::Context::default();
+        let now = "2026-11-18T15:30:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        app.open_panel = Some(SidePanel::Screener);
+        settle(&mut app, &ctx);
+        // The filter row paints before the table and its popups after it, so a control is the
+        // first panel text of its label and a popup choice the last.
+        let click = |app: &mut DemoApp, label: &str, last: bool| {
+            let texts = hotlist_frame(app, &ctx, 10.0, vec![]);
+            let mut found = texts
+                .iter()
+                .filter(|(text, rect)| text == label && rect.left() > 1000.0);
+            let rect = if last { found.last() } else { found.next() };
+            let point = rect
+                .unwrap_or_else(|| panic!("missing {label}: {texts:?}"))
+                .1
+                .center();
+            hotlist_pointer_click(app, &ctx, point, egui::PointerButton::Primary);
+        };
+        let tick = |app: &mut DemoApp, shown: &str, value: &str| {
+            egui::Popup::close_all(&ctx);
+            click(app, shown, false);
+            click(app, value, true);
+            egui::Popup::close_all(&ctx);
+        };
+        // The demo feed answers screens at once; the next frame shows the rows.
+        let shown = |app: &mut DemoApp| {
+            hotlist_frame(app, &ctx, 10.0, vec![]);
+            let texts = hotlist_frame(app, &ctx, 10.0, vec![]);
+            DemoSymbol::catalog()
+                .iter()
+                .filter(|spec| {
+                    texts
+                        .iter()
+                        .any(|(text, rect)| rect.left() > 1000.0 && text == spec.symbol)
+                })
+                .map(|spec| spec.symbol)
+                .collect::<Vec<_>>()
+        };
+        click(&mut app, "Price", false);
+        click(&mut app, "Exchange", true);
+        tick(&mut app, "Choose values", "Crypto");
+        tick(&mut app, "Crypto", "Forex");
+        click(&mut app, "Add filter", false);
+        let crypto_or_forex: Vec<_> = DemoSymbol::catalog()
+            .iter()
+            .filter(|spec| matches!(spec.exchange, "Crypto" | "Forex"))
+            .map(|spec| spec.symbol)
+            .collect();
+        assert_eq!(shown(&mut app), crypto_or_forex);
+
+        click(&mut app, "Exchange is Crypto, Forex  ×", false);
+        click(&mut app, "is", false);
+        click(&mut app, "is not", true);
+        tick(&mut app, "Choose values", "Crypto");
+        click(&mut app, "Add filter", false);
+        let others: Vec<_> = DemoSymbol::catalog()
+            .iter()
+            .filter(|spec| spec.exchange != "Crypto")
+            .map(|spec| spec.symbol)
+            .collect();
+        assert_eq!(shown(&mut app), others);
     }
 
     /// Row menus update the demo watchlist, and starring a list survives the real settings save
