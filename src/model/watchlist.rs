@@ -100,7 +100,7 @@ pub enum WatchlistItem {
     Symbol {
         /// Instrument identifier used by the host.
         symbol: String,
-        /// Optional user-assigned color flag.
+        /// The symbol's colour flag. `WatchlistPanel` keeps it equal in every list.
         flag: Option<WatchlistFlag>,
     },
     /// A section title grouping the symbols below it, up to the next section.
@@ -144,6 +144,8 @@ pub struct SkippedEntries {
 /// let mut list = Watchlist::new("Tech");
 /// list.favorite = true;
 /// list.show_descriptions = true;
+/// list.show_tickers = false;
+/// list.columns = Some(vec![WatchlistColumn::Last, WatchlistColumn::Volume]);
 /// list.column_widths.insert(WatchlistColumn::Last, 72.0);
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -163,6 +165,15 @@ pub struct Watchlist {
     /// no logo, before the symbol. On by default, also for a saved list without this setting.
     #[serde(default = "shown")]
     pub show_logos: bool,
+    /// Whether rows show tickers. Off, the host's nonblank description takes the ticker's
+    /// place, falling back to the ticker. On by default, including in older saves.
+    #[serde(default = "shown")]
+    pub show_tickers: bool,
+    /// Chosen compact quote columns, in [`WatchlistColumn::WIDE`] order after a menu edit.
+    /// `None`, including in older saves, uses the panel's columns, initially
+    /// [`WatchlistColumn::DEFAULT`]. Unknown column names are ignored when reading.
+    #[serde(default, deserialize_with = "known_column_choice")]
+    pub columns: Option<Vec<WatchlistColumn>>,
     /// The widths, in points, the user dragged quote columns to. The other columns share the
     /// room left, as they do by default. A column this release does not know is left out when
     /// reading.
@@ -174,9 +185,46 @@ pub struct Watchlist {
     pub host_column_widths: BTreeMap<String, f32>,
 }
 
-/// The logos setting of a list saved without one.
+/// Logos and tickers stay shown in lists saved before those settings existed.
 fn shown() -> bool {
     true
+}
+
+/// A column read by name, `None` for a name this release does not know.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Known(Option<WatchlistColumn>);
+impl<'de> Deserialize<'de> for Known {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Name;
+        impl Visitor<'_> for Name {
+            type Value = Known;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a watchlist column")
+            }
+            fn visit_str<E: de::Error>(self, name: &str) -> Result<Known, E> {
+                let column: Result<WatchlistColumn, E> =
+                    WatchlistColumn::deserialize(name.into_deserializer());
+                Ok(Known(column.ok()))
+            }
+        }
+        // Read as an identifier: a JSON key reads as one, and so does a variant name in
+        // other formats.
+        deserializer.deserialize_identifier(Name)
+    }
+}
+
+/// Reads chosen columns without rejecting a list saved by a newer release.
+fn known_column_choice<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<WatchlistColumn>>, D::Error> {
+    Ok(
+        Option::<Vec<Known>>::deserialize(deserializer)?.map(|columns| {
+            columns
+                .into_iter()
+                .filter_map(|Known(column)| column)
+                .collect()
+        }),
+    )
 }
 
 /// Reads column widths, leaving out the columns this release does not know, such as one a newer
@@ -184,28 +232,6 @@ fn shown() -> bool {
 fn known_columns<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<BTreeMap<WatchlistColumn, f32>, D::Error> {
-    /// A column read by name, `None` for a name this release does not know.
-    #[derive(PartialEq, Eq, PartialOrd, Ord)]
-    struct Known(Option<WatchlistColumn>);
-    impl<'de> Deserialize<'de> for Known {
-        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            struct Name;
-            impl Visitor<'_> for Name {
-                type Value = Known;
-                fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    formatter.write_str("a watchlist column")
-                }
-                fn visit_str<E: de::Error>(self, name: &str) -> Result<Known, E> {
-                    let column: Result<WatchlistColumn, E> =
-                        WatchlistColumn::deserialize(name.into_deserializer());
-                    Ok(Known(column.ok()))
-                }
-            }
-            // Read as an identifier: a JSON key reads as one, and so does a variant name in
-            // other formats.
-            deserializer.deserialize_identifier(Name)
-        }
-    }
     Ok(BTreeMap::<Known, f32>::deserialize(deserializer)?
         .into_iter()
         .filter_map(|(Known(column), width)| Some((column?, width)))
@@ -224,14 +250,16 @@ impl Watchlist {
             favorite: false,
             show_descriptions: false,
             show_logos: true,
+            show_tickers: true,
+            columns: None,
             column_widths: BTreeMap::new(),
             host_column_widths: BTreeMap::new(),
         }
     }
 
     /// A copy named after this list and `taken` names: "Name copy", then "Name copy 2" and so on.
-    /// Sections, symbol order, flags, the descriptions and logos settings and column widths carry
-    /// over; the copy is not starred.
+    /// Sections, symbol order, flags, the descriptions, logos, tickers and columns settings and
+    /// widths carry over; the copy is not starred.
     pub fn duplicate<'a>(&self, taken: impl IntoIterator<Item = &'a str>) -> Self {
         let taken: Vec<&str> = taken.into_iter().collect();
         let base = format!("{} copy", self.name);

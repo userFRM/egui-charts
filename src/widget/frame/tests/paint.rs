@@ -1,6 +1,63 @@
 use crate::widget::test_frames::{candle_ys, chart, frame, shapes};
 use egui::{Pos2, Rect, Shape};
 
+#[test]
+fn news_badge_has_a_distinct_icon_and_colour() {
+    use crate::model::{EventKind, TimeScaleEvent};
+    use crate::widget::SeriesId;
+    for dark in [false, true] {
+        let ctx = egui::Context::default();
+        ctx.set_visuals(if dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        });
+        let mut chart = chart(&[100.0], &[110.0]);
+        let kinds = [EventKind::News, EventKind::Economic, EventKind::Earnings];
+        let events = kinds
+            .iter()
+            .enumerate()
+            .map(|(index, kind)| {
+                TimeScaleEvent::new(
+                    kind.label(),
+                    chart.bars(SeriesId::MAIN)[90 + index * 2].time,
+                    *kind,
+                    kind.label(),
+                )
+            })
+            .collect();
+        chart.set_time_scale_events(events);
+        let mut visibility = chart.event_visibility().clone();
+        visibility.show_earnings = true;
+        visibility.show_economic_events = true;
+        chart.set_event_visibility(visibility);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let badges: Vec<_> = kinds
+            .iter()
+            .map(|kind| {
+                painted
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.text() == kind.label() => Some((
+                            text.pos + text.galley.size() * 0.5,
+                            text.galley.job.sections[0].format.color,
+                        )),
+                        _ => None,
+                    })
+                    .expect("event badge")
+            })
+            .collect();
+        assert_ne!(badges[0].1, badges[1].1);
+        assert_ne!(badges[0].1, badges[2].1);
+        assert!(painted.iter().any(|shape| matches!(shape, Shape::Path(path)
+            if path.closed && path.points.len() == 4 && path.visual_bounding_rect().contains(badges[0].0))));
+        for (centre, _) in &badges[1..] {
+            assert!(painted.iter().any(|shape| matches!(shape, Shape::Circle(circle) if circle.center.distance(*centre) < 1.0)));
+        }
+    }
+}
+
 /// Each chart of a layout carries the replay mark exactly while it replays itself.
 #[test]
 fn legend_marks_a_chart_only_while_it_replays() {
