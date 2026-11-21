@@ -924,7 +924,8 @@ mod tests {
             })
             .collect();
         // On the last day 100 holds 36 of 40 volume units, and four of eight TPOs.
-        // Its 0.25 row spans 99.875..100.125; the last row spans 159.875..160.125.
+        // 241 quarter-point ticks / 24 requested rows rounds up to 11 ticks per row. Keys
+        // floor(400/11)=36 through floor(640/11)=58 span 98.875..162.125, with POC 100.25.
         for (kind, mode, letters) in [
             (
                 ChartType::SessionVolumeProfile,
@@ -996,7 +997,12 @@ mod tests {
                     chart.set_start_idx(start);
                     draw(&mut chart, None);
                     let map = chart.get_chart_mapping();
-                    for price in [99.875, 160.125] {
+                    let edges = if kind == ChartType::SessionVolumeProfile {
+                        [98.875, 162.125]
+                    } else {
+                        [99.875, 161.875]
+                    };
+                    for price in edges {
                         assert!(
                             map.price
                                 .range()
@@ -1007,9 +1013,9 @@ mod tests {
                     if count <= 8 {
                         let range = map.price.range();
                         // The span takes 82% of the pane, with 8% below and 10% above.
-                        // Executed rows span 99.875..160.125; TPO rows of 2 end at 161.875.
+                        // Grouped execution rows span 98.875..162.125; TPO rows of 2 end at 161.875.
                         let (low, high) = if kind == ChartType::SessionVolumeProfile {
-                            (99.875 - 60.25 / 0.82 * 0.08, 160.125 + 60.25 / 0.82 * 0.1)
+                            (98.875 - 63.25 / 0.82 * 0.08, 162.125 + 63.25 / 0.82 * 0.1)
                         } else {
                             (99.875 - 62.0 / 0.82 * 0.08, 161.875 + 62.0 / 0.82 * 0.1)
                         };
@@ -1063,9 +1069,14 @@ mod tests {
                     }]
                     .time,
                 );
+                let poc = if kind == ChartType::SessionVolumeProfile {
+                    "POC 100.25"
+                } else {
+                    "POC 100.00"
+                };
                 assert!(
                     painted.iter().any(|s| matches!(&s.shape, Shape::Text(t)
-                    if t.galley.text().starts_with(&session) && t.galley.text().contains("POC 100.00") && t.galley.text().contains("VAH")
+                    if t.galley.text().starts_with(&session) && t.galley.text().contains(poc) && t.galley.text().contains("VAH")
                         && t.galley.text().contains("VAL") && t.galley.text().contains("below"))),
                     "cropped {kind:?} retains its central levels"
                 );

@@ -3898,14 +3898,17 @@ impl Chart {
                 if self.trade_profile_settings().poc
                     && let Some(poc) = profile.volume.poc()
                 {
-                    labels.push(("POC", poc as f64 * step));
+                    labels.push(("POC", (poc as f64 + 0.5) * step - tick * 0.5));
                 }
                 if let Some((low, high)) = self
                     .trade_profile_settings()
                     .value_area
                     .and_then(|s| profile.volume.value_area(s))
                 {
-                    labels.extend([("VAH", high as f64 * step), ("VAL", low as f64 * step)]);
+                    labels.extend([
+                        ("VAH", (high as f64 + 1.0) * step - tick * 0.5),
+                        ("VAL", low as f64 * step - tick * 0.5),
+                    ]);
                 }
                 let bars = &self.state.data().bars;
                 let first = bars.partition_point(|b| b.time < profile.range.start);
