@@ -339,7 +339,6 @@ impl Drawing {
                         | DrawingToolType::PriceNote
                         | DrawingToolType::Comment
                         | DrawingToolType::Signpost
-                        | DrawingToolType::Image
                         | DrawingToolType::Tweet
                         | DrawingToolType::Idea
                 )
