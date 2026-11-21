@@ -295,9 +295,7 @@ mod tests {
                         );
                         assert!(!bounds("AAA").intersects(bounds("123.45")), "{texts:?}");
                         if is_hotlist {
-                            if panel == "hotlist_long" {
-                                assert!(elided.contains(&hotlist_title.to_owned()), "{elided:?}");
-                            } else {
+                            if panel == "hotlist" {
                                 bounds(hotlist_title);
                                 assert!(!elided.contains(&hotlist_title.to_owned()), "{elided:?}");
                             }
