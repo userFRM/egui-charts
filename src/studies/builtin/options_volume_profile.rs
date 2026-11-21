@@ -1245,7 +1245,6 @@ impl Indicator for OptionsVolumeProfile {
         self.timeframe = Some(timeframe);
     }
     // The option chain belongs to the chart's underlying, so the profile cannot follow another symbol.
-    // The option chain belongs to the chart's underlying, so the profile cannot follow another symbol.
     fn draws_on_other_bars(&self) -> bool {
         false
     }
