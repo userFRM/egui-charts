@@ -452,6 +452,7 @@ impl AlertEvaluator {
                         clock: reader.clock().clone(),
                         instrument: reader.instrument(),
                         timeframe: run.subject(symbol, Some(request)).timeframe,
+                        chart: None,
                     }
                 })
                 .collect();

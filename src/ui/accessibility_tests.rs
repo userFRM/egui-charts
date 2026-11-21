@@ -550,6 +550,7 @@ fn dialogs_expose_titles_and_label_their_fields() {
             &[
                 (Role::ComboBox, "Scale mode"),
                 (Role::CheckBox, "Invert scale"),
+                (Role::CheckBox, "Custom"),
             ],
         ),
         (
@@ -809,8 +810,9 @@ fn click_either<S>(harness: &mut Harness<'_, S>, name: &str) {
     harness.run();
 }
 
-/// Names users type are shown as saved under a translator; the library's own names, such as
-/// the tool name of an unlabelled drawing and the default layout and list names, are translated.
+/// Names users type and text the host gives are shown as written under a translator; the
+/// library's own names, such as the tool name of an unlabelled drawing, the default layout and
+/// list names and the chat composer's placeholder, are translated once.
 #[test]
 fn user_names_show_as_saved_under_a_translator() {
     use super::top_toolbar::components::{LayoutMenu, SettingsDialog};
@@ -960,6 +962,72 @@ fn user_names_show_as_saved_under_a_translator() {
             },
             &["Active"],
             &["Watchlist"],
+        ),
+        (
+            "chats panel",
+            || {
+                use crate::data::Reply;
+                use crate::services::{
+                    ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, Events,
+                };
+                /// A host with one room, one message and one member, finding one more user.
+                struct Host;
+                impl Chats for Host {
+                    fn watch(&self, events: Events<ChatEvent>) {
+                        let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(570);
+                        let message = ChatMessage::new("Desk", "Ann", time, "Close");
+                        events.push(ChatEvent::Message(message));
+                        events.push(ChatEvent::Members {
+                            room: "Desk".into(),
+                            members: vec![ChatUser::new("u1", "Bo")],
+                        });
+                    }
+                    fn send(&self, _: String, _: String, reply: Reply<()>) {
+                        reply.send(Ok(()));
+                    }
+                    fn capabilities(&self) -> ChatCapabilities {
+                        ChatCapabilities {
+                            direct_messages: true,
+                            manage_members: true,
+                            ..Default::default()
+                        }
+                    }
+                    fn find_users(&self, _: String, reply: Reply<Vec<ChatUser>>) {
+                        reply.send(Ok(vec![ChatUser::new("u2", "Cy")]));
+                    }
+                }
+                let mut panel = super::widget_bar::ChatsPanel::new();
+                panel.set_service(std::sync::Arc::new(Host));
+                let mut harness = translated(panel, |ui, panel| {
+                    panel.poll(ui.ctx());
+                    panel.show(ui);
+                });
+                let mut texts = shown(&harness);
+                harness.get_by_label("T:Members").click();
+                harness.run();
+                texts.extend(shown(&harness));
+                harness.get_by_label("T:New chat").click();
+                harness.run();
+                // A typed character reaches the field only once it has focus.
+                harness
+                    .get_by_role_and_label(Role::TextInput, "T:Find people")
+                    .focus();
+                harness.run();
+                harness
+                    .get_by_role_and_label(Role::TextInput, "T:Find people")
+                    .type_text("C");
+                harness.run();
+                texts.extend(shown(&harness));
+                click_either(&mut harness, "Cy");
+                texts.extend(shown(&harness));
+                harness.get_by_label("T:New chat").click();
+                harness.run();
+                click_either(&mut harness, "Desk");
+                texts.extend(shown(&harness));
+                texts
+            },
+            &["Desk", "Ann", "09:30", "Close", "Bo", "Cy"],
+            &["Message Desk"],
         ),
     ];
     let mut wrong = Vec::new();

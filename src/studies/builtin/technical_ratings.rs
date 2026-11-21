@@ -1488,6 +1488,7 @@ mod tests {
             clock: BarClock::new(request.timeframe.unwrap()),
             instrument: None,
             timeframe: request.timeframe.unwrap(),
+            chart: None,
         };
         let sources = [
             source(&requests[0], &falling[..]),

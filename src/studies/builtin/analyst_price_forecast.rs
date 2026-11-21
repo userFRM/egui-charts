@@ -102,6 +102,11 @@ impl Indicator for AnalystPriceForecast {
         self.visible = visible;
     }
 
+    // The chart draws the targets of its own symbol.
+    fn draws_on_other_bars(&self) -> bool {
+        false
+    }
+
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
     }

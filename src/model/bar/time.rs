@@ -1,13 +1,9 @@
-//! Fractional index and UTC interpolation for sorted bars.
+//! Fractional index and UTC interpolation for sorted bars. Times are measured from an actual
+//! bar, which keeps sub-millisecond execution times.
 
 use super::Bar;
 use crate::model::{Timeframe, TimezoneId, local_instant, local_time};
 use chrono::{DateTime, Datelike, Duration, Months, NaiveDateTime, NaiveTime, Utc};
-
-// Use differences relative to an actual bar, preserving sub-millisecond execution times.
-fn seconds(duration: Duration) -> f64 {
-    duration.num_seconds() as f64 + duration.subsec_nanos() as f64 / 1e9
-}
 
 fn segment(bars: &[Bar], index: usize) -> (usize, usize) {
     let mut right = index + 1;
@@ -37,17 +33,18 @@ fn edge_step(bars: &[Bar], at: usize, timeframe: Option<Timeframe>) -> (f64, f64
         .map(|tf| tf.duration())
         .filter(|d| *d > Duration::zero())
     {
-        seconds(duration)
+        duration.as_seconds_f64()
     } else {
         let (left, right) = segment(bars, at);
         // Keep the per-index spacing of repeated edge elements.
         if right - left > 1 {
-            let step = seconds(bars[right].time - bars[left].time) / (right - left) as f64;
+            let step =
+                (bars[right].time - bars[left].time).as_seconds_f64() / (right - left) as f64;
             return (step, step);
         }
         let mut steps = [0.0; 15];
         for (step, pair) in steps.iter_mut().zip(sample.windows(2)) {
-            *step = seconds(pair[1].time - pair[0].time);
+            *step = (pair[1].time - pair[0].time).as_seconds_f64();
         }
         steps
             .into_iter()
@@ -64,7 +61,7 @@ fn edge_step(bars: &[Bar], at: usize, timeframe: Option<Timeframe>) -> (f64, f64
         return (step, step);
     }
     // Slots stay on the grid of the regular pair nearest the edge, past a partial edge bar.
-    let regular = |pair: &&[Bar]| seconds(pair[1].time - pair[0].time) == step;
+    let regular = |pair: &&[Bar]| (pair[1].time - pair[0].time).as_seconds_f64() == step;
     let behind = if at == 0 {
         sample
             .windows(2)
@@ -77,7 +74,10 @@ fn edge_step(bars: &[Bar], at: usize, timeframe: Option<Timeframe>) -> (f64, f64
             .find(regular)
             .map(|pair| bars[at].time - pair[1].time)
     };
-    (step - behind.map_or(0.0, seconds) % step, step)
+    (
+        step - behind.map_or(0.0, Duration::as_seconds_f64) % step,
+        step,
+    )
 }
 
 fn calendar_months(timeframe: Option<Timeframe>) -> Option<u32> {
@@ -181,7 +181,7 @@ pub(crate) fn time_at_with_timeframe(
                 return Some(left);
             }
             let right = shift_months(bars[at].time, count as i64 + i64::from(months), timezone)?;
-            return add_seconds(left, (offset - whole) * seconds(right - left));
+            return add_seconds(left, (offset - whole) * (right - left).as_seconds_f64());
         }
         let (near, step) = edge_step(bars, at, timeframe);
         let slots = offset.abs();
@@ -197,7 +197,7 @@ pub(crate) fn time_at_with_timeframe(
     }
     add_seconds(
         bars[at].time,
-        offset * seconds(bars[at + 1].time - bars[at].time),
+        offset * (bars[at + 1].time - bars[at].time).as_seconds_f64(),
     )
 }
 
@@ -239,10 +239,14 @@ pub(crate) fn index_at_with_timeframe(
                 return Some(at as f64 + whole as f64);
             }
             let right = shift_months(origin, (whole + 1) * i64::from(months), timezone)?;
-            return Some(at as f64 + whole as f64 + seconds(time - left) / seconds(right - left));
+            return Some(
+                at as f64
+                    + whole as f64
+                    + (time - left).as_seconds_f64() / (right - left).as_seconds_f64(),
+            );
         }
         let (near, step) = edge_step(bars, at, timeframe);
-        let distance = seconds(time - origin);
+        let distance = (time - origin).as_seconds_f64();
         let slots = if distance.abs() <= near {
             distance.abs() / near
         } else {
@@ -251,8 +255,8 @@ pub(crate) fn index_at_with_timeframe(
         return Some(at as f64 + slots.copysign(distance));
     }
     let (left, right) = segment(bars, at.saturating_sub(1));
-    let step = seconds(bars[right].time - bars[left].time) / (right - left) as f64;
-    Some(left as f64 + seconds(time - bars[left].time) / step)
+    let step = (bars[right].time - bars[left].time).as_seconds_f64() / (right - left) as f64;
+    Some(left as f64 + (time - bars[left].time).as_seconds_f64() / step)
 }
 
 /// Positions share the same interpolation and edge cadence as keys mapped through row indices.
@@ -262,7 +266,7 @@ pub(crate) fn numeric_positions(bars: &[Bar], unit: Option<f64>) -> crate::model
         return crate::model::NumericPositions::new(Vec::new(), unit, DateTime::UNIX_EPOCH);
     };
     let last = bars.len() - 1;
-    let span = seconds(bars[last].time - first.time);
+    let span = (bars[last].time - first.time).as_seconds_f64();
     // A lone key has no gap to retain, so its key unit lasts only until keys differ.
     let retained = unit.or_else(|| (last > 0 && span > 0.0).then_some(span / last as f64));
     let unit = retained.unwrap_or(1.0);
@@ -273,7 +277,7 @@ pub(crate) fn numeric_positions(bars: &[Bar], unit: Option<f64>) -> crate::model
     points.extend([offset - (near + step) / unit, offset - near / unit]);
     points.extend(
         bars.iter()
-            .map(|bar| offset + seconds(bar.time - first.time) / unit),
+            .map(|bar| offset + (bar.time - first.time).as_seconds_f64() / unit),
     );
     let (near, step) = edge_step(bars, last, None);
     points.extend([

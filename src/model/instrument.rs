@@ -184,9 +184,12 @@ pub struct Instrument {
     pub pip_size: Option<f64>,
     /// Decimals of price labels.
     pub price_decimals: Option<u8>,
-    /// Decimals of volume readouts, including abbreviated K/M/B values, of studies in volume
-    /// units without a precision chosen in their settings, of measured volume, of footprint
-    /// volumes and of volume profile row values.
+    /// Decimals of volume readouts, of studies in volume units without a precision chosen in
+    /// their settings, of measured volume, of footprint volumes and of volume profile row values.
+    /// They describe the whole number: an abbreviated K, M or B value keeps the decimals its
+    /// readout writes without them when they are fewer, one in footprint cells and statistics and
+    /// two elsewhere, and takes them when they are more. At 0 a volume of 1,234.56 reads 1.23K,
+    /// at 3 it reads 1.235K. Trade counts and open interest keep their own format.
     pub volume_decimals: Option<u8>,
     /// Currency of prices, such as "USD". A code that mixes upper and lower case names a minor
     /// unit and matches only itself, such as "GBp" for pence against "GBP"; other codes match
