@@ -1240,6 +1240,7 @@ mod tests {
         params.footprint_modes = vec![FootprintMode::BidAsk, FootprintMode::Delta];
         params.footprint_profile = true;
         params.footprint_color_by = FootprintColor::Delta;
+        params.footprint_step_colors[0][3] = Some(egui::Color32::GOLD);
         params.footprint_intensity = FootprintIntensity::Volume(500.0);
         params.footprint_auto_row_height = 24.0;
         params.footprint_min_text_height = 14.0;
@@ -1465,6 +1466,7 @@ mod tests {
             (
                 &params.footprint_modes,
                 params.footprint_color_by,
+                params.footprint_step_colors,
                 params.footprint_auto_row_height,
                 params.footprint_min_text_height,
                 params.footprint_font_size,
@@ -1473,6 +1475,7 @@ mod tests {
             (
                 &vec![FootprintMode::BidAsk, FootprintMode::Delta],
                 FootprintColor::Delta,
+                [[None, None, None, Some(egui::Color32::GOLD)], [None; 4]],
                 24.0,
                 14.0,
                 [9.0, 14.0],
