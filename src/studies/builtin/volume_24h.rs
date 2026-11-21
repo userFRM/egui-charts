@@ -229,7 +229,7 @@ impl Volume24h {
         if span > 0 && span <= day && day % span == 0 {
             return None;
         }
-        lower_interval::lower_timeframe(&self.clock, None)
+        lower_interval::below(&self.clock)
     }
 
     /// Whether converting the latest window, whose bars open at `times`, lacks a rate, with

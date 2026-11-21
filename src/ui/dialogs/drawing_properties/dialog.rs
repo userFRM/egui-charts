@@ -774,6 +774,8 @@ mod tests {
                 (Tool::HorizontalLine, false, false, true, (true, true)),
                 (Tool::Rect, true, true, true, (true, true)),
                 (Tool::Brush, true, false, false, (true, true)),
+                (Tool::Curve, true, true, false, (true, true)),
+                (Tool::DoubleCurve, true, true, false, (true, true)),
                 (Tool::TrendLine, false, true, true, (true, true)),
                 (Tool::TrendAngle, false, true, true, (true, true)),
                 (Tool::TextLabel, false, false, true, (false, false)),
@@ -782,6 +784,16 @@ mod tests {
                 (Tool::ArrowMarkDown, false, false, true, (false, false)),
                 (Tool::FibonacciChannel, true, false, true, (false, false)),
                 (Tool::Pitchfork, false, true, false, (true, false)),
+                (Tool::SchiffPitchfork, false, true, false, (true, false)),
+                (
+                    Tool::ModifiedSchiffPitchfork,
+                    false,
+                    true,
+                    false,
+                    (true, false),
+                ),
+                (Tool::InsidePitchfork, false, true, false, (true, false)),
+                (Tool::Pitchfan, false, false, false, (true, false)),
                 (Tool::Tweet, true, false, true, (false, true)),
                 (Tool::Sticker, false, false, false, (false, false)),
                 (Tool::FontIcon, false, false, false, (false, false)),
@@ -802,6 +814,16 @@ mod tests {
                 for (label, present) in [
                     ("Fill", fill),
                     ("Extend", extend),
+                    (
+                        "Extend lines",
+                        matches!(
+                            tool,
+                            Tool::Pitchfork
+                                | Tool::SchiffPitchfork
+                                | Tool::ModifiedSchiffPitchfork
+                                | Tool::InsidePitchfork
+                        ),
+                    ),
                     ("Text", text),
                     (
                         "Color",
@@ -809,6 +831,10 @@ mod tests {
                             tool,
                             Tool::FibonacciChannel
                                 | Tool::Pitchfork
+                                | Tool::SchiffPitchfork
+                                | Tool::ModifiedSchiffPitchfork
+                                | Tool::InsidePitchfork
+                                | Tool::Pitchfan
                                 | Tool::Tweet
                                 | Tool::Sticker
                                 | Tool::GhostFeed
@@ -832,6 +858,74 @@ mod tests {
                 }
                 dialog.close();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
+            }
+        }
+    }
+
+    /// The forward switch previews, survives templates and commits once, or restores on Cancel.
+    #[test]
+    fn fork_extension_controls_preview_cancel_and_commit() {
+        use crate::drawings::PitchforkConfig;
+        use egui_kittest::{Harness, kittest::Queryable};
+        // The four forks share the row, whose presence the table above checks per tool.
+        let tool = Tool::Pitchfork;
+        for original in [Some(PitchforkConfig::default()), None] {
+            for confirm in [false, true] {
+                let mut chart = Chart::new(BarData::new());
+                let mut drawing = Drawing::new(7, tool);
+                drawing.pitchfork = original.clone();
+                drawing.line_style = crate::model::LineStyle::Dashed;
+                drawing.chart_points = vec![ChartPoint::new(1.0, 100.0); 3];
+                let mut expected = super::super::tabs::pitchfork_shown(&drawing);
+                expected.extend_lines = false;
+                assert!(
+                    expected.levels.iter().all(|level| level.line_style
+                        == if original.is_none() {
+                            crate::model::LineStyle::Dashed
+                        } else {
+                            crate::model::LineStyle::Solid
+                        }),
+                    "{tool:?}: editing reach keeps the drawn patterns"
+                );
+                chart.drawings_mut().drawings.push(drawing);
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open_for_chart(&chart, DrawingId(7));
+                let mut h = Harness::builder()
+                    .with_size(egui::vec2(1440.0, 900.0))
+                    .with_accessibility_check(false)
+                    .allow_missing_glyphs()
+                    .build_ui_state(
+                        |ui, (chart, dialog): &mut (Chart, DrawingPropertiesDialog)| {
+                            dialog.show_and_apply(ui.ctx(), chart);
+                        },
+                        (chart, dialog),
+                    );
+                h.run();
+                assert_eq!(h.state().0.drawings().drawings[0].pitchfork, original);
+                h.get_by_role_and_label(egui::Role::CheckBox, "Extend lines")
+                    .click();
+                h.run();
+                assert_eq!(
+                    h.state().0.drawings().drawings[0].pitchfork,
+                    Some(expected.clone())
+                );
+                assert!(!h.state().0.can_undo());
+                let template = h.state().1.current_template().unwrap();
+                let template: DrawingTemplate =
+                    serde_json::from_str(&serde_json::to_string(&template).unwrap()).unwrap();
+                let mut peer = Drawing::new(8, tool);
+                template.apply_to(&mut peer).unwrap();
+                assert_eq!(peer.pitchfork, Some(expected));
+                if confirm {
+                    h.get_by_role_and_label(egui::Role::Button, "Ok").click();
+                    h.run();
+                    assert!(h.state_mut().0.undo());
+                    assert!(!h.state().0.can_undo());
+                } else {
+                    h.state_mut().1.close();
+                    h.run();
+                }
+                assert_eq!(h.state().0.drawings().drawings[0].pitchfork, original);
             }
         }
     }

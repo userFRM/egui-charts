@@ -152,6 +152,7 @@ impl DemoApp {
             return;
         }
         self.stop_live_strategy();
+        self.follow_instrument_tick();
         let bars = self.chart.bars(SeriesId::MAIN);
         // The newest bar can still change. Bound this synchronous demonstration to 121 opens.
         let completed = &bars[..bars.len().saturating_sub(1)];
@@ -162,13 +163,6 @@ impl DemoApp {
         }
         let mut report = sample_backtest(&self.state.symbol, self.state.timeframe, source);
         report.currency = self.chart.instrument().and_then(|i| i.currency.clone());
-        if let Some(tick) = self.chart.instrument().and_then(|i| i.tick_size) {
-            let mut settings = self.strategy_report.settings().clone();
-            settings.price_increment = tick;
-            if let Err(error) = self.strategy_report.set_settings(settings) {
-                log::warn!("Cannot use the instrument's price increment: {error}");
-            }
-        }
         self.strategy_report.set_report(Some(report), source);
         self.strategy_report
             .select_strategy("Consecutive Up/Down")
@@ -178,8 +172,33 @@ impl DemoApp {
         self.refresh_strategy_signals();
     }
 
+    /// Sets the tester's price increment to the chart instrument's tick size once per instrument,
+    /// so that an increment typed afterwards holds until the instrument changes.
+    fn follow_instrument_tick(&mut self) {
+        let Some(instrument) = self.chart.instrument() else {
+            return;
+        };
+        let tick = instrument
+            .tick_size
+            .filter(|tick| tick.is_finite() && *tick > 0.0);
+        let followed = (instrument.symbol.clone(), tick);
+        if self.strategy_instrument.as_ref() == Some(&followed) {
+            return;
+        }
+        if let Some(tick) = tick {
+            let mut settings = self.strategy_report.settings().clone();
+            settings.price_increment = tick;
+            // An invalid form refuses every change; try again once it is valid.
+            if self.strategy_report.set_settings(settings).is_err() {
+                return;
+            }
+        }
+        self.strategy_instrument = Some(followed);
+    }
+
     pub(super) fn show_strategy_report(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         self.update_live_strategy();
+        self.follow_instrument_tick();
         if self.strategy_report.report().is_none() {
             return;
         }
@@ -599,6 +618,112 @@ mod tests {
         assert_eq!(app.strategy_report.report(), Some(&report));
     }
 
+    #[test]
+    fn tester_price_increment_follows_the_chart_instrument() {
+        let ctx = egui::Context::default();
+        let now = "2026-11-03T15:00:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        super::super::tests::settle(&mut app, &ctx);
+        app.run_sample_backtest();
+        let frame = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_strategy_report(ui, app.theme.ui.panel_bg),
+            )
+        };
+        let increment = |app: &DemoApp| app.strategy_report.settings().price_increment;
+        frame(&mut app, vec![]).drop_without_applying_deltas();
+        assert_eq!(increment(&app), 0.01);
+        app.switch_symbol("FOREXA");
+        super::super::tests::settle(&mut app, &ctx);
+        frame(&mut app, vec![]).drop_without_applying_deltas();
+        assert_eq!(increment(&app), 0.0001, "FOREXA trades in ten-thousandths");
+        app.strategy_report
+            .select_strategy("Keltner Channels")
+            .unwrap();
+        let output = frame(&mut app, vec![]);
+        let pos = text_at(&output, "Run");
+        output.drop_without_applying_deltas();
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    Event::PointerMoved(pos),
+                    Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            )
+            .drop_without_applying_deltas();
+        }
+        for _ in 0..100 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
+        assert!(!app.strategy_report.is_stale(), "the run completes");
+        let report = app.strategy_report.report().unwrap().clone();
+        let bars = app.chart.bars(SeriesId::MAIN).to_vec();
+        // A buy stop that a bar reaches after opening below it fills at the stop itself.
+        let mut stops = 0;
+        for trade in report
+            .trades
+            .iter()
+            .filter(|trade| trade.side == OrderSide::Buy)
+        {
+            let entry = bars
+                .iter()
+                .position(|bar| bar.time == trade.entry_time)
+                .unwrap();
+            let stop = trade.entry_price;
+            if stop <= bars[entry].open + 1e-9 {
+                continue;
+            }
+            // No bar since the signal bar reached the stop, so the latest bar within a tick of
+            // it is the signal bar.
+            let signal = bars[..entry]
+                .iter()
+                .rev()
+                .find(|bar| bar.high > stop - 0.00015)
+                .unwrap();
+            assert!(
+                (stop - (signal.high + 0.0001)).abs() < 1e-9,
+                "stop {stop} over the high {}",
+                signal.high
+            );
+            stops += 1;
+        }
+        assert!(stops > 0, "a long stop fills inside a bar");
+        app.switch_symbol("SAMPLE");
+        super::super::tests::settle(&mut app, &ctx);
+        frame(&mut app, vec![]).drop_without_applying_deltas();
+        assert_eq!(increment(&app), 0.01);
+        // A typed increment holds on the same symbol, also when the sample backtest runs again.
+        let mut settings = app.strategy_report.settings().clone();
+        settings.price_increment = 0.05;
+        app.strategy_report.set_settings(settings).unwrap();
+        for _ in 0..3 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
+        assert_eq!(increment(&app), 0.05, "frames");
+        app.run_sample_backtest();
+        frame(&mut app, vec![]).drop_without_applying_deltas();
+        assert_eq!(increment(&app), 0.05, "sample rerun");
+        app.switch_symbol("FOREXA");
+        super::super::tests::settle(&mut app, &ctx);
+        frame(&mut app, vec![]).drop_without_applying_deltas();
+        assert_eq!(increment(&app), 0.0001, "second switch");
+    }
+
     fn fills_visible(
         output: &FullOutput,
         chart: &egui_charts::Chart,
@@ -757,6 +882,10 @@ mod tests {
                 let output = frame(&mut app, vec![]);
                 assert_eq!(fills_visible(&output, &app.chart, last), [false, false]);
                 let first = text_at(&output, "1");
+                // At 640 px the column starts beyond the visible part of the list.
+                if width == 1440.0 {
+                    text_at(&output, "Cumulative profit");
+                }
                 output.drop_without_applying_deltas();
                 click(&mut app, first);
                 assert_eq!(app.state.symbol, report.symbol);

@@ -33,6 +33,11 @@ pub struct DrawingProps {
     pub save_as_default: bool,
     /// Primary color
     pub color: Color32,
+    /// The text colour last picked under Color in the Style tab, for a Text or Anchored text with
+    /// a text colour of its own. While it matches the edited text colour, applying gives its hue
+    /// to every selected drawing, as a Color pick does on other tools. Properties assembled by
+    /// hand leave it `None`.
+    pub color_row_text_pick: Option<[u8; 4]>,
     /// Line width (1-10)
     pub line_width: f32,
     /// Line style
@@ -63,6 +68,7 @@ impl Default for DrawingProps {
             coordinates: CoordinatesState::default(),
             save_as_default: false,
             color: crate::theme::Theme::default().ui.accent,
+            color_row_text_pick: None,
             line_width: 1.0,
             line_style: LineStyle::Solid,
             fill_color: None,
@@ -197,17 +203,20 @@ impl DrawingProps {
             .iter()
             .find(|d| d.id == id.0)
             .ok_or("Drawing was removed")?;
-        if !target.accepts_user_edits()
+        if !chart.drawings().accepts_user_edits(target)
             && (self.save_as_default
                 || !chart.drawings().is_selected(id.0)
                 || !chart.drawings().drawings.iter().any(|drawing| {
-                    drawing.accepts_user_edits() && chart.drawings().is_selected(drawing.id)
+                    chart.drawings().accepts_user_edits(drawing)
+                        && chart.drawings().is_selected(drawing.id)
                 }))
         {
-            return Err(if target.user_edit_enabled {
-                "Unlock the drawing before editing its properties"
-            } else {
+            return Err(if !target.user_edit_enabled {
                 "This drawing cannot be edited"
+            } else if chart.drawings().is_locked() {
+                "Unlock all drawings before editing its properties"
+            } else {
+                "Unlock the drawing before editing its properties"
             });
         }
         let adds_position_stop = matches!(
@@ -232,18 +241,28 @@ impl DrawingProps {
             })
         });
         let [r, g, b, a] = self.color_rgba();
-        let [tr, tg, tb, _] = target.color;
-        // Without tool settings only the paint colour is held, and it reads back as another hue
-        // at each opacity: the hue was edited unless one RGB paints both it and the target's.
-        let hue_edited = [r, g, b] != [tr, tg, tb]
-            && (self.tool_settings.is_some() || !self.keeps_hue_of(target.color32()));
+        // Only a recorded Color-row pick propagates text colour through the whole selection.
+        let text_pick = self
+            .tool_settings
+            .as_ref()
+            .and_then(|template| template.settings.text_color_override())
+            .zip(target.text_color_override())
+            .filter(|(picked, _)| self.color_row_text_pick == Some(*picked));
+        let hue_edited = if let Some((picked, shown)) = text_pick {
+            picked[..3] != shown[..3]
+        } else {
+            // Without tool settings only the paint colour is held, and it reads back as another
+            // hue at each opacity: the hue was edited unless one RGB paints both colours.
+            [r, g, b] != target.color[..3]
+                && (self.tool_settings.is_some() || !self.keeps_hue_of(target.color32()))
+        };
         let mut edits = Vec::new();
         for mut drawing in chart
             .drawings()
             .drawings
             .iter()
             .filter(|drawing| {
-                drawing.accepts_user_edits()
+                chart.drawings().accepts_user_edits(drawing)
                     && if selected {
                         chart.drawings().is_selected(drawing.id)
                     } else {
@@ -259,10 +278,23 @@ impl DrawingProps {
             // The dialog opened with the target's values: one that differs from them was edited,
             // and only edited values are written, so each drawing keeps the rest of its own.
             if hue_edited {
-                drawing.recolor([r, g, b, drawing.color[3]]);
+                let [.., opacity] = drawing.text_color_override().unwrap_or(drawing.color);
+                drawing.recolor([r, g, b, opacity]);
             }
             if a != target.color[3] {
                 drawing.color[3] = a;
+                if drawing.text_color_override().is_some() {
+                    drawing.text_color = drawing.text_color.map(|[r, g, b, _]| [r, g, b, a]);
+                }
+            }
+            if let Some((picked, shown)) = text_pick
+                && picked[3] != shown[3]
+                && matches!(
+                    drawing.tool_type,
+                    DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+                )
+            {
+                drawing.text_color.as_mut().unwrap_or(&mut drawing.color)[3] = picked[3];
             }
             if self.line_width != target.stroke_width {
                 drawing.stroke_width = self.line_width;
@@ -309,11 +341,14 @@ impl DrawingProps {
                         })+
                     };
                 }
+                // Colour-row picks already keep each text opacity above unless it was edited.
+                if text_pick.is_none() {
+                    edited!(text_color);
+                }
                 edited!(
                     font_weight,
                     italic,
                     glyph_angle,
-                    text_color,
                     background,
                     border,
                     border_color,
@@ -729,6 +764,17 @@ mod tests {
             .drawings_mut()
             .edit_drawing(7, |d| d.user_edit_enabled = true)
             .unwrap();
+        chart.drawings_mut().set_locked(true);
+        assert_eq!(
+            DrawingProps {
+                font_size: 40.0,
+                ..props.clone()
+            }
+            .apply_to_chart(DrawingId(7), &mut chart),
+            Err("Unlock all drawings before editing its properties")
+        );
+        assert_eq!(chart.drawings().drawings[0].font_size, 24.0);
+        chart.drawings_mut().set_locked(false);
         // A size the drawings file would refuse cannot be applied.
         assert!(
             DrawingProps {
@@ -1421,6 +1467,7 @@ mod tests {
                             .to_vec(),
                         show_background: true,
                         background_opacity: 75,
+                        extend_lines: true,
                     })
                 },
             ),

@@ -243,6 +243,7 @@ impl DemoApp {
             ("Price unit", &icons::PRICE_LABEL),
             ("Market recording", &icons::REPLAY),
             ("Readout", &icons::EYE),
+            ("Scrolling", &icons::UI_DRAG_HANDLE),
             ("Appearance", &icons::BRUSH),
             ("Formatting", &icons::TEXT),
             ("Showcase", &icons::WIDGET_BAR_HIGHLIGHTS),
@@ -259,6 +260,7 @@ impl DemoApp {
                 )
                 .show(ui, &response, |ui| match label {
                     "Readout" => self.show_readout_controls(ui),
+                    "Scrolling" => self.show_scrolling_controls(ui),
                     "Appearance" => self.show_appearance_controls(ui),
                     "Formatting" => self.show_formatting_controls(ui),
                     "Price unit" => self.show_price_unit_controls(ui),
@@ -330,9 +332,7 @@ impl DemoApp {
         }
         if let Some(name) = id.strip_prefix("study:") {
             if let Some(study) = self.indicator_dialog.factory().create(name) {
-                let inputs = super::study_input_summary(study.as_ref());
-                let id = self.chart.add_indicator(study);
-                self.chart.set_indicator_inputs(id, inputs);
+                self.chart.add_indicator(study);
             }
             return;
         }
@@ -366,7 +366,12 @@ impl DemoApp {
                 Some(DrawingToolbarAction::HideAllDrawings)
             }
             "remove-drawings" => Some(DrawingToolbarAction::RemoveAllDrawings),
-            "lock-drawings" => Some(DrawingToolbarAction::LockAllDrawings),
+            "lock-drawings" => {
+                // The toolbar's lock button flips its state before it reports the click.
+                let state = &mut self.drawing_toolbar.state;
+                state.lock_all = !state.lock_all;
+                Some(DrawingToolbarAction::LockAllDrawings)
+            }
             "magnet" => Some(DrawingToolbarAction::ToggleMagnet),
             "remove-indicators" => Some(DrawingToolbarAction::RemoveAllIndicators),
             _ => None,
@@ -959,6 +964,7 @@ mod tests {
                 "Price unit",
                 "Market recording",
                 "Readout",
+                "Scrolling",
                 "Appearance",
                 "Formatting",
                 "Showcase",
@@ -1334,6 +1340,13 @@ mod tests {
             app.chart.chart_options().tooltip.touch_exit_mode,
             egui_charts::config::TouchTrackingExitMode::OnTouchEnd
         );
+        egui::Popup::close_all(&ctx);
+        click(&mut app, &ctx, "Menu");
+        click(&mut app, &ctx, "Scrolling");
+        click(&mut app, &ctx, "Coast after a touch swipe");
+        assert!(!app.chart.chart_options().kinetic_scroll.enabled);
+        click(&mut app, &ctx, "Coast after a mouse drag");
+        assert!(app.chart.chart_options().kinetic_scroll.mouse);
         egui::Popup::close_all(&ctx);
         click(&mut app, &ctx, "Menu");
         click(&mut app, &ctx, "Appearance");

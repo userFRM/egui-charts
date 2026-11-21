@@ -11,7 +11,9 @@
 //! A bar without candles has no value and no candle, and the total carries over it.
 //!
 //! [`Indicator::candles`] holds one candle per bar with a value, on plot 1 ("Up") when it closes
-//! at or above its open and on plot 2 ("Down") otherwise. Output 0 ("Delta") holds every close,
+//! above its open and on plot 2 ("Down") otherwise, so a Volume Delta bar whose delta is zero is
+//! drawn as selling; a Cumulative Volume Delta bar whose total ends where it opened is drawn as
+//! buying. Output 0 ("Delta") holds every close,
 //! for studies that take this one as their source, and is not drawn; outputs 1 and 2 hold the
 //! close in the column of its candle's plot.
 
@@ -22,7 +24,7 @@ use crate::scales::StudyFormat;
 use crate::studies::palette;
 use crate::studies::{
     Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, PlotStyle, PlotType,
-    StudyCandle, StudyData, StudyDataRequest, StudyInput,
+    StudyCandle, StudyData, StudyDataRequest, StudyInput, StudyTable,
 };
 use egui::Color32;
 
@@ -47,6 +49,8 @@ struct DeltaCandles {
     values: IndicatorValues,
     colors: [Color32; 3],
     visible: bool,
+    /// Shown while the chosen lower interval is not read.
+    notice: Option<StudyTable>,
 }
 
 impl DeltaCandles {
@@ -59,6 +63,7 @@ impl DeltaCandles {
             values: IndicatorValues::new(),
             colors: [palette::BLUE, palette::UP, palette::DOWN],
             visible: true,
+            notice: None,
         }
     }
 
@@ -67,7 +72,7 @@ impl DeltaCandles {
     }
 
     fn inputs(&self) -> Vec<StudyInput> {
-        let mut inputs = vec![lower_interval::input(self.lower_interval)];
+        let mut inputs = vec![lower_interval::input(&self.clock, self.lower_interval)];
         if let Some(anchor) = self.anchor {
             inputs.push(
                 StudyInput::new(
@@ -152,7 +157,12 @@ impl DeltaCandles {
             if ![high, low, close].iter().all(|value| value.is_finite()) {
                 continue;
             }
-            let down = close < open;
+            // A bar delta of zero sells; an unchanged cumulative total keeps buying.
+            let down = if anchor.is_some() {
+                close < open
+            } else {
+                close <= open
+            };
             self.values.set(
                 i,
                 IndicatorValue::Multiple(if down {
@@ -206,7 +216,10 @@ macro_rules! delta_study {
                 self.core.inputs()
             }
             fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
-                self.core.set_input(id, value)
+                self.core.set_input(id, value)?;
+                self.core.notice =
+                    lower_interval::notice($name, &self.core.clock, self.core.lower_interval);
+                Ok(())
             }
             fn data_requests(&self) -> Vec<StudyDataRequest> {
                 self.core
@@ -224,6 +237,8 @@ macro_rules! delta_study {
             fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
                 let changed = self.core.clock != *clock;
                 self.core.clock = clock.clone();
+                self.core.notice =
+                    lower_interval::notice($name, &self.core.clock, self.core.lower_interval);
                 changed
             }
             fn calculate(&mut self, data: &[Bar]) {
@@ -252,6 +267,9 @@ macro_rules! delta_study {
             }
             fn candles(&self) -> &[StudyCandle] {
                 &self.core.candles
+            }
+            fn table(&self) -> Option<&StudyTable> {
+                self.core.notice.as_ref()
             }
             fn colors(&self) -> Vec<Color32> {
                 self.core.colors.to_vec()
@@ -300,9 +318,10 @@ mod tests {
     use crate::studies::IndicatorFactory;
     use chrono::{TimeZone, Utc};
 
-    /// Volume Delta draws each bar from zero along the running delta of its candles; Cumulative
-    /// Volume Delta carries the total across bars and gaps, restarts at each anchor period and
-    /// resumes it when the last bars are recomputed.
+    /// Volume Delta draws each bar from zero along the running delta of its candles, as buying
+    /// only when the delta is above zero; Cumulative Volume Delta carries the total across bars
+    /// and gaps, draws an unchanged total as buying, restarts at each anchor period and resumes
+    /// it when the last bars are recomputed.
     #[test]
     fn delta_candles_follow_the_running_delta_of_lower_interval_candles() {
         let factory = IndicatorFactory::new();
@@ -351,7 +370,7 @@ mod tests {
         };
 
         // Five-minute bars; the third has no candles.
-        let chart = [0, 300, 600, 900].map(|s| bar(s, 1.0, 1.0, 999.0));
+        let chart = [0, 300, 600, 900, 1200, 1500].map(|s| bar(s, 1.0, 1.0, 999.0));
         let candles = [
             bar(0, 10.0, 11.0, 5.0),   // +5
             bar(60, 11.0, 10.0, 8.0),  // -8, running -3
@@ -359,33 +378,55 @@ mod tests {
             bar(300, 10.0, 9.0, 4.0),  // -4
             bar(360, 9.0, 9.0, 1.0), // doji at the previous close takes the falling side: -1, running -5
             bar(900, 9.0, 8.0, 0.0), // no volume
+            bar(1200, 9.0, 10.0, 5.0), // +5
+            bar(1260, 10.0, 9.0, 5.0), // -5: a bar delta of zero
+            bar(1500, 9.0, 10.0, 5.0), // +5
         ];
         let mut delta = VolumeDelta::new();
         delta.set_bar_clock(&BarClock::new(Timeframe::Min5));
         assert_eq!(delta.data_requests()[0].timeframe, Some(Timeframe::Min1));
         update(&mut delta, &chart, 0, &candles);
+        // A delta of zero, without volume or from +5 and -5, is drawn as selling.
         assert_eq!(
             drawn(&delta),
             [
                 (0, 2, [0.0, 5.0, -8.0, -8.0]),
                 (1, 2, [0.0, 0.0, -5.0, -5.0]),
-                (3, 1, [0.0; 4]),
+                (3, 2, [0.0; 4]),
+                (4, 2, [0.0, 5.0, 0.0, 0.0]),
+                (5, 1, [0.0, 5.0, 0.0, 5.0]),
             ]
         );
         // The Delta output has every close; Up and Down only those of their candles.
         let values = delta.values();
         assert_eq!(
-            (0..4).map(|i| values.value(0, i)).collect::<Vec<_>>(),
-            [Some(-8.0), Some(-5.0), None, Some(0.0)]
+            (0..6).map(|i| values.value(0, i)).collect::<Vec<_>>(),
+            [
+                Some(-8.0),
+                Some(-5.0),
+                None,
+                Some(0.0),
+                Some(0.0),
+                Some(5.0)
+            ]
         );
         assert_eq!(
+            [4, 5].map(|i| [values.value(1, i), values.value(2, i)]),
+            [[None, Some(0.0)], [Some(5.0), None]]
+        );
+        // The cumulative total keeps buying through the bars that leave it unchanged.
+        let mut cumulative = CumulativeVolumeDelta::new();
+        cumulative.set_bar_clock(&BarClock::new(Timeframe::Min5));
+        update(&mut cumulative, &chart, 0, &candles);
+        assert_eq!(
+            drawn(&cumulative),
             [
-                values.value(1, 3),
-                values.value(2, 3),
-                values.value(2, 1),
-                values.value(1, 1)
-            ],
-            [Some(0.0), None, Some(-5.0), None]
+                (0, 2, [0.0, 5.0, -8.0, -8.0]),
+                (1, 2, [-8.0, -8.0, -13.0, -13.0]),
+                (3, 1, [-13.0; 4]),
+                (4, 1, [-13.0, -8.0, -13.0, -13.0]),
+                (5, 1, [-13.0, -8.0, -13.0, -8.0]),
+            ]
         );
 
         // Hourly bars from 22:00 on 1 January 1970 to 03:00 on the 2nd; 02:00 has no candles.

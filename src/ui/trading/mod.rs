@@ -15,6 +15,7 @@ mod widgets;
 pub use account_panel::{AccountPanel, AccountPanelAction};
 pub use broker_picker::{BrokerFact, BrokerPicker, BrokerPickerAction, BrokerTile};
 pub use dom::DepthPanel;
+pub use executions::{ExecutionMark, render_executions};
 pub use format::TradingFormatter;
 pub use ticket::{Bracket, BracketMode, Kind as OrderKind, OrderPreset, PresetLevel, PresetSizing};
 
@@ -271,8 +272,8 @@ impl Trading {
     }
 
     /// Writes the prices, quantities, spreads and pip values of the ticket, the depth ladder and
-    /// the account tables, and the prices and quantities of order and fill notifications, with
-    /// `formatter`, where it returns text. `None` restores the built-in text.
+    /// the account tables and fill marks, and the prices and quantities of order and fill
+    /// notifications, with `formatter`, where it returns text. `None` restores the built-in text.
     pub fn set_formatter(&mut self, formatter: Option<Arc<dyn TradingFormatter>>) {
         self.formatter = formatter;
     }

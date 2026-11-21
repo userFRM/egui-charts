@@ -1,7 +1,7 @@
 //! Propagate drawing changes without consuming the host's persistence queue, and list and delete
 //! the layout's drawings by symbol.
 
-use super::ChartLayout;
+use super::{ChartLayout, MAX_CHARTS};
 use crate::config::{DrawingSort, DrawingToolType};
 use crate::drawings::manager::sync_id;
 use crate::drawings::persistence::{DrawingStorage, StoredCoord, StoredDrawing};
@@ -307,7 +307,7 @@ impl DrawingLinks {
         &self,
         charts: &[&mut Chart],
         count: usize,
-        groups: &[Option<String>; 16],
+        groups: &[Option<String>; MAX_CHARTS],
         key: Key,
         drawing: &Drawing,
         layout_wide: bool,
@@ -345,7 +345,7 @@ impl DrawingLinks {
         &mut self,
         charts: &mut [&mut Chart],
         count: usize,
-        groups: &[Option<String>; 16],
+        groups: &[Option<String>; MAX_CHARTS],
         pointer_down: bool,
         layout_wide: bool,
     ) -> bool {
@@ -833,7 +833,7 @@ impl DrawingLinks {
         &mut self,
         charts: &[&mut Chart],
         count: usize,
-        groups: &[Option<String>; 16],
+        groups: &[Option<String>; MAX_CHARTS],
         changes: &[Change],
         seen: &HashMap<Key, u64>,
         layout_wide: bool,
@@ -941,7 +941,7 @@ impl DrawingLinks {
     fn one_version(
         &self,
         charts: &[&mut Chart],
-        groups: &[Option<String>; 16],
+        groups: &[Option<String>; MAX_CHARTS],
         seen: &HashMap<Key, u64>,
         layout_wide: bool,
         changes: Vec<Change>,
@@ -1010,7 +1010,7 @@ impl DrawingLinks {
         &mut self,
         charts: &[&mut Chart],
         count: usize,
-        groups: &[Option<String>; 16],
+        groups: &[Option<String>; MAX_CHARTS],
         changes: &[Change],
         joined: &HashSet<Key>,
         layout_wide: bool,
@@ -1072,7 +1072,7 @@ impl DrawingLinks {
         &mut self,
         charts: &mut [&mut Chart],
         count: usize,
-        groups: &[Option<String>; 16],
+        groups: &[Option<String>; MAX_CHARTS],
         symbol: &str,
         key: Key,
     ) {
@@ -1121,7 +1121,7 @@ impl DrawingLinks {
         &mut self,
         charts: &[&mut Chart],
         count: usize,
-        groups: &[Option<String>; 16],
+        groups: &[Option<String>; MAX_CHARTS],
         changes: &[Change],
     ) -> HashSet<Key> {
         let mut joined = HashSet::new();
@@ -2444,7 +2444,11 @@ mod tests {
             let mut chart = bars(60);
             chart.set_symbol("AAA");
             chart.load_drawings_remapped(&json, true).unwrap();
-            chart.drawings_mut().toggle_lock_all();
+            let ids: Vec<_> = chart.drawings().drawings.iter().map(|d| d.id).collect();
+            chart
+                .drawings_mut()
+                .edit_drawings(&ids, |d| d.locked = true)
+                .unwrap();
             assert!(times(&chart).iter().all(|(_, time)| *time > 2_000));
         }
     }

@@ -176,7 +176,10 @@ pub struct AlertsPanel {
     next_reply: u64,
     sources: Vec<(AlertSource, AlertSourceName)>,
     symbol: String,
+    last_price: Option<f64>,
     draft: Alert,
+    draft_level_text: String,
+    draft_level_edited: bool,
     inputs: Option<(crate::model::AlertInputs, Option<crate::model::Timeframe>)>,
     draft_saving: bool,
     pending: usize,
@@ -250,7 +253,10 @@ impl AlertsPanel {
             next_reply: DRAFT_REPLY - 1,
             sources: Vec::new(),
             symbol: String::new(),
-            draft: Alert::new("", AlertCondition::Crossing(0.0)),
+            last_price: None,
+            draft: Alert::new("", AlertCondition::Crossing(f64::NAN)),
+            draft_level_text: String::new(),
+            draft_level_edited: false,
             inputs: None,
             draft_saving: false,
             pending: 0,
@@ -382,6 +388,52 @@ impl AlertsPanel {
         if self.symbol != symbol {
             self.symbol = symbol.to_owned();
             self.draft.symbol = symbol.to_owned();
+            self.last_price = None;
+            self.seed_draft_price();
+        }
+    }
+
+    /// Supply the chart symbol's current price and optional tick size for Quick alert. Call
+    /// every frame, including while hidden, so a saved form starts again at the latest price.
+    /// A user-entered level stays until a successful save. Without a finite price, an unedited
+    /// level is empty and cannot be saved. Invalid tick sizes use the price's display decimals.
+    pub fn set_price(&mut self, symbol: &str, price: Option<f64>, tick_size: Option<f64>) {
+        self.set_symbol(symbol);
+        self.last_price = price
+            .map(|price| {
+                crate::scales::snap_price(price, tick_size, crate::scales::price_decimals(price))
+            })
+            .filter(|price| price.is_finite());
+        self.seed_draft_price();
+    }
+
+    fn seed_draft_price(&mut self) {
+        if !self.draft_level_edited && self.draft.source == AlertSource::Price {
+            let price = self.last_price.filter(|_| self.draft.symbol == self.symbol);
+            match &mut self.draft.condition {
+                AlertCondition::Crossing(level)
+                | AlertCondition::CrossingUp(level)
+                | AlertCondition::CrossingDown(level)
+                | AlertCondition::Above(level)
+                | AlertCondition::Below(level) => {
+                    *level = price.unwrap_or(f64::NAN);
+                    // Keep two decimals without rounding away a finer suggested price.
+                    self.draft_level_text = price
+                        .map(|price| {
+                            let text = price.to_string();
+                            if text
+                                .split_once('.')
+                                .is_none_or(|(_, fraction)| fraction.len() < 2)
+                            {
+                                format!("{price:.2}")
+                            } else {
+                                text
+                            }
+                        })
+                        .unwrap_or_default();
+                }
+                _ => {}
+            }
         }
     }
 
@@ -689,7 +741,9 @@ impl AlertsPanel {
                         self.error = None;
                         if key == DRAFT_REPLY {
                             self.draft =
-                                Alert::new(self.symbol.clone(), AlertCondition::Crossing(0.0));
+                                Alert::new(self.symbol.clone(), AlertCondition::Crossing(f64::NAN));
+                            self.draft_level_edited = false;
+                            self.seed_draft_price();
                         }
                     }
                     Err(error) => {
@@ -1005,12 +1059,11 @@ impl AlertsPanel {
 
     /// The boxes that narrow the Log tab to one alert, named by its newest entry, or one symbol.
     fn log_filters(&mut self, ui: &mut Ui) {
-        let ctx = ui.ctx().clone();
         let label = |trigger: &AlertTrigger| {
             if trigger.name.is_empty() {
                 trigger.id.0.clone()
             } else {
-                l10n::text(&ctx, &trigger.name)
+                trigger.name.clone()
             }
         };
         ui.horizontal_wrapped(|ui| {
@@ -1167,13 +1220,15 @@ impl AlertsPanel {
                     ui.text_edit_singleline(&mut self.draft.symbol)
                         .accessible_name(l10n::text(ui.ctx(), "Symbol"));
                 });
-                rule_form(
+                self.seed_draft_price();
+                self.draft_level_edited |= rule_form(
                     ui,
                     &mut self.draft.source,
                     &mut self.draft.condition,
                     &self.sources,
                     &[],
                     true,
+                    Some(&mut self.draft_level_text),
                 );
                 if self.draft_saving {
                     ui.label(l10n::text(ui.ctx(), "Saving…"));
@@ -1241,7 +1296,7 @@ impl AlertsPanel {
                         let mut parts = vec![if trigger.name.is_empty() {
                             trigger.id.0.clone()
                         } else {
-                            l10n::text(ui.ctx(), &trigger.name)
+                            trigger.name.clone()
                         }];
                         if !trigger.symbol.is_empty() {
                             parts.push(trigger.symbol.clone());
@@ -1360,7 +1415,7 @@ impl AlertsPanel {
                                 ));
                             }
                             if self.options.name && !alert.name.is_empty() {
-                                ui.label(l10n::text(ui.ctx(), &alert.name));
+                                ui.label(&alert.name);
                             }
                             let color = self.status_color(ui, alert.status);
                             ui.horizontal(|ui| {
@@ -2140,10 +2195,14 @@ mod tests {
             })
             .drop_without_applying_deltas();
         };
-        panel.set_symbol("SIM");
-        panel.draft.condition = AlertCondition::CrossingUp(10.0);
+        panel.set_price("SIM", Some(98.9137), Some(0.25));
+        assert_eq!(panel.draft.condition, AlertCondition::Crossing(99.0));
         panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY).is_some();
         assert_eq!((panel.pending, panel.draft_saving), (1, true));
+        assert_eq!(
+            host.saved.lock().unwrap().last().unwrap().condition,
+            AlertCondition::Crossing(99.0)
+        );
         host.reply
             .lock()
             .unwrap()
@@ -2155,12 +2214,237 @@ mod tests {
         assert_eq!(panel.error, Some(FeedError::NotSupported));
         assert_eq!(panel.draft.symbol, "SIM");
         panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY).is_some();
+        panel.set_price("SIM", Some(100.127), Some(0.25));
         host.reply.lock().unwrap().take().unwrap().send(Ok(()));
         frame(&mut panel);
         assert_eq!(panel.error, None);
         assert_eq!(panel.draft.symbol, "SIM");
-        assert_eq!(panel.draft.condition, AlertCondition::Crossing(0.0));
+        assert_eq!(panel.draft.condition, AlertCondition::Crossing(100.25));
+        panel.set_price("NEXT", Some(200.137), Some(0.25));
+        assert_eq!(panel.draft.symbol, "NEXT");
+        assert_eq!(panel.draft.condition, AlertCondition::Crossing(200.25));
+        panel.set_symbol("UNKNOWN");
+        assert!(panel.draft.condition.level().unwrap().is_nan());
+        assert!(!panel.draft.is_valid());
         assert!(panel.alerts().is_empty());
+    }
+
+    /// Guards #3737: an unknown price cannot save zero; replacing a suggested level
+    /// accepts grouped negative input and survives quote and symbol changes.
+    #[test]
+    fn inline_level_is_empty_without_a_quote_and_keeps_user_input() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let mut panel = AlertsPanel::default();
+        panel.set_symbol("SIM");
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(300.0, 400.0))
+            .build_ui_state(|ui, panel: &mut AlertsPanel| panel.draft_form(ui), panel);
+        h.get_by_label("Quick alert").click();
+        h.run();
+        assert!(
+            h.get_by_label("Create alert")
+                .accesskit_node()
+                .is_disabled()
+        );
+        let level = h
+            .get_by_role_and_label(egui::Role::TextInput, "Level")
+            .rect();
+        let label = h.get_by_role_and_label(egui::Role::Label, "Level").rect();
+        assert!(
+            level.y_range().contains(label.center().y),
+            "the numeric field keeps its row"
+        );
+        assert!(
+            h.get_by_role_and_label(egui::Role::TextInput, "Level")
+                .value()
+                .is_none_or(|value| value.is_empty())
+        );
+        for (quote, tick, price, text) in [
+            (98.9137, 0.25, 99.0, "99.00"),
+            (1.084537, 0.00001, 1.08454, "1.08454"),
+        ] {
+            h.state_mut().set_price("SIM", Some(quote), Some(tick));
+            h.run();
+            assert_eq!(h.state().draft.condition, AlertCondition::Crossing(price));
+            assert_eq!(
+                h.get_by_role_and_label(egui::Role::TextInput, "Level")
+                    .value()
+                    .as_deref(),
+                Some(text),
+            );
+        }
+        h.get_by_role_and_label(egui::Role::TextInput, "Level")
+            .click();
+        h.run();
+        h.get_by_role_and_label(egui::Role::TextInput, "Level")
+            .type_text("−1 234.56");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(
+            h.state().draft.condition,
+            AlertCondition::Crossing(-1234.56)
+        );
+        assert!(
+            !h.get_by_label("Create alert")
+                .accesskit_node()
+                .is_disabled()
+        );
+        h.state_mut().set_price("SIM", Some(99.0), Some(0.25));
+        h.state_mut().set_price("NEXT", Some(200.0), Some(0.25));
+        h.run();
+        assert_eq!(
+            h.state().draft.condition,
+            AlertCondition::Crossing(-1234.56)
+        );
+    }
+
+    /// A level chosen from a finite channel keeps its lower bound; other conditions preserve
+    /// the previous level text and keep following the quote until the level is entered.
+    #[test]
+    fn inline_channel_to_level_keeps_lower_bound() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let mut failures = Vec::new();
+        for (origin, quote, typed, bound, level, text) in [
+            (
+                "Entering channel",
+                Some(99.0),
+                None,
+                Some(95.0),
+                Some(95.0),
+                "95",
+            ),
+            ("Entering channel", None, None, Some(95.0), Some(95.0), "95"),
+            (
+                "Entering channel",
+                Some(99.0),
+                Some("120"),
+                Some(95.0),
+                Some(95.0),
+                "95",
+            ),
+            (
+                "Entering channel",
+                None,
+                Some("120"),
+                Some(95.0),
+                Some(95.0),
+                "95",
+            ),
+            (
+                "Moving by value",
+                Some(99.0),
+                None,
+                None,
+                Some(99.0),
+                "99.00",
+            ),
+            ("Moving by value", None, None, None, None, ""),
+            (
+                "Moving by value",
+                Some(99.0),
+                Some("120"),
+                None,
+                Some(120.0),
+                "120",
+            ),
+            ("Entering channel", None, None, None, None, ""),
+        ] {
+            let mut panel = AlertsPanel::default();
+            panel.set_price("SIM", quote, None);
+            let mut h = Harness::builder()
+                .with_size(egui::vec2(300.0, 500.0))
+                .build_ui_state(|ui, panel: &mut AlertsPanel| panel.draft_form(ui), panel);
+            h.get_by_label("Quick alert").click();
+            h.run();
+            if quote.is_some() && typed.is_none() {
+                h.get_by_label("Condition").click();
+                h.run();
+                h.get_by_label("Crossing up").click();
+                h.run();
+                h.state_mut().set_price("SIM", Some(101.0), None);
+                h.run();
+                assert_eq!(h.state().draft.condition, AlertCondition::CrossingUp(101.0));
+                h.state_mut().set_price("SIM", quote, None);
+                h.run();
+            }
+            if let Some(text) = typed {
+                h.get_by_role_and_label(egui::Role::TextInput, "Level")
+                    .click();
+                h.run();
+                h.get_by_role_and_label(egui::Role::TextInput, "Level")
+                    .type_text(text);
+                h.key_press(egui::Key::Enter);
+                h.run();
+                assert_eq!(h.state().draft.condition.level(), Some(120.0));
+            }
+            h.get_by_label("Condition").click();
+            h.run();
+            h.get_by_label(origin).scroll_to_me();
+            h.run();
+            h.get_by_label(origin).click();
+            h.run();
+            assert_eq!(
+                matches!(h.state().draft.condition, AlertCondition::MovingBy { .. }),
+                origin == "Moving by value",
+                "{origin}: {:?}",
+                h.state().draft.condition
+            );
+            if let Some(lower) = bound {
+                h.state_mut().draft.condition = AlertCondition::EnteringChannel {
+                    lower,
+                    upper: 100.0,
+                };
+                h.run();
+            }
+            h.get_by_label("Condition").click();
+            h.run();
+            h.get_by_label("Crossing").scroll_to_me();
+            h.run();
+            h.get_by_label("Crossing").click();
+            h.run();
+            let follows_quote = bound.is_none() && typed.is_none();
+            for (quote_update, level, text) in [
+                (None, level, text),
+                (
+                    Some(101.0),
+                    if follows_quote { Some(101.0) } else { level },
+                    if follows_quote { "101.00" } else { text },
+                ),
+            ] {
+                if let Some(price) = quote_update {
+                    h.state_mut().set_price("SIM", Some(price), None);
+                    h.run();
+                }
+                let AlertCondition::Crossing(actual_level) = h.state().draft.condition else {
+                    panic!(
+                        "expected Crossing after {origin}: {:?}",
+                        h.state().draft.condition
+                    );
+                };
+                let actual = (
+                    (!actual_level.is_nan()).then_some(actual_level),
+                    h.get_by_role_and_label(egui::Role::TextInput, "Level")
+                        .value()
+                        .unwrap_or_default(),
+                    h.get_by_label("Create alert")
+                        .accesskit_node()
+                        .is_disabled(),
+                );
+                let expected = (level, text.to_owned(), level.is_none());
+                if actual != expected {
+                    failures.push(format!(
+                        "{origin}, quote={quote:?}, typed={typed:?}, bound={bound:?}, quote_update={quote_update:?}: expected {expected:?}, got {actual:?}"
+                    ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[cfg(feature = "alert-engine")]
@@ -2590,6 +2874,60 @@ mod tests {
         let refused = "Desktop notification failed: permission denied".to_owned();
         assert_eq!(errors[0], [(errors[0][0].0, refused)]);
         assert_eq!(errors[1], errors[0], "the first error toast stays, alone");
+    }
+
+    #[test]
+    fn a_user_alert_name_is_shown_as_saved_under_a_translator() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let host = Arc::new(Host::default());
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        // The name is also the catalogue key of the status shown below it.
+        let mut alert = Alert::new("SAMPLE", AlertCondition::Above(100.0));
+        alert.id = Some(AlertId("saved".into()));
+        alert.name = "Active".into();
+        let events = host.events.lock().unwrap().clone().unwrap();
+        events.push(AlertEvent::Upsert(Box::new(alert)));
+        let mut toasts = Toasts::new();
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(300.0, 700.0))
+            .with_context_setup(|ctx| {
+                l10n::set_translator(ctx, |key| (key == "Active").then(|| "Aktiv".to_owned()));
+            })
+            .build_ui_state(
+                move |ui, panel: &mut AlertsPanel| {
+                    panel.poll(ui.ctx(), &mut toasts);
+                    panel.show(ui);
+                },
+                panel,
+            );
+        h.run_steps(3);
+        let shown = |text: &str| h.query_all_by_label(text).count();
+        assert_eq!(shown("Active"), 1, "the name as saved");
+        assert_eq!(shown("Aktiv"), 1, "the translated status");
+
+        let id = AlertId("saved".into());
+        let mut trigger = AlertTrigger::new(
+            id.clone(),
+            "SAMPLE",
+            "2026-11-20T12:00:00Z".parse().unwrap(),
+        );
+        trigger.name = "Active".into();
+        events.push(AlertEvent::Logged(trigger));
+        h.state_mut().show_log = true;
+        h.state_mut().log_alert = Some(id);
+        h.run_steps(3);
+        assert_eq!(
+            (
+                h.query_all_by_label("Active · SAMPLE · 2026-11-20 12:00:00 +00:00")
+                    .count(),
+                h.get_by_label("Filter by alert").value(),
+                h.query_all_by_label("Aktiv").count(),
+            ),
+            (1, Some("Active".to_owned()), 0),
+            "the log row and selected alert filter show the saved name"
+        );
     }
 
     #[test]

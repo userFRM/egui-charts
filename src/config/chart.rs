@@ -44,10 +44,10 @@ pub enum BackgroundStyle {
 pub enum NavigationButtons {
     /// Always show the buttons.
     Always,
-    /// Show the buttons while the pointer is over the main pane, price and volume.
-    OnHover,
-    /// Hide the buttons (the default).
+    /// Show the buttons while the pointer is over the main pane, price and volume (the default).
     #[default]
+    OnHover,
+    /// Hide the buttons.
     Never,
 }
 
@@ -422,7 +422,8 @@ pub struct ChartConfig {
     pub show_ohlc_change_percent: bool,
     /// Show volume in the legend independently of the histogram.
     pub show_legend_volume: bool,
-    /// Show host-supplied study inputs in the legend.
+    /// Show study inputs after their names in the legend: the host's caption, else one built
+    /// from the study's inputs.
     pub show_indicator_inputs: bool,
     /// Show the symbol's logo before the legend title: the legend badge, else the instrument's
     /// logo, else the symbol's initial on a neutral disc.
@@ -556,7 +557,7 @@ pub struct ChartConfig {
     pub realtime_button_hover_color: Color32,
     /// Text or icon color for the realtime button; `PLACEHOLDER` follows the theme.
     pub realtime_button_text_color: Color32,
-    /// When to show the navigation buttons.
+    /// When to show the navigation buttons. Default: [`NavigationButtons::OnHover`].
     pub navigation_buttons: NavigationButtons,
     /// When to show the maximize and menu buttons of the panes.
     #[serde(default = "pane_buttons_on_hover")]

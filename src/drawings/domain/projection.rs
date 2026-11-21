@@ -5,26 +5,24 @@ use crate::drawings::validation::{MAX_PROJECTION_LEVEL, MAX_STROKE_WIDTH};
 use crate::model::LineStyle;
 use serde::{Deserialize, Serialize};
 
-/// One projected target: the third anchor moved by `coefficient` times the move from the first
-/// anchor to the second.
+/// One arc of the projection's sector, at `coefficient` times its radius.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectionLevel {
-    /// Multiple of the measured move, from 0 to 100: 1 projects the whole move.
+    /// Multiple of the sector's radius, from 0 to 100: 1 is the sector's arc; 0 draws nothing.
     pub coefficient: f32,
-    /// Whether the level's line, target zone and labels are drawn.
+    /// Whether the level's arc and coefficient are drawn.
     pub visible: bool,
-    /// Colour as RGBA of the level's line, the border of its target zone, its target label and
-    /// its coefficient.
+    /// Colour as RGBA of the level's arc and its coefficient.
     pub color: [u8; 4],
-    /// Stroke style of the level's line.
+    /// Stroke style of the level's arc.
     pub line_style: LineStyle,
     /// Stroke width in points. `None` takes the drawing's width.
     #[serde(default)]
     pub width: Option<f32>,
 }
 
-/// The projection's levels, the target zone behind each level, its coefficient labels and the
-/// style of its measured leg, which takes the drawing's colour and width.
+/// The projection's sector: its levels, the gradient behind it, its coefficient labels and the
+/// style of its radii and arc, which take the drawing's colour and width.
 ///
 /// ```
 /// use egui_charts::drawings::{ProjectionConfig, ProjectionLevel};
@@ -47,25 +45,24 @@ pub struct ProjectionLevel {
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectionConfig {
-    /// Projected targets, drawn in list order.
+    /// Arcs, drawn in list order.
     pub levels: Vec<ProjectionLevel>,
-    /// Whether each visible level draws its target zone.
+    /// Whether the sector is filled with a gradient from the first background colour at its
+    /// centre to the second at its arc.
     pub show_background: bool,
-    /// Colours as RGBA of the zone's half on the side the move comes from, then of its half
-    /// past the target. Their alpha is the opacity.
+    /// Colours as RGBA of the fill at the sector's centre and at its arc. Their alpha is the opacity.
     pub background_colors: [[u8; 4]; 2],
-    /// Whether each visible level writes its coefficient beside its target zone.
+    /// Whether each visible level writes its coefficient at the end of its arc.
     pub show_coefficients: bool,
-    /// Whether the measured leg from the first anchor to the second, its arrowhead and its
-    /// move label are drawn.
+    /// Whether the sector's radii and arc are drawn.
     pub trend_visible: bool,
-    /// Stroke style of the measured leg.
+    /// Stroke style of the sector's radii and arc.
     pub trend_line_style: LineStyle,
 }
 
 impl Default for ProjectionConfig {
-    /// The whole move as one solid grey level, a blue zone before the target and a purple one
-    /// past it at 20%, coefficients shown and a solid leg.
+    /// One grey level at the sector's arc, a gradient from blue at the centre to purple at the
+    /// arc at 20%, coefficients shown and solid radii and arc.
     fn default() -> Self {
         use super::drawing::{BLUE, GREY, PURPLE};
         let [r, g, b, _] = BLUE;
@@ -96,9 +93,9 @@ impl ProjectionConfig {
         })
     }
 
-    /// The settings a projection saved without them is drawn with: one level at the whole move
-    /// in the drawing colour at alpha 150, dashed; a zone in the fill colour, or the drawing
-    /// colour at alpha 30, on both sides; no coefficients; the leg in the drawing's line style.
+    /// The settings a projection saved without them is drawn with: one dashed level at the
+    /// sector's arc in the drawing colour at alpha 150; a flat fill in the fill colour, or the
+    /// drawing colour at alpha 30; no coefficients; radii and arc in the drawing's line style.
     pub(crate) fn legacy(drawing: &Drawing) -> Self {
         let [r, g, b, _] = drawing.color;
         let zone = drawing.fill_color.unwrap_or([r, g, b, 30]);
@@ -125,7 +122,7 @@ mod tests {
     use crate::drawings::{DrawingManager, DrawingTemplate, DrawingToolType};
 
     /// Templates and saved defaults retain edited settings; a default saved before the field
-    /// existed keeps the legacy look, rather than taking new-drawing defaults.
+    /// existed keeps the legacy styles, rather than taking new-drawing defaults.
     #[test]
     fn projection_settings_reach_templates_and_tool_defaults() {
         let mut drawing = Drawing::new(0, DrawingToolType::ProjectionTool);

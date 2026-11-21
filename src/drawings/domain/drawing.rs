@@ -273,10 +273,12 @@ pub struct Drawing {
     #[serde(default)]
     pub note_text_style: Option<NoteTextStyle>,
     /// Extend line to left edge; a trend line, ray, extended line, info line or trend angle
-    /// extends past its first anchor, whichever way it was drawn
+    /// extends past its first anchor, whichever way it was drawn, and a curve or double curve
+    /// continues along its tangent past its first anchor
     pub extend_left: bool,
     /// Extend line to right edge; a trend line, ray, extended line, info line or trend angle
-    /// extends past its second anchor, whichever way it was drawn
+    /// extends past its second anchor, whichever way it was drawn, and a curve or double curve
+    /// continues along its tangent past its last anchor
     pub extend_right: bool,
     /// Arrow style at start of line
     pub arrow_start_style: ArrowStyle,
@@ -403,10 +405,10 @@ pub struct Drawing {
     /// bars; `None` uses the defaults, OHLC bars, as drawings saved before this setting do.
     #[serde(default)]
     pub bars_pattern: Option<BarsPatternConfig>,
-    /// Levels, target zone backgrounds, coefficient labels and leg style of the projection
+    /// Sector levels, gradient, coefficient labels and outline style of the projection
     /// tool. New projections start from [`ProjectionConfig::default`]; `None`, as on projections
-    /// saved before these settings, draws one dashed level at the whole move in the drawing
-    /// colour with a zone in the fill colour and no coefficients. Other tools ignore it.
+    /// saved before these settings, draws one dashed level at the sector's arc in the drawing
+    /// colour with a flat fill and no coefficients. Other tools ignore it.
     #[serde(default)]
     pub projection: Option<ProjectionConfig>,
     /// Card and badge colours and the background transparency of the forecast tool. New
@@ -432,7 +434,7 @@ pub struct Drawing {
     pub series_layer: Option<usize>,
 }
 
-fn enabled() -> bool {
+pub(super) fn enabled() -> bool {
     true
 }
 
@@ -678,6 +680,8 @@ impl Drawing {
 
     /// Whether the user can edit this drawing now: it is not [locked](Self::locked) and
     /// [user edits](Self::user_edit_enabled) are on.
+    /// Lock all drawings is not part of it: see
+    /// [`DrawingManager::accepts_user_edits`](crate::drawings::DrawingManager::accepts_user_edits).
     pub fn accepts_user_edits(&self) -> bool {
         self.user_edit_enabled && !self.locked
     }
@@ -933,12 +937,29 @@ impl Drawing {
         }
     }
 
+    /// The text colour of Text and Anchored text that has one. Their colour controls show and
+    /// edit it, as the drawing colour then paints at most a border left to follow it.
+    #[cfg(feature = "ui")]
+    pub(crate) fn text_color_override(&self) -> Option<[u8; 4]> {
+        matches!(
+            self.tool_type,
+            DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+        )
+        .then_some(self.text_color)
+        .flatten()
+    }
+
     /// Set the colour picked in a colour control. A price label's badge stays one colour, so its
-    /// border and fill follow as in [`Self::set_line_color`]; other tools keep theirs.
+    /// border and fill follow as in [`Self::set_line_color`]. Text with a colour of its own takes
+    /// the pick there, and its drawing colour takes the RGB at its own opacity; other tools keep
+    /// their other colours.
     #[cfg(feature = "ui")]
     pub(crate) fn recolor(&mut self, color: [u8; 4]) {
         if self.tool_type == DrawingToolType::PriceLabel {
             self.set_line_color(color);
+        } else if self.text_color_override().is_some() {
+            self.text_color = Some(color);
+            self.color[..3].copy_from_slice(&color[..3]);
         } else {
             self.color = color;
         }

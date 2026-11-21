@@ -171,6 +171,16 @@ impl SettingsDialog {
                 text,
                 |_| {},
             );
+            ui.add_enabled_ui(trading.show_execution_labels, |ui| {
+                trading_option(
+                    ui,
+                    2.0 * TRADING_INDENT,
+                    &mut trading.show_execution_prices,
+                    "Execution prices",
+                    text,
+                    |_| {},
+                );
+            });
         });
     }
 

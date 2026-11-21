@@ -152,6 +152,8 @@ impl Chart {
         }
         let [above, below] =
             [false, true].map(|down| pane.and_then(|at| self.drawn_neighbour(at, down)));
+        // A maximized pane hides the stack, so these entries would change only hidden state.
+        let stacked = self.pane_layout.maximized.is_none();
         let button = Rect::from_min_size(
             Pos2::new(plot.right() - 42.0, rect.top() + 2.0),
             egui::vec2(20.0, 20.0),
@@ -169,9 +171,9 @@ impl Chart {
         .ui(&mut child, |ui| {
             if pane.is_some() {
                 for (label, enabled, pick) in [
-                    ("Move pane up", above.is_some(), 0),
-                    ("Move pane down", below.is_some(), 1),
-                    ("Collapse pane", true, 2),
+                    ("Move pane up", stacked && above.is_some(), 0),
+                    ("Move pane down", stacked && below.is_some(), 1),
+                    ("Collapse pane", stacked, 2),
                 ] {
                     if ui
                         .add_enabled(enabled, egui::Button::new(l10n::text(ui.ctx(), label)))
@@ -325,21 +327,23 @@ impl Chart {
             .or_else(|| self.series_pane(SeriesId::MAIN));
         let above = pane_idx.checked_sub(1).map(|at| panes[at].id);
         let below = panes.get(pane_idx + 1).map(|pane| pane.id);
+        // A maximized pane hides the stack, so these entries would change only hidden state.
+        let stacked = self.pane_layout.maximized.is_none();
         child.menu_button("...", |ui| {
             let members = self.pane_series(id);
             let editable = members.iter().all(|member| {
                 !self.study_ids.contains(member) || self.indicator_user_edit_enabled(*member)
             });
             for (label, enabled, command) in [
-                ("Move pane up", drawn_above.is_some(), 0),
-                ("Move pane down", drawn_below.is_some(), 1),
+                ("Move pane up", stacked && drawn_above.is_some(), 0),
+                ("Move pane down", stacked && drawn_below.is_some(), 1),
                 (
                     if collapsed {
                         "Expand pane"
                     } else {
                         "Collapse pane"
                     },
-                    true,
+                    stacked,
                     2,
                 ),
                 (
@@ -608,6 +612,112 @@ mod tests {
             harness.get_by_label("Expand pane").click();
             harness.run();
             assert!(harness.state().pane_height(PaneId::MAIN).unwrap() > 24.0);
+        }
+    }
+
+    /// While a pane is maximized, its menu has no entry that changes only the panes it hides,
+    /// and a click on the header of a maximized study pane does not collapse it. Restore panes
+    /// brings back the order and heights from before maximizing, and the maximize and restore
+    /// steps are the only undo steps.
+    #[test]
+    fn maximized_pane_menu_and_header_leave_the_hidden_panes_alone() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        for price in [true, false] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0, 105.0], &[110.0, 115.0]);
+            let rsi = chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            chart.add_indicator(Box::new(crate::studies::MACD::new(12, 26, 9)));
+            let rsi_pane = chart.series_pane(rsi).unwrap();
+            chart.config_mut().show_volume = false;
+            // The maximized pane has a drawn pane above and below it.
+            let target = if price {
+                assert!(chart.move_pane(rsi_pane, 0));
+                PaneId::MAIN
+            } else {
+                rsi_pane
+            };
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(800.0, 600.0))
+                .allow_missing_glyphs()
+                .with_accessibility_check(false)
+                .build_ui_state(
+                    |ui, chart: &mut Chart| {
+                        chart.show(ui);
+                    },
+                    chart,
+                );
+            harness.run();
+            let layout = |chart: &Chart| -> Vec<_> {
+                chart
+                    .panes()
+                    .into_iter()
+                    .map(|id| (id, chart.pane_height(id)))
+                    .collect()
+            };
+            let before = layout(harness.state());
+            assert!(!harness.state().can_undo());
+            harness
+                .state_mut()
+                .user_action(|chart| chart.pane_layout.maximized = Some(target));
+            harness.run();
+            if !price {
+                let pane = harness.state().get_rendered_indicator_panes()[0].clone();
+                let header = pane.chart_rect.min + egui::vec2(10.0, 12.0);
+                harness.hover_at(header);
+                harness.run();
+                for pressed in [true, false] {
+                    harness.event(Event::PointerButton {
+                        pos: header,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    });
+                }
+                harness.run();
+                let chart = harness.state();
+                let stored = chart.pane_layout.panes.iter().find(|p| p.id == rsi_pane);
+                assert_eq!(stored.unwrap().collapsed, None, "header click");
+            }
+            let rect = harness
+                .state()
+                .pane_layout
+                .panes
+                .iter()
+                .find(|pane| pane.id == target)
+                .unwrap()
+                .rect;
+            harness.hover_at(rect.center());
+            harness.run();
+            harness
+                .query_all_by_label("...")
+                .find(|node| rect.contains(node.rect().center()))
+                .unwrap()
+                .click();
+            harness.run();
+            for entry in ["Move pane up", "Move pane down", "Collapse pane"] {
+                // The study header also announces Collapse pane; select the popup entry.
+                let node = harness
+                    .query_all_by_label(entry)
+                    .find(|node| node.rect().left() > rect.center().x)
+                    .unwrap();
+                assert!(
+                    node.accesskit_node().is_disabled(),
+                    "price={price}: {entry}"
+                );
+            }
+            // As the Restore panes button does.
+            harness
+                .state_mut()
+                .user_action(|chart| chart.pane_layout.maximized = None);
+            harness.run();
+            assert_eq!(layout(harness.state()), before, "price={price}");
+            let chart = harness.state_mut();
+            assert!(chart.undo());
+            assert_eq!(chart.pane_layout.maximized, Some(target));
+            assert!(chart.undo());
+            assert!(!chart.can_undo(), "price={price}");
         }
     }
 
