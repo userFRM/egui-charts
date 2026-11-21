@@ -3227,7 +3227,10 @@ mod tests {
             }
             h.get_by_label("B").click_secondary();
             h.run();
-            assert_eq!(h.get_by_label("Add section").is_disabled(), sorted);
+            assert_eq!(
+                h.get_by_label("Add section").accesskit_node().is_disabled(),
+                sorted
+            );
             if !sorted {
                 h.get_by_label("Add section").click();
                 h.run();
@@ -3273,7 +3276,10 @@ mod tests {
             ("Symbol tickers", true),
         ] {
             assert_eq!(
-                h.get_by_role_and_label(Role::CheckBox, label).toggled(),
+                h.get_by_role_and_label(Role::CheckBox, label)
+                    .accesskit_node()
+                    .data()
+                    .toggled(),
                 Some(if checked {
                     Toggled::True
                 } else {

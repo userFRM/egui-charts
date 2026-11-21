@@ -107,7 +107,9 @@ impl ShareControls {
         let revoked = self.last.as_ref().is_some_and(
             |(operation, _)| matches!(operation, Operation::Revoke(document) if document == name),
         );
-        if !offer.link && !offer.copy && !shared && !revoked {
+        let revoking =
+            matches!(&self.pending, Some(Operation::Revoke(document)) if document == name);
+        if !offer.link && !offer.copy && !shared && !revoked && !revoking {
             return false;
         }
         ui.separator();
@@ -273,14 +275,22 @@ mod tests {
         assert!(h.query_by_value("Shared by link").is_some());
         h.get_by_label("Stop sharing").click();
         h.run();
-        assert!(h.get_by_label("Stop sharing").is_disabled());
+        assert!(
+            h.get_by_label("Stop sharing")
+                .accesskit_node()
+                .is_disabled()
+        );
         assert!(h.query_by_value("Stopping sharing…").is_some());
         let (kind, name, reply) = host.0.lock().unwrap().1.pop().unwrap();
         assert_eq!((kind, name.as_str()), (ShareKind::Watchlist, "Shared"));
         reply.send(Err(FeedError::Other("locked".into())));
         h.run();
         assert!(h.query_by_value("Could not stop sharing: locked").is_some());
-        assert!(!h.get_by_label("Stop sharing").is_disabled());
+        assert!(
+            !h.get_by_label("Stop sharing")
+                .accesskit_node()
+                .is_disabled()
+        );
         h.get_by_label("Stop sharing").click();
         h.run();
         let (_, _, reply) = host.0.lock().unwrap().1.pop().unwrap();
