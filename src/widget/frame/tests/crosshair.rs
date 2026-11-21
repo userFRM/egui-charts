@@ -1793,11 +1793,14 @@ fn drawing_drag_hides_the_value_readout() {
             (start, start - egui::vec2(240.0, 200.0))
         } else {
             let time = chart.state.shown()[50].time;
-            drawing = chart.create_drawing(
-                Drawing::new(0, DrawingToolType::HorizontalLine),
-                &[(time, 110.0)],
+            drawing = Some(
+                chart
+                    .create_drawing(
+                        Drawing::new(0, DrawingToolType::HorizontalLine),
+                        &[(time, 110.0)],
+                    )
+                    .unwrap(),
             );
-            assert!(drawing.is_some());
             frame(&ctx, &mut chart, 0.1, vec![]);
             let map = chart.get_chart_mapping();
             let start = Pos2::new(map.idx_to_x(50), chart.last_price_map.price_to_y(110.0));
