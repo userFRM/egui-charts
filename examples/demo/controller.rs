@@ -1700,15 +1700,7 @@ impl DemoApp {
 
     fn write_export(&mut self, save_path: Option<std::path::PathBuf>, extension: &str, out: &[u8]) {
         let from_dialog = save_path.is_some();
-        let path = save_path.unwrap_or_else(|| {
-            // A symbol of a visitor's own data must not carry a path into the file name.
-            let stem = owndata::store::file_stem(&self.state.symbol);
-            let filename = format!("{stem}_export.{extension}");
-            #[cfg(not(target_arch = "wasm32"))]
-            return std::env::temp_dir().join(filename);
-            #[cfg(target_arch = "wasm32")]
-            std::path::PathBuf::from(filename)
-        });
+        let path = save_path.unwrap_or_else(|| default_export_path(&self.state.symbol, extension));
         #[cfg(not(target_arch = "wasm32"))]
         let result = std::fs::write(&path, out).map_err(|e| e.to_string());
         #[cfg(target_arch = "wasm32")]
@@ -1791,6 +1783,18 @@ impl eframe::App for DemoApp {
         let alerts = &self.settings_state.alerts;
         self.alerts
             .set_sound(alerts.play_sound.then(|| alerts.sound.clone()));
+        self.alerts.set_price(
+            self.chart.symbol(),
+            self.chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .rev()
+                .find(|bar| !bar.is_whitespace())
+                .map(|bar| bar.close),
+            self.chart
+                .instrument()
+                .and_then(|instrument| instrument.tick_size),
+        );
         self.alerts.poll(&ctx, &mut self.toasts);
         self.monitor_alerts(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
@@ -2478,12 +2482,7 @@ impl DemoApp {
             });
         self.drawing_toolbar.state.hide_indicators = self.chart.indicators_hidden();
         self.drawing_toolbar.state.hide_drawings = self.chart.drawings().is_hidden();
-        let drawings = &self.chart.drawings().drawings;
-        self.drawing_toolbar.state.lock_all = drawings.iter().any(|d| d.user_edit_enabled)
-            && drawings
-                .iter()
-                .filter(|d| d.user_edit_enabled)
-                .all(|d| d.locked);
+        self.drawing_toolbar.state.lock_all = self.chart.drawings().is_locked();
         if self.drawing_toolbar.state.preferences.hidden {
             let action = self.drawing_toolbar.show_with_action(ui);
             self.handle_drawing_toolbar(action);
@@ -2516,11 +2515,12 @@ impl DemoApp {
         }
         let action = egui_charts::ui::drawing_toolbar::utilities::RemoveMenu::request(
             action,
-            self.chart
-                .drawings()
-                .drawings
-                .iter()
-                .any(|drawing| drawing.locked && drawing.user_edit_enabled),
+            {
+                let dm = self.chart.drawings();
+                dm.drawings
+                    .iter()
+                    .any(|d| d.user_edit_enabled && (d.locked || dm.is_locked()))
+            },
             &mut self.drawing_toolbar.state,
         );
         match action {
@@ -2681,7 +2681,9 @@ impl DemoApp {
             DrawingToolbarAction::HideAllDrawings => {
                 dm.set_hidden(self.drawing_toolbar.state.hide_drawings);
             }
-            DrawingToolbarAction::LockAllDrawings => dm.toggle_lock_all(),
+            DrawingToolbarAction::LockAllDrawings => {
+                dm.set_locked(self.drawing_toolbar.state.lock_all)
+            }
             DrawingToolbarAction::InsertGlyph { icon_name, size } => {
                 dm.start_icon_insertion(icon_name.to_string());
                 if let Some(drawing) = dm.curr_drawing_mut() {
@@ -2974,12 +2976,13 @@ impl DemoApp {
         }
 
         // Live drawings.
+        let all_locked = self.chart.drawings().is_locked();
         for d in self.chart.drawings().listed_drawings() {
             let mut item =
                 SourceItem::drawing(d.id, d.tool_type, d.color32()).with_panes(&self.chart);
             item.visible = d.visible;
             item.locked = d.locked;
-            item.user_edit_enabled = d.user_edit_enabled;
+            item.user_edit_enabled = d.user_edit_enabled && !all_locked;
             item.z_index = d.z_order;
             item.label = d.label.clone();
             item.folder = d.folder.clone();
@@ -3032,7 +3035,7 @@ impl DemoApp {
                     .drawings()
                     .drawings
                     .iter()
-                    .any(|d| d.id == id && d.accepts_user_edits())
+                    .any(|d| d.id == id && chart.drawings().accepts_user_edits(d))
                 {
                     let _ = chart
                         .drawings_mut()
@@ -3307,7 +3310,6 @@ impl DemoApp {
 
     fn show_alerts_panel(&mut self, ui: &mut egui::Ui) {
         self.list_alert_sources();
-        self.alerts.set_symbol(&self.state.symbol);
         match self.alerts.show(ui) {
             AlertPanelAction::CreateAlert => self.open_alert(None),
             AlertPanelAction::EditAlert(mut alert)
@@ -3916,7 +3918,9 @@ impl DemoApp {
         if let Some(id) = drawing_settings
             && !self.replay_selecting
             && self.chart.drawings().drawings.iter().any(|d| {
-                d.id == id && (!d.accepts_user_edits() || !d.tool_type.edits_text_inline())
+                d.id == id
+                    && (!self.chart.drawings().accepts_user_edits(d)
+                        || !d.tool_type.edits_text_inline())
             })
         {
             self.open_drawing_props_for(id);
@@ -4148,7 +4152,7 @@ impl DemoApp {
                 if dm
                     .drawings
                     .iter()
-                    .any(|d| d.id == id && d.accepts_user_edits())
+                    .any(|d| d.id == id && dm.accepts_user_edits(d))
                 {
                     self.chart.move_drawing_to_pane(id, pane);
                 }
@@ -4382,6 +4386,16 @@ impl DemoApp {
                 self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::OpenLayout)
             }
             A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
+            A::NextWatchlistSymbol | A::PreviousWatchlistSymbol => {
+                let step = if action == A::NextWatchlistSymbol {
+                    self.watchlist.select_next_symbol()
+                } else {
+                    self.watchlist.select_previous_symbol()
+                };
+                if let WatchlistAction::SelectSymbol(symbol) = step {
+                    self.open_catalog_symbol(&symbol);
+                }
+            }
             A::ToggleSession if DemoSymbol::has_hours(&self.state.symbol) => {
                 let session = if self.timeframe_toolbar.state.session_type == SessionType::RTH {
                     SessionType::ETH
@@ -4401,11 +4415,9 @@ impl DemoApp {
                     if ctx
                         .layer_id_at(pos)
                         .is_some_and(|layer| layer.order == egui::Order::Background)
+                        && let Some(price) = self.chart.alert_price_at(pos)
                     {
-                        let price = mapping.y_to_price(pos.y);
-                        if price.is_finite() {
-                            self.quick_price_alert(self.chart.symbol().to_owned(), price);
-                        }
+                        self.quick_price_alert(self.chart.symbol().to_owned(), price);
                     }
                 } else {
                     self.open_alert(None);
@@ -4531,13 +4543,7 @@ impl DemoApp {
         png: &[u8],
         path: Option<std::path::PathBuf>,
     ) -> Result<String, String> {
-        let path = path.unwrap_or_else(|| {
-            let filename = format!("{}_chart.png", self.state.symbol);
-            #[cfg(not(target_arch = "wasm32"))]
-            return std::env::temp_dir().join(filename);
-            #[cfg(target_arch = "wasm32")]
-            std::path::PathBuf::from(filename)
-        });
+        let path = path.unwrap_or_else(|| default_export_path(&self.state.symbol, "png"));
         #[cfg(not(target_arch = "wasm32"))]
         let result = std::fs::write(&path, png).map_err(|error| error.to_string());
         #[cfg(target_arch = "wasm32")]
@@ -4549,6 +4555,19 @@ impl DemoApp {
 // ---------------------------------------------------------------------------
 // Free helpers.
 // ---------------------------------------------------------------------------
+
+/// Default export destination, named from a path-safe symbol and the local time to the second,
+/// such as `SAMPLE_2026-11-20_06-50-12.png`. Native hosts save in the temporary directory;
+/// browsers download the file. A visitor's symbol must not carry a path into the file name.
+fn default_export_path(symbol: &str, extension: &str) -> std::path::PathBuf {
+    let stem = owndata::store::file_stem(symbol);
+    let time = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let filename = format!("{stem}_{time}.{extension}");
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::env::temp_dir().join(filename);
+    #[cfg(target_arch = "wasm32")]
+    std::path::PathBuf::from(filename)
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn open_image(ctx: &egui::Context, png: &[u8]) -> Result<String, String> {
@@ -6399,6 +6418,96 @@ mod tests {
         fn flush(&mut self) {}
     }
 
+    /// The selection toolbar opens the same drawing alert editor as the drawing menu.
+    #[test]
+    fn selection_toolbar_add_alert_opens_the_dialog_for_the_drawing() {
+        use eframe::App as _;
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-04T17:30:00Z".parse().unwrap(),
+            false,
+        );
+        app.live.set_paused(true);
+        settle(&mut app, &ctx);
+        ctx.enable_accesskit();
+        let id = app
+            .chart
+            .drawings()
+            .drawings
+            .iter()
+            .map(|d| d.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let n = app.bars.len();
+        let price = app.bars.last().unwrap().close;
+        let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+        drawing.completed = true;
+        drawing.chart_points = vec![
+            ChartPoint::new((n - 20) as f32, price),
+            ChartPoint::new((n - 5) as f32, price),
+        ];
+        let source = drawing.alert_source(0);
+        app.chart.drawings_mut().drawings.push(drawing);
+        app.chart.drawings_mut().select(id);
+        let draw = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+        };
+        draw(&mut app, vec![]).drop_without_applying_deltas();
+        let output = draw(&mut app, vec![]);
+        let pos = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find_map(|(_, node)| {
+                if node.label() != Some("Add alert") || node.role() == egui::accesskit::Role::Label
+                {
+                    return None;
+                }
+                let rect = node.bounds()?;
+                Some(egui::pos2(
+                    (rect.x0 + rect.x1) as f32 / 2.0,
+                    (rect.y0 + rect.y1) as f32 / 2.0,
+                ))
+            })
+            .expect("missing control: Add alert");
+        output.drop_without_applying_deltas();
+        for pressed in [true, false] {
+            draw(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        pressed,
+                        button: egui::PointerButton::Primary,
+                        modifiers: Default::default(),
+                    },
+                ],
+            )
+            .drop_without_applying_deltas();
+        }
+        assert!(app.alert_dialog.is_open);
+        assert!(
+            matches!(&app.alert_dialog.alert.condition, AlertCondition::Compare { other, .. } if *other == source)
+        );
+    }
+
     #[test]
     fn depth_menu_requires_a_declaration_and_restores_its_view() {
         use eframe::App;
@@ -7974,6 +8083,112 @@ mod tests {
     }
 
     #[test]
+    fn watchlist_shortcuts_follow_the_filtered_order_and_replay_keeps_its_keys() {
+        use eframe::App;
+        use egui::{Event, Key, Modifiers};
+        use egui_charts::model::{Watchlist, WatchlistFlag, WatchlistItem};
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        let mut list = Watchlist::from_text("List", "STOCKC,###Section,STOCKB,TOKENA,STOCKA");
+        for item in &mut list.items {
+            if let WatchlistItem::Symbol { symbol, flag } = item
+                && symbol != "TOKENA"
+            {
+                *flag = Some(WatchlistFlag::Red);
+            }
+        }
+        app.watchlist = WatchlistPanel::new(vec![list]);
+        app.watchlist.set_flag_filter(Some(WatchlistFlag::Red));
+        app.open_panel = Some(SidePanel::Watchlist);
+        settle(&mut app, &ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        let texts = ui_frame(&ctx, size, vec![], |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        let header = texts.iter().find(|(text, _)| text == "Symbol").unwrap().1;
+        ui_click(&ctx, size, header.center(), |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        let chart = app.chart.get_chart_mapping().rect.center();
+        ui_click(&ctx, size, chart, |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        settle(&mut app, &ctx);
+        let chart_focus = ctx.memory(|memory| memory.focused()).unwrap();
+        let press = |app: &mut DemoApp, key, modifiers| {
+            ui_frame(
+                &ctx,
+                size,
+                vec![
+                    Event::ModifiersChanged(modifiers),
+                    Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    },
+                    Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers,
+                    },
+                ],
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+        };
+        for (key, modifiers, symbol) in [
+            (Key::ArrowDown, Modifiers::NONE, "STOCKA"),
+            (Key::ArrowDown, Modifiers::NONE, "STOCKB"),
+            (Key::ArrowUp, Modifiers::NONE, "STOCKA"),
+            (Key::ArrowUp, Modifiers::NONE, "STOCKC"),
+            (Key::ArrowDown, Modifiers::NONE, "STOCKA"),
+            (Key::Space, Modifiers::NONE, "STOCKB"),
+            (Key::Space, Modifiers::SHIFT, "STOCKA"),
+        ] {
+            press(&mut app, key, modifiers);
+            assert_eq!(app.chart.symbol(), symbol, "{key:?} / {modifiers:?}");
+            assert_eq!(app.state.symbol, symbol);
+            assert_eq!(app.live.instrument().symbol, symbol);
+            settle(&mut app, &ctx);
+            assert_eq!(
+                ctx.memory(|memory| memory.focused()),
+                Some(chart_focus),
+                "{key:?} changed keyboard focus"
+            );
+        }
+
+        app.start_replay();
+        app.handle_replay_control(ReplayControlAction::Pause);
+        settle(&mut app, &ctx);
+        let before = app.replay.as_ref().unwrap().state.curr_bar;
+        for (key, modifiers, offset, playing) in [
+            (Key::ArrowRight, Modifiers::NONE, 1, false),
+            (Key::ArrowLeft, Modifiers::NONE, 0, false),
+            (Key::Space, Modifiers::NONE, 0, true),
+            (Key::Space, Modifiers::SHIFT, 0, false),
+        ] {
+            press(&mut app, key, modifiers);
+            assert_eq!(app.chart.symbol(), "STOCKA");
+            let replay = app.replay.as_ref().unwrap();
+            if key != Key::Space {
+                assert_eq!(replay.state.curr_bar, before + offset);
+            }
+            assert_eq!(replay.state.is_playing(), playing);
+        }
+        press(&mut app, Key::ArrowDown, Modifiers::NONE);
+        assert_eq!(app.chart.symbol(), "STOCKB");
+        assert!(
+            app.replay.is_none(),
+            "a symbol change exits replay as a row click does"
+        );
+    }
+
+    #[test]
     fn session_shortcut_switches_symbols_with_hours_and_keeps_continuous_markets() {
         for (symbol, initial, expected) in [
             ("SAMPLE", SessionType::Full24x7, SessionType::RTH),
@@ -8440,6 +8655,48 @@ mod tests {
                 }
             }
             output.drop_without_applying_deltas();
+        }
+
+        // Every download of a symbol is kept: the default name carries the capture time.
+        use chrono::Timelike;
+        fn paths_time(path: &std::path::Path) -> chrono::NaiveDateTime {
+            let name = path.file_name().unwrap().to_str().unwrap();
+            let stamp = name
+                .strip_prefix("BTC_USD_")
+                .and_then(|name| name.strip_suffix(".png"));
+            chrono::NaiveDateTime::parse_from_str(stamp.unwrap(), "%Y-%m-%d_%H-%M-%S").unwrap()
+        }
+        let now = || chrono::Local::now().naive_local();
+        app.state.symbol = "BTC/USD".into();
+        let mut paths: Vec<std::path::PathBuf> = Vec::new();
+        for _ in 0..2 {
+            // The second download is a second after the first.
+            while paths.len() == 1 && now().with_nanosecond(0).unwrap() <= paths_time(&paths[0]) {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let before = now().with_nanosecond(0).unwrap();
+            app.handle_top_toolbar(&ctx, TopToolbarAction::TakeScreenshot);
+            app.screenshot_requested.as_mut().unwrap().1.size = [200, 120];
+            app.handle_screenshot(&ctx);
+            let after = now();
+            let message = &app.toasts.toasts().last().unwrap().message;
+            let path = std::path::PathBuf::from(
+                message
+                    .strip_prefix("Export successful: ")
+                    .unwrap_or_else(|| panic!("{message}")),
+            );
+            assert_eq!(path.parent(), Some(std::env::temp_dir().as_path()));
+            assert!(
+                (before..=after).contains(&paths_time(&path)),
+                "{}",
+                path.display()
+            );
+            assert!(std::fs::read(&path).unwrap().starts_with(b"\x89PNG"));
+            paths.push(path);
+        }
+        assert_ne!(paths[0], paths[1]);
+        for path in paths {
+            std::fs::remove_file(path).unwrap();
         }
     }
 
@@ -9043,7 +9300,13 @@ mod tests {
         let map = app.chart.get_chart_mapping();
         let point = egui::pos2(map.rect.center().x, map.rect.center().y);
         let range = map.price.range();
-        let expected = (range.min + range.max) / 2.0;
+        let expected = app.chart.alert_price_at(point).unwrap();
+        let tick = app
+            .chart
+            .instrument()
+            .and_then(|instrument| instrument.tick_size)
+            .unwrap_or(0.01);
+        assert!((expected - (range.min + range.max) / 2.0).abs() <= tick / 2.0 + 1e-9);
         frame(
             &mut app,
             vec![
@@ -9662,8 +9925,90 @@ mod tests {
         );
     }
 
-    /// Existing drawing settings survive opening and applying the dialog, and the toolbar
-    /// reflects locks changed through other drawing controls rather than an optimistic toggle.
+    /// Turning Lock all off preserves each drawing's own lock, including through undo and redo.
+    #[test]
+    fn lock_all_drawings_returns_each_drawing_to_its_own_lock() {
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        for (id, bar, price) in [(7, 1.0, 105.0), (8, 3.0, 107.0)] {
+            let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+            drawing.chart_points = vec![
+                ChartPoint::new(bar, price),
+                ChartPoint::new(bar + 1.0, price + 1.0),
+            ];
+            drawing.completed = true;
+            app.chart.drawings_mut().drawings.push(drawing);
+        }
+        app.user_action(|app| {
+            let dm = app.chart.drawings_mut();
+            dm.select(7);
+            dm.set_selected_locked(true);
+        });
+        for (command, locked) in [
+            ("lock-drawings", true),
+            ("undo", false),
+            ("redo", true),
+            ("lock-drawings", false),
+        ] {
+            app.execute_search_command(&ctx, command);
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.show_drawing_toolbar(ui, egui::Color32::BLACK)
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(app.drawing_toolbar.state.lock_all, locked, "{command}");
+        }
+        let locks: Vec<_> = app
+            .chart
+            .drawings()
+            .drawings
+            .iter()
+            .map(|d| (d.id, d.locked))
+            .collect();
+        assert_eq!(locks, [(7, true), (8, false)]);
+    }
+
+    /// A drawing placed while every drawing is locked cannot be dragged, and the button stays on.
+    #[test]
+    fn lock_all_drawings_holds_a_drawing_placed_while_it_is_on() {
+        use egui_charts::drawings::DrawingToolType;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.execute_search_command(&ctx, "lock-drawings");
+        let dm = app.chart.drawings_mut();
+        let x_to_bar = |x: f32| x / 10.0;
+        let y_to_price = |y: f32| 200.0 - f64::from(y);
+        dm.start_drawing_with_coords(
+            DrawingToolType::TrendLine,
+            egui::pos2(10.0, 95.0),
+            x_to_bar,
+            y_to_price,
+        );
+        dm.add_point_with_coords(egui::pos2(20.0, 94.0), x_to_bar, y_to_price);
+        dm.complete_curr_drawing();
+        let placed = dm.drawings.last().unwrap().clone();
+        assert!(!placed.locked);
+        dm.start_drag_body(placed.id, egui::pos2(15.0, 94.5));
+        dm.update_drag_handle(
+            egui::pos2(55.0, 54.5),
+            x_to_bar,
+            y_to_price,
+            |price, from, to| price - f64::from(to - from),
+        );
+        dm.end_drag_handle();
+        assert_eq!(
+            dm.drawings.last().unwrap().chart_points,
+            placed.chart_points
+        );
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.show_drawing_toolbar(ui, egui::Color32::BLACK)
+        })
+        .drop_without_applying_deltas();
+        assert!(app.drawing_toolbar.state.lock_all);
+    }
+
+    /// Existing drawing settings survive opening and applying the dialog, and the object tree
+    /// leaves the colour of a drawing the user cannot edit as it is.
     #[test]
     fn drawing_controls_round_trip_visibility_fill_fonts_and_locks() {
         use egui_charts::drawings::{Drawing, DrawingToolType, TimeframeVisibility};
@@ -9750,21 +10095,10 @@ mod tests {
         app.handle_object_tree(ObjectTreeAction::ChangeColor(7, egui::Color32::RED), &[]);
         assert_eq!(app.chart.drawings().drawings[0].color, [51, 102, 153, 85]);
         app.chart.drawings_mut().drawings[0].user_edit_enabled = true;
-        app.chart
-            .drawings_mut()
-            .edit_drawing(7, |d| d.locked = true)
-            .unwrap();
-        ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.show_drawing_toolbar(ui, egui::Color32::BLACK)
-        })
-        .drop_without_applying_deltas();
-        assert!(app.drawing_toolbar.state.lock_all);
-        app.chart.drawings_mut().drawings[0].locked = false;
-        ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.show_drawing_toolbar(ui, egui::Color32::BLACK)
-        })
-        .drop_without_applying_deltas();
-        assert!(!app.drawing_toolbar.state.lock_all);
+        app.chart.drawings_mut().set_locked(true);
+        app.handle_object_tree(ObjectTreeAction::ChangeColor(7, egui::Color32::RED), &[]);
+        assert_eq!(app.chart.drawings().drawings[0].color, [51, 102, 153, 85]);
+        app.chart.drawings_mut().set_locked(false);
         use egui_charts::data::VolumeProfileConfig;
         use egui_charts::drawings::{
             FibonacciConfig, GannConfig, GannLevel, PitchforkConfig, PositionSize, PositionSizing,
@@ -10878,6 +11212,81 @@ mod tests {
         assert!(near(span.to, "2026-11-11T05:00:00Z"), "{span:?}");
     }
 
+    /// The demo's interval menu lists every range preset and applies the chosen size in ticks.
+    #[test]
+    fn interval_menu_selects_a_range_preset() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+        );
+        let trigger = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find_map(|(_, node)| {
+                // Without saved favorites the menu trigger is named for the current interval.
+                if node.role() == egui::accesskit::Role::Button && node.label() == Some("1 minute")
+                {
+                    node.bounds()
+                } else {
+                    None
+                }
+            })
+            .expect("Chart interval trigger");
+        let point = egui::pos2(
+            ((trigger.x0 + trigger.x1) / 2.0) as f32,
+            ((trigger.y0 + trigger.y1) / 2.0) as f32,
+        );
+        output.drop_without_applying_deltas();
+        ui_click(&ctx, size, point, |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest());
+        });
+        let rows = ui_frame(&ctx, size, Vec::new(), |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest());
+        });
+        for label in [
+            "1 range tick",
+            "10 range ticks",
+            "100 range ticks",
+            "1000 range ticks",
+        ] {
+            assert_eq!(
+                rows.iter().filter(|(text, _)| text == label).count(),
+                1,
+                "{label} must be listed in the demo interval menu"
+            );
+        }
+        let point = rows
+            .iter()
+            .find(|(text, _)| text == "100 range ticks")
+            .unwrap()
+            .1
+            .center();
+        ui_click(&ctx, size, point, |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest());
+        });
+        assert_eq!(app.chart.timeframe(), Some("100r".parse().unwrap()));
+        assert_eq!(app.chart.chart_type(), ChartType::Range);
+        let tick_size = app.chart.instrument().unwrap().tick_size.unwrap();
+        assert!((app.chart.chart_type_params().range_size - 100.0 * tick_size).abs() < 1e-10);
+    }
+
     /// Selecting seconds must rebuild the same executions, including the current partial minute.
     #[test]
     fn interval_switch_rebuilds_the_same_executions() {
@@ -11330,7 +11739,13 @@ mod tests {
                     .drop_without_applying_deltas();
                 }
                 settle(&mut app, &ctx);
-                assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
+                // Adding a member keeps a completed once alert stopped.
+                let expected = match (watchlist, replay) {
+                    (true, false) => 3,
+                    (true, true) => 2,
+                    _ => 1,
+                };
+                assert_eq!(app.alerts.log().len(), expected);
                 if watchlist && !replay {
                     let feed = LiveFeed::new("STOCKB", app.live.now());
                     finish_feed(&feed);
@@ -11396,7 +11811,7 @@ mod tests {
                     .drop_without_applying_deltas();
                 }
                 settle(&mut app, &ctx);
-                assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
+                assert_eq!(app.alerts.log().len(), expected);
                 app.switch_timeframe(Timeframe::Min1);
                 let replacement = app
                     .chart
@@ -11417,7 +11832,7 @@ mod tests {
                 settle(&mut app, &ctx);
                 assert_eq!(
                     app.alerts.log().len(),
-                    if watchlist { 4 } else { 2 },
+                    expected + 1,
                     "an edited alert must use its newly selected study"
                 );
                 let reference = LiveFeed::new("FOREXA", app.live.now());

@@ -779,6 +779,7 @@ impl Chart {
                 next.0.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
                 next.0.eraser_mode = self.drawings.eraser_mode;
                 next.0.set_hidden(self.drawings.is_hidden());
+                next.0.set_locked(self.drawings.is_locked());
                 next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
                 self.flush_change_events();
                 next.0.events.clear();
