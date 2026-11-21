@@ -900,6 +900,7 @@ mod tests {
                 clock: BarClock::new(Timeframe::Day1),
                 instrument: None,
                 timeframe: Timeframe::Day1,
+                chart: None,
             };
             study.update_data(&chart, 0, &[source]);
             for (line, expected) in expected.into_iter().enumerate() {
@@ -995,6 +996,7 @@ mod tests {
                     clock: BarClock::new(Timeframe::Day1),
                     instrument: None,
                     timeframe: Timeframe::Day1,
+                    chart: None,
                 };
                 study.update_data(chart, 0, &[source]);
                 let table = study.table().unwrap();
@@ -1038,6 +1040,7 @@ mod tests {
             clock: BarClock::new(Timeframe::Day1),
             instrument: None,
             timeframe: Timeframe::Day1,
+            chart: None,
         }];
         let mut updated = new(Timeframe::Month1);
         updated.update_data(&monthly, 0, &sources);
@@ -1114,6 +1117,7 @@ mod tests {
                 clock: BarClock::new(Timeframe::Day1),
                 instrument,
                 timeframe: Timeframe::Day1,
+                chart: None,
             }
         }
         let source = supplied(&msft, None);
