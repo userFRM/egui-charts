@@ -2683,10 +2683,18 @@ fn footprint_and_session_profile_write_the_instrument_volume_decimals() {
     use crate::studies::{InputValue, VolProfileSession};
     // Decimals, the bid-by-ask cell, a profile row value and the bar volume of the statistics,
     // 0.375 + 123.456; without decimals they read `0.375 × 123`, `913.58` and `124`. The trade
-    // count of the statistics stays `2`.
-    for (decimals, cell, row, volume) in [
-        (0, "0 × 123", "914", "124"),
-        (3, "0.375 × 123.456", "913.578", "123.831"),
+    // count of the statistics stays `2`. At a spacing too narrow for 1237566, the statistics of
+    // a bar of 618,783 by 618,783 write it as 1.2M at 0 decimals, as without them.
+    let sizes = [0.375, 123.456];
+    for (decimals, sizes, spacing, expected) in [
+        (0, sizes, 150.0, &["0 × 123", "914", "124", "2"][..]),
+        (
+            3,
+            sizes,
+            150.0,
+            &["0.375 × 123.456", "913.578", "123.831", "2"],
+        ),
+        (0, [618_783.0; 2], 30.0, &["1.2M", "2"]),
     ] {
         let bars = (0..10)
             .map(|minute| {
@@ -2705,10 +2713,10 @@ fn footprint_and_session_profile_write_the_instrument_volume_decimals() {
             crate::studies::Indicator::set_input(&mut profile, id, value).unwrap();
         }
         chart.add_indicator(Box::new(profile));
-        chart.apply_synced_time_scale(150.0, 1.0);
+        chart.apply_synced_time_scale(spacing, 1.0);
         let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
         for bar in chart.bars(crate::widget::SeriesId::MAIN).to_vec() {
-            for (size, side) in [(0.375, OrderSide::Sell), (123.456, OrderSide::Buy)] {
+            for (size, side) in sizes.into_iter().zip([OrderSide::Sell, OrderSide::Buy]) {
                 flow.push(&Tick::new(bar.time, 105.0, size, Some(side)))
                     .unwrap();
             }
@@ -2741,7 +2749,7 @@ fn footprint_and_session_profile_write_the_instrument_volume_decimals() {
                 })
                 .collect::<Vec<_>>();
         }
-        for expected in [cell, row, volume, "2"] {
+        for &expected in expected {
             assert!(
                 texts.iter().any(|text| text == expected),
                 "volume decimals {decimals}: {expected} not in {texts:?}"

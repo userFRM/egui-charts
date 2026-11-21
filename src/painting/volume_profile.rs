@@ -320,7 +320,6 @@ pub(crate) fn paint_profile(
     }
 
     if config.show_values && !drawing {
-        use crate::scales::PriceFormatter;
         let formatter = crate::scales::VolumeFormatter {
             precision: volume_decimals.map_or(2, usize::from),
         };
@@ -342,21 +341,21 @@ pub(crate) fn paint_profile(
             } else if options {
                 format!(
                     "{} × {}",
-                    formatter.format(profile.up[row]),
-                    formatter.format(profile.down[row])
+                    formatter.format_with_min_unit_decimals(profile.up[row], 2),
+                    formatter.format_with_min_unit_decimals(profile.down[row], 2)
                 )
             } else {
                 match config.display {
-                    ProfileDisplay::Total => formatter.format(volume),
+                    ProfileDisplay::Total => formatter.format_with_min_unit_decimals(volume, 2),
                     ProfileDisplay::UpDown => format!(
                         "{} / {}",
-                        formatter.format(profile.up[row]),
-                        formatter.format(profile.down[row])
+                        formatter.format_with_min_unit_decimals(profile.up[row], 2),
+                        formatter.format_with_min_unit_decimals(profile.down[row], 2)
                     ),
                     ProfileDisplay::Delta => format!(
                         "{}{}",
                         if delta > 0.0 { "+" } else { "" },
-                        formatter.format(delta)
+                        formatter.format_with_min_unit_decimals(delta, 2)
                     ),
                 }
             };

@@ -100,16 +100,19 @@ pub struct FootprintConfig {
     pub value_area_low: Option<Stroke>,
     /// Trade profiles: how volume nodes are chosen.
     pub node_sensitivity: NodeSensitivity,
-    /// Prefer 1.2K for 1,200 and 3.4M for 3,400,000, even when every digit would fit, at the
-    /// [`volume_decimals`](Self::volume_decimals) when they are set. Otherwise compact units are
-    /// only a width-fitting fallback.
+    /// Prefer 1.2K for 1,200 and 3.4M for 3,400,000, even when every digit would fit, with the
+    /// decimals [`volume_decimals`](Self::volume_decimals) describes. Otherwise compact units
+    /// are only a width-fitting fallback.
     pub abbreviate: bool,
-    /// Decimals of volumes, abbreviated K, M and B values included, as
+    /// Decimals of volumes, as
     /// [`Instrument::volume_decimals`](crate::model::Instrument::volume_decimals) sets them for
-    /// the chart's other volume readouts. `None`, the default, keeps the footprint's own rule:
-    /// up to three decimals below 100, none from 100 up, scientific notation below 0.001 and one
-    /// decimal in compact units. Trade counts and open interest keep that rule either way. The
-    /// chart takes its instrument's decimals when this is `None`.
+    /// the chart's other volume readouts. Abbreviated K, M and B values keep the footprint's one
+    /// decimal, and ladders their two, when these decimals are fewer, so at 0 a level of 1,499
+    /// reads 1.5K and one of 1,234,567 reads 1.2M, or 1.23M in a ladder. `None`, the default,
+    /// keeps the footprint's own rule: up to three decimals below 100, none from 100 up,
+    /// scientific notation below 0.001, one decimal in compact units and at most two in ladders.
+    /// Trade counts and open interest keep that rule either way. The chart takes its
+    /// instrument's decimals when this is `None`.
     pub volume_decimals: Option<u8>,
     /// Write zero volumes as 0. Otherwise they are left blank, so a one-sided row shows only
     /// the side that traded.
@@ -1069,40 +1072,48 @@ pub(super) fn cell_text(
     }
 }
 
-/// The number of a ladder cell: two decimals when abbreviated, one when the column is too narrow.
+/// The number of a ladder cell: at most two decimals, trailing zeros dropped, when abbreviated
+/// (the volume decimals from two up), one when the column is too narrow.
 fn ladder_text(value: f64, config: &FootprintConfig, compact: bool) -> String {
     if value == 0.0 && !config.show_zero {
         return String::new();
     }
-    if config.abbreviate && !compact && value.abs() >= 1000.0 && config.volume_decimals.is_none() {
+    if config.abbreviate
+        && !compact
+        && value.abs() >= 1000.0
+        && config.volume_decimals.is_none_or(|decimals| decimals < 2)
+    {
         // 999,995 and above round to 1000.00K, so they take the next unit.
         let (scaled, unit) = if value.abs() >= 999_995.0 {
             (value / 1e6, 'M')
         } else {
             (value / 1e3, 'K')
         };
-        return format!(
-            "{}{unit}",
-            egui::emath::format_with_decimals_in_range(scaled, 0..=2)
-        );
+        // Two decimals always write a point, so trimming never eats an integer digit.
+        let text = crate::scales::format_decimal(scaled, 2);
+        return format!("{}{unit}", text.trim_end_matches('0').trim_end_matches('.'));
     }
     volume_text(value, config.abbreviate || compact, config.volume_decimals)
 }
 
 /// A volume as cells, ladders and statistics write it: with `decimals`, as the chart's other
-/// volume readouts write it, else by the footprint's own rule, see
+/// volume readouts write it, else by the footprint's own rule, which also writes K, M and B
+/// values at 0 decimals, see
 /// [`FootprintConfig::volume_decimals`].
 fn volume_text(value: f64, abbreviate: bool, decimals: Option<u8>) -> String {
     if let Some(decimals) = decimals {
         let precision = usize::from(decimals);
-        return if abbreviate {
-            crate::scales::PriceFormatter::format(
-                &crate::scales::VolumeFormatter { precision },
-                value,
-            )
-        } else {
-            crate::scales::format_decimal(value, precision)
-        };
+        if !abbreviate {
+            return crate::scales::format_decimal(value, precision);
+        }
+        let text = crate::scales::PriceFormatter::format(
+            &crate::scales::VolumeFormatter { precision },
+            value,
+        );
+        // At 0 decimals K, M and B values keep the one decimal of the rule below.
+        if precision > 0 || !text.ends_with(['K', 'M', 'B']) {
+            return text;
+        }
     }
     if abbreviate && value.abs() >= 1000.0 {
         // 999,950 and above round to 1000.0K at one decimal, so they take the next unit.
@@ -4496,14 +4507,34 @@ mod tests {
             (FootprintMode::AverageSize, row(0.0, 0.0, 0.0), config(false, true), ""),
             (FootprintMode::Volume, row(0.0, 1234.56, 0.0), decimals(true, 3), "1.235K"),
             (FootprintMode::Volume, row(0.0, 1234.56, 0.0), decimals(false, 3), "1234.560"),
-            (FootprintMode::Volume, row(0.0, 1234.0, 0.0), decimals(true, 0), "1K"),
+            (FootprintMode::Volume, row(0.0, 1499.0, 0.0), decimals(true, 0), "1.5K"),
+            (FootprintMode::Volume, row(0.0, 1500.0, 0.0), decimals(true, 0), "1.5K"),
+            (FootprintMode::Volume, row(0.0, 1_234_567.0, 0.0), decimals(true, 0), "1.2M"),
+            (FootprintMode::Volume, row(0.0, 999.0, 0.0), decimals(true, 0), "999"),
+            (FootprintMode::BidAsk, row(1400.0, 1600.0, 0.0), decimals(true, 0), "1.4K × 1.6K"),
             (FootprintMode::Delta, row(0.0004, 0.0, 0.0), decimals(false, 3), "0.000"),
             (FootprintMode::BidAskTrades, counted.clone(), decimals(false, 3), "1 × 2"),
             (FootprintMode::Trades, counted.clone(), decimals(false, 3), "4"),
             (FootprintMode::AverageSize, counted, decimals(false, 3), "5.000"),
         ];
-        // A ladder keeps its own two-decimal units only without volume decimals.
-        assert_eq!(ladder_text(1234.56, &decimals(true, 3), false), "1.235K");
+        // A ladder keeps its own two decimals in units below two volume decimals.
+        for (value, places, expected) in [
+            (1234.56, Some(3), "1.235K"),
+            (1499.0, Some(0), "1.5K"),
+            (1500.0, Some(0), "1.5K"),
+            (1_234_567.0, Some(0), "1.23M"),
+            (999.0, Some(0), "999"),
+            (1234.0, Some(1), "1.23K"),
+            (1499.0, None, "1.5K"),
+        ] {
+            let mut config = config(true, true);
+            config.volume_decimals = places;
+            assert_eq!(
+                ladder_text(value, &config, false),
+                expected,
+                "{value}, {places:?} decimals"
+            );
+        }
         for (mode, row, config, expected) in texts {
             assert_eq!(
                 cell_text(
