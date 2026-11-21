@@ -6,8 +6,8 @@ use egui_charts::data::{MarketEvent, RecordingWriter, ReplayDriver, ReplayEvent}
 use egui_charts::model::{Bar, BarClock, Timeframe};
 use egui_charts::ui::floating_replay_control::ReplayControlAction;
 use egui_charts::ui::replay::{
-    ReplayAction, ReplayController, ReplayScope, ReplayStartAction, ReplayToolbarAction,
-    ReplayTradingChoice, paint_start_line,
+    ReplayAction, ReplayChart, ReplayController, ReplayScope, ReplayStartAction,
+    ReplayToolbarAction, ReplayTradingChoice, paint_start_line,
 };
 use egui_charts::ui::strategy_report::StrategyReportAction;
 use egui_charts::ui::timeframe_toolbar::SessionType;
@@ -988,7 +988,27 @@ impl DemoApp {
         if self.recording_files.opened {
             return;
         }
-        if let Some(session) = self.replay.as_ref().and_then(|replay| replay.session()) {
+        if let Some(mut session) = self.replay.as_ref().and_then(|replay| replay.session()) {
+            // The chart the replay runs on first, then the other charts it covers in slot order.
+            session.charts = vec![ReplayChart::new(
+                self.layout_slot,
+                self.state.symbol.clone(),
+                self.state.timeframe,
+            )];
+            if session.scope == ReplayScope::AllCharts {
+                for (index, extra) in self.extra_charts.iter().enumerate() {
+                    let slot = if index >= self.layout_slot {
+                        index + 1
+                    } else {
+                        index
+                    };
+                    if let Some(interval) = extra.chart.timeframe() {
+                        session
+                            .charts
+                            .push(ReplayChart::new(slot, extra.chart.symbol(), interval));
+                    }
+                }
+            }
             self.replay_session = Some((session, self.replay_interval));
         }
     }
@@ -1327,6 +1347,7 @@ impl DemoApp {
             ReplayStartAction::Resume => {
                 if let Some((session, interval)) = self.replay_session.clone() {
                     self.replay_selecting = false;
+                    self.restore_replayed_charts(&session.charts);
                     if session.symbol != self.state.symbol {
                         self.switch_symbol(&session.symbol);
                     }
@@ -1370,6 +1391,32 @@ impl DemoApp {
                 }
                 self.start_replay_at(index);
             }
+        }
+    }
+
+    /// Puts each chart a saved replay covered and the layout shows back on its symbol and
+    /// interval, the chart the replay ran on last so that it ends active. Without that chart the
+    /// replay runs on the active one, as for a session saved without charts.
+    fn restore_replayed_charts(&mut self, charts: &[ReplayChart]) {
+        let active = self.layout_slot;
+        let shown = self
+            .layout
+            .mode
+            .chart_count()
+            .min(self.extra_charts.len() + 1);
+        for chart in charts.iter().skip(1).chain(charts.first()) {
+            if chart.slot < shown {
+                self.activate_chart_slot(chart.slot);
+                if chart.symbol != self.state.symbol {
+                    self.switch_symbol(&chart.symbol);
+                }
+                if chart.interval != self.state.timeframe {
+                    self.switch_timeframe(chart.interval);
+                }
+            }
+        }
+        if charts.first().is_none_or(|source| source.slot >= shown) {
+            self.activate_chart_slot(active);
         }
     }
 
@@ -2045,6 +2092,16 @@ mod tests {
         app.trading.poll(ctx, &mut app.toasts);
     }
 
+    /// The symbol of the chart in `slot`, the active one included.
+    fn symbol_at(app: &DemoApp, slot: usize) -> String {
+        let chart = match slot.cmp(&app.layout_slot) {
+            std::cmp::Ordering::Equal => &app.chart,
+            std::cmp::Ordering::Less => &app.extra_charts[slot].chart,
+            std::cmp::Ordering::Greater => &app.extra_charts[slot - 1].chart,
+        };
+        chart.symbol().to_owned()
+    }
+
     fn cursor(app: &DemoApp) -> usize {
         app.replay.as_ref().expect("replay is on").state.curr_bar
     }
@@ -2523,6 +2580,9 @@ mod tests {
             true,
         );
         settle(&mut app, &ctx);
+        // Every chart of the layout replays at one hour.
+        app.switch_timeframe(Timeframe::Hour1);
+        settle(&mut app, &ctx);
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::Four);
         settle(&mut app, &ctx);
         app.activate_chart_slot(1);
@@ -2576,6 +2636,18 @@ mod tests {
             assert_scope(&app, scope);
             let cutoff = app.chart.replay_time();
             app.stop_replay();
+            // After the session the source chart moves to one day, slot 2 to another symbol, and
+            // slot 3 becomes active.
+            let replayed = symbol_at(&app, 2);
+            let other = if replayed == "STOCKB" {
+                "STOCKC"
+            } else {
+                "STOCKB"
+            };
+            app.switch_timeframe(Timeframe::Day1);
+            app.activate_chart_slot(2);
+            app.switch_symbol(other);
+            app.activate_chart_slot(3);
             app.toggle_replay();
             click(&mut app, "Replay start");
             // Choose the opposite scope before Resume to prove it adopts the saved one.
@@ -2588,6 +2660,17 @@ mod tests {
                 },
             );
             click(&mut app, "Resume saved session");
+            assert_eq!(
+                (app.layout_slot, app.state.timeframe),
+                (1, Timeframe::Hour1)
+            );
+            // All charts puts slot 2 back on its replayed symbol; This chart leaves it.
+            let expected = if scope == ReplayScope::AllCharts {
+                replayed.as_str()
+            } else {
+                other
+            };
+            assert_eq!(symbol_at(&app, 2), expected);
             assert_scope(&app, scope);
             assert_eq!(app.chart.replay_time(), cutoff);
         }

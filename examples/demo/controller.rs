@@ -907,6 +907,9 @@ impl DemoApp {
                     session.scope = ReplayScope::AllCharts;
                 }
                 session.symbol = DemoSymbol::current(&session.symbol);
+                for chart in &mut session.charts {
+                    chart.symbol = DemoSymbol::current(&chart.symbol);
+                }
                 Some((session, interval))
             }),
             replay_slots: Vec::new(),
@@ -7649,18 +7652,30 @@ mod tests {
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(&storage);
         let mut restored = DemoApp::new(&cc);
-        assert_eq!(
-            restored.replay_session,
-            Some((saved.clone(), Timeframe::Hour1))
-        );
+        // The session records the three charts, every one a copy of the source at one hour.
+        let mut expected = saved.clone();
+        expected.charts = (0..3)
+            .map(|slot| {
+                egui_charts::ui::replay::ReplayChart::new(
+                    slot,
+                    app.state.symbol.clone(),
+                    Timeframe::Hour1,
+                )
+            })
+            .collect();
+        assert_eq!(restored.replay_session, Some((expected, Timeframe::Hour1)));
         restored.apply_replay_start(egui_charts::ui::replay::ReplayStartAction::Resume);
         assert_eq!(restored.chart.replay_time(), Some(cutoff));
         assert!(!restored.replay.as_ref().unwrap().state.is_playing());
 
-        // Before scopes were saved, the demo replayed every chart in the default layout.
+        // Before scopes and charts were saved, the demo replayed every chart in the default layout.
         let session = storage.0.get_mut("replay_session").unwrap();
-        assert!(session.contains(",scope:AllCharts"));
-        *session = session.replace(",scope:AllCharts", "");
+        let (from, to) = (
+            session.find(",scope:AllCharts").unwrap(),
+            session.rfind("),").unwrap(),
+        );
+        session.replace_range(from..to, "");
+        assert!(!session.contains("charts"));
         let mut cc = eframe::CreationContext::_new_kittest(ctx);
         cc.storage = Some(&storage);
         let mut restored = DemoApp::new(&cc);
