@@ -330,19 +330,21 @@ impl Trading {
             }
             AccountEvent::Execution(fill) if announce => {
                 let order = self.account_panel.fills.orders.get(&fill.order);
+                // The order's symbol, or the fill's own when the order is unknown.
+                let symbol = self.account_panel.fills.symbol(&fill);
                 let chart = (self.chart_logo.as_ref()).map_or("", |(chart, _)| chart.as_str());
-                let numbers = self.numbers(order.map_or("", |order| order.symbol.as_str()), chart);
+                let numbers = self.numbers(symbol.unwrap_or(""), chart);
                 let side = l10n::text(ctx, side_name(fill.side));
                 let quantity = numbers.quantity(fill.quantity, quantity_decimals(fill.quantity));
                 let price = numbers.price(fill.price);
-                let text = match order {
-                    Some(order) => l10n::format_text(
+                let text = match symbol {
+                    Some(symbol) => l10n::format_text(
                         ctx,
                         "{side} {quantity} {symbol} at {price}",
                         &[
                             ("side", side.as_str()),
                             ("quantity", quantity.as_str()),
-                            ("symbol", order.symbol.as_str()),
+                            ("symbol", symbol),
                             ("price", price.as_str()),
                         ],
                     ),
@@ -1204,6 +1206,7 @@ mod tests {
     /// formatter for the order's symbol or else in the built-in text, in the title, the message
     /// and on the card, a rejection with its reason in the title, and a partial fill's running
     /// total without the noise of adding fills up.
+    /// A fill whose order is unknown uses its own symbol and that symbol's host text.
     /// A regression announces a five-decimal symbol at the chart's two, skips the formatter, or
     /// writes fills of 0.1 and 0.2 as 0.30000000000000004 filled.
     #[test]
@@ -1242,6 +1245,14 @@ mod tests {
         let ctx = egui::Context::default();
         trading.poll(&ctx, &mut Toasts::new());
         let mut toasts = Toasts::new();
+        let mut own = Execution::new(
+            OrderId::new("9"),
+            chrono::Utc::now(),
+            OrderSide::Sell,
+            110.5,
+            2_000.0,
+        );
+        own.symbol = Some("ZN".into());
         for event in [
             order("1", "EURUSD", OrderSide::Buy, 1.0, 1.08765),
             fill("1", OrderSide::Buy, 1.08765, 0.1),
@@ -1259,6 +1270,7 @@ mod tests {
                 OrderRequest::new("EURUSD", OrderSide::Buy, 1.0, OrderType::Market),
                 OrderStatus::Rejected("Market closed".into()),
             )),
+            AccountEvent::Execution(own),
         ] {
             trading.apply(&ctx, event, &mut toasts);
         }
@@ -1314,10 +1326,11 @@ mod tests {
                     "Order rejected: Buy 1 lots EURUSD at market: Market closed",
                     Some(("1 lots", "market")),
                 ),
+                (None, "Filled: Sell 2,000 ZN at 110'16", None),
             ]
         );
         assert!(
-            toasts.toasts()[6..]
+            toasts.toasts()[6..8]
                 .iter()
                 .all(|toast| toast.kind == ToastKind::Error)
         );
