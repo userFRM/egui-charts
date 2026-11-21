@@ -800,13 +800,16 @@ mod tests {
     /// record from before the patterns without a trend condition dropped the trend rule matches
     /// the Doji without it. An ADX record from before the smoothing had an input matches the ADX
     /// whose smoothing equals its period. A Knoxville record stored while the study offered
-    /// Symbol and Interval matches the Knoxville that offers neither. Loading and pasting agree.
+    /// Symbol and Interval matches the Knoxville that offers neither. A Trading Sessions record
+    /// from before session hours were times of day matches the study that reports them so.
+    /// Loading and pasting agree.
     #[cfg(feature = "studies")]
     #[test]
     fn stored_pane_survives_a_new_study_input() {
         use crate::studies::{
             ADX, ConfiguredStudy, CustomIndicator, Indicator, IndicatorFactory, IndicatorValue,
             InputValue, KnoxvilleDivergence, RSI, StochasticMomentumIndex, StudyTemplate,
+            TradingSessions,
         };
         let bars = [0, 60, 180]
             .map(|s| Bar::new(Utc.timestamp_opt(s, 0).unwrap(), 10.0, 11.0, 9.0, 10.0, 1.0))
@@ -834,6 +837,33 @@ mod tests {
             let mut study = ConfiguredStudy::new(IndicatorFactory::new().create("Doji").unwrap());
             study.set_overlay(false);
             Box::new(study)
+        };
+        let sessions: Study = || {
+            // Moved into a pane of its own, as a user can move any study.
+            let mut study = ConfiguredStudy::new(Box::new(TradingSessions::new()));
+            study.set_overlay(false);
+            Box::new(study)
+        };
+        // Hours and zones as written before inputs had a time of day and a time zone.
+        let minute_counts = |inputs: &mut Vec<serde_json::Value>| {
+            let mut written = 0;
+            for input in inputs.iter_mut() {
+                let value = &mut input[1];
+                if let Some((hours, minutes)) = value["TimeOfDay"]
+                    .as_str()
+                    .and_then(|time| time.split_once(':'))
+                {
+                    let minutes =
+                        hours.parse::<usize>().unwrap() * 60 + minutes.parse::<usize>().unwrap();
+                    *value = serde_json::to_value(InputValue::Length(minutes)).unwrap();
+                    written += 1;
+                } else if let Some(zone) = value["TimeZone"].as_str() {
+                    *value = serde_json::to_value(InputValue::Text(zone.into())).unwrap();
+                    written += 1;
+                }
+            }
+            // Start, end and zone of each of the three sessions.
+            assert_eq!(written, 9);
         };
         let pivots = |inputs: &mut Vec<serde_json::Value>| {
             inputs.retain(|input| input[0] != "left" && input[0] != "right");
@@ -957,7 +987,7 @@ mod tests {
             Option<(&'a str, InputValue)>,
             bool,
         );
-        let cases: [Case<'_>; 16] = [
+        let cases: [Case<'_>; 17] = [
             // From before an input existed: the last one, which the chart adds after the study's
             // own, or one of the study's own, which comes before the chart's.
             (rsi, &last, None, true),
@@ -983,6 +1013,8 @@ mod tests {
             (smi, &equal, None, true),
             (smi, &unequal, length("smooth2", 4), true),
             (smi, &equal, length("smoothing", 4), false),
+            // From before session hours were times of day and zones were time zones.
+            (sessions, &minute_counts, None, true),
         ];
         for (at, (study, edit, input, shown)) in cases.into_iter().enumerate() {
             let text = copied(study);

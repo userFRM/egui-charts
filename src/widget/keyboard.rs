@@ -44,6 +44,8 @@ pub(crate) struct KeyboardState {
     pub chart_id: Option<egui::Id>,
     pub last_pass: Option<u64>,
     pub focus_elsewhere: bool,
+    /// The pass in which a layout last showed this chart, and the actions it handles.
+    pub layout_keys: Option<(u64, &'static [KeyboardAction])>,
     /// A limit-order key pressed this pass, for [`ChartMenus::show`] to turn into the chart
     /// menu's limit row at the pointer.
     ///
@@ -120,9 +122,24 @@ impl super::Chart {
         &mut self.keyboard.map
     }
 
-    /// Drain commands that need host UI or a host-owned service.
+    /// Drain commands that need host UI or a host-owned service. Keys that the
+    /// [`ChartLayout`](super::ChartLayout) showing this chart handles itself stay queued for its
+    /// [`show`](super::ChartLayout::show), also when the host drains them first.
     pub fn take_shortcut_requests(&mut self) -> Vec<ShortcutRequest> {
-        std::mem::take(&mut self.keyboard.requests)
+        let requests = std::mem::take(&mut self.keyboard.requests);
+        // Requests come from `last_pass`; the layout may still be due to show this pass.
+        let Some((_, keys)) = self.keyboard.layout_keys.filter(|(shown, _)| {
+            self.keyboard
+                .last_pass
+                .is_some_and(|pass| pass <= shown + 1)
+        }) else {
+            return requests;
+        };
+        let (layout, host) = requests.into_iter().partition(
+            |request| matches!(request, ShortcutRequest::Action(action) if keys.contains(action)),
+        );
+        self.keyboard.requests = layout;
+        host
     }
 
     /// Give host dialogs keyboard priority over every chart and drawing toolbar this pass.
@@ -1018,6 +1035,30 @@ mod tests {
                 Some(A::OpenDataWindow),
             ),
             (Key::E, alt_shift, None, Some(A::ToggleSession)),
+            (
+                Key::ArrowDown,
+                Modifiers::NONE,
+                None,
+                Some(A::NextWatchlistSymbol),
+            ),
+            (
+                Key::ArrowUp,
+                Modifiers::NONE,
+                None,
+                Some(A::PreviousWatchlistSymbol),
+            ),
+            (
+                Key::Space,
+                Modifiers::NONE,
+                Some((" ", false)),
+                Some(A::NextWatchlistSymbol),
+            ),
+            (
+                Key::Space,
+                Modifiers::SHIFT,
+                Some((" ", true)),
+                Some(A::PreviousWatchlistSymbol),
+            ),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
@@ -1201,6 +1242,11 @@ mod tests {
                 .bindings
                 .push((KeyboardShortcut::new(Modifiers::NONE, key), action));
         }
+        // An unbound space, as a host that leaves the watchlist keys out has it.
+        chart
+            .shortcuts_mut()
+            .bindings
+            .retain(|(shortcut, _)| shortcut.logical_key != Key::Space);
         // A press that ran a binding types nothing, whatever character its text carries and in
         // either order, and a space typed before it in the same frame is not taken for its text.
         for (events, text) in [

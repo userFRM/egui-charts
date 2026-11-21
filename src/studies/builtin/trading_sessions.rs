@@ -39,6 +39,7 @@
 
 use crate::model::local_time;
 use crate::model::{Bar, BarClock, TimezoneId};
+use crate::studies::inputs::{clock, minutes, upgrade_saved_value};
 use crate::studies::palette;
 use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValues, LabelPlacement, StudyLabel, StudyZone};
@@ -164,7 +165,6 @@ impl TradingSessions {
         zone: TimezoneId,
     ) -> Self {
         if slot < 3 {
-            let minutes = |time: NaiveTime| (time.hour() * 60 + time.minute()) as usize;
             let name: String = name.into();
             self.names[slot] = name.replace(char::is_control, " ").trim().to_owned();
             self.start[slot] = minutes(start);
@@ -441,9 +441,10 @@ impl Default for TradingSessions {
 const SLOTS: [(&str, &str); 3] = [("first", "First"), ("second", "Second"), ("third", "Third")];
 
 impl Indicator for TradingSessions {
-    /// Each session shows or not, and has a name, a start and an end in minutes after midnight,
-    /// and a time zone that [`TimezoneId::named`] reads. The toggles after them apply to every
-    /// session; its average price is the mean of its closes.
+    /// Each session shows or not, and has a name, a start and an end time of day and a time zone
+    /// that [`TimezoneId::named`] reads. A start or end set as a count of minutes after midnight
+    /// and a zone set as text, as studies saved them before, are accepted too. The toggles after
+    /// them apply to every session; its average price is the mean of its closes.
     fn inputs(&self) -> Vec<crate::studies::StudyInput> {
         use crate::studies::{InputKind, InputValue, StudyInput};
         let defaults = Self::default();
@@ -453,7 +454,6 @@ impl Indicator for TradingSessions {
                 StudyInput::new(format!("{field} [{slot}]"), label, value, kind)
                     .with_default(default)
             };
-            let minutes = InputKind::Length(0, 1439);
             inputs.extend([
                 input(
                     "show",
@@ -471,24 +471,24 @@ impl Indicator for TradingSessions {
                 ),
                 input(
                     "start",
-                    format!("{upper} session start, minutes after midnight"),
-                    InputValue::Length(self.start[slot]),
-                    InputValue::Length(defaults.start[slot]),
-                    minutes.clone(),
+                    format!("{upper} session start"),
+                    InputValue::TimeOfDay(clock(self.start[slot])),
+                    InputValue::TimeOfDay(clock(defaults.start[slot])),
+                    InputKind::TimeOfDay,
                 ),
                 input(
                     "end",
-                    format!("{upper} session end, minutes after midnight"),
-                    InputValue::Length(self.end[slot]),
-                    InputValue::Length(defaults.end[slot]),
-                    minutes,
+                    format!("{upper} session end"),
+                    InputValue::TimeOfDay(clock(self.end[slot])),
+                    InputValue::TimeOfDay(clock(defaults.end[slot])),
+                    InputKind::TimeOfDay,
                 ),
                 input(
                     "zone",
                     format!("{upper} session time zone"),
-                    InputValue::Text(self.zones[slot].name().to_owned()),
-                    InputValue::Text(defaults.zones[slot].name().to_owned()),
-                    InputKind::Text,
+                    InputValue::TimeZone(self.zones[slot].name().to_owned()),
+                    InputValue::TimeZone(defaults.zones[slot].name().to_owned()),
+                    InputKind::TimeZone { exchange: false },
                 ),
             ]);
         }
@@ -550,6 +550,7 @@ impl Indicator for TradingSessions {
             .into_iter()
             .find(|input| input.id == id)
             .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
+        let value = upgrade_saved_value(&schema.kind, value);
         if !schema.accepts(&value) {
             return Err(crate::studies::StudyError::invalid_input(id));
         }
@@ -579,9 +580,9 @@ impl Indicator for TradingSessions {
         match (field, value) {
             ("show", InputValue::Toggle(show)) => self.show[slot] = show,
             ("name", InputValue::Text(name)) => self.names[slot] = name,
-            ("start", InputValue::Length(minutes)) => self.start[slot] = minutes,
-            ("end", InputValue::Length(minutes)) => self.end[slot] = minutes,
-            ("zone", InputValue::Text(name)) => {
+            ("start", InputValue::TimeOfDay(time)) => self.start[slot] = minutes(time),
+            ("end", InputValue::TimeOfDay(time)) => self.end[slot] = minutes(time),
+            ("zone", InputValue::TimeZone(name)) => {
                 self.zones[slot] =
                     zone(&name).ok_or_else(|| crate::studies::StudyError::InvalidInput {
                         id: id.into(),
@@ -759,6 +760,87 @@ mod tests {
         zones
             .map(|zone| (zone.bars.clone(), zone.top, zone.bottom, zone.plot))
             .collect()
+    }
+
+    /// New York's 09:30 to 16:00, set as times of day or as the minute counts and zone text
+    /// studies saved before (570 and 960), highlights the same bars in each session: 14:30 to
+    /// 20:30 UTC on 15 January 2024, under standard time (UTC-5), and 13:30 to 19:30 on 15 July,
+    /// under daylight saving time (UTC-4). Each session then reports a time of day and a zone.
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn session_hours_set_as_times_or_minute_counts_highlight_the_same_bars() {
+        use crate::studies::{InputKind, InputValue};
+        // Half-hour bars over 15 January and 15 July 2024, UTC.
+        let data: Vec<Bar> = [1, 7]
+            .into_iter()
+            .flat_map(|month| {
+                let midnight = Utc.with_ymd_and_hms(2024, month, 15, 0, 0, 0).unwrap();
+                (0..48).map(move |i| {
+                    Bar::new(
+                        midnight + TimeDelta::minutes(i * 30),
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                    )
+                })
+            })
+            .collect();
+        let expected: Vec<_> = [(1, 14), (7, 13)]
+            .into_iter()
+            .flat_map(|(month, hour)| {
+                let first = Utc.with_ymd_and_hms(2024, month, 15, hour, 30, 0).unwrap();
+                (0..13).map(move |i| first + TimeDelta::minutes(i * 30))
+            })
+            .collect();
+        let time =
+            |hour, minute| InputValue::TimeOfDay(NaiveTime::from_hms_opt(hour, minute, 0).unwrap());
+        let zone = "America/New_York".to_owned();
+        let times = [
+            ("start", time(9, 30)),
+            ("end", time(16, 0)),
+            ("zone", InputValue::TimeZone(zone.clone())),
+        ];
+        let saved = [
+            ("start", InputValue::Length(570)),
+            ("end", InputValue::Length(960)),
+            ("zone", InputValue::Text(zone)),
+        ];
+        for (slot, (_, upper)) in SLOTS.into_iter().enumerate() {
+            for set in [&times, &saved] {
+                let mut sessions = TradingSessions::new();
+                for (field, value) in set {
+                    let id = format!("{field} [{slot}]");
+                    sessions.set_input(&id, value.clone()).unwrap();
+                }
+                sessions.calculate(&data);
+                let highlighted: Vec<_> = data
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| sessions.values().value(slot, *i) == Some(1.0))
+                    .map(|(_, bar)| bar.time)
+                    .collect();
+                assert_eq!(highlighted, expected, "{set:?} [{slot}]");
+                let inputs = sessions.inputs();
+                for ((field, value), label) in times.iter().zip(["start", "end", "time zone"]) {
+                    let input = inputs
+                        .iter()
+                        .find(|input| input.id == format!("{field} [{slot}]"))
+                        .unwrap();
+                    assert_eq!(input.label, format!("{upper} session {label}"));
+                    assert_eq!(&input.value, value, "{set:?} [{slot}]");
+                    assert!(
+                        matches!(
+                            (&input.kind, *field),
+                            (InputKind::TimeOfDay, "start" | "end")
+                                | (InputKind::TimeZone { exchange: false }, "zone")
+                        ),
+                        "{field} [{slot}]"
+                    );
+                }
+            }
+        }
     }
 
     /// Session bars 1, 2 and 3, 12:00 being past its end: high 13, low 8.5, range 4.5, open 10,
