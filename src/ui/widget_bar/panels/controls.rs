@@ -59,6 +59,64 @@ pub(super) fn cell(ui: &mut Ui, rect: Rect, text: &str, right: bool, color: Colo
     )
 }
 
+/// The codes chosen in `choices`, in the order offered.
+pub(super) fn chosen(choices: &[(String, bool)]) -> Vec<String> {
+    choices
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(code, _)| code.clone())
+        .collect()
+}
+
+/// Size the whole title before the filter row decides whether to wrap the button.
+pub(super) fn full_dropdown(ui: &mut Ui, id: &str, text: &str, contents: impl FnOnce(&mut Ui)) {
+    let button = ui.add(
+        egui::Button::new((
+            l10n::text(ui.ctx(), text),
+            icons::CHEVRON_DOWN.as_image_square(16.0),
+        ))
+        .frame_when_inactive(false)
+        .image_tint_follows_text_color(true)
+        .min_size(vec2(0.0, 28.0))
+        .wrap_mode(egui::TextWrapMode::Extend),
+    );
+    egui::Popup::menu(&button)
+        .id(ui.make_persistent_id(id))
+        .show(|ui| {
+            egui::ScrollArea::vertical()
+                .max_height(ui.spacing().combo_height)
+                .show(ui, contents);
+        });
+}
+
+/// A dropdown of checkboxes, read `all` with none chosen, the code with one and `many` with more.
+pub(super) fn choices(
+    ui: &mut Ui,
+    id: &str,
+    all: &str,
+    many: &str,
+    choices: &mut [(String, bool)],
+) {
+    if choices.is_empty() {
+        return;
+    }
+    let chosen = chosen(choices);
+    let text = match chosen.as_slice() {
+        [] => all.to_owned(),
+        [code] => code.clone(),
+        _ => l10n::format_text(
+            ui.ctx(),
+            many,
+            &[("count", chosen.len().to_string().as_str())],
+        ),
+    };
+    full_dropdown(ui, id, &text, |ui| {
+        for (code, on) in choices.iter_mut() {
+            ui.checkbox(on, l10n::text(ui.ctx(), code.as_str()));
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
