@@ -849,7 +849,11 @@ pub enum ProfileRows {
     /// The rows the feed groups executions into.
     #[default]
     Feed,
-    /// About this many rows between each session's lowest and highest traded rows.
+    /// About this many rows between each session's lowest and highest traded rows. That span
+    /// of feed rows over this count, rounded down and rounded up, gives two whole row heights;
+    /// the one whose rows, laid on multiples of their height, come closer to this count is
+    /// used, the taller on a tie. Zero counts as one. The volume profile studies lay Row count
+    /// on whole ticks by the same rule.
     Count(u32),
     /// At least this many instrument ticks per row.
     Ticks(u32),
