@@ -1372,12 +1372,16 @@ mod tests {
             (ExtendedSession::PostMarket, "Post-market"),
             (ExtendedSession::Overnight, "Overnight"),
         ] {
-            panel.set_quote(quote.with_extended(crate::model::ExtendedHoursQuote {
-                session,
-                last: 703.65,
-                // Summer time ends in Berlin on October 25.
-                time: "2026-10-26T12:30:00Z".parse().unwrap(),
-            }));
+            panel.set_quote(
+                quote
+                    .clone()
+                    .with_extended(crate::model::ExtendedHoursQuote {
+                        session,
+                        last: 703.65,
+                        // Summer time ends in Berlin on October 25.
+                        time: "2026-10-26T12:30:00Z".parse().unwrap(),
+                    }),
+            );
             let shown = texts(&ctx, &mut panel);
             for text in [
                 label,

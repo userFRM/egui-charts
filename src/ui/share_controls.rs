@@ -281,6 +281,10 @@ mod tests {
                 .is_disabled()
         );
         assert!(h.query_by_value("Stopping sharing…").is_some());
+        host.0.lock().unwrap().0 = true;
+        h.run();
+        assert!(h.query_by_value("Stopping sharing…").is_some());
+        host.0.lock().unwrap().0 = false;
         let (kind, name, reply) = host.0.lock().unwrap().1.pop().unwrap();
         assert_eq!((kind, name.as_str()), (ShareKind::Watchlist, "Shared"));
         reply.send(Err(FeedError::Other("locked".into())));
