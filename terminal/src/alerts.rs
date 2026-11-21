@@ -169,7 +169,7 @@ impl Terminal {
         }
     }
 
-    fn open_alert(&mut self, alert: Option<Alert>) {
+    fn prepare_alert_dialog(&mut self) {
         self.alerts.dialog.sources = self.chart().alert_sources();
         self.alerts.dialog.timezone = self
             .chart()
@@ -178,6 +178,10 @@ impl Terminal {
             .timezone
             .to_tz()
             .unwrap_or_else(egui_charts::model::TimezoneId::utc);
+    }
+
+    fn open_alert(&mut self, alert: Option<Alert>) {
+        self.prepare_alert_dialog();
         if let Some(mut alert) = alert {
             self.chart().prepare_alert(&mut alert);
             self.alerts.dialog.edit(alert);
@@ -191,6 +195,14 @@ impl Terminal {
         }
     }
 
+    fn open_alert_at_price(&mut self, price: f64) {
+        self.prepare_alert_dialog();
+        let chart = self.chart();
+        let symbol = chart.symbol().to_owned();
+        self.alerts.dialog.open(symbol, price);
+        self.charts[self.active].prepare_alert(&mut self.alerts.dialog.alert);
+    }
+
     pub(super) fn alerts_perform(&mut self, action: Action) -> Option<Action> {
         if self.services.alerts.is_none() {
             return Some(action);
@@ -199,11 +211,7 @@ impl Terminal {
             Action::TopToolbar(TopToolbarAction::CreateAlert)
             | Action::Alerts(AlertPanelAction::CreateAlert) => self.open_alert(None),
             Action::ChartMenu(ChartContextAction::Series(SeriesContextMenuAction::AddAlert)) => {
-                let alert = Alert::new(
-                    self.chart().symbol(),
-                    AlertCondition::Crossing(self.menus.series_click_price()),
-                );
-                self.open_alert(Some(alert));
+                self.open_alert_at_price(self.menus.series_click_price());
             }
             Action::WidgetBar(WidgetBarAction::Clicked(RightBarIcon::Alerts)) => {
                 self.open_panel(SidePanel::Alerts)
