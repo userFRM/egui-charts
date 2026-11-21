@@ -2190,8 +2190,11 @@ fn drawings_keep_their_place_when_the_series_and_studies_change() {
     }
 
     const UPPER: Color32 = Color32::from_rgb(230, 120, 0);
+    const NEW: Color32 = Color32::from_rgb(20, 160, 60);
     const INTO: &str = "main series into a study pane";
     const BACK: &str = "main series back";
+    const ADD: &str = "add study";
+    const TEMPLATE: &str = "apply template";
     for (case, backward, layers) in [
         // Over the candles and SMA(2), under SMA(3).
         ("add series", 1, [Some(2), Some(3)]),
@@ -2199,6 +2202,9 @@ fn drawings_keep_their_place_when_the_series_and_studies_change() {
         (INTO, 2, [Some(1), Some(2)]),
         // Under RSI and the candles, in the RSI pane.
         (BACK, 2, [Some(0), Some(2)]),
+        // Over every item, with the count that removing a study drawn over it leaves (#3897).
+        (ADD, 0, [Some(3), Some(4)]),
+        (TEMPLATE, 0, [Some(3), Some(4)]),
     ] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0, 100.0], &[110.0, 104.0]);
@@ -2222,11 +2228,33 @@ fn drawings_keep_their_place_when_the_series_and_studies_change() {
         for _ in 0..backward {
             assert!(chart.reorder_drawing(id, VisualOrder::SendBackward));
         }
+        let joins = case == ADD || case == TEMPLATE;
+        if joins {
+            chart
+                .drawings_mut()
+                .edit_drawing(id, |d| d.series_layer = Some(3))
+                .unwrap();
+        }
+        // SMA(4) is 107 on every bar, along SMA(2).
+        let template = {
+            let mut set = chart.study_template_set();
+            set.price_pane.push(set.studies.len());
+            set.studies.push(crate::studies::StudyTemplate::from_study(
+                &SMA::new(4).with_color(NEW),
+            ));
+            set
+        };
         for step in 0..3 {
             match step {
                 0 => chart.user_action(|chart| match case {
                     INTO => assert!(chart.move_series_to_pane(SeriesId::MAIN, pane)),
                     BACK => assert!(chart.move_series_to_pane(SeriesId::MAIN, PaneId::MAIN)),
+                    ADD => {
+                        chart.add_indicator(Box::new(SMA::new(4).with_color(NEW)));
+                    }
+                    TEMPLATE => {
+                        chart.apply_chosen_study_template_set(&template).unwrap();
+                    }
                     _ => {
                         chart.add_series(SeriesOptions::default());
                     }
@@ -2262,7 +2290,11 @@ fn drawings_keep_their_place_when_the_series_and_studies_change() {
             // The studies sharing the rectangle's pane, and whether it is drawn over each.
             let price_pane = chart.series_pane(SeriesId::MAIN) == Some(PaneId::MAIN);
             let sides = if price_pane {
-                vec![(sma_color, case != INTO), (UPPER, case == BACK)]
+                let mut sides = vec![(sma_color, case != INTO), (UPPER, case == BACK || joins)];
+                if joins && step != 1 {
+                    sides.push((NEW, true));
+                }
+                sides
             } else {
                 vec![(rsi_color, case == INTO)]
             };
@@ -2378,7 +2410,88 @@ fn drawings_keep_their_place_when_the_series_and_studies_change() {
             assert!(line_at(&painted, colors[0]).1 < rect);
         }
     }
+    // A study placed on its source study's pane goes under a drawing over every item there, with
+    // the count that removing a study drawn over it leaves (#3897).
+    let ctx = egui::Context::default();
+    let mut chart = crate::widget::test_frames::chart(&[100.0, 100.0], &[110.0, 104.0]);
+    chart.config.show_volume = false;
+    chart.set_visible_bars(20);
+    let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+    let id = add_rect(&mut chart, Some(rsi.0), [80.0, 20.0], FILL);
+    chart
+        .drawings_mut()
+        .edit_drawing(id, |d| d.series_layer = Some(1))
+        .unwrap();
+    for step in 0..3 {
+        match step {
+            0 => chart.user_action(|chart| {
+                use crate::studies::{Indicator, InputValue, StudySource};
+                let mut study: Box<dyn Indicator> = Box::new(crate::studies::ConfiguredStudy::new(
+                    Box::new(SMA::new(2).with_color(NEW)),
+                ));
+                let source = StudySource::Study { id: rsi.0, plot: 0 };
+                study
+                    .set_input("source", InputValue::Source(source))
+                    .unwrap();
+                let added = chart.add_indicator(study);
+                assert_eq!(chart.series_pane(added), chart.series_pane(rsi));
+            }),
+            1 => assert!(chart.undo()),
+            _ => assert!(chart.redo()),
+        }
+        frame(&ctx, &mut chart, f64::from(step), vec![]);
+        let painted = shapes(&ctx, &mut chart, f64::from(step) + 0.1, vec![]);
+        // A point of the study on RSI over bar 95, or of RSI after the undo.
+        let x = chart.get_chart_mapping().idx_to_x(95);
+        let color = if step == 1 {
+            color_of(&chart, rsi)
+        } else {
+            NEW
+        };
+        let on = painted
+            .iter()
+            .flat_map(|shape| match shape {
+                Shape::LineSegment { points, stroke } if stroke.color == color => points.to_vec(),
+                Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(color) => {
+                    path.points.clone()
+                }
+                _ => Vec::new(),
+            })
+            .min_by(|a, b| (a.x - x).abs().total_cmp(&(b.x - x).abs()))
+            .unwrap();
+        let painted = shapes(
+            &ctx,
+            &mut chart,
+            f64::from(step) + 0.2,
+            vec![Event::PointerMoved(on)],
+        );
+        let rect = rect_at(&painted, FILL);
+        let layer = chart
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.id == id)
+            .unwrap()
+            .series_layer;
+        let actual = (
+            layer,
+            line_at(&painted, color).1 < rect,
+            chart.drawings().hit_test(on),
+        );
+        let expected = (Some(if step == 1 { 1 } else { 2 }), true, Some(id));
+        if actual != expected {
+            failures.push(format!(
+                "study on its source, step {step}: {actual:?}, expected {expected:?}"
+            ));
+        }
+    }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[cfg(all(feature = "drawings", feature = "studies"))]
+fn color_of(chart: &crate::widget::Chart, id: crate::widget::SeriesId) -> egui::Color32 {
+    let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
+    study.plot_style(0).color
 }
 
 /// Drawings cross series and studies one item at a time, keep that place through undo and

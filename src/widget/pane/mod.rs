@@ -825,8 +825,7 @@ impl Chart {
         moved
     }
 
-    /// Moves like [`Self::move_series_to_pane`] without restacking drawings, for a restore or
-    /// a study just added, which has no place among the drawings yet.
+    /// Moves like [`Self::move_series_to_pane`] without restacking drawings, for a restore.
     pub(super) fn move_series_keeping_layers(&mut self, series: SeriesId, pane: PaneId) -> bool {
         self.sync_panes();
         if self.pane_index(pane).is_none() {

@@ -146,10 +146,20 @@ impl Chart {
     /// another study's output ([`StudySource::Study`]) opens in that study's pane when the source
     /// has a pane of its own, and takes the source's scale when the two share a pane; move it
     /// afterwards with [`move_indicator_to_pane`](Self::move_indicator_to_pane).
+    /// In a [`user_action`](Self::user_action), drawings of the pane it joins stay over and
+    /// under the same series and studies, and the study goes under a drawing where its place
+    /// leaves the choice, as an added series does. Outside one, drawings keep their stored
+    /// count of items under them.
     /// Returns the study's id, which stays valid when other studies are removed. Host code adds
     /// past both caps; the interface goes through [`try_add_indicator`](Self::try_add_indicator).
     pub fn add_indicator(&mut self, indicator: Box<dyn Indicator>) -> SeriesId {
+        #[cfg(feature = "drawings")]
+        let stack = self.pane_stack(SeriesId(self.next_series));
         let id = self.insert_indicator(indicator);
+        #[cfg(feature = "drawings")]
+        if let Some(stack) = stack {
+            self.keep_stack(stack);
+        }
         self.place_on_source(id);
         id
     }
@@ -173,7 +183,7 @@ impl Chart {
             return;
         };
         if !overlay && let Some(pane) = self.series_pane(source) {
-            self.move_series_keeping_layers(id, pane);
+            self.move_series_to_pane(id, pane);
         }
         let own = self
             .indicators()

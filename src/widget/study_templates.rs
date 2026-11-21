@@ -133,7 +133,8 @@ impl Chart {
     /// twice or past its studies, or when a study cannot be built, with the error of
     /// [`StudyTemplate::create_with`]. Wrap the call in [`user_action`](Self::user_action) when
     /// it applies a user's choice, so that one undo restores the previous studies, symbol and
-    /// interval.
+    /// interval; there the added studies go under drawings as
+    /// [`add_indicator`](Self::add_indicator) describes.
     pub fn apply_study_template_set_with(
         &mut self,
         set: &StudyTemplateSet,
@@ -249,10 +250,16 @@ impl Chart {
         if keep != Keep::None {
             self.renumber_scales(&mut studies);
         }
+        #[cfg(feature = "drawings")]
+        let stack = self.pane_stack(SeriesId(self.next_series));
         let ids: Vec<_> = studies
             .into_iter()
             .map(|study| study.map(|study| self.insert_indicator(study)))
             .collect();
+        #[cfg(feature = "drawings")]
+        if let Some(stack) = stack {
+            self.keep_stack(stack);
+        }
         for (id, template) in ids.iter().zip(&set.studies) {
             let Some(id) = *id else {
                 continue;
