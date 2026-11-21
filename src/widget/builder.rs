@@ -429,6 +429,7 @@ impl Chart {
     pub fn set_visible_bars(&mut self, count: usize) {
         // Only reapply if requested value differs from last computed
         if self.last_visible_bars == 0 || count != self.last_visible_bars {
+            self.history.clear_view_restore();
             self.desired_visible_bars = Some(count);
             self.apply_visible_bars_once = true;
         }
@@ -441,6 +442,7 @@ impl Chart {
     /// elements, with zero the oldest kept element.
     pub fn set_start_idx(&mut self, index: usize) {
         if index != self.start_idx {
+            self.history.clear_view_restore();
             self.start_idx = index;
             self.pending_start_idx = Some(index);
             self.pending_scroll_time = None;
@@ -453,6 +455,7 @@ impl Chart {
     /// older history is requested until the time is reached or history ends. Panning, zooming,
     /// [`Chart::set_start_idx`] or tracking cancel it.
     pub fn scroll_to_time(&mut self, time: chrono::DateTime<chrono::Utc>) {
+        self.history.clear_view_restore();
         self.pending_scroll_time = Some(time);
         self.pending_scroll_next = false;
         self.pending_start_idx = None;
@@ -497,6 +500,7 @@ impl Chart {
     /// When enabled, the chart immediately scrolls to the live edge and stays
     /// there as new data arrives. Disable with [`Chart::disable_tracking_mode`].
     pub fn enable_tracking_mode(&mut self) {
+        self.history.clear_view_restore();
         self.tracking_mode_active = true;
         self.pending_scroll_time = None;
         // Immediately scroll to latest when enabling

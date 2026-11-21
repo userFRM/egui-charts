@@ -729,6 +729,7 @@ pub enum AlertCondition {
         upper: f64,
     },
     /// Signed change from `bars` bars ago reaches `value`: at least for positive, at most for negative.
+    /// The dialog offers positive values as Moving up and negative values as Moving down.
     MovingBy {
         /// Signed, nonzero change in source units.
         value: f64,
@@ -736,7 +737,8 @@ pub enum AlertCondition {
         bars: u32,
     },
     /// Signed percentage change, 100 * (current - previous) / abs(previous), over `bars` bars.
-    /// A zero previous value cannot satisfy this condition.
+    /// A zero previous value cannot satisfy this condition. The dialog offers positive percentages
+    /// as Moving up % and negative percentages as Moving down %.
     MovingByPercent {
         /// Signed, nonzero percentage, with 1 meaning 1%.
         percent: f64,
@@ -1148,9 +1150,21 @@ impl std::fmt::Display for AlertCondition {
             Self::ExitingChannel { lower, upper } => write!(f, "Exiting {lower} to {upper}"),
             Self::InsideChannel { lower, upper } => write!(f, "Inside {lower} to {upper}"),
             Self::OutsideChannel { lower, upper } => write!(f, "Outside {lower} to {upper}"),
-            Self::MovingBy { value, bars } => write!(f, "Moving by {value} over {bars} bars"),
+            Self::MovingBy { value, bars } => {
+                let direction = if value.is_sign_negative() {
+                    "down"
+                } else {
+                    "up"
+                };
+                write!(f, "Moving {direction} {} over {bars} bars", value.abs())
+            }
             Self::MovingByPercent { percent, bars } => {
-                write!(f, "Moving by {percent}% over {bars} bars")
+                let direction = if percent.is_sign_negative() {
+                    "down"
+                } else {
+                    "up"
+                };
+                write!(f, "Moving {direction} {}% over {bars} bars", percent.abs())
             }
             Self::Compare { comparison, .. } => write!(f, "{} another output", comparison),
             Self::Channel { comparison, .. } => write!(f, "{comparison}"),
