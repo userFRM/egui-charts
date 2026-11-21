@@ -27,14 +27,14 @@ pub struct StyleTab;
 impl StyleTab {
     /// `badge_pickers` edit the text, background and border of a price label's badge, a price
     /// note's label or a range's readout label, card and border. `card_pickers` edit the
-    /// background, text and border colours of a forecast's cards and badges, in the order of its
+    /// background, text, border and anchor colours of a forecast, in the order of its thirteen
     /// rows.
     pub fn show(
         ui: &mut Ui,
         props: &mut DrawingProps,
         pickers: &mut [ColorPickerState; 3],
         badge_pickers: &mut [ColorPickerState; 3],
-        card_pickers: &mut [ColorPickerState; 10],
+        card_pickers: &mut [ColorPickerState; 13],
         custom: Option<&crate::drawings::RegisteredDrawingTool>,
     ) {
         let style = custom.map_or_else(StyleControls::default, |tool| tool.style);
@@ -513,6 +513,15 @@ impl StyleTab {
                     ui.checkbox(&mut props.extend_left, l10n::text(ui.ctx(), "Left"));
                     ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
                     ui.checkbox(&mut props.extend_right, l10n::text(ui.ctx(), "Right"));
+                    if let Some(template) = &mut props.tool_settings
+                        && template.settings.tool_type == DrawingToolType::DateAndPriceRange
+                    {
+                        let settings = &mut template.settings.range_settings;
+                        ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
+                        ui.checkbox(&mut settings.extend_top, l10n::text(ui.ctx(), "Top"));
+                        ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
+                        ui.checkbox(&mut settings.extend_bottom, l10n::text(ui.ctx(), "Bottom"));
+                    }
                 });
                 ui.end_row();
             }
@@ -925,13 +934,19 @@ fn ghost_feed_rows(
 }
 
 /// The forecast's card and badge rows: the background and text colours of the start card, the
-/// target card and the success and failure badges, a border switch and colour for each card,
-/// then the background transparency. Unset colours show the active theme's. A palette colour
-/// keeps the opacity in use; the custom editor sets it.
-fn forecast_rows(ui: &mut Ui, settings: &mut Drawing, pickers: &mut [ColorPickerState; 10]) {
+/// target card and the success, failure and pending badges, a border switch and colour for each
+/// card, the anchor dots and the background transparency. Unset card colours show the active
+/// theme's, and unset anchor dots the line colour. A palette colour keeps the opacity in use;
+/// the custom editor sets it.
+fn forecast_rows(ui: &mut Ui, settings: &mut Drawing, pickers: &mut [ColorPickerState; 13]) {
     let mut style = settings.forecast_style();
     let original = style;
-    let [start, target, success, failure] = style.cards(&ui.active_theme().chart);
+    let [start, target, success, failure, pending] = style.cards(&ui.active_theme().chart);
+    let anchor_shown = style
+        .anchor_color
+        .map_or(settings.color32(), |[r, g, b, a]| {
+            Color32::from_rgba_unmultiplied(r, g, b, a)
+        });
     // A border row switches its colour on and off; switched on, it starts in the text colour.
     let rows = [
         (
@@ -964,6 +979,19 @@ fn forecast_rows(ui: &mut Ui, settings: &mut Drawing, pickers: &mut [ColorPicker
             false,
         ),
         ("Failure text", &mut style.failure_text, failure.text, false),
+        (
+            "Pending background",
+            &mut style.pending_background,
+            pending.background,
+            false,
+        ),
+        ("Pending text", &mut style.pending_text, pending.text, false),
+        (
+            "Anchor points",
+            &mut style.anchor_color,
+            anchor_shown,
+            false,
+        ),
     ];
     for ((name, color, shown, border), picker) in rows.into_iter().zip(pickers) {
         let label = ui.label(l10n::text(ui.ctx(), name));
@@ -1306,13 +1334,13 @@ mod tests {
         }
     }
 
-    /// Each of a forecast's ten card and badge wells sets its own colour, and a palette colour
-    /// keeps the opacity in use.
+    /// Each of a forecast's thirteen card, badge and anchor wells sets its own colour; a palette
+    /// colour keeps the opacity in use.
     #[test]
     fn forecast_wells_set_their_own_colours() {
         use crate::drawings::ForecastStyle;
         type Member = fn(&mut ForecastStyle) -> &mut Option<[u8; 4]>;
-        let members: [Member; 10] = [
+        let members: [Member; 13] = [
             |s| &mut s.start_background,
             |s| &mut s.start_text,
             |s| &mut s.start_border,
@@ -1323,6 +1351,9 @@ mod tests {
             |s| &mut s.success_text,
             |s| &mut s.failure_background,
             |s| &mut s.failure_text,
+            |s| &mut s.pending_background,
+            |s| &mut s.pending_text,
+            |s| &mut s.anchor_color,
         ];
         // Every colour set, so that both border wells show and no well paints the swatch.
         let mut saved = ForecastStyle::default();
@@ -1338,14 +1369,14 @@ mod tests {
             let mut drawing = Drawing::new(1, DrawingToolType::Forecast);
             drawing.forecast = Some(saved);
             let mut props = DrawingProps::from_drawing(&drawing, &chart);
-            let mut card_pickers: [ColorPickerState; 10] = Default::default();
+            let mut card_pickers: [ColorPickerState; 13] = Default::default();
             card_pickers[i].is_open = true;
             let mut frame = |events| {
                 let output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(
                             Pos2::ZERO,
-                            egui::vec2(1440.0, 900.0),
+                            egui::vec2(1440.0, 1400.0),
                         )),
                         events,
                         ..Default::default()
@@ -1895,8 +1926,10 @@ mod tests {
                     "Volume",
                     "Left",
                     "Right",
+                    "Top",
+                    "Bottom",
                 ][..],
-                &["Top", "Bottom"][..],
+                &[][..],
             ),
         ] {
             let ctx = Context::default();
@@ -1964,7 +1997,28 @@ mod tests {
                 })
                 .expect("the palette shows the swatch");
             frame(click(well));
+            if range {
+                // Close the palette before clicking the extension row beneath it.
+                frame(click(Pos2::new(1300.0, 850.0)));
+                let shapes = frame(vec![]);
+                let top = shapes
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.job.text == "Top" => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    })
+                    .expect("the range offers Top");
+                frame(click(top));
+            }
             let settings = &props.tool_settings.as_ref().unwrap().settings;
+            if range {
+                assert!(
+                    settings.range_settings.extend_top,
+                    "{tool:?} extends at the top"
+                );
+            }
             assert_eq!(
                 if range {
                     settings.range_settings.border_color
