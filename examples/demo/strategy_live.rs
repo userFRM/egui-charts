@@ -135,6 +135,9 @@ impl DemoApp {
         inputs: Vec<(String, InputValue)>,
         settings: BacktestSettings,
     ) {
+        if self.replay.is_some() {
+            return;
+        }
         // The demo's tester uses the default factory, so its names resolve here.
         let Some(mut script) = StrategyFactory::new().create(strategy) else {
             return;
@@ -306,6 +309,19 @@ mod tests {
         app.strategy_report
             .set_input("length", InputValue::Length(1))
             .unwrap();
+
+        // A fill alert needs live data, so replay cannot start its run.
+        app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - 1);
+        click(&mut app, &ctx, "Add alert");
+        assert!(
+            !app.alert_dialog.is_open,
+            "replay cannot start a live strategy alert"
+        );
+        assert!(app.live_strategy.is_none());
+        assert!(app.alert_host.engine().alerts().is_empty());
+        app.stop_replay();
+        app.chart.set_data(SeriesId::MAIN, snapshot(&app));
+        app.chart.set_feed_paused(true);
 
         click(&mut app, &ctx, "Add alert");
         assert!(app.alert_dialog.is_open, "Add alert opens the alert dialog");
