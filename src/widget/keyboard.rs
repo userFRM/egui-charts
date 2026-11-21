@@ -294,7 +294,7 @@ impl super::Chart {
             self.drawings
                 .drawings
                 .iter()
-                .any(|d| d.id == id && d.accepts_user_edits())
+                .any(|d| d.id == id && self.drawings.accepts_user_edits(d))
         }) {
             return false;
         }
@@ -797,12 +797,13 @@ mod tests {
         use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
         use crate::widget::ChartEvent;
         use crate::widget::test_frames::frame;
-        for (selected, left, reported) in [
-            (&[7][..], &[7, 8, 9, 10][..], &[1][..]),
-            (&[7, 8, 9], &[7, 8, 10], &[2]),
-            (&[9], &[7, 8, 10], &[]),
-            (&[10], &[7, 8, 9, 10], &[]),
-            (&[7, 8, 9, 10], &[7, 8, 10], &[2]),
+        for (selected, left, reported, all_locked) in [
+            (&[7][..], &[7, 8, 9, 10][..], &[1][..], false),
+            (&[7, 8, 9], &[7, 8, 10], &[2], false),
+            (&[9], &[7, 8, 10], &[], false),
+            (&[10], &[7, 8, 9, 10], &[], false),
+            (&[7, 8, 9, 10], &[7, 8, 10], &[2], false),
+            (&[7, 8, 9, 10], &[7, 8, 9, 10], &[3], true),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
@@ -815,6 +816,7 @@ mod tests {
                 drawing.user_edit_enabled = id != 10;
                 chart.drawings_mut().drawings.push(drawing);
             }
+            chart.drawings_mut().set_locked(all_locked);
             frame(&ctx, &mut chart, 0.0, vec![]);
             chart
                 .drawings_mut()
@@ -1016,6 +1018,30 @@ mod tests {
                 Some(A::OpenDataWindow),
             ),
             (Key::E, alt_shift, None, Some(A::ToggleSession)),
+            (
+                Key::ArrowDown,
+                Modifiers::NONE,
+                None,
+                Some(A::NextWatchlistSymbol),
+            ),
+            (
+                Key::ArrowUp,
+                Modifiers::NONE,
+                None,
+                Some(A::PreviousWatchlistSymbol),
+            ),
+            (
+                Key::Space,
+                Modifiers::NONE,
+                Some((" ", false)),
+                Some(A::NextWatchlistSymbol),
+            ),
+            (
+                Key::Space,
+                Modifiers::SHIFT,
+                Some((" ", true)),
+                Some(A::PreviousWatchlistSymbol),
+            ),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
@@ -1199,6 +1225,11 @@ mod tests {
                 .bindings
                 .push((KeyboardShortcut::new(Modifiers::NONE, key), action));
         }
+        // An unbound space, as a host that leaves the watchlist keys out has it.
+        chart
+            .shortcuts_mut()
+            .bindings
+            .retain(|(shortcut, _)| shortcut.logical_key != Key::Space);
         // A press that ran a binding types nothing, whatever character its text carries and in
         // either order, and a space typed before it in the same frame is not taken for its text.
         for (events, text) in [

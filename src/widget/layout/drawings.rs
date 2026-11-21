@@ -2444,7 +2444,11 @@ mod tests {
             let mut chart = bars(60);
             chart.set_symbol("AAA");
             chart.load_drawings_remapped(&json, true).unwrap();
-            chart.drawings_mut().toggle_lock_all();
+            let ids: Vec<_> = chart.drawings().drawings.iter().map(|d| d.id).collect();
+            chart
+                .drawings_mut()
+                .edit_drawings(&ids, |d| d.locked = true)
+                .unwrap();
             assert!(times(&chart).iter().all(|(_, time)| *time > 2_000));
         }
     }

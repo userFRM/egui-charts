@@ -616,6 +616,11 @@ impl Chart {
             self.set_indicator_autoscale(id, saved.autoscale);
             self.restored_studies.insert(saved.id, id.0);
             self.move_series_keeping_layers(id, panes[&saved.pane]);
+            if panes[&saved.pane] == PaneId::MAIN
+                && let Some(scale) = saved.study.scale
+            {
+                self.set_indicator_scale(id, scale);
+            }
         }
         // Only a snapshot this chart took names its columns by saved ids; a study of any other
         // snapshot starts a new column.
