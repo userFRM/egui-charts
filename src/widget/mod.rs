@@ -1123,6 +1123,12 @@ impl Chart {
             new.right_offset,
             new.right_offset_pixels,
         ) {
+            if new.bar_spacing != old.bar_spacing
+                || (new.right_offset, new.right_offset_pixels)
+                    != (old.right_offset, old.right_offset_pixels)
+            {
+                self.history.clear_view_restore();
+            }
             let scale = self.state.time_scale_mut();
             let offset = scale.right_offset_precise();
             let spacing = if new.bar_spacing == old.bar_spacing {

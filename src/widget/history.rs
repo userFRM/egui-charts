@@ -2365,8 +2365,9 @@ mod tests {
             Tracking,
             View((f32, f32)),
             Range(crate::model::LogicalRange),
+            Spacing(f32),
         }
-        let rows: [(&str, Request); 8] = [
+        let rows: [(&str, Request); 9] = [
             ("scroll_to_time", |chart| {
                 chart.scroll_to_time(chart.bars(SeriesId::MAIN)[50].time);
                 true
@@ -2389,6 +2390,12 @@ mod tests {
             }),
             ("set_right_margin", |chart| {
                 chart.set_right_margin(12.0);
+                true
+            }),
+            ("set_chart_options", |chart| {
+                let mut options = chart.chart_options().clone();
+                options.time_scale.bar_spacing = 20.0;
+                chart.set_chart_options(options);
                 true
             }),
             ("zoom_back", Chart::zoom_back),
@@ -2436,6 +2443,7 @@ mod tests {
                     "set_visible_bars" => Expected::Bars(20),
                     "enable_tracking_mode" => Expected::Tracking,
                     "set_right_margin" => Expected::View((8.0, 12.0)),
+                    "set_chart_options" => Expected::Spacing(20.0),
                     "zoom_back" => Expected::View(pre_zoom),
                     "execute_box_zoom" => Expected::Range(chart.visible_logical_range().unwrap()),
                     _ => unreachable!(),
@@ -2459,6 +2467,7 @@ mod tests {
                             (range.left - expected.left).abs() < 0.01
                                 && (range.right - expected.right).abs() < 0.01
                         }
+                        Expected::Spacing(spacing) => chart.get_time_scale_state().0 == spacing,
                     }
                 };
                 frame(&ctx, &mut chart, 0.06, vec![]);
