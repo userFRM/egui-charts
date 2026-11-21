@@ -917,16 +917,16 @@ Trading,Trading panel,Take-profit and stop-loss buttons on working order labels,
 Trading,Trading panel,Time in force and order presets,incomplete,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/ui/trading/widgets.rs;src/ui/trading/ticket/view.rs;src/ui/trading/mod.rs;src/model/trading.rs;src/services/broker.rs;src/ui/trading/view.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs;src/chart/rendering/trading_lines/mod.rs;src/scales/time_formatter.rs;src/services/paper.rs,3283;3535;3844
 Trading,Trading panel,Trade button and broker / paper account picker,verified,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/broker_picker.rs;terminal/src/trading.rs,
 Trading,Trading panel,Trading notifications,incomplete,host,src/ui/trading/mod.rs;src/ui/trading/events.rs;src/ui/trading/format.rs;src/ui_kit/notifications/toast.rs;src/ui_kit/notifications/panel.rs;src/ui/trading/view.rs;src/services/broker.rs,3279;3432;3433;3533
-Workspace,"News, calendar and social",Dividend and IPO calendars,incomplete,host,src/ui/widget_bar/panels/calendar.rs;terminal/src/panels.rs,3586
-Workspace,"News, calendar and social",Earnings calendar,incomplete,host,src/ui/widget_bar/panels/calendar.rs;terminal/src/panels.rs,3586
-Workspace,"News, calendar and social",Economic calendar,incomplete,host,src/ui/widget_bar/panels/calendar.rs;terminal/src/panels.rs,
-Workspace,"News, calendar and social",Filtered headline stream,incomplete,host,src/ui/widget_bar/panels/news.rs;src/data/market.rs;terminal/src/panels.rs,
+Workspace,"News, calendar and social",Dividend and IPO calendars,incomplete,host,src/ui/widget_bar/panels/calendar.rs;terminal/src/panels.rs;src/data/market.rs,3586
+Workspace,"News, calendar and social",Earnings calendar,unverified,host,src/ui/widget_bar/panels/calendar.rs;terminal/src/panels.rs;src/data/market.rs,3586
+Workspace,"News, calendar and social",Economic calendar,incomplete,host,src/ui/widget_bar/panels/calendar.rs;src/data/market.rs;terminal/src/panels.rs,3586
+Workspace,"News, calendar and social",Filtered headline stream,incomplete,host,src/ui/widget_bar/panels/news.rs;src/data/market.rs;src/services/storage.rs;terminal/src/panels.rs,3586
 Workspace,"News, calendar and social",Ideas and community feed,unverified,host,src/ui/ideas.rs;examples/demo/ideas.rs,3590
-Workspace,"News, calendar and social",News alerts,incomplete,host,src/services/notifications.rs;src/ui/widget_bar/panels/notifications.rs;terminal/src/panels.rs;examples/demo/marks.rs;examples/demo/layouts.rs;examples/demo/feeds.rs,1931;3586
+Workspace,"News, calendar and social",News alerts,unverified,host,src/services/notifications.rs;src/ui/widget_bar/panels/notifications.rs;terminal/src/panels.rs;examples/demo/marks.rs;examples/demo/layouts.rs;examples/demo/feeds.rs;src/ui/widget_bar/panels/news.rs;src/services/storage.rs;src/data/market.rs,1931;3586
 Workspace,"News, calendar and social",Private chats,unverified,host,src/services/chats.rs;src/ui/widget_bar/panels/chats.rs;terminal/src/panels.rs;examples/demo/feeds.rs,3590
 Workspace,"News, calendar and social","Profiles, following and social notifications",unverified,host,src/services/profiles.rs;src/services/profile_directory.rs;src/services/notifications.rs;src/ui/profile/mod.rs;src/ui/widget_bar/panels/notifications.rs;terminal/src/panels.rs;examples/demo/ideas.rs,3590
 Workspace,"News, calendar and social",Publish an idea from the chart,unverified,host,src/ui/top_toolbar/toolbar.rs;src/ui/ideas.rs;src/widget/export.rs;src/ui/top_toolbar/actions.rs;src/ui/top_toolbar/state.rs;examples/demo/ideas.rs,3590
-Workspace,"News, calendar and social",Symbol news in the right panel,verified,host,src/ui/widget_bar/panels/news.rs;terminal/src/panels.rs,
+Workspace,"News, calendar and social",Symbol news in the right panel,unverified,host,src/ui/widget_bar/panels/news.rs;src/data/market.rs;terminal/src/panels.rs,3586
 Workspace,Templates and layouts,Autosave,verified,library,src/ui/top_toolbar/components/layout_menu.rs;terminal/src/layouts.rs,3220
 Workspace,Templates and layouts,Chart settings templates,incomplete,library,src/ui/dialogs/chart_settings/mod.rs;src/widget/settings/apply.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs,2517;2141;2504
 Workspace,Templates and layouts,Cloud sync of layouts and settings across devices,incomplete,host,src/services/storage.rs;src/services/document.rs;src/ui/top_toolbar/components/layout_menu.rs;src/services/settings.rs;src/ui/dialogs/storage_conflict.rs;terminal/src/core.rs;src/services/revisions.rs,3223
