@@ -11,6 +11,7 @@
 
 use crate::localization as l10n;
 use crate::model::{PostContent, PostLink};
+use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 use crate::ui_kit::{EmptyState, PanelHeader};
@@ -26,6 +27,9 @@ pub enum IdeaKind {
     Idea,
     /// A short note without a title.
     ShortPost,
+    /// A recorded walkthrough. Its [`attachment`](Idea::attachment) is the preview picture, and
+    /// [`IdeasAction::Open`] asks the host to play it.
+    Video,
 }
 
 /// Which way an idea expects the price to move.
@@ -61,20 +65,29 @@ pub struct Idea {
     pub symbol: String,
     /// The chart interval it was made on, as the host names it.
     pub interval: String,
-    /// The host's reference to the attached chart image, if any: a link or a key.
+    /// The host's reference to the attached chart image, or for a video its preview picture, if
+    /// any: a link or a key.
     pub attachment: Option<String>,
+    /// Which way the idea expects the price to move; neutral by default and for posts.
+    pub direction: IdeaDirection,
+    /// The author's tags, in their order. Empty by default.
+    pub tags: Vec<String>,
+    /// Whether the entry is publicly discoverable. True by default; false shows it as private.
+    pub public: bool,
 }
 
 impl Idea {
-    /// An entry without a title, instrument, interval or attachment: set them as known. A short
-    /// post keeps the empty title.
+    /// An entry without a title, instrument, interval, attachment or tags, neutral and public:
+    /// set them as known. A short post keeps the empty title.
     ///
     /// ```
     /// use chrono::Utc;
-    /// use egui_charts::ui::ideas::{Idea, IdeaKind, IdeaPage};
+    /// use egui_charts::ui::ideas::{Idea, IdeaDirection, IdeaKind, IdeaPage};
     ///
     /// let mut idea = Idea::new("1", IdeaKind::Idea, "Breakout above the range", "analyst", Utc::now());
     /// idea.title = "Range breakout".into();
+    /// idea.direction = IdeaDirection::Long;
+    /// idea.tags = vec!["breakout".into()];
     /// let mut page = IdeaPage::default();
     /// page.items.push(idea);
     /// ```
@@ -95,6 +108,9 @@ impl Idea {
             symbol: String::new(),
             interval: String::new(),
             attachment: None,
+            direction: IdeaDirection::Neutral,
+            tags: Vec::new(),
+            public: true,
         }
     }
 }
@@ -385,11 +401,13 @@ impl IdeasPanel {
 
     fn feed(&mut self, ui: &mut Ui) -> IdeasAction {
         let mut action = IdeasAction::None;
+        let theme = ui.active_theme();
         let weak = ui.visuals().weak_text_color();
         ui.horizontal(|ui| {
             for (kind, label) in [
                 (IdeaKind::Idea, "Ideas"),
                 (IdeaKind::ShortPost, "Short posts"),
+                (IdeaKind::Video, "Videos"),
             ] {
                 ui.selectable_value(&mut self.filter, kind, l10n::text(ui.ctx(), label));
             }
@@ -409,6 +427,33 @@ impl IdeasPanel {
                     ui.label(RichText::new(&idea.title).strong());
                 }
                 ui.label(&idea.body);
+                let call = match idea.direction {
+                    IdeaDirection::Long => Some(("Long", theme.ui.success)),
+                    IdeaDirection::Short => Some(("Short", theme.ui.danger_text)),
+                    _ => None,
+                };
+                if let Some((label, color)) = call {
+                    ui.label(
+                        RichText::new(l10n::text(ui.ctx(), label))
+                            .strong()
+                            .color(color),
+                    );
+                }
+                if !idea.tags.is_empty() {
+                    let tags: Vec<String> = idea
+                        .tags
+                        .iter()
+                        .map(|tag| {
+                            if tag.starts_with('#') {
+                                tag.clone()
+                            } else {
+                                format!("#{tag}")
+                            }
+                        })
+                        .collect();
+                    ui.label(RichText::new(tags.join(" ")).color(weak));
+                }
+                let video = idea.kind == IdeaKind::Video;
                 let mut meta = format!(
                     "{} \u{b7} {} \u{b7} {} {}",
                     idea.author,
@@ -416,12 +461,18 @@ impl IdeasPanel {
                     idea.symbol,
                     idea.interval
                 );
-                if idea.attachment.is_some() {
+                if video {
+                    meta += &format!(" \u{b7} {}", l10n::text(ui.ctx(), "Video"));
+                } else if idea.attachment.is_some() {
                     meta += &format!(" \u{b7} {}", l10n::text(ui.ctx(), "Chart attached"));
+                }
+                if !idea.public {
+                    meta += &format!(" \u{b7} {}", l10n::text(ui.ctx(), "Private"));
                 }
                 ui.label(RichText::new(meta).color(weak));
                 ui.horizontal(|ui| {
-                    if ui.link(l10n::text(ui.ctx(), "Open")).clicked() {
+                    let open = if video { "Watch video" } else { "Open" };
+                    if ui.link(l10n::text(ui.ctx(), open)).clicked() {
                         action = IdeasAction::Open(idea.id.clone());
                     }
                     if ui.link(l10n::text(ui.ctx(), "Show on chart")).clicked() {
@@ -508,6 +559,24 @@ mod tests {
         action
     }
 
+    /// The texts the panel paints in one frame, in paint order.
+    fn texts(panel: &mut IdeasPanel) -> Vec<String> {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            panel.show(ui);
+        });
+        let texts = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        texts
+    }
+
     /// Whitespace is not a title or a description, and a disabled Publish keeps the draft idle.
     #[test]
     fn publish_waits_for_a_title_and_a_text() {
@@ -580,6 +649,9 @@ mod tests {
                     symbol: "AAPL".into(),
                     interval: "1D".into(),
                     attachment: Some("https://example.invalid/42.png".into()),
+                    direction: IdeaDirection::Neutral,
+                    tags: Vec::new(),
+                    public: true,
                 }],
                 next: None,
             },
@@ -592,6 +664,55 @@ mod tests {
         assert_eq!(
             action,
             IdeasAction::Place(PostLink::resolved("42", content))
+        );
+    }
+
+    /// Guards what an entry shows of its author's choices: the direction in words, the tags on
+    /// one line, the private mark, and for a video its own tab, mark and Watch video link.
+    #[test]
+    fn entries_show_direction_tags_privacy_and_videos() {
+        use chrono::TimeZone;
+        let time = Utc.with_ymd_and_hms(2026, 10, 30, 9, 30, 0).unwrap();
+        let mut long = Idea::new("a", IdeaKind::Idea, "Above the range", "Ada", time);
+        long.direction = IdeaDirection::Long;
+        long.tags = vec!["btc".into(), "#breakout".into()];
+        long.public = false;
+        let mut short = Idea::new("b", IdeaKind::Idea, "Below the range", "Bo", time);
+        short.direction = IdeaDirection::Short;
+        let mut video = Idea::new("v1", IdeaKind::Video, "Reading the open", "Cy", time);
+        video.attachment = Some("https://example.invalid/v1.png".into());
+        let mut panel = IdeasPanel::new();
+        panel.set_browsing(true);
+        panel.add_page(
+            IdeaPage {
+                items: vec![long, short, video],
+                next: None,
+            },
+            true,
+        );
+        let shown = texts(&mut panel);
+        assert!(shown.iter().any(|t| t == "Long"));
+        assert!(shown.iter().any(|t| t == "Short"));
+        assert_eq!(shown.iter().filter(|t| *t == "#btc #breakout").count(), 1);
+        let meta = |author: &str| {
+            shown
+                .iter()
+                .find(|t| t.starts_with(&format!("{author} \u{b7}")))
+                .cloned()
+                .unwrap()
+        };
+        assert!(meta("Ada").ends_with(" \u{b7} Private"));
+        assert!(!meta("Bo").contains("Private"));
+        assert!(!shown.iter().any(|t| t == "Reading the open"));
+
+        click(&mut panel, "Videos", None);
+        let shown = texts(&mut panel);
+        let meta = shown.iter().find(|t| t.starts_with("Cy \u{b7}")).unwrap();
+        assert!(meta.contains(" \u{b7} Video") && !meta.contains("Chart attached"));
+        assert!(!shown.iter().any(|t| t == "Above the range"));
+        assert_eq!(
+            click(&mut panel, "Watch video", None),
+            IdeasAction::Open("v1".into())
         );
     }
 
@@ -632,19 +753,7 @@ mod tests {
             panel.set_publishing(publishing);
             panel.set_browsing(browsing);
             panel.set_context("AAPL", "1D");
-            let ctx = egui::Context::default();
-            let output = ctx.run_ui(Default::default(), |ui| {
-                panel.show(ui);
-            });
-            let texts: Vec<String> = output
-                .shapes
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
-                    _ => None,
-                })
-                .collect();
-            output.drop_without_applying_deltas();
+            let texts = texts(&mut panel);
             assert_eq!(texts.iter().any(|t| t == "Publish"), publishing);
             assert_eq!(texts.iter().any(|t| t == "Short posts"), browsing);
         }

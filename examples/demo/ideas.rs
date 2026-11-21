@@ -1,13 +1,15 @@
 //! The demo's ideas: a composer and an in-memory feed for ideas and posted chart images.
 
-use chrono::Utc;
+use chrono::{TimeDelta, Utc};
 use egui_charts::drawings::DrawingToolType;
-use egui_charts::ui::ideas::{Idea, IdeaDraft, IdeaKind, IdeaPage, IdeasAction, IdeasPanel};
+use egui_charts::ui::ideas::{
+    Idea, IdeaDirection, IdeaDraft, IdeaKind, IdeaPage, IdeasAction, IdeasPanel,
+};
 use egui_charts::ui::widget_bar::NotificationsAction;
 
 use super::{DemoApp, ExportFormat, SidePanel};
 
-/// Ideas and posts published in this session, newest first.
+/// Ideas and posts published in this session, newest first, then two seeded examples.
 pub(super) struct DemoIdeas {
     pub(super) panel: IdeasPanel,
     feed: Vec<Idea>,
@@ -19,11 +21,36 @@ impl DemoIdeas {
         let mut panel = IdeasPanel::new();
         panel.set_publishing(true);
         panel.set_browsing(true);
-        Self {
+        let now = Utc::now();
+        let mut idea = Idea::new(
+            "demo-seed-idea",
+            IdeaKind::Idea,
+            "Price closed above the three-week range on rising volume.",
+            "Demo analyst",
+            now - TimeDelta::hours(3),
+        );
+        idea.title = "Range breakout".into();
+        idea.direction = IdeaDirection::Long;
+        idea.tags = vec!["breakout".into(), "INDEXA".into()];
+        idea.symbol = "INDEXA".into();
+        idea.interval = "1D".into();
+        let mut video = Idea::new(
+            "demo-seed-video",
+            IdeaKind::Video,
+            "A walkthrough of the first hour of the session.",
+            "Demo analyst",
+            now - TimeDelta::hours(5),
+        );
+        video.title = "Reading the open".into();
+        let mut ideas = Self {
             panel,
-            feed: Vec::new(),
+            feed: vec![idea, video],
             next: 1,
-        }
+        };
+        let mut page = IdeaPage::default();
+        page.items = ideas.feed.clone();
+        ideas.panel.add_page(page, true);
+        ideas
     }
 
     fn add(&mut self, idea: Idea) {
@@ -41,6 +68,9 @@ impl DemoApp {
         idea.title = draft.title.clone();
         idea.symbol = draft.symbol.clone();
         idea.interval = draft.interval.clone();
+        idea.direction = draft.direction;
+        idea.tags = draft.tags.clone();
+        idea.public = draft.public;
         if draft.attach_chart {
             match self.export_image_bytes(ctx, &Default::default(), ExportFormat::Png, false) {
                 Ok(png) => {

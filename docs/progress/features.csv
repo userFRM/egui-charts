@@ -921,7 +921,7 @@ Workspace,"News, calendar and social",Dividend and IPO calendars,incomplete,host
 Workspace,"News, calendar and social",Earnings calendar,unverified,host,src/ui/widget_bar/panels/calendar.rs;terminal/src/panels.rs;src/data/market.rs,3586
 Workspace,"News, calendar and social",Economic calendar,incomplete,host,src/ui/widget_bar/panels/calendar.rs;src/data/market.rs;terminal/src/panels.rs,3586
 Workspace,"News, calendar and social",Filtered headline stream,incomplete,host,src/ui/widget_bar/panels/news.rs;src/data/market.rs;src/services/storage.rs;terminal/src/panels.rs,3586
-Workspace,"News, calendar and social",Ideas and community feed,unverified,host,src/ui/ideas.rs;examples/demo/ideas.rs,3590
+Workspace,"News, calendar and social",Ideas and community feed,unverified,host,src/ui/ideas.rs;examples/demo/ideas.rs,3586;3590
 Workspace,"News, calendar and social",News alerts,unverified,host,src/services/notifications.rs;src/ui/widget_bar/panels/notifications.rs;terminal/src/panels.rs;examples/demo/marks.rs;examples/demo/layouts.rs;examples/demo/feeds.rs;src/ui/widget_bar/panels/news.rs;src/services/storage.rs;src/data/market.rs,1931;3586
 Workspace,"News, calendar and social",Private chats,unverified,host,src/services/chats.rs;src/ui/widget_bar/panels/chats.rs;terminal/src/panels.rs;examples/demo/feeds.rs,3590
 Workspace,"News, calendar and social","Profiles, following and social notifications",unverified,host,src/services/profiles.rs;src/services/profile_directory.rs;src/services/notifications.rs;src/ui/profile/mod.rs;src/ui/widget_bar/panels/notifications.rs;terminal/src/panels.rs;examples/demo/ideas.rs,3590
