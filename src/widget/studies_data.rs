@@ -2959,14 +2959,15 @@ pub(super) mod tests {
     /// Guards #3925: a custom study reads an hourly history on a 30-minute chart as each chart
     /// bar knew it, through `StudyData::closed_at`, and the chart's Wait for interval close,
     /// offered on by default, decides whether the latest bar reads the developing hour. Rows: a
-    /// study with an interval input of its own that offers the input, and a study reading
-    /// another symbol, which has it because the chart can calculate it on another interval.
+    /// study with an interval input of its own that offers the input, a study reading another
+    /// symbol, which has it because the chart can calculate it on another interval, and that
+    /// study calculated on 1 hour bars of the chart's symbol, which date its history instead.
     #[test]
     fn custom_study_reads_closed_bars_of_a_longer_interval() {
         use crate::studies::{CustomIndicator, IndicatorValue, InputKind, StudyInput};
         type Requests = fn(&[StudyInput]) -> Vec<StudyDataRequest>;
-        type Row = (&'static str, StudyInput, Requests, bool, &'static str);
-        let rows: [Row; 2] = [
+        type Row = (&'static str, StudyInput, Requests, bool, &'static str, bool);
+        let rows: [Row; 3] = [
             (
                 "own interval",
                 StudyInput::new(
@@ -2985,6 +2986,7 @@ pub(super) mod tests {
                 },
                 true,
                 "MAIN",
+                false,
             ),
             (
                 "other symbol",
@@ -3004,9 +3006,30 @@ pub(super) mod tests {
                 },
                 false,
                 "OTHER",
+                false,
+            ),
+            (
+                "other symbol on hourly bars",
+                StudyInput::new(
+                    "symbol",
+                    "Symbol",
+                    InputValue::Symbol("OTHER".into()),
+                    InputKind::Symbol,
+                ),
+                |inputs| match &inputs[0].value {
+                    InputValue::Symbol(symbol) => vec![StudyDataRequest {
+                        symbol: symbol.clone(),
+                        timeframe: Some(Timeframe::Hour1),
+                        metric: None,
+                    }],
+                    _ => Vec::new(),
+                },
+                false,
+                "OTHER",
+                true,
             ),
         ];
-        for (case, input, requests, offers_wait, symbol) in rows {
+        for (case, input, requests, offers_wait, symbol, on_hourly_bars) in rows {
             let mut study = CustomIndicator::new(case, |_| Vec::new())
                 .with_inputs(vec![input], move |bars, inputs, _, histories| {
                     let wanted = requests(inputs);
@@ -3034,17 +3057,28 @@ pub(super) mod tests {
             chart.set_symbol("MAIN");
             chart.set_timeframe(Timeframe::Min30);
             let id = chart.add_indicator(Box::new(study));
-            let hourly = StudyDataRequest {
+            let hourly = |symbol: &str| StudyDataRequest {
                 symbol: symbol.into(),
                 timeframe: Some(Timeframe::Hour1),
                 metric: None,
             };
-            assert_eq!(
-                chart.study_data_requests(),
-                std::slice::from_ref(&hourly),
-                "{case}"
-            );
-            chart.set_study_data(hourly, bars(&[10.5, 20.5, 30.5], 60), None);
+            let mut requested = vec![hourly(symbol)];
+            if on_hourly_bars {
+                chart
+                    .indicator_mut(id)
+                    .unwrap()
+                    .set_input(
+                        "calculation_timeframe",
+                        InputValue::Timeframe(Some(Timeframe::Hour1)),
+                    )
+                    .unwrap();
+                // The study runs on the chart symbol's hourly bars, requested first, and reads
+                // none of their closes.
+                requested.insert(0, hourly("MAIN"));
+                chart.set_study_data(hourly("MAIN"), bars(&[1.0; 3], 60), None);
+            }
+            assert_eq!(chart.study_data_requests(), requested, "{case}");
+            chart.set_study_data(hourly(symbol), bars(&[10.5, 20.5, 30.5], 60), None);
             let ctx = egui::Context::default();
             let values = |chart: &mut Chart, frames: std::ops::Range<u32>| {
                 for frame in frames {
