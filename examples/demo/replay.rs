@@ -6,8 +6,8 @@ use egui_charts::data::{MarketEvent, RecordingWriter, ReplayDriver, ReplayEvent}
 use egui_charts::model::{Bar, BarClock, Timeframe};
 use egui_charts::ui::floating_replay_control::ReplayControlAction;
 use egui_charts::ui::replay::{
-    ReplayAction, ReplayController, ReplayScope, ReplayStartAction, ReplayTradingChoice,
-    paint_start_line,
+    ReplayAction, ReplayController, ReplayScope, ReplayStartAction, ReplayToolbarAction,
+    ReplayTradingChoice, paint_start_line,
 };
 use egui_charts::ui::strategy_report::StrategyReportAction;
 use egui_charts::ui::timeframe_toolbar::SessionType;
@@ -24,6 +24,8 @@ const CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 pub(super) enum ReplayMove {
     /// A step back or a jump to the start from the replay bar.
     Control(ReplayControlAction),
+    /// A move back or a finished replay's restart from the standalone toolbar.
+    Toolbar(ReplayToolbarAction),
     /// A new start at this bar of [`DemoApp::replay_start_bars`].
     StartAt(usize),
     /// A new start at this time of the open recording.
@@ -111,7 +113,7 @@ const RECORDING_MAGIC: &[u8; 8] = b"EGCDEMO1";
 pub(super) struct RecordingFiles {
     selected: Option<std::sync::mpsc::Receiver<Result<Option<Vec<u8>>, String>>>,
     parsing: Option<RecordingImport>,
-    opened: bool,
+    pub(super) opened: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -817,6 +819,7 @@ impl DemoApp {
                 self.open_replay_account();
                 match self.replay_move.take() {
                     Some(ReplayMove::Control(action)) => self.handle_replay_control(action),
+                    Some(ReplayMove::Toolbar(action)) => self.handle_replay_toolbar(action),
                     Some(ReplayMove::StartAt(index)) => self.start_replay_at(index),
                     Some(ReplayMove::Recording(time)) => self.seek_recording(time),
                     None => {}
@@ -884,6 +887,7 @@ impl DemoApp {
         for other in self
             .extra_charts
             .iter()
+            .filter(|_| self.replay_scope == ReplayScope::AllCharts)
             .filter_map(|extra| extra.chart.timeframe())
         {
             interval = common_replay_interval(interval, other);
@@ -1071,11 +1075,11 @@ impl DemoApp {
             }
         }
         let source = self.layout_slot;
-        // A recording replays on its own chart; otherwise the replay covers every chart.
+        // A recording stays on its own chart, independently of the layout replay choice.
         let scope = if self.recording_files.opened {
             ReplayScope::ThisChart
         } else {
-            ReplayScope::AllCharts
+            self.replay_scope
         };
         let slots: Vec<_> = (0..self.extra_charts.len() + 1)
             .filter(|&slot| scope == ReplayScope::AllCharts || slot == source)
@@ -1340,6 +1344,7 @@ impl DemoApp {
                         );
                         return;
                     }
+                    self.replay_scope = replay.state.scope;
                     self.start_replay();
                     self.replay = Some(replay);
                     self.replay_interval = interval;
@@ -1580,6 +1585,60 @@ mod tests {
     use super::*;
     use egui_charts::model::{Bar, OrderSide};
     use egui_charts::ui::floating_replay_control::ReplayControlAction;
+
+    fn replay_test_ui(app: &mut DemoApp, ui: &mut egui::Ui) {
+        app.show_top_toolbar(ui, app.theme.ui.panel_bg);
+        app.reserve_replay_strip(ui, app.theme.ui.panel_bg);
+        app.show_replay_control(ui.ctx());
+        app.show_replay_trading(ui.ctx());
+    }
+
+    fn replay_ui_texts(app: &mut DemoApp, ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            texts = super::super::tests::ui_frame(ctx, egui::vec2(1440.0, 900.0), vec![], |ui| {
+                replay_test_ui(app, ui);
+            });
+        }
+        texts
+    }
+
+    fn click_replay_ui(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
+        let shown = replay_ui_texts(app, ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ui| replay_test_ui(app, ui),
+        );
+        let point = shown
+            .iter()
+            .find(|(text, _)| text == label)
+            .map(|(_, rect)| rect.center())
+            .or_else(|| {
+                output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()?
+                    .nodes
+                    .iter()
+                    .find_map(|(_, node)| {
+                        if node.label() != Some(label) {
+                            return None;
+                        }
+                        let rect = node.bounds()?;
+                        Some(egui::pos2(
+                            (rect.x0 + rect.x1) as f32 / 2.0,
+                            (rect.y0 + rect.y1) as f32 / 2.0,
+                        ))
+                    })
+            })
+            .unwrap_or_else(|| panic!("missing replay control: {label}"));
+        output.drop_without_applying_deltas();
+        super::super::tests::ui_click(ctx, size, point, |ui| replay_test_ui(app, ui));
+    }
 
     /// Local files must round-trip their price basis and book events, and reject bad input before replacement.
     #[test]
@@ -2436,6 +2495,184 @@ mod tests {
         assert_eq!(stepped.close, hours[at + 1].close);
     }
 
+    #[test]
+    fn replay_scope_menu_controls_the_layout_and_saved_session() {
+        use super::super::tests::{settle, ui_click};
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::Four);
+        settle(&mut app, &ctx);
+        app.activate_chart_slot(1);
+        app.layout.set_sync_group(2, Some("Other".into()));
+        app.layout.set_sync_group(3, Some("Other".into()));
+        let size = egui::vec2(1440.0, 900.0);
+        let texts = |app: &mut DemoApp| replay_ui_texts(app, &ctx);
+        let click = |app: &mut DemoApp, label: &str| click_replay_ui(app, &ctx, label);
+        let assert_scope = |app: &DemoApp, scope| {
+            assert!(app.chart.replay_time().is_some());
+            let expected = if scope == ReplayScope::AllCharts {
+                vec![0, 1, 2, 3]
+            } else {
+                vec![app.layout_slot]
+            };
+            assert_eq!(app.replay_slots, expected);
+            for extra in &app.extra_charts {
+                assert_eq!(
+                    extra.chart.replay_time(),
+                    (scope == ReplayScope::AllCharts).then(|| app.chart.replay_time().unwrap())
+                );
+            }
+            assert_eq!(app.replay.as_ref().unwrap().state.scope, scope);
+            assert_eq!(app.replay_session.as_ref().unwrap().0.scope, scope);
+        };
+        app.toggle_replay();
+        click(&mut app, "Replay start");
+        click(&mut app, "This chart");
+        ui_click(&ctx, size, egui::pos2(1400.0, 400.0), |ui| {
+            replay_test_ui(&mut app, ui)
+        });
+        let start = app.chart.bars(SeriesId::MAIN)[10].time;
+        app.handle_replay_bar_click(&ctx, start);
+        assert_scope(&app, ReplayScope::ThisChart);
+
+        for scope in [ReplayScope::AllCharts, ReplayScope::ThisChart] {
+            click(&mut app, "Replay start");
+            click(
+                &mut app,
+                if scope == ReplayScope::AllCharts {
+                    "All charts"
+                } else {
+                    "This chart"
+                },
+            );
+            assert_scope(&app, scope);
+            // A new start and replacement source controllers keep the menu's choice.
+            click(&mut app, "First available bar");
+            assert_scope(&app, scope);
+            app.set_replay_interval(app.state.timeframe);
+            assert_scope(&app, scope);
+            let cutoff = app.chart.replay_time();
+            app.stop_replay();
+            app.toggle_replay();
+            click(&mut app, "Replay start");
+            // Choose the opposite scope before Resume to prove it adopts the saved one.
+            click(
+                &mut app,
+                if scope == ReplayScope::AllCharts {
+                    "This chart"
+                } else {
+                    "All charts"
+                },
+            );
+            click(&mut app, "Resume saved session");
+            assert_scope(&app, scope);
+            assert_eq!(app.chart.replay_time(), cutoff);
+        }
+
+        for recording in [true, false] {
+            app.recording_files.opened = recording;
+            if !recording {
+                app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::Single);
+            }
+            click(&mut app, "Replay start");
+            let shown = texts(&mut app);
+            assert!(
+                !shown.iter().any(|(text, _)| matches!(
+                    text.as_str(),
+                    "CHARTS" | "This chart" | "All charts"
+                ))
+            );
+            ui_click(&ctx, size, egui::pos2(1400.0, 400.0), |ui| {
+                replay_test_ui(&mut app, ui)
+            });
+        }
+    }
+
+    #[test]
+    fn replay_toolbar_menu_drives_the_layout() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        app.switch_timeframe(Timeframe::Min1);
+        super::super::tests::settle(&mut app, &ctx);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::Four);
+        super::super::tests::settle(&mut app, &ctx);
+        app.connect_paper();
+        app.trading.display.instant_orders = true;
+        app.start_replay_at(10);
+        let click = |app: &mut DemoApp, label: &str| click_replay_ui(app, &ctx, label);
+        click(&mut app, "Menu");
+        click(&mut app, "Replay toolbar");
+        // Close the host menu before using the docked toolbar.
+        super::super::tests::ui_click(
+            &ctx,
+            egui::vec2(1440.0, 900.0),
+            egui::pos2(1400.0, 400.0),
+            |ui| replay_test_ui(&mut app, ui),
+        );
+        let before = app.chart.replay_time().unwrap();
+        let at = app.replay.as_ref().unwrap().state.curr_bar;
+        click(&mut app, "Step forward");
+        assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, at + 1);
+        assert_eq!(
+            app.chart.replay_time(),
+            Some(before + chrono::TimeDelta::minutes(1))
+        );
+        assert!(
+            app.extra_charts
+                .iter()
+                .all(|extra| extra.chart.replay_time() == app.chart.replay_time())
+        );
+        // Both controls show 1x; the toolbar's speed selector is above the floating bar.
+        click(&mut app, "1x");
+        click(&mut app, "50x");
+        assert_eq!(app.replay.as_ref().unwrap().state.speed.multiplier(), 50.0);
+        assert_eq!(
+            replay_ui_texts(&mut app, &ctx)
+                .iter()
+                .filter(|(text, _)| text == "50x")
+                .count(),
+            2
+        );
+        // Backward toolbar actions use the same account safeguard as the replay bar.
+        let symbol = app.state.symbol.clone();
+        for _ in 0..2 {
+            market_order(&mut app, &ctx, &symbol, OrderSide::Buy);
+        }
+        assert!(app.replay_paper.as_ref().unwrap().last_change().is_some());
+        let cutoff = app.chart.replay_time();
+        click(&mut app, "Step backward");
+        assert_eq!(app.chart.replay_time(), cutoff);
+        assert!(app.replay_prompt.is_open);
+        click(&mut app, "Trade from here");
+        assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, at);
+        assert_eq!(app.chart.replay_time(), Some(before));
+        click(&mut app, "Stop");
+        assert!(app.replay.is_none());
+        assert!(app.replay_slots.is_empty());
+        assert!(app.chart.replay_time().is_none());
+        assert!(
+            app.extra_charts
+                .iter()
+                .all(|extra| extra.chart.replay_time().is_none())
+        );
+        assert!(
+            !replay_ui_texts(&mut app, &ctx)
+                .iter()
+                .any(|(text, _)| text == "50x")
+        );
+    }
+
     /// The bar offers daily and second updates where supported, with Automatic on every time
     /// chart. A daily update grows a weekly bar from completed daily bars only.
     #[test]
@@ -2559,6 +2796,21 @@ mod tests {
         app.switch_timeframe(Timeframe::Day1);
         super::super::tests::settle(&mut app, &ctx);
         assert_eq!(app.replay_interval, Timeframe::Day1);
+
+        // Recent execution history supplies genuine one-second updates near the live edge.
+        app.stop_replay();
+        app.switch_timeframe(Timeframe::Min1);
+        super::super::tests::settle(&mut app, &ctx);
+        app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - 3);
+        click(&mut app, "Automatic");
+        click(&mut app, "1s updates");
+        assert_eq!(app.replay_interval, Timeframe::Sec1);
+        let before = app.chart.replay_time().unwrap();
+        step(&mut app);
+        assert_eq!(
+            app.chart.replay_time(),
+            Some(before + chrono::TimeDelta::seconds(1))
+        );
 
         // Hand values: gcd(2,17)=1 minute, gcd(4,6)=2 minutes; calendar periods use a day.
         for (a, b, expected) in [

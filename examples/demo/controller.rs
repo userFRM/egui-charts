@@ -80,7 +80,10 @@ use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
 use egui_charts::ui::floating_replay_control::{FloatingReplayControl, ReplayControlAction};
 use egui_charts::ui::floating_toolbar::FloatingSelectionToolbar;
-use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplaySession, ReplayStartPicker};
+use egui_charts::ui::replay::{
+    ReplayAction, ReplayController, ReplayScope, ReplaySession, ReplayStartPicker, ReplayToolbar,
+    ReplayToolbarAction, ReplayToolbarState,
+};
 use egui_charts::ui::timeframe_toolbar::{
     DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction,
     default_time_zones,
@@ -481,10 +484,12 @@ pub struct DemoApp {
     replay_start: ReplayStartPicker,
     replay_selecting: bool,
     replay_interval: Timeframe,
+    replay_scope: ReplayScope,
     replay_session: Option<(ReplaySession, Timeframe)>,
     replay_slots: Vec<usize>,
     live_was_paused: bool,
     replay_control: FloatingReplayControl,
+    replay_toolbar: bool,
 
     // Pending offscreen image options and delivery destination.
     screenshot_requested: Option<(ScreenshotTarget, egui_charts::widget::ImageExportOptions)>,
@@ -865,6 +870,7 @@ impl DemoApp {
             replay_start: ReplayStartPicker::default(),
             replay_selecting: false,
             replay_interval: Timeframe::Hour1,
+            replay_scope: ReplayScope::AllCharts,
             replay_session: cc
                 .storage
                 .and_then(|storage| eframe::get_value(storage, "replay_session"))
@@ -876,6 +882,7 @@ impl DemoApp {
             replay_slots: Vec::new(),
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
+            replay_toolbar: false,
             screenshot_requested: None,
             toasts: Toasts::new(),
             demo_level: None,
@@ -2132,6 +2139,12 @@ impl DemoApp {
                         ui.separator();
                     }
                     sample = self.show_demo_controls(ui);
+                    menu_toggle(
+                        ui,
+                        "Replay toolbar",
+                        &icons::REPLAY,
+                        &mut self.replay_toolbar,
+                    );
                     let editing = menu_item(
                         ui,
                         "Study editing",
@@ -4140,20 +4153,31 @@ impl DemoApp {
 
     /// Keeps the replay bar out of the chart's way: between its time axis and the bottom bar.
     fn reserve_replay_strip(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
-        if !self.replay_control.is_visible() {
-            return;
+        if self.replay_control.is_visible() {
+            let strip = egui::Panel::bottom("replay_bar")
+                .exact_size(FloatingReplayControl::STRIP_HEIGHT)
+                .show_separator_line(false)
+                .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
+                    top: 1,
+                    ..egui::Margin::ZERO
+                }))
+                .show(ui, |_| {})
+                .response
+                .rect;
+            self.replay_control.set_dock_strip(strip);
         }
-        let strip = egui::Panel::bottom("replay_bar")
-            .exact_size(FloatingReplayControl::STRIP_HEIGHT)
-            .show_separator_line(false)
-            .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
-                top: 1,
-                ..egui::Margin::ZERO
-            }))
-            .show(ui, |_| {})
-            .response
-            .rect;
-        self.replay_control.set_dock_strip(strip);
+        if self.replay_toolbar
+            && let Some(replay) = &self.replay
+        {
+            let state = ReplayToolbarState::from(replay);
+            let action = egui::Panel::bottom("replay_toolbar")
+                .frame(panel_frame(bg))
+                .show(ui, |ui| ReplayToolbar::new(&state).show(ui))
+                .inner;
+            if let Some(action) = action {
+                self.handle_replay_toolbar(action);
+            }
+        }
     }
 
     fn show_replay_control(&mut self, ctx: &egui::Context) {
@@ -4161,6 +4185,10 @@ impl DemoApp {
             return;
         }
         self.replay_control.set_selecting(self.replay_selecting);
+        self.replay_control.set_scope(
+            (self.layout.mode.chart_count() > 1 && !self.recording_files.opened)
+                .then_some(self.replay_scope),
+        );
         self.replay_control
             .set_can_resume(self.replay.is_none() && self.replay_session.is_some());
         match self.replay.as_ref() {
@@ -4186,6 +4214,16 @@ impl DemoApp {
     fn handle_replay_control(&mut self, action: ReplayControlAction) {
         match action {
             ReplayControlAction::Start(start) => return self.apply_replay_start(start),
+            ReplayControlAction::SetScope(scope) => {
+                if !self.recording_files.opened {
+                    self.replay_scope = scope;
+                    if self.replay_control.uses_automatic_update_interval() {
+                        self.set_automatic_replay_interval();
+                    }
+                    self.push_replay_window_to_chart();
+                }
+                return;
+            }
             // Without a replay the bar is only there to select its start.
             ReplayControlAction::Stop | ReplayControlAction::Close if self.replay.is_none() => {
                 return self.stop_replay();
@@ -4259,6 +4297,52 @@ impl DemoApp {
         } else if !transport {
             self.push_replay_window_to_chart();
         }
+        self.sync_replay_driver(play);
+    }
+
+    fn handle_replay_toolbar(&mut self, action: ReplayToolbarAction) {
+        match action {
+            ReplayToolbarAction::Stop => return self.stop_replay(),
+            ReplayToolbarAction::OpenSettings => return,
+            _ => {}
+        }
+        let back = self.replay.as_ref().and_then(|replay| {
+            match action {
+                ReplayToolbarAction::StepBackward => replay.visible_bars().iter().rev().nth(1),
+                ReplayToolbarAction::Play
+                    if replay.state.playback_state
+                        == egui_charts::ui::replay::PlaybackState::Finished =>
+                {
+                    replay.visible_bars().first()
+                }
+                _ => None,
+            }
+            .map(|bar| bar.time)
+        });
+        if let Some(time) = back
+            && self.hold_replay_move(replay::ReplayMove::Toolbar(action.clone()), Some(time))
+        {
+            return;
+        }
+        let play = matches!(action, ReplayToolbarAction::Play);
+        let transport = matches!(
+            action,
+            ReplayToolbarAction::Play
+                | ReplayToolbarAction::Pause
+                | ReplayToolbarAction::SetSpeed(_)
+        );
+        let restart = play && back.is_some();
+        let Some(replay) = &mut self.replay else {
+            return;
+        };
+        replay.handle_action(action.into());
+        if !transport || restart {
+            self.push_replay_window_to_chart();
+        }
+        self.sync_replay_driver(play);
+    }
+
+    fn sync_replay_driver(&mut self, play: bool) {
         if let Some(driver) = self.chart.replay_driver() {
             let replay = self.replay.as_mut().expect("active replay");
             if play && !driver.is_finished() {
