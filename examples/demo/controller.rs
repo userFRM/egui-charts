@@ -3209,6 +3209,7 @@ impl DemoApp {
             .unwrap_or_default();
         self.calendar.set_timezone(timezone.clone());
         self.news.set_timezone(timezone.clone());
+        self.chats.set_timezone(timezone.clone());
         self.highlights.set_timezone(timezone.clone());
         self.symbol_details.set_timezone(timezone.clone());
         self.hotlists.set_timezone(timezone);

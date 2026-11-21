@@ -4,12 +4,14 @@ use crate::localization as l10n;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
+use chrono::Offset;
 use egui::{RichText, Ui};
 
 use super::controls::dropdown;
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
 use crate::icons::icons;
+use crate::model::TimezoneId;
 use crate::services::{
     ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, Listener, NewChatRoom,
     NewChatRoomKind,
@@ -99,8 +101,10 @@ fn allowed(kind: NewChatRoomKind, capabilities: &ChatCapabilities) -> bool {
 /// create a private or group room, choosing the recipients from the service's
 /// [`find_users`](Chats::find_users), and to add or remove the members of a room whose members
 /// the service pushes. Each action shows while it is pending and its failure, and attaching
-/// another service clears them. Call [`poll`](Self::poll) each frame, even while the panel is
-/// hidden, then [`show`](Self::show) while it is open. Accounts and moderation are the host's.
+/// another service clears them. Message times and a separator for each day are written in the
+/// zone set with [`set_timezone`](Self::set_timezone), UTC until then. Call [`poll`](Self::poll)
+/// each frame, even while the panel is hidden, then [`show`](Self::show) while it is open.
+/// Accounts and moderation are the host's.
 #[derive(Default)]
 pub struct ChatsPanel {
     service: Option<Arc<dyn Chats>>,
@@ -132,6 +136,7 @@ pub struct ChatsPanel {
     /// A room to select once the service pushes it.
     open: Option<String>,
     action_error: Option<FeedError>,
+    timezone: TimezoneId,
 }
 
 impl std::fmt::Debug for ChatsPanel {
@@ -153,6 +158,7 @@ impl std::fmt::Debug for ChatsPanel {
             .field("member_key", &self.member_key)
             .field("open", &self.open)
             .field("action_error", &self.action_error)
+            .field("timezone", &self.timezone)
             .finish_non_exhaustive()
     }
 }
@@ -175,6 +181,11 @@ impl ChatsPanel {
         self.open = None;
         self.action_error = None;
         self.watch();
+    }
+
+    /// Writes message times and day separators in `timezone`, such as the chart's. UTC until set.
+    pub fn set_timezone(&mut self, timezone: TimezoneId) {
+        self.timezone = timezone;
     }
 
     fn next_key(&mut self) -> u64 {
@@ -566,7 +577,23 @@ impl ChatsPanel {
                         None => {}
                     }
                 }
+                let mut day = None;
                 for (index, message) in self.messages.get(&room).into_iter().flatten().enumerate() {
+                    let local = message.time.with_timezone(&self.timezone);
+                    if day != Some(local.date_naive()) {
+                        day = Some(local.date_naive());
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                RichText::new(l10n::text(
+                                    ui.ctx(),
+                                    local.format("%A, %b %-d, %Y").to_string(),
+                                ))
+                                .size(theme.text.small)
+                                .color(theme.ui.text_secondary),
+                            );
+                        });
+                    }
+                    // Below the day separator: the scroll keeping follows the message itself.
                     let y = ui.cursor().top() - top;
                     if index == 0 {
                         first = Some((message.clone(), y));
@@ -601,14 +628,21 @@ impl ChatsPanel {
                                         RichText::new(l10n::text(ui.ctx(), &message.author))
                                             .strong(),
                                     );
+                                    let zone = super::symbol_details::zone_label(
+                                        local.offset().fix().local_minus_utc(),
+                                    );
                                     ui.label(
                                         RichText::new(l10n::text(
                                             ui.ctx(),
-                                            message.time.format("%H:%M").to_string(),
+                                            local.format("%H:%M").to_string(),
                                         ))
                                         .size(theme.text.small)
                                         .color(theme.ui.text_secondary),
-                                    );
+                                    )
+                                    .on_hover_text(format!(
+                                        "{} {zone}",
+                                        local.format("%b %-d, %Y, %H:%M")
+                                    ));
                                 });
                                 ui.label(l10n::text(ui.ctx(), &message.text));
                             });
@@ -1100,6 +1134,79 @@ mod tests {
         h.get_by_label("No older messages");
         to_top(&mut h);
         assert!(host.asked.lock().unwrap().is_empty());
+    }
+
+    /// Guards message times: each is written in the zone the host sets, UTC until then, under a
+    /// separator for each local day, and its hover names the date and the zone.
+    #[test]
+    fn times_follow_the_zone_with_a_separator_per_local_day() {
+        use chrono::TimeZone;
+        let utc = |day, hour| chrono::Utc.with_ymd_and_hms(2026, 11, day, hour, 30, 0).unwrap();
+        for (zone, expected, hover) in [
+            (
+                None,
+                [
+                    "Friday, Nov 20, 2026",
+                    "23:30",
+                    "Saturday, Nov 21, 2026",
+                    "04:30",
+                    "05:30",
+                ],
+                "Nov 20, 2026, 23:30 UTC",
+            ),
+            (
+                TimezoneId::fixed_offset(-5 * 3600),
+                [
+                    "Friday, Nov 20, 2026",
+                    "18:30",
+                    "23:30",
+                    "Saturday, Nov 21, 2026",
+                    "00:30",
+                ],
+                "Nov 20, 2026, 18:30 GMT-5",
+            ),
+        ] {
+            let host = Arc::new(Host::default());
+            let mut panel = ChatsPanel::new();
+            panel.set_service(host.clone());
+            if let Some(zone) = zone {
+                panel.set_timezone(zone);
+            }
+            let events = host.events.lock().unwrap().clone().unwrap();
+            for (n, time) in [utc(20, 23), utc(21, 4), utc(21, 5)].into_iter().enumerate() {
+                let message = ChatMessage::new("desk", "Ann", time, format!("m{n}"));
+                events.push(ChatEvent::Message(message));
+            }
+            panel.poll(&egui::Context::default());
+            let mut h = Harness::builder()
+                .with_size(Vec2::new(320.0, 600.0))
+                .with_context_setup(|ctx| {
+                    crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                    ctx.all_styles_mut(|style| {
+                        style.interaction.tooltip_delay = 0.0;
+                        style.interaction.show_tooltips_only_when_still = false;
+                    });
+                })
+                .build_ui_state(|ui, panel: &mut ChatsPanel| panel.show(ui), panel);
+            h.run();
+            let painted: Vec<String> = h
+                .output()
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .filter(|text| {
+                    text.ends_with(", 2026")
+                        || chrono::NaiveTime::parse_from_str(text, "%H:%M").is_ok()
+                })
+                .collect();
+            assert_eq!(painted, expected);
+            h.get_by_label(expected[1]).hover();
+            h.run();
+            h.get_by_label(hover);
+        }
     }
 
     /// Guards a room's history against a hole: a page asked before a message the room has since
