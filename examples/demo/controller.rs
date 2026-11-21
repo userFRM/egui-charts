@@ -1699,15 +1699,7 @@ impl DemoApp {
 
     fn write_export(&mut self, save_path: Option<std::path::PathBuf>, extension: &str, out: &[u8]) {
         let from_dialog = save_path.is_some();
-        let path = save_path.unwrap_or_else(|| {
-            // A symbol of a visitor's own data must not carry a path into the file name.
-            let stem = owndata::store::file_stem(&self.state.symbol);
-            let filename = format!("{stem}_export.{extension}");
-            #[cfg(not(target_arch = "wasm32"))]
-            return std::env::temp_dir().join(filename);
-            #[cfg(target_arch = "wasm32")]
-            std::path::PathBuf::from(filename)
-        });
+        let path = save_path.unwrap_or_else(|| default_export_path(&self.state.symbol, extension));
         #[cfg(not(target_arch = "wasm32"))]
         let result = std::fs::write(&path, out).map_err(|e| e.to_string());
         #[cfg(target_arch = "wasm32")]
@@ -1790,6 +1782,18 @@ impl eframe::App for DemoApp {
         let alerts = &self.settings_state.alerts;
         self.alerts
             .set_sound(alerts.play_sound.then(|| alerts.sound.clone()));
+        self.alerts.set_price(
+            self.chart.symbol(),
+            self.chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .rev()
+                .find(|bar| !bar.is_whitespace())
+                .map(|bar| bar.close),
+            self.chart
+                .instrument()
+                .and_then(|instrument| instrument.tick_size),
+        );
         self.alerts.poll(&ctx, &mut self.toasts);
         self.monitor_alerts(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
@@ -2472,12 +2476,7 @@ impl DemoApp {
             });
         self.drawing_toolbar.state.hide_indicators = self.chart.indicators_hidden();
         self.drawing_toolbar.state.hide_drawings = self.chart.drawings().is_hidden();
-        let drawings = &self.chart.drawings().drawings;
-        self.drawing_toolbar.state.lock_all = drawings.iter().any(|d| d.user_edit_enabled)
-            && drawings
-                .iter()
-                .filter(|d| d.user_edit_enabled)
-                .all(|d| d.locked);
+        self.drawing_toolbar.state.lock_all = self.chart.drawings().is_locked();
         if self.drawing_toolbar.state.preferences.hidden {
             let action = self.drawing_toolbar.show_with_action(ui);
             self.handle_drawing_toolbar(action);
@@ -2510,11 +2509,12 @@ impl DemoApp {
         }
         let action = egui_charts::ui::drawing_toolbar::utilities::RemoveMenu::request(
             action,
-            self.chart
-                .drawings()
-                .drawings
-                .iter()
-                .any(|drawing| drawing.locked && drawing.user_edit_enabled),
+            {
+                let dm = self.chart.drawings();
+                dm.drawings
+                    .iter()
+                    .any(|d| d.user_edit_enabled && (d.locked || dm.is_locked()))
+            },
             &mut self.drawing_toolbar.state,
         );
         match action {
@@ -2675,7 +2675,9 @@ impl DemoApp {
             DrawingToolbarAction::HideAllDrawings => {
                 dm.set_hidden(self.drawing_toolbar.state.hide_drawings);
             }
-            DrawingToolbarAction::LockAllDrawings => dm.toggle_lock_all(),
+            DrawingToolbarAction::LockAllDrawings => {
+                dm.set_locked(self.drawing_toolbar.state.lock_all)
+            }
             DrawingToolbarAction::InsertGlyph { icon_name, size } => {
                 dm.start_icon_insertion(icon_name.to_string());
                 if let Some(drawing) = dm.curr_drawing_mut() {
@@ -2962,12 +2964,13 @@ impl DemoApp {
         }
 
         // Live drawings.
+        let all_locked = self.chart.drawings().is_locked();
         for d in self.chart.drawings().listed_drawings() {
             let mut item =
                 SourceItem::drawing(d.id, d.tool_type, d.color32()).with_panes(&self.chart);
             item.visible = d.visible;
             item.locked = d.locked;
-            item.user_edit_enabled = d.user_edit_enabled;
+            item.user_edit_enabled = d.user_edit_enabled && !all_locked;
             item.z_index = d.z_order;
             item.label = d.label.clone();
             item.folder = d.folder.clone();
@@ -3020,7 +3023,7 @@ impl DemoApp {
                     .drawings()
                     .drawings
                     .iter()
-                    .any(|d| d.id == id && d.accepts_user_edits())
+                    .any(|d| d.id == id && chart.drawings().accepts_user_edits(d))
                 {
                     let _ = chart
                         .drawings_mut()
@@ -3295,7 +3298,6 @@ impl DemoApp {
 
     fn show_alerts_panel(&mut self, ui: &mut egui::Ui) {
         self.list_alert_sources();
-        self.alerts.set_symbol(&self.state.symbol);
         match self.alerts.show(ui) {
             AlertPanelAction::CreateAlert => self.open_alert(None),
             AlertPanelAction::EditAlert(mut alert)
@@ -3904,7 +3906,9 @@ impl DemoApp {
         if let Some(id) = drawing_settings
             && !self.replay_selecting
             && self.chart.drawings().drawings.iter().any(|d| {
-                d.id == id && (!d.accepts_user_edits() || !d.tool_type.edits_text_inline())
+                d.id == id
+                    && (!self.chart.drawings().accepts_user_edits(d)
+                        || !d.tool_type.edits_text_inline())
             })
         {
             self.open_drawing_props_for(id);
@@ -4136,7 +4140,7 @@ impl DemoApp {
                 if dm
                     .drawings
                     .iter()
-                    .any(|d| d.id == id && d.accepts_user_edits())
+                    .any(|d| d.id == id && dm.accepts_user_edits(d))
                 {
                     self.chart.move_drawing_to_pane(id, pane);
                 }
@@ -4461,11 +4465,9 @@ impl DemoApp {
                     if ctx
                         .layer_id_at(pos)
                         .is_some_and(|layer| layer.order == egui::Order::Background)
+                        && let Some(price) = self.chart.alert_price_at(pos)
                     {
-                        let price = mapping.y_to_price(pos.y);
-                        if price.is_finite() {
-                            self.quick_price_alert(self.chart.symbol().to_owned(), price);
-                        }
+                        self.quick_price_alert(self.chart.symbol().to_owned(), price);
                     }
                 } else {
                     self.open_alert(None);
@@ -4590,13 +4592,7 @@ impl DemoApp {
         png: &[u8],
         path: Option<std::path::PathBuf>,
     ) -> Result<String, String> {
-        let path = path.unwrap_or_else(|| {
-            let filename = format!("{}_chart.png", self.state.symbol);
-            #[cfg(not(target_arch = "wasm32"))]
-            return std::env::temp_dir().join(filename);
-            #[cfg(target_arch = "wasm32")]
-            std::path::PathBuf::from(filename)
-        });
+        let path = path.unwrap_or_else(|| default_export_path(&self.state.symbol, "png"));
         #[cfg(not(target_arch = "wasm32"))]
         let result = std::fs::write(&path, png).map_err(|error| error.to_string());
         #[cfg(target_arch = "wasm32")]
@@ -4608,6 +4604,19 @@ impl DemoApp {
 // ---------------------------------------------------------------------------
 // Free helpers.
 // ---------------------------------------------------------------------------
+
+/// Default export destination, named from a path-safe symbol and the local time to the second,
+/// such as `SAMPLE_2026-11-20_06-50-12.png`. Native hosts save in the temporary directory;
+/// browsers download the file. A visitor's symbol must not carry a path into the file name.
+fn default_export_path(symbol: &str, extension: &str) -> std::path::PathBuf {
+    let stem = owndata::store::file_stem(symbol);
+    let time = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let filename = format!("{stem}_{time}.{extension}");
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::env::temp_dir().join(filename);
+    #[cfg(target_arch = "wasm32")]
+    std::path::PathBuf::from(filename)
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn open_image(ctx: &egui::Context, png: &[u8]) -> Result<String, String> {
@@ -8500,6 +8509,48 @@ mod tests {
             }
             output.drop_without_applying_deltas();
         }
+
+        // Every download of a symbol is kept: the default name carries the capture time.
+        use chrono::Timelike;
+        fn paths_time(path: &std::path::Path) -> chrono::NaiveDateTime {
+            let name = path.file_name().unwrap().to_str().unwrap();
+            let stamp = name
+                .strip_prefix("BTC_USD_")
+                .and_then(|name| name.strip_suffix(".png"));
+            chrono::NaiveDateTime::parse_from_str(stamp.unwrap(), "%Y-%m-%d_%H-%M-%S").unwrap()
+        }
+        let now = || chrono::Local::now().naive_local();
+        app.state.symbol = "BTC/USD".into();
+        let mut paths: Vec<std::path::PathBuf> = Vec::new();
+        for _ in 0..2 {
+            // The second download is a second after the first.
+            while paths.len() == 1 && now().with_nanosecond(0).unwrap() <= paths_time(&paths[0]) {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let before = now().with_nanosecond(0).unwrap();
+            app.handle_top_toolbar(&ctx, TopToolbarAction::TakeScreenshot);
+            app.screenshot_requested.as_mut().unwrap().1.size = [200, 120];
+            app.handle_screenshot(&ctx);
+            let after = now();
+            let message = &app.toasts.toasts().last().unwrap().message;
+            let path = std::path::PathBuf::from(
+                message
+                    .strip_prefix("Export successful: ")
+                    .unwrap_or_else(|| panic!("{message}")),
+            );
+            assert_eq!(path.parent(), Some(std::env::temp_dir().as_path()));
+            assert!(
+                (before..=after).contains(&paths_time(&path)),
+                "{}",
+                path.display()
+            );
+            assert!(std::fs::read(&path).unwrap().starts_with(b"\x89PNG"));
+            paths.push(path);
+        }
+        assert_ne!(paths[0], paths[1]);
+        for path in paths {
+            std::fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]
@@ -9102,7 +9153,13 @@ mod tests {
         let map = app.chart.get_chart_mapping();
         let point = egui::pos2(map.rect.center().x, map.rect.center().y);
         let range = map.price.range();
-        let expected = (range.min + range.max) / 2.0;
+        let expected = app.chart.alert_price_at(point).unwrap();
+        let tick = app
+            .chart
+            .instrument()
+            .and_then(|instrument| instrument.tick_size)
+            .unwrap_or(0.01);
+        assert!((expected - (range.min + range.max) / 2.0).abs() <= tick / 2.0 + 1e-9);
         frame(
             &mut app,
             vec![
@@ -9721,8 +9778,90 @@ mod tests {
         );
     }
 
-    /// Existing drawing settings survive opening and applying the dialog, and the toolbar
-    /// reflects locks changed through other drawing controls rather than an optimistic toggle.
+    /// Turning Lock all off preserves each drawing's own lock, including through undo and redo.
+    #[test]
+    fn lock_all_drawings_returns_each_drawing_to_its_own_lock() {
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        for (id, bar, price) in [(7, 1.0, 105.0), (8, 3.0, 107.0)] {
+            let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+            drawing.chart_points = vec![
+                ChartPoint::new(bar, price),
+                ChartPoint::new(bar + 1.0, price + 1.0),
+            ];
+            drawing.completed = true;
+            app.chart.drawings_mut().drawings.push(drawing);
+        }
+        app.user_action(|app| {
+            let dm = app.chart.drawings_mut();
+            dm.select(7);
+            dm.set_selected_locked(true);
+        });
+        for (command, locked) in [
+            ("lock-drawings", true),
+            ("undo", false),
+            ("redo", true),
+            ("lock-drawings", false),
+        ] {
+            app.execute_search_command(&ctx, command);
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.show_drawing_toolbar(ui, egui::Color32::BLACK)
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(app.drawing_toolbar.state.lock_all, locked, "{command}");
+        }
+        let locks: Vec<_> = app
+            .chart
+            .drawings()
+            .drawings
+            .iter()
+            .map(|d| (d.id, d.locked))
+            .collect();
+        assert_eq!(locks, [(7, true), (8, false)]);
+    }
+
+    /// A drawing placed while every drawing is locked cannot be dragged, and the button stays on.
+    #[test]
+    fn lock_all_drawings_holds_a_drawing_placed_while_it_is_on() {
+        use egui_charts::drawings::DrawingToolType;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.execute_search_command(&ctx, "lock-drawings");
+        let dm = app.chart.drawings_mut();
+        let x_to_bar = |x: f32| x / 10.0;
+        let y_to_price = |y: f32| 200.0 - f64::from(y);
+        dm.start_drawing_with_coords(
+            DrawingToolType::TrendLine,
+            egui::pos2(10.0, 95.0),
+            x_to_bar,
+            y_to_price,
+        );
+        dm.add_point_with_coords(egui::pos2(20.0, 94.0), x_to_bar, y_to_price);
+        dm.complete_curr_drawing();
+        let placed = dm.drawings.last().unwrap().clone();
+        assert!(!placed.locked);
+        dm.start_drag_body(placed.id, egui::pos2(15.0, 94.5));
+        dm.update_drag_handle(
+            egui::pos2(55.0, 54.5),
+            x_to_bar,
+            y_to_price,
+            |price, from, to| price - f64::from(to - from),
+        );
+        dm.end_drag_handle();
+        assert_eq!(
+            dm.drawings.last().unwrap().chart_points,
+            placed.chart_points
+        );
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.show_drawing_toolbar(ui, egui::Color32::BLACK)
+        })
+        .drop_without_applying_deltas();
+        assert!(app.drawing_toolbar.state.lock_all);
+    }
+
+    /// Existing drawing settings survive opening and applying the dialog, and the object tree
+    /// leaves the colour of a drawing the user cannot edit as it is.
     #[test]
     fn drawing_controls_round_trip_visibility_fill_fonts_and_locks() {
         use egui_charts::drawings::{Drawing, DrawingToolType, TimeframeVisibility};
@@ -9809,21 +9948,10 @@ mod tests {
         app.handle_object_tree(ObjectTreeAction::ChangeColor(7, egui::Color32::RED), &[]);
         assert_eq!(app.chart.drawings().drawings[0].color, [51, 102, 153, 85]);
         app.chart.drawings_mut().drawings[0].user_edit_enabled = true;
-        app.chart
-            .drawings_mut()
-            .edit_drawing(7, |d| d.locked = true)
-            .unwrap();
-        ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.show_drawing_toolbar(ui, egui::Color32::BLACK)
-        })
-        .drop_without_applying_deltas();
-        assert!(app.drawing_toolbar.state.lock_all);
-        app.chart.drawings_mut().drawings[0].locked = false;
-        ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.show_drawing_toolbar(ui, egui::Color32::BLACK)
-        })
-        .drop_without_applying_deltas();
-        assert!(!app.drawing_toolbar.state.lock_all);
+        app.chart.drawings_mut().set_locked(true);
+        app.handle_object_tree(ObjectTreeAction::ChangeColor(7, egui::Color32::RED), &[]);
+        assert_eq!(app.chart.drawings().drawings[0].color, [51, 102, 153, 85]);
+        app.chart.drawings_mut().set_locked(false);
         use egui_charts::data::VolumeProfileConfig;
         use egui_charts::drawings::{
             FibonacciConfig, GannConfig, GannLevel, PitchforkConfig, PositionSize, PositionSizing,
