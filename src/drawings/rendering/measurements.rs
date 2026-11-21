@@ -67,10 +67,14 @@ impl Drawing {
         }
     }
 
-    /// Screen span shared by a date range's painted time edges and its hit area.
+    /// Screen span shared by the painted time edges of a date range or a date and price range
+    /// and their hit area.
     pub(super) fn time_edge_span(&self, pane: Rect, bounds: Rect) -> egui::Rangef {
         let mut span = bounds.y_range();
-        if self.tool_type == DrawingToolType::DateRange {
+        if matches!(
+            self.tool_type,
+            DrawingToolType::DateRange | DrawingToolType::DateAndPriceRange
+        ) {
             if self.range_settings.extend_top {
                 span.min = span.min.min(pane.min.y);
             }
@@ -82,8 +86,9 @@ impl Drawing {
     }
 
     /// Paints a range after the common style pass: fill, independently styled box edges, arrows
-    /// in the drawing's line style, centred custom text and the readout card. Date ranges can
-    /// extend their time edges to either pane edge; price edges follow the side extensions.
+    /// in the drawing's line style, centred custom text and the readout card. Date ranges and
+    /// date and price ranges can extend their time edges to either pane edge; price edges
+    /// follow the side extensions.
     pub(crate) fn render_range(
         &self,
         painter: &egui::Painter,
@@ -1197,9 +1202,8 @@ mod tests {
                         ..Default::default()
                     };
                     let shapes = paint(&drawing, &Theme::dark());
-                    let extended = tool == DrawingToolType::DateRange;
-                    let ymin = if extended && top { 0.0 } else { 200.0 };
-                    let ymax = if extended && bottom { 400.0 } else { 250.0 };
+                    let ymin = if top { 0.0 } else { 200.0 };
+                    let ymax = if bottom { 400.0 } else { 250.0 };
                     for x in [10.0, 40.0] {
                         let found=shapes.iter().any(|s|matches!(s,Shape::LineSegment {points,stroke} if *points==[Pos2::new(x,ymin),Pos2::new(x,ymax)] && *stroke==drawing.stroke()));
                         assert_eq!(found, border, "{tool:?} {top}/{bottom}/{border}");
@@ -1207,7 +1211,7 @@ mod tests {
                     for (y, on) in [(50.0, top), (350.0, bottom)] {
                         assert_eq!(
                             hit_test(Pos2::new(10.0, y), std::slice::from_ref(&drawing), "1D"),
-                            (extended && on && border).then_some(1),
+                            (on && border).then_some(1),
                             "{tool:?} hit {top}/{bottom}/{border}/{y}"
                         );
                     }
