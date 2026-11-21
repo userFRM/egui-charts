@@ -799,8 +799,10 @@ mod tests {
         let orange = Color32::from_rgb(255, 152, 0);
         let blue = Color32::from_rgb(0, 0, 255);
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            let mut settings = SeriesSettings::default();
-            settings.chart_alert_color = blue;
+            let settings = SeriesSettings {
+                chart_alert_color: blue,
+                ..Default::default()
+            };
             let mut dialog = SeriesSettingsDialog::new();
             dialog.open(SeriesId::MAIN, settings);
             dialog.active_tab = SeriesSettingsTab::ScalesAndLines;
