@@ -17,7 +17,7 @@ use std::sync::Arc;
 const MAX_PRECISION: usize = 324;
 
 // Inspect the rounded digits so rounding ties follow Rust's formatter.
-pub(super) fn format_decimal(value: f64, precision: usize) -> String {
+pub(crate) fn format_decimal(value: f64, precision: usize) -> String {
     let precision = precision.min(MAX_PRECISION);
     let mut formatted = format!("{value:.precision$}");
     if formatted
@@ -61,6 +61,23 @@ fn format_fraction(value: f64, fraction: crate::model::PriceFraction) -> String 
 pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 {
     let scale = 10f64.powi(decimals(step) as i32);
     (round(value / step) * step * scale).round() / scale
+}
+
+/// The price alert and order rows act on: the nearest positive finite tick, else the menu's
+/// decimals, with halfway values away from zero. Non-finite prices and decimal counts above
+/// the instrument precision cap stay unchanged.
+#[cfg(feature = "ui")]
+pub(crate) fn snap_price(price: f64, tick: Option<f64>, decimals: usize) -> f64 {
+    if !price.is_finite() {
+        return price;
+    }
+    match tick.filter(|tick| tick.is_finite() && *tick > 0.0) {
+        Some(tick) => to_step(price, tick, f64::round),
+        None if decimals <= MAX_PRICE_DECIMALS => {
+            to_step(price, 10f64.powi(-(decimals as i32)), f64::round)
+        }
+        None => price,
+    }
 }
 
 /// Decimals needed to write `step`, such as 2 for 0.25.

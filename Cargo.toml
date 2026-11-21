@@ -18,9 +18,8 @@ readme = "README.md"
 # example set is declared explicitly instead.
 autoexamples = false
 exclude = [
-    "plan.md",
     ".github/",
-    "tests/",
+    "src/widget/frame/tests/",
     "benches/",
     "docs/*",
     "!docs/builder-guide.md",
@@ -185,7 +184,7 @@ icons = ["widget", "dep:resvg"]
 ## Application-level UI components: toolbars, panels, sidebars, dialogs, the
 ## reusable `ui_kit` widget library they are built on, the `ext` helpers, and
 ## the built-in studies they offer.
-ui = ["icons", "studies", "drawings", "csv", "png-export", "dep:egui_extras", "egui_extras/svg", "dep:thiserror", "eframe/accesskit"]
+ui = ["icons", "studies", "drawings", "csv", "png-export", "dep:egui_extras", "egui_extras/svg", "eframe/accesskit"]
 ## Month and weekday names and the AM/PM marker in the language of a locale, for
 ## `Chart::set_locale` and `LocaleTimeFormatter`, from chrono's locale tables.
 ## Without it those labels stay in English.
@@ -193,8 +192,6 @@ locales = ["chrono/unstable-locales"]
 ## IANA time zones and daylight-saving rules from chrono-tz, enabled by default.
 ## Without it, UTC, system local time and explicit fixed offsets remain available.
 timezones = ["dep:chrono-tz"]
-## `Serialize` and `Deserialize` for `theme::Theme`, so an application can load a theme from a file.
-serde = []
 
 # The web builds: `trunk build --release` of `examples/demo`, whose own profile matches this one,
 # and of the bare chart in `scripts/web-size.sh`. Whole-program optimisation for size: at `s` the
@@ -259,5 +256,4 @@ web-time = { version = "1.1.0", optional = true }
 csv = { version = "1.4.0", optional = true }
 # Encodes chart images rasterised by `Chart::export_png`.
 png = { version = "0.17.16", optional = true }
-thiserror = { version = "2.0.18", optional = true }
 log = "0.4.29"

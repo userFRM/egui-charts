@@ -357,7 +357,18 @@ impl SymbolHeader {
                         "Vol {volume}",
                         &[(
                             "volume",
-                            crate::scales::StudyFormat::Volume.format(self.ohlc.volume, None),
+                            match self.instrument.volume_decimals {
+                                Some(precision) if self.ohlc.volume.is_finite() => {
+                                    crate::scales::PriceFormatter::format(
+                                        &crate::scales::VolumeFormatter {
+                                            precision: usize::from(precision),
+                                        },
+                                        self.ohlc.volume,
+                                    )
+                                }
+                                _ => crate::scales::StudyFormat::Volume
+                                    .format(self.ohlc.volume, None),
+                            },
                         )],
                     );
                     let vol_galley = painter.layout_no_wrap(
@@ -436,11 +447,10 @@ impl SymbolHeader {
 
 #[cfg(test)]
 mod tests {
-    use super::OhlcData;
+    use super::*;
 
     #[test]
     fn quote_buttons_remain_clickable_in_narrow_headers() {
-        use super::*;
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for width in [800.0, 320.0] {
                 for (translated, label, expected) in [
@@ -524,11 +534,36 @@ mod tests {
     }
 
     #[test]
-    fn ohlc_change_percent_follows_the_sign_of_the_change() {
-        // (open, close, expected percent)
-        for (open, close, expected) in [(100.0, 105.0, 5.0), (-10.0, -5.0, 50.0), (0.0, 5.0, 0.0)] {
-            let data = OhlcData::new(open, close, open, close, 0.0);
+    fn ohlc_change_percent_and_volume_follow_their_units() {
+        // Open, close, percent, volume decimals, volume and painted volume label.
+        for (open, close, expected, decimals, volume, label) in [
+            (100.0, 105.0, 5.0, Some(3), 0.75, "Vol 0.750"),
+            (-10.0, -5.0, 50.0, Some(0), 0.75, "Vol 1"),
+            (0.0, 5.0, 0.0, None, 0.75, "Vol 1"),
+            (100.0, 105.0, 5.0, Some(3), 1234.56, "Vol 1.235K"),
+            (100.0, 105.0, 5.0, None, 1234.56, "Vol 1.23K"),
+        ] {
+            let data = OhlcData::new(open, close, open, close, volume);
             assert_eq!(data.change_percent, expected, "{open} -> {close}");
+            let mut instrument = Instrument::new("FLOW");
+            instrument.volume_decimals = decimals;
+            let header = SymbolHeader::new(instrument, "1m").with_ohlc(data);
+            let output = egui::Context::default().run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, 100.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    header.show(ui);
+                },
+            );
+            let painted = output.shapes.iter().any(|shape| {
+                matches!(
+                    &shape.shape, egui::Shape::Text(text) if text.galley.text() == label
+                )
+            });
+            output.drop_without_applying_deltas();
+            assert!(painted, "volume decimals {decimals:?}: {label}");
         }
     }
 }

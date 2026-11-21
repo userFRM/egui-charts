@@ -1,6 +1,7 @@
 //! Saved levels, fan lines, arcs and background of the Gann tools.
 
 use super::DrawingToolType;
+use crate::model::LineStyle;
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::f32::consts::SQRT_2;
@@ -11,6 +12,8 @@ pub(crate) const GANN_SQUARE_UNITS: f32 = 5.0;
 pub(crate) const GANN_MAX_ARC: f32 = GANN_SQUARE_UNITS * SQRT_2;
 
 const GREY: [u8; 4] = [128, 128, 128, 255];
+const LAVENDER: [u8; 4] = [179, 157, 219, 255];
+const VIOLET: [u8; 4] = [149, 117, 205, 255];
 const ORANGE: [u8; 4] = [255, 152, 0, 255];
 const CYAN: [u8; 4] = [0, 188, 212, 255];
 const GREEN: [u8; 4] = [76, 175, 80, 255];
@@ -47,6 +50,9 @@ pub struct GannLevel {
     /// Stroke width in points. `None` takes the drawing's width, as drawings saved before levels
     /// had a width do.
     pub width: Option<f32>,
+    /// Pattern of a Gann fan line. `None` takes the drawing's style, as older saves do.
+    /// Other Gann tools keep the drawing's style for their levels, fan lines and arcs.
+    pub line_style: Option<LineStyle>,
 }
 
 impl GannLevel {
@@ -57,6 +63,7 @@ impl GannLevel {
             visible: true,
             color,
             width: None,
+            line_style: None,
         }
     }
 }
@@ -72,6 +79,8 @@ enum SavedGannLevel {
         color: [u8; 4],
         #[serde(default)]
         width: Option<f32>,
+        #[serde(default)]
+        line_style: Option<LineStyle>,
     },
     Value(f32),
 }
@@ -84,11 +93,13 @@ impl From<SavedGannLevel> for GannLevel {
                 visible,
                 color,
                 width,
+                line_style,
             } => Self {
                 value,
                 visible,
                 color,
                 width,
+                line_style,
             },
             // The drawing colour is not known here, so older values take the neutral level colour.
             SavedGannLevel::Value(value) => Self::new(value, GREY),
@@ -98,9 +109,9 @@ impl From<SavedGannLevel> for GannLevel {
 
 /// Levels, fan lines and arcs of the Gann tools, and the background between them.
 ///
-/// A field missing from a saved object takes the value of [`GannConfig::for_tool`] for the tool
-/// of the [`Drawing`](crate::drawings::Drawing) that holds it, or of [`GannConfig::default`]
-/// when the object is read on its own.
+/// Fields missing from a saved drawing take its former defaults: squares keep ten arcs and
+/// grey hidden fan lines. New squares store the lists from [`GannConfig::for_tool`]. An object
+/// read on its own takes [`GannConfig::default`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GannConfig {
@@ -133,8 +144,10 @@ pub struct GannConfig {
     pub background_opacity: u8,
     /// Whether a Gann box draws rays from its corners to the level points on its far edges.
     pub show_angles: bool,
-    /// Whether a Gann box writes each level's value beside and below it, and a Gann fan each
-    /// line's ratio at the pane's edge. Gann squares draw no level labels.
+    /// Whether labels are drawn: a box's level values on the enabled sides, a fan's ratios
+    /// at the pane edge, or a square's price range, bar count and price per bar beside it.
+    /// On by default except for the fixed square, including saves without this field.
+    #[serde(default = "left_out_show_labels")]
     pub show_labels: bool,
     /// Whether a Gann box, Gann square or fixed Gann square is mirrored inside its anchors: its
     /// levels, fan lines and arcs are counted from the corner opposite the first anchor, and
@@ -142,15 +155,36 @@ pub struct GannConfig {
     pub reverse: bool,
     /// A colour as RGBA that every line, band and label of the tool takes instead of the level
     /// colours, which are kept for when it is cleared. Labels drawn on a box, the fan's ratios
-    /// and a square's range readout, take it as the box's fill under white or black text,
+    /// and a square's label, take it as the box's fill under white or black text,
     /// whichever reads on it. `None` draws the level colours.
     pub one_color: Option<[u8; 4]>,
+    /// Whether a Gann box labels its price levels on its left side.
+    pub labels_left: bool,
+    /// Whether a Gann box labels its price levels on its right side.
+    pub labels_right: bool,
+    /// Whether a Gann box labels its time levels above it.
+    pub labels_top: bool,
+    /// Whether a Gann box labels its time levels below it.
+    pub labels_bottom: bool,
+    /// Whether a Gann box tints bands between time levels. `None` follows
+    /// [`show_background`](Self::show_background), preserving older saves. Price bands
+    /// always follow `show_background`.
+    pub show_time_background: Option<bool>,
+    /// Time band opacity from 0 to 255. `None` follows
+    /// [`background_opacity`](Self::background_opacity).
+    pub time_background_opacity: Option<u8>,
+    /// Label size in points for a Gann square or fixed square, from 1 to 256.
+    pub label_size: f32,
+    /// Whether a square's label is bold.
+    pub label_bold: bool,
+    /// Whether a square's label is italic.
+    pub label_italic: bool,
 }
 
 thread_local! {
     /// The fields whose default differs between the Gann tools that the last [`GannConfig`] read
-    /// on this thread left out: its price levels, time levels and fan lines.
-    static LEFT_OUT: Cell<[bool; 3]> = const { Cell::new([false; 3]) };
+    /// on this thread left out: its price levels, time levels, fan lines and labels switch.
+    static LEFT_OUT: Cell<[bool; 4]> = const { Cell::new([false; 4]) };
 }
 
 /// Notes that the configuration being read left out `field`, and gives its [`Default`] value.
@@ -173,6 +207,10 @@ fn left_out_time_levels() -> Vec<GannLevel> {
 
 fn left_out_fan_ratios() -> Vec<GannLevel> {
     left_out(2, |config| config.fan_ratios)
+}
+
+fn left_out_show_labels() -> bool {
+    left_out(3, |config| config.show_labels)
 }
 
 fn levels(entries: &[(f32, [u8; 4])]) -> Vec<GannLevel> {
@@ -237,16 +275,71 @@ impl Default for GannConfig {
             show_labels: true,
             reverse: false,
             one_color: None,
+            labels_left: true,
+            labels_right: false,
+            labels_top: false,
+            labels_bottom: true,
+            show_time_background: None,
+            time_background_opacity: None,
+            label_size: 10.0,
+            label_bold: false,
+            label_italic: false,
         }
     }
 }
 
 impl GannConfig {
-    /// The levels, fan lines and arcs a new Gann box, square, fixed square or fan starts from,
-    /// which a drawing without [`Drawing::gann`](crate::drawings::Drawing::gann) draws. Start a
-    /// configuration from the drawing's own tool here rather than from
-    /// [`GannConfig::default`], which is the Gann box's.
+    /// Settings a new Gann drawing starts with: a box labels all four sides, and a square or
+    /// fixed square uses a 12 point regular, upright label. The fixed square's label stays off.
+    /// Saved drawings without settings keep their former defaults instead.
+    pub fn drawing_default(tool: DrawingToolType) -> Self {
+        let mut config = Self::for_tool(tool);
+        match tool {
+            DrawingToolType::GannBox => {
+                config.labels_right = true;
+                config.labels_top = true;
+            }
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed => config.label_size = 12.0,
+            _ => {}
+        }
+        config
+    }
+
+    /// The levels, fan lines and arcs a new Gann box, square, fixed square or fan starts from.
+    /// Start a configuration from the drawing's own tool here rather than from
+    /// [`GannConfig::default`], which is the Gann box's. A Gann square or fixed square adds an
+    /// arc at 1.5 units and colours each fan line.
     pub fn for_tool(tool: DrawingToolType) -> Self {
+        let mut config = Self::saved_default(tool);
+        if matches!(
+            tool,
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed
+        ) {
+            config.fan_ratios = levels(&[
+                (8.0, LAVENDER),
+                (5.0, RED),
+                (4.0, GREY),
+                (3.0, ORANGE),
+                (2.0, CYAN),
+                (1.0, GREEN),
+                (0.5, TEAL),
+                (1.0 / 3.0, TEAL),
+                (0.25, BLUE),
+                (0.2, VIOLET),
+                (0.125, LAVENDER),
+            ]);
+            for line in &mut config.fan_ratios {
+                line.visible = matches!(line.value, 2.0 | 1.0 | 0.5);
+            }
+            // 1.5 units, in the unit-1 colour, between the 1x1 arc (√2) and the 2x0 arc.
+            config.arc_ratios.insert(2, GannLevel::new(1.5, ORANGE));
+        }
+        config
+    }
+
+    /// Defaults for saved drawings and templates: boxes keep left and bottom labels, squares
+    /// keep 10 point labels, ten arcs and grey hidden fan lines, and fixed labels stay off.
+    pub(crate) fn saved_default(tool: DrawingToolType) -> Self {
         match tool {
             DrawingToolType::GannSquare | DrawingToolType::GannFixed => {
                 let units = levels(&[
@@ -260,6 +353,7 @@ impl GannConfig {
                 Self {
                     price_levels: units.clone(),
                     time_levels: units,
+                    show_labels: tool != DrawingToolType::GannFixed,
                     ..Self::default()
                 }
             }
@@ -284,17 +378,17 @@ impl GannConfig {
     /// Forgets the fields an earlier configuration read on this thread left out, before a
     /// drawing that may hold one is read.
     pub(crate) fn forget_left_out() {
-        LEFT_OUT.with(|left_out| left_out.set([false; 3]));
+        LEFT_OUT.with(|left_out| left_out.set([false; 4]));
     }
 
-    /// Takes the fields that this configuration, the last one read on this thread, left out from
-    /// [`GannConfig::for_tool`] of `tool` instead of [`GannConfig::default`].
+    /// Takes missing fields from the saved defaults of `tool`, preserving its former lists.
     pub(crate) fn fill_left_out(&mut self, tool: DrawingToolType) {
-        let [price_levels, time_levels, fan_ratios] = LEFT_OUT.with(|l| l.replace([false; 3]));
-        if !(price_levels || time_levels || fan_ratios) {
+        let [price_levels, time_levels, fan_ratios, show_labels] =
+            LEFT_OUT.with(|l| l.replace([false; 4]));
+        if !(price_levels || time_levels || fan_ratios || show_labels) {
             return;
         }
-        let defaults = Self::for_tool(tool);
+        let defaults = Self::saved_default(tool);
         if price_levels {
             self.price_levels = defaults.price_levels;
         }
@@ -304,6 +398,9 @@ impl GannConfig {
         if fan_ratios {
             self.fan_ratios = defaults.fan_ratios;
         }
+        if show_labels {
+            self.show_labels = defaults.show_labels;
+        }
     }
 }
 
@@ -311,26 +408,61 @@ impl GannConfig {
 mod tests {
     use super::*;
 
-    /// The defaults a new tool draws: the square's three fan lines on, its arcs at n and the
-    /// square root of n² + 1 units, and the fan's nine lines. Radii by hand: √2, √5, √10, √17, √26.
+    /// The square and fixed square's coloured fan lines, with three on, and eleven arcs at n,
+    /// √(n² + 1) and 1.5 units. Radii by hand: √2, √5, √10, √17, √26. The fan keeps nine lines.
     #[test]
     fn new_tools_start_from_their_defaults() {
         let square = GannConfig::for_tool(DrawingToolType::GannSquare);
-        let visible: Vec<f32> = square
+        let fans: Vec<_> = square
             .fan_ratios
             .iter()
-            .filter(|l| l.visible)
-            .map(|l| l.value)
+            .map(|l| (l.value, l.color, l.visible))
             .collect();
-        assert_eq!(visible, [2.0, 1.0, 0.5]);
-        assert_eq!(square.fan_ratios.len(), 11);
+        assert_eq!(
+            fans,
+            [
+                (8.0, [179, 157, 219, 255], false),
+                (5.0, [242, 54, 69, 255], false),
+                (4.0, [128, 128, 128, 255], false),
+                (3.0, [255, 152, 0, 255], false),
+                (2.0, [0, 188, 212, 255], true),
+                (1.0, [76, 175, 80, 255], true),
+                (0.5, [8, 153, 129, 255], true),
+                (1.0 / 3.0, [8, 153, 129, 255], false),
+                (0.25, [41, 98, 255, 255], false),
+                (0.2, [149, 117, 205, 255], false),
+                (0.125, [179, 157, 219, 255], false),
+            ]
+        );
         let radii = [
-            1.0, SQRT_2, 2.0, 2.236068, 3.0, 3.1622777, 4.0, 4.1231055, 5.0, 5.0990195,
+            1.0, SQRT_2, 1.5, 2.0, 2.236068, 3.0, 3.1622777, 4.0, 4.1231055, 5.0, 5.0990195,
+        ];
+        let colours = [
+            [255, 152, 0, 255],
+            [255, 152, 0, 255],
+            [255, 152, 0, 255],
+            [0, 188, 212, 255],
+            [0, 188, 212, 255],
+            [76, 175, 80, 255],
+            [76, 175, 80, 255],
+            [8, 153, 129, 255],
+            [8, 153, 129, 255],
+            [41, 98, 255, 255],
+            [41, 98, 255, 255],
         ];
         assert_eq!(square.arc_ratios.len(), radii.len());
-        for (arc, radius) in square.arc_ratios.iter().zip(radii) {
+        for ((arc, radius), colour) in square.arc_ratios.iter().zip(radii).zip(colours) {
             assert!((arc.value - radius).abs() < 1e-5, "{arc:?} != {radius}");
+            assert_eq!(arc.color, colour);
+            assert!(arc.visible);
         }
+        assert_eq!(
+            GannConfig::for_tool(DrawingToolType::GannFixed),
+            GannConfig {
+                show_labels: false,
+                ..square
+            }
+        );
         let fan = GannConfig::for_tool(DrawingToolType::GannFan);
         assert_eq!(fan.fan_ratios.iter().filter(|l| l.visible).count(), 9);
     }

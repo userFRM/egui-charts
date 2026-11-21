@@ -72,6 +72,13 @@ their unallocated entry fees, already deducted from equity. Market and stop orde
 against their side once per fill, by ticks times tick size, ticks of the price increment or an
 absolute-price fraction. Limits, including the limit execution of a stop-limit order, never slip.
 
+[`StrategyContext::exit_trailing`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.exit_trailing)
+protects a position with an optional fixed stop from its average fill price and a trailing stop.
+The trail starts at an activation distance in the position's favour and follows the best price
+the bar path reaches at an offset. It can activate and fill within one bar, and fills and slips
+like other stops. Activation at a closing fill carries into the next bar. Requesting it with new
+distances keeps the best price; closing the position forgets it.
+
 A report is in `settings.currency`, or in [`Backtest::instrument_currency`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.instrument_currency), the currency of the
 prices, when that is unset. When the settings name another currency, the engine converts what it
 derives from prices into it: sizing, funding, margin and liquidation, fraction commissions,
@@ -83,6 +90,12 @@ none applies, or where it is not finite and positive, reports [`StrategyReport::
 instead of trades and equity. Each trade records the rate its profit converted at, and an open
 trade the latest rate, in [`StrategyTrade::exchange_rate`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyTrade.html#structfield.exchange_rate);
 its excursions convert at it. The buy-and-hold benchmark stays unconverted.
+
+A strategy naming a [`calculation_timeframe`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#method.calculation_timeframe) reads the instrument's own bars of that interval from
+[`Backtest::calculation_bars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.calculation_bars), placed on [`Backtest::bar_clock`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.bar_clock). The tester asks its host for these bars;
+pass the same instrument calendar to [`StrategyTester::set_bar_clock`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyTester.html#method.set_bar_clock). Each chart bar reads the last calculation
+bar closed by its close. Without supplied calculation bars, Technical Ratings places no orders
+on another Indicator timeframe. Its default remains the chart interval, which needs no extra history.
 
 Long and short exposure fund separately. [`long_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.long_funding) and [`short_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.short_funding)
 are the fractions of absolute position market value that equity must cover, one over leverage
@@ -203,12 +216,20 @@ placement, data loading and CSV storage. Chart entry/exit markers use the signal
 The assembled terminal and its demo mounting remain separate integration work.
 
 The Summary tab shows the selected range and its trade figures in All, Long and Short columns,
-followed by the drawdown, ratio, growth and buy-and-hold figures for the selected range, equity
-and drawdown in account units, and an optional fee-free buy-and-hold comparison on the same
-equity scale. Curve positions and hover values retain submillisecond timestamps. Time labels
-along the axis follow its span. Hover a curve for timestamped values. The virtualized trade
-list uses entry-time order, keeps equal-time trades in input order, filters to the range's
-trades and shows fill prices, net profit, fees, labels and excursions.
+followed by open profit, drawdown, run-up, ratio, growth and buy-and-hold figures for that range. Charts of equity,
+drawdown from peak and run-up from trough default to account units; **Percent of initial capital**
+switches all three to percentages of the selected range's initial capital, with equity starting at 100. The
+optional fee-free buy-and-hold comparison uses the same equity scale. Drawdown and run-up follow
+usable intrabar ranges, falling back to closes when ranges are unavailable. Replacing the report
+resets the switch to account units; the switch requires positive finite initial capital.
+The intrabar figures and all three charts follow the date range. Curve positions and hover
+values retain submillisecond timestamps. Time labels along the axis follow its span. Hover a curve
+for timestamped values. The virtualized trade list uses entry-time order, keeps equal-time
+trades in input order, filters to the range's trades and shows fill prices, net profit,
+cumulative profit, fees, labels and excursions. Cumulative profit adds the net profit of the
+listed trades closed in the range, in list order up to and including the row. An open trade
+has an empty cell and adds nothing, as does a trade that closes at or after the range's end,
+which the range counts as open like the Summary.
 Fill prices retain their precision and fill times retain fractional seconds.
 Properties includes run metadata and the host's ordered settings. Invalid inputs are
 counted visibly. An undefined or non-finite metric displays as `N/A`, including when
@@ -216,8 +237,10 @@ converting a fraction to a displayed percentage overflows.
 Both exports cover the whole run whatever date range is selected.
 Export trades CSV writes valid trades using
 [`StrategyReport::trades_csv_with_excursions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv_with_excursions): the columns of
-[`StrategyReport::trades_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv) with the displayed excursions in the final `mae` and `mfe` cells,
-empty when unavailable, and the same quoting and UTC timestamps. Export summary CSV returns
+[`StrategyReport::trades_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv) with the displayed excursions in the `mae` and `mfe` cells,
+empty when unavailable, and the same quoting and UTC timestamps. The last column,
+`cumulative_profit`, is the whole run's running total of `profit` in row order, empty on an
+open trade, which adds nothing, and when the total is not finite. Export summary CSV returns
 [`StrategyReportAction::ExportSummaryCsv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyReportAction.html#variant.ExportSummaryCsv) with a suggested file name and the whole-run metrics and
 properties, as [`StrategyReport::summary_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.summary_csv) writes them: a dot as the decimal
 separator, no thousands separator, and an empty cell for an unavailable value. Percent
@@ -241,10 +264,12 @@ chart bar at or before its last host bar also ends continuation and marks it sta
 newer host history is needed. Chart bars that close later within the host history are
 already part of the run.
 
-Runs with finer fill bars or currency conversion request the finer bars or exchange rates
-for each new chart bar with [`StrategyTesterAction::RequestHistory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyTesterAction.html#variant.RequestHistory) and stay stale while
-waiting. Answer through `set_history` or `set_history_with_rates`; continuation uses the
-reply's finer bars and rates with the chart history captured when requested. A failed
+Runs with finer fill bars, currency conversion or another calculation interval request the finer
+bars, exchange rates or calculation bars for each new chart bar with [`StrategyTesterAction::RequestHistory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyTesterAction.html#variant.RequestHistory) and stay stale while
+waiting. Answer through `set_history`, `set_history_with_rates` or `set_history_with_calculation`;
+continuation uses the reply's finer bars, rates and calculation bars with the chart history
+captured when requested. A calculation reply starts with the bar containing the requested start,
+so it can update the last held interval bar. A failed
 request ends continuation and preserves the last report as stale. The host supplies these
 data; the library fetches no market history or rates. End dates still bound the run.
 Optimisation results do not continue. Form edits, symbol or interval changes, Run and
@@ -350,6 +375,35 @@ of downside excess returns over all steps, and both use the curve's actual steps
 365.25-day year and require at least 13 weeks. Non-finite equity points are skipped;
 unordered finite points invalidate the entire curve. [`equity_curve()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.equity_curve) exposes those same
 validated points for rendering.
+
+Drawdown and run-up are reported separately from closing marks and from equity inside each bar.
+Close-to-close drawdown is the largest fall below an earlier closing peak. Intrabar drawdown
+also uses [`StrategyReport::equity_ranges`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.equity_ranges), one [`EquityRange`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.EquityRange.html) per mark: its bar's low, high,
+largest fall and largest rise along the execution path, including finer bars and the close.
+Each bar's depth is the larger of the earlier peak less its low and its own fall. Peak-relative
+percentages take the larger of `(earlier peak - low) / earlier peak` and
+`fall / max(earlier peak, high)`. If the largest fall starts below both peaks, this second
+term understates that fall's own percentage. A separate percentage divides the maximum
+intrabar money drawdown by initial capital. Missing or unusable ranges make intrabar metrics
+unavailable; old saved reports load with empty ranges. Hosts knowing only the extremes can
+supply `high - low` for both fall and rise, yielding upper bounds.
+
+For capital 10,000 and 100 units bought at 100, a bar dipping to 70 and closing at 100 has
+close-to-close drawdown 0 and intrabar drawdown 3,000 (30%). Open profit reconciles equity with
+closed trades: last usable equity less initial capital and closed net profit, including entry
+fees already paid. It is exactly 0 without an open trade, or unavailable when an open trade
+has no usable equity mark. Holding those units at a final close of 90 gives open profit -1,000
+and closed net profit 0. The summary and summary CSV list open profit as a whole-run row and
+label both drawdown measures explicitly. Trade figures retain their All, Long and Short columns;
+whole-run CSV rows have an empty `side`.
+
+Run-up is the largest rise above an earlier equity trough. Close-to-close run-up uses closing
+marks; intrabar run-up takes, at each bar, the larger of its high less the earlier trough and
+its own rise. Both run-up percentages divide by initial capital and require positive finite
+capital. A path of equity 10,000, 12,000, 7,000, 10,000 has largest fall 5,000 but largest rise
+3,000 (7,000 to 10,000), so knowing only the high and low cannot recover both movements.
+The summary and CSV distinguish close-to-close and intrabar run-up, and the run-up chart shows
+each bar's rise from its trough.
 
 The largest winner is the greatest positive net profit, and the largest loser is the most
 negative net profit. Either is unavailable without a trade of that sign. Consecutive wins

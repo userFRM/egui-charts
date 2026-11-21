@@ -50,7 +50,8 @@ pub enum ContextMenuAction {
     AddAlert {
         /// Instrument identifier used by the host.
         symbol: String,
-        /// Price under the pointer when the menu opened.
+        /// Price at the pointer when the menu opened, rounded to the instrument's tick,
+        /// else the decimals the row uses.
         price: f64,
     },
     /// Add the symbol to the watchlist at this index of the panel's lists, with
@@ -139,16 +140,20 @@ impl ContextMenuAction {
 /// Format a price with two decimals (more below 1) and thousands separators, for a menu shown
 /// without its chart.
 pub(crate) fn format_price(price: f64) -> String {
-    // Use 2 decimal places for most prices, but handle very small prices
-    let formatted = if price.abs() < 0.01 {
-        format!("{price:.6}")
-    } else if price.abs() < 1.0 {
-        format!("{price:.4}")
-    } else {
-        format!("{price:.2}")
-    };
+    let formatted = format!("{price:.*}", standalone_decimals(price));
 
     crate::scales::group_thousands(formatted, Some(','))
+}
+
+/// Decimals used by a menu shown without its chart.
+fn standalone_decimals(price: f64) -> usize {
+    if price.abs() < 0.01 {
+        6
+    } else if price.abs() < 1.0 {
+        4
+    } else {
+        2
+    }
 }
 
 // ============================================================================
@@ -182,12 +187,17 @@ pub struct ChartContextMenu {
     /// The last price. Order entries need it: a click above it offers a sell limit and a buy
     /// stop, a click below it a buy limit and a sell stop.
     pub market_price: Option<f64>,
-    /// The symbol's tick size, to which order prices are rounded, and by which a stop-limit
-    /// row's limit lies beyond its stop; without it there is no stop-limit row.
+    /// The symbol's tick size, to which alert and order prices are rounded, and by which a
+    /// stop-limit row's limit lies beyond its stop; without it there is no stop-limit row.
     pub tick_size: Option<f64>,
+    /// Decimals supplied by [`ChartMenus`] for alert and order prices without a tick size.
+    /// `None` uses the decimals of a menu shown without its chart.
+    pub(crate) price_decimals: Option<usize>,
     /// Names of the watchlists the symbol can be added to; without any, the menu has no such
     /// entry.
     pub watchlists: Vec<String>,
+    /// The list the add-to-watchlist key uses. Its row shows the binding; `None` shows none.
+    pub active_watchlist: Option<usize>,
     /// The quantity of the order entries.
     pub order_quantity: f64,
     /// The order types the account accepts; entries for the others are left out.
@@ -226,7 +236,9 @@ impl ChartContextMenu {
             indicator_cnt: 0,
             market_price: None,
             tick_size: None,
+            price_decimals: None,
             watchlists: Vec::new(),
+            active_watchlist: None,
             order_quantity: 1.0,
             order_types: Capabilities {
                 limit: true,
@@ -303,17 +315,25 @@ impl ChartContextMenu {
         ];
         // Trading items need an instrument, so they are offered only with a symbol, but the line row.
         let mut trading = Vec::new();
-        if self.symbol_price && !symbol.is_empty() && !self.hidden.contains(&Control::Alerts) {
+        let alert_price = self.row_price(self.click_price);
+        if self.symbol_price
+            && !symbol.is_empty()
+            && !self.hidden.contains(&Control::Alerts)
+            && alert_price.is_finite()
+        {
             trading.push(MenuEntry::Item(
                 MenuItem::new(
                     l10n::format_text(
                         ctx,
                         "Add alert on {name} at {price}…",
-                        &[("name", symbol.as_str()), ("price", price_str.as_str())],
+                        &[
+                            ("name", symbol.as_str()),
+                            ("price", &price_text(alert_price)),
+                        ],
                     ),
                     ContextMenuAction::AddAlert {
                         symbol: symbol.clone(),
-                        price: self.click_price,
+                        price: alert_price,
                     },
                 )
                 .with_icon(&embedded_icons::ALERTS)
@@ -350,13 +370,20 @@ impl ChartContextMenu {
                     .iter()
                     .enumerate()
                     .map(|(list, name)| {
-                        MenuEntry::Item(MenuItem::new(
-                            name.clone(),
-                            ContextMenuAction::AddToWatchlist {
-                                list,
-                                symbol: symbol.clone(),
-                            },
-                        ))
+                        MenuEntry::Item(
+                            MenuItem::new(
+                                name.clone(),
+                                ContextMenuAction::AddToWatchlist {
+                                    list,
+                                    symbol: symbol.clone(),
+                                },
+                            )
+                            .with_shortcut(
+                                (self.active_watchlist == Some(list))
+                                    .then(|| shortcuts.shortcut(KeyboardAction::AddToWatchlist))
+                                    .flatten(),
+                            ),
+                        )
                     })
                     .collect(),
             });
@@ -501,7 +528,8 @@ impl ChartContextMenu {
 
     /// The requests of the order rows at `price`, in menu order: a limit and a stop order, and
     /// a stop-limit order with a known tick size, each only if the account accepts it. `price`
-    /// is rounded to the tick size. Empty where the menu offers no order rows: no symbol, a
+    /// is taken as the alert row takes it: on the tick size, else at the menu's decimals.
+    /// Empty where the menu offers no order rows: no symbol, a
     /// price that is not of the chart symbol, trading hidden, no positive finite quantity, or no
     /// finite price or market price.
     fn order_requests(&self, price: f64) -> Vec<OrderRequest> {
@@ -520,9 +548,7 @@ impl ChartContextMenu {
         let tick = self
             .tick_size
             .filter(|tick| tick.is_finite() && *tick > 0.0);
-        let price = tick.map_or(price, |tick| {
-            crate::scales::to_step(price, tick, f64::round)
-        });
+        let price = self.row_price(price);
         // Above the market a sell waits as a limit order and a buy as a stop order; below it,
         // the other way round. At the market either order can fill immediately.
         let (limit, stop) = if price >= market {
@@ -559,6 +585,16 @@ impl ChartContextMenu {
             ))
         })
         .collect()
+    }
+
+    /// Round alert and order prices to the tick, else the decimals the menu uses.
+    fn row_price(&self, price: f64) -> f64 {
+        crate::scales::snap_price(
+            price,
+            self.tick_size,
+            self.price_decimals
+                .unwrap_or_else(|| standalone_decimals(price)),
+        )
     }
 
     /// Show the context menu
@@ -719,21 +755,32 @@ mod tests {
                 )],
             ),
             (
-                98.9,
+                98.9137,
                 None,
                 all,
-                vec![(Buy, Limit(98.9)), (Sell, Stop(98.9))],
+                vec![(Buy, Limit(98.91)), (Sell, Stop(98.91))],
             ),
         ] {
             menu.click_price = click;
             menu.tick_size = tick;
             menu.order_types = types;
-            let entries: Vec<_> = menu
-                .build_menu_items(
-                    &Context::default(),
-                    &crate::widget::ShortcutMap::default(),
-                    &format_price,
-                )
+            let rows = menu.build_menu_items(
+                &Context::default(),
+                &crate::widget::ShortcutMap::default(),
+                &format_price,
+            );
+            assert_eq!(
+                rows.iter().any(|entry| matches!(
+                    entry,
+                    MenuEntry::Item(MenuItem {
+                        action: ContextMenuAction::AddAlert { .. },
+                        ..
+                    })
+                )),
+                click.is_finite(),
+                "alert at {click}"
+            );
+            let entries: Vec<_> = rows
                 .into_iter()
                 .filter_map(|entry| match entry {
                     MenuEntry::Item(MenuItem {
@@ -858,7 +905,7 @@ mod tests {
                 "chart",
                 &[
                     "~101.10~",
-                    "~1301~101.10~",
+                    "~1301~101.00~",
                     "~1301~",
                     "~2~1301~101.00~",
                     "~2~1301~101.00~102.00~",

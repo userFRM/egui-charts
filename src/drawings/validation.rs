@@ -11,6 +11,11 @@ pub(crate) const MAX_STROKE_WIDTH: f32 = 100.0;
 /// Largest side of an image frame, in points.
 pub(crate) const MAX_IMAGE_SIDE: f32 = 10_000.0;
 
+/// Narrowest column and lowest row, in points, that dragging a table or its settings sets.
+pub(crate) const MIN_TABLE_CELL: f32 = 8.0;
+/// Widest column and highest row of a table, in points.
+pub(crate) const MAX_TABLE_CELL: f32 = 10_000.0;
+
 /// Widest line of wrapped annotation text, in points.
 pub(crate) const MAX_TEXT_WRAP_WIDTH: f32 = 10_000.0;
 
@@ -18,7 +23,7 @@ pub(crate) const MAX_TEXT_WRAP_WIDTH: f32 = 10_000.0;
 /// drawn. Larger levels lie far outside the chart, and near `f32::MAX` overflow its geometry.
 pub(crate) const MAX_PITCHFORK_LEVEL: f32 = 100.0;
 
-/// The largest projection coefficient, as a multiple of the measured move, that is drawn.
+/// The largest projection coefficient, as a multiple of the sector's radius, that is drawn.
 /// Larger levels lie far outside the chart.
 pub(crate) const MAX_PROJECTION_LEVEL: f32 = 100.0;
 

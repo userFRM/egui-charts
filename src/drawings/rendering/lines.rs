@@ -1528,7 +1528,7 @@ mod tests {
     /// selection follows the painted extension.
     #[test]
     fn anchor_ordered_lines_extend_past_the_anchor_named_in_paint_and_hit_testing() {
-        use crate::drawings::{DrawingToolType as T, services::DrawingInteraction};
+        use crate::drawings::{DrawingToolType as T, services::hit_test};
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 600.0));
         let (low, high) = (Pos2::new(400.0, 100.0), Pos2::new(500.0, 200.0));
         let (top, bottom) = (Pos2::new(300.0, 100.0), Pos2::new(300.0, 400.0));
@@ -1608,13 +1608,7 @@ mod tests {
             drawing.points = vec![first, second];
             (drawing.extend_left, drawing.extend_right) = (left, right);
             assert_eq!(drawing.trend_line_ends(rect), Some(want));
-            let hit = |(x, y)| {
-                DrawingInteraction::new().hit_test(
-                    Pos2::new(x, y),
-                    std::slice::from_ref(&drawing),
-                    "1D",
-                )
-            };
+            let hit = |(x, y)| hit_test(Pos2::new(x, y), std::slice::from_ref(&drawing), "1D");
             assert_eq!(hit(on), Some(1), "{first:?} {second:?}");
             assert_eq!(hit(off), None, "{first:?} {second:?}");
         }
@@ -1702,14 +1696,17 @@ mod tests {
                     drawing.arrow_end_style = ArrowStyle::Square;
                     let expected = ends.map(|(x, y)| Pos2::new(x, y));
                     assert_eq!(drawing.outline(rect).unwrap().lines, [expected]);
-                    let interaction = crate::drawings::services::DrawingInteraction::new();
                     for (point, hit) in [
                         (Pos2::new(400., 50.), left),
                         (Pos2::new(550., 125.), true),
                         (Pos2::new(800., 250.), right),
                     ] {
                         assert_eq!(
-                            interaction.hit_test(point, std::slice::from_ref(&drawing), "1D"),
+                            crate::drawings::services::hit_test(
+                                point,
+                                std::slice::from_ref(&drawing),
+                                "1D"
+                            ),
                             hit.then_some(1)
                         );
                     }
@@ -1749,7 +1746,7 @@ mod tests {
     /// dashed even with a wide border, and does not require selection.
     #[test]
     fn rectangle_extensions_and_middle_line_follow_the_painted_zone() {
-        use crate::drawings::{DrawingToolType, services::DrawingInteraction};
+        use crate::drawings::{DrawingToolType, services::hit_test};
         let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.));
         for (left, right, min, max) in [
             (false, false, 100., 300.),
@@ -1771,14 +1768,9 @@ mod tests {
                 let expected = Rect::from_min_max(Pos2::new(min, 100.), Pos2::new(max, 300.));
                 let outline = drawing.outline(pane).expect("rectangle outline");
                 assert_eq!(Rect::from_points(&outline.areas[0]), expected);
-                let interaction = DrawingInteraction::new();
                 for (x, hit) in [(50., left), (200., true), (450., right)] {
                     assert_eq!(
-                        interaction.hit_test(
-                            Pos2::new(x, 150.),
-                            std::slice::from_ref(&drawing),
-                            "1D"
-                        ),
+                        hit_test(Pos2::new(x, 150.), std::slice::from_ref(&drawing), "1D"),
                         hit.then_some(1)
                     );
                 }

@@ -164,9 +164,7 @@ impl DemoApp {
                         for id in previous {
                             chart.remove_series(id);
                         }
-                        let inputs = super::study_input_summary(&study);
-                        let id = chart.add_indicator(Box::new(study));
-                        chart.set_indicator_inputs(id, inputs);
+                        chart.add_indicator(Box::new(study));
                     });
                     self.sample_study.editor.set_diagnostics(Vec::new());
                     self.sample_study.editor.apply_result(Ok(()));
@@ -308,7 +306,7 @@ mod tests {
             .zip(&times)
             .map(|(close, &time)| Bar::from_value(time, close))
             .collect();
-        app.chart = egui_charts::Chart::new(BarData::from_bars(bars));
+        *app.chart = egui_charts::Chart::new(BarData::from_bars(bars));
         edit(&mut app, &ctx, "close - close[10]", "close - close[1]");
         click(&mut app, &ctx, "Apply");
         let id = app

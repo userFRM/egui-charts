@@ -1,11 +1,12 @@
 //! Retained history and a shared, exclusive replay cutoff.
 
 use super::events::same_bar;
+use super::layout::MAX_CHARTS;
 use super::series::PriceSeries;
 use super::{Chart, ChartLayout, SeriesId};
 use crate::data::ReplayDriver;
 use crate::data::merge::{Origin, fold, merge};
-use crate::model::{Bar, BarClock, Timeframe};
+use crate::model::{Bar, BarClock, ReplayScope, Timeframe};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
@@ -555,9 +556,9 @@ pub(super) fn completed<'a>(bars: &'a [Bar], clock: &BarClock, time: DateTime<Ut
 }
 
 /// When the bar of `clock` opening at `open` closes in bar replay: at its next open, or for a
-/// daily, weekly or monthly bar of a clock with an exchange session when its last trading window
-/// closes. A bar without a trading window closes at its next open. `ReplayController::cutoff`
-/// and `seek_cutoff` close bars here too.
+/// daily, multi-day, weekly or monthly bar of a clock with an exchange session when its last
+/// trading window closes. A bar without a trading window closes at its next open.
+/// `ReplayController::cutoff` and `seek_cutoff` close bars here too.
 pub(crate) fn bar_close(clock: &BarClock, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
     (clock.timeframe())
         .filter(|timeframe| {
@@ -699,22 +700,26 @@ fn trading_dates(
 }
 
 impl ChartLayout {
-    /// Sets one replay cutoff on the source slot's synchronization group, including hidden
-    /// slots. Other groups keep their own sessions. Call for every cursor move and with `None`
-    /// to exit; each chart windows its own host-supplied history at its own interval.
+    /// Sets one replay cutoff on the charts `scope` covers: the `source` chart alone, or every
+    /// chart up to the 16 slots, hidden ones included, whatever their link groups. Charts
+    /// outside the scope leave replay, so a change of scope during a session needs no other
+    /// call; a replay of its own on another chart goes through [`Chart::set_replay_time`].
+    /// Call for every cursor move and with `None` to exit, which every chart does; each chart
+    /// windows its own host-supplied history at its own interval. A `source` outside `charts`
+    /// changes nothing.
     pub fn set_replay_time(
         &self,
         charts: &mut [&mut Chart],
         source: usize,
+        scope: ReplayScope,
         time: Option<DateTime<Utc>>,
     ) {
-        if source >= charts.len().min(16) {
+        if source >= charts.len().min(MAX_CHARTS) {
             return;
         }
-        for (index, chart) in charts.iter_mut().take(16).enumerate() {
-            if self.sync_group(index) == self.sync_group(source) {
-                chart.set_replay_time(time);
-            }
+        for (index, chart) in charts.iter_mut().take(MAX_CHARTS).enumerate() {
+            let covered = index == source || scope == ReplayScope::AllCharts;
+            chart.set_replay_time(time.filter(|_| covered));
         }
     }
 }
@@ -733,8 +738,8 @@ mod tests {
         DateTime::from_timestamp(1_704_067_200 + minute * 60, 0).unwrap()
     }
 
-    /// Completion cutoffs, partial OHLCV, corrections, new/removed comparisons and group
-    /// isolation all use the same retained history. The final minute's spike must stay hidden.
+    /// Completion cutoffs, partial OHLCV, corrections and new/removed comparisons all use the
+    /// same retained history. The final minute's spike must stay hidden.
     #[test]
     fn replay_windows_every_series_and_restores_retained_history() {
         let minutes = vec![
@@ -751,18 +756,19 @@ mod tests {
         a.set_data(comparison, coarse.clone());
         let mut b = Chart::new(BarData::from_bars(minutes.clone()));
         b.set_timeframe(Timeframe::Min1);
-        let mut isolated = Chart::new(BarData::from_bars(minutes.clone()));
-        isolated.set_timeframe(Timeframe::Min1);
-        let mut layout = ChartLayout::default();
-        layout.set_sync_group(2, Some("other".into()));
-        layout.set_replay_time(&mut [&mut a, &mut b, &mut isolated], 0, Some(time(2)));
+        let layout = ChartLayout::default();
+        layout.set_replay_time(
+            &mut [&mut a, &mut b],
+            0,
+            ReplayScope::AllCharts,
+            Some(time(2)),
+        );
         assert!(
             a.bars(SeriesId::MAIN).is_empty(),
             "unfinished coarse bar must be hidden"
         );
         assert!(a.bars(comparison).is_empty());
         assert_eq!(b.bars(SeriesId::MAIN), &minutes[..2]);
-        assert_eq!(isolated.bars(SeriesId::MAIN), minutes);
         assert!(a.set_replay_source(minutes.clone(), BarClock::new(Timeframe::Min1)));
         // First open 10; max(12,15)=15; min(9,10)=9; last close 14; volume 2+3=5.
         assert_eq!(
@@ -838,6 +844,63 @@ mod tests {
             chart.set_replay_time(Some(time(10)));
             assert_eq!(chart.bars(SeriesId::MAIN), &a.bars(SeriesId::MAIN)[1..]);
         }
+    }
+
+    /// A layout replay covers the chart that starts it or every chart, whatever their link
+    /// groups, and takes the charts it does not cover out of replay. A cutoff at minute t keeps
+    /// the t one-minute bars that close by then; a live chart keeps all five.
+    #[test]
+    fn layout_replay_covers_this_chart_or_all_charts() {
+        let minutes: Vec<_> = (0..5)
+            .map(|minute| bar(minute, [10.0, 12.0, 9.0, 11.0, 1.0]))
+            .collect();
+        let mut charts: Vec<_> = (0..3)
+            .map(|_| {
+                let mut chart = Chart::new(BarData::from_bars(minutes.clone()));
+                chart.set_timeframe(Timeframe::Min1);
+                chart
+            })
+            .collect();
+        let mut layout = ChartLayout::default();
+        // Charts 0 and 1 share the unnamed group; chart 2 is in a group of its own.
+        layout.set_sync_group(2, Some("other".into()));
+        type Row = (usize, ReplayScope, Option<i64>, [(Option<i64>, usize); 3]);
+        let live = (None, 5);
+        let rows: [Row; 5] = [
+            (
+                1,
+                ReplayScope::ThisChart,
+                Some(2),
+                [live, (Some(2), 2), live],
+            ),
+            (1, ReplayScope::AllCharts, Some(3), [(Some(3), 3); 3]),
+            (
+                0,
+                ReplayScope::ThisChart,
+                Some(4),
+                [(Some(4), 4), live, live],
+            ),
+            // A source outside the charts changes nothing.
+            (
+                3,
+                ReplayScope::AllCharts,
+                Some(2),
+                [(Some(4), 4), live, live],
+            ),
+            (0, ReplayScope::AllCharts, None, [live; 3]),
+        ];
+        let mut expected = Vec::new();
+        let mut shown = Vec::new();
+        for (source, scope, minute, covered) in rows {
+            let mut refs: Vec<_> = charts.iter_mut().collect();
+            layout.set_replay_time(&mut refs, source, scope, minute.map(time));
+            expected.push(covered.map(|(minute, bars)| (minute.map(time), bars)));
+            shown.push([0, 1, 2].map(|index| {
+                let chart = &charts[index];
+                (chart.replay_time(), chart.bars(SeriesId::MAIN).len())
+            }));
+        }
+        assert_eq!(shown, expected);
     }
 
     /// An added series brought back by undo shows what it would have shown had it never left:

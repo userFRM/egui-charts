@@ -149,6 +149,10 @@ impl Indicator for AdvanceDecline {
         false
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }

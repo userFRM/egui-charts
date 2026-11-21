@@ -8,10 +8,10 @@ use egui::{
 };
 
 use crate::model::{OrderSide, TimeInForce, TradingRules};
-use crate::scales::{CurrencyFormatter, PriceFormatter};
 use crate::theme::{Theme, ThemeExt, readable_color};
 use crate::ui::top_toolbar::buttons::rule_color;
 
+pub(crate) use crate::chart::grouped;
 pub(super) use crate::theme::trading_side_color as side_color;
 
 /// Height shared by the ticket's fields, menus and order-type row.
@@ -422,22 +422,6 @@ pub(super) fn info(ui: &mut Ui, label: &str, value: &str, unit: &str, color: Col
     let at = right - vec2(galley.size().x, galley.size().y / 2.0);
     ui.painter().galley(at, galley, color);
     rect
-}
-
-/// `value` with thousands separators and `decimals` decimals, or a dash when not finite. With
-/// `sign`, a value that shows a nonzero digit carries an explicit sign; one that rounds to zero
-/// is unsigned either way.
-pub(crate) fn grouped(value: f64, decimals: usize, sign: bool) -> String {
-    if !value.is_finite() {
-        return "-".to_owned();
-    }
-    let magnitude = CurrencyFormatter::new("", decimals).format(value.abs());
-    let shown = magnitude.bytes().any(|b| matches!(b, b'1'..=b'9'));
-    match (shown, value < 0.0, sign) {
-        (true, true, _) => format!("-{magnitude}"),
-        (true, false, true) => format!("+{magnitude}"),
-        _ => magnitude,
-    }
 }
 
 /// `text` at `size` in the bundled face's semibold weight.

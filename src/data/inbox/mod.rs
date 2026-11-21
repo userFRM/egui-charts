@@ -5,9 +5,13 @@
 //! feed pushes. Trades wait in a store as bounded as the chart's, and depth updates apply to the
 //! subscription's book.
 
+#[cfg(feature = "widget")]
+mod checkpoint;
 mod reader;
 mod sink;
 
+#[cfg(feature = "widget")]
+pub(crate) use checkpoint::{SinkCheckpoint, SinkCheckpointError, SinkCheckpointGuard};
 pub(crate) use sink::TradeBars;
 
 pub use reader::{ReplyReader, SinkReader, SinkUpdates};
@@ -44,6 +48,9 @@ impl std::fmt::Debug for Inbox {
 
 #[derive(Default)]
 struct State {
+    /// Changes on the first push after a drain, and on changes that do not wake the chart.
+    #[cfg(feature = "widget")]
+    revision: u64,
     /// Set by the first push after a drain, so a burst wakes the chart once.
     woken: bool,
     answers: Vec<(u64, Answer)>,
@@ -52,7 +59,19 @@ struct State {
     subscriptions: HashMap<SubscriptionId, Live>,
 }
 
+impl State {
+    fn changed(&mut self) {
+        #[cfg(feature = "widget")]
+        {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+}
+
 struct Live {
+    /// A bar, quote or book push introduced state outside trade-only replay since the last reset.
+    #[cfg(feature = "widget")]
+    non_trade: bool,
     symbol: String,
     clock: BarClock,
     /// The bar of the last trade, quote or heartbeat placed, kept while later ones share its date.
@@ -194,10 +213,12 @@ impl Inbox {
     /// Samples the book of `id` into depth history columns from its next update, or stops. The
     /// columns sampled before and not yet drained are dropped.
     pub(crate) fn sample_depth(&self, id: SubscriptionId, config: Option<DepthHistoryConfig>) {
-        if let Some(live) = self.state().subscriptions.get_mut(&id) {
+        let mut state = self.state();
+        if let Some(live) = state.subscriptions.get_mut(&id) {
             live.sampler = config.map(Sampler::new);
             live.updates.depth_columns.clear();
             live.updates.replay_depth = None;
+            state.changed();
         }
     }
 
@@ -205,8 +226,10 @@ impl Inbox {
     /// over a pause already count.
     #[cfg(feature = "widget")]
     pub(crate) fn drop_trades_before(&self, id: SubscriptionId, time: DateTime<Utc>) {
-        if let Some(live) = self.state().subscriptions.get_mut(&id) {
+        let mut state = self.state();
+        if let Some(live) = state.subscriptions.get_mut(&id) {
             live.last_trade = live.last_trade.max(Some(time));
+            state.changed();
         }
     }
 
@@ -217,14 +240,19 @@ impl Inbox {
         id: SubscriptionId,
         inputs: Vec<crate::data::OrderFlowInput>,
     ) {
-        if let Some(live) = self.state().subscriptions.get_mut(&id) {
+        let mut state = self.state();
+        if let Some(live) = state.subscriptions.get_mut(&id) {
             live.connect_study_inputs(inputs);
+            state.changed();
         }
     }
 
     /// Discards what `id` pushed and ignores whatever it pushes from now on.
     pub(crate) fn unsubscribe(&self, id: SubscriptionId) {
-        self.state().subscriptions.remove(&id);
+        let mut state = self.state();
+        if state.subscriptions.remove(&id).is_some() {
+            state.changed();
+        }
     }
 
     /// Stops a subscription atomically, retaining its symbol, undrained executions and reset.
@@ -233,10 +261,10 @@ impl Inbox {
         &self,
         id: SubscriptionId,
     ) -> Option<(String, bool, Trades)> {
-        self.state()
-            .subscriptions
-            .remove(&id)
-            .map(|live| (live.symbol, live.updates.reset, live.updates.trades))
+        let mut state = self.state();
+        let live = state.subscriptions.remove(&id)?;
+        state.changed();
+        Some((live.symbol, live.updates.reset, live.updates.trades))
     }
 
     /// Takes everything that arrived since the last drain.
@@ -276,7 +304,11 @@ impl Inbox {
     fn push(&self, push: impl FnOnce(&mut State) -> bool) {
         let wake = {
             let mut state = self.state();
-            push(&mut state) && !std::mem::replace(&mut state.woken, true)
+            let first = push(&mut state) && !std::mem::replace(&mut state.woken, true);
+            if first {
+                state.changed();
+            }
+            first
         };
         if wake && let Some(waker) = self.waker.get() {
             waker();

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 
 use super::Events;
 use crate::data::{MaybeSend, Reply};
-use crate::model::{Alert, AlertId};
+use crate::model::{Alert, AlertId, AlertTrigger};
 
 /// The host's alerts. The host stores and evaluates them, on its own prices or on a server; the
 /// library shows what the host pushes and sends every change the user makes through
@@ -27,7 +27,9 @@ use crate::model::{Alert, AlertId};
 /// conditions [`InsideChannel`](crate::model::AlertCondition::InsideChannel) and
 /// [`OutsideChannel`](crate::model::AlertCondition::OutsideChannel) hold on every evaluation
 /// while the value is in that state, so pair them with a frequency that limits repeats, whereas
-/// entering and exiting hold only on the evaluation that crosses a boundary.
+/// entering and exiting hold only on the evaluation that crosses a boundary. A crossing,
+/// entering or exiting rule of an alert created or changed by [`save`](Alerts::save) needs a
+/// value observed after the save on the side it leaves: a move made before the save never fires it.
 /// [`AlertFrequency::OncePerMinute`](crate::model::AlertFrequency::OncePerMinute) allows one
 /// trigger per UTC clock minute, from `hh:mm:00` up to but excluding the next minute, whatever the
 /// chart's interval. An alert's [`schedule`](crate::model::Alert::schedule) allows triggers only when
@@ -119,8 +121,10 @@ pub trait Alerts: MaybeSend + 'static {
     /// Pushes the host's alerts, then every change and trigger. Called when the terminal starts and
     /// again after a lagged stream, each time with a new stream that starts from no alerts: push
     /// the current list first, then keep pushing until `events` is inactive. On the first call,
-    /// also push the triggers that fired while the application was closed; do not push them again
-    /// on a later call.
+    /// also push the triggers that fired while the application was closed: as
+    /// [`AlertEvent::Logged`] to add them to the log without popups, or as triggers to show a popup
+    /// for each. Do not push them again on a later call. `AlertEngine` pushes the history its host
+    /// restored this way.
     ///
     /// The stream takes at most 10,000 pushes between two frames, the current list and the missed
     /// triggers included: send at most that many at once (for example only the most recent
@@ -191,6 +195,10 @@ pub enum AlertEvent {
         /// The alert's message with its placeholders filled in, empty if the alert has none.
         message: String,
     },
+    /// A trigger from the service's history, such as one that fired before a restart. The panel
+    /// adds it to the log as it is, silent or not, without a popup, sound or delivery, and leaves
+    /// the alert's status and firing time as they are.
+    Logged(AlertTrigger),
 }
 
 /// What a host sends for one trigger by email, plain-text email, mobile push or webhook, built
@@ -216,8 +224,9 @@ pub struct AlertNotice {
     /// "AAPL: Crossing up 100 at 2026-01-01T10:00:00+00:00, price 101.5", without the price when
     /// the trigger has none.
     pub body: String,
-    /// The webhook's `Content-Type`: `application/json` when the body is a JSON object or array,
-    /// otherwise `text/plain; charset=utf-8`.
+    /// The webhook's `Content-Type`: `application/json` when the body is a valid JSON text,
+    /// including an object, array, number, string, boolean or `null`, with surrounding whitespace
+    /// allowed; otherwise `text/plain; charset=utf-8`.
     pub content_type: &'static str,
 }
 
@@ -265,8 +274,7 @@ impl AlertNotice {
         } else {
             message.clone()
         };
-        let json = serde_json::from_str::<serde_json::Value>(&body)
-            .is_ok_and(|value| value.is_object() || value.is_array());
+        let json = serde_json::from_str::<serde_json::Value>(&body).is_ok();
         Some(Self {
             subject,
             push_title,
@@ -334,7 +342,15 @@ mod tests {
                 " [1, 2] \n",
                 J,
             ),
-            ("", "42", None, S, S, "42", T),
+            ("", "42", None, S, S, "42", J),
+            ("", r#""text""#, None, S, S, r#""text""#, J),
+            ("", "true", None, S, S, "true", J),
+            ("", "false", None, S, S, "false", J),
+            ("", "null", None, S, S, "null", J),
+            ("", " null \n", None, S, S, " null \n", J),
+            ("", "plain", None, S, S, "plain", T),
+            ("", "42 43", None, S, S, "42 43", T),
+            ("", r#""text"#, None, S, S, r#""text"#, T),
             ("", r#"{"close": NaN}"#, None, S, S, r#"{"close": NaN}"#, T),
             ("", "Closed at 101.5", None, S, S, "Closed at 101.5", T),
         ];

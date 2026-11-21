@@ -216,6 +216,7 @@ pub enum ChartContextAction {
 pub struct ChartMenus {
     chart: ChartContextMenu,
     series: SeriesContextMenu,
+    series_alert_price: f64,
     study: StudyContextMenu,
     drawing: DrawingContextMenu,
     axes: crate::ui::context_menu::axis::AxisMenus,
@@ -234,9 +235,15 @@ pub struct ChartMenus {
 }
 
 impl ChartMenus {
-    /// The price of the series menu's last right-click, which stays after a pick.
+    /// The raw price of the series menu's last right-click, which stays after a pick.
     pub fn series_click_price(&self) -> f64 {
         self.series.click_price
+    }
+
+    /// The price named by the series menu's alert row, rounded to the instrument's tick or
+    /// the menu's decimals, which stays after a pick.
+    pub fn series_alert_price(&self) -> f64 {
+        self.series_alert_price
     }
 
     /// Shows or hides named menu entries: Alerts, Trading, Settings, ObjectTree, Indicators,
@@ -283,6 +290,12 @@ impl ChartMenus {
     /// names the menu has no such entry.
     pub fn set_watchlists(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
         self.chart.watchlists = names.into_iter().map(Into::into).collect();
+    }
+
+    /// Shows the binding of [`KeyboardAction::AddToWatchlist`] on the row at `list` in
+    /// [`set_watchlists`](Self::set_watchlists), such as the panel's active list.
+    pub fn set_active_watchlist(&mut self, list: Option<usize>) {
+        self.chart.active_watchlist = list;
     }
 
     /// Lets the host place, reorder and leave out the rows of every chart menu: the chart, series,
@@ -386,7 +399,7 @@ impl ChartMenus {
         if chart.series_pane(SeriesId::MAIN) != Some(pane) || !pointer_on_chart(ctx, chart, pos) {
             return None;
         }
-        self.load_order_context(chart, pos);
+        self.load_order_context(chart, pos, price);
         self.chart
             .order_requests(price)
             .into_iter()
@@ -394,9 +407,10 @@ impl ChartMenus {
             .map(|order| ChartContextAction::Chart(ContextMenuAction::Order(order)))
     }
 
-    /// Reads the symbol, its last price and tick size, and whether `pos` reads prices of the
-    /// chart symbol into the chart menu, for its alert and order rows.
-    fn load_order_context(&mut self, chart: &Chart, pos: egui::Pos2) {
+    /// Reads the symbol, its last price and tick size, the decimals used for `price`, and whether
+    /// `pos` reads prices of the chart symbol into the menu, for its alert and order rows.
+    fn load_order_context(&mut self, chart: &Chart, pos: egui::Pos2, price: f64) {
+        self.chart.price_decimals = chart.menu_price_decimals(SeriesId::MAIN, price);
         self.chart.set_symbol(chart.symbol.clone());
         self.chart.market_price =
             crate::model::last_with_value(chart.bars(SeriesId::MAIN)).map(|b| b.close);
@@ -508,6 +522,13 @@ impl ChartMenus {
                     ..
                 } => {
                     self.series.set_context(chart.symbol.clone(), price);
+                    let tick = chart
+                        .instrument()
+                        .and_then(|instrument| instrument.tick_size);
+                    let decimals = chart
+                        .menu_price_decimals(SeriesId::MAIN, price)
+                        .unwrap_or_else(|| super::standalone_decimals(price));
+                    self.series_alert_price = crate::scales::snap_price(price, tick, decimals);
                     self.series.open(pos, id);
                 }
                 RightClickTarget::Drawing { drawing_id, pos } => {
@@ -515,7 +536,7 @@ impl ChartMenus {
                 }
                 RightClickTarget::Background { pos, price } => {
                     self.chart.set_indicator_cnt(chart.indicators().count());
-                    self.load_order_context(chart, pos);
+                    self.load_order_context(chart, pos, price);
                     let line = chart
                         .drawings()
                         .registry
@@ -649,7 +670,8 @@ impl ChartMenus {
                 &mut store,
             ),
             RightClickTarget::Element { .. } => rows::split(
-                self.series.build_menu_items(ctx, shortcuts, &price_text),
+                self.series
+                    .build_menu_items(ctx, shortcuts, self.series_alert_price, &price_text),
                 &SeriesContextMenuAction::row_id,
                 &ChartContextAction::Series,
                 &mut store,

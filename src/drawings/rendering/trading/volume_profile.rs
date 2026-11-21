@@ -1,6 +1,8 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
-use crate::data::{FootprintBarView, FootprintView, StudyDataRequest, VolumeProfile};
+use crate::data::{
+    FootprintBarView, FootprintView, StudyDataRequest, VolumeProfile, VolumeProfileConfig,
+};
 use crate::drawings::domain::Drawing;
 use crate::drawings::domain::DrawingToolType;
 use crate::drawings::domain::{VwapBandLine, VwapBandMode, VwapConfig, VwapPlotType};
@@ -31,6 +33,9 @@ thread_local! {
         const { RefCell::new(SpanCache::new(MAX_CACHED_SPANS)) };
     /// Profiles built from finer bars.
     static FINER_PROFILES: RefCell<FinerCache> =
+        const { RefCell::new(SpanCache::new(MAX_CACHED_SPANS)) };
+    /// Lowest low and highest high of the spans whose row count is laid on whole ticks.
+    static PRICE_SPANS: RefCell<SpanCache<Option<(f64, f64)>>> =
         const { RefCell::new(SpanCache::new(MAX_CACHED_SPANS)) };
 }
 
@@ -95,13 +100,14 @@ impl Drawing {
             view.executions,
             from..to,
         )) {
-            let Some((vwap, unit)) = value else { continue };
             let x = (view.bar_to_x)((first + i) as f32);
             for (line, k) in lines.iter_mut().zip(&offsets) {
-                line.push(Pos2::new(x, (view.price_to_y)(vwap + k * unit)));
+                line.push(value.map_or(Pos2::NAN, |(vwap, unit)| {
+                    Pos2::new(x, (view.price_to_y)(vwap + k * unit))
+                }));
             }
         }
-        if lines[0].is_empty() {
+        if !lines[0].iter().any(|point| point.is_finite()) {
             return;
         }
 
@@ -123,12 +129,30 @@ impl Drawing {
                     .color
                     .unwrap_or(config.bands[0].upper.color),
             );
-            super::super::fibonacci::paint_band(
-                painter,
-                &lines[1],
-                &lines[2],
-                color.gamma_multiply(config.band_fill.opacity()),
-            );
+            let fill = |upper: &[Pos2], lower: &[Pos2]| {
+                super::super::fibonacci::paint_band(
+                    painter,
+                    upper,
+                    lower,
+                    color.gamma_multiply(config.band_fill.opacity()),
+                );
+            };
+            if config.bands[0].upper.plot_type.has_breaks()
+                || config.bands[0].lower.plot_type.has_breaks()
+            {
+                for (upper, lower) in lines[1]
+                    .split(|p| !p.is_finite())
+                    .zip(lines[2].split(|p| !p.is_finite()))
+                {
+                    if !upper.is_empty() {
+                        fill(upper, lower);
+                    }
+                }
+            } else {
+                lines[1].retain(|p| p.is_finite());
+                lines[2].retain(|p| p.is_finite());
+                fill(&lines[1], &lines[2]);
+            }
         }
         let vwap_line = lines.remove(0);
         let zero = (view.price_to_y)(0.0);
@@ -406,19 +430,44 @@ impl Drawing {
         );
     }
 
+    /// The drawing's row layout on the view's instrument: rows of its ticks per row where the
+    /// instrument has a tick size, else its row count or price height, the count as asked for:
+    /// [`Self::span_profile`] lays it on whole ticks.
+    fn profile_config(&self, view: &ChartView) -> VolumeProfileConfig {
+        let config = self.volume_profile.unwrap_or_default();
+        config
+            .tick_height(view.instrument.and_then(|instrument| instrument.tick_size))
+            .and_then(|height| config.with_row_size(Some(height)))
+            .unwrap_or(config)
+    }
+
     /// The profile of `bars`, the span that starts at bar `first`: the executed volume in the
     /// drawing's rows when the view holds complete executions in the span, else the finer bars
-    /// where they cover chart bars, else estimated from the chart bars.
+    /// where they cover chart bars, else estimated from the chart bars. A row count takes whole
+    /// ticks of the view's instrument, as the volume profile studies lay theirs: from the price
+    /// span of `bars` for bars and finer bars, and from the traded rows for executions.
     fn span_profile(
         &self,
         view: &ChartView,
         first: usize,
         bars: &[Bar],
     ) -> Rc<Option<VolumeProfile>> {
-        let config = self.volume_profile.unwrap_or_default();
+        let config = self.profile_config(view);
+        // A row count is laid on whole ticks where the instrument has a tick size.
+        let tick = view
+            .instrument
+            .and_then(|instrument| instrument.tick_size)
+            .filter(|tick| config.row_size().is_none() && tick.is_finite() && *tick > 0.0);
         if let (Some(flow), Some(start), Some(end)) = (view.executions, bars.first(), bars.last()) {
             let executed = flow.profile(start.time, end.time);
             let complete = flow.span_is_complete(start.time, end.time);
+            let levels = executed.levels.keys();
+            let config = match (tick, levels.clone().next(), levels.clone().next_back()) {
+                (Some(_), Some(&low), Some(&high)) => {
+                    config.with_whole_rows(flow.price_step(), low as f64, high as f64 + 1.0)
+                }
+                _ => config,
+            };
             if let Some(profile) = VolumeProfile::of_executions(
                 &executed,
                 &config,
@@ -429,6 +478,11 @@ impl Drawing {
                 return Rc::new(Some(profile));
             }
         }
+        let span = tick.and_then(|tick| Some((tick, cached_price_span(view, first, bars)?)));
+        let config = match span {
+            Some((tick, (low, high))) => config.with_whole_rows(tick, low / tick, high / tick),
+            None => config,
+        };
         if let Some(profile) = finer_profile(view, config.rows(), config.row_size(), first, bars) {
             return profile;
         }
@@ -439,7 +493,10 @@ impl Drawing {
     /// with its [source](VolumeProfile::source): executed volume, in the drawing's rows as the
     /// volume profile studies group executions, when [`ChartView::executions`] holds complete
     /// bars in the selected span, including prepared bars before a missing join, else the finer
-    /// bars of [`ChartView::finer`], else the bar estimate.
+    /// bars of [`ChartView::finer`], else the bar estimate. Rows set in ticks take the tick size
+    /// of [`ChartView::instrument`], or the row count without one. A row count draws the whole
+    /// number of those ticks per row whose row total lies closest to it, on multiples of that
+    /// height, and equal rows without a tick size.
     /// `None` for other tools, a drawing without its anchors, or an empty selection.
     pub fn volume_profile_of(&self, view: &ChartView) -> Option<VolumeProfile> {
         let (first, bars) = self.profile_span(view.bars)?;
@@ -617,13 +674,32 @@ fn anchored_vwap<'a>(
 /// An area is its line over a fill of its colour at 20% of its opacity, as a study's area is.
 fn paint_vwap_line(
     painter: &egui::Painter,
-    points: Vec<Pos2>,
+    mut points: Vec<Pos2>,
     plot: VwapPlotType,
     style: LineStyle,
     stroke: Stroke,
     zero: f32,
     pitch: f32,
 ) {
+    if plot.has_breaks() {
+        let joined = match plot {
+            VwapPlotType::LineWithBreaks => VwapPlotType::Line,
+            VwapPlotType::StepLineWithBreaks => VwapPlotType::StepLine,
+            VwapPlotType::AreaWithBreaks => VwapPlotType::Area,
+            _ => plot,
+        };
+        for run in points
+            .split(|point| !point.is_finite())
+            .filter(|run| !run.is_empty())
+        {
+            paint_vwap_line(painter, run.to_vec(), joined, style, stroke, zero, pitch);
+        }
+        return;
+    }
+    points.retain(|point| point.is_finite());
+    if points.is_empty() {
+        return;
+    }
     let clip = painter.clip_rect();
     // Zero is usually far off the pane: plots from it start at the pane's edge.
     let zero = if zero.is_finite() {
@@ -641,8 +717,10 @@ fn paint_vwap_line(
         }
     };
     match plot {
-        VwapPlotType::Line => path(points),
-        VwapPlotType::StepLine => {
+        VwapPlotType::Line | VwapPlotType::LineWithBreaks => path(points),
+        VwapPlotType::StepLine
+        | VwapPlotType::StepLineWithBreaks
+        | VwapPlotType::StepLineWithDiamonds => {
             let mut steps = Vec::with_capacity(points.len() * 2);
             for (i, &point) in points.iter().enumerate() {
                 if i > 0 {
@@ -651,6 +729,23 @@ fn paint_vwap_line(
                 steps.push(point);
             }
             path(steps);
+            if plot == VwapPlotType::StepLineWithDiamonds {
+                for (i, &point) in points.iter().enumerate() {
+                    if i == 0 || point.y != points[i - 1].y {
+                        let half = stroke.width + 2.0;
+                        painter.add(Shape::convex_polygon(
+                            vec![
+                                point - egui::vec2(0.0, half),
+                                point + egui::vec2(half, 0.0),
+                                point + egui::vec2(0.0, half),
+                                point - egui::vec2(half, 0.0),
+                            ],
+                            color,
+                            Stroke::NONE,
+                        ));
+                    }
+                }
+            }
         }
         VwapPlotType::Histogram | VwapPlotType::Columns => {
             let half = if plot == VwapPlotType::Columns {
@@ -669,7 +764,7 @@ fn paint_vwap_line(
                 );
             }
         }
-        VwapPlotType::Area => {
+        VwapPlotType::Area | VwapPlotType::AreaWithBreaks => {
             let base: Vec<_> = points.iter().map(|p| Pos2::new(p.x, zero)).collect();
             let fill = color.gamma_multiply(0.2);
             super::super::fibonacci::paint_band(painter, &points, &base, fill);
@@ -698,6 +793,20 @@ fn rgba([r, g, b, a]: [u8; 4]) -> Color32 {
 /// The colour of a band line at its opacity.
 fn painted_color(line: &VwapBandLine) -> Color32 {
     rgba(line.color).gamma_multiply(line.opacity())
+}
+
+/// Lowest low and highest high of the valid bars of `bars`, the span that starts at bar `first`,
+/// kept as the span's profile is, so a tick or a new bar costs one bar.
+fn cached_price_span(view: &ChartView, first: usize, bars: &[Bar]) -> Option<(f64, f64)> {
+    use crate::data::price_span;
+    PRICE_SPANS.with_borrow_mut(|cache| {
+        *view.cached(cache, (), first, bars, price_span, |span, bar| {
+            Some(match (*span, price_span(std::slice::from_ref(bar))) {
+                (Some((low, high)), Some((lo, hi))) => Some((low.min(lo), high.max(hi))),
+                (span, bar) => span.or(bar),
+            })
+        })
+    })
 }
 
 /// Profile of `bars`, the span that starts at bar `first`, with `rows` rows.
@@ -795,6 +904,104 @@ mod tests {
 
     fn assert_close(got: f64, want: f64) {
         assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
+    }
+
+    /// Joined plots span a bar without volume; plots with breaks restart each line after it.
+    #[test]
+    fn anchored_vwap_plot_types_keep_or_break_missing_values() {
+        let bars: Vec<_> = [1.0, 2.0, f64::NAN, 1.0, 1.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, volume)| {
+                let price = 10.0 + i as f64;
+                Bar::new(
+                    DateTime::from_timestamp(i as i64 * 60, 0).unwrap(),
+                    price,
+                    price,
+                    price,
+                    price,
+                    volume,
+                )
+            })
+            .collect();
+        let mut failures = Vec::new();
+        for (name, label, paths, diamonds) in [
+            ("Line", "Line", 1, 0),
+            ("StepLine", "Step line", 1, 0),
+            ("Area", "Area", 1, 0),
+            ("LineWithBreaks", "Line with breaks", 2, 0),
+            ("StepLineWithBreaks", "Step line with breaks", 2, 0),
+            ("AreaWithBreaks", "Area with breaks", 2, 0),
+            ("StepLineWithDiamonds", "Step line with diamonds", 1, 4),
+        ] {
+            let Ok(plot) = serde_json::from_value::<VwapPlotType>(name.into()) else {
+                failures.push(format!("{name}: missing plot type"));
+                continue;
+            };
+            assert!(VwapPlotType::ALL.contains(&plot));
+            assert_eq!(plot.name(), label);
+            assert_eq!(serde_json::to_value(plot).unwrap(), serde_json::json!(name));
+            let mut config = VwapConfig {
+                plot_type: plot,
+                ..Default::default()
+            };
+            config.bands[0].upper.plot_type = plot;
+            config.bands[0].lower.plot_type = plot;
+            let shapes = render_vwap(&bars, 0.0, 1.0, LineStyle::Solid, Some(config));
+            let lines: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Path(line) if line.stroke.width > 0.0 => Some(line),
+                    _ => None,
+                })
+                .collect();
+            if lines.len() != paths * 3 {
+                failures.push(format!(
+                    "{name}: {} paths, expected {}",
+                    lines.len(),
+                    paths * 3
+                ));
+            }
+            for line in lines {
+                assert!(line.points.iter().all(|p| p.is_finite()), "{name}");
+                if paths == 2 {
+                    assert!(
+                        line.points.iter().all(|p| p.x <= 110.0)
+                            || line.points.iter().all(|p| p.x >= 130.0),
+                        "{name}: bridged gap"
+                    );
+                }
+            }
+            let fills: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Mesh(mesh) => Some(mesh),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                fills.len(),
+                paths * if name.starts_with("Area") { 4 } else { 1 },
+                "{name}: fills"
+            );
+            for fill in fills {
+                assert!(
+                    fill.vertices.iter().all(|v| v.pos.is_finite()),
+                    "{name}: fill"
+                );
+                if paths == 2 {
+                    assert!(
+                        fill.vertices.iter().all(|v| v.pos.x <= 110.0)
+                            || fill.vertices.iter().all(|v| v.pos.x >= 130.0),
+                        "{name}: fill bridged gap"
+                    );
+                }
+            }
+            assert_eq!(shapes.iter().filter(|shape| matches!(shape,
+                Shape::Path(line) if line.closed && line.points.len() == 4 && line.stroke.width == 0.0
+            )).count(), diamonds * 3, "{name}: diamonds");
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// The line keeps the drawing's width and line style and only the enabled bands are drawn,
@@ -2290,6 +2497,394 @@ mod tests {
                 Some((poc, (poc, poc))),
                 "{label}"
             );
+        }
+    }
+
+    /// Both profile drawings draw rows set in ticks that many ticks of the instrument high, on
+    /// multiples of that height, from executions, finer bars and chart bars, and the row count on an
+    /// instrument without a tick size. A row count draws the whole ticks per row whose row total
+    /// lies closest to it where the instrument has a tick size, as the volume profile studies do,
+    /// and equal rows without one. A price height saved before rows could be set in ticks draws the
+    /// rows it drew then.
+    #[test]
+    fn profile_rows_follow_ticks_of_the_instrument() {
+        use crate::data::{Footprint, ProfileSource};
+        use crate::drawings::ChartPoint;
+        use crate::model::{BarClock, Instrument, OrderSide, Tick};
+        use crate::studies::StudyData;
+        // A rising bar over 10.25..11.25 and a falling one over 11.5..12.5.
+        let bars: Vec<_> = [
+            (10.25, 11.25, 10.25, 11.0, 40.0),
+            (12.0, 12.5, 11.5, 11.75, 20.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (open, high, low, close, volume))| {
+            let time = DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+            Bar::new(time, open, high, low, close, volume)
+        })
+        .collect();
+        // Bar 0 trades 10.25 (1 sold), 10.75 (2 bought) and 11 (3 bought); bar 1 trades 11.5
+        // (4 sold), 12 (5 unknown) and 12.25 (6 bought), in a footprint of 0.25 ticks.
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for (bar, price, size, side) in [
+            (0, 10.25, 1.0, Some(OrderSide::Sell)),
+            (0, 10.75, 2.0, Some(OrderSide::Buy)),
+            (0, 11.0, 3.0, Some(OrderSide::Buy)),
+            (1, 11.5, 4.0, Some(OrderSide::Sell)),
+            (1, 12.0, 5.0, None),
+            (1, 12.25, 6.0, Some(OrderSide::Buy)),
+        ] {
+            flow.push(&Tick::new(bars[bar].time, price, size, side))
+                .unwrap();
+        }
+        // Finer bars have the same ranges and twice the volume, so using chart bars would fail.
+        let finer_bars: Vec<_> = bars
+            .iter()
+            .cloned()
+            .map(|mut bar| {
+                bar.volume *= 2.0;
+                bar
+            })
+            .collect();
+        let history = [StudyData {
+            request: StudyDataRequest {
+                symbol: "TEST".into(),
+                timeframe: Some(Timeframe::Sec1),
+                metric: None,
+            },
+            bars: &finer_bars,
+            clock: BarClock::new(Timeframe::Sec1),
+            instrument: None,
+            timeframe: Timeframe::Sec1,
+        }];
+        let four_ticks = VolumeProfileConfig::default()
+            .with_row_ticks(Some(4))
+            .unwrap();
+        let saved = |json| serde_json::from_str::<VolumeProfileConfig>(json).unwrap();
+        // The layout and the instrument's tick size, then the rows from chart bars and from
+        // executions: bottom edge, height, volume, buys and sells. Executed rows start half a
+        // tick below their first tick.
+        for (label, config, tick, from_bars, executed) in [
+            (
+                "4 ticks of 0.25",
+                four_ticks,
+                Some(0.25),
+                (
+                    10.0,
+                    1.0,
+                    vec![30.0, 20.0, 10.0],
+                    vec![30.0, 10.0, 0.0],
+                    vec![0.0, 10.0, 10.0],
+                ),
+                (
+                    9.875,
+                    1.0,
+                    vec![3.0, 7.0, 11.0],
+                    vec![2.0, 3.0, 6.0],
+                    vec![1.0, 4.0, 0.0],
+                ),
+            ),
+            (
+                "4 ticks of 0.5",
+                four_ticks,
+                Some(0.5),
+                (
+                    10.0,
+                    2.0,
+                    vec![50.0, 10.0],
+                    vec![40.0, 0.0],
+                    vec![10.0, 10.0],
+                ),
+                (9.875, 2.0, vec![10.0, 11.0], vec![5.0, 6.0], vec![5.0, 0.0]),
+            ),
+            (
+                "4 ticks without a tick size",
+                VolumeProfileConfig::new(3, 0.7)
+                    .and_then(|c| c.with_row_ticks(Some(4)))
+                    .unwrap(),
+                None,
+                (
+                    10.25,
+                    0.75,
+                    vec![30.0, 15.0, 15.0],
+                    vec![30.0, 10.0, 0.0],
+                    vec![0.0, 5.0, 15.0],
+                ),
+                (9.875, 1.25, vec![6.0, 15.0], vec![5.0, 6.0], vec![1.0, 4.0]),
+            ),
+            // 9 ticks over 3 rows are 3 ticks a row, which takes 4 rows from 9.75; the
+            // executed rows hold the ticks 39 to 41, 42 to 44, 45 to 47 and 48 to 50.
+            (
+                "saved row count",
+                saved(r#"{"rows":3,"value_area":0.7}"#),
+                Some(0.25),
+                (
+                    9.75,
+                    0.75,
+                    vec![10.0, 30.0, 10.0, 10.0],
+                    vec![10.0, 30.0, 0.0, 0.0],
+                    vec![0.0, 0.0, 10.0, 10.0],
+                ),
+                (
+                    9.625,
+                    0.75,
+                    vec![1.0, 5.0, 4.0, 11.0],
+                    vec![0.0, 5.0, 0.0, 6.0],
+                    vec![1.0, 0.0, 4.0, 0.0],
+                ),
+            ),
+            (
+                "saved row count without a tick size",
+                saved(r#"{"rows":3,"value_area":0.7}"#),
+                None,
+                (
+                    10.25,
+                    0.75,
+                    vec![30.0, 15.0, 15.0],
+                    vec![30.0, 10.0, 0.0],
+                    vec![0.0, 5.0, 15.0],
+                ),
+                (9.875, 1.25, vec![6.0, 15.0], vec![5.0, 6.0], vec![1.0, 4.0]),
+            ),
+            (
+                "saved price height",
+                saved(r#"{"row_size":0.5,"rows":24,"value_area":0.7}"#),
+                Some(0.25),
+                (
+                    10.0,
+                    0.5,
+                    vec![10.0, 20.0, 10.0, 10.0, 10.0, 0.0],
+                    vec![10.0, 20.0, 10.0, 0.0, 0.0, 0.0],
+                    vec![0.0, 0.0, 0.0, 10.0, 10.0, 0.0],
+                ),
+                (
+                    9.875,
+                    0.5,
+                    vec![1.0, 2.0, 3.0, 4.0, 11.0],
+                    vec![0.0, 2.0, 3.0, 0.0, 6.0],
+                    vec![1.0, 0.0, 0.0, 4.0, 0.0],
+                ),
+            ),
+        ] {
+            let mut instrument = Instrument::new("TEST")
+                .with_profile_resolutions([ProfileResolution::new(Timeframe::Sec1, None)]);
+            if let Some(tick) = tick {
+                instrument = instrument.with_tick_size(tick);
+            }
+            for tool in [
+                DrawingToolType::FixedRangeVolumeProfile,
+                DrawingToolType::AnchoredVolumeProfile,
+            ] {
+                let mut drawing = Drawing::new(1, tool);
+                drawing.chart_points = vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(1.0, 10.0)];
+                drawing.volume_profile = Some(config);
+                for (executions, finer, source, (low, height, volume, up, down)) in [
+                    (None, false, ProfileSource::Estimated, &from_bars),
+                    (None, true, ProfileSource::Estimated, &from_bars),
+                    (
+                        Some((&flow).into()),
+                        false,
+                        ProfileSource::Executions { complete: true },
+                        &executed,
+                    ),
+                ] {
+                    let view = ChartView {
+                        price_formatter: None,
+                        thousands_sep: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
+                        instrument: Some(&instrument),
+                        bars: &bars,
+                        revision: 0,
+                        bar_to_x: &|x| x,
+                        bar_spacing: 1.0,
+                        price_to_y: &|price| price as f32,
+                        y_to_price: &f64::from,
+                        time_axis: true,
+                        executions,
+                        timeframe: Some(Timeframe::Min1),
+                        finer: if finer { &history } else { &[] },
+                    };
+                    let profile = drawing.volume_profile_of(&view).unwrap();
+                    let at = format!("{label}, {tool:?}, {source:?}, finer={finer}");
+                    assert_eq!(profile.source(), source, "{at}");
+                    assert_eq!(
+                        (profile.low(), profile.row_height()),
+                        (*low, *height),
+                        "{at}"
+                    );
+                    let expected = |values: &[f64]| {
+                        values
+                            .iter()
+                            .map(|value| value * if finer { 2.0 } else { 1.0 })
+                            .collect::<Vec<_>>()
+                    };
+                    assert_eq!(profile.volume(), expected(volume), "{at}");
+                    assert_eq!(profile.up(), expected(up), "{at}");
+                    assert_eq!(profile.down(), expected(down), "{at}");
+                }
+            }
+        }
+        // Cent ticks from 10.00 to 11.00: a rising bar of 60 over 10.00..10.60 and a falling one
+        // of 40 over 10.60..11.00, 100 a point each, and executions at 10.00 (1 sold), 10.30
+        // (2 bought) and 10.99 (3 bought) in a footprint of 0.01 ticks.
+        let bars: Vec<_> = [
+            (10.0, 10.6, 10.0, 10.6, 60.0),
+            (11.0, 11.0, 10.6, 10.6, 40.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (open, high, low, close, volume))| {
+            let time = DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+            Bar::new(time, open, high, low, close, volume)
+        })
+        .collect();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.01, 1).unwrap();
+        for (bar, price, size, side) in [
+            (0, 10.0, 1.0, OrderSide::Sell),
+            (0, 10.3, 2.0, OrderSide::Buy),
+            (1, 10.99, 3.0, OrderSide::Buy),
+        ] {
+            flow.push(&Tick::new(bars[bar].time, price, size, Some(side)))
+                .unwrap();
+        }
+        let finer_bars: Vec<_> = bars
+            .iter()
+            .cloned()
+            .map(|mut bar| {
+                bar.volume *= 2.0;
+                bar
+            })
+            .collect();
+        let history = [StudyData {
+            request: StudyDataRequest {
+                symbol: "TEST".into(),
+                timeframe: Some(Timeframe::Sec1),
+                metric: None,
+            },
+            bars: &finer_bars,
+            clock: BarClock::new(Timeframe::Sec1),
+            instrument: None,
+            timeframe: Timeframe::Sec1,
+        }];
+        let instrument = Instrument::new("TEST")
+            .with_tick_size(0.01)
+            .with_profile_resolutions([ProfileResolution::new(Timeframe::Sec1, None)]);
+        let sparse = |len: usize, rows: &[(usize, f64)]| {
+            let mut volume = vec![0.0; len];
+            for &(row, value) in rows {
+                volume[row] = value;
+            }
+            volume
+        };
+        // Rows asked for, then the rows from chart bars and from executions.
+        for (rows, from_bars, executed) in [
+            // 100 ticks over 30 rows are 3.33 a row: 3 ticks take 34 rows and 4 take 25, so 3,
+            // from 9.99. The first bar ends 0.01 into row 20 and the second starts there.
+            (
+                30,
+                (
+                    9.99,
+                    0.03,
+                    [vec![2.0], vec![3.0; 32], vec![2.0]].concat(),
+                    [vec![2.0], vec![3.0; 19], vec![1.0], vec![0.0; 13]].concat(),
+                    [vec![0.0; 20], vec![2.0], vec![3.0; 12], vec![2.0]].concat(),
+                ),
+                (
+                    9.985,
+                    0.03,
+                    sparse(34, &[(0, 1.0), (10, 2.0), (33, 3.0)]),
+                    sparse(34, &[(10, 2.0), (33, 3.0)]),
+                    sparse(34, &[(0, 1.0)]),
+                ),
+            ),
+            // Over 24 rows they are 4.17 a row: 4 ticks take 25 rows and 5 take 20, so 4, from
+            // 10.00. The high of 11.00 lies on a row edge, which opens an empty row above it.
+            (
+                24,
+                (
+                    10.0,
+                    0.04,
+                    [vec![4.0; 25], vec![0.0]].concat(),
+                    [vec![4.0; 15], vec![0.0; 11]].concat(),
+                    [vec![0.0; 15], vec![4.0; 10], vec![0.0]].concat(),
+                ),
+                (
+                    9.995,
+                    0.04,
+                    sparse(25, &[(0, 1.0), (7, 2.0), (24, 3.0)]),
+                    sparse(25, &[(7, 2.0), (24, 3.0)]),
+                    sparse(25, &[(0, 1.0)]),
+                ),
+            ),
+        ] {
+            for tool in [
+                DrawingToolType::FixedRangeVolumeProfile,
+                DrawingToolType::AnchoredVolumeProfile,
+            ] {
+                let mut drawing = Drawing::new(1, tool);
+                drawing.chart_points = vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(1.0, 10.0)];
+                drawing.volume_profile = VolumeProfileConfig::new(rows, 0.7);
+                for (executions, finer, (low, height, volume, up, down)) in [
+                    (None, false, &from_bars),
+                    (None, true, &from_bars),
+                    (Some((&flow).into()), false, &executed),
+                ] {
+                    let view = ChartView {
+                        price_formatter: None,
+                        thousands_sep: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
+                        instrument: Some(&instrument),
+                        bars: &bars,
+                        revision: 0,
+                        bar_to_x: &|x| x,
+                        bar_spacing: 1.0,
+                        price_to_y: &|price| price as f32,
+                        y_to_price: &f64::from,
+                        time_axis: true,
+                        executions,
+                        timeframe: Some(Timeframe::Min1),
+                        finer: if finer { &history } else { &[] },
+                    };
+                    let profile = drawing.volume_profile_of(&view).unwrap();
+                    let at = format!(
+                        "{rows} rows, {tool:?}, executed={}, finer={finer}",
+                        executions.is_some()
+                    );
+                    // Cent prices are not exact in binary, so rows are compared within 1e-9.
+                    let close = |got: &[f64], want: &[f64], scale: f64| {
+                        got.len() == want.len()
+                            && got
+                                .iter()
+                                .zip(want)
+                                .all(|(got, want)| (got - want * scale).abs() < 1e-9)
+                    };
+                    let scale = if finer { 2.0 } else { 1.0 };
+                    assert!(
+                        close(
+                            &[profile.low(), profile.row_height()],
+                            &[*low, *height],
+                            1.0
+                        ),
+                        "{at}: from {}, {} high",
+                        profile.low(),
+                        profile.row_height()
+                    );
+                    assert!(
+                        close(profile.volume(), volume, scale),
+                        "{at}: {:?}",
+                        profile.volume()
+                    );
+                    assert!(close(profile.up(), up, scale), "{at}: {:?}", profile.up());
+                    assert!(
+                        close(profile.down(), down, scale),
+                        "{at}: {:?}",
+                        profile.down()
+                    );
+                }
+            }
         }
     }
 

@@ -16,7 +16,8 @@ use crate::model::range_bar::price_path;
 use crate::model::rounding_tolerance;
 use crate::model::same_currency;
 use crate::model::{
-    Bar, ChartType, OrderSide, OrderType, StrategyExit, StrategyReport, StrategyTrade, Timeframe,
+    Bar, BarClock, BarData, ChartType, EquityRange, OrderSide, OrderType, StrategyExit,
+    StrategyReport, StrategyTrade, Timeframe,
 };
 
 /// The default entry size, converted to units at the execution price.
@@ -307,7 +308,13 @@ pub trait Strategy {
                         }
                         _ => index.to_string(),
                     },
-                    InputValue::Text(value) | InputValue::Symbol(value) => value,
+                    InputValue::TimeOfDay(time) => time.format("%H:%M").to_string(),
+                    InputValue::Text(value)
+                    | InputValue::Symbol(value)
+                    | InputValue::TimeZone(value) => value,
+                    InputValue::Timeframe(value) => {
+                        value.map_or_else(|| "Chart interval".into(), |tf| tf.to_string())
+                    }
                     value => format!("{value:?}"),
                 };
                 (input.label, value)
@@ -347,6 +354,35 @@ pub trait Strategy {
     /// only its settings. Returns `None` by default.
     fn default_order_size(&self) -> Option<OrderSize> {
         None
+    }
+
+    /// Receives the interval of the bars this strategy will see. [`Backtest::run`],
+    /// [`Backtest::run_async`] and [`Backtest::update`] pass it before preparing;
+    /// [`optimise`](crate::strategies::optimise) and the strategy tester pass it before
+    /// [`validate_inputs`](Self::validate_inputs) and read
+    /// [`calculation_timeframe`](Self::calculation_timeframe) after it. Does nothing by default.
+    fn set_timeframe(&mut self, timeframe: Timeframe) {
+        let _ = timeframe;
+    }
+
+    /// The interval of the instrument's own bars this strategy reads besides the chart bars, or
+    /// `None` for the chart bars alone. Read it after [`set_timeframe`](Self::set_timeframe) and
+    /// setting the inputs; supply those bars in [`Backtest::calculation_bars`]. Returns `None`
+    /// by default.
+    fn calculation_timeframe(&self) -> Option<Timeframe> {
+        None
+    }
+
+    /// Receives valid calculation bars, oldest first, and for each chart bar the index of the
+    /// last calculation bar closed by its close, or `None` before the first closes. Before
+    /// preparation, [`Backtest`] supplies [`Backtest::calculation_bars`] on its instrument's
+    /// [`bar_clock`](Backtest::bar_clock), converted to Heikin Ashi when decisions use them.
+    /// `bars` is empty when the host supplied none. Read them only through `closed` to avoid
+    /// looking ahead. During historical tick recalculation a forming chart bar reads only
+    /// calculation bars closed by its open; live forming decisions use the host's current bars.
+    /// Does nothing by default.
+    fn set_calculation_bars(&mut self, bars: &[Bar], closed: &[Option<usize>]) {
+        let _ = (bars, closed);
     }
 
     /// Computes what the strategy needs from the whole run once, before the first bar, such as
@@ -521,6 +557,42 @@ impl StrategyContext<'_> {
         }
     }
 
+    /// Protects entries on `side` with a trailing stop and an optional fixed stop at
+    /// `stop_loss` distance from the position's average fill price. Trailing starts when price
+    /// reaches `activation` distance in its favour, then follows the best price at `offset`.
+    /// Both fill and slip as stops along the bar path; the nearer stop fills first.
+    /// Like [`Self::exit_relative`], this closes the whole position, can precede its entry and
+    /// protects it on its execution bar. Closing or reversing cancels it unless an entry on
+    /// `side` is still working. A new request keeps the best price; closing forgets it.
+    /// `activation` must be finite and nonnegative, `offset` finite and positive, and any
+    /// `stop_loss` finite and positive. Other requests are ignored.
+    pub fn exit_trailing(
+        &mut self,
+        id: impl Into<String>,
+        side: OrderSide,
+        stop_loss: Option<f64>,
+        activation: f64,
+        offset: f64,
+    ) {
+        if activation.is_finite()
+            && activation >= 0.0
+            && offset.is_finite()
+            && offset > 0.0
+            && stop_loss.is_none_or(|loss| loss.is_finite() && loss > 0.0)
+        {
+            self.place(
+                id.into(),
+                None,
+                Kind::TrailingExit {
+                    stop_loss,
+                    activation,
+                    offset,
+                    side,
+                },
+            );
+        }
+    }
+
     fn place(&mut self, id: String, quantity: Option<f64>, kind: Kind) {
         if !self.trading {
             return;
@@ -536,6 +608,7 @@ impl StrategyContext<'_> {
             delay: self.order_delay,
             triggered: None,
             active: None,
+            best: None,
         };
         match self
             .orders
@@ -545,7 +618,17 @@ impl StrategyContext<'_> {
             Some(working)
                 if working.quantity == order.quantity
                     && (working.kind == order.kind || working.triggered == Some(order.kind)) => {}
-            Some(working) => *working = order,
+            Some(working) => {
+                let best = match (working.kind, order.kind) {
+                    (Kind::TrailingExit { side: a, .. }, Kind::TrailingExit { side: b, .. })
+                        if a == b =>
+                    {
+                        working.best
+                    }
+                    _ => None,
+                };
+                *working = Working { best, ..order };
+            }
             None => self.orders.push(order),
         }
     }
@@ -568,6 +651,8 @@ struct Working {
     /// reached, at the point it was placed or its delay ended. A limit already reached there
     /// never traded through its threshold while working.
     active: Option<u64>,
+    /// A trailing exit's best price since activation, absent before it starts.
+    best: Option<f64>,
 }
 
 /// How an execution at a reached price point is priced.
@@ -588,6 +673,13 @@ enum Kind {
     Exit(Option<f64>, Option<f64>, Option<OrderSide>),
     /// Distances from the position's average fill price and the entry side to protect.
     RelativeExit(f64, f64, OrderSide),
+    /// Fixed stop distance, activation distance, trail offset and the entry side to protect.
+    TrailingExit {
+        stop_loss: Option<f64>,
+        activation: f64,
+        offset: f64,
+        side: OrderSide,
+    },
 }
 
 /// An entry's quantity that is still open.
@@ -611,7 +703,9 @@ struct Lot {
 /// its limit or stop price, or at the open when the bar opened beyond it; a triggered stop-limit
 /// order works on as a limit order from its stop. Orders the path reaches at the same point fill
 /// in the order they were first placed. An exit with a take profit and a stop loss fills whichever
-/// the path reaches first. With `settings.fill_on_close`, orders are tried again at the close of
+/// the path reaches first. A trailing exit follows the best price after its activation level
+/// is reached and fills as a stop when the path returns to its offset.
+/// With `settings.fill_on_close`, orders are tried again at the close of
 /// the bar they were placed on, where market orders fill and priced orders fill if the close
 /// satisfies them. `settings.order_delay` holds new orders back for that many further price points.
 ///
@@ -626,9 +720,12 @@ struct Lot {
 /// start time it begins there and subsequent marks use chart-bar closing times. Fills use the
 /// times of their chart or finer bars. Close fills on trade-based bars use the last source time,
 /// which stays fixed as bars arrive.
+/// Each mark has an [`EquityRange`] recording the account extremes and largest fall and rise
+/// along the path its fills walk, including finer bars and the chart close.
 ///
 /// Bars are oldest first, in strictly increasing time order. A bar without finite prices, or
-/// whose high and low do not contain its open and close, fills no orders and has no equity value.
+/// whose high and low do not contain its open and close, fills no orders and has no equity
+/// value or range.
 /// Settings apply sizing, pyramiding, costs and funding at each execution; a funding deficit
 /// liquidates along the path. Optional finer bars determine fills within each chart bar.
 #[derive(Clone, Debug, PartialEq)]
@@ -653,6 +750,14 @@ pub struct Backtest {
     /// currencies differ. A run that needs a rate where none applies, or where it is not finite
     /// and positive, reports [`StrategyReport::unavailable`] instead of trades and equity.
     pub exchange_rates: Vec<Bar>,
+    /// The host's answer to [`Strategy::calculation_timeframe`]: the instrument's own bars of that
+    /// interval, in any order, stamped as [`Self::bar_clock`] places them. A strategy that names
+    /// an interval receives no bars without them.
+    pub calculation_bars: Vec<Bar>,
+    /// The instrument's calendar, including its zone and exchange session, used to place chart
+    /// and calculation bars. Each chart bar reads only calculation bars closed by its close.
+    /// The clock's interval is ignored. `None` uses UTC boundaries without a session.
+    pub bar_clock: Option<BarClock>,
     live: Option<Box<live::LiveState>>,
 }
 
@@ -671,6 +776,8 @@ impl Backtest {
             live: None,
             instrument_currency: None,
             exchange_rates: Vec::new(),
+            calculation_bars: Vec::new(),
+            bar_clock: None,
             settings: BacktestSettings {
                 initial_capital,
                 ..Default::default()
@@ -709,6 +816,9 @@ impl Backtest {
     /// remain on the chart interval unless historical tick decisions are enabled. Finer prices
     /// apply to regular candles and original-price execution; derived-price fills use their own
     /// candle path. Pass `&[]` to use chart bars alone.
+    ///
+    /// A strategy naming a [`calculation_timeframe`](Strategy::calculation_timeframe) receives
+    /// [`Self::calculation_bars`] with each chart bar's last closed one before preparation.
     ///
     /// With a start time, `prepare` still receives every bar that closes by the end time, or none
     /// with historical tick decisions, whose calculations refresh through `prepare_update`.
@@ -759,6 +869,8 @@ impl Backtest {
         let mut lower: Vec<_> = lower.iter().filter(|bar| valid_bar(bar)).collect();
         lower.sort_by_key(|bar| bar.time);
         lower.dedup_by_key(|bar| bar.time);
+        strategy.set_timeframe(self.timeframe);
+        let calculation = self.supply_calculation(strategy, &bars[..last]);
         strategy.prepare(
             if settings.recalculate_on_history && !settings.chart_type.transforms_data() {
                 &[]
@@ -775,6 +887,7 @@ impl Backtest {
             rejected: 0,
             settings,
             strategy,
+            calculation,
             history: Cow::Borrowed(&[]),
             prices,
             trading: false,
@@ -782,6 +895,7 @@ impl Backtest {
             open_tick: 0,
             fills: None,
             forming: false,
+            range: None,
             rate: if rates.is_some() { f64::NAN } else { 1.0 },
             rates,
             unconverted: Cell::new(false),
@@ -797,6 +911,67 @@ impl Backtest {
             self.withhold(&mut report);
         }
         report
+    }
+
+    /// Maps chart closes and historical opens using the instrument's schedule alone.
+    fn supply_calculation(
+        &self,
+        strategy: &mut dyn Strategy,
+        bars: &[Bar],
+    ) -> Option<HistoricalCalculation> {
+        let timeframe = strategy.calculation_timeframe()?;
+        let clock = self
+            .bar_clock
+            .clone()
+            .unwrap_or_else(|| BarClock::new(self.timeframe));
+        let (chart, own) = (
+            clock.for_timeframe(self.timeframe),
+            clock.for_timeframe(timeframe),
+        );
+        let mut calculation: Vec<Bar> = self
+            .calculation_bars
+            .iter()
+            .filter(|bar| valid_bar(bar))
+            .cloned()
+            .collect();
+        calculation.sort_by_key(|bar| bar.time);
+        calculation.dedup_by_key(|bar| bar.time);
+        if self.settings.chart_type == ChartType::Heikin {
+            calculation = BarData::from_bars(calculation).to_heikin_ashi().bars;
+        }
+        let opens: Vec<_> = calculation
+            .iter()
+            .map(|bar| own.bar_open(bar.time))
+            .collect();
+        // Trade-based bars have no scheduled close.
+        let timed = !self.timeframe.is_trade_based() && !timeframe.is_trade_based();
+        let closed: Vec<_> = bars
+            .iter()
+            .map(|bar| {
+                let next = chart
+                    .next_trading_open(chart.bar_open(bar.time))
+                    .filter(|_| timed)?;
+                let until = own.instant_open(chart.bar_start(next));
+                opens.partition_point(|open| *open < until).checked_sub(1)
+            })
+            .collect();
+        strategy.set_calculation_bars(&calculation, &closed);
+        (self.settings.recalculate_on_history && !self.settings.chart_type.transforms_data()).then(
+            || HistoricalCalculation {
+                bars: calculation,
+                closed,
+                opened: bars
+                    .iter()
+                    .map(|bar| {
+                        if !timed {
+                            return None;
+                        }
+                        let until = own.instant_open(chart.bar_start(chart.bar_open(bar.time)));
+                        opens.partition_point(|open| *open < until).checked_sub(1)
+                    })
+                    .collect(),
+            },
+        )
     }
 
     fn new_report(&self, strategy: &dyn Strategy, lower_count: usize) -> StrategyReport {
@@ -948,6 +1123,7 @@ impl Backtest {
         }
         report.trades.clear();
         report.equity.clear();
+        report.equity_ranges.clear();
     }
 }
 
@@ -1003,6 +1179,23 @@ pub(super) fn valid_bar(bar: &Bar) -> bool {
         && bar.high >= bar.open.max(bar.close)
 }
 
+/// Best price since reaching `level`, in direction `s` (1 long, -1 short).
+fn trailed(
+    best: Option<f64>,
+    level: f64,
+    s: f64,
+    points: impl IntoIterator<Item = f64>,
+) -> Option<f64> {
+    points.into_iter().fold(best, |best, point| match best {
+        Some(best) => Some(if s * (point - best) > 0.0 {
+            point
+        } else {
+            best
+        }),
+        None => (s * (point - level) >= 0.0).then_some(point),
+    })
+}
+
 /// The side of an exit from `position`, `None` while flat.
 fn exit_side(position: f64) -> Option<OrderSide> {
     if position > 0.0 {
@@ -1021,6 +1214,12 @@ fn sign(side: OrderSide) -> f64 {
     }
 }
 
+struct HistoricalCalculation {
+    bars: Vec<Bar>,
+    closed: Vec<Option<usize>>,
+    opened: Vec<Option<usize>>,
+}
+
 struct Run<'a> {
     orders: Vec<Working>,
     /// Open entries, oldest first, all on one side.
@@ -1031,6 +1230,7 @@ struct Run<'a> {
     rejected: usize,
     settings: &'a BacktestSettings,
     strategy: &'a mut dyn Strategy,
+    calculation: Option<HistoricalCalculation>,
     history: Cow<'a, [Bar]>,
     prices: &'a [Bar],
     trading: bool,
@@ -1039,6 +1239,8 @@ struct Run<'a> {
     open_tick: u64,
     fills: Option<&'a mut Vec<StrategyFill>>,
     forming: bool,
+    /// Equity movements reached along the current bar, retained across live updates.
+    range: Option<EquityRange>,
     /// Exchange rates in time order while amounts convert into the account currency.
     rates: Option<Vec<Bar>>,
     /// Units of the account currency per unit of the instrument's at the current price point:
@@ -1049,6 +1251,21 @@ struct Run<'a> {
 }
 
 impl<'a> Run<'a> {
+    fn prepare_history_update(&mut self) {
+        if let Some(calculation) = &mut self.calculation {
+            let index = self.history.len() - 1;
+            let closed = calculation.closed[index];
+            // Finished host candles stay hidden until the historical chart candle closes.
+            if self.forming {
+                calculation.closed[index] = calculation.opened[index];
+            }
+            self.strategy
+                .set_calculation_bars(&calculation.bars, &calculation.closed);
+            calculation.closed[index] = closed;
+        }
+        self.strategy.prepare_update(&self.history);
+    }
+
     fn start_equity(&self, timeframe: Timeframe, bars: &[Bar], report: &mut StrategyReport) {
         if let Some(first) = bars.iter().find(|bar| {
             self.settings
@@ -1063,6 +1280,10 @@ impl<'a> Run<'a> {
                     .unwrap_or(before.unwrap_or(DateTime::<Utc>::MIN_UTC)),
                 self.settings.initial_capital,
             ));
+            let capital = self.settings.initial_capital;
+            report
+                .equity_ranges
+                .push(EquityRange::new(capital, capital, 0.0, 0.0));
         }
     }
 
@@ -1077,6 +1298,9 @@ impl<'a> Run<'a> {
     ) {
         execution_step(processed).await;
         self.forming = false;
+        if walk {
+            self.range = None;
+        }
         let timeframe = report.timeframe;
         let bar = &bars[index];
         self.trading = self
@@ -1144,7 +1368,7 @@ impl<'a> Run<'a> {
         if !historical {
             self.history = Cow::Borrowed(&bars[..=index]);
             if self.settings.recalculate_on_history && !self.settings.chart_type.transforms_data() {
-                self.strategy.prepare_update(&self.history);
+                self.prepare_history_update();
             }
             self.decide(bar.close, false);
         }
@@ -1164,6 +1388,23 @@ impl<'a> Run<'a> {
         }
         // A trade-based mark's stamp is known only when the next bar closes; convert at its price.
         self.set_rate(last_price_time);
+        let (equity, range) = if valid {
+            let equity = self.equity(execution.close);
+            // Include the chart close even when finer bars ended at a different price.
+            self.reach_equity(execution.close);
+            (
+                equity,
+                self.range
+                    .take()
+                    .unwrap_or(EquityRange::new(equity, equity, 0.0, 0.0)),
+            )
+        } else {
+            self.range = None;
+            (
+                f64::NAN,
+                EquityRange::new(f64::NAN, f64::NAN, f64::NAN, f64::NAN),
+            )
+        };
         report.equity.push((
             if self.settings.start_time.is_some() {
                 // A final execution bar has no known end; keep its mark after its last price.
@@ -1175,12 +1416,9 @@ impl<'a> Run<'a> {
             } else {
                 bar.time
             },
-            if valid {
-                self.equity(execution.close)
-            } else {
-                f64::NAN
-            },
+            equity,
         ));
+        report.equity_ranges.push(range);
     }
 
     fn report_trades(&self, report: &mut StrategyReport) {
@@ -1252,6 +1490,20 @@ impl<'a> Run<'a> {
         }
     }
 
+    /// Count the next account value reached along the fill path, including both sides of costs.
+    fn reach_equity(&mut self, price: f64) {
+        let equity = self.equity(price);
+        self.range = Some(match self.range {
+            None => EquityRange::new(equity, equity, 0.0, 0.0),
+            Some(range) => EquityRange::new(
+                range.low.min(equity),
+                range.high.max(equity),
+                range.fall.max(range.high - equity),
+                range.rise.max(equity - range.low),
+            ),
+        });
+    }
+
     fn decide(&mut self, price: f64, after_fill: bool) {
         let position = self.position();
         let mark = if !after_fill
@@ -1311,7 +1563,7 @@ impl<'a> Run<'a> {
                 candle.volume += bar.volume;
             }
             self.forming = complete.is_none();
-            self.strategy.prepare_update(&self.history);
+            self.prepare_history_update();
             self.decide(price, false);
             previous = price;
         }
@@ -1419,6 +1671,45 @@ impl<'a> Run<'a> {
                     delay: 0,
                     triggered: None,
                     active: None,
+                    best: None,
+                };
+                self.reach(&exit, start, end)
+            }
+            Kind::TrailingExit {
+                stop_loss,
+                activation,
+                offset,
+                side,
+            } => {
+                let quantity = self.position();
+                if quantity * sign(side) <= 0.0 {
+                    return None;
+                }
+                let (average, s) = (self.average_price(), sign(side));
+                let trail = trailed(order.best, average + s * activation, s, [start])
+                    .map(|best| best - s * offset)
+                    .filter(|level| level.is_finite());
+                let fixed = stop_loss.map(|loss| average - s * loss);
+                // Both are stops on the exit side; the nearer one is reached first.
+                let stop = match (trail, fixed) {
+                    (Some(a), Some(b)) => {
+                        if s * (a - b) > 0.0 {
+                            a
+                        } else {
+                            b
+                        }
+                    }
+                    (a, b) => a.or(b)?,
+                };
+                let exit = Working {
+                    id: String::new(),
+                    quantity: None,
+                    kind: Kind::Exit(None, Some(stop), exit_side(quantity)),
+                    deferred: None,
+                    delay: 0,
+                    triggered: None,
+                    active: None,
+                    best: None,
                 };
                 self.reach(&exit, start, end)
             }
@@ -1580,10 +1871,31 @@ impl<'a> Run<'a> {
         }
     }
 
+    /// Moves working trailing exits with the favourable extreme of a linear path step.
+    fn trail(&mut self, from: f64, to: f64) {
+        let position = self.position();
+        if position == 0.0 {
+            return;
+        }
+        let average = self.average_price();
+        for order in &mut self.orders {
+            if let Kind::TrailingExit {
+                activation, side, ..
+            } = order.kind
+                && order.delay == 0
+                && position * sign(side) > 0.0
+            {
+                let s = sign(side);
+                order.best = trailed(order.best, average + s * activation, s, [from, to]);
+            }
+        }
+    }
+
     fn fill_segment(&mut self, mut start: f64, end: f64, time: DateTime<Utc>, advance: bool) {
         self.set_rate(time);
         let mut at_end = !advance;
         loop {
+            self.reach_equity(start);
             let mut next: Option<(usize, f64, Pricing)> = None;
             for (index, order) in self.orders.iter().enumerate() {
                 if let Some((price, pricing)) = self.fill_price(order, start, end)
@@ -1609,7 +1921,9 @@ impl<'a> Run<'a> {
                     self.next_tick(start, end);
                     at_end = price == end;
                 }
+                self.trail(start, price);
                 start = price;
+                self.reach_equity(price);
                 let held = self.position().abs();
                 self.fill(
                     Working {
@@ -1620,12 +1934,14 @@ impl<'a> Run<'a> {
                         delay: 0,
                         triggered: None,
                         active: None,
+                        best: None,
                     },
                     price,
                     Pricing::Slips,
                     time,
                 );
                 if self.position().abs() == held {
+                    self.reach_equity(end);
                     return;
                 }
                 continue;
@@ -1634,17 +1950,22 @@ impl<'a> Run<'a> {
                 if !at_end {
                     // Equal OHLC prices still denote successive points in the bar.
                     self.next_tick(start, end);
+                    self.trail(start, end);
                     start = end;
                     at_end = true;
                     continue;
                 }
+                // A closing fill can activate a trail without another path step.
+                self.trail(start, start);
                 return;
             };
             if price != start {
                 self.next_tick(start, end);
                 at_end = price == end;
             }
+            self.trail(start, price);
             start = price;
+            self.reach_equity(price);
             if let Kind::Entry(side, OrderType::StopLimit { limit, .. }) = self.orders[index].kind {
                 self.orders[index].triggered = Some(self.orders[index].kind);
                 self.orders[index].kind = Kind::Entry(side, OrderType::Limit(limit));
@@ -1665,7 +1986,7 @@ impl<'a> Run<'a> {
     fn fill(&mut self, order: Working, mark: f64, pricing: Pricing, time: DateTime<Utc>) {
         let side = match order.kind {
             Kind::Entry(side, _) => side,
-            Kind::RelativeExit(_, _, side) => {
+            Kind::RelativeExit(_, _, side) | Kind::TrailingExit { side, .. } => {
                 if side == OrderSide::Buy {
                     OrderSide::Sell
                 } else {
@@ -1731,7 +2052,7 @@ impl<'a> Run<'a> {
                     fees: fee * (quantity / filled),
                 });
             }
-            Kind::Exit(..) | Kind::RelativeExit(..) => {
+            Kind::Exit(..) | Kind::RelativeExit(..) | Kind::TrailingExit { .. } => {
                 let quantity = order.quantity.unwrap_or(held).min(held);
                 if quantity <= 0.0 {
                     return;
@@ -1750,12 +2071,12 @@ impl<'a> Run<'a> {
                     quantity,
                     time,
                 );
-                if let Kind::RelativeExit(_, _, side) = order.kind
+                if let Kind::RelativeExit(_, _, side) | Kind::TrailingExit { side, .. } = order.kind
                     && self.orders.iter().any(|working| {
                         matches!(working.kind, Kind::Entry(entry_side, _) if entry_side == side)
                     })
                 {
-                    self.orders.push(order);
+                    self.orders.push(Working { best: None, ..order });
                 }
             }
         }
@@ -1785,6 +2106,13 @@ impl<'a> Run<'a> {
             Kind::RelativeExit(_, _, side) => {
                 position * sign(*side) > 0.0 || pending[usize::from(*side == OrderSide::Sell)]
             }
+            Kind::TrailingExit { side, .. } => {
+                let open = position * sign(*side) > 0.0;
+                if !open {
+                    order.best = None;
+                }
+                open || pending[usize::from(*side == OrderSide::Sell)]
+            }
         });
         if self.settings.recalculate_after_fills {
             if self.forming && matches!(self.history, Cow::Owned(_)) {
@@ -1792,7 +2120,7 @@ impl<'a> Run<'a> {
                 candle.high = candle.high.max(mark);
                 candle.low = candle.low.min(mark);
                 candle.close = mark;
-                self.strategy.prepare_update(&self.history);
+                self.prepare_history_update();
             }
             self.decide(price, true);
         }
@@ -1848,6 +2176,115 @@ impl<'a> Run<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Hand calculations: long equity is 100 * price, short equity is 20,000 - 100 * price.
+    #[test]
+    fn equity_ranges_follow_the_fill_path() {
+        fn long(bar: usize, c: &mut StrategyContext<'_>) {
+            match bar {
+                0 => c.entry("A", OrderSide::Buy, 100.0, OrderType::Market),
+                1 => c.exit("X", None, None, None),
+                _ => {}
+            }
+        }
+        fn short(bar: usize, c: &mut StrategyContext<'_>) {
+            match bar {
+                0 => c.entry("A", OrderSide::Sell, 100.0, OrderType::Market),
+                1 => c.exit("X", None, None, None),
+                _ => {}
+            }
+        }
+        let bar = |time, (o, h, l, c)| Bar::new(time, o, h, l, c, 0.0);
+        let level = (100.0, 100.0, 100.0, 100.0);
+        let flat = EquityRange::new(10_000.0, 10_000.0, 0.0, 0.0);
+        let half = hour(1) + TimeDelta::minutes(30);
+        for (name, script, held, lower, range, drawdown, fraction) in [
+            (
+                "long falls 30% and closes level",
+                long as fn(usize, &mut StrategyContext<'_>),
+                (100.0, 100.0, 70.0, 100.0),
+                vec![],
+                EquityRange::new(7000.0, 10_000.0, 3000.0, 3000.0),
+                3000.0,
+                0.3,
+            ),
+            (
+                "long high before low",
+                long,
+                (100.0, 120.0, 70.0, 100.0),
+                vec![],
+                EquityRange::new(7000.0, 12_000.0, 5000.0, 3000.0),
+                5000.0,
+                5000.0 / 12_000.0,
+            ),
+            (
+                "short low before high",
+                short,
+                (100.0, 130.0, 80.0, 100.0),
+                vec![],
+                EquityRange::new(7000.0, 12_000.0, 5000.0, 3000.0),
+                5000.0,
+                5000.0 / 12_000.0,
+            ),
+            (
+                "finer bars set a long path",
+                long,
+                (100.0, 120.0, 70.0, 100.0),
+                vec![
+                    bar(hour(1), (100.0, 100.0, 70.0, 80.0)),
+                    bar(half, (80.0, 120.0, 80.0, 100.0)),
+                ],
+                EquityRange::new(7000.0, 12_000.0, 3000.0, 5000.0),
+                3000.0,
+                0.3,
+            ),
+            (
+                "finer bars set a short path",
+                short,
+                (100.0, 130.0, 80.0, 100.0),
+                vec![
+                    bar(hour(1), (100.0, 130.0, 100.0, 120.0)),
+                    bar(half, (120.0, 120.0, 80.0, 100.0)),
+                ],
+                EquityRange::new(7000.0, 12_000.0, 3000.0, 5000.0),
+                3000.0,
+                0.3,
+            ),
+        ] {
+            let bars = [bar(hour(0), level), bar(hour(1), held), bar(hour(2), level)];
+            let mut engine = Backtest::new("Ranges", "TEST", Timeframe::Hour1, 10_000.0);
+            engine.settings.long_funding = Some(0.0);
+            engine.settings.short_funding = Some(0.0);
+            let report = engine.run(&mut Script(script), &bars, &lower);
+            assert_eq!(report.equity_ranges, [flat, flat, range, flat], "{name}");
+            let p = report.performance();
+            assert_eq!(
+                (
+                    p.max_drawdown,
+                    p.intrabar_max_drawdown,
+                    p.intrabar_max_drawdown_fraction
+                ),
+                (Some(0.0), Some(drawdown), Some(fraction)),
+                "{name}"
+            );
+            let run_up = if lower.is_empty() { 3000.0 } else { 5000.0 };
+            assert_eq!(
+                (
+                    p.max_run_up,
+                    p.max_run_up_fraction,
+                    p.intrabar_max_run_up,
+                    p.intrabar_max_run_up_fraction
+                ),
+                (Some(0.0), Some(0.0), Some(run_up), Some(run_up / 10_000.0)),
+                "{name}"
+            );
+            assert_eq!(
+                p.intrabar_max_drawdown_initial_capital_fraction,
+                Some(drawdown / 10_000.0),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn historical_ticks_mask_unseen_prices_refresh_calculations_and_wait_for_the_next_point() {
@@ -2970,6 +3407,37 @@ mod tests {
             if bar == 0 {
                 context.entry("A", Buy, None, OrderType::Market);
                 context.exit_relative("X", Buy, 10.0, 5.0);
+            }
+        }
+        fn trailing(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("A", Buy, None, OrderType::Market);
+                context.exit_trailing("X", Buy, Some(5.0), 4.0, 3.0);
+            }
+        }
+        fn trailing_short(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("A", Sell, None, OrderType::Market);
+                context.exit_trailing("X", Sell, Some(5.0), 4.0, 3.0);
+            }
+        }
+        fn trailing_at_close(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("A", Buy, None, OrderType::Market);
+                context.exit_trailing("X", Buy, None, 0.0, 3.0);
+            }
+        }
+        fn trailing_again(bar: usize, context: &mut StrategyContext<'_>) {
+            match bar {
+                0 => {
+                    context.entry("A", Buy, None, OrderType::Market);
+                    context.exit_trailing("X", Buy, None, 2.0, 1.0);
+                }
+                1 => {
+                    context.exit_trailing("X", Buy, None, 2.0, 0.5);
+                    context.entry("B", Buy, None, OrderType::Limit(100.0));
+                }
+                _ => {}
             }
         }
         fn decimal_buy_limit(bar: usize, context: &mut StrategyContext<'_>) {
@@ -4233,6 +4701,69 @@ mod tests {
                 0,
             ),
             (
+                // The closing fill at 100 activates a zero-distance trail at 97. The next
+                // open gaps through it at 96: two units close for a loss of 8.
+                "a closing fill activates its trailing exit before the next opening gap",
+                trailing_at_close,
+                BacktestSettings {
+                    fill_on_close: true,
+                    ..terms.clone()
+                },
+                flat(&[100.0, 96.0]),
+                vec![trade(Buy, 2.0, 0, 100.0, Some((1, 96.0, -8.0)), "A / X")],
+                vec![1000.0, 1000.0, 992.0],
+                0,
+            ),
+            (
+                // Activation 104 is not reached on bar 1. Bar 2 reaches 107, then falls to
+                // the trailing stop 107 - 3 = 104: two units gain 8.
+                "a trailing exit starts at its activation distance and trails inside the bar",
+                trailing,
+                terms.clone(),
+                vec![
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 103.0, 99.0, 99.5),
+                    (99.5, 107.0, 99.0, 103.0),
+                ],
+                vec![trade(Buy, 2.0, 1, 100.0, Some((2, 104.0, 8.0)), "A / X")],
+                vec![1000.0, 1000.0, 999.0, 1008.0],
+                0,
+            ),
+            (
+                // Short at 99.5 after slippage, fixed stop at 104.5, slipped buy at 105.
+                "a short trailing exit's fixed stop is measured from the slipped fill and slips",
+                trailing_short,
+                BacktestSettings {
+                    slippage: Slippage::Ticks {
+                        ticks: 2,
+                        tick_size: 0.25,
+                    },
+                    ..terms.clone()
+                },
+                vec![(100.0, 100.0, 100.0, 100.0), (100.0, 106.0, 99.0, 101.0)],
+                vec![trade(Sell, 2.0, 1, 99.5, Some((1, 105.0, -11.0)), "A / X")],
+                vec![1000.0, 1000.0, 989.0],
+                0,
+            ),
+            (
+                // Best 110 survives the new offset: A closes at 109.5. B's queued limit
+                // fills at 100, below its fresh activation 102, and stays open.
+                "a trailing exit keeps its best price when requested again and forgets it on close",
+                trailing_again,
+                terms.clone(),
+                vec![
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 110.0, 100.0, 109.75),
+                    (109.75, 109.75, 99.0, 100.0),
+                ],
+                vec![
+                    trade(Buy, 2.0, 1, 100.0, Some((2, 109.5, 19.0)), "A / X"),
+                    trade(Buy, 2.0, 2, 100.0, None, "B"),
+                ],
+                vec![1000.0, 1000.0, 1019.5, 1019.0],
+                0,
+            ),
+            (
                 // 180 EUR buys 180 / (100 * 0.9) = 2 units. The entry fee is 2 * 100 * 1% * 0.9
                 // = 1.8 and needs 2 * 100 * 0.9 + 1.8 = 181.8 of 190. At 105 equity is 188.2 +
                 // 10 * 0.9 = 197.2 against a margin of 189. The exit at 110 converts at 0.8: fee
@@ -4346,6 +4877,13 @@ mod tests {
                     "{name}: {actual} != {expected}"
                 );
             }
+            let p = report.performance();
+            assert_eq!(
+                p.intrabar_max_drawdown.is_some(),
+                p.max_drawdown.is_some(),
+                "{name}"
+            );
+            assert!(p.intrabar_max_drawdown >= p.max_drawdown, "{name}");
         }
 
         // A run that needs a rate where none applies says so instead of reporting figures. A
@@ -4380,7 +4918,9 @@ mod tests {
                     "{rates:?}"
                 );
                 assert!(
-                    report.trades.is_empty() && report.equity.is_empty(),
+                    report.trades.is_empty()
+                        && report.equity.is_empty()
+                        && report.equity_ranges.is_empty(),
                     "{rates:?}"
                 );
             }

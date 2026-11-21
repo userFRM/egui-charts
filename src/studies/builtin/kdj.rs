@@ -162,6 +162,10 @@ impl Indicator for KDJ {
         3
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn line_names(&self) -> Vec<String> {
         vec![
             format!("K({})", self.period),

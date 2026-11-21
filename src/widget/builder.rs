@@ -153,6 +153,7 @@ impl Chart {
             study_limit: None,
             chained_study_limit: None,
             study_inputs: Vec::new(),
+            study_captions: Vec::new(),
             study_autoscale: Vec::new(),
             pending_from: Vec::new(),
             stale: Vec::new(),
@@ -211,6 +212,8 @@ impl Chart {
             study_formatters: Default::default(),
             extended_hours: false,
             overnight_hours: false,
+            back_adjust_futures: false,
+            settlement_as_close: true,
             conversion: None,
             measured_axis_width: 0.0,
             last_layout: None,
@@ -252,6 +255,7 @@ impl Chart {
             last_rendered_price_rect: egui::Rect::NOTHING,
             last_rendered_volume_rect: egui::Rect::NOTHING,
             last_vertical_grid_x: Vec::new(),
+            last_session_break_x: Vec::new(),
             last_rendered_indicator_panes: Vec::new(),
             // Multi-chart sync
             layout_inactive: false,
@@ -425,6 +429,7 @@ impl Chart {
     pub fn set_visible_bars(&mut self, count: usize) {
         // Only reapply if requested value differs from last computed
         if self.last_visible_bars == 0 || count != self.last_visible_bars {
+            self.history.clear_view_restore();
             self.desired_visible_bars = Some(count);
             self.apply_visible_bars_once = true;
         }
@@ -437,6 +442,7 @@ impl Chart {
     /// elements, with zero the oldest kept element.
     pub fn set_start_idx(&mut self, index: usize) {
         if index != self.start_idx {
+            self.history.clear_view_restore();
             self.start_idx = index;
             self.pending_start_idx = Some(index);
             self.pending_scroll_time = None;
@@ -449,6 +455,7 @@ impl Chart {
     /// older history is requested until the time is reached or history ends. Panning, zooming,
     /// [`Chart::set_start_idx`] or tracking cancel it.
     pub fn scroll_to_time(&mut self, time: chrono::DateTime<chrono::Utc>) {
+        self.history.clear_view_restore();
         self.pending_scroll_time = Some(time);
         self.pending_scroll_next = false;
         self.pending_start_idx = None;
@@ -493,6 +500,7 @@ impl Chart {
     /// When enabled, the chart immediately scrolls to the live edge and stays
     /// there as new data arrives. Disable with [`Chart::disable_tracking_mode`].
     pub fn enable_tracking_mode(&mut self) {
+        self.history.clear_view_restore();
         self.tracking_mode_active = true;
         self.pending_scroll_time = None;
         // Immediately scroll to latest when enabling
@@ -1276,6 +1284,7 @@ mod tests {
         chart.drawings_mut().eraser_mode = true;
         chart.drawings_mut().start_drag_body(7, egui::Pos2::ZERO);
         chart.drawings_mut().set_hidden(true);
+        chart.drawings_mut().set_locked(true);
         chart.drawings_mut().registry.set_availability(
             DrawingToolType::TrendLine,
             crate::drawings::ToolAvailability {
@@ -1296,6 +1305,7 @@ mod tests {
         assert!(chart.drawings().stay_in_drawing_mode);
         assert!(chart.drawings().eraser_mode);
         assert!(chart.drawings().is_hidden());
+        assert!(chart.drawings().is_locked());
         chart.set_data(SeriesId::MAIN, bars(&[0, 120, 240]));
         chart.set_symbol("A");
         assert!(chart.drawings().dragging_handle.is_none());

@@ -69,9 +69,9 @@ impl AutoAnchor {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Auto => "Auto",
-            Self::HighestHigh => "Highest High",
-            Self::LowestLow => "Lowest Low",
-            Self::HighestVolume => "Highest Volume",
+            Self::HighestHigh => "Highest high",
+            Self::LowestLow => "Lowest low",
+            Self::HighestVolume => "Highest volume",
             Self::Session => "Session",
             Self::Week => "Week",
             Self::Month => "Month",
@@ -444,6 +444,10 @@ impl Indicator for VwapAutoAnchored {
 
     fn line_count(&self) -> usize {
         7
+    }
+
+    fn draws_only_plots(&self) -> bool {
+        true
     }
 
     fn line_names(&self) -> Vec<String> {

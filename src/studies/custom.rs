@@ -124,8 +124,12 @@ impl CustomIndicator {
         }
     }
 
-    /// Declare editable inputs and calculate from their current values. Ids must be unique;
-    /// defaults and initial values must satisfy the same schema used by the editor and setters.
+    /// Declare editable inputs and calculate from their current values. Ids must be unique, and
+    /// must not be `plot_offset`, `calculation_symbol`, `calculation_timeframe` or
+    /// `wait_for_close`: the chart adds its Offset, Symbol, Interval and Wait for interval close
+    /// inputs to the study under these ids, and refuses them with
+    /// [`StudyError::InvalidInput`](super::StudyError::InvalidInput). Defaults and initial values
+    /// must satisfy the same schema used by the editor and setters.
     ///
     /// The calculation receives the bars, inputs, aligned source and available histories from
     /// [`with_data_requests`](Self::with_data_requests), and returns one value per bar.
@@ -151,7 +155,9 @@ impl CustomIndicator {
             if input.id.is_empty() {
                 return Err(super::StudyError::EmptyInputId { index: at });
             }
-            let reason = if inputs[..at].iter().any(|other| other.id == input.id) {
+            let reason = if super::settings::CHART_INPUT_IDS.contains(&input.id.as_str()) {
+                "is reserved by the chart".into()
+            } else if inputs[..at].iter().any(|other| other.id == input.id) {
                 "is declared twice".into()
             } else if !input.accepts(&input.value) {
                 format!("has value {:?}, expected {:?}", input.value, input.kind)
@@ -393,6 +399,11 @@ impl Indicator for CustomIndicator {
         self.offsets.get(line).copied().unwrap_or(0)
     }
 
+    fn draws_only_plots(&self) -> bool {
+        // A study reading histories of its own keeps its inputs.
+        self.data_requests.is_none()
+    }
+
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
         self.plot_color
             .as_ref()
@@ -598,6 +609,14 @@ mod tests {
             );
         }
         let length = |value| StudyInput::new("length", "Length", value, InputKind::Length(1, 10));
+        let reserved = |id: &str| {
+            vec![StudyInput::new(
+                id,
+                "Length",
+                InputValue::Length(2),
+                InputKind::Length(1, 10),
+            )]
+        };
         for (schema, expected) in [
             (
                 vec![StudyInput::new(
@@ -611,6 +630,22 @@ mod tests {
             (
                 vec![length(InputValue::Length(2)), length(InputValue::Length(3))],
                 "study input \"length\" is declared twice",
+            ),
+            (
+                reserved("plot_offset"),
+                "study input \"plot_offset\" is reserved by the chart",
+            ),
+            (
+                reserved("calculation_symbol"),
+                "study input \"calculation_symbol\" is reserved by the chart",
+            ),
+            (
+                reserved("calculation_timeframe"),
+                "study input \"calculation_timeframe\" is reserved by the chart",
+            ),
+            (
+                reserved("wait_for_close"),
+                "study input \"wait_for_close\" is reserved by the chart",
             ),
             (
                 vec![length(InputValue::Length(0))],

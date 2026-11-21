@@ -105,10 +105,15 @@ struct ReportData {
     shown: StrategyPerformance,
     shown_comparison: StrategyComparison,
     analysis: StrategyAnalysis,
+    initial_capital: f64,
     equity: Vec<(DateTime<Utc>, f64)>,
     drawdown: Vec<(DateTime<Utc>, f64)>,
+    run_up: Vec<(DateTime<Utc>, f64)>,
     /// Original indices of valid trades in the range, sorted by entry.
     trades: Vec<usize>,
+    /// Net profit of the trades closed in the range up to each row of `trades`; `None` on a
+    /// trade that is open in the range.
+    cumulative: Vec<Option<f64>>,
 }
 
 impl ReportData {
@@ -117,6 +122,7 @@ impl ReportData {
         let comparison = report.comparison(bars);
         let analysis = report.analysis(bars);
         let mut data = Self {
+            initial_capital: report.initial_capital,
             report,
             bars: bars.to_vec(),
             shown: performance.clone(),
@@ -127,7 +133,9 @@ impl ReportData {
             analysis,
             equity: Vec::new(),
             drawdown: Vec::new(),
+            run_up: Vec::new(),
             trades: Vec::new(),
+            cumulative: Vec::new(),
         };
         data.select(None);
         data
@@ -142,6 +150,7 @@ impl ReportData {
             .filter(|b| range.as_ref().is_none_or(|r| r.contains(&b.time)))
             .cloned()
             .collect();
+        self.initial_capital = run.initial_capital;
         self.shown = run.performance();
         self.shown_comparison = run.comparison(&bars);
         if range.is_some() {
@@ -153,15 +162,19 @@ impl ReportData {
         }
         self.analysis = run.analysis(&bars);
         self.equity = run.equity_curve();
-        let mut peak = self.equity.first().map_or(0.0, |p| p.1);
-        self.drawdown = self
-            .equity
+        let excursions = run
+            .excursion_curve(true)
+            .or_else(|| run.excursion_curve(false))
+            .unwrap_or_default();
+        self.drawdown = excursions
             .iter()
-            .map(|&(t, e)| {
-                peak = peak.max(e);
-                (t, e - peak)
-            })
+            .map(|&(t, x)| (t, 0.0 - x.drawdown))
             .filter(|(_, d)| d.is_finite())
+            .collect();
+        self.run_up = excursions
+            .iter()
+            .map(|&(t, x)| (t, x.run_up))
+            .filter(|(_, r)| r.is_finite())
             .collect();
         self.trades = self
             .report
@@ -173,6 +186,20 @@ impl ReportData {
             .collect();
         self.trades
             .sort_by_key(|&i| self.report.trades[i].entry_time);
+        let mut total = 0.0;
+        self.cumulative = self
+            .trades
+            .iter()
+            .map(|&i| {
+                // An exit at or after the range's end leaves the trade open in it, as `within` does.
+                let exit = self.report.trades[i]
+                    .exit
+                    .as_ref()
+                    .filter(|exit| range.as_ref().is_none_or(|r| exit.time < r.end))?;
+                total += exit.profit;
+                Some(total)
+            })
+            .collect();
         self.range = range;
     }
 
@@ -196,7 +223,7 @@ impl ReportData {
     }
 }
 
-/// Standalone summary, equity and drawdown charts, trade list, period, distribution and trade
+/// Standalone summary, equity, drawdown and run-up charts, trade list, period, distribution and trade
 /// time pages and run properties, for the whole run or a chosen date range. Exports always
 /// cover the whole run.
 ///
@@ -209,6 +236,7 @@ pub struct StrategyReportPanel {
     tab: Tab,
     selected: Option<usize>,
     compare: bool,
+    percent: bool,
     range_text: [String; 2],
     range_error: bool,
 }
@@ -221,6 +249,7 @@ impl StrategyReportPanel {
         self.tab = Tab::Summary;
         self.selected = None;
         self.compare = false;
+        self.percent = false;
         self.range_error = false;
         self.data = report.map(|report| ReportData::new(report, bars));
         self.range_text = self
@@ -391,7 +420,7 @@ impl StrategyReportPanel {
                     egui::ScrollArea::vertical()
                         .id_salt("summary")
                         .show(ui, |ui| {
-                            summary(ui, data, &mut self.compare);
+                            summary(ui, data, &mut self.compare, &mut self.percent);
                         });
                 }
             }
@@ -499,8 +528,11 @@ fn property(ui: &mut Ui, label: &str, value: &str) {
     ui.end_row();
 }
 
-fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
+fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool, as_percent: &mut bool) {
     let report = &data.report;
+    if !data.initial_capital.is_finite() || data.initial_capital <= 0.0 {
+        *as_percent = false;
+    }
     let theme = ui.active_theme();
     let range_label = data.range.as_ref().map_or_else(
         || l10n::text(ui.ctx(), "Range: whole run").to_string(),
@@ -593,10 +625,23 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
                 ui.colored_label(theme.ui.warning, l10n::text(ui.ctx(), "Buy-and-hold"));
             }
         }
-        if let Some(currency) = &report.currency {
+        if data.initial_capital.is_finite() && data.initial_capital > 0.0 {
+            ui.checkbox(
+                as_percent,
+                l10n::text(ui.ctx(), "Percent of initial capital"),
+            );
+        }
+        if *as_percent {
+            ui.label("%");
+        } else if let Some(currency) = &report.currency {
             ui.label(currency);
         }
     });
+    let scale = if *as_percent {
+        100.0 / data.initial_capital
+    } else {
+        1.0
+    };
     plot::show(
         ui,
         &data.equity,
@@ -607,9 +652,12 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
         },
         theme.ui.accent,
         175.0,
+        scale,
     );
     ui.label(RichText::new(l10n::text(ui.ctx(), "Drawdown from peak")).strong());
-    plot::show(ui, &data.drawdown, &[], theme.ui.error, 125.0);
+    plot::show(ui, &data.drawdown, &[], theme.ui.error, 125.0, scale);
+    ui.label(RichText::new(l10n::text(ui.ctx(), "Run-up from trough")).strong());
+    plot::show(ui, &data.run_up, &[], theme.ui.success, 125.0, scale);
 }
 
 fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Option<usize> {
@@ -635,7 +683,9 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
                 .column(Column::initial(150.0))
                 .column(Column::initial(80.0))
                 .column(Column::initial(150.0))
-                .columns(Column::initial(85.0), 5)
+                .columns(Column::initial(85.0), 2)
+                .column(Column::initial(120.0))
+                .columns(Column::initial(85.0), 3)
                 .column(Column::remainder().at_least(100.0))
                 .header(28.0, |mut header| {
                     for label in [
@@ -647,6 +697,7 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
                         "Exit (UTC)",
                         "Exit price",
                         "Net profit",
+                        "Cumulative profit",
                         "Fees",
                         "MAE",
                         "MFE",
@@ -696,6 +747,8 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
                                 .as_ref()
                                 .map_or_else(|| "N/A".into(), |e| e.price.to_string()),
                             money(t.exit.as_ref().map(|e| e.profit), &data.report),
+                            data.cumulative[ordinal]
+                                .map_or_else(String::new, |total| money(Some(total), &data.report)),
                             money(Some(t.fees), &data.report),
                             money(excursion.map(|e| e.adverse), &data.report),
                             money(excursion.map(|e| e.favourable), &data.report),

@@ -4,8 +4,9 @@ use super::{DrawingEventKind, DrawingManager, DrawingSyncAction, sync_id};
 use crate::drawings::domain::{
     ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType, HandlePos,
 };
-use crate::drawings::services::{DrawingCommand, HandleService, point_to_line_distance};
+use crate::drawings::services::{DrawingCommand, HandleService};
 use crate::model::PostLink;
+use crate::painting::point_to_segment_distance;
 use egui::{Pos2, Rect};
 
 /// What one Ctrl or Command eraser drag has changed so far.
@@ -31,7 +32,7 @@ fn erased_span(a: Pos2, b: Pos2, e0: Pos2, e1: Pos2, reach: f32) -> Option<(f32,
     {
         return None;
     }
-    let gap = |t: f32| point_to_line_distance(a.lerp(b, t), e0, e1);
+    let gap = |t: f32| point_to_segment_distance(a.lerp(b, t), e0, e1);
     let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
     for _ in 0..40 {
         let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
@@ -90,7 +91,7 @@ fn finish_stroke_piece(
 fn cut_stroke(drawing: &Drawing, from: Pos2, to: Pos2) -> Option<Vec<Drawing>> {
     const ERASER_REACH: f32 = 5.0;
     let reach = ERASER_REACH.max(drawing.stroke_width / 2.0);
-    let outside = |p| point_to_line_distance(p, from, to) > reach;
+    let outside = |p| point_to_segment_distance(p, from, to) > reach;
     let mut piece = Vec::new();
     let mut pieces = Vec::new();
     let mut cut = false;
@@ -239,7 +240,7 @@ impl DrawingManager {
                     d.tool_type,
                     DrawingToolType::Brush | DrawingToolType::Highlighter
                 ) && d.custom_tool.is_none()
-                    && d.accepts_user_edits()
+                    && self.accepts_user_edits(d)
                     && d.selectable
                     && self.shows(d)
                     && self.owns_pane(d)
@@ -339,7 +340,7 @@ impl DrawingManager {
     /// Returns the [`HandlePos`] if a handle was hit, `None` otherwise.
     pub fn hit_test_handle(&self, drawing: &Drawing, point: Pos2) -> Option<HandlePos> {
         if !drawing.selectable
-            || !drawing.accepts_user_edits()
+            || !self.accepts_user_edits(drawing)
             || !self.shows(drawing)
             || (!self.pane_clips.is_empty()
                 && !self
@@ -357,13 +358,12 @@ impl DrawingManager {
     }
 
     /// Begins a handle drag operation, saving the drawing's current state for undo. A locked
-    /// drawing, or one whose user edits are off, is not dragged.
+    /// drawing, one whose user edits are off, or any drawing while [`Self::set_locked`] locks them
+    /// all, is not dragged.
     pub fn start_drag_handle(&mut self, drawing_id: usize, handle: HandlePos) {
-        if let Some(drawing) = self
-            .drawings
-            .iter()
-            .find(|d| d.id == drawing_id && d.selectable && d.accepts_user_edits() && self.shows(d))
-        {
+        if let Some(drawing) = self.drawings.iter().find(|d| {
+            d.id == drawing_id && d.selectable && self.accepts_user_edits(d) && self.shows(d)
+        }) {
             self.dragging_handle = Some((drawing_id, handle));
             self.drag_old_state = Some(drawing.clone());
             self.drag_origin = (handle == HandlePos::Middle)
@@ -379,7 +379,8 @@ impl DrawingManager {
 
     /// Begins moving the anchors that move with the body (all but a bars pattern's source)
     /// from a grab at `origin`, retaining the grab offset.
-    /// Locked drawings and those whose user edits are off ignore the grab. The move shares the
+    /// Locked drawings, those whose user edits are off, and every drawing while
+    /// [`Self::set_locked`] locks them all ignore the grab. The move shares the
     /// handle drag's undo and sync lifecycle.
     pub fn start_drag_body(&mut self, drawing_id: usize, origin: Pos2) {
         self.start_drag_handle(drawing_id, HandlePos::Middle);
@@ -393,7 +394,7 @@ impl DrawingManager {
                         && self.pane_members.contains(&d.pane)
                         && d.selectable
                         && self.selection.is_selected(d.id)
-                        && d.accepts_user_edits()
+                        && self.accepts_user_edits(d)
                         && self.shows(d)
                 })
                 .cloned()
@@ -617,6 +618,7 @@ impl DrawingManager {
         H: Fn(f64, f32, f32) -> f64,
     {
         if let Some((id, handle)) = self.dragging_handle {
+            let all_locked = self.locked;
             // A derived handle can be rounded, clamped or shifted away from its stored anchor,
             // so a drag that stays within the handle's bar leaves the drawing as it is.
             if let Some(drawing) = self.drawings.iter().find(|d| d.id == id)
@@ -633,16 +635,20 @@ impl DrawingManager {
             {
                 return;
             }
+            let table_edge = matches!(
+                handle,
+                HandlePos::Column(_) | HandlePos::Row(_) | HandlePos::BottomRight
+            );
             // Size and rotation handles follow the pointer rather than a bar's price.
             let free = handle != HandlePos::Middle
                 && self.drawings.iter().any(|d| {
                     d.id == id
-                        && matches!(
+                        && (matches!(
                             d.tool_type,
                             DrawingToolType::FontIcon
                                 | DrawingToolType::Sticker
                                 | DrawingToolType::Image
-                        )
+                        ) || (d.tool_type == DrawingToolType::Table && table_edge))
                 });
             let mut snapped = if free {
                 new_pos
@@ -701,7 +707,7 @@ impl DrawingManager {
                     if let Some(drawing) = self
                         .drawings
                         .iter_mut()
-                        .find(|d| d.id == old.id && d.accepts_user_edits())
+                        .find(|d| d.id == old.id && !all_locked && d.accepts_user_edits())
                     {
                         let first = old.first_moved_anchor();
                         for (point, before) in drawing
@@ -729,10 +735,16 @@ impl DrawingManager {
                     }
                 }
             }
+            // A table sizes itself from the grid it was last painted with.
+            let table_edges = self
+                .drawings
+                .iter()
+                .find(|d| d.id == id && d.tool_type == DrawingToolType::Table && table_edge)
+                .map(|d| self.handle_drawing(d).into_owned().points);
             if let Some(drawing) = self
                 .drawings
                 .iter_mut()
-                .find(|d| d.id == id && d.accepts_user_edits())
+                .find(|d| d.id == id && !all_locked && d.accepts_user_edits())
             {
                 if let (Some(origin), Some(old)) = (self.drag_origin, &self.drag_old_state) {
                     let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
@@ -777,6 +789,8 @@ impl DrawingManager {
                     for (point, before) in drawing.points.iter_mut().zip(&old.points).skip(skip) {
                         *point = *before + moved;
                     }
+                } else if let Some(edges) = &table_edges {
+                    drawing.resize_table(handle, snapped, edges);
                 } else {
                     HandleService::update_handle(
                         drawing,
@@ -804,10 +818,11 @@ impl DrawingManager {
         }
     }
 
-    /// Keeps each anchored text of this pane on the bar and price under the point it is drawn
-    /// at, so its coordinates follow its pane position through pans, zooms and resizes. A bar or
-    /// price already within half a pixel of that point is kept, so an exact time or price set
-    /// from code stays exact, and a whole bar within half a pixel is taken over a fraction.
+    /// Keeps each anchored text and each table anchored to the screen of this pane on the bar
+    /// and price under the point it is drawn at, so its coordinates follow its pane position
+    /// through pans, zooms and resizes, and a table taken off the screen stays where it is shown.
+    /// A bar or price already within half a pixel of that point is kept, so an exact time or price
+    /// set from code stays exact, and a whole bar within half a pixel is taken over a fraction.
     /// Called by the chart after the pane's screen coordinates are updated; the pane position is
     /// left as it is, and nothing is queued for saving.
     pub(crate) fn place_anchored_text(
@@ -819,7 +834,7 @@ impl DrawingManager {
     ) {
         let near = |a: f32, b: f32| (a - b).abs() <= 0.5;
         for drawing in self.drawings.iter_mut().chain(&mut self.curr_drawing) {
-            if drawing.tool_type != DrawingToolType::AnchoredText
+            if !drawing.pins_to_pane()
                 || drawing.screen_anchor.is_none()
                 || !self.pane_members.contains(&drawing.pane)
             {
@@ -932,7 +947,7 @@ impl DrawingManager {
             } else {
                 let mut before = std::mem::take(&mut self.drag_group);
                 for drawing in &before {
-                    self.queue_change(drawing, true);
+                    self.queue_change(drawing, moved);
                 }
                 before.push(old_state);
                 let snapshot = self
@@ -944,7 +959,11 @@ impl DrawingManager {
                         Some((index, old.clone()))
                     })
                     .collect();
-                self.history.push_moved_snapshot(snapshot);
+                if moved {
+                    self.history.push_moved_snapshot(snapshot);
+                } else {
+                    self.history.push_snapshot(snapshot);
+                }
             }
         }
         self.dragging_handle = None;
@@ -1031,13 +1050,13 @@ impl DrawingManager {
     }
 
     /// Shows a registered tool's settings and records a changed draft as one undoable edit.
-    /// Unknown tools, locked drawings and drawings whose user edits are off show no editor and
-    /// return false.
+    /// Unknown tools, locked drawings, drawings whose user edits are off and every drawing while
+    /// all are locked show no editor and return false.
     pub fn show_custom_settings(&mut self, ui: &mut egui::Ui, id: usize) -> bool {
         let Some(drawing) = self
             .drawings
             .iter()
-            .find(|d| d.id == id && d.accepts_user_edits())
+            .find(|d| d.id == id && self.accepts_user_edits(d))
         else {
             return false;
         };
@@ -1765,7 +1784,12 @@ mod tests {
                 2.0,
                 Some([41, 98, 255, 38]),
             ),
-            (DrawingToolType::AnchoredVWAP, [41, 98, 255, 255], 1.0, None),
+            (
+                DrawingToolType::AnchoredVWAP,
+                [30, 136, 229, 255],
+                1.0,
+                None,
+            ),
             (
                 DrawingToolType::FixedRangeVolumeProfile,
                 [83, 196, 216, 255],
@@ -1786,6 +1810,9 @@ mod tests {
                 (color, width, fill),
                 "{tool:?}"
             );
+            if tool == DrawingToolType::AnchoredVWAP {
+                assert_eq!(drawing.line_style, crate::model::LineStyle::Solid);
+            }
             if tool == DrawingToolType::Pitchfan {
                 let config = drawing.pitchfork.as_ref().unwrap();
                 let visible: Vec<_> = config
@@ -1818,6 +1845,59 @@ mod tests {
         manager.tool_defaults.insert(DrawingToolType::Rect, saved);
         let rect = place(&mut manager, DrawingToolType::Rect);
         assert_eq!((rect.color, rect.fill_color), ([9, 9, 9, 255], None));
+
+        for color in [[41, 98, 255, 255], [9, 9, 9, 255]] {
+            let saved = Drawing::with_color(0, DrawingToolType::AnchoredVWAP, color);
+            let template = crate::drawings::DrawingTemplate::from_drawing(&saved);
+            let template: crate::drawings::DrawingTemplate =
+                serde_json::from_value(serde_json::to_value(template).unwrap()).unwrap();
+            assert_eq!(template.settings.color, color);
+            if color == [41, 98, 255, 255] {
+                assert!(template.settings.has_default_color());
+            }
+            manager
+                .tool_defaults
+                .insert(DrawingToolType::AnchoredVWAP, template);
+            let drawing = place(&mut manager, DrawingToolType::AnchoredVWAP);
+            assert_eq!(drawing.color, color);
+        }
+
+        for tool in [DrawingToolType::GannSquare, DrawingToolType::GannFixed] {
+            let mut drawing = place(&mut manager, tool);
+            let config = drawing
+                .gann
+                .as_ref()
+                .expect("new square stores its defaults");
+            assert_eq!(config.arc_ratios.len(), 11, "{tool:?}");
+            assert_eq!(config.arc_ratios[2].value, 1.5);
+            assert_eq!(config.fan_ratios[0].color, [179, 157, 219, 255]);
+
+            // A template and a per-tool default saved without settings keep the former look.
+            for gann in [serde_json::Value::Null, serde_json::json!({})] {
+                let template = crate::drawings::DrawingTemplate::from_drawing(&drawing);
+                let mut saved = serde_json::to_value(template).unwrap();
+                saved["settings"]["gann"] = gann;
+                let template: crate::drawings::DrawingTemplate =
+                    serde_json::from_value(saved).unwrap();
+                template.apply_to(&mut drawing).unwrap();
+                assert_eq!(
+                    drawing.gann_config().arc_ratios.len(),
+                    10,
+                    "{tool:?}: template"
+                );
+                manager.tool_defaults.insert(tool, template);
+                let placed = place(&mut manager, tool);
+                assert_eq!(
+                    placed.gann_config().arc_ratios.len(),
+                    10,
+                    "{tool:?}: saved default"
+                );
+                assert_eq!(
+                    placed.gann_config().fan_ratios[0].color,
+                    [128, 128, 128, 255]
+                );
+            }
+        }
 
         // Closure belongs to the outline, so a saved default cannot close a new polyline.
         let mut closed = Drawing::new(0, DrawingToolType::Polyline);

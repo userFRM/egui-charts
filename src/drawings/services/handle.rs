@@ -47,6 +47,37 @@ impl Default for HandleConfig {
     }
 }
 
+/// The rows and columns of a table whose points are its anchor and the ends of its column and
+/// row edges, as [`DrawingManager`](crate::drawings::DrawingManager) gives them from the last
+/// paint.
+fn painted_table(drawing: &Drawing) -> Option<(usize, usize)> {
+    if drawing.tool_type != DrawingToolType::Table {
+        return None;
+    }
+    let (rows, cols) = drawing.table_shape();
+    (drawing.points.len() == 1 + cols + rows).then_some((rows, cols))
+}
+
+/// The column or row edge of a painted table within `reach` of `point`: any grid line, or the
+/// right or bottom edge, along its whole length. The nearest wins, a column on a tie.
+fn table_edge_at(drawing: &Drawing, point: Pos2, reach: f32) -> Option<HandlePos> {
+    let (rows, cols) = painted_table(drawing)?;
+    let p = &drawing.points;
+    let across = (p[0].x..=p[cols].x).contains(&point.x);
+    let down = (p[0].y..=p[cols + rows].y).contains(&point.y);
+    let columns = (0..cols)
+        .filter(|_| down)
+        .map(|c| (HandlePos::Column(c), (point.x - p[1 + c].x).abs()));
+    let rows = (0..rows)
+        .filter(|_| across)
+        .map(|r| (HandlePos::Row(r), (point.y - p[1 + cols + r].y).abs()));
+    columns
+        .chain(rows)
+        .filter(|&(_, distance)| distance <= reach)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(edge, _)| edge)
+}
+
 /// Stateless service for selection handle operations on drawings.
 ///
 /// All methods are static (`&self`-free) since `HandleService` carries no state.
@@ -68,6 +99,9 @@ impl HandleService {
     /// - **Brushes**: One Middle handle on the stroke, which moves it whole
     /// - **Three-anchor channels**: Four indexed handles, one at each line end
     /// - **Bars pattern**: Start and End at the ends of its copy
+    /// - **Table**: its anchor, the top end of each column's right edge, the left end of each
+    ///   row's bottom edge and the bottom-right corner, at the grid a chart last painted; before
+    ///   that its anchor alone
     /// - **Multi-point tools**: Indexed handles at each anchor
     pub fn get_handles(drawing: &Drawing) -> Vec<(HandlePos, Pos2)> {
         let mut handles = Vec::new();
@@ -183,6 +217,20 @@ impl HandleService {
                     handles.push((HandlePos::BottomRight, frame.max));
                 }
             }
+            DrawingToolType::Table => {
+                let p = &drawing.points;
+                if let Some((rows, cols)) = painted_table(drawing) {
+                    handles.push((HandlePos::Point(0), p[0]));
+                    handles.extend((0..cols).map(|c| (HandlePos::Column(c), p[1 + c])));
+                    handles.extend((0..rows).map(|r| (HandlePos::Row(r), p[1 + cols + r])));
+                    handles.push((
+                        HandlePos::BottomRight,
+                        Pos2::new(p[cols].x, p[cols + rows].y),
+                    ));
+                } else if let Some(&anchor) = p.first() {
+                    handles.push((HandlePos::Point(0), anchor));
+                }
+            }
             // Multi-point tools - show indexed handles
             _ => {
                 for (i, &point) in drawing.points.iter().enumerate() {
@@ -203,7 +251,8 @@ impl HandleService {
     /// Hit-tests to find which handle (if any) is at a screen position.
     ///
     /// Returns `Some(HandlePos)` if `point` is within `handle_size * 1.5` pixels
-    /// of a handle center, `None` otherwise.
+    /// of a handle center, `None` otherwise. A table's grid lines and its right and bottom
+    /// edges can also be grabbed along their whole length, within half the handle size.
     pub fn hit_test_handle(drawing: &Drawing, point: Pos2, handle_size: f32) -> Option<HandlePos> {
         let hit_radius = handle_size * 1.5;
         // The nearest handle wins, so a small glyph's centre still moves it instead of
@@ -214,6 +263,7 @@ impl HandleService {
             .filter(|&(_, dist)| dist <= hit_radius)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(pos, _)| pos)
+            .or_else(|| table_edge_at(drawing, point, handle_size / 2.0))
     }
 
     /// Moves a handle to a new screen position, updating both screen coordinates
@@ -1232,7 +1282,7 @@ mod tests {
     #[test]
     fn glyph_rotation_turns_its_handles_frame_and_hit_area() {
         use crate::drawings::DrawingManager;
-        use crate::drawings::services::DrawingInteraction;
+        use crate::drawings::services::hit_test_painted;
 
         let mut manager = DrawingManager::new();
         let mut drawing = create_test_drawing(DrawingToolType::FontIcon, vec![pos2(100.0, 200.0)]);
@@ -1270,14 +1320,8 @@ mod tests {
             Some(HandlePos::Rotate)
         );
         let upright = paint(&manager.drawings[0], false);
-        assert!(DrawingInteraction::hit_test_painted(
-            pos2(115.0, 215.0),
-            &upright
-        ));
-        assert!(!DrawingInteraction::hit_test_painted(
-            pos2(100.0, 221.0),
-            &upright
-        ));
+        assert!(hit_test_painted(pos2(115.0, 215.0), &upright));
+        assert!(!hit_test_painted(pos2(100.0, 221.0), &upright));
         manager.start_drag_handle(1, HandlePos::Rotate);
         for pointer in [pos2(140.0, 160.0), pos2(100.5, 200.5)] {
             manager.update_drag_handle(pointer, x_to_bar, y_to_price, |p, from, to| {
@@ -1317,14 +1361,8 @@ mod tests {
         // The painted square has half-side 15: at 45 degrees its bottom vertex is y=221.213.
         // The former corner (115,215) is now 6.21 pt from an edge, outside the 5 pt tolerance.
         let rotated = paint(drawing, false);
-        assert!(DrawingInteraction::hit_test_painted(
-            pos2(100.0, 221.0),
-            &rotated
-        ));
-        assert!(!DrawingInteraction::hit_test_painted(
-            pos2(115.0, 215.0),
-            &rotated
-        ));
+        assert!(hit_test_painted(pos2(100.0, 221.0), &rotated));
+        assert!(!hit_test_painted(pos2(115.0, 215.0), &rotated));
         manager.end_drag_handle();
         assert!(manager.undo());
         assert_eq!(manager.drawings[0].glyph_angle, 0.0);

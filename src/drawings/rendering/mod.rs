@@ -1,8 +1,8 @@
 //! Painting drawings against bars and a coordinate mapping.
 //!
 //! [`ChartView`] supplies data and mappings to [`Drawing::render`]; [`traits`]
-//! provides handle drawing and hit-testing helpers for custom
-//! renderers. A chart invokes drawing rendering automatically.
+//! re-exports the [`DrawingRenderer`] trait for custom renderers. A chart invokes drawing
+//! rendering automatically.
 
 mod annotations;
 mod channels;
@@ -244,7 +244,7 @@ impl Drawing {
             DrawingToolType::Triangle => self.render_triangle(painter, color, stroke),
             DrawingToolType::Arc => self.render_arc(painter, color, stroke),
             DrawingToolType::Polyline => self.render_polyline(painter, color, stroke),
-            DrawingToolType::DoubleCurve => self.render_double_curve(painter),
+            DrawingToolType::DoubleCurve => self.render_double_curve(painter, rect),
 
             // Fibonacci (10 tools)
             DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension => {
@@ -309,7 +309,7 @@ impl Drawing {
             DrawingToolType::BarsPattern => self.render_bars_pattern(painter, view),
             // Candle colours and the neutral path are independent of the common drawing style.
             DrawingToolType::GhostFeed => return self.render_ghost_feed(painter, view),
-            DrawingToolType::ProjectionTool => self.render_projection_tool(painter, rect, view),
+            DrawingToolType::ProjectionTool => self.render_projection_tool(painter),
 
             // Volume (3 tools)
             DrawingToolType::AnchoredVWAP => self.render_anchored_vwap(painter, view),
@@ -351,7 +351,7 @@ impl Drawing {
             DrawingToolType::Pitchfan => self.render_pitchfork(painter, rect),
             DrawingToolType::Sector => self.render_sector(painter),
             DrawingToolType::Path => self.render_path(painter),
-            DrawingToolType::Curve => self.render_curve(painter),
+            DrawingToolType::Curve => self.render_curve(painter, rect),
             DrawingToolType::PriceNote => self.render_price_note(painter, view),
             DrawingToolType::Table => self.render_table(painter),
             DrawingToolType::Comment => self.render_comment(painter),
@@ -509,7 +509,9 @@ impl Drawing {
             };
             // Five times the anchors' span can pass the reach below when the span is steep.
             let corner = self.gann_square_corner(first, second);
-            return Some(Rect::from_two_pos(first, corner).expand(PAINT_MARGIN));
+            return Some(
+                Rect::from_two_pos(first, corner).expand(PAINT_MARGIN + self.gann_label_room()),
+            );
         }
         if self.tool_type == T::Image {
             return self.image_frame().map(|frame| frame.expand(PAINT_MARGIN));
@@ -520,7 +522,7 @@ impl Drawing {
         let text = self.text.as_deref().map_or(0.0, |t| {
             1.5 * crate::styles::typography::font_size(self.font_size) * t.chars().count() as f32
         });
-        let reach = 3.0 * hull.size().length() + PAINT_MARGIN + text;
+        let reach = 3.0 * hull.size().length() + PAINT_MARGIN + text + self.gann_label_room();
         let bounds = hull.expand(reach);
         let time_only = matches!(
             self.tool_type,
@@ -531,7 +533,7 @@ impl Drawing {
                 | T::FixedRangeVolumeProfile
                 | T::HeadAndShoulders
                 | T::TrianglePattern
-        ) || (self.tool_type == T::DateRange
+        ) || (matches!(self.tool_type, T::DateRange | T::DateAndPriceRange)
             && (self.range_settings.extend_top || self.range_settings.extend_bottom));
         Some(if time_only {
             Rect::from_x_y_ranges(bounds.x_range(), egui::Rangef::EVERYTHING)
@@ -813,6 +815,7 @@ mod tests {
         }
         for &tool in DrawingToolType::all() {
             let mut drawing = Drawing::new(7, tool);
+            drawing.range_settings.border = true;
             drawing.points = [
                 (100., 100.),
                 (300., 300.),
@@ -945,6 +948,15 @@ mod tests {
                         size: Some([1500.0, 800.0]),
                         ..Default::default()
                     });
+                }
+                if matches!(
+                    tool,
+                    DrawingToolType::DateRange | DrawingToolType::DateAndPriceRange
+                ) {
+                    // Time edges run to the pane's top and bottom.
+                    drawing.range_settings.border = true;
+                    drawing.range_settings.extend_top = true;
+                    drawing.range_settings.extend_bottom = true;
                 }
                 // The largest label size, whose text reaches far past a circle, on closed arcs.
                 if matches!(
@@ -1463,17 +1475,24 @@ mod tests {
                         }
                         assert_eq!(painted_lines, lines);
                         assert_eq!(areas, outline.areas);
-                        let hit = crate::drawings::services::DrawingInteraction::new();
                         for x in [125.0, 275.0] {
                             for y in [250.0 - x / 2.0, other_y(x)] {
                                 assert_eq!(
-                                    hit.hit_test(Pos2::new(x, y), &[drawing.clone()], "1m"),
+                                    crate::drawings::services::hit_test(
+                                        Pos2::new(x, y),
+                                        &[drawing.clone()],
+                                        "1m"
+                                    ),
                                     Some(1)
                                 );
                             }
                             let y = (250.0 - x / 2.0 + other_y(x)) / 2.0;
                             assert_eq!(
-                                hit.hit_test(Pos2::new(x, y), &[drawing.clone()], "1m"),
+                                crate::drawings::services::hit_test(
+                                    Pos2::new(x, y),
+                                    &[drawing.clone()],
+                                    "1m"
+                                ),
                                 filled.then_some(1)
                             );
                         }
@@ -1486,7 +1505,7 @@ mod tests {
     /// Even-odd fills and their hit areas agree for concave and crossing paths and curve lobes.
     #[test]
     fn filled_shapes_cover_the_area_their_line_encloses() {
-        use crate::drawings::services::DrawingInteraction;
+        use crate::drawings::services::{hit_test, hit_test_painted};
         use DrawingToolType as T;
         let concave = vec![
             (50., 50.),
@@ -1612,12 +1631,12 @@ mod tests {
             for (points, want) in [(hits, true), (misses, false)] {
                 for point in points.into_iter().map(Pos2::from) {
                     assert_eq!(
-                        DrawingInteraction::new().hit_test(point, &[drawing.clone()], "1m"),
+                        hit_test(point, &[drawing.clone()], "1m"),
                         want.then_some(1),
                         "{tool:?} outline at {point:?}"
                     );
                     assert_eq!(
-                        DrawingInteraction::hit_test_painted(point, &clipped),
+                        hit_test_painted(point, &clipped),
                         want,
                         "{tool:?} paint at {point:?}"
                     );
@@ -1649,6 +1668,7 @@ mod tests {
     /// Paints `drawing` over `bars`, bar `i` at x = 10 i and price `p` at y = 500 - p.
     fn paint_on(drawing: &Drawing, selected: bool, bars: &[Bar]) -> Vec<Shape> {
         let ctx = Context::default();
+        ctx.add_image_loader(std::sync::Arc::new(super::media::tests::Pictures));
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
                 price_formatter: None,
@@ -2051,8 +2071,13 @@ mod tests {
             })
             .collect();
         let mut inert = Vec::new();
-        for &tool in DrawingToolType::all() {
+        // An image is checked as its placeholder and again showing a loaded picture.
+        let tools = DrawingToolType::all().iter().map(|&tool| (tool, false));
+        for (tool, loaded) in tools.chain([(T::Image, true)]) {
             let mut drawing = Drawing::new(7, tool);
+            if loaded {
+                drawing.text = Some("test://square".into());
+            }
             drawing.points = [
                 (100., 100.),
                 (300., 300.),
@@ -2103,6 +2128,27 @@ mod tests {
                     == painted(&|d| d.color = [200, 100, 50, 255])
             {
                 inert.push((tool, "colour"));
+            }
+            if tool.supports_fill()
+                && painted(&|d| d.fill_color = Some([10, 20, 30, 200]))
+                    == painted(&|d| d.fill_color = Some([200, 100, 50, 200]))
+            {
+                inert.push((tool, "fill"));
+            }
+            // The colour controls also change a drawing whose text has a colour of its own.
+            #[cfg(feature = "ui")]
+            {
+                let recolored = |color| {
+                    painted(&|d| {
+                        d.text_color = Some([0, 200, 0, 255]);
+                        d.recolor(color);
+                    })
+                };
+                if tool.supports_color()
+                    && recolored([10, 20, 30, 255]) == recolored([200, 100, 50, 255])
+                {
+                    inert.push((tool, "colour with a text colour"));
+                }
             }
             // The Text tab offers this size for text, trend angles and chart patterns;
             // the Style tab offers it for a price label.

@@ -237,6 +237,10 @@ impl Indicator for SuperTrend {
         }
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.bullish_color = colors[0];

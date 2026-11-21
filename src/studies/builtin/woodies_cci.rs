@@ -19,9 +19,11 @@
 //! # Column stages
 //!
 //! A column's stage follows its run: the bar itself and the unbroken CCI 14 values just before it
-//! on the same side of zero. Bars without a value are not part of the series, so a run continues
-//! across them. A value of exactly zero is on neither side, so it has no run and ends the run
-//! before it. A zero after five values on one side keeps the established colour of that side.
+//! on the same side of zero. Bars skipped for a non-finite close are not part of the series, so a
+//! run continues across them. A value of exactly zero is on neither side, so it has no run and
+//! ends the run before it. A bar whose CCI 14 window holds equal closes has no value and no
+//! column, and ends the run before it as a zero does. A zero after five values on one side keeps
+//! the established colour of that side.
 //!
 //! | Run | Stage | Colour |
 //! |-----|-------|--------|
@@ -57,6 +59,9 @@ pub struct WoodiesCCI {
     turbo_length: usize,
     cci_length: usize,
     values: IndicatorValues,
+    /// Whether each bar has a finite close but no CCI 14 value: a window of equal closes,
+    /// which ends the column run, or a warm-up bar, before which no bar has a value.
+    flat: Vec<bool>,
     /// Colors: [columns, CCI Turbo, CCI 14]; the columns colour is the established run above zero.
     colors: Vec<Color32>,
     /// Column colour of an established run below zero.
@@ -82,6 +87,7 @@ impl WoodiesCCI {
             turbo_length: turbo_length.max(1),
             cci_length: cci_length.max(1),
             values: IndicatorValues::new(),
+            flat: Vec::new(),
             colors: vec![palette::DEEP_TEAL, palette::DEEP_TEAL, palette::BRIGHT_RED],
             down_color: palette::BRIGHT_RED,
             transition_color: palette::BRIGHT_RED,
@@ -181,9 +187,10 @@ impl Indicator for WoodiesCCI {
             return None;
         }
         let value = self.values.value(0, bar)?;
-        // Bars without a value, skipped as non-finite, are not in the run.
+        // A flat window ends the run; bars skipped for a non-finite close are not in it.
         let previous = (0..bar)
             .rev()
+            .take_while(|&bar| self.flat.get(bar) != Some(&true))
             .filter_map(|bar| self.values.value(0, bar))
             .take(5);
         // A zero crosses to neither side, so it keeps the colour of an established run before it.
@@ -229,6 +236,13 @@ impl Indicator for WoodiesCCI {
                 b.close.is_finite()
             }),
             |data| over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data)),
+        );
+        // Kept beside the values: update_window keeps the first min(from, len) bars.
+        self.flat.truncate(from.min(data.len()));
+        let start = self.flat.len();
+        self.flat.extend(
+            (start..data.len())
+                .map(|bar| data[bar].close.is_finite() && values.value(0, bar).is_none()),
         );
         self.values = values;
     }
@@ -354,7 +368,8 @@ mod tests {
     /// run of one or a zero is neutral, two to five values are a transition and six or more are
     /// established, above zero in the columns colour and below it in the down colour. A non-finite
     /// bar is not part of the run, and a zero ends it. A zero after five values on one side keeps
-    /// that side's established colour.
+    /// that side's established colour. A window of equal closes has no value and ends the run as
+    /// a zero does, also for a zero after it.
     #[test]
     fn columns_are_staged_by_the_run_on_one_side_of_zero() {
         let closes = [
@@ -384,6 +399,14 @@ mod tests {
             2.0,
             3.0,
             2.5,
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+            6.0,
+            6.0,
+            7.0,
+            6.5,
         ];
         let bars = bars_closing_at(&closes);
         let mut study = WoodiesCCI::new(2, 3);
@@ -416,6 +439,14 @@ mod tests {
             Some(r),
             Some(r),
             Some(g),
+            Some(r),
+            Some(r),
+            Some(r),
+            Some(r),
+            Some(r),
+            None,
+            Some(r),
+            Some(r),
         ];
         let colours = |study: &WoodiesCCI| -> Vec<_> {
             (0..bars.len())
@@ -423,6 +454,16 @@ mod tests {
                 .collect()
         };
         assert_eq!(colours(&study), expected);
+        // Streamed bars give the same colours. Each bar first arrives one higher, as a live bar
+        // whose close then moves, so the flat window at bar 31 first has a value.
+        let mut stepped = WoodiesCCI::new(2, 3);
+        for end in 1..=bars.len() {
+            let mut live = bars[..end].to_vec();
+            live[end - 1].close += 1.0;
+            stepped.update(&live, end - 1);
+            stepped.update(&bars[..end], end - 1);
+        }
+        assert_eq!(colours(&stepped), expected);
         // The columns colour of the plot and the three stage inputs replace the defaults, each
         // distinct, so a zero cannot pass in a colour two stages share.
         let (b, d, t, n) = (Color32::BLUE, Color32::GOLD, Color32::KHAKI, Color32::BROWN);
@@ -464,6 +505,14 @@ mod tests {
             Some(t),
             Some(t),
             Some(b),
+            Some(n),
+            Some(t),
+            Some(t),
+            Some(t),
+            Some(t),
+            None,
+            Some(n),
+            Some(n),
         ];
         assert_eq!(colours(&study), recoloured);
     }

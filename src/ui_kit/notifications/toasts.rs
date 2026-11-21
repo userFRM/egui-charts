@@ -23,6 +23,8 @@ pub struct Toasts {
     toasts: Vec<Toast>,
     /// Whether the user expanded the stack; a new burst starts collapsed.
     pub(super) expanded: bool,
+    /// The toast and the index of each action pressed and not yet taken.
+    pub(super) pressed: Vec<(u64, usize)>,
 }
 
 impl Toasts {
@@ -66,6 +68,13 @@ impl Toasts {
     pub fn clear(&mut self) {
         self.toasts.clear();
         self.expanded = false;
+        self.pressed.clear();
+    }
+
+    /// The index of the action the user pressed on the toast `id`, which closed it, once.
+    pub fn take_pressed(&mut self, id: u64) -> Option<usize> {
+        let at = self.pressed.iter().position(|(toast, _)| *toast == id)?;
+        Some(self.pressed.remove(at).1)
     }
 
     /// Get the toasts

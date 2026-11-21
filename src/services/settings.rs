@@ -58,6 +58,9 @@ pub struct UserSettings {
     pub layout_autosave: bool,
     /// The names of the starred layouts.
     pub layout_favorites: Vec<String>,
+    /// The host's names of starred hotlists, in the order offered; documents without this field
+    /// read with none.
+    pub hotlist_favorites: Vec<String>,
     /// Factory names of the starred studies of the indicator dialog, in order.
     pub indicator_favorites: Vec<String>,
     /// The intervals starred in the interval menu, in order. An interval this release does not
@@ -82,6 +85,9 @@ pub struct UserSettings {
     pub drawing_defaults: BTreeMap<String, serde_json::Value>,
     /// The watchlists, in order.
     pub watchlists: Vec<Watchlist>,
+    /// The index of the last shown watchlist. Older documents read zero. Restore it with
+    /// `WatchlistPanel::set_active_list`, which ignores an index past the last list.
+    pub active_watchlist: usize,
     /// The market heatmap's universe, size metric and colour metric.
     pub market_heatmap: MarketHeatmapSelection,
     /// The replay position to resume, with the interval its history was fetched at. A position
@@ -504,6 +510,7 @@ mod tests {
             symbol: "AAA".into(),
             time: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
             speed: 2.0,
+            scope: Default::default(),
         };
         let rows = [
             (
@@ -830,6 +837,7 @@ mod tests {
             symbol: "AAA".into(),
             time: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
             speed,
+            scope: Default::default(),
         };
         let ctrl_k = |modifiers| ShortcutMap {
             bindings: vec![(

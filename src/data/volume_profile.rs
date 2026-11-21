@@ -11,7 +11,8 @@ use std::sync::Arc;
 ///
 /// Build a profile beside its bars, as a custom study can return from
 /// `Indicator::volume_profiles`. Set `strip: Some(0.3)` with `right_aligned: true` to
-/// place it in the plot's rightmost 30% instead.
+/// place it in the plot's rightmost 30% instead. A study that writes row values keeps the
+/// volume decimals of the instrument `Indicator::set_instrument` gives it.
 ///
 /// ```
 /// use egui_charts::data::{StudyProfile, VolumeProfile, VolumeProfileConfig};
@@ -28,6 +29,7 @@ use std::sync::Arc;
 ///     right_aligned: false,
 ///     strip: None,
 ///     width: 0.8,
+///     volume_decimals: None,
 /// };
 /// assert_eq!(profile.bars, 0..1);
 /// assert_eq!(profile.strip, None);
@@ -58,6 +60,11 @@ pub struct StudyProfile {
     /// Share of the span, from 0 to 1, that the row with the most volume takes. An options
     /// exposure overlay's largest bar takes half of it on each side of its centre.
     pub width: f32,
+    /// Decimals of the row values that [`VolumeProfileConfig::show_values`] writes, abbreviated
+    /// K, M and B values included, as
+    /// [`Instrument::volume_decimals`](crate::model::Instrument::volume_decimals) sets them;
+    /// `None` writes two decimals.
+    pub volume_decimals: Option<u8>,
 }
 
 /// A level of a finished study profile carried right past the profile's bars: from the bar
@@ -125,6 +132,7 @@ fn profile_line_colors() -> [[u8; 4]; 2] {
 #[serde(try_from = "VolumeProfileFields")]
 pub struct VolumeProfileConfig {
     row_size: Option<f64>,
+    row_ticks: Option<usize>,
     rows: usize,
     value_area: f64,
     /// Volume displayed in each row. Totals still determine POC and value area.
@@ -158,6 +166,8 @@ pub struct VolumeProfileConfig {
 struct VolumeProfileFields {
     #[serde(default)]
     row_size: Option<f64>,
+    #[serde(default)]
+    row_ticks: Option<usize>,
     rows: usize,
     value_area: f64,
     #[serde(default)]
@@ -206,7 +216,9 @@ impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
         config.extend_right = fields.extend_right;
         config
             .with_row_size(fields.row_size)
-            .ok_or("volume profile row height must be finite and positive")
+            .ok_or("volume profile row height must be finite and positive")?
+            .with_row_ticks(fields.row_ticks)
+            .ok_or("volume profile ticks per row out of bounds")
     }
 }
 
@@ -214,9 +226,15 @@ impl VolumeProfileConfig {
     /// Price rows a profile may have.
     pub const ROWS: RangeInclusive<usize> = 1..=1000;
 
+    /// Ticks per row a volume profile drawing may have, as the studies' Height in ticks input.
+    pub const ROW_TICKS: RangeInclusive<usize> = 1..=100_000;
+
     /// A profile of `rows` equal price rows whose value area holds the
     /// `value_area` share of its volume (above 0, at most 1); `None` when
-    /// either is out of bounds.
+    /// either is out of bounds. A volume profile drawing on an instrument with a tick size draws
+    /// the whole number of ticks per row whose row total lies closest to `rows`, as the volume
+    /// profile studies do with Row count; [`VolumeProfile::from_bars`] splits the span into exactly
+    /// `rows`.
     pub fn new(rows: usize, value_area: f64) -> Option<Self> {
         (Self::ROWS.contains(&rows) && value_area > 0.0 && value_area <= 1.0).then_some(Self {
             rows,
@@ -227,12 +245,13 @@ impl VolumeProfileConfig {
 
     /// Fix each row to a price height, aligned to multiples of that height.
     /// `None` restores equal rows over the span. Rejects nonpositive or nonfinite heights.
-    /// Profiles spanning more than 10,000 fixed rows are not drawn.
+    /// Profiles spanning more than 10,000 fixed rows are not drawn. Clears [`Self::row_ticks`].
     pub fn with_row_size(mut self, height: Option<f64>) -> Option<Self> {
         if height.is_some_and(|h| !h.is_finite() || h <= 0.0) {
             return None;
         }
         self.row_size = height;
+        self.row_ticks = None;
         Some(self)
     }
 
@@ -241,7 +260,75 @@ impl VolumeProfileConfig {
         self.row_size
     }
 
-    /// Number of price rows.
+    /// Rows `ticks` ticks of the chart instrument high, on multiples of that height, for a
+    /// volume profile drawing, which on an instrument without a tick size draws [`Self::rows`]
+    /// equal rows instead. [`VolumeProfile::from_bars`] and the volume profile studies, which
+    /// size rows in ticks through their own inputs, use the row count too. Clears
+    /// [`Self::row_size`]; `None` leaves the row count or price height. Rejects a count outside
+    /// [`Self::ROW_TICKS`].
+    ///
+    /// ```
+    /// use egui_charts::data::VolumeProfileConfig;
+    ///
+    /// let ticks = VolumeProfileConfig::default().with_row_ticks(Some(4)).unwrap();
+    /// assert_eq!((ticks.row_ticks(), ticks.row_size()), (Some(4), None));
+    /// let height = ticks.with_row_size(Some(2.0)).unwrap();
+    /// assert_eq!((height.row_ticks(), height.row_size()), (None, Some(2.0)));
+    /// let ticks = height.with_row_ticks(Some(4)).unwrap();
+    /// assert_eq!((ticks.row_ticks(), ticks.row_size()), (Some(4), None));
+    /// assert!(ticks.with_row_ticks(Some(0)).is_none());
+    /// ```
+    pub fn with_row_ticks(mut self, ticks: Option<usize>) -> Option<Self> {
+        if ticks.is_some_and(|ticks| !Self::ROW_TICKS.contains(&ticks)) {
+            return None;
+        }
+        self.row_ticks = ticks;
+        if ticks.is_some() {
+            self.row_size = None;
+        }
+        Some(self)
+    }
+
+    /// Ticks of the chart instrument per row of a volume profile drawing, when set.
+    pub fn row_ticks(&self) -> Option<usize> {
+        self.row_ticks
+    }
+
+    /// Price height of [`Self::row_ticks`] ticks of `tick_size`; `None` without row ticks,
+    /// without a tick size, or when the height is not finite and positive.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn tick_height(&self, tick_size: Option<f64>) -> Option<f64> {
+        let height = self.row_ticks? as f64 * tick_size?;
+        (height.is_finite() && height > 0.0).then_some(height)
+    }
+
+    /// `self` in rows a whole number of `unit`s high over the span `low` to `high`, given in
+    /// `unit`s: the count whose row total lies closest to [`Self::rows`], as the volume profile
+    /// studies lay a row count on whole ticks. Unchanged with a price height, and for a span or
+    /// height that cannot be represented.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn with_whole_rows(self, unit: f64, low: f64, high: f64) -> Self {
+        if self.row_size.is_some() {
+            return self;
+        }
+        whole_tick_rows(low, high, self.rows)
+            .and_then(|units| self.with_row_size(Some(units as f64 * unit)))
+            .unwrap_or(self)
+    }
+
+    /// `self` with the row layout and value area of `layout`, keeping every display setting.
+    #[cfg(feature = "ui")]
+    pub(crate) fn with_layout(self, layout: Self) -> Self {
+        Self {
+            row_size: layout.row_size,
+            row_ticks: layout.row_ticks,
+            rows: layout.rows,
+            value_area: layout.value_area,
+            ..self
+        }
+    }
+
+    /// Number of price rows asked for.
     pub fn rows(&self) -> usize {
         self.rows
     }
@@ -269,6 +356,7 @@ impl Default for VolumeProfileConfig {
     fn default() -> Self {
         Self {
             row_size: None,
+            row_ticks: None,
             rows: 24,
             value_area: 0.7,
             display: ProfileDisplay::Total,
@@ -341,6 +429,16 @@ pub(crate) struct ExpiryParts {
     pub rows: Vec<Vec<f64>>,
 }
 
+/// The call and put walls of an options profile drawn at its expiration, named beside their rows.
+#[cfg(any(feature = "studies", feature = "widget"))]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct OptionWalls {
+    /// Call and put wall strikes; `None` for a side without one.
+    pub strikes: [Option<f64>; 2],
+    /// Call and put wall colours, unmultiplied RGBA.
+    pub colors: [[u8; 4]; 2],
+}
+
 /// Volume traded at each price row of bars or host-supplied option strikes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VolumeProfile {
@@ -365,6 +463,15 @@ pub struct VolumeProfile {
     // Each row split by expiry, for an options profile drawn by expiry.
     #[cfg(any(feature = "studies", feature = "widget"))]
     pub(crate) expiry_parts: Option<ExpiryParts>,
+    // Each row holds its strike's puts over calls, for an options profile of put/call ratios.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) ratio_rows: bool,
+    // The walls of an options profile drawn at its expiration.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) walls: Option<OptionWalls>,
+    // The expiration date an options profile is drawn at and the colour of its time scale tag.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) expiry_tag: Option<(chrono::NaiveDate, [u8; 4])>,
 }
 
 fn valid_bar(bar: &Bar) -> bool {
@@ -682,6 +789,12 @@ impl VolumeProfile {
             exposure: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             expiry_parts: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            ratio_rows: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            walls: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_tag: None,
         };
         let mut total = 0.0;
         let rows = data
@@ -755,6 +868,12 @@ impl VolumeProfile {
             exposure: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             expiry_parts: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            ratio_rows: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            walls: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_tag: None,
         };
         for (&level, row) in &bar.levels {
             let i = (level - first) as usize;
@@ -869,6 +988,12 @@ impl VolumeProfile {
             exposure: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             expiry_parts: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            ratio_rows: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            walls: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_tag: None,
         })
     }
 
@@ -1059,7 +1184,7 @@ fn grid_edge(value: f64, scale: f64) -> Option<f64> {
 /// Whole ticks per row closest to the requested row count on a zero-aligned grid.
 /// Compares the span per row rounded down and up, taking the larger tick count on a tie.
 /// Rejects nonfinite, reversed or unrepresentable spans and zero rows.
-#[cfg(feature = "studies")]
+#[cfg(any(feature = "studies", feature = "drawings"))]
 pub(crate) fn whole_tick_rows(low: f64, high: f64, rows: usize) -> Option<u64> {
     let span = high - low;
     if !low.is_finite() || !high.is_finite() || !span.is_finite() || span < 0.0 || rows == 0 {
@@ -1507,7 +1632,9 @@ mod tests {
                         crate::painting::volume_profile::ProfileStyle::Study {
                             right_aligned,
                             strip: right_aligned,
+                            walls_visible: [true; 2],
                             width: 0.9,
+                            volume_decimals: None,
                         },
                         &|price| price as f32 * direction,
                     );

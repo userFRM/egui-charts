@@ -1,10 +1,10 @@
 //! Copies of a chart's studies and settings to the other charts of a layout, undone and redone
 //! together.
 
-use super::ChartLayout;
+use super::{ChartLayout, MAX_CHARTS};
 use crate::chart::overlays::BubbleGrouping;
 use crate::config::ChartConfig;
-use crate::model::{Bar, ChartType};
+use crate::model::{Bar, ChartType, ChartTypeParams, FootprintIntensity, TradeProfileSettings};
 use crate::studies::{Indicator, IndicatorFactory, InputValue, StudySource, StudyTemplateSet};
 use crate::widget::settings::ChartSettingsState;
 use crate::widget::studies::reads_study;
@@ -29,18 +29,26 @@ pub enum LayoutCopy {
     /// use.
     Studies,
     /// Applies these settings to every chart, the source included. Each other chart takes the
-    /// source's styles for every chart type and its footprint, session volume profile and TPO
-    /// colours. The TPO drawing switches, including period columns and the legacy poor highs and
-    /// lows flag, block mode, outside value area opacity and initial balance minutes also follow
-    /// the source. Profile sessions, TPO session splitting, period lengths, profile grouping,
-    /// composites, manual profile splits, row sizes and value area shares stay per chart. Each
-    /// other chart keeps its symbol, interval and chart type, the other parameters of that type,
-    /// its own price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes,
-    /// and its bubble grouping when the source uses a price step. It keeps the precision of its
+    /// source's look for every chart type: the chart type styles; the footprint colours, columns,
+    /// display switches, marker thresholds, text sizes and statistics rows, and its intensity
+    /// unless the source measures it against a volume; the session volume profile colours, mode,
+    /// node labels, point of control and value area lines with their extensions, developing
+    /// levels, alignment, width, row values and session box; the TPO colours, drawing switches,
+    /// captions and price scale tags, including period columns and the legacy poor highs and lows
+    /// flag, block mode, outside value area opacity and initial balance minutes; and the Renko
+    /// wicks and the real price labels of the price-based types. What suits each chart's own
+    /// prices, sizes and sessions stays per chart: footprint row sizes, minimum imbalance volume
+    /// and single print volume, profile sessions and rows, TPO row size, session splitting,
+    /// period length and profile grouping, composites and manual profile splits, every value area
+    /// share, and the sizes, sources, reversals, line counts, one step back rule and base of the
+    /// other chart types. Each other chart keeps its symbol, interval and chart type, its own
+    /// price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes, and
+    /// its bubble grouping when the source uses a price step. It keeps the precision of its
     /// instrument unless the source was given another one. A chart without a feed has no order
     /// flow to give: from it, each chart keeps its order-flow layers and settings. A chart that
     /// has not been drawn yet fits its bars on its first frame, and a lock in the settings then
-    /// locks that view.
+    /// locks that view. Each other chart keeps its futures data choices, since only its host can
+    /// reload its history for them.
     Settings(Box<ChartSettingsState>),
 }
 
@@ -145,7 +153,12 @@ impl CopiedStudies {
             .collect();
         let captions: Vec<_> = source
             .indicators()
-            .map(|(id, _)| source.indicator_inputs(id).unwrap_or_default().to_owned())
+            .map(|(id, _)| {
+                source
+                    .host_indicator_inputs(id)
+                    .unwrap_or_default()
+                    .to_owned()
+            })
             .collect();
         match copy {
             LayoutCopy::Study(id) => {
@@ -281,18 +294,14 @@ impl CopiedStudies {
     }
 }
 
-/// Applies the settings of the chart with `from` as its configuration to another chart. That
-/// chart takes the chart type styles and the footprint, session profile and TPO colours of the
-/// settings. TPO drawing switches, including period columns and the legacy poor highs and lows
-/// flag, block mode, outside value area opacity and initial balance minutes also follow the
-/// source. Profile sessions, TPO session splitting, period lengths, profile grouping, composites,
-/// manual profile splits, row sizes and value area shares stay per chart. It keeps the other
-/// parameters of its chart type, whose sizes and base prices suit its own prices, its own
-/// price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes, and its
-/// bubble grouping when the source uses a price step, which suit its own instrument. It keeps
-/// all its order-flow settings when `from_feed` is false, since a chart without a feed holds none.
-/// It takes the colours of `from` for its candles when the settings describe another style of
-/// candles and so do not hold them. A precision left at its default follows each chart's instrument.
+/// Applies the settings of the chart with `from` as its configuration to another chart, which
+/// takes the source's chart type look and keeps what suits its own prices, sizes and sessions, as
+/// [`LayoutCopy::Settings`] lists. It keeps its own price-to-bar ratio when the settings lock it,
+/// its quantity unit and order-flow sizes, and its bubble grouping when the source uses a price
+/// step, which suit its own instrument. It keeps all its order-flow settings when `from_feed` is
+/// false, since a chart without a feed holds none. It takes the colours of `from` for its candles
+/// when the settings describe another style of candles and so do not hold them. A precision left
+/// at its default follows each chart's instrument.
 fn apply_to_other_chart(
     settings: &ChartSettingsState,
     from: &ChartConfig,
@@ -300,42 +309,141 @@ fn apply_to_other_chart(
     chart: &mut Chart,
 ) {
     let mut settings = settings.clone();
-    if let Some(params) = settings.chart_type_params.take() {
-        let mut own = chart.chart_type_params().clone();
-        own.styles = params.styles;
-        own.footprint_colors = params.footprint_colors;
-        own.footprint_imbalance_colors = params.footprint_imbalance_colors;
-        let (profile, source) = (&mut own.profile, &params.profile);
-        profile.poc_color = source.poc_color;
-        profile.value_area_high_color = source.value_area_high_color;
-        profile.value_area_low_color = source.value_area_low_color;
-        profile.up_volume_color = source.up_volume_color;
-        profile.down_volume_color = source.down_volume_color;
-        profile.value_area_up_color = source.value_area_up_color;
-        profile.value_area_down_color = source.value_area_down_color;
-        own.tpo_block_colors = params.tpo_block_colors;
-        own.tpo_block_color = params.tpo_block_color;
-        own.tpo_poc = params.tpo_poc;
-        own.tpo_volume_profile = params.tpo_volume_profile;
-        own.tpo_value_area_levels = params.tpo_value_area_levels;
-        own.tpo_open_price = params.tpo_open_price;
-        own.tpo_close_price = params.tpo_close_price;
-        own.tpo_poor_high = params.tpo_poor_high;
-        own.tpo_poor_low = params.tpo_poor_low;
-        own.tpo_poor_highs_lows = params.tpo_poor_highs_lows;
-        own.tpo_extend_poor = params.tpo_extend_poor;
-        own.tpo_initial_balance = params.tpo_initial_balance;
-        own.tpo_initial_balance_minutes = params.tpo_initial_balance_minutes;
-        own.tpo_initial_balance_extensions = params.tpo_initial_balance_extensions;
-        own.tpo_single_prints = params.tpo_single_prints;
-        own.tpo_midpoint = params.tpo_midpoint;
-        own.tpo_letters = params.tpo_letters;
-        own.tpo_statistics = params.tpo_statistics;
-        own.tpo_colored_blocks = params.tpo_colored_blocks;
-        own.tpo_outside_value_area_opacity = params.tpo_outside_value_area_opacity;
-        own.tpo_split_periods = params.tpo_split_periods;
-        if &own != chart.chart_type_params() {
-            chart.apply_chart_type_params(own);
+    if let Some(source) = settings.chart_type_params.take() {
+        let own = chart.chart_type_params().clone();
+        // Every field is named, so that a new one has to be sorted into the look, which follows
+        // the source, or the values that suit each chart's own prices, sizes and sessions.
+        let params = ChartTypeParams {
+            footprint_modes: source.footprint_modes,
+            footprint_profile: source.footprint_profile,
+            footprint_color_by: source.footprint_color_by,
+            // A volume is in the source's sizes; the other measures reach every chart.
+            footprint_intensity: match source.footprint_intensity {
+                FootprintIntensity::Volume(_) => own.footprint_intensity,
+                intensity => intensity,
+            },
+            footprint_colors: source.footprint_colors,
+            footprint_imbalance_colors: source.footprint_imbalance_colors,
+            footprint_step_colors: source.footprint_step_colors,
+            footprint_auto_row_height: source.footprint_auto_row_height,
+            footprint_min_text_height: source.footprint_min_text_height,
+            footprint_imbalance: source.footprint_imbalance,
+            footprint_poc: source.footprint_poc,
+            footprint_imbalance_ratio: source.footprint_imbalance_ratio,
+            footprint_diagonal: source.footprint_diagonal,
+            footprint_stacked_imbalances: source.footprint_stacked_imbalances,
+            footprint_stack: source.footprint_stack,
+            footprint_zones_until_broken: source.footprint_zones_until_broken,
+            footprint_naked_poc: source.footprint_naked_poc,
+            footprint_delta_poc: source.footprint_delta_poc,
+            footprint_unfinished_auctions: source.footprint_unfinished_auctions,
+            footprint_cluster_share: source.footprint_cluster_share,
+            footprint_delta_percent: source.footprint_delta_percent,
+            footprint_ratio: source.footprint_ratio,
+            footprint_extend_bars: source.footprint_extend_bars,
+            footprint_extreme_ratio: source.footprint_extreme_ratio,
+            footprint_pullback: source.footprint_pullback,
+            footprint_abbreviate: source.footprint_abbreviate,
+            footprint_show_zero: source.footprint_show_zero,
+            footprint_font_size: source.footprint_font_size,
+            footprint_info_box: source.footprint_info_box,
+            footprint_statistics: source.footprint_statistics,
+            footprint_statistics_rows: source.footprint_statistics_rows,
+            footprint_session_cumulative_delta: source.footprint_session_cumulative_delta,
+            profile: TradeProfileSettings {
+                mode: source.profile.mode,
+                developing_poc: source.profile.developing_poc,
+                developing_value_area: source.profile.developing_value_area,
+                extend_poc: source.profile.extend_poc,
+                extend_vah: source.profile.extend_vah,
+                extend_val: source.profile.extend_val,
+                nodes: source.profile.nodes,
+                value_area_guides: source.profile.value_area_guides,
+                poc: source.profile.poc,
+                poc_color: source.profile.poc_color,
+                value_area_high: source.profile.value_area_high,
+                value_area_high_color: source.profile.value_area_high_color,
+                value_area_low: source.profile.value_area_low,
+                value_area_low_color: source.profile.value_area_low_color,
+                up_volume_color: source.profile.up_volume_color,
+                down_volume_color: source.profile.down_volume_color,
+                value_area_up_color: source.profile.value_area_up_color,
+                value_area_down_color: source.profile.value_area_down_color,
+                right_aligned: source.profile.right_aligned,
+                width: source.profile.width,
+                values: source.profile.values,
+                values_color: source.profile.values_color,
+                session_box: source.profile.session_box,
+                session_box_color: source.profile.session_box_color,
+                // Sessions, rows and the value area share suit the chart's own instrument.
+                session: own.profile.session,
+                rows: own.profile.rows,
+                value_area: own.profile.value_area,
+            },
+            styles: source.styles,
+            renko_wicks: source.renko_wicks,
+            renko_real_price: source.renko_real_price,
+            kagi_real_price: source.kagi_real_price,
+            line_break_real_price: source.line_break_real_price,
+            pnf_real_price: source.pnf_real_price,
+            tpo_initial_balance_minutes: source.tpo_initial_balance_minutes,
+            tpo_poor_highs_lows: source.tpo_poor_highs_lows,
+            tpo_poor_high: source.tpo_poor_high,
+            tpo_poor_low: source.tpo_poor_low,
+            tpo_extend_poor: source.tpo_extend_poor,
+            tpo_initial_balance_extensions: source.tpo_initial_balance_extensions,
+            tpo_single_prints: source.tpo_single_prints,
+            tpo_midpoint: source.tpo_midpoint,
+            tpo_letters: source.tpo_letters,
+            tpo_statistics: source.tpo_statistics,
+            tpo_colored_blocks: source.tpo_colored_blocks,
+            tpo_block_colors: source.tpo_block_colors,
+            tpo_block_color: source.tpo_block_color,
+            tpo_outside_value_area_opacity: source.tpo_outside_value_area_opacity,
+            tpo_split_periods: source.tpo_split_periods,
+            tpo_initial_balance: source.tpo_initial_balance,
+            tpo_labels: source.tpo_labels,
+            tpo_level_tags: source.tpo_level_tags,
+            tpo_poc: source.tpo_poc,
+            tpo_value_area_levels: source.tpo_value_area_levels,
+            tpo_open_price: source.tpo_open_price,
+            tpo_close_price: source.tpo_close_price,
+            tpo_volume_profile: source.tpo_volume_profile,
+            // Row sizes, value area shares, volumes, sessions and the way price-based elements
+            // are built suit the chart's own instrument.
+            footprint_row_ticks: own.footprint_row_ticks,
+            footprint_row_atr: own.footprint_row_atr,
+            footprint_row_atr_length: own.footprint_row_atr_length,
+            footprint_value_area: own.footprint_value_area,
+            footprint_imbalance_min_volume: own.footprint_imbalance_min_volume,
+            footprint_single_print_max: own.footprint_single_print_max,
+            renko_size_method: own.renko_size_method,
+            kagi_size_method: own.kagi_size_method,
+            range_size_method: own.range_size_method,
+            pnf_size_method: own.pnf_size_method,
+            renko_source: own.renko_source,
+            kagi_source: own.kagi_source,
+            line_break_source: own.line_break_source,
+            pnf_source: own.pnf_source,
+            renko_brick_size: own.renko_brick_size,
+            kagi_reversal: own.kagi_reversal,
+            range_size: own.range_size,
+            pnf_box_size: own.pnf_box_size,
+            pnf_reversal: own.pnf_reversal,
+            line_break_count: own.line_break_count,
+            pnf_one_step_back: own.pnf_one_step_back,
+            baseline: own.baseline,
+            columns_base: own.columns_base,
+            tpo_period_minutes: own.tpo_period_minutes,
+            tpo_row_ticks: own.tpo_row_ticks,
+            tpo_value_area: own.tpo_value_area,
+            tpo_split_sessions: own.tpo_split_sessions,
+            tpo_profile_period: own.tpo_profile_period,
+            tpo_composites: own.tpo_composites,
+            tpo_splits: own.tpo_splits,
+        };
+        if &params != chart.chart_type_params() {
+            chart.apply_chart_type_params(params);
         }
     }
     let own = ChartSettingsState::from_chart(chart).order_flow;
@@ -356,6 +464,9 @@ fn apply_to_other_chart(
             flow.volume_bubbles.grouping = own.volume_bubbles.grouping;
         }
     }
+    // Only each chart's host can reload its history for the futures data choices.
+    settings.back_adjust_futures = chart.back_adjust_futures;
+    settings.settlement_as_close = chart.settlement_as_close;
     let own_ratio = chart.state().price_scale().bar_ratio();
     // A chart not drawn yet holds the scale's placeholder range, not a view of its own.
     // shortcut: a chart drawn before its bars changed counts as drawn; track a fit since the last
@@ -515,14 +626,17 @@ impl ChartLayout {
     }
 
     fn preset_charts(&self, charts: &[&mut Chart]) -> usize {
-        charts.len().min(16).min(self.mode.chart_count())
+        charts.len().min(MAX_CHARTS).min(self.mode.chart_count())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Bar, BarData, Instrument, ProfileRows, ProfileSession, Timeframe};
+    use crate::model::{
+        Bar, BarData, FootprintColor, FootprintIntensity, FootprintMode, FootprintStatistic,
+        Instrument, NodeSensitivity, ProfileRows, ProfileSession, TPOLabels, Timeframe,
+    };
     use crate::studies::{RSI, SMA};
     use crate::widget::settings::PrecisionMode;
     use crate::widget::{ChartLayoutMode, PaneId};
@@ -598,6 +712,12 @@ mod tests {
             "the source keeps its panes"
         );
         assert_eq!(charts[0].indicators().count(), 2, "and its studies");
+        charts[1]
+            .indicator_mut(rsi)
+            .unwrap()
+            .set_input("period", InputValue::Length(4))
+            .unwrap();
+        assert_eq!(charts[1].indicator_inputs(rsi), Some("4 close"));
 
         // An edit on another chart after the copy goes back with it, and its redo returns it.
         charts[2].user_action(|chart| chart.add_indicator(Box::new(SMA::new(9))));
@@ -1022,9 +1142,9 @@ mod tests {
         assert_eq!(names(charts[2]), ["SMA"]);
     }
 
-    /// Settings reach every chart whatever its style of candles, give it the source's profile and
-    /// TPO colours and TPO display settings, and leave its chart type, profile structure, the other
-    /// parameters of that type and the precision of its instrument alone.
+    /// Settings reach every chart whatever its style of candles, give it the source's look for
+    /// every chart type, and leave its chart type, the values that suit its own prices, sizes and
+    /// sessions and the precision of its instrument alone.
     #[test]
     fn settings_copy_reaches_every_chart_and_reverses_as_one_edit() {
         let (mut a, mut b) = (chart(50), chart(50));
@@ -1043,6 +1163,18 @@ mod tests {
         params.tpo_split_periods = true;
         params.tpo_period_minutes = 15;
         params.tpo_profile_period = crate::model::TPOProfilePeriod::Week;
+        params.footprint_row_ticks = 4;
+        params.footprint_row_atr = true;
+        params.footprint_row_atr_length = 20;
+        params.footprint_value_area = Some(0.6);
+        params.footprint_imbalance_min_volume = 25.0;
+        params.footprint_single_print_max = Some(5.0);
+        params.footprint_intensity = FootprintIntensity::Visible;
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let composites = vec![start..=start + Duration::days(2)];
+        let splits = vec![start + Duration::hours(3)];
+        params.tpo_composites = composites.clone();
+        params.tpo_splits = splits.clone();
         b.set_chart_type_params(params);
         a.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.01)));
         b.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.0001)));
@@ -1057,6 +1189,23 @@ mod tests {
         profile.down_volume_color = Some(egui::Color32::BROWN);
         profile.value_area_up_color = Some(egui::Color32::DARK_GREEN);
         profile.value_area_down_color = Some(egui::Color32::DARK_RED);
+        profile.mode = FootprintMode::Delta;
+        profile.poc = false;
+        profile.extend_poc = true;
+        profile.extend_vah = true;
+        profile.extend_val = true;
+        profile.value_area_guides = true;
+        profile.value_area_high = false;
+        profile.value_area_low = false;
+        profile.developing_poc = true;
+        profile.developing_value_area = true;
+        profile.nodes = Some(NodeSensitivity::default());
+        profile.right_aligned = true;
+        profile.width = 0.5;
+        profile.values = true;
+        profile.values_color = Some(egui::Color32::LIGHT_BLUE);
+        profile.session_box = false;
+        profile.session_box_color = Some(egui::Color32::GRAY);
         params.tpo_block_colors = [
             egui::Color32::RED,
             egui::Color32::GREEN,
@@ -1079,10 +1228,56 @@ mod tests {
         params.tpo_statistics = true;
         params.tpo_colored_blocks = false;
         params.tpo_outside_value_area_opacity = 80;
+        let labels = TPOLabels {
+            poc: false,
+            initial_balance_high: true,
+            poor_high: true,
+            prices: true,
+            ..TPOLabels::default()
+        };
+        params.tpo_labels = labels;
+        params.tpo_level_tags = true;
+        params.footprint_modes = vec![FootprintMode::BidAsk, FootprintMode::Delta];
+        params.footprint_profile = true;
+        params.footprint_color_by = FootprintColor::Delta;
+        params.footprint_step_colors[0][3] = Some(egui::Color32::GOLD);
+        params.footprint_intensity = FootprintIntensity::Volume(500.0);
+        params.footprint_auto_row_height = 24.0;
+        params.footprint_min_text_height = 14.0;
+        params.footprint_imbalance = false;
+        params.footprint_poc = false;
+        params.footprint_imbalance_ratio = 4.0;
+        params.footprint_diagonal = false;
+        params.footprint_stacked_imbalances = true;
+        params.footprint_stack = 2;
+        params.footprint_zones_until_broken = true;
+        params.footprint_naked_poc = true;
+        params.footprint_delta_poc = true;
+        params.footprint_unfinished_auctions = true;
+        params.footprint_cluster_share = Some(0.2);
+        params.footprint_delta_percent = Some(10.0);
+        params.footprint_ratio = Some(2.0);
+        params.footprint_extend_bars = Some(5);
+        params.footprint_extreme_ratio = true;
+        params.footprint_pullback = true;
+        params.footprint_abbreviate = false;
+        params.footprint_show_zero = false;
+        params.footprint_font_size = [9.0, 14.0];
+        params.footprint_info_box = false;
+        params.footprint_statistics = true;
+        params.footprint_statistics_rows = vec![FootprintStatistic::Trades];
+        params.footprint_session_cumulative_delta = true;
+        params.renko_wicks = true;
+        params.renko_real_price = false;
+        params.kagi_real_price = false;
+        params.line_break_real_price = false;
+        params.pnf_real_price = false;
         a.set_chart_type_params(params);
         let mut settings = ChartSettingsState::from_chart(&a);
         settings.chart_basic_styles.background_color = egui::Color32::KHAKI;
         settings.candle_colors.body_up = egui::Color32::GOLD;
+        settings.back_adjust_futures = true;
+        settings.settlement_as_close = false;
         let factory = IndicatorFactory::new();
         let mut layout = ChartLayout {
             mode: ChartLayoutMode::TwoHorizontal,
@@ -1200,10 +1395,157 @@ mod tests {
             (true, 15, crate::model::TPOProfilePeriod::Week),
             "the TPO session and period grouping stay the chart's own"
         );
+        assert_eq!(
+            (params.tpo_labels, params.tpo_level_tags),
+            (labels, true),
+            "the TPO captions and price scale tags follow the source"
+        );
+        assert_eq!(
+            [
+                profile.poc,
+                profile.extend_poc,
+                profile.extend_vah,
+                profile.extend_val,
+                profile.value_area_guides,
+                profile.value_area_high,
+                profile.value_area_low,
+                profile.developing_poc,
+                profile.developing_value_area,
+                profile.right_aligned,
+                profile.values,
+                profile.session_box,
+            ],
+            [
+                false, true, true, true, true, false, false, true, true, true, true, false
+            ],
+            "the profile level, extension, placement and label switches follow the source"
+        );
+        assert_eq!(
+            (
+                profile.mode,
+                profile.nodes,
+                profile.width,
+                profile.values_color,
+                profile.session_box_color,
+            ),
+            (
+                FootprintMode::Delta,
+                Some(NodeSensitivity::default()),
+                0.5,
+                Some(egui::Color32::LIGHT_BLUE),
+                Some(egui::Color32::GRAY),
+            ),
+            "the profile mode, node labels, width and label colours follow the source"
+        );
+        assert_eq!(
+            [
+                params.footprint_profile,
+                params.footprint_imbalance,
+                params.footprint_poc,
+                params.footprint_diagonal,
+                params.footprint_stacked_imbalances,
+                params.footprint_zones_until_broken,
+                params.footprint_naked_poc,
+                params.footprint_delta_poc,
+                params.footprint_unfinished_auctions,
+                params.footprint_extreme_ratio,
+                params.footprint_pullback,
+                params.footprint_abbreviate,
+                params.footprint_show_zero,
+                params.footprint_info_box,
+                params.footprint_statistics,
+                params.footprint_session_cumulative_delta,
+            ],
+            [
+                true, false, false, false, true, true, true, true, true, true, true, false, false,
+                false, true, true,
+            ],
+            "the footprint display switches follow the source"
+        );
+        assert_eq!(
+            (
+                &params.footprint_modes,
+                params.footprint_color_by,
+                params.footprint_step_colors,
+                params.footprint_auto_row_height,
+                params.footprint_min_text_height,
+                params.footprint_font_size,
+                &params.footprint_statistics_rows,
+            ),
+            (
+                &vec![FootprintMode::BidAsk, FootprintMode::Delta],
+                FootprintColor::Delta,
+                [[None, None, None, Some(egui::Color32::GOLD)], [None; 4]],
+                24.0,
+                14.0,
+                [9.0, 14.0],
+                &vec![FootprintStatistic::Trades],
+            ),
+            "the footprint columns, colouring, text sizes and statistics rows follow the source"
+        );
+        assert_eq!(
+            (
+                params.footprint_imbalance_ratio,
+                params.footprint_stack,
+                params.footprint_cluster_share,
+                params.footprint_delta_percent,
+                params.footprint_ratio,
+                params.footprint_extend_bars,
+            ),
+            (4.0, 2, Some(0.2), Some(10.0), Some(2.0), Some(5)),
+            "the footprint marker thresholds follow the source"
+        );
+        assert_eq!(
+            [
+                params.renko_wicks,
+                params.renko_real_price,
+                params.kagi_real_price,
+                params.line_break_real_price,
+                params.pnf_real_price,
+            ],
+            [true, false, false, false, false],
+            "the Renko wicks and real price labels follow the source"
+        );
+        assert_eq!(
+            (
+                params.footprint_row_ticks,
+                params.footprint_row_atr,
+                params.footprint_row_atr_length,
+                params.footprint_value_area,
+                params.footprint_imbalance_min_volume,
+                params.footprint_single_print_max,
+                params.footprint_intensity,
+            ),
+            (
+                4,
+                true,
+                20,
+                Some(0.6),
+                25.0,
+                Some(5.0),
+                FootprintIntensity::Visible
+            ),
+            "the footprint rows, value area share and volumes stay the chart's own"
+        );
+        assert_eq!(
+            (&params.tpo_composites, &params.tpo_splits),
+            (&composites, &splits),
+            "the TPO composites and splits stay the chart's own"
+        );
         // Neither chose a precision, so each writes its own instrument's.
         let precision = |chart: &Chart| chart.state().price_scale().price_precision();
         assert_eq!(precision(charts[0]), Some(2));
         assert_eq!(precision(charts[1]), Some(4));
+
+        // Only the source takes the futures data choices; the other chart keeps its own.
+        let futures = |chart: &Chart| {
+            let settings = ChartSettingsState::from_chart(chart);
+            (settings.back_adjust_futures, settings.settlement_as_close)
+        };
+        assert_eq!(
+            (futures(charts[0]), futures(charts[1])),
+            ((true, false), (false, true))
+        );
 
         assert!(charts[0].undo());
         show(&mut layout, &mut charts);
@@ -1214,6 +1556,42 @@ mod tests {
             &params_before,
             "one undo restores every parameter"
         );
+
+        for (source, own, expected) in [
+            (
+                FootprintIntensity::Bar,
+                FootprintIntensity::Visible,
+                FootprintIntensity::Bar,
+            ),
+            (
+                FootprintIntensity::Visible,
+                FootprintIntensity::Bar,
+                FootprintIntensity::Visible,
+            ),
+            (
+                FootprintIntensity::Volume(500.0),
+                FootprintIntensity::Bar,
+                FootprintIntensity::Bar,
+            ),
+            (
+                FootprintIntensity::Volume(500.0),
+                FootprintIntensity::Volume(20.0),
+                FootprintIntensity::Volume(20.0),
+            ),
+        ] {
+            for (chart, intensity) in charts.iter_mut().zip([source, own]) {
+                let mut params = chart.chart_type_params().clone();
+                params.footprint_intensity = intensity;
+                chart.set_chart_type_params(params);
+            }
+            let copy = LayoutCopy::Settings(Box::new(ChartSettingsState::from_chart(charts[0])));
+            assert_eq!(layout.apply_copy(&mut charts, 0, &copy, &factory), []);
+            assert_eq!(
+                charts[1].chart_type_params().footprint_intensity,
+                expected,
+                "only a volume-based intensity stays per chart: {source:?}, {own:?}"
+            );
+        }
     }
 
     /// Settings every chart already has change none of them and leave no step to undo.

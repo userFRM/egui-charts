@@ -17,7 +17,7 @@ impl Drawing {
     /// What this drawing draws, with lines that run to the chart's edge cut at
     /// the edge of `rect`. `None` for the tools not described here (text,
     /// media, the data-driven tools and the Fibonacci arcs, circles, spiral and
-    /// wedge, the cycles, the position and projection tools) and below the
+    /// wedge, the cycles, the position tools) and below the
     /// anchors a tool needs.
     pub(crate) fn outline(&self, rect: Rect) -> Option<Outline> {
         use DrawingToolType as T;
@@ -123,10 +123,19 @@ impl Drawing {
                 }
                 None => outline.lines = path(p.len() == 3),
             },
-            T::Sector => {
+            T::Sector | T::ProjectionTool => {
                 let points = self.sector_points(clip, 1.0)?;
-                outline.lines = edges(&points);
-                if filled {
+                let fill = if self.tool_type == T::ProjectionTool {
+                    let config = self.projection_config();
+                    if config.trend_visible {
+                        outline.lines = edges(&points);
+                    }
+                    config.show_background
+                } else {
+                    outline.lines = edges(&points);
+                    filled
+                };
+                if fill {
                     outline.areas.extend(
                         points[1..]
                             .windows(2)
@@ -175,6 +184,13 @@ impl Drawing {
                         [first.y, second.y]
                             .map(|y| [Pos2::new(edges.min.x, y), Pos2::new(edges.max.x, y)]),
                     );
+                    if self.tool_type == T::DateAndPriceRange {
+                        let span = self.time_edge_span(rect, Rect::from_two_pos(first, second));
+                        outline.lines.extend(
+                            [first.x, second.x]
+                                .map(|x| [Pos2::new(x, span.min), Pos2::new(x, span.max)]),
+                        );
+                    }
                 }
             }
             T::Circle => {
@@ -207,14 +223,15 @@ impl Drawing {
             }
             T::Curve => {
                 let [p0, p1, p2] = self.curve_controls()?;
-                outline.lines = shapes::curve_points(p0, p1, p2, clip, 1.0)
+                outline.lines = self
+                    .extended_curve(shapes::quadratic_controls(p0, p1, p2), rect, clip, 1.0)
                     .windows(2)
                     .map(|w| [w[0], w[1]])
                     .collect();
             }
             T::DoubleCurve => {
                 outline.lines = self
-                    .double_curve_points(clip, 1.0)?
+                    .extended_curve(self.double_curve_controls()?, rect, clip, 1.0)
                     .windows(2)
                     .map(|w| [w[0], w[1]])
                     .collect();

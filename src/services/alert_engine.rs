@@ -1,6 +1,6 @@
 //! An alert service that evaluates alerts on the bars the host feeds it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
@@ -9,8 +9,11 @@ use super::{AlertEvent, Alerts, Events};
 use crate::data::{FeedError, MaybeSend, Reply};
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency, AlertId,
-    AlertPositionProgress, AlertSource, AlertStatus, Bar, BarClock, Timeframe,
+    AlertPositionProgress, AlertSource, AlertStatus, AlertTrigger, Bar, BarClock, Timeframe,
 };
+
+/// Triggers the engine keeps for [`AlertEngine::triggers`], silent entries included.
+const TRIGGER_HISTORY: usize = 5_000;
 
 /// An [`Alerts`] service that keeps alerts in memory and evaluates them on the bars the host
 /// feeds it with [`update`](Self::update), as [`PaperAccount`](super::PaperAccount) fills orders
@@ -20,11 +23,15 @@ use crate::model::{
 /// supplies these evaluations without constructing a chart.
 ///
 /// The host keeps the alerts: [`alerts`](Self::alerts) returns them with their status for
-/// storage, and [`with_alerts`](Self::with_alerts) restores them. Evaluation state lives in
-/// memory only, so after a restart an alert that fires on every occurrence may fire again while
-/// its condition still holds; an alert with frequency [`Once`](AlertFrequency::Once) that fired
-/// stays [`Triggered`](AlertStatus::Triggered). A [`Position`](AlertCondition::Position) keeps
-/// its progress in its condition, so it resumes waiting for the entry or for an exit.
+/// storage, and [`with_alerts`](Self::with_alerts) restores them. In the same way
+/// [`triggers`](Self::triggers) returns the newest 5,000 triggers, silent ones included, and
+/// [`with_triggers`](Self::with_triggers) restores them; the first `watch` pushes them as
+/// [`AlertEvent::Logged`], so the alert log survives a restart. Evaluation state lives in
+/// memory; a restored alert counts its [`last_triggered_at`](Alert::last_triggered_at), or on a
+/// watchlist each member's time in [`member_triggered_at`](Alert::member_triggered_at), as its
+/// last firing (see *Restarts*). An alert with frequency [`Once`](AlertFrequency::Once) that
+/// fired stays [`Triggered`](AlertStatus::Triggered). A [`Position`](AlertCondition::Position)
+/// keeps its progress in its condition, so it resumes waiting for the entry or for an exit.
 ///
 /// # Rules
 ///
@@ -57,7 +64,13 @@ use crate::model::{
 /// alert again.
 ///
 /// *Crossings.* On every interval the previous value is the value at the alert's previous
-/// evaluation, within a bar and across bars, and on the first evaluation the value one bar earlier.
+/// evaluation, within a bar and across bars. The first evaluation on a symbol of an alert saved
+/// through [`save`](Alerts::save), new or with a change to what it watches or its status, only
+/// records the values, so a crossing, entering or exiting rule needs a transition observed after
+/// the save, and a move made before the save never fires it. An alert restored by
+/// [`with_alerts`](Self::with_alerts), or saved under an id the engine did not hold, compares its
+/// first evaluation with the value one bar earlier, so a crossing made while the host was closed
+/// fires, subject to the saved last firing (see *Restarts*).
 /// A crossing on a longer interval therefore fires once whatever the shorter interval does, and
 /// one between two closes of the shorter interval is caught at the later close. Crossing up needs
 /// a previous value strictly below the level and a current value at or above it, crossing down the
@@ -67,12 +80,23 @@ use crate::model::{
 /// skipped updates use that bar's current geometry. Within a bar they use the previous evaluation.
 ///
 /// *Frequency.* [`Once`](AlertFrequency::Once) fires on the first evaluation that holds and the
-/// alert becomes [`Triggered`](AlertStatus::Triggered); a watchlist alert fires once per member
-/// and stays active. [`EveryTime`](AlertFrequency::EveryTime) fires on every evaluation that
+/// alert becomes [`Triggered`](AlertStatus::Triggered); a watchlist alert fires once per member,
+/// records it in [`member_triggered_at`](Alert::member_triggered_at), and becomes `Triggered` when
+/// every member of its list has fired, also when [`set_watchlist`](Self::set_watchlist) leaves
+/// only members that fired. [`EveryTime`](AlertFrequency::EveryTime) fires on every evaluation that
 /// holds, [`OncePerBar`](AlertFrequency::OncePerBar) at most once per bar open time, and
 /// [`OncePerBarClose`](AlertFrequency::OncePerBarClose) evaluates each completed bar once.
 /// [`OncePerMinute`](AlertFrequency::OncePerMinute) fires at most once per minute of the update
 /// time `now`; moving the clock backwards does not repeat a minute.
+///
+/// *Restarts.* The first evaluation on a symbol of an alert restored by
+/// [`with_alerts`](Self::with_alerts), or saved under an id the engine did not hold, takes its
+/// saved last firing as the last firing there. A per-minute alert does not fire again in that
+/// minute. When the evaluated bar opened at or before that time, or for an alert at bar close
+/// the bar after it did, a once-per-bar or once-per-bar-close alert does not fire on that bar,
+/// and a crossing, entering or exiting rule needs a new transition, since this evaluation only
+/// records the values. A save that changes what the alert watches or its status ends this, so
+/// it starts afresh; display and delivery edits keep its restart handling.
 ///
 /// *Schedule.* An alert's `schedule` restricts notifications. Outside it the engine keeps
 /// observing values for crossings and records each trigger as a silent
@@ -89,7 +113,9 @@ use crate::model::{
 /// *Expiry.* Every `update` and [`tick`](Self::tick) first marks active alerts whose expiry has
 /// passed as [`Expired`](AlertStatus::Expired), so an alert never fires at or after its expiry
 /// and expires without data. Disabled, triggered and expired alerts are not evaluated, and
-/// saving or removing an alert discards its evaluation state, so a resumed alert starts afresh.
+/// saving changes to what an alert watches or its status, or removing it, discards its evaluation
+/// state, so a resumed alert starts afresh. Display and delivery edits keep a watchlist alert's
+/// member record.
 ///
 /// ```
 /// use std::sync::{Arc, Mutex};
@@ -179,6 +205,14 @@ struct State {
     runs: HashMap<(AlertId, String), Run>,
     /// The custom event sources the host connected.
     routes: std::collections::HashSet<String>,
+    /// Alerts restored by `with_alerts`, or saved under an id the engine did not hold, whose
+    /// monitoring has not changed since: a run's first evaluation compares crossings with the
+    /// bar before and counts their saved last firing.
+    restored: std::collections::HashSet<AlertId>,
+    /// The newest triggers, oldest first.
+    triggers: VecDeque<AlertTrigger>,
+    /// A stream was watched, so the history was pushed.
+    watched: bool,
 }
 
 /// What the engine remembers of one alert on one symbol.
@@ -225,6 +259,9 @@ struct Observation {
     clock: BarClock,
     event: DateTime<Utc>,
     bar: Bar,
+    /// The time of the bar after this one in the update that observed it, if any: for an alert
+    /// at bar close, the bar whose arrival completed this one.
+    next: Option<DateTime<Utc>>,
     /// What the message of the first condition's interval reads on this bar. An update of another
     /// interval, which may fire the alert, cannot read it.
     values: Vec<(AlertSource, Option<f64>)>,
@@ -275,14 +312,19 @@ impl AlertEngine {
     }
 
     /// Starts with `alerts` as [`alerts`](Self::alerts) returned them, giving those without an
-    /// id one after the others.
+    /// id one after the others. Their first evaluation on each symbol compares crossings with
+    /// the value one bar earlier and counts their saved last firing, as the *Crossings* and
+    /// *Restarts* rules describe.
     pub fn with_alerts(self, alerts: Vec<Alert>) -> Self {
         {
             let mut state = self.lock();
             // Ids are given once every kept id is known, so that none is given twice.
             let (kept, new): (Vec<_>, Vec<_>) = alerts.into_iter().partition(|a| a.id.is_some());
             for alert in kept.into_iter().chain(new) {
-                state.insert(alert);
+                // Restored alerts compare with the bar before and count their saved last firing.
+                if let Some(id) = state.insert(alert).id {
+                    state.restored.insert(id);
+                }
             }
         }
         self
@@ -297,6 +339,37 @@ impl AlertEngine {
     /// The alerts with their current status, for the host to keep.
     pub fn alerts(&self) -> Vec<Alert> {
         self.lock().alerts.clone()
+    }
+
+    /// The newest 5,000 triggers, oldest first, silent entries included, for the host to keep
+    /// beside [`alerts`](Self::alerts).
+    pub fn triggers(&self) -> Vec<AlertTrigger> {
+        self.lock().triggers.iter().cloned().collect()
+    }
+
+    /// Starts with `triggers` as [`triggers`](Self::triggers) returned them, oldest first,
+    /// keeping the newest 5,000. The first [`watch`](Alerts::watch) pushes them as
+    /// [`AlertEvent::Logged`], so the alert log survives a restart; later calls do not.
+    pub fn with_triggers(self, triggers: Vec<AlertTrigger>) -> Self {
+        {
+            let mut state = self.lock();
+            let skip = triggers.len().saturating_sub(TRIGGER_HISTORY);
+            state.triggers = triggers
+                .into_iter()
+                .skip(skip)
+                .map(|mut trigger| {
+                    trigger.price = trigger.price.filter(|p| p.is_finite());
+                    trigger
+                })
+                .collect();
+        }
+        self
+    }
+
+    /// Keeps only the triggers of the history for which `keep` returns true, as the alerts
+    /// panel does when the user clears its log.
+    pub fn retain_triggers(&self, keep: impl FnMut(&AlertTrigger) -> bool) {
+        self.lock().triggers.retain(keep);
     }
 
     /// Active symbols still armed for `id`, including watchlist members. A once-per-member
@@ -318,26 +391,45 @@ impl AlertEngine {
         symbols
             .into_iter()
             .filter(|symbol| {
-                !state
-                    .runs
-                    .get(&(id.clone(), symbol.clone()))
-                    .is_some_and(|run| run.done)
+                !member_done(alert, symbol)
+                    && !state
+                        .runs
+                        .get(&(id.clone(), symbol.clone()))
+                        .is_some_and(|run| run.done)
             })
             .collect()
     }
 
     /// Sets the members of the watchlist `id`, as the host's watchlist holds them. A member that
-    /// leaves loses its evaluation state, so it starts afresh if it returns.
+    /// leaves loses its evaluation state, so it starts afresh if it returns, except that a member
+    /// a once alert fired for stays done.
     pub fn set_watchlist(&self, id: &str, symbols: Vec<String>) {
         let mut state = self.lock();
-        let State { alerts, runs, .. } = &mut *state;
+        let State {
+            alerts,
+            runs,
+            watchlists,
+            events,
+            ..
+        } = &mut *state;
         runs.retain(|(alert, symbol), _| {
             symbols.contains(symbol)
                 || !alerts
                     .iter()
                     .any(|a| a.id.as_ref() == Some(alert) && a.watchlist.as_deref() == Some(id))
         });
-        state.watchlists.insert(id.to_owned(), symbols);
+        watchlists.insert(id.to_owned(), symbols);
+        for alert in alerts.iter_mut().filter(|alert| {
+            alert.status == AlertStatus::Active
+                && alert.frequency == AlertFrequency::Once
+                && alert.watchlist.as_deref() == Some(id)
+                && finished(alert, watchlists)
+        }) {
+            alert.status = AlertStatus::Triggered;
+            if let Some(events) = events {
+                events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+            }
+        }
     }
 
     /// Updates active conditions of `symbol` on `timeframe` against the newest of `bars`, oldest
@@ -406,6 +498,8 @@ impl AlertEngine {
             events,
             watchlists,
             runs,
+            restored,
+            triggers,
             ..
         } = &mut *state;
         for alert in alerts.iter_mut().filter(|alert| {
@@ -442,7 +536,13 @@ impl AlertEngine {
             let intervals = alert.timeframes();
             let mut matched = false;
             let mut ready = true;
-            let run = runs.entry((id.clone(), symbol.to_owned())).or_default();
+            let done = member_done(alert, symbol);
+            let run = runs
+                .entry((id.clone(), symbol.to_owned()))
+                .or_insert_with(|| Run {
+                    done,
+                    ..Run::default()
+                });
             for (clock, bars) in inputs {
                 let Some(timeframe) = clock.timeframe().filter(|tf| intervals.contains(tf)) else {
                     continue;
@@ -462,21 +562,25 @@ impl AlertEngine {
             if !matched || !ready {
                 continue;
             }
-            let Some((bar, messages, silent)) = evaluate(alert, run, symbol, exchange, now) else {
+            let Some((bar, messages, silent)) =
+                evaluate(alert, run, symbol, exchange, now, restored.contains(&id))
+            else {
                 continue;
             };
             let price = bar.close.is_finite().then_some(bar.close);
             let position = matches!(alert.condition, AlertCondition::Position { .. });
             if silent {
-                if let Some(events) = events {
-                    for message in &messages {
-                        events.push(AlertEvent::SilentTriggered {
-                            id: id.clone(),
-                            symbol: symbol.to_owned(),
-                            time: now,
-                            price,
-                            message: message.clone(),
-                        });
+                for message in &messages {
+                    let event = AlertEvent::SilentTriggered {
+                        id: id.clone(),
+                        symbol: symbol.to_owned(),
+                        time: now,
+                        price,
+                        message: message.clone(),
+                    };
+                    remember(triggers, alert, &event);
+                    if let Some(events) = events {
+                        events.push(event);
                     }
                 }
                 // A position alert moves on outside its schedule too.
@@ -486,6 +590,7 @@ impl AlertEngine {
             } else {
                 alert.last_triggered_at =
                     Some(alert.last_triggered_at.map_or(now, |old| old.max(now)));
+                record_member(alert, symbol, now);
             }
             // An entered position keeps watching for its exit.
             let open = matches!(
@@ -495,15 +600,19 @@ impl AlertEngine {
                     ..
                 }
             );
-            if alert.frequency == AlertFrequency::Once && !open {
+            let once = alert.frequency == AlertFrequency::Once;
+            if once && !open {
                 run.done = true;
-                if alert.watchlist.is_none() {
+                if alert.watchlist.is_none() || finished(alert, watchlists) {
                     alert.status = AlertStatus::Triggered;
                 }
             }
             run.fired = Some(occurrence(alert.frequency, &bar, now));
+            // A once alert on a list reports each member it fired for.
             if let Some(events) = events
-                && (alert.status != AlertStatus::Active || position)
+                && (alert.status != AlertStatus::Active
+                    || position
+                    || (once && alert.watchlist.is_some()))
             {
                 events.push(AlertEvent::Upsert(Box::new(alert.clone())));
             }
@@ -518,6 +627,7 @@ impl AlertEngine {
                     price,
                     message,
                 };
+                remember(triggers, alert, &event);
                 if let Some(events) = events {
                     events.push(event.clone());
                 }
@@ -746,6 +856,7 @@ impl AlertEngine {
             runs,
             events,
             watchlists,
+            triggers,
             ..
         } = &mut *state;
         for alert in alerts.iter_mut().filter(|alert| {
@@ -768,7 +879,13 @@ impl AlertEngine {
                     events.push(AlertEvent::Upsert(Box::new(alert.clone())));
                 }
             }
-            let seen = runs.entry((id.clone(), symbol.to_owned())).or_default();
+            let done = member_done(alert, symbol);
+            let seen = runs
+                .entry((id.clone(), symbol.to_owned()))
+                .or_insert_with(|| Run {
+                    done,
+                    ..Run::default()
+                });
             for occurrence in occurrences(&alert.condition, seen) {
                 if seen.done {
                     continue;
@@ -799,22 +916,25 @@ impl AlertEngine {
                     .as_ref()
                     .is_some_and(|schedule| !schedule.allows(now))
                 {
+                    let event = AlertEvent::SilentTriggered {
+                        id: id.clone(),
+                        symbol: symbol.to_owned(),
+                        time,
+                        price,
+                        message,
+                    };
+                    remember(triggers, alert, &event);
                     if let Some(events) = events {
-                        events.push(AlertEvent::SilentTriggered {
-                            id: id.clone(),
-                            symbol: symbol.to_owned(),
-                            time,
-                            price,
-                            message,
-                        });
+                        events.push(event);
                     }
                     continue;
                 }
                 alert.last_triggered_at =
                     Some(alert.last_triggered_at.map_or(time, |old| old.max(time)));
+                record_member(alert, symbol, time);
                 if alert.frequency == AlertFrequency::Once {
                     seen.done = true;
-                    if alert.watchlist.is_none() {
+                    if alert.watchlist.is_none() || finished(alert, watchlists) {
                         alert.status = AlertStatus::Triggered;
                     }
                     if let Some(events) = events {
@@ -828,6 +948,7 @@ impl AlertEngine {
                     price,
                     message,
                 };
+                remember(triggers, alert, &event);
                 if let Some(events) = events {
                     events.push(event.clone());
                 }
@@ -852,6 +973,7 @@ impl AlertEngine {
 impl State {
     /// Adds `alert` or replaces the one with its id, giving it an id if it has none.
     fn insert(&mut self, mut alert: Alert) -> Alert {
+        let restoring = alert.id.is_some();
         // A position alert made active again after its exit waits for the entry again.
         if alert.status == AlertStatus::Active
             && let AlertCondition::Position { progress, .. } = &mut alert.condition
@@ -865,6 +987,7 @@ impl State {
         if alert.id.is_none() {
             alert.created_at = Some(Utc::now());
             alert.last_triggered_at = None;
+            alert.member_triggered_at.clear();
             loop {
                 self.next_id += 1;
                 let id = AlertId(self.next_id.to_string());
@@ -875,9 +998,22 @@ impl State {
             }
         }
         let existing = self.alerts.iter().find(|old| old.id == alert.id);
+        if let Some(id) = &alert.id {
+            if existing.is_some_and(|old| !old.same_monitoring(&alert)) {
+                self.restored.remove(id);
+            } else if existing.is_none() && restoring {
+                self.restored.insert(id.clone());
+            }
+        }
         if let Some(old) = existing {
             alert.created_at = old.created_at;
             alert.last_triggered_at = old.last_triggered_at;
+            // A save that changes what the alert watches or its status starts its members afresh.
+            alert.member_triggered_at = if old.same_monitoring(&alert) {
+                old.member_triggered_at.clone()
+            } else {
+                BTreeMap::new()
+            };
         }
         let same_monitoring = existing.is_some_and(|old| {
             old.same_monitoring(&alert)
@@ -940,6 +1076,15 @@ impl Alerts for AlertEngine {
         for alert in &state.alerts {
             events.push(AlertEvent::Upsert(Box::new(alert.clone())));
         }
+        if !std::mem::replace(&mut state.watched, true) {
+            // The alerts and the history share the stream's 10,000 pushes per frame; 1,000 stay
+            // free for the frame's other pushes.
+            let room = 9_000usize.saturating_sub(state.alerts.len());
+            let skip = state.triggers.len().saturating_sub(room);
+            for trigger in state.triggers.iter().skip(skip) {
+                events.push(AlertEvent::Logged(trigger.clone()));
+            }
+        }
         state.events = Some(events);
     }
 
@@ -968,6 +1113,7 @@ impl Alerts for AlertEngine {
     fn remove(&self, id: AlertId, reply: Reply<()>) {
         let mut state = self.lock();
         state.runs.retain(|(kept, _), _| *kept != id);
+        state.restored.remove(&id);
         state.alerts.retain(|a| a.id.as_ref() != Some(&id));
         state.push(AlertEvent::Remove(id));
         reply.send(Ok(()));
@@ -1081,6 +1227,7 @@ fn observe(
             clock: clock.clone(),
             event,
             bar: bars[at].clone(),
+            next: bars.get(at + 1).map(|bar| bar.time),
             values: values.into_inner(),
             earlier,
         }
@@ -1118,13 +1265,15 @@ fn observe(
 
 /// Test one coherent set of interval observations and consume its occurrence. Returns the bar
 /// and messages to fire, one per trigger (a position can enter and exit on one evaluation), and
-/// whether they fall outside the schedule and are only logged.
+/// whether they fall outside the schedule and are only logged. `restored` tells whether the
+/// alert was restored, see [`State::restored`].
 fn evaluate(
     alert: &mut Alert,
     run: &mut Run,
     symbol: &str,
     exchange: Option<&str>,
     now: DateTime<Utc>,
+    restored: bool,
 ) -> Option<(Bar, Vec<String>, bool)> {
     let intervals = alert.timeframes();
     let anchor = run.intervals.get(&intervals[0])?;
@@ -1157,6 +1306,46 @@ fn evaluate(
         .eq(&run.joined)
     {
         return None;
+    }
+    // A watchlist member reads its own time: another member may have set the alert's.
+    let last = match &alert.watchlist {
+        _ if !restored => None,
+        Some(_) => alert.member_triggered_at.get(symbol).copied(),
+        None => alert.last_triggered_at,
+    };
+    // A restored alert takes its saved last firing on its first evaluation.
+    if run.joined.is_empty()
+        && let Some(last) = last
+    {
+        if alert.frequency == AlertFrequency::OncePerMinute {
+            run.fired = Some(occurrence(alert.frequency, &anchor.bar, last));
+        }
+        // The evaluated bar held the firing, or for an alert at bar close, completed before it.
+        let covered = match alert.frequency {
+            AlertFrequency::OncePerBarClose => anchor.next.is_some_and(|next| next <= last),
+            _ => anchor.bar.time <= last,
+        };
+        if covered {
+            // Rules that compare two evaluations need a transition seen after the restart.
+            run.joined = joined
+                .iter()
+                .map(|observation| observation.seen.clone())
+                .collect();
+            if matches!(
+                alert.frequency,
+                AlertFrequency::OncePerBar | AlertFrequency::OncePerBarClose
+            ) {
+                run.fired = Some(occurrence(alert.frequency, &anchor.bar, now));
+            }
+        }
+    }
+    // An alert saved in this session compares only values it observed, so its first evaluation
+    // records them: a crossing that happened before the save never fires.
+    if run.joined.is_empty() && !restored {
+        run.joined = joined
+            .iter()
+            .map(|observation| observation.seen.clone())
+            .collect();
     }
     let holds =
         joined
@@ -1295,6 +1484,74 @@ fn reads_previous(condition: &AlertCondition) -> bool {
         ),
         _ => false,
     }
+}
+
+/// Whether `alert`, a once alert on a watchlist, fired for `symbol` before, as its saved member
+/// record holds.
+fn member_done(alert: &Alert, symbol: &str) -> bool {
+    alert.frequency == AlertFrequency::Once
+        && alert.watchlist.is_some()
+        && alert.member_triggered_at.contains_key(symbol)
+}
+
+/// Whether every member of the watchlist of `alert` has fired. A list the host has not set, or an
+/// empty one, is never finished.
+fn finished(alert: &Alert, watchlists: &HashMap<String, Vec<String>>) -> bool {
+    alert
+        .watchlist
+        .as_ref()
+        .and_then(|list| watchlists.get(list))
+        .is_some_and(|members| {
+            !members.is_empty()
+                && members
+                    .iter()
+                    .all(|member| alert.member_triggered_at.contains_key(member))
+        })
+}
+
+/// Records `time` as the latest firing of the watchlist member `symbol`.
+fn record_member(alert: &mut Alert, symbol: &str, time: DateTime<Utc>) {
+    if alert.watchlist.is_some() {
+        let at = alert
+            .member_triggered_at
+            .entry(symbol.to_owned())
+            .or_insert(time);
+        *at = (*at).max(time);
+    }
+}
+
+/// Keeps the trigger `event` of `alert` as the newest of `history`, dropping the oldest beyond
+/// the bound.
+fn remember(history: &mut VecDeque<AlertTrigger>, alert: &Alert, event: &AlertEvent) {
+    let (AlertEvent::TriggeredForSymbol {
+        id,
+        symbol,
+        time,
+        price,
+        message,
+    }
+    | AlertEvent::SilentTriggered {
+        id,
+        symbol,
+        time,
+        price,
+        message,
+    }) = event
+    else {
+        return;
+    };
+    if history.len() == TRIGGER_HISTORY {
+        history.pop_front();
+    }
+    history.push_back(AlertTrigger {
+        id: id.clone(),
+        name: alert.display_name(),
+        symbol: symbol.clone(),
+        time: *time,
+        price: price.filter(|p| p.is_finite()),
+        message: message.clone(),
+        silent: matches!(event, AlertEvent::SilentTriggered { .. }),
+    });
 }
 
 /// What a frequency fires at most once per: the bar, or for a per-minute alert the minute of `now`.
@@ -1814,6 +2071,17 @@ mod tests {
                     })
                     .collect();
                 assert_eq!(fired, triggers, "row {index}, silent {silent}");
+                // The history keeps every trigger pushed, silent ones marked.
+                let history = host.engine.triggers();
+                let kept: Vec<_> = history
+                    .iter()
+                    .filter_map(|t| Some((t.message.as_str(), t.price?)))
+                    .collect();
+                assert_eq!(kept, triggers, "row {index}, silent {silent}");
+                assert!(
+                    history.iter().all(|t| t.silent == silent),
+                    "row {index}, silent {silent}"
+                );
                 assert_eq!(reported, progress, "row {index}, silent {silent}");
                 assert_eq!(
                     host.delivered.lock().unwrap().len(),
@@ -1914,6 +2182,143 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// An hourly alert fired at 10:05 in the 10:00 bar, was saved and is restored at 10:20. Each
+    /// step is the first hour of an update, its closes, the update time and the closes that fire.
+    #[test]
+    fn a_restored_alert_counts_its_last_firing() {
+        use AlertCondition::{Above, CrossingUp};
+        use AlertFrequency::{EveryTime, OncePerBar, OncePerBarClose, OncePerMinute};
+        let restored = |condition, frequency| {
+            let mut saved = alert(condition, frequency);
+            saved.timeframe = Some(Timeframe::Hour1);
+            saved.id = Some(AlertId("1".into()));
+            saved.last_triggered_at = Some(time(36_300));
+            saved
+        };
+        let hourly = |first: i64, closes: &[f64]| -> Vec<Bar> {
+            (first..)
+                .zip(closes)
+                .map(|(hour, &close)| Bar::new(time(hour * 3_600), close, close, close, close, 1.0))
+                .collect()
+        };
+        let update = |host: &Host, symbol: &str, (first, closes): (i64, &[f64]), now: i64| {
+            host.engine.update(
+                symbol,
+                None,
+                Timeframe::Hour1,
+                &hourly(first, closes),
+                time(now),
+                |_, _| None,
+            );
+        };
+        let rows = [
+            // No firing before the 11:00 bar.
+            (
+                Above(100.0),
+                OncePerBar,
+                vec![
+                    (9, vec![99.0, 101.0], 37_200, vec![]),
+                    (9, vec![99.0, 102.0], 38_400, vec![]),
+                    (9, vec![99.0, 102.0, 103.0], 39_660, vec![103.0]),
+                ],
+            ),
+            // The 09:00 bar fired when the 10:00 bar arrived; the 10:00 bar fires at its close.
+            (
+                Above(100.0),
+                OncePerBarClose,
+                vec![
+                    (8, vec![99.0, 101.0, 101.0], 37_200, vec![]),
+                    (8, vec![99.0, 101.0, 102.0, 103.0], 39_660, vec![102.0]),
+                ],
+            ),
+            // Not again before 10:06.
+            (
+                Above(100.0),
+                OncePerMinute,
+                vec![
+                    (9, vec![99.0, 101.0], 36_330, vec![]),
+                    (9, vec![99.0, 102.0], 36_360, vec![102.0]),
+                ],
+            ),
+            // The crossing that fired needs a new one.
+            (
+                CrossingUp(100.0),
+                EveryTime,
+                vec![
+                    (9, vec![99.0, 101.0], 37_200, vec![]),
+                    (9, vec![99.0, 99.0], 37_260, vec![]),
+                    (9, vec![99.0, 101.0], 37_320, vec![101.0]),
+                ],
+            ),
+            // In a later bar the alert evaluates as a new one.
+            (
+                Above(100.0),
+                OncePerBar,
+                vec![(10, vec![101.0, 101.0], 40_800, vec![101.0])],
+            ),
+            (
+                CrossingUp(100.0),
+                EveryTime,
+                vec![(10, vec![99.0, 101.0], 40_800, vec![101.0])],
+            ),
+        ];
+        for (row, (condition, frequency, steps)) in rows.into_iter().enumerate() {
+            let host = Host::new(vec![restored(condition, frequency)]);
+            for (step, (first, closes, now, fired)) in steps.into_iter().enumerate() {
+                update(&host, "SYM", (first, &closes), now);
+                assert_eq!(host.fired(), fired, "row {row}, step {step}");
+            }
+        }
+        // A display-only save before the first evaluation keeps the saved last firing.
+        for list in [false, true] {
+            let mut saved = restored(Above(100.0), OncePerBar);
+            if list {
+                saved.symbol = String::new();
+                saved.watchlist = Some("tech".into());
+                saved.member_triggered_at.insert("SYM".into(), time(36_300));
+            }
+            let host = Host::new(vec![saved]);
+            host.engine.set_watchlist("tech", vec!["SYM".into()]);
+            let mut edited = host.engine.alerts().remove(0);
+            edited.extend_line = false;
+            assert_eq!(host.save(edited), Ok(()));
+            update(&host, "SYM", (9, &[99.0, 101.0]), 37_200);
+            assert!(
+                host.fired().is_empty(),
+                "display-only save, watchlist: {list}"
+            );
+        }
+        // Changing what the alert watches starts it afresh.
+        let host = Host::new(vec![restored(Above(100.0), OncePerBar)]);
+        update(&host, "SYM", (9, &[99.0, 101.0]), 37_200);
+        assert!(host.fired().is_empty());
+        let mut edited = host.engine.alerts().remove(0);
+        edited.condition = Above(100.5);
+        assert_eq!(host.save(edited), Ok(()));
+        update(&host, "SYM", (9, &[99.0, 101.0]), 37_260);
+        assert_eq!(host.fired(), [101.0]);
+        // A watchlist member counts its own firing, not one of another member.
+        let mut list = restored(Above(100.0), OncePerBar);
+        list.symbol = String::new();
+        list.watchlist = Some("tech".into());
+        list.member_triggered_at.insert("SYM".into(), time(36_300));
+        let host = Host::new(vec![list]);
+        host.engine
+            .set_watchlist("tech", vec!["SYM".into(), "OTHER".into()]);
+        for symbol in ["SYM", "OTHER"] {
+            update(&host, symbol, (9, &[99.0, 101.0]), 37_200);
+        }
+        let symbols: Vec<_> = host
+            .events()
+            .into_iter()
+            .filter_map(|event| match event {
+                AlertEvent::TriggeredForSymbol { symbol, .. } => Some(symbol),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(symbols, ["OTHER"]);
     }
 
     /// A crossing follows the configured ray's stable slot through drawing and alert restore,
@@ -2169,6 +2574,67 @@ mod tests {
                     .collect();
                 let values: Vec<f64> = history.iter().chain([current]).map(|t| t.2).collect();
                 feed(&host, &bars, &values, 1_000 + tick as i64);
+                if !host.fired().is_empty() {
+                    fired.push(tick);
+                }
+            }
+            assert_eq!(fired, expected, "row {row}");
+        }
+    }
+
+    /// A saved alert compares only values it observed after the save: a crossing between the bar
+    /// before and the forming bar at the save is history. Each row saves the alert at 00:01:10 with
+    /// the 00:00 bar closed at `before` and feeds the forming 00:01 bar tick by tick.
+    #[test]
+    fn a_saved_alert_crosses_only_from_values_it_observed() {
+        type SavedRow = (AlertCondition, f64, Vec<f64>, Vec<usize>);
+        let (lower, upper) = (100.0, 110.0);
+        let rows: Vec<SavedRow> = vec![
+            (
+                AlertCondition::CrossingUp(100.0),
+                99.0,
+                vec![105.0, 99.0, 101.0],
+                vec![2],
+            ),
+            // The bell's default: crossing at the last close, the bar before on either side.
+            (
+                AlertCondition::Crossing(100.0),
+                99.0,
+                vec![100.0, 101.0, 99.0],
+                vec![2],
+            ),
+            (
+                AlertCondition::Crossing(100.0),
+                101.0,
+                vec![100.0, 99.0, 101.0],
+                vec![2],
+            ),
+            (
+                AlertCondition::EnteringChannel { lower, upper },
+                95.0,
+                vec![105.0, 111.0, 105.0],
+                vec![2],
+            ),
+            (
+                AlertCondition::ExitingChannel { lower, upper },
+                105.0,
+                vec![111.0, 105.0, 99.0],
+                vec![2],
+            ),
+        ];
+        for (row, (condition, before, ticks, expected)) in rows.into_iter().enumerate() {
+            let host = Host::new(Vec::new());
+            host.save(alert(condition, AlertFrequency::EveryTime))
+                .unwrap();
+            host.events();
+            let mut fired = Vec::new();
+            for (tick, close) in ticks.into_iter().enumerate() {
+                feed(
+                    &host,
+                    &[bar(0, before, 1.0), bar(1, close, 1.0)],
+                    &[],
+                    70 + tick as i64,
+                );
                 if !host.fired().is_empty() {
                     fired.push(tick);
                 }
@@ -2554,6 +3020,65 @@ mod tests {
         assert!(host.events().is_empty());
     }
 
+    /// Saved trigger history survives restoration and is pushed once, including silent entries,
+    /// while the retained history stays bounded.
+    #[test]
+    fn restored_triggers_are_pushed_on_the_first_watch_only() {
+        let mut watched = alert(AlertCondition::Above(100.0), AlertFrequency::EveryTime);
+        watched.id = Some(AlertId("1".into()));
+        watched.name = "Breakout".into();
+        let host = Host::new(vec![watched]);
+        host.events();
+        let bars = [bar(0, 99.0, 1.0), bar(1, 101.0, 1.0), bar(2, 103.0, 1.0)];
+        feed(&host, &bars, &[], 1_000);
+        let mut fired = AlertTrigger::new(AlertId("1".into()), "SYM", time(1_000));
+        fired.name = "Breakout".into();
+        fired.price = Some(103.0);
+        assert_eq!(host.engine.triggers(), [fired]);
+        // The host keeps the history as text beside the alerts.
+        let mut quiet = AlertTrigger::new(AlertId("1".into()), "SYM", time(2_000));
+        quiet.silent = true;
+        let mut saved = host.engine.triggers();
+        saved.push(quiet);
+        let saved: Vec<AlertTrigger> =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let restored = AlertEngine::new()
+            .with_alerts(host.engine.alerts())
+            .with_triggers(saved.clone());
+        let inbox = Arc::new(Inbox::default());
+        let (_first, events) = Listener::new(&inbox, 1);
+        restored.watch(events);
+        let (_second, events) = Listener::new(&inbox, 2);
+        restored.watch(events);
+        let answers = inbox.drain().answers;
+        let pushed = |key| {
+            answers
+                .iter()
+                .filter(|(k, _)| *k == key)
+                .map(|(_, event)| event.downcast_ref::<AlertEvent>().unwrap().clone())
+                .collect::<Vec<_>>()
+        };
+        let upsert = AlertEvent::Upsert(Box::new(restored.alerts()[0].clone()));
+        assert_eq!(
+            pushed(1),
+            [
+                upsert.clone(),
+                AlertEvent::Logged(saved[0].clone()),
+                AlertEvent::Logged(saved[1].clone())
+            ]
+        );
+        assert_eq!(pushed(2), [upsert]);
+        // The history keeps the newest triggers.
+        let many = (0..5_001)
+            .map(|n| AlertTrigger::new(AlertId(n.to_string()), "SYM", time(n)))
+            .collect();
+        let kept = AlertEngine::new().with_triggers(many).triggers();
+        assert_eq!(
+            (kept.len(), kept[0].id.0.as_str(), kept[4_999].id.0.as_str()),
+            (5_000, "1", "5000")
+        );
+    }
+
     /// An alert stored before names and messages had limits, here with a 4001-character
     /// message, loads with `with_alerts` and keeps working.
     #[test]
@@ -2690,7 +3215,8 @@ mod tests {
         feed(&host, &bars, &[], 1_000);
         assert_eq!(host.fired(), [101.0]);
 
-        // A disabled alert is ignored; saving it active again starts with a first observation.
+        // A disabled alert is ignored; saving it active again records a first observation,
+        // so the crossing from before the save does not fire.
         let mut paused = alert(AlertCondition::CrossingUp(100.0), AlertFrequency::Once);
         paused.status = AlertStatus::Disabled;
         let host = Host::new(vec![paused.clone()]);
@@ -2702,6 +3228,13 @@ mod tests {
         host.save(paused).unwrap();
         host.events();
         feed(&host, &bars, &[], 1_001);
+        assert!(
+            host.events().is_empty(),
+            "resumed: crossing before the save"
+        );
+        feed(&host, &[bars[0].clone(), bar(1, 99.5, 1.0)], &[], 1_001);
+        assert!(host.events().is_empty());
+        feed(&host, &bars, &[], 1_001);
         // Once reports the new status before the trigger.
         let events = host.events();
         assert!(matches!(&events[0], AlertEvent::Upsert(a) if a.status == AlertStatus::Triggered));
@@ -2710,30 +3243,78 @@ mod tests {
             if symbol == "SYM" && *t == time(1_001) && *p == 101.0)
         );
 
-        // A watchlist alert fires once for each member and stays active.
-        let mut list = alert(AlertCondition::Above(100.0), AlertFrequency::Once);
-        list.symbol = String::new();
-        list.watchlist = Some("tech".into());
-        let host = Host::new(vec![list]);
-        host.engine
-            .set_watchlist("tech", vec!["SYM".into(), "OTHER".into()]);
-        host.events();
-        for symbol in ["SYM", "SYM", "OTHER", "NOT_A_MEMBER"] {
-            host.engine
-                .update(symbol, None, Timeframe::Min1, &bars, time(1_000), |_, _| {
-                    None
-                });
+        for host_events in [false, true] {
+            // A watchlist alert fires once for each member and ends when every member has fired.
+            let condition = if host_events {
+                AlertCondition::CustomEvents("Turns".into())
+            } else {
+                AlertCondition::Above(100.0)
+            };
+            let mut list = alert(condition, AlertFrequency::Once);
+            list.symbol = String::new();
+            list.watchlist = Some("tech".into());
+            let members = || vec!["SYM".to_owned(), "OTHER".to_owned()];
+            let fired_on = |host: &Host, symbols: &[&str]| -> Vec<String> {
+                for symbol in symbols {
+                    if host_events {
+                        host.engine.custom_events(
+                            "Turns",
+                            symbol,
+                            None,
+                            Timeframe::Min1,
+                            &[crate::model::CustomAlertEvent::new(1, time(1_000), "Turn")],
+                            time(1_000),
+                        );
+                    } else {
+                        host.engine.update(
+                            symbol,
+                            None,
+                            Timeframe::Min1,
+                            &bars,
+                            time(1_000),
+                            |_, _| None,
+                        );
+                    }
+                }
+                host.events()
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        AlertEvent::TriggeredForSymbol { symbol, .. } => Some(symbol),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            let host = Host::new(vec![list]);
+            host.engine.set_watchlist("tech", members());
+            host.events();
+            assert_eq!(fired_on(&host, &["SYM", "SYM"]), ["SYM"]);
+            let partial = host.engine.alerts().remove(0);
+            assert_eq!(partial.status, AlertStatus::Active);
+            assert_eq!(
+                partial.member_triggered_at.keys().collect::<Vec<_>>(),
+                ["SYM"]
+            );
+            // A member that leaves and returns keeps its saved completion.
+            host.engine.set_watchlist("tech", vec!["OTHER".into()]);
+            host.engine.set_watchlist("tech", members());
+            assert!(fired_on(&host, &["SYM"]).is_empty());
+            assert_eq!(fired_on(&host, &["OTHER", "NOT_A_MEMBER"]), ["OTHER"]);
+            let ended = host.engine.alerts().remove(0);
+            assert_eq!(ended.status, AlertStatus::Triggered);
+            // A restored copy fires only for the members that had not fired, none once it ended.
+            for (saved, expected) in [(partial.clone(), vec!["OTHER"]), (ended, vec![])] {
+                let host = Host::new(vec![saved]);
+                host.engine.set_watchlist("tech", members());
+                host.events();
+                assert_eq!(fired_on(&host, &["SYM", "OTHER"]), expected);
+            }
+            // A list left with only members that fired ends the alert; an empty list does not.
+            let host = Host::new(vec![partial]);
+            host.engine.set_watchlist("tech", Vec::new());
+            assert_eq!(host.engine.alerts()[0].status, AlertStatus::Active);
+            host.engine.set_watchlist("tech", vec!["SYM".into()]);
+            assert_eq!(host.engine.alerts()[0].status, AlertStatus::Triggered);
         }
-        let symbols: Vec<_> = host
-            .events()
-            .into_iter()
-            .filter_map(|event| match event {
-                AlertEvent::TriggeredForSymbol { symbol, .. } => Some(symbol),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(symbols, ["SYM", "OTHER"]);
-        assert_eq!(host.engine.alerts()[0].status, AlertStatus::Active);
 
         // Invalid alerts are refused.
         assert!(matches!(
@@ -2849,8 +3430,8 @@ mod tests {
                     "{comparison}: changed geometry after bar {last}",
                 );
             }
-            // First evaluation on bar 1 must use bar 0's bounds, not bar 1's bounds twice.
-            let host = Host::new(host.engine.alerts());
+            // A new alert on bar 1 uses bar 0's bounds, not bar 1's bounds twice.
+            let host = Host::new(vec![watching]);
             host.events();
             host.engine
                 .update("SYM", None, Timeframe::Min1, &bars[..2], time(1020), rising);
@@ -3247,6 +3828,16 @@ mod tests {
         };
         assert_eq!(
             triggers(&host),
+            [at(100, Some(101.0), "Turn 1"), at(160, None, "Turn 2")]
+        );
+        let kept: Vec<_> = host
+            .engine
+            .triggers()
+            .into_iter()
+            .map(|t| (t.symbol, t.time, t.price, t.message))
+            .collect();
+        assert_eq!(
+            kept,
             [at(100, Some(101.0), "Turn 1"), at(160, None, "Turn 2")]
         );
         // Paused while other alerts evaluate bars, then resumed, it fires no event again.

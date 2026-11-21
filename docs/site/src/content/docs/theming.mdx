@@ -25,8 +25,8 @@ let mut chart = ChartBuilder::new().with_theme(theme).build();
 
 Apply the theme at startup to propagate tokens into egui. [`Chart::set_theme`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_theme)
 updates an existing chart and the context. Use [`set_theme_override`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_theme_override) for a local
-chart theme when multiple charts need different appearances. Enable `serde` to
-serialize [`Theme`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/theme/struct.Theme.html) in host settings.
+chart theme when multiple charts need different appearances. [`Theme`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/theme/struct.Theme.html)
+implements serde's `Serialize` and `Deserialize` for host settings.
 
 ## Try presentation changes
 

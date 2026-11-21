@@ -115,8 +115,9 @@ pub struct SourceItem {
     pub visible: bool,
     /// Is locked (drawings only - prevents modification)
     pub locked: bool,
-    /// Whether the user can edit the drawing, copied from
-    /// [`crate::drawings::Drawing::user_edit_enabled`]. Off, the row offers no lock toggle and
+    /// Whether the user can edit the drawing: [`crate::drawings::Drawing::user_edit_enabled`],
+    /// and off while every drawing is locked
+    /// ([`crate::drawings::DrawingManager::is_locked`]). Off, the row offers no lock toggle and
     /// no delete. Non-drawing rows ignore this field.
     pub user_edit_enabled: bool,
     /// Is selected in the tree
@@ -186,7 +187,8 @@ impl SourceItem {
     }
 
     /// A drawing row with the chart's tool name, the drawing's label, colour, visibility,
-    /// lock, layer, folder and synchronisation, and the panes it can move to.
+    /// lock, layer, folder and synchronisation, whether the user can edit it, and the panes it
+    /// can move to.
     pub fn for_drawing(chart: &crate::widget::Chart, drawing: &crate::drawings::Drawing) -> Self {
         let mut item =
             Self::drawing(drawing.id, drawing.tool_type, drawing.color32()).with_panes(chart);
@@ -194,6 +196,7 @@ impl SourceItem {
         item.label = drawing.label.clone();
         item.visible = drawing.visible;
         item.locked = drawing.locked;
+        item.user_edit_enabled = drawing.user_edit_enabled && !chart.drawings().is_locked();
         item.z_index = drawing.z_order;
         item.folder = drawing.folder.clone();
         item.folder_sync = drawing.folder_sync_mode();
@@ -326,6 +329,16 @@ impl SourceItem {
             format!("{} ({})", self.display_name(), params)
         } else {
             self.display_name().to_string()
+        }
+    }
+
+    /// The row's text: the label the user gave as saved, otherwise the library's name through
+    /// the host translator.
+    pub(super) fn shown_name(&self, ctx: &egui::Context) -> String {
+        if self.label.is_some() {
+            self.full_display_name()
+        } else {
+            crate::localization::text(ctx, self.full_display_name())
         }
     }
 

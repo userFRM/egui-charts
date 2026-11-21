@@ -1734,7 +1734,7 @@ impl Datafeed for LiveFeed {
 
     /// Synthetic stories about the catalog symbols.
     fn news(&self, query: NewsQuery, reply: Reply<Vec<NewsStory>>) {
-        reply.send(Ok(super::feeds::news(&query, Utc::now())));
+        reply.send(Ok(super::feeds::news(&query, self.now())));
     }
 
     /// Synthetic statistics, profile and category derived from the catalog entry of `symbol`.
@@ -2013,10 +2013,16 @@ mod tests {
         layout.set_replay_time(
             &mut charts.iter_mut().collect::<Vec<_>>(),
             0,
+            egui_charts::model::ReplayScope::AllCharts,
             Some(now - TimeDelta::minutes(30)),
         );
         assert!(charts.iter().all(|chart| chart.replay_time().is_some()));
-        layout.set_replay_time(&mut charts.iter_mut().collect::<Vec<_>>(), 0, None);
+        layout.set_replay_time(
+            &mut charts.iter_mut().collect::<Vec<_>>(),
+            0,
+            egui_charts::model::ReplayScope::AllCharts,
+            None,
+        );
         // Resolve, load the latest pages and subscribe, without draining the backfill.
         for _ in 0..3 {
             for chart in &mut charts {

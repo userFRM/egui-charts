@@ -3,7 +3,7 @@
 use super::{DrawingManager, PaintedDrawing};
 use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType};
 use crate::drawings::rendering::ChartView;
-use crate::drawings::services::{DrawingInteraction, HandleService, in_z_order};
+use crate::drawings::services::{self, HandleService, in_z_order};
 use egui::epaint::{ClippedShape, Mesh, TessellationOptions, Tessellator, emath::TSTransform};
 use egui::{Color32, Pos2, Rect, Shape};
 use std::borrow::Cow;
@@ -85,16 +85,18 @@ fn is_plain(shape: &Shape) -> bool {
 }
 
 impl DrawingManager {
-    /// Uses the fitted endpoints kept with the last paint for data-driven handles.
+    /// Uses the fitted endpoints kept with the last paint for data-driven handles, and the grid
+    /// edges for a table's.
     pub(super) fn handle_drawing<'a>(&self, drawing: &'a Drawing) -> Cow<'a, Drawing> {
         let regression = drawing.tool_type == DrawingToolType::RegressionTrend;
-        let volume_tool = matches!(
+        let laid_out = matches!(
             drawing.tool_type,
             DrawingToolType::AnchoredVWAP
                 | DrawingToolType::FixedRangeVolumeProfile
                 | DrawingToolType::AnchoredVolumeProfile
+                | DrawingToolType::Table
         );
-        if !(regression || volume_tool) || drawing.custom_tool.is_some() {
+        if !(regression || laid_out) || drawing.custom_tool.is_some() {
             return Cow::Borrowed(drawing);
         }
         let painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
@@ -102,7 +104,8 @@ impl DrawingManager {
             .iter()
             .find(|p| p.id == drawing.id && p.points == drawing.points)
             .and_then(|p| p.handle_points.clone());
-        // A volume tool with nothing drawn keeps its handles on its anchors, to be dragged to bars.
+        // A volume tool with nothing drawn keeps its handles on its anchors, to be dragged to bars,
+        // and a table not yet painted its handle on its anchor.
         if points.is_none() && !regression {
             return Cow::Borrowed(drawing);
         }
@@ -131,7 +134,7 @@ impl DrawingManager {
     /// Hit-tests a screen point against all visible drawings (back-to-front).
     ///
     /// Returns the ID of the topmost drawing at `point`, or `None` if no
-    /// drawing was hit. Delegates to [`DrawingInteraction::hit_test`], the single
+    /// drawing was hit. Delegates to [`services::hit_test`], the single
     /// source of truth for per-segment / per-level geometry hit testing, so that
     /// channels, Fibonacci levels, fans, and pitchforks are selectable along
     /// their drawn geometry rather than only near a control point. Honors the
@@ -176,11 +179,14 @@ impl DrawingManager {
                 {
                     return false;
                 }
-                paint.is_some_and(|p| DrawingInteraction::hit_test_painted(point, &p.shapes))
+                paint.is_some_and(|p| services::hit_test_painted(point, &p.shapes))
                     || (drawing.tool_type != DrawingToolType::RegressionTrend
-                        && DrawingInteraction::new()
-                            .hit_test(point, std::slice::from_ref(*drawing), &self.curr_timeframe)
-                            .is_some())
+                        && services::hit_test(
+                            point,
+                            std::slice::from_ref(*drawing),
+                            &self.curr_timeframe,
+                        )
+                        .is_some())
             })
             .map(|d| d.id)
     }
@@ -277,12 +283,15 @@ impl DrawingManager {
                 tool.implementation.render(drawing, painter, rect, view);
             }
         } else {
-            drawing.render_with_selection(
-                painter,
-                rect,
-                view,
-                self.selection.is_selected(drawing.id),
-            );
+            let selected = self.selection.is_selected(drawing.id);
+            if selected && self.locked && !drawing.locked {
+                // A selected drawing offers no text hints while every drawing is locked.
+                let mut held = drawing.clone();
+                held.locked = true;
+                held.render_with_selection(painter, rect, view, true);
+            } else {
+                drawing.render_with_selection(painter, rect, view, selected);
+            }
         }
     }
 
@@ -393,6 +402,7 @@ impl DrawingManager {
                         | DrawingToolType::AnchoredVolumeProfile => {
                             drawing.volume_tool_handles(view)
                         }
+                        DrawingToolType::Table => drawing.table_handle_points(painter),
                         _ => None,
                     },
                     shapes,

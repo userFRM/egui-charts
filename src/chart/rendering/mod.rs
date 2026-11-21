@@ -22,12 +22,12 @@ mod legend;
 mod markers;
 mod session_breaks;
 mod trading_lines;
-pub(in crate::chart) mod volume_profile;
+pub(crate) mod volume_profile;
 mod watermark;
 
 // Re-export rendering functions
 pub(crate) use crate::painting::dashed_line::{draw_dashed_line, draw_dashed_polyline};
-pub use alert_levels::{alert_shortcut_price, render_alert_levels};
+pub use alert_levels::render_alert_levels;
 pub(crate) use axes::{
     fit_study_mapping, price_marks, render_study_axis, render_time_grid, study_mapping,
     time_axis_marks,
@@ -64,12 +64,12 @@ pub use session_breaks::{SessionBreakRenderConfig, SessionBreakRenderer};
 pub(crate) use session_breaks::{exchange_session, render_extended_hours};
 #[cfg(feature = "ui")]
 pub(crate) use trading_lines::{
-    COVERAGE_CELL, coverage_text, entry_price, exit_coverage, exit_request, held_exits,
-    paint_coverage, pnl_text,
+    COVERAGE_CELL, coverage_text, entry_price, exit_coverage, exit_request, grouped, held_exits,
+    paint_coverage, pnl_text, quantity_decimals, quantity_text,
 };
 pub use trading_lines::{
-    PnlUnit, TradingLabelAlignment, TradingLineAction, TradingLineAppearance, TradingLineOptions,
-    TradingLines, render_trading_lines,
+    PnlUnit, TradingFormatter, TradingLabelAlignment, TradingLineAction, TradingLineAppearance,
+    TradingLineOptions, TradingLines, render_trading_lines,
 };
 pub(crate) use watermark::render_watermark;
 pub use watermark::{Watermark, WatermarkLine};

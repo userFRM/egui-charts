@@ -17,9 +17,9 @@ pub use bar_data::BarData;
 pub(crate) use levels::{bar_level_keys, level_grid, level_key};
 pub use patterns::CandlePatterns;
 
-#[cfg(feature = "widget")]
+#[cfg(any(feature = "widget", feature = "studies"))]
 mod time;
+#[cfg(any(feature = "widget", feature = "studies"))]
+pub(crate) use time::index_at_with_timeframe;
 #[cfg(feature = "widget")]
-pub(crate) use time::{
-    index_at, index_at_with_timeframe, numeric_positions, time_at, time_at_with_timeframe,
-};
+pub(crate) use time::{index_at, numeric_positions, time_at, time_at_with_timeframe};

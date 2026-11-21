@@ -478,6 +478,7 @@ impl Chart {
 
     /// Ends pending scrolls, animations and momentum, so a programmatic view replaces them.
     pub(super) fn cancel_view_motion(&mut self) {
+        self.history.clear_view_restore();
         self.pending_scroll_time = None;
         self.pending_start_idx = None;
         self.scroll_animation = None;
@@ -1078,7 +1079,7 @@ mod tests {
 
         let cases: [(Arc<dyn HorizontalScale>, &[f64]); 7] = [
             (
-                Arc::new(PriceHorizontalScale { precision: 1 }),
+                Arc::new(PriceHorizontalScale::new(1)),
                 &[100.0, 110.0, 140.0],
             ),
             (Arc::new(MaturityScale::default()), &[3.0, 12.0, 36.0]),
@@ -1344,9 +1345,7 @@ mod tests {
             .map(|i| Bar::from_value(key_time(4400.0 + 25.0 * f64::from(i)).unwrap(), 20.0))
             .collect();
         let mut chart = Chart::new(BarData::from_bars(bars));
-        chart.set_horizontal_scale(Some(std::sync::Arc::new(PriceHorizontalScale {
-            precision: 0,
-        })));
+        chart.set_horizontal_scale(Some(std::sync::Arc::new(PriceHorizontalScale::new(0))));
         let ctx = egui::Context::default();
         frame(&ctx, &mut chart, 0.0, vec![]);
         assert!(chart.set_visible_logical_range(LogicalRange::new(0.0, 8.0)));
@@ -1708,6 +1707,8 @@ mod tests {
                             })
                             .collect();
                         let mut chart = Chart::new(BarData::from_bars(bars));
+                        chart.config_mut().navigation_buttons =
+                            crate::config::NavigationButtons::Never;
                         let series = if added {
                             let series = chart.add_series(crate::widget::SeriesOptions {
                                 chart_type,

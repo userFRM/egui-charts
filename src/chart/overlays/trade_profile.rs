@@ -45,6 +45,7 @@ pub(crate) fn render_session_volume_profiles(
     profiles: &[TradeProfile],
     flow: FootprintView<'_>,
     settings: &TradeProfileSettings,
+    volume_decimals: Option<u8>,
 ) {
     let theme = painter.ctx().active_theme();
     let colors = SessionColors::new(settings, &theme);
@@ -53,6 +54,7 @@ pub(crate) fn render_session_volume_profiles(
     };
     let config = FootprintConfig {
         modes: vec![settings.mode],
+        volume_decimals,
         value_area: settings.value_area,
         node_sensitivity: settings.nodes.unwrap_or_default(),
         neutral_color: theme.chart.axis_text_secondary,
@@ -205,14 +207,16 @@ fn render_profiles(
             && end < bars.len()
         {
             let start = mapping.idx_to_x(end - 1) + mapping.bar_spacing * 0.5;
-            let mut extend = |price: f64, level: i64, stroke: Stroke| {
-                // Trading anywhere in the level's row touches it, as for footprint POC revisits.
-                // A candle without volume, such as the one a heartbeat opens, traded nowhere.
-                let row =
-                    level as f64 * step - tick * 0.5..(level as f64 + 1.0) * step - tick * 0.5;
+            let mut extend = |price: f64, stroke: Stroke| {
+                // Decimal tick arithmetic can put the drawn level a few ulps off its price.
+                let epsilon = (price.abs() * f64::EPSILON * 4.0).max(f64::from_bits(1));
                 let last = bars[end..]
                     .iter()
-                    .position(|bar| bar.volume > 0.0 && bar.low < row.end && row.start <= bar.high)
+                    .position(|bar| {
+                        bar.volume > 0.0
+                            && bar.low - price <= epsilon
+                            && price - bar.high <= epsilon
+                    })
                     .map_or(mapping.rect.right(), |i| mapping.idx_to_x(end + i));
                 let left = start.max(mapping.rect.left());
                 let right = last.min(mapping.rect.right());
@@ -226,7 +230,6 @@ fn render_profiles(
             {
                 extend(
                     (poc as f64 + 0.5) * step - tick * 0.5,
-                    poc,
                     Stroke::new(1.0, colors.poc),
                 );
             }
@@ -235,17 +238,16 @@ fn render_profiles(
                     .value_area
                     .and_then(|s| profile.volume.value_area(s))
             {
-                for (enabled, edge, level, color) in [
+                for (enabled, edge, color) in [
                     (
                         settings.extend_vah,
                         high as f64 + 1.0,
-                        high,
                         colors.value_area_high,
                     ),
-                    (settings.extend_val, low as f64, low, colors.value_area_low),
+                    (settings.extend_val, low as f64, colors.value_area_low),
                 ] {
                     if enabled {
-                        extend(edge * step - tick * 0.5, level, Stroke::new(1.0, color));
+                        extend(edge * step - tick * 0.5, Stroke::new(1.0, color));
                     }
                 }
             }
@@ -386,7 +388,13 @@ fn render_profiles(
                 && let Some(colors) = &colors
                 && (y0 - y1).abs() >= *height
             {
-                let text = super::footprint::cell_text(value_mode(mode), row, true, true);
+                let text = super::footprint::cell_text(
+                    value_mode(mode),
+                    row,
+                    true,
+                    true,
+                    config.volume_decimals,
+                );
                 let (lo, hi) = (x + 2.0, (x + session_width).min(mapping.rect.right()) - 2.0);
                 let galley = painter.layout_no_wrap(text, font.clone(), colors.values);
                 let size = galley.size();
@@ -659,6 +667,7 @@ mod tests {
                         &profiles,
                         (&flow).into(),
                         &settings,
+                        None,
                     )
                 },
             );
@@ -716,6 +725,63 @@ mod tests {
         }
     }
 
+    /// Four hundred ticks grouped by ceil(400 / 24) = 17 give keys 100 through 123.
+    #[test]
+    fn default_session_profile_groups_four_hundred_ticks_into_twenty_four_rows() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for price in 1700..2100 {
+            flow.push(&Tick::new(time, price as f64, 1.0, Some(OrderSide::Buy)))
+                .unwrap();
+        }
+        let bars = [Bar::new(time, 1700.0, 2099.0, 1700.0, 2099.0, 400.0)];
+        let ranges = TradeProfileRanges::new(vec![time..time + TimeDelta::minutes(1)]).unwrap();
+        for (rows, expected) in [
+            (TradeProfileSettings::default().rows, 24),
+            (crate::model::ProfileRows::Feed, 400),
+        ] {
+            let profiles = crate::studies::trade_profiles_with_rows(&flow, &ranges, rows);
+            let settings = TradeProfileSettings {
+                rows,
+                session_box: false,
+                poc: false,
+                ..Default::default()
+            };
+            let mapping = ChartMapping::new(
+                Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 900.0)),
+                100.0,
+                0,
+                0,
+                0.0,
+                PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(1690.0, 2110.0),
+                    0.0,
+                    900.0,
+                    false,
+                ),
+            );
+            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                render_session_volume_profiles(
+                    ui.painter(),
+                    &mapping,
+                    &bars,
+                    &profiles,
+                    (&flow).into(),
+                    &settings,
+                    None,
+                );
+            });
+            output.textures_delta.clear();
+            let rectangles = output
+                .shapes
+                .iter()
+                .filter(|s| matches!(&s.shape, Shape::Rect(r) if r.rect.width() > 0.0))
+                .count();
+            assert_eq!(rectangles, expected, "{rows:?}");
+        }
+    }
+
     /// The rows hold bid 500 with ask 1,500 and bid 1,000 alone: totals 2K and 1K, deltas +1K and
     /// -1K. Their text fits rows 32 points tall but not 1.6, beside each bar inside the box.
     #[test]
@@ -744,46 +810,65 @@ mod tests {
             .collect();
         let ranges = TradeProfileRanges::new(vec![time..time + TimeDelta::minutes(4)]).unwrap();
         let profiles = trade_profiles(&flow, &ranges);
-        let cases: [(serde_json::Value, bool, &[&str]); 9] = [
-            (serde_json::json!({}), false, &[]),
+        let cases: [(serde_json::Value, bool, Option<u8>, &[&str]); 11] = [
+            (serde_json::json!({}), false, None, &[]),
             (
                 serde_json::json!({"values": true}),
                 false,
+                None,
                 &["500 × 1.5K", "1K × 0"],
             ),
             (
                 serde_json::json!({"values": true, "values_color": [0, 0, 200, 200], "mode": "Volume"}),
                 false,
+                None,
                 &["2K", "1K"],
             ),
             (
                 serde_json::json!({"values": true, "values_color": [0, 0, 200, 200], "mode": "Delta"}),
                 false,
+                None,
                 &["+1K", "-1K"],
             ),
-            (serde_json::json!({"values": true}), true, &[]),
+            (serde_json::json!({"values": true}), true, None, &[]),
             (
                 serde_json::json!({"values": true, "right_aligned": true}),
                 false,
+                None,
                 &["500 × 1.5K", "1K × 0"],
             ),
             (
                 serde_json::json!({"values": true, "mode": "DeltaVolume"}),
                 false,
+                None,
                 &["+1K / 2K", "-1K / 1K"],
             ),
             (
                 serde_json::json!({"values": true, "mode": "Ladder"}),
                 false,
+                None,
                 &["500 × 1.5K", "1K × 0"],
             ),
             (
                 serde_json::json!({"values": true, "mode": "Trades"}),
                 false,
+                None,
                 &["+1K", "-1K"],
             ),
+            (
+                serde_json::json!({"values": true, "mode": "Volume"}),
+                false,
+                Some(0),
+                &["2K", "1K"],
+            ),
+            (
+                serde_json::json!({"values": true, "mode": "Volume"}),
+                false,
+                Some(3),
+                &["2.000K", "1.000K"],
+            ),
         ];
-        for (saved, short, expected) in cases {
+        for (saved, short, decimals, expected) in cases {
             let settings = serde_json::from_value(saved.clone()).unwrap();
             for theme in [Theme::dark(), Theme::light()] {
                 let mapping = ChartMapping::new(
@@ -819,6 +904,7 @@ mod tests {
                             &profiles,
                             (&flow).into(),
                             &settings,
+                            decimals,
                         )
                     },
                 );
@@ -1172,6 +1258,7 @@ mod tests {
                             &profiles,
                             (&flow).into(),
                             &settings,
+                            None,
                         )
                     },
                 );
@@ -1265,6 +1352,7 @@ mod tests {
                     extend_val: true,
                     ..Default::default()
                 },
+                None,
             );
         });
         output.textures_delta.clear();
@@ -1360,6 +1448,7 @@ mod tests {
                     extend_val: true,
                     ..Default::default()
                 },
+                None,
             );
         });
         output.textures_delta.clear();
@@ -1388,8 +1477,160 @@ mod tests {
         );
     }
 
+    /// A traded tick inside a grouped row does not reach its centre or outside edges.
+    #[test]
+    fn prior_session_levels_end_only_when_a_traded_range_reaches_their_price() {
+        use crate::model::ProfileRows;
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let at = |minute| time + TimeDelta::minutes(minute);
+        let ticks: Vec<_> = [
+            (0, 100.0),
+            (1, 100.0),
+            (2, 100.0),
+            (2, 102.0),
+            (3, 103.0),
+            (3, 104.0),
+            (4, 99.0),
+            (4, 100.0),
+        ]
+        .into_iter()
+        .map(|(minute, price)| Tick::new(at(minute), price, 1.0, None))
+        .collect();
+        let bars: Vec<_> = [
+            (100.0, 100.0),
+            (100.0, 100.0),
+            (100.0, 102.0),
+            (103.0, 104.0),
+            (99.0, 100.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (low, high))| Bar::new(at(i as i64), low, high, low, high, 1.0))
+        .collect();
+        let ranges = TradeProfileRanges::new(vec![time..at(1)]).unwrap();
+        for (rows, expected) in [
+            (ProfileRows::Ticks(4), [(101.5, 2), (103.5, 3), (99.5, 4)]),
+            (ProfileRows::Count(2), [(101.5, 2), (103.5, 3), (99.5, 4)]),
+            (ProfileRows::Feed, [(100.0, 1), (100.5, 2), (99.5, 4)]),
+            // ceil(1 / 24) = 1, retaining the same feed row.
+            (ProfileRows::Count(24), [(100.0, 1), (100.5, 2), (99.5, 4)]),
+        ] {
+            let (mut ticks, mut bars) = (ticks.clone(), bars.clone());
+            if rows == ProfileRows::Count(2) {
+                // Eight feed rows / two requested rows = four ticks per row. The lower row's
+                // 1.3 of 1.7 volume holds the 70% area alone, as the other grouped-row case does.
+                ticks.extend((101..=107).map(|price| Tick::new(time, price as f64, 0.1, None)));
+                ticks.sort_by_key(|tick| tick.ts);
+                bars[0].high = 107.0;
+                bars[0].volume = 1.7;
+            }
+            for tick in [1.0, 0.003, 0.1, 0.05, 0.01] {
+                let ticks: Vec<_> = ticks
+                    .iter()
+                    .cloned()
+                    .map(|mut trade| {
+                        trade.price *= tick;
+                        trade
+                    })
+                    .collect();
+                let bars: Vec<_> = bars
+                    .iter()
+                    .cloned()
+                    .map(|mut bar| {
+                        bar.open *= tick;
+                        bar.high *= tick;
+                        bar.low *= tick;
+                        bar.close *= tick;
+                        bar
+                    })
+                    .collect();
+                for inverted in [false, true] {
+                    for mode in [
+                        crate::scales::PriceScaleMode::Normal,
+                        crate::scales::PriceScaleMode::Logarithmic,
+                    ] {
+                        let mut live =
+                            Footprint::new(BarClock::new(Timeframe::Min1), tick, 1).unwrap();
+                        for count in 1..=bars.len() {
+                            for tick in ticks.iter().filter(|t| t.ts == at(count as i64 - 1)) {
+                                live.push(tick).unwrap();
+                            }
+                            let mut rebuilt =
+                                Footprint::new(BarClock::new(Timeframe::Min1), tick, 1).unwrap();
+                            for tick in ticks.iter().filter(|t| t.ts < at(count as i64)) {
+                                rebuilt.push(tick).unwrap();
+                            }
+                            for flow in [&live, &rebuilt] {
+                                let transform = PriceTransform {
+                                    mode,
+                                    ..Default::default()
+                                };
+                                let mapping = ChartMapping::new(
+                                    Rect::from_min_size(pos2(40.0, 20.0), vec2(500.0, 300.0)),
+                                    60.0,
+                                    0,
+                                    4,
+                                    0.0,
+                                    PriceMap::new(
+                                        transform,
+                                        PriceRange::new(
+                                            transform.to_scale(98.0 * tick),
+                                            transform.to_scale(106.0 * tick),
+                                        ),
+                                        20.0,
+                                        320.0,
+                                        inverted,
+                                    ),
+                                );
+                                let profiles =
+                                    crate::studies::trade_profiles_with_rows(flow, &ranges, rows);
+                                let settings = TradeProfileSettings {
+                                    rows,
+                                    extend_poc: true,
+                                    extend_vah: true,
+                                    extend_val: true,
+                                    ..Default::default()
+                                };
+                                let mut output = egui::Context::default().run_ui(
+                                    egui::RawInput::default(),
+                                    |ui| {
+                                        render_session_volume_profiles(
+                                            ui.painter(),
+                                            &mapping,
+                                            &bars[..count],
+                                            &profiles,
+                                            flow.into(),
+                                            &settings,
+                                            None,
+                                        );
+                                    },
+                                );
+                                output.textures_delta.clear();
+                                let start = mapping.idx_to_x(0) + mapping.bar_spacing * 0.5;
+                                for (price, touch) in expected {
+                                    let end = if touch < count {
+                                        mapping.idx_to_x(touch)
+                                    } else {
+                                        mapping.rect.right()
+                                    };
+                                    let y = mapping.price_to_y(price * tick);
+                                    let line = output.shapes.iter().any(|s| matches!(&s.shape, Shape::LineSegment {points, ..} if *points == [pos2(start,y),pos2(end,y)]));
+                                    assert_eq!(
+                                        line,
+                                        count > 1,
+                                        "{rows:?} {mode:?} inverted {inverted}, count {count}, price {price}, tick {tick}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// At 70%, 6 + 3 exceeds 7 of 10; after adding 8 at 100, 9 + 6 exceeds 12.6
-    /// of 18. Prior levels stop independently at the first later bar trading in their row.
+    /// of 18. Prior levels stop independently when a later traded range reaches their price.
     #[test]
     fn developing_area_and_prior_levels_follow_live_and_rebuilt_history() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -1493,6 +1734,7 @@ mod tests {
                         &profiles,
                         (flow).into(),
                         &settings,
+                        None,
                     );
                 });
                 output.textures_delta.clear();
@@ -1634,8 +1876,8 @@ mod tests {
                         let start = (map.idx_to_x(1) + 20.0).max(map.rect.left());
                         for (price, stop, enabled, color) in [
                             (100.0, 3, extend_poc, poc),
-                            (101.5, 4, extend_vah, high),
-                            (99.5, 3, extend_val, low),
+                            (101.5, 5, extend_vah, high),
+                            (99.5, 4, extend_val, low),
                         ] {
                             let end = if stop < count {
                                 map.idx_to_x(stop)

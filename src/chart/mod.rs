@@ -27,11 +27,11 @@ pub use rendering::axes::{axis_settings_button, crosshair_price_action};
 pub use rendering::axes::{price_axis_width, render_quote_tags};
 #[cfg(feature = "ui")]
 pub(crate) use rendering::{
-    COVERAGE_CELL, coverage_text, entry_price, exit_coverage, exit_request, held_exits,
-    paint_coverage, pnl_text,
+    COVERAGE_CELL, coverage_text, entry_price, exit_coverage, exit_request, grouped, held_exits,
+    paint_coverage, pnl_text, quantity_decimals, quantity_text,
 };
 pub use rendering::{
-    PnlUnit, RenderContext, TradingLabelAlignment, TradingLineAction, TradingLineAppearance,
-    TradingLineOptions, TradingLines, alert_shortcut_price, render_alert_levels,
+    PnlUnit, RenderContext, TradingFormatter, TradingLabelAlignment, TradingLineAction,
+    TradingLineAppearance, TradingLineOptions, TradingLines, render_alert_levels,
     render_axis_currency, render_crosshair_full, render_event_band, render_trading_lines,
 };

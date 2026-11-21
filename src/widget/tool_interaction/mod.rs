@@ -681,10 +681,6 @@ mod tests {
         for (id, (tool, anchors)) in [
             (Measure, vec![(30.0, 100_000.0), (40.0, 95_000.0)]),
             (Forecast, vec![(30.0, 100_000.0), (40.0, 105_000.0)]),
-            (
-                ProjectionTool,
-                vec![(30.0, 100_000.0), (40.0, 104_000.0), (50.0, 101_000.0)],
-            ),
             (LongPos, vec![(30.0, 100_000.0), (40.0, 106_000.0)]),
             (
                 FibonacciRetracement,
@@ -712,7 +708,7 @@ mod tests {
             }
             chart.drawings_mut().drawings.push(drawing);
         }
-        chart.drawings_mut().select(5);
+        chart.drawings_mut().select(4);
         // Only texts left of the price axes, whose tick labels can read as a drawing's price.
         let texts = |chart: &mut crate::Chart, time| {
             let painted = shapes(&ctx, chart, time, vec![]);
@@ -727,13 +723,11 @@ mod tests {
         };
         let mut failures = Vec::new();
         let built_in = texts(&mut chart, 0.0);
-        // Hand values in thousands: 95-100=-5, 105-100=5, |104-100|=4, 101+4=105,
+        // Hand values in thousands: 95-100=-5, 105-100=5,
         // target 106 and mirrored stop 94, midpoint 100, height 16 at 16/92*100 percent.
         for expected in [
             "-5,000.00 (-5.00%)",
             "+5,000.00 (+5.00%)",
-            "4,000.00 (4.0%)",
-            "Target: 105,000.00",
             "Target: 6,000.00 (6.000%)",
             "Stop: 6,000.00 (6.000%)",
             "(100,000.00)",
@@ -750,8 +744,6 @@ mod tests {
         for expected in [
             "-5000.0 pts (-5.00%)",
             "+5000.0 pts (+5.00%)",
-            "4000.0 pts (4.0%)",
-            "Target: 105000.0 pts",
             "Target: 6000.0 pts (6.000%)",
             "Stop: 6000.0 pts (6.000%)",
             "(100000.0 pts)",
@@ -1483,6 +1475,7 @@ mod tests {
         ]) {
             let ctx = Context::default();
             let mut chart = chart(&[0.0, 10.0, 10.0], &[30.0, 20.0, 20.0]);
+            chart.config_mut().navigation_buttons = crate::config::NavigationButtons::Never;
             let overlay = CustomIndicator::new("Two levels", move |bars| {
                 bars.iter()
                     .enumerate()

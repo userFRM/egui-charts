@@ -3,7 +3,8 @@
 //! Keep a [`Toasts`] queue in host state, add messages as events occur and call
 //! [`NotificationPanel::show_with_toasts`] each frame to display them. Two or more toasts
 //! collapse into a stack showing the newest; a pill expands it and a button beside it dismisses
-//! every dismissible toast.
+//! every dismissible toast. A toast may carry action buttons; pressing one closes it and
+//! [`Toasts::take_pressed`] reports which.
 //!
 //! Each toast is announced by screen readers on Linux, Windows and macOS as a live region (polite,
 //! or assertive for errors); on the web nothing is announced, since eframe does not forward
