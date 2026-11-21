@@ -46,7 +46,7 @@ impl HammingMA {
 
 impl Default for HammingMA {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(10)
     }
 }
 

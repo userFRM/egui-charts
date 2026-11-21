@@ -1020,6 +1020,7 @@ impl AlertDialog {
                     &self.sources,
                     &self.strategy_runs,
                     true,
+                    None,
                 );
             } else {
                 let index = self.editing_condition - 1;
@@ -1039,6 +1040,7 @@ impl AlertDialog {
                     &self.sources,
                     &[],
                     false,
+                    None,
                 );
                 if ui
                     .button(l10n::text(ui.ctx(), "Remove condition"))
@@ -1379,6 +1381,7 @@ fn drawing_position(
     })
 }
 
+/// Returns whether a single threshold was entered through the optional text editor or menu.
 pub(crate) fn rule_form(
     ui: &mut Ui,
     source: &mut AlertSource,
@@ -1386,7 +1389,9 @@ pub(crate) fn rule_form(
     sources: &[(AlertSource, AlertSourceName)],
     runs: &[(String, String)],
     offer_position: bool,
-) {
+    mut level_text: Option<&mut String>,
+) -> bool {
+    let mut level_edited = false;
     ui.add_enabled_ui(
         !matches!(condition, AlertCondition::VolumeAboveAverage { .. }) && !condition.is_event(),
         |ui| source_picker(ui, "source", source, sources),
@@ -1503,6 +1508,19 @@ pub(crate) fn rule_form(
                     {
                         *source = AlertSource::Price;
                     }
+                    if matches!(
+                        condition,
+                        AlertCondition::EnteringChannel { .. }
+                            | AlertCondition::ExitingChannel { .. }
+                            | AlertCondition::InsideChannel { .. }
+                            | AlertCondition::OutsideChannel { .. }
+                    ) && let Some(level) = value.level()
+                        && level.is_finite()
+                        && let Some(text) = level_text.as_deref_mut()
+                    {
+                        *text = level.to_string();
+                        level_edited = true;
+                    }
                     *condition = value;
                 }
             }
@@ -1545,8 +1563,30 @@ pub(crate) fn rule_form(
         | AlertCondition::Above(v)
         | AlertCondition::Below(v) => {
             ui.label(l10n::text(ui.ctx(), "Level"));
-            ui.add(egui::DragValue::new(v).speed(0.01))
-                .accessible_name(l10n::text(ui.ctx(), "Level"));
+            if let Some(text) = level_text {
+                let mut field = egui::TextEdit::singleline(text)
+                    .desired_width(0.0)
+                    .clip_text(false)
+                    .min_size(ui.spacing().interact_size)
+                    .show(ui);
+                if field.response.gained_focus() {
+                    field
+                        .state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::select_all(&field.galley)));
+                    field.state.store(ui.ctx(), field.response.id);
+                }
+                level_edited |= field
+                    .response
+                    .response
+                    .accessible_name(l10n::text(ui.ctx(), "Level"))
+                    .changed();
+                let number: String = text.split_whitespace().collect();
+                *v = number.replace('−', "-").parse().unwrap_or(f64::NAN);
+            } else {
+                ui.add(egui::DragValue::new(v).speed(0.01))
+                    .accessible_name(l10n::text(ui.ctx(), "Level"));
+            }
         }
         AlertCondition::EnteringChannel { lower, upper }
         | AlertCondition::ExitingChannel { lower, upper }
@@ -1630,6 +1670,7 @@ pub(crate) fn rule_form(
                 .accessible_name(l10n::text(ui.ctx(), "Comparison"));
         }
     });
+    level_edited
 }
 
 #[cfg(test)]

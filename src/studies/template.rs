@@ -774,7 +774,7 @@ impl StudyTemplate {
             }
             // Seasonality saved before its Positive colour input coloured rising months with its
             // Expected plot. One saved before placement inputs also counted from 1900, sat at the
-            // lower right and drew falling months in their original red.
+            // lower right fitted to its cells and drew falling months in their original red.
             "Seasonality" if !has("positive_color") => {
                 let positive = self
                     .settings
@@ -786,6 +786,8 @@ impl StudyTemplate {
                     added.extend([
                         ("start_year", InputValue::Integer(1900)),
                         ("table_position", InputValue::Choice(8)),
+                        ("table_width", InputValue::Number(0.0)),
+                        ("table_height", InputValue::Number(0.0)),
                         (
                             "negative_color",
                             InputValue::Color(egui::Color32::from_rgb(242, 55, 69)),
@@ -995,6 +997,10 @@ impl StudyTemplate {
                 {
                     template.settings.help_url = declared.help_url;
                 }
+            }
+            // An earlier key migrates only when it still resolves to the renamed built-in.
+            now if IndicatorFactory::renamed(&self.name) == Some(now) => {
+                template.name = now.to_owned();
             }
             _ => changed = false,
         }

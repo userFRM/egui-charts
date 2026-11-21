@@ -297,9 +297,10 @@ impl ChartState {
         &mut self.price_scale
     }
 
-    /// Fits the price scale to the visible bars and the visible values of the visible overlay
-    /// studies in `indicators`, unless the user scaled by hand, and returns this frame's
-    /// transform: percentage and indexed modes are relative to the first visible close.
+    /// Fits the price scale to the visible bars and values of the visible overlay studies in
+    /// `indicators` and the studies that keep their plots on the price chart, unless the user
+    /// scaled by hand, and returns this frame's transform: percentage and indexed modes are
+    /// relative to the first visible close.
     pub fn fit_price_scale<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
@@ -349,8 +350,11 @@ impl ChartState {
             .into_iter()
             .filter(|study| {
                 study.is_visible()
-                    && study.is_overlay()
-                    && study.scale() == crate::studies::StudyScale::Main
+                    && if study.is_overlay() {
+                        study.scale() == crate::studies::StudyScale::Main
+                    } else {
+                        study.plots_on_price()
+                    }
             })
             .flat_map(|study| {
                 #[cfg(not(feature = "drawings"))]
