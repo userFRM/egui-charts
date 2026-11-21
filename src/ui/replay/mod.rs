@@ -3,7 +3,9 @@
 //! Use [`ReplayController`] to drive playback over host-supplied bars and apply its
 //! cutoff to the chart with [`Chart::set_replay_time`](crate::Chart::set_replay_time).
 //! [`ReplayControls`] emits playback and seek actions; the host retains or persists
-//! the session and supplies any additional source history. For trading during replay,
+//! the session and supplies any additional source history. [`ReplayToolbar`] is a standalone
+//! alternative: build its state with `ReplayToolbarState::from(&controller)` and pass its
+//! action back through `controller.handle_action(action.into())`. For trading during replay,
 //! [`ReplayTradingPrompt`] asks before the cursor moves before the replay account's last
 //! change, and [`ReplayResults`] shows the session's results.
 //!
@@ -48,7 +50,7 @@ pub mod status;
 mod toolbar;
 mod trading;
 
-pub use crate::model::ReplaySession;
+pub use crate::model::{ReplayScope, ReplaySession};
 pub use actions::{ReplayAction, ReplaySpeed};
 pub use config::{ReplayBehavior, ReplayColors, ReplayConfig, ReplayLayout};
 pub use controls::{CompactReplayControls, ReplayControls, ReplayKeyboardHandler};

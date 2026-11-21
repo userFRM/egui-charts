@@ -4,7 +4,7 @@
 //! composing your own renderer. Direct users synchronize screen coordinates with
 //! [`DrawingManager::update_all_screen_coords`] after changing the viewport.
 
-use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType, HandlePos};
+use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType, HandlePos, TableConfig};
 use crate::drawings::services::{
     HandleConfig, HistoryService, SelectionService, SnapOptions, SnapService,
 };
@@ -171,7 +171,7 @@ struct PaintedDrawing {
     start: usize,
     points: Vec<Pos2>,
     shapes: Vec<ClippedShape>,
-    /// Where the handles of a drawing that fits itself to the bars sit.
+    /// Where the handles of a drawing that fits itself to the bars sit, or a table's grid edges.
     handle_points: Option<Vec<Pos2>>,
     /// The tessellation of `shapes`, made once a second frame paints the same shapes.
     tessellated: Option<Tessellated>,
@@ -189,6 +189,8 @@ pub(crate) struct TextEditState {
     pub inline: bool,
     /// A retracement level whose custom text is being edited.
     pub fib_level: Option<usize>,
+    /// The table settings being edited with a table's cells; the defaults for other tools.
+    pub table: TableConfig,
 }
 
 impl TextEditState {
@@ -297,7 +299,8 @@ pub struct DrawingManager {
     pane: Option<usize>,
     pane_members: Vec<Option<usize>>,
     pub(crate) pane_clips: std::collections::HashMap<Option<usize>, Rect>,
-    pub(crate) text_editor: Option<TextEditState>,
+    /// Editor-only settings must not grow every idle chart's inline state.
+    pub(crate) text_editor: Option<Box<TextEditState>>,
     /// A completed text placement whose add command may already be in chart history.
     pub(crate) finished_text_placement: Option<usize>,
     /// A newly placed image waiting for a host file request at the end of this frame.

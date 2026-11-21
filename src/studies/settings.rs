@@ -1047,6 +1047,15 @@ impl ConfiguredStudy {
     }
 }
 
+/// Ids of the inputs [`ConfiguredStudy::inputs`] adds to a study itself, refused by
+/// `CustomIndicator::with_inputs`. Keep in step with the inputs listed there.
+pub(crate) const CHART_INPUT_IDS: [&str; 4] = [
+    "plot_offset",
+    "calculation_symbol",
+    "calculation_timeframe",
+    "wait_for_close",
+];
+
 impl Indicator for ConfiguredStudy {
     fn projections(&self) -> &[super::StudyProjection] {
         // Fractional and future source anchors have no chart position in the span map.
@@ -1196,6 +1205,7 @@ impl Indicator for ConfiguredStudy {
             let schema = self
                 .inputs()
                 .into_iter()
+                .rev() // The chart's own input follows a study input of the same id.
                 .find(|input| input.id == id)
                 .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
             if !schema.accepts(&value) {
@@ -2388,6 +2398,60 @@ fn source_bars(
 mod tests {
     use super::*;
     use crate::studies::BollingerBands;
+
+    /// An edit of a chart input uses its schema even if a host study declares the same id.
+    #[test]
+    fn chart_inputs_check_edits_against_their_own_schema() {
+        #[derive(Clone, Default)]
+        struct Own {
+            values: IndicatorValues,
+        }
+        impl Indicator for Own {
+            fn name(&self) -> &str {
+                "Own"
+            }
+            fn calculate(&mut self, data: &[Bar]) {
+                self.values = IndicatorValues::missing(data.len());
+            }
+            fn values(&self) -> &IndicatorValues {
+                &self.values
+            }
+            fn colors(&self) -> Vec<Color32> {
+                vec![Color32::WHITE]
+            }
+            fn set_colors(&mut self, _: Vec<Color32>) {}
+            fn set_visible(&mut self, _: bool) {}
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                Box::new(self.clone())
+            }
+            fn inputs(&self) -> Vec<super::super::StudyInput> {
+                vec![super::super::StudyInput::new(
+                    "wait_for_close",
+                    "Bars",
+                    InputValue::Length(2),
+                    super::super::InputKind::Length(1, 10),
+                )]
+            }
+        }
+        let mut study = ConfiguredStudy::new(Box::new(Own::default()));
+        let error = study
+            .set_input("wait_for_close", InputValue::Length(3))
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "study input \"wait_for_close\" is outside its accepted values"
+        );
+        study
+            .set_input("wait_for_close", InputValue::Toggle(false))
+            .unwrap();
+        assert_eq!(
+            study
+                .inputs()
+                .last()
+                .map(|input| (input.id.clone(), input.value.clone())),
+            Some(("wait_for_close".into(), InputValue::Toggle(false)))
+        );
+    }
 
     /// Performance comparing no symbols, which requests the chart symbol's daily bars alone.
     fn performance_alone() -> super::super::Performance {
