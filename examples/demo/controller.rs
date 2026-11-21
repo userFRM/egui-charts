@@ -8142,6 +8142,80 @@ mod tests {
         assert!(!ChartSettingsState::from_chart(&app.chart).settlement_as_close);
     }
 
+    /// The demo opens the footprint colouring rows, hides side shade pickers when unused,
+    /// and applies the accepted choice to its chart.
+    #[test]
+    fn footprint_colourings_reach_the_chart_through_demo_settings() {
+        use egui_charts::model::FootprintColor;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        let size = egui::vec2(1440.0, 900.0);
+        let scroll_to = |app: &mut DemoApp, label: &str| -> Option<egui::Pos2> {
+            let wheel = |dy: f32| {
+                vec![egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    source: egui::MouseWheelSource::Wheel,
+                    phase: egui::TouchPhase::Move,
+                    delta: egui::vec2(0.0, dy),
+                    modifiers: Default::default(),
+                }]
+            };
+            let show = |app: &mut DemoApp, events| {
+                ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+            };
+            show(
+                app,
+                vec![egui::Event::PointerMoved(egui::pos2(900.0, 450.0))],
+            );
+            show(app, wheel(5000.0));
+            for _ in 0..20 {
+                for _ in 0..10 {
+                    show(app, vec![]);
+                }
+                if let Some((_, rect)) = show(app, vec![])
+                    .into_iter()
+                    .find(|(text, _)| text == label)
+                {
+                    return Some(rect.center());
+                }
+                show(app, wheel(-150.0));
+            }
+            None
+        };
+        app.chart.set_chart_type(ChartType::VolumeFootprint);
+        app.open_chart_settings_dialog();
+        assert!(scroll_to(&mut app, "Buy shade 1").is_some());
+        let colouring = scroll_to(&mut app, "Volume steps").expect("Colouring combo");
+        ui_click(&ctx, size, colouring, |ui| app.show_dialogs(ui.ctx()));
+        let choices = ui_frame(&ctx, size, vec![], |ui| app.show_dialogs(ui.ctx()));
+        assert!(choices.iter().any(|(text, _)| text == "Side colours"));
+        let larger = choices
+            .into_iter()
+            .find(|(text, _)| text == "Larger side")
+            .expect("Larger side choice")
+            .1
+            .center();
+        ui_click(&ctx, size, larger, |ui| app.show_dialogs(ui.ctx()));
+        assert!(scroll_to(&mut app, "Buy shade 1").is_none());
+        assert_eq!(
+            app.chart.chart_type_params().footprint_color_by,
+            FootprintColor::VolumeSteps,
+            "the choice stays staged until Ok"
+        );
+        let ok = scroll_to(&mut app, "Ok").expect("Ok");
+        ui_click(&ctx, size, ok, |ui| app.show_dialogs(ui.ctx()));
+        assert!(!app.settings_dialog.is_open);
+        assert_eq!(
+            app.chart.chart_type_params().footprint_color_by,
+            FootprintColor::LargerSide
+        );
+    }
+
     /// Bars outside regular hours are shaded only in the extended session, and a saved layout
     /// returns in the session it was saved in. A layout saved before the session was recorded
     /// returns its extended hours choice as the 24/7 session.
