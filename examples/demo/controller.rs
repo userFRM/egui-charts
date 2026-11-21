@@ -3938,6 +3938,7 @@ impl DemoApp {
                     }
                 }
                 self.trading.show(ui, &mut self.chart);
+                self.show_sample_fill(ui);
             });
         // The chart's rectangular background covers the frame; restore its top-left cutout.
         let corner = chart.response.rect.min;
@@ -9705,6 +9706,69 @@ mod tests {
             ),
             (SessionType::Full24x7, SessionType::Full24x7)
         );
+    }
+
+    /// The demo's chart settings reach the custom-session list and apply it to its chart.
+    #[test]
+    fn session_profile_custom_sessions_are_reachable_from_demo_settings() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.chart.set_chart_type(ChartType::SessionVolumeProfile);
+        app.open_chart_settings_dialog();
+        let size = egui::vec2(1440.0, 900.0);
+        let click = |app: &mut DemoApp, text: &str, scroll: bool| {
+            let show = |app: &mut DemoApp, events| {
+                ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+            };
+            for _ in 0..20 {
+                for _ in 0..5 {
+                    show(app, vec![]);
+                }
+                if let Some((_, rect)) = show(app, vec![]).into_iter().find(|(label, rect)| {
+                    label == text && (180.0..720.0).contains(&rect.center().y)
+                }) {
+                    ui_click(&ctx, size, rect.center(), |ui| app.show_dialogs(ui.ctx()));
+                    return;
+                }
+                assert!(scroll, "missing {text}");
+                show(
+                    app,
+                    vec![
+                        egui::Event::PointerMoved(egui::pos2(900.0, 450.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            source: egui::MouseWheelSource::Wheel,
+                            phase: egui::TouchPhase::Move,
+                            delta: egui::vec2(0.0, -100.0),
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+            }
+            panic!("missing {text}");
+        };
+        click(&mut app, "Chart hours", true);
+        click(&mut app, "Custom", false);
+        click(&mut app, "Add session", true);
+        // The footer is fixed and does not need scrolling.
+        let texts = ui_frame(&ctx, size, vec![], |ui| app.show_dialogs(ui.ctx()));
+        let point = texts
+            .iter()
+            .find(|(text, _)| text == "Ok")
+            .unwrap()
+            .1
+            .center();
+        ui_click(&ctx, size, point, |ui| app.show_dialogs(ui.ctx()));
+        let egui_charts::model::ProfileSession::Custom(custom) =
+            &app.chart.trade_profile_settings().session
+        else {
+            panic!("custom hours applied")
+        };
+        assert_eq!(custom.sessions.len(), 2);
     }
 
     /// The settings offer the futures data choices on the demo's futures contracts only;

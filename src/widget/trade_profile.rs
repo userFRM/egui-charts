@@ -6,6 +6,7 @@ use crate::chart::overlays::TradeProfileSettings;
 use crate::model::{Bar, BarClock, ChartType, ProfileSession, SessionProvider};
 use crate::studies::TradeProfileRanges;
 use chrono::{DateTime, Utc};
+use std::borrow::Cow;
 use std::ops::{Range, RangeInclusive};
 
 #[derive(Clone, Default, PartialEq)]
@@ -29,6 +30,7 @@ impl Chart {
     }
 
     /// Current execution-profile ranges, in time order, over the loaded main bars.
+    /// Custom sessions that keep shared hours in both may overlap.
     /// Merge and split edits retain UTC boundaries across history eviction and prepending.
     pub fn trade_profile_ranges(&self) -> Option<TradeProfileRanges> {
         self.execution_profile_ranges(0..self.bars(SeriesId::MAIN).len())
@@ -39,6 +41,9 @@ impl Chart {
         let Some(ranges) = self.trade_profile_ranges() else {
             return false;
         };
+        if ranges.ranges().windows(2).any(|r| r[0].end > r[1].start) {
+            return false;
+        }
         let Some(pair) = ranges.ranges().get(index..).and_then(|r| r.get(..2)) else {
             return false;
         };
@@ -63,6 +68,9 @@ impl Chart {
         let Some(ranges) = self.trade_profile_ranges() else {
             return false;
         };
+        if ranges.ranges().windows(2).any(|r| r[0].end > r[1].start) {
+            return false;
+        }
         let bars = self.bars(SeriesId::MAIN);
         let Some(bar) = bars.get(bars.partition_point(|bar| bar.time < time)) else {
             return false;
@@ -106,7 +114,7 @@ impl Chart {
     /// The calendar that divides the chart into profile sessions and the choice that keeps the
     /// bars of their hours, as [`Chart::profile_hours`] resolves the session volume profile's
     /// choice.
-    fn profile_division(&self) -> (BarClock, &ProfileSession) {
+    fn profile_division(&self) -> (BarClock, Cow<'_, ProfileSession>) {
         // The profile settings divide only the session volume profile chart: the market profile
         // chart and its menu keep the chart's calendar.
         let selection = match self.chart_type {
@@ -122,7 +130,7 @@ impl Chart {
             .context
             .as_ref()
             .is_some_and(|(symbol, edited, division)| {
-                symbol == self.symbol() && *edited == clock && division == selection
+                symbol == self.symbol() && *edited == clock && division == &*selection
             })
     }
 
@@ -130,7 +138,7 @@ impl Chart {
         if !self.profile_edits_current() {
             self.reset_trade_profile_ranges();
             let (clock, selection) = self.profile_division();
-            let context = (self.symbol().to_owned(), clock, selection.clone());
+            let context = (self.symbol().to_owned(), clock, selection.into_owned());
             self.trade_profiles.context = Some(context);
         }
     }
@@ -162,16 +170,27 @@ impl Chart {
         let joins = |end: &DateTime<Utc>, start: &DateTime<Utc>| {
             sessions.session_break_between(end, start).is_none() && segment(end) == segment(start)
         };
-        let mut natural = profiled(
-            bars,
-            session_ranges(bars, shown.clone(), &clock)?,
-            &clock,
-            selection,
-        )?;
-        let current = self.profile_edits_current();
+        let natural = |shown| match &*selection {
+            ProfileSession::Custom(custom) => custom_ranges(
+                bars,
+                shown,
+                &clock,
+                custom,
+                self.regular_hours_clock().as_ref(),
+            ),
+            _ => profiled(
+                bars,
+                session_ranges(bars, shown, &clock)?,
+                &clock,
+                &selection,
+            ),
+        };
+        let mut ranges = natural(shown.clone())?;
+        let current = self.profile_edits_current()
+            && !ranges.ranges().windows(2).any(|r| r[0].end > r[1].start);
         if current {
-            let first = natural.ranges().first()?.start;
-            let end = natural.ranges().last()?.end;
+            let first = ranges.ranges().first()?.start;
+            let end = ranges.ranges().last()?.end;
             let original = shown.clone();
             for merged in &self.trade_profiles.spans {
                 if *merged.start() < end && (*merged.end() >= first || joins(merged.end(), &first))
@@ -185,17 +204,13 @@ impl Chart {
                 }
             }
             if shown != original {
-                natural = profiled(
-                    bars,
-                    session_ranges(bars, shown, &clock)?,
-                    &clock,
-                    selection,
-                )?;
+                ranges = natural(shown)?;
             }
         }
-        if !current {
-            return Some(natural);
+        if !current || ranges.ranges().windows(2).any(|r| r[0].end > r[1].start) {
+            return Some(ranges);
         }
+        let natural = ranges;
         let mut ranges: Vec<Range<DateTime<Utc>>> = Vec::new();
         for range in natural.ranges() {
             let merged = self.trade_profiles.spans.iter().find(|r| {
@@ -227,6 +242,49 @@ impl Chart {
             })
             .filter(|range| range.end > clock.bar_open(bars[0].time))
             .collect();
+        TradeProfileRanges::new(ranges).ok()
+    }
+}
+
+/// Whole custom parts touching the view, padded to include an overnight session across a clock change.
+fn custom_ranges(
+    bars: &[Bar],
+    shown: Range<usize>,
+    clock: &BarClock,
+    custom: &crate::model::CustomProfileSessions,
+    regular: Option<&BarClock>,
+) -> Option<TradeProfileRanges> {
+    let visible = bars.get(shown.clone())?;
+    let first = visible.first()?.time;
+    let last = visible.last()?.time;
+    let padding = chrono::TimeDelta::days(2);
+    let first = first
+        .checked_sub_signed(padding)
+        .unwrap_or(DateTime::<Utc>::MIN_UTC);
+    let last = last
+        .checked_add_signed(padding)
+        .unwrap_or(DateTime::<Utc>::MAX_UTC);
+    let slice = bars.partition_point(|b| b.time < first)..bars.partition_point(|b| b.time <= last);
+    let ranges = custom
+        .parts(
+            bars,
+            slice,
+            clock.timeframe().unwrap_or_default(),
+            regular,
+            true,
+        )
+        .into_iter()
+        .filter(|p| p.bars.end > shown.start && p.bars.start < shown.end)
+        .map(|p| {
+            clock.bar_open(bars[p.bars.start].time)
+                ..bars
+                    .get(p.bars.end)
+                    .map_or(DateTime::<Utc>::MAX_UTC, |b| clock.bar_open(b.time))
+        })
+        .collect();
+    if custom.overlap == crate::model::SessionOverlap::InBoth {
+        TradeProfileRanges::overlapping(ranges).ok()
+    } else {
         TradeProfileRanges::new(ranges).ok()
     }
 }
@@ -264,28 +322,274 @@ fn profiled(
 mod tests {
     use crate::chart::overlays::TradeProfileSettings;
     use crate::model::{
-        Bar, BarData, ChartType, CustomProfileSession, Instrument, ProfileSession, Session,
-        SessionWindow, Timeframe, TimezoneId,
+        Bar, BarData, ChartType, CustomProfileSession, CustomProfileSessions, Instrument,
+        ProfileSession, Session, SessionOverlap, SessionWindow, Timeframe, TimezoneId,
     };
     use crate::widget::Chart;
-    use chrono::{DateTime, NaiveTime, TimeDelta, Utc, Weekday};
+    use chrono::{DateTime, NaiveTime, TimeDelta, Timelike, Utc, Weekday};
 
     fn hourly(instrument: Instrument, session: ProfileSession) -> Chart {
-        // Hourly bars from Friday 2024-03-08 20:00 UTC across the New York clock change early
-        // on Sunday March 10.
+        bars_every(60, 80, instrument, session)
+    }
+
+    fn bars_every(
+        minutes: i64,
+        count: i64,
+        instrument: Instrument,
+        session: ProfileSession,
+    ) -> Chart {
+        // Friday evening through the New York clock change on Sunday March 10.
         let start: DateTime<Utc> = "2024-03-08T20:00:00Z".parse().unwrap();
-        let bars = (0..80)
-            .map(|i| Bar::new(start + TimeDelta::hours(i), 100.0, 102.0, 99.0, 101.0, 1.0))
+        let bars = (0..count)
+            .map(|i| {
+                Bar::new(
+                    start + TimeDelta::minutes(minutes * i),
+                    100.0,
+                    102.0,
+                    99.0,
+                    101.0,
+                    1.0,
+                )
+            })
             .collect();
         let mut chart = Chart::new(BarData::from_bars(bars));
         chart.set_chart_type(ChartType::SessionVolumeProfile);
-        chart.set_timeframe(Timeframe::Hour1);
+        chart.set_timeframe(if minutes == 30 {
+            Timeframe::Min30
+        } else {
+            Timeframe::Hour1
+        });
         chart.set_instrument(Some(instrument));
         chart.set_trade_profile_settings(TradeProfileSettings {
             session,
             ..Default::default()
         });
         chart
+    }
+
+    fn custom_windows() -> CustomProfileSessions {
+        let at = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        CustomProfileSessions::new([
+            CustomProfileSession::new(at(8, 0), at(12, 30)),
+            CustomProfileSession::new(at(12, 0), at(16, 0)),
+        ])
+    }
+
+    fn ranges(chart: &Chart) -> Vec<String> {
+        let bars = chart.bars(crate::widget::SeriesId::MAIN);
+        chart
+            .trade_profile_ranges()
+            .unwrap()
+            .ranges()
+            .iter()
+            .map(|r| {
+                let start = bars.partition_point(|bar| bar.time < r.start);
+                let end = bars.partition_point(|bar| bar.time < r.end);
+                assert_eq!(r.start, chart.profile_clock().bar_open(bars[start].time));
+                format!(
+                    "{}-{}",
+                    bars[start].time.format("%d %H:%M"),
+                    bars.get(end)
+                        .map_or(r.end, |bar| bar.time)
+                        .format("%d %H:%M")
+                )
+            })
+            .collect()
+    }
+
+    /// The 12:00 bar belongs to both windows: keep it twice or give it its own profile.
+    #[test]
+    fn custom_sessions_share_or_split_their_common_hours() {
+        for (overlap, expected) in [
+            (
+                SessionOverlap::InBoth,
+                vec![
+                    "08 20:00-08 21:00",
+                    "09 13:00-09 18:00",
+                    "09 17:00-09 21:00",
+                    "10 12:00-10 17:00",
+                    "10 16:00-10 20:00",
+                    "11 12:00-11 17:00",
+                    "11 16:00-11 20:00",
+                ],
+            ),
+            (
+                SessionOverlap::OwnProfile,
+                vec![
+                    "08 20:00-08 21:00",
+                    "09 13:00-09 17:00",
+                    "09 17:00-09 18:00",
+                    "09 18:00-09 21:00",
+                    "10 12:00-10 16:00",
+                    "10 16:00-10 17:00",
+                    "10 17:00-10 20:00",
+                    "11 12:00-11 16:00",
+                    "11 16:00-11 17:00",
+                    "11 17:00-11 20:00",
+                ],
+            ),
+        ] {
+            let mut custom = custom_windows();
+            custom.overlap = overlap;
+            let mut chart = hourly(us_equity_hours(), ProfileSession::Custom(custom));
+            assert_eq!(ranges(&chart), expected, "{overlap:?}");
+            // The session study uses the same independent windows and counts every kept bar.
+            use crate::studies::{Indicator, InputValue, VolProfileSession};
+            let mut study = VolProfileSession::new(24);
+            study.set_timeframe(Timeframe::Hour1);
+            study.set_instrument(chart.instrument());
+            for (id, value) in [
+                ("sessions", InputValue::Choice(3)),
+                ("hours_only", InputValue::Toggle(true)),
+                ("custom_sessions", InputValue::Choice(1)),
+                ("session_start", InputValue::Length(480)),
+                ("session_end", InputValue::Length(750)),
+                ("session_2_start", InputValue::Length(720)),
+                ("session_2_end", InputValue::Length(960)),
+                (
+                    "session_overlap",
+                    InputValue::Choice(usize::from(overlap == SessionOverlap::InBoth)),
+                ),
+            ] {
+                study.set_input(id, value).unwrap();
+            }
+            let bars = chart.bars(crate::widget::SeriesId::MAIN);
+            study.calculate(bars);
+            let parts = study.volume_profiles(0..bars.len());
+            let observed: Vec<_> = parts
+                .iter()
+                .map(|p| {
+                    assert!(
+                        (p.profile.volume().iter().sum::<f64>() - p.bars.len() as f64).abs() < 1e-9
+                    );
+                    format!(
+                        "{}-{}",
+                        bars[p.bars.start].time.format("%d %H:%M"),
+                        bars[p.bars.end].time.format("%d %H:%M")
+                    )
+                })
+                .collect();
+            assert_eq!(observed, expected, "session study {overlap:?}");
+            study
+                .set_input("session_2_end", InputValue::Length(15 * 60))
+                .unwrap();
+            study.calculate(bars);
+            let edited = study.volume_profiles(0..bars.len());
+            assert_eq!(
+                edited.len(),
+                if overlap == SessionOverlap::InBoth {
+                    6
+                } else {
+                    9
+                }
+            );
+            let total: f64 = edited.iter().flat_map(|p| p.profile.volume()).sum();
+            assert!(
+                (total
+                    - if overlap == SessionOverlap::InBoth {
+                        24.0
+                    } else {
+                        21.0
+                    })
+                .abs()
+                    < 1e-9,
+                "edited window rebuilds its cached bars"
+            );
+
+            if overlap == SessionOverlap::InBoth {
+                let mut shared = chart.trade_profile_ranges().unwrap();
+                assert!(!shared.merge_next(1));
+                assert!(!shared.split(1, "2024-03-09T15:00:00Z".parse().unwrap()));
+                assert!(!chart.merge_trade_profile(1));
+                assert!(!chart.split_trade_profile(1, "2024-03-09T15:00:00Z".parse().unwrap()));
+                assert_eq!(ranges(&chart), expected);
+                // A later history fill can introduce shared bars after an unambiguous merge.
+                let full = chart.bars(crate::widget::SeriesId::MAIN).to_vec();
+                let zone = TimezoneId::named("America/New_York").unwrap();
+                let without_shared = full
+                    .iter()
+                    .filter(|bar| bar.time.with_timezone(&zone).hour() != 12)
+                    .cloned()
+                    .collect();
+                chart.set_data(crate::widget::SeriesId::MAIN, without_shared);
+                assert!(chart.merge_trade_profile(1));
+                chart.set_data(crate::widget::SeriesId::MAIN, full);
+                assert!(chart.profile_edits_current());
+                assert_eq!(
+                    ranges(&chart),
+                    expected,
+                    "shared bars keep their natural profiles despite earlier edits"
+                );
+            }
+        }
+    }
+
+    /// Clipping removes weekends and Monday pre-market, without requiring instrument hours.
+    #[test]
+    fn custom_sessions_clip_to_the_trading_hours() {
+        for (clip, hours, expected) in [
+            (
+                false,
+                true,
+                vec![
+                    "09 13:00-09 17:30",
+                    "10 12:00-10 16:30",
+                    "11 12:00-11 16:30",
+                ],
+            ),
+            (true, true, vec!["11 13:30-11 16:30"]),
+            (
+                true,
+                false,
+                vec![
+                    "09 13:00-09 17:30",
+                    "10 12:00-10 16:30",
+                    "11 12:00-11 16:30",
+                ],
+            ),
+        ] {
+            let mut custom = custom_windows();
+            custom.sessions.truncate(1);
+            custom.trading_hours_only = clip;
+            let instrument = if hours {
+                us_equity_hours()
+            } else {
+                Instrument::new("X").with_time_zone(TimezoneId::named("America/New_York").unwrap())
+            };
+            let chart = bars_every(30, 160, instrument, ProfileSession::Custom(custom));
+            assert_eq!(
+                ranges(&chart),
+                expected,
+                "clip {clip} instrument hours {hours}"
+            );
+            use crate::studies::{Indicator, InputValue, VolProfileSession};
+            let mut study = VolProfileSession::new(24);
+            study.set_timeframe(Timeframe::Min30);
+            study.set_instrument(chart.instrument());
+            for (id, value) in [
+                ("sessions", InputValue::Choice(3)),
+                ("hours_only", InputValue::Toggle(true)),
+                ("session_start", InputValue::Length(480)),
+                ("session_end", InputValue::Length(750)),
+                ("clip_hours", InputValue::Toggle(clip)),
+            ] {
+                study.set_input(id, value).unwrap();
+            }
+            let bars = chart.bars(crate::widget::SeriesId::MAIN);
+            study.calculate(bars);
+            let observed: Vec<_> = study
+                .volume_profiles(0..bars.len())
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{}-{}",
+                        bars[p.bars.start].time.format("%d %H:%M"),
+                        bars[p.bars.end].time.format("%d %H:%M")
+                    )
+                })
+                .collect();
+            assert_eq!(observed, expected, "session study clipping");
+        }
     }
 
     /// New York hours on weekdays: regular from 09:30 to 16:00, extended from 04:00 to 09:30 and
@@ -320,11 +624,14 @@ mod tests {
     fn custom_sessions_open_at_their_local_time_across_a_clock_change() {
         let new_york = TimezoneId::named("America/New_York").unwrap();
         let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
-        let custom = ProfileSession::Custom(CustomProfileSession {
-            start: at(18),
-            end: at(17),
-            zone: None,
-        });
+        let custom = ProfileSession::Custom(
+            CustomProfileSession {
+                start: at(18),
+                end: at(17),
+                zone: None,
+            }
+            .into(),
+        );
         // Monday daytime hours in New York: only the custom session can explain the starts.
         let exchange = Instrument::new("X")
             .with_time_zone(new_york)
@@ -343,9 +650,24 @@ mod tests {
         let ProfileSession::Custom(mut other) = custom.clone() else {
             unreachable!()
         };
-        other.zone = Some(TimezoneId::utc());
+        other.sessions[0].zone = Some(TimezoneId::utc());
         let chart = hourly(exchange.clone(), ProfileSession::Custom(other));
         assert_eq!(starts(&chart)[..2], ["08 20:00", "09 18:00"]);
+        let mut event_chart = chart;
+        for interval in [
+            Timeframe::Ticks(1.try_into().unwrap()),
+            Timeframe::Volume(10.try_into().unwrap()),
+            Timeframe::Range(4.try_into().unwrap()),
+            Timeframe::Delta(5.try_into().unwrap()),
+        ] {
+            event_chart.set_timeframe(interval);
+            assert_eq!(
+                starts(&event_chart)[..2],
+                ["08 20:00", "09 18:00"],
+                "{interval:?}"
+            );
+        }
+
         // Other chart types keep the chart's calendar, so their menus find the same sessions.
         let mut other_type = hourly(exchange.clone(), ProfileSession::Chart);
         let plain = other_type.profile_clock();
@@ -416,11 +738,14 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let custom = |zone: &str| {
-            ProfileSession::Custom(CustomProfileSession {
-                start: at(9, 0),
-                end: at(17, 30),
-                zone: Some(TimezoneId::named(zone).unwrap()),
-            })
+            ProfileSession::Custom(
+                CustomProfileSession {
+                    start: at(9, 0),
+                    end: at(17, 30),
+                    zone: Some(TimezoneId::named(zone).unwrap()),
+                }
+                .into(),
+            )
         };
         let observed = [
             (
@@ -528,22 +853,28 @@ mod tests {
     /// trading day split by extended hours one per segment.
     #[test]
     fn tpo_study_hours_profile_only_their_bars() {
-        use crate::model::{TPOConfig, to_tpo_profiles};
+        use crate::model::to_tpo_profiles;
         use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
-        let chart = hourly(us_equity_hours(), ProfileSession::Chart);
         // (hours, split, profiles as first bar and period letters); periods are the bar's hour.
-        let rows: [(usize, bool, &[&str]); 5] = [
-            (1, false, &["08 20:00 F", "11 14:00 ABCDEF"]),
+        type Case = (usize, bool, usize, bool, i64, &'static [&'static str]);
+        let rows: [Case; 9] = [
+            (1, false, 1, false, 60, &["08 20:00 F", "11 14:00 ABCDEF"]),
             (
                 2,
                 false,
+                1,
+                false,
+                60,
                 &["09 13:00 ABCDE", "10 12:00 ABCDE", "11 12:00 ABCDE"],
             ),
-            (3, false, &["11 08:00 ABCDEF"]),
-            (4, false, &["08 21:00 ABCD", "11 20:00 ABCD"]),
+            (3, false, 1, false, 60, &["11 08:00 ABCDEF"]),
+            (4, false, 1, false, 60, &["08 21:00 ABCD", "11 20:00 ABCD"]),
             (
                 0,
                 true,
+                1,
+                false,
+                60,
                 &[
                     "08 20:00 F",
                     "08 21:00 ABCD",
@@ -552,25 +883,84 @@ mod tests {
                     "11 20:00 ABCD",
                 ],
             ),
+            (
+                2,
+                false,
+                2,
+                false,
+                60,
+                &[
+                    "08 20:00 D",
+                    "09 13:00 ABCDE",
+                    "09 17:00 ABCD",
+                    "10 12:00 ABCDE",
+                    "10 16:00 ABCD",
+                    "11 12:00 ABCDE",
+                    "11 16:00 ABCD",
+                ],
+            ),
+            (
+                2,
+                false,
+                2,
+                true,
+                60,
+                &[
+                    "08 20:00 D",
+                    "09 13:00 ABCD",
+                    "09 17:00 A",
+                    "09 18:00 BCD",
+                    "10 12:00 ABCD",
+                    "10 16:00 A",
+                    "10 17:00 BCD",
+                    "11 12:00 ABCD",
+                    "11 16:00 A",
+                    "11 17:00 BCD",
+                ],
+            ),
+            (
+                2,
+                false,
+                1,
+                false,
+                30,
+                &[
+                    "09 13:00 ABCDEFGHI",
+                    "10 12:00 ABCDEFGHI",
+                    "11 12:00 ABCDEFGHI",
+                ],
+            ),
+            (2, false, 1, true, 30, &["11 13:30 ABCDEF"]),
         ];
-        for (hours, split, expected) in rows {
+        for (hours, split, count, own_or_clip, minutes, expected) in rows {
+            let chart = bars_every(
+                minutes,
+                4800 / minutes,
+                us_equity_hours(),
+                ProfileSession::Chart,
+            );
             let mut study = TimePriceOpportunity::default();
             for (id, value) in [
                 ("hours", InputValue::Choice(hours)),
                 ("split_sessions", InputValue::Toggle(split)),
                 ("session_start", InputValue::Length(8 * 60)),
                 ("session_end", InputValue::Length(12 * 60 + 30)),
+                ("custom_sessions", InputValue::Choice(count - 1)),
+                ("session_2_start", InputValue::Length(12 * 60)),
+                ("session_2_end", InputValue::Length(16 * 60)),
+                (
+                    "session_overlap",
+                    InputValue::Choice(usize::from(!own_or_clip)),
+                ),
+                ("clip_hours", InputValue::Toggle(count == 1 && own_or_clip)),
+                ("period", InputValue::Length(minutes as usize)),
             ] {
                 study.set_input(id, value).unwrap();
             }
             // As the chart draws the study, on rows of one price unit.
             let config = study.tpo().unwrap();
-            let (clock, session) = chart.profile_hours(&config.session);
-            let config = TPOConfig {
-                session: session.clone(),
-                tick_size: 1.0,
-                ..config.clone()
-            };
+            let (clock, mut config) = chart.tpo_division(config);
+            config.tick_size = 1.0;
             let observed: Vec<_> =
                 to_tpo_profiles(chart.bars(crate::widget::SeriesId::MAIN), &config, &clock)
                     .iter()
@@ -585,6 +975,42 @@ mod tests {
                     })
                     .collect();
             assert_eq!(observed, expected, "hours {hours} split {split}");
+            if count == 2 {
+                let weekly = crate::model::TPOConfig {
+                    profile_period: crate::model::TPOProfilePeriod::Week,
+                    ..config.clone()
+                };
+                let profiles =
+                    to_tpo_profiles(chart.bars(crate::widget::SeriesId::MAIN), &weekly, &clock);
+                let dates: Vec<_> = profiles
+                    .iter()
+                    .map(|p| p.session_date.format("%d %H:%M").to_string())
+                    .collect();
+                let expected_dates = if own_or_clip {
+                    vec!["08 20:00", "11 12:00"]
+                } else {
+                    vec!["08 20:00", "09 13:00", "11 12:00", "11 16:00"]
+                };
+                assert_eq!(dates, expected_dates, "weekly session layers");
+                assert_eq!(
+                    profiles.iter().map(|p| p.letters.len()).sum::<usize>(),
+                    if own_or_clip { 25 * 4 } else { 28 * 4 }
+                );
+            }
+            let saved = study.tpo().unwrap().clone();
+            study
+                .set_input("custom_sessions", InputValue::Choice(0))
+                .unwrap();
+            study
+                .set_input("custom_sessions", InputValue::Choice(count - 1))
+                .unwrap();
+            assert_eq!(study.tpo(), Some(&saved), "inactive window values survive");
+            let inputs = study.inputs();
+            let second = inputs
+                .iter()
+                .find(|input| input.id == "session_2_start")
+                .unwrap();
+            assert_eq!(second.is_shown(&inputs), hours == 2 && count == 2);
         }
     }
 }
