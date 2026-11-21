@@ -3935,6 +3935,7 @@ impl DemoApp {
                     }
                 }
                 self.trading.show(ui, &mut self.chart);
+                self.show_sample_fill(ui);
             });
         // The chart's rectangular background covers the frame; restore its top-left cutout.
         let corner = chart.response.rect.min;
