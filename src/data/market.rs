@@ -122,12 +122,16 @@ pub struct CalendarQuery {
     pub countries: Vec<String>,
     /// Only events at least this important, when set. Set for economic events only.
     pub importance: Option<Importance>,
+    /// Only events of these symbols, in the identifiers the chart uses, or of every symbol when
+    /// empty. Set for earnings, dividends and IPOs, whose events carry a
+    /// [`symbol`](CalendarEvent::symbol).
+    pub symbols: Vec<String>,
 }
 
 impl CalendarQuery {
     /// The events of the `kind` calendar from `from` until before `to`, of every country and
-    /// importance. Assign [`countries`](Self::countries) and, for economic events,
-    /// [`importance`](Self::importance) to narrow it.
+    /// importance. Assign [`countries`](Self::countries), [`symbols`](Self::symbols) and, for
+    /// economic events, [`importance`](Self::importance) to narrow it.
     ///
     /// ```
     /// use egui_charts::data::{CalendarKind, CalendarQuery, Importance};
@@ -139,6 +143,7 @@ impl CalendarQuery {
     /// );
     /// query.importance = Some(Importance::High);
     /// assert!(query.countries.is_empty());
+    /// assert!(query.symbols.is_empty());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn new(kind: CalendarKind, from: DateTime<Utc>, to: DateTime<Utc>) -> Self {
@@ -148,6 +153,7 @@ impl CalendarQuery {
             to,
             countries: Vec::new(),
             importance: None,
+            symbols: Vec::new(),
         }
     }
 }

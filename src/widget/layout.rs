@@ -5707,7 +5707,7 @@ mod tests {
     }
 
     /// The chart menu names the chart's synchronization group, which decides its scrolling,
-    /// crosshair, drawing, date range and replay links, and leaves its field memberships alone.
+    /// crosshair, drawing and date range links, and leaves its field memberships alone.
     #[test]
     fn chart_menu_still_assigns_the_synchronization_group() {
         let ctx = egui::Context::default();

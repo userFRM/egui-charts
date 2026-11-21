@@ -826,7 +826,7 @@ impl Chart {
     }
 
     /// Moves like [`Self::move_series_to_pane`] without restacking drawings, for a restore or
-    /// a study just added, which has no place among the drawings yet.
+    /// a study being placed before its caller restacks the final panes.
     pub(super) fn move_series_keeping_layers(&mut self, series: SeriesId, pane: PaneId) -> bool {
         self.sync_panes();
         if self.pane_index(pane).is_none() {
@@ -883,9 +883,21 @@ impl Chart {
 
     /// Moves a host series or study into a new pane at the bottom.
     fn move_to_new_pane(&mut self, series: SeriesId) -> bool {
+        #[cfg(feature = "drawings")]
+        let stack = self.pane_stack(series);
+        let moved = self.move_to_new_pane_keeping_layers(series);
+        #[cfg(feature = "drawings")]
+        if let Some(stack) = stack.filter(|_| moved) {
+            self.keep_stack(stack);
+        }
+        moved
+    }
+
+    /// Creates a study's pane before its caller restacks the final placement.
+    pub(super) fn move_to_new_pane_keeping_layers(&mut self, series: SeriesId) -> bool {
         self.sync_panes();
         let pane = self.add_pane();
-        let moved = self.move_series_to_pane(series, pane);
+        let moved = self.move_series_keeping_layers(series, pane);
         if moved {
             let height = self.study_pane_height(series);
             if let Some(item) = self
