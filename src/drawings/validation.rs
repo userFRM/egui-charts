@@ -11,6 +11,11 @@ pub(crate) const MAX_STROKE_WIDTH: f32 = 100.0;
 /// Largest side of an image frame, in points.
 pub(crate) const MAX_IMAGE_SIDE: f32 = 10_000.0;
 
+/// Narrowest column and lowest row, in points, that dragging a table or its settings sets.
+pub(crate) const MIN_TABLE_CELL: f32 = 8.0;
+/// Widest column and highest row of a table, in points.
+pub(crate) const MAX_TABLE_CELL: f32 = 10_000.0;
+
 /// Widest line of wrapped annotation text, in points.
 pub(crate) const MAX_TEXT_WRAP_WIDTH: f32 = 10_000.0;
 
