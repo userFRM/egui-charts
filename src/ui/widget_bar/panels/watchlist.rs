@@ -1443,6 +1443,7 @@ impl WatchlistPanel {
         let mut moved = None;
         let mut removed = None;
         let mut flag_edit = None;
+        let mut added_section = None;
         let mut section_move = None;
         let show_summary = wide.is_some() && *summary;
         let summaries: Vec<_> = shown_columns
@@ -1737,6 +1738,16 @@ impl WatchlistPanel {
                                 });
                                 if ui
                                     .add_enabled(
+                                        reorderable,
+                                        egui::Button::new(l10n::text(ui.ctx(), "Add section")),
+                                    )
+                                    .clicked()
+                                {
+                                    added_section = Some(index);
+                                    ui.close();
+                                }
+                                if ui
+                                    .add_enabled(
                                         flag.is_some(),
                                         egui::Button::new(l10n::text(ui.ctx(), "Remove flag")),
                                     )
@@ -1834,6 +1845,12 @@ impl WatchlistPanel {
                 states.remove(at);
             }
             list.items.remove(index);
+        }
+        if let Some(index) = added_section {
+            let at = sections.iter().filter(|&&section| section < index).count();
+            states.insert(at, false);
+            list.items
+                .insert(index, WatchlistItem::Section("New section".to_owned()));
         }
         if let Some((symbol, flag)) = flag_edit {
             set_flag(lists, &symbol, flag);
@@ -3165,6 +3182,63 @@ mod tests {
         assert_eq!(flags(&h, "AAPL"), [None; 3]);
         assert_eq!(flags(&h, "MSFT"), [Some(Red)]);
         assert_eq!(flags(&h, "NVDA"), [Some(Green); 2]);
+    }
+
+    /// A symbol's menu inserts an expanded section above it without shifting later collapse states.
+    #[test]
+    fn a_symbols_menu_adds_a_section_above_it_in_list_order() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        for (text, collapsed, sorted, expected, shown) in [
+            (
+                "A,B,C",
+                false,
+                false,
+                "A,###New section,B,C",
+                vec!["A", "B", "C"],
+            ),
+            (
+                "###One,A,B,###Two,C",
+                true,
+                false,
+                "###One,A,###New section,B,###Two,C",
+                vec!["A", "B"],
+            ),
+            ("A,B,C", false, true, "A,B,C", vec!["A", "B", "C"]),
+        ] {
+            let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", text)]);
+            if sorted {
+                panel.sort = Some((WatchlistColumn::Symbol.into(), false));
+            }
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(vec2(300.0, 600.0))
+                .build_ui_state(
+                    |ui, panel: &mut WatchlistPanel| {
+                        panel.show(ui);
+                    },
+                    panel,
+                );
+            if collapsed {
+                h.get_by_label("Two").click();
+                h.run();
+            }
+            h.get_by_label("B").click_secondary();
+            h.run();
+            assert_eq!(h.get_by_label("Add section").is_disabled(), sorted);
+            if !sorted {
+                h.get_by_label("Add section").click();
+                h.run();
+            }
+            assert_eq!(h.state().lists()[0].to_text(), expected);
+            let visible: Vec<_> = ["A", "B", "C"]
+                .into_iter()
+                .filter(|s| h.query_by_label(s).is_some())
+                .collect();
+            assert_eq!(visible, shown);
+        }
     }
 
     /// Column choices apply immediately, stay open for more edits, and govern keyboard sorting.
