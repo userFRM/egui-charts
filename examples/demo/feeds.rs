@@ -956,6 +956,35 @@ pub(super) fn seasonality(bars: &[Bar]) -> Seasonality {
     Seasonality::new(years as u32, summaries)
 }
 
+/// Demo watchlist sharing, with placeholder links kept in memory until revoked.
+#[derive(Default)]
+pub(super) struct ListSharing(Mutex<(usize, HashSet<String>)>);
+
+impl Sharing for ListSharing {
+    fn offers(&self, kind: ShareKind) -> ShareOffer {
+        let mut offer = ShareOffer::new(kind == ShareKind::Watchlist, false);
+        offer.revoke = offer.link;
+        offer
+    }
+    fn shared(&self, kind: ShareKind, name: &str) -> bool {
+        kind == ShareKind::Watchlist && self.0.lock().unwrap().1.contains(name)
+    }
+    fn link(&self, _: ShareKind, name: &str, reply: Reply<ShareLink>) {
+        let mut state = self.0.lock().unwrap();
+        state.0 += 1;
+        state.1.insert(name.to_owned());
+        // There is no demo server; this reserved domain does not resolve.
+        reply.send(Ok(ShareLink::new(
+            format!("https://demo.invalid/watchlist/{}", state.0),
+            false,
+        )));
+    }
+    fn revoke(&self, _: ShareKind, name: &str, reply: Reply<()>) {
+        self.0.lock().unwrap().1.remove(name);
+        reply.send(Ok(()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1561,34 +1590,5 @@ mod tests {
                 "since={since:?}, before={before:?}, count={count}"
             );
         }
-    }
-}
-
-/// Demo watchlist sharing, with placeholder links kept in memory until revoked.
-#[derive(Default)]
-pub(super) struct ListSharing(Mutex<(usize, HashSet<String>)>);
-
-impl Sharing for ListSharing {
-    fn offers(&self, kind: ShareKind) -> ShareOffer {
-        let mut offer = ShareOffer::new(kind == ShareKind::Watchlist, false);
-        offer.revoke = offer.link;
-        offer
-    }
-    fn shared(&self, kind: ShareKind, name: &str) -> bool {
-        kind == ShareKind::Watchlist && self.0.lock().unwrap().1.contains(name)
-    }
-    fn link(&self, _: ShareKind, name: &str, reply: Reply<ShareLink>) {
-        let mut state = self.0.lock().unwrap();
-        state.0 += 1;
-        state.1.insert(name.to_owned());
-        // There is no demo server; this reserved domain does not resolve.
-        reply.send(Ok(ShareLink::new(
-            format!("https://demo.invalid/watchlist/{}", state.0),
-            false,
-        )));
-    }
-    fn revoke(&self, _: ShareKind, name: &str, reply: Reply<()>) {
-        self.0.lock().unwrap().1.remove(name);
-        reply.send(Ok(()));
     }
 }
