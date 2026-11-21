@@ -1,5 +1,5 @@
 area,group,feature,status,provided_by,source,issues
-Alerts,Alerts,"Alert editing, pause, resume and duplication",incomplete,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;terminal/src/alerts.rs,2534;3584;3872
+Alerts,Alerts,"Alert editing, pause, resume and duplication",unverified,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;terminal/src/alerts.rs,2534;3584;3872
 Alerts,Alerts,Alert evaluation engine,incomplete,library,src/services/alerts.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs;terminal/src/alerts.rs;src/widget/alerts.rs,1132;2130;3827
 Alerts,Alerts,Alert expiration,verified,library,src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,2068;3584
 Alerts,Alerts,Alert levels drawn on the chart,incomplete,library,src/chart/rendering/alert_levels.rs;src/model/alert.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;examples/demo/controller.rs;terminal/src/alerts.rs,2065;2204;2537;852
