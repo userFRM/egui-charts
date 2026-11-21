@@ -82,7 +82,10 @@ use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse, ExportScope};
 use egui_charts::ui::floating_replay_control::{FloatingReplayControl, ReplayControlAction};
 use egui_charts::ui::floating_toolbar::FloatingSelectionToolbar;
-use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplaySession, ReplayStartPicker};
+use egui_charts::ui::replay::{
+    ReplayAction, ReplayController, ReplayScope, ReplaySession, ReplayStartPicker, ReplayToolbar,
+    ReplayToolbarAction, ReplayToolbarState,
+};
 use egui_charts::ui::timeframe_toolbar::{
     DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction,
     default_time_zones,
@@ -488,10 +491,12 @@ pub struct DemoApp {
     replay_start: ReplayStartPicker,
     replay_selecting: bool,
     replay_interval: Timeframe,
+    replay_scope: ReplayScope,
     replay_session: Option<(ReplaySession, Timeframe)>,
     replay_slots: Vec<usize>,
     live_was_paused: bool,
     replay_control: FloatingReplayControl,
+    replay_toolbar: bool,
 
     // Pending offscreen image options and delivery destination.
     screenshot_requested: Option<(
@@ -880,17 +885,21 @@ impl DemoApp {
             replay_start: ReplayStartPicker::default(),
             replay_selecting: false,
             replay_interval: Timeframe::Hour1,
-            replay_session: cc
-                .storage
-                .and_then(|storage| eframe::get_value(storage, "replay_session"))
-                .flatten()
-                .map(|(mut session, interval): (ReplaySession, Timeframe)| {
-                    session.symbol = DemoSymbol::current(&session.symbol);
-                    (session, interval)
-                }),
+            replay_scope: ReplayScope::AllCharts,
+            replay_session: cc.storage.and_then(|storage| {
+                let (mut session, interval): (ReplaySession, Timeframe) =
+                    eframe::get_value::<Option<_>>(storage, "replay_session")??;
+                // Older demo sessions replayed all charts.
+                if !storage.get_string("replay_session")?.contains("scope:") {
+                    session.scope = ReplayScope::AllCharts;
+                }
+                session.symbol = DemoSymbol::current(&session.symbol);
+                Some((session, interval))
+            }),
             replay_slots: Vec::new(),
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
+            replay_toolbar: false,
             screenshot_requested: None,
             toasts: Toasts::new(),
             demo_level: None,
@@ -1197,6 +1206,8 @@ impl DemoApp {
             self.timeframe_toolbar.state.adjust_for_dividends,
         );
         self.loading_bars = true;
+        // New prices may keep the bar times, such as after a dividend adjustment: rate them anew.
+        self.symbol_details.set_bars(self.state.timeframe, &[]);
         self.bars = self.live.snapshot(
             self.state.timeframe,
             self.chart.bar_clock(),
@@ -2187,6 +2198,12 @@ impl DemoApp {
                         ui.separator();
                     }
                     sample = self.show_demo_controls(ui);
+                    menu_toggle(
+                        ui,
+                        "Replay toolbar",
+                        &icons::REPLAY,
+                        &mut self.replay_toolbar,
+                    );
                     let editing = menu_item(
                         ui,
                         "Study editing",
@@ -2887,6 +2904,8 @@ impl DemoApp {
                             .frame(egui::Frame::NONE)
                             .show(ui, |ui| self.symbol_details.show(ui));
                     }
+                    let action = self.symbol_details.take_news_action();
+                    self.handle_news(ui.ctx(), action);
                     self.show_watchlist(ui);
                 }
                 SidePanel::TimeAndSales => self.time_and_sales.show(ui),
@@ -3176,6 +3195,12 @@ impl DemoApp {
                 .cloned()
                 .unwrap_or_else(|| egui_charts::model::Instrument::new(&chart_symbol)),
         );
+        if let Some(timeframe) = self.chart.timeframe()
+            && !self.loading_bars
+        {
+            self.symbol_details
+                .set_bars(timeframe, self.chart.bars(SeriesId::MAIN));
+        }
         if let Some(quote) = self.live.quote(now) {
             self.symbol_details.set_quote(quote.clone());
             self.trading.set_quote(&chart_symbol, quote);
@@ -4061,6 +4086,13 @@ impl DemoApp {
                     context.target
                 ));
             }
+            ChartContextAction::Series(SeriesContextMenuAction::CopyPrice) => self
+                .handle_context_action(
+                    ctx,
+                    ChartContextAction::Chart(ContextMenuAction::CopyPrice(
+                        self.menus.series_click_price(),
+                    )),
+                ),
             ChartContextAction::Chart(ContextMenuAction::CopyPrice(price)) => {
                 use egui_charts::scales::PriceFormatter;
                 let decimals = self
@@ -4175,7 +4207,10 @@ impl DemoApp {
             SeriesContextMenuAction::AddIndicator => {
                 self.indicator_dialog.open_for_chart(&self.chart, None);
             }
-            SeriesContextMenuAction::AddAlert => self.open_alert(None),
+            SeriesContextMenuAction::AddAlert => {
+                let price = self.menus.series_alert_price();
+                self.open_alert(price.is_finite().then_some(price));
+            }
             _ => {}
         }
     }
@@ -4251,20 +4286,31 @@ impl DemoApp {
 
     /// Keeps the replay bar out of the chart's way: between its time axis and the bottom bar.
     fn reserve_replay_strip(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
-        if !self.replay_control.is_visible() {
-            return;
+        if self.replay_control.is_visible() {
+            let strip = egui::Panel::bottom("replay_bar")
+                .exact_size(FloatingReplayControl::STRIP_HEIGHT)
+                .show_separator_line(false)
+                .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
+                    top: 1,
+                    ..egui::Margin::ZERO
+                }))
+                .show(ui, |_| {})
+                .response
+                .rect;
+            self.replay_control.set_dock_strip(strip);
         }
-        let strip = egui::Panel::bottom("replay_bar")
-            .exact_size(FloatingReplayControl::STRIP_HEIGHT)
-            .show_separator_line(false)
-            .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
-                top: 1,
-                ..egui::Margin::ZERO
-            }))
-            .show(ui, |_| {})
-            .response
-            .rect;
-        self.replay_control.set_dock_strip(strip);
+        if self.replay_toolbar
+            && let Some(replay) = &self.replay
+        {
+            let state = ReplayToolbarState::from(replay);
+            let action = egui::Panel::bottom("replay_toolbar")
+                .frame(panel_frame(bg))
+                .show(ui, |ui| ReplayToolbar::new(&state).show(ui))
+                .inner;
+            if let Some(action) = action {
+                self.handle_replay_toolbar(action);
+            }
+        }
     }
 
     fn show_replay_control(&mut self, ctx: &egui::Context) {
@@ -4272,6 +4318,10 @@ impl DemoApp {
             return;
         }
         self.replay_control.set_selecting(self.replay_selecting);
+        self.replay_control.set_scope(
+            (self.layout.mode.chart_count() > 1 && !self.recording_files.opened)
+                .then_some(self.replay_scope),
+        );
         self.replay_control
             .set_can_resume(self.replay.is_none() && self.replay_session.is_some());
         match self.replay.as_ref() {
@@ -4297,6 +4347,16 @@ impl DemoApp {
     fn handle_replay_control(&mut self, action: ReplayControlAction) {
         match action {
             ReplayControlAction::Start(start) => return self.apply_replay_start(start),
+            ReplayControlAction::SetScope(scope) => {
+                if !self.recording_files.opened {
+                    self.replay_scope = scope;
+                    if self.replay_control.uses_automatic_update_interval() {
+                        self.set_automatic_replay_interval();
+                    }
+                    self.push_replay_window_to_chart();
+                }
+                return;
+            }
             // Without a replay the bar is only there to select its start.
             ReplayControlAction::Stop | ReplayControlAction::Close if self.replay.is_none() => {
                 return self.stop_replay();
@@ -4351,6 +4411,7 @@ impl DemoApp {
             }
             ReplayControlAction::SetSpeed(s) => replay.handle_action(ReplayAction::SetSpeed(s)),
             ReplayControlAction::SetUpdateInterval(interval) => self.set_replay_interval(interval),
+            ReplayControlAction::SetAutomaticUpdateInterval => self.set_automatic_replay_interval(),
             ReplayControlAction::Stop => self.stop_replay(),
             ReplayControlAction::Close => {
                 self.replay_selecting = false;
@@ -4369,6 +4430,52 @@ impl DemoApp {
         } else if !transport {
             self.push_replay_window_to_chart();
         }
+        self.sync_replay_driver(play);
+    }
+
+    fn handle_replay_toolbar(&mut self, action: ReplayToolbarAction) {
+        match action {
+            ReplayToolbarAction::Stop => return self.stop_replay(),
+            ReplayToolbarAction::OpenSettings => return,
+            _ => {}
+        }
+        let back = self.replay.as_ref().and_then(|replay| {
+            match action {
+                ReplayToolbarAction::StepBackward => replay.visible_bars().iter().rev().nth(1),
+                ReplayToolbarAction::Play
+                    if replay.state.playback_state
+                        == egui_charts::ui::replay::PlaybackState::Finished =>
+                {
+                    replay.visible_bars().first()
+                }
+                _ => None,
+            }
+            .map(|bar| bar.time)
+        });
+        if let Some(time) = back
+            && self.hold_replay_move(replay::ReplayMove::Toolbar(action.clone()), Some(time))
+        {
+            return;
+        }
+        let play = matches!(action, ReplayToolbarAction::Play);
+        let transport = matches!(
+            action,
+            ReplayToolbarAction::Play
+                | ReplayToolbarAction::Pause
+                | ReplayToolbarAction::SetSpeed(_)
+        );
+        let restart = play && back.is_some();
+        let Some(replay) = &mut self.replay else {
+            return;
+        };
+        replay.handle_action(action.into());
+        if !transport || restart {
+            self.push_replay_window_to_chart();
+        }
+        self.sync_replay_driver(play);
+    }
+
+    fn sync_replay_driver(&mut self, play: bool) {
         if let Some(driver) = self.chart.replay_driver() {
             let replay = self.replay.as_mut().expect("active replay");
             if play && !driver.is_finished() {
@@ -4815,6 +4922,152 @@ mod tests {
     use egui_charts::model::DateRange;
     use egui_charts::model::{AlertSource, LineStyle};
     use egui_charts::ui::dialogs::DrawingProps;
+
+    /// The watchlist's details use the chart's bars and feed, open headline links and honour
+    /// the three section choices through the demo's menus and action handler.
+    #[test]
+    fn watchlist_details_sections_reach_the_demo() {
+        use eframe::App as _;
+        use egui::accesskit::Role;
+        use egui_charts::studies::{Indicator, StudyCell, TechnicalRatings};
+
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            chrono::Utc::now(),
+            true,
+        );
+        app.switch_symbol("STOCKA");
+        settle(&mut app, &ctx);
+        // The tall viewport fits all the details; the narrow toolbar offers its Panels menu.
+        let frame = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(560.0, 3600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+        };
+        let click = |app: &mut DemoApp, role, label: &str| {
+            let output = frame(app, vec![]);
+            let bounds = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find_map(|(_, node)| {
+                    (node.role() == role && node.label() == Some(label))
+                        .then(|| node.bounds())
+                        .flatten()
+                })
+                .unwrap_or_else(|| panic!("missing control: {label}"));
+            let pos = egui::pos2(
+                (bounds.x0 + bounds.x1) as f32 * 0.5,
+                (bounds.y0 + bounds.y1) as f32 * 0.5,
+            );
+            output.drop_without_applying_deltas();
+            frame(app, vec![egui::Event::PointerMoved(pos)]).drop_without_applying_deltas();
+            frame(
+                app,
+                [true, false]
+                    .map(|pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    })
+                    .to_vec(),
+            )
+        };
+        click(&mut app, Role::Button, "Menu").drop_without_applying_deltas();
+        click(&mut app, Role::MenuItem, "Panels").drop_without_applying_deltas();
+        click(&mut app, Role::MenuItem, "Watchlist and details").drop_without_applying_deltas();
+        assert!(app.open_panel == Some(SidePanel::Watchlist));
+        egui::Popup::close_all(&ctx);
+        // Let the side panel's initial sizing and feed replies settle.
+        for _ in 0..3 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
+        let painted = |output: &egui::FullOutput| {
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let output = frame(&mut app, vec![]);
+        let shown = painted(&output);
+        output.drop_without_applying_deltas();
+        let bars = app.chart.bars(SeriesId::MAIN);
+        assert!(!bars.is_empty());
+        let mut study = TechnicalRatings::new();
+        study.set_timeframe(app.chart.timeframe().unwrap());
+        study.calculate(bars);
+        let table = study.table().unwrap();
+        for (label, column) in [("Summary", 3), ("Moving averages", 1), ("Oscillators", 2)] {
+            let StudyCell::Text(word) = &table.rows[0][column] else {
+                panic!("rating word");
+            };
+            assert!(
+                shown.windows(2).any(|row| row == [label, word]),
+                "{label}: {shown:?}"
+            );
+        }
+        for title in [
+            "Technicals",
+            "Upcoming events",
+            "Earnings",
+            "Ex-dividend",
+            "News",
+        ] {
+            assert!(shown.iter().any(|text| text == title), "{title}: {shown:?}");
+        }
+        let mut query = egui_charts::data::NewsQuery::new(10);
+        query.symbols.push("STOCKA".into());
+        let stories = feeds::news(&query, app.live.now());
+        assert!(stories.len() > 3);
+        let headlines: Vec<_> = shown
+            .iter()
+            .filter(|text| stories.iter().any(|story| story.headline == **text))
+            .collect();
+        assert_eq!(
+            headlines,
+            stories[..3]
+                .iter()
+                .map(|story| &story.headline)
+                .collect::<Vec<_>>()
+        );
+        let output = click(&mut app, Role::Button, &stories[0].headline);
+        assert!(output.platform_output.commands.iter().any(|command| {
+            matches!(command, egui::OutputCommand::OpenUrl(url) if Some(&url.url) == stories[0].url.as_ref())
+        }));
+        output.drop_without_applying_deltas();
+        click(&mut app, Role::Button, "Layout").drop_without_applying_deltas();
+        for title in ["Technicals", "Upcoming events", "News"] {
+            click(&mut app, Role::CheckBox, title).drop_without_applying_deltas();
+        }
+        egui::Popup::close_all(&ctx);
+        let output = frame(&mut app, vec![]);
+        let shown = painted(&output);
+        output.drop_without_applying_deltas();
+        for title in ["Technicals", "Upcoming events", "News"] {
+            assert!(
+                !shown.iter().any(|text| text == title),
+                "{title}: {shown:?}"
+            );
+        }
+    }
 
     /// Study settings use the own-data chart's zones and apply the edited session clock.
     #[test]
@@ -6951,6 +7204,7 @@ mod tests {
         app.push_replay_window_to_chart();
         app.stop_replay();
         assert!(app.extra_charts[0].chart.replay_time().is_none());
+        settle(&mut app, &ctx);
         let mut storage = AppStorage::default();
         eframe::App::save(&mut *app, &mut storage);
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -6963,6 +7217,24 @@ mod tests {
         restored.apply_replay_start(egui_charts::ui::replay::ReplayStartAction::Resume);
         assert_eq!(restored.chart.replay_time(), Some(cutoff));
         assert!(!restored.replay.as_ref().unwrap().state.is_playing());
+
+        // Before scopes were saved, the demo replayed every chart in the default layout.
+        let session = storage.0.get_mut("replay_session").unwrap();
+        assert!(session.contains(",scope:AllCharts"));
+        *session = session.replace(",scope:AllCharts", "");
+        let mut cc = eframe::CreationContext::_new_kittest(ctx);
+        cc.storage = Some(&storage);
+        let mut restored = DemoApp::new(&cc);
+        assert_eq!(restored.extra_charts.len(), 2);
+        restored.apply_replay_start(egui_charts::ui::replay::ReplayStartAction::Resume);
+        assert_eq!(restored.chart.replay_time(), Some(cutoff));
+        assert!(
+            restored
+                .extra_charts
+                .iter()
+                .all(|extra| extra.chart.replay_time() == Some(cutoff))
+        );
+        assert_eq!(restored.replay_slots, [0, 1, 2]);
     }
 
     #[derive(Default)]
@@ -8944,6 +9216,80 @@ mod tests {
             );
         }
         assert!(!ChartSettingsState::from_chart(&app.chart).settlement_as_close);
+    }
+
+    /// The demo opens the footprint colouring rows, hides side shade pickers when unused,
+    /// and applies the accepted choice to its chart.
+    #[test]
+    fn footprint_colourings_reach_the_chart_through_demo_settings() {
+        use egui_charts::model::FootprintColor;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        let size = egui::vec2(1440.0, 900.0);
+        let scroll_to = |app: &mut DemoApp, label: &str| -> Option<egui::Pos2> {
+            let wheel = |dy: f32| {
+                vec![egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    source: egui::MouseWheelSource::Wheel,
+                    phase: egui::TouchPhase::Move,
+                    delta: egui::vec2(0.0, dy),
+                    modifiers: Default::default(),
+                }]
+            };
+            let show = |app: &mut DemoApp, events| {
+                ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+            };
+            show(
+                app,
+                vec![egui::Event::PointerMoved(egui::pos2(900.0, 450.0))],
+            );
+            show(app, wheel(5000.0));
+            for _ in 0..20 {
+                for _ in 0..10 {
+                    show(app, vec![]);
+                }
+                if let Some((_, rect)) = show(app, vec![])
+                    .into_iter()
+                    .find(|(text, _)| text == label)
+                {
+                    return Some(rect.center());
+                }
+                show(app, wheel(-150.0));
+            }
+            None
+        };
+        app.chart.set_chart_type(ChartType::VolumeFootprint);
+        app.open_chart_settings_dialog();
+        assert!(scroll_to(&mut app, "Buy shade 1").is_some());
+        let colouring = scroll_to(&mut app, "Volume steps").expect("Colouring combo");
+        ui_click(&ctx, size, colouring, |ui| app.show_dialogs(ui.ctx()));
+        let choices = ui_frame(&ctx, size, vec![], |ui| app.show_dialogs(ui.ctx()));
+        assert!(choices.iter().any(|(text, _)| text == "Side colours"));
+        let larger = choices
+            .into_iter()
+            .find(|(text, _)| text == "Larger side")
+            .expect("Larger side choice")
+            .1
+            .center();
+        ui_click(&ctx, size, larger, |ui| app.show_dialogs(ui.ctx()));
+        assert!(scroll_to(&mut app, "Buy shade 1").is_none());
+        assert_eq!(
+            app.chart.chart_type_params().footprint_color_by,
+            FootprintColor::VolumeSteps,
+            "the choice stays staged until Ok"
+        );
+        let ok = scroll_to(&mut app, "Ok").expect("Ok");
+        ui_click(&ctx, size, ok, |ui| app.show_dialogs(ui.ctx()));
+        assert!(!app.settings_dialog.is_open);
+        assert_eq!(
+            app.chart.chart_type_params().footprint_color_by,
+            FootprintColor::LargerSide
+        );
     }
 
     /// Bars outside regular hours are shaded only in the extended session, and a saved layout
@@ -12048,6 +12394,124 @@ mod tests {
         let time = app.chart.format_time(now);
         assert!(time.ends_with(&clock[..5]), "{clock} against {time}");
         assert!(clock.ends_with(" America/New_York"), "{clock}");
+    }
+
+    /// The series menu opens an alert and copies a price at the values their rows name.
+    #[test]
+    fn series_menu_alert_starts_at_the_clicked_price() {
+        for row_prefix in ["Add alert on STOCKA at ", "Copy price "] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                "2026-11-10T19:29:50Z".parse().unwrap(),
+                true,
+            );
+            app.switch_symbol("STOCKA");
+            settle(&mut app, &ctx);
+            let frame = |app: &mut DemoApp, events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest()),
+                );
+                let texts: Vec<(String, egui::Pos2)> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            text.pos + text.galley.size() / 2.0,
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                let commands = output.platform_output.commands.clone();
+                output.drop_without_applying_deltas();
+                (texts, commands)
+            };
+            let click = |app: &mut DemoApp, button, pos| {
+                let mut commands = frame(app, vec![egui::Event::PointerMoved(pos)]).1;
+                for pressed in [true, false] {
+                    commands.extend(
+                        frame(
+                            app,
+                            vec![egui::Event::PointerButton {
+                                pos,
+                                button,
+                                pressed,
+                                modifiers: Default::default(),
+                            }],
+                        )
+                        .1,
+                    );
+                }
+                commands
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            // Click off the tick grid inside a candle whose body lies clear of the last close.
+            let mapping = app.chart.get_chart_mapping();
+            let plot = app.chart.get_rendered_price_rect();
+            let bars = app.chart.bars(SeriesId::MAIN);
+            let last = bars.last().expect("the demo has bars").close;
+            let (pos, low, high) = bars
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, bar)| {
+                    let (low, high) = (bar.open.min(bar.close), bar.open.max(bar.close));
+                    let pos = egui::pos2(
+                        mapping.idx_to_x(index),
+                        mapping.price_to_y((low + high) / 2.0) + 3.0,
+                    );
+                    ((last < low || last > high)
+                        && mapping.price_to_y(low) - mapping.price_to_y(high) >= 8.0
+                        && plot.shrink(40.0).contains(pos))
+                    .then_some((pos, low, high))
+                })
+                .expect("a visible candle away from the last close");
+            click(&mut app, egui::PointerButton::Secondary, pos);
+            let texts = frame(&mut app, vec![]).0;
+            let row = texts
+                .iter()
+                .find(|(text, _)| text.starts_with(row_prefix))
+                .unwrap_or_else(|| panic!("the series menu offers {row_prefix}: {texts:?}"));
+            let mut commands = click(&mut app, egui::PointerButton::Primary, row.1);
+            commands.extend(frame(&mut app, vec![]).1);
+            if row_prefix == "Copy price " {
+                let expected = row.0.strip_prefix(row_prefix).unwrap();
+                assert!(
+                    commands.iter().any(|command| matches!(command,
+                    egui::OutputCommand::CopyText(text) if text == expected)),
+                    "the series row copies {expected}: {commands:?}"
+                );
+                continue;
+            }
+            assert!(
+                app.alert_dialog.is_open,
+                "the series row opens the alert dialog"
+            );
+            let AlertCondition::Crossing(price) = app.alert_dialog.alert.condition else {
+                panic!("{:?}", app.alert_dialog.alert.condition);
+            };
+            let expected: f64 = row
+                .0
+                .strip_prefix(row_prefix)
+                .unwrap()
+                .strip_suffix('…')
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert_eq!(price, expected);
+            assert!((low..=high).contains(&price), "{price} in {low}..{high}");
+        }
     }
 
     /// The demo published every subscribed quote once per frame, and the first push after a drain
