@@ -35,8 +35,9 @@ use crate::data::{
     VolumeProfileConfig, grid_row,
 };
 use crate::model::{
-    Bar, BarClock, CustomProfileSession, EventKind, Instrument, ProfileResolution, ProfileSession,
-    Session, SessionProvider, TimeScaleEvent, Timeframe, TimezoneId,
+    Bar, BarClock, CustomProfileSession, CustomProfileSessions, EventKind, Instrument,
+    ProfileResolution, ProfileSession, Session, SessionOverlap, SessionProvider, TimeScaleEvent,
+    Timeframe, TimezoneId,
 };
 use crate::studies::{
     Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, PlotStyle, PlotType,
@@ -116,7 +117,10 @@ struct ProfileStudy {
     /// each segment of the day.
     sessions: usize,
     /// The hours of the Custom choice, kept while another choice is selected.
-    custom: CustomProfileSession,
+    custom: [CustomProfileSession; CustomProfileSessions::MAX],
+    custom_count: usize,
+    overlap: SessionOverlap,
+    clip_hours: bool,
     /// Leave the bars outside regular, extended or custom hours out of each session profile.
     hours_only: bool,
     tick_size: Option<f64>,
@@ -319,6 +323,14 @@ fn parse_time(text: &str, unset: f64) -> Result<f64, &'static str> {
 }
 
 impl ProfileStudy {
+    fn custom_sessions(&self) -> CustomProfileSessions {
+        CustomProfileSessions {
+            sessions: self.custom[..self.custom_count].to_vec(),
+            overlap: self.overlap,
+            trading_hours_only: self.clip_hours,
+        }
+    }
+
     fn new(kind: Kind, rows: usize) -> Self {
         Self {
             kind,
@@ -349,11 +361,19 @@ impl ProfileStudy {
             feed_source: true,
             adaptive: false,
             sessions: 0,
-            custom: CustomProfileSession {
-                start: NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
-                end: NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
-                zone: None,
-            },
+            custom: std::array::from_fn(|i| {
+                if i == 0 {
+                    CustomProfileSession::new(
+                        NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
+                        NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+                    )
+                } else {
+                    CustomProfileSession::new(NaiveTime::MIN, NaiveTime::MIN)
+                }
+            }),
+            custom_count: 1,
+            overlap: SessionOverlap::OwnProfile,
+            clip_hours: false,
             hours_only: false,
             tick_size: None,
             volume_decimals: None,
@@ -534,15 +554,15 @@ impl ProfileStudy {
                 ]),
             ));
             for (id, label, time) in [
-                ("session_start", "Session start", self.custom.start),
-                ("session_end", "Session end", self.custom.end),
+                ("session_start", "Session start", self.custom[0].start),
+                ("session_end", "Session end", self.custom[0].end),
             ] {
                 inputs.push(
                     StudyInput::new(id, label, InputValue::TimeOfDay(time), InputKind::TimeOfDay)
                         .shown_when("sessions", [3]),
                 );
             }
-            let zone = self.custom.zone.as_ref().map_or("", TimezoneId::name);
+            let zone = self.custom[0].zone.as_ref().map_or("", TimezoneId::name);
             inputs.push(
                 StudyInput::new(
                     "session_zone",
@@ -552,6 +572,83 @@ impl ProfileStudy {
                 )
                 .shown_when("sessions", [3]),
             );
+            let mut custom_inputs = vec![
+                StudyInput::new(
+                    "custom_sessions",
+                    "Custom sessions",
+                    InputValue::Choice(self.custom_count - 1),
+                    InputKind::Choice(
+                        (1..=CustomProfileSessions::MAX)
+                            .map(|n| n.to_string())
+                            .collect(),
+                    ),
+                )
+                .with_default(InputValue::Choice(0))
+                .shown_when("sessions", [3]),
+            ];
+            for i in 1..CustomProfileSessions::MAX {
+                let session = &self.custom[i];
+                for (suffix, label, value, kind) in [
+                    (
+                        "start",
+                        "start",
+                        InputValue::TimeOfDay(session.start),
+                        InputKind::TimeOfDay,
+                    ),
+                    (
+                        "end",
+                        "end",
+                        InputValue::TimeOfDay(session.end),
+                        InputKind::TimeOfDay,
+                    ),
+                    (
+                        "zone",
+                        "time zone",
+                        InputValue::TimeZone(
+                            session.zone.as_ref().map_or("", TimezoneId::name).into(),
+                        ),
+                        InputKind::TimeZone { exchange: true },
+                    ),
+                ] {
+                    let default = if suffix == "zone" {
+                        InputValue::TimeZone(String::new())
+                    } else {
+                        InputValue::TimeOfDay(NaiveTime::MIN)
+                    };
+                    custom_inputs.push(
+                        StudyInput::new(
+                            format!("session_{}_{suffix}", i + 1),
+                            format!("Session {} {label}", i + 1),
+                            value,
+                            kind,
+                        )
+                        .with_default(default)
+                        .shown_when(
+                            "custom_sessions",
+                            (i..CustomProfileSessions::MAX).collect::<Vec<_>>(),
+                        ),
+                    );
+                }
+            }
+            custom_inputs.extend([
+                StudyInput::new(
+                    "session_overlap",
+                    "Overlapping hours",
+                    InputValue::Choice(usize::from(self.overlap == SessionOverlap::InBoth)),
+                    InputKind::Choice(vec!["Own profile".into(), "In both sessions".into()]),
+                )
+                .with_default(InputValue::Choice(0))
+                .shown_when("sessions", [3]),
+                StudyInput::new(
+                    "clip_hours",
+                    "Clip to trading hours",
+                    InputValue::Toggle(self.clip_hours),
+                    InputKind::Toggle,
+                )
+                .with_default(InputValue::Toggle(false))
+                .shown_when("sessions", [3]),
+            ]);
+            inputs.extend(custom_inputs);
             inputs.push(
                 StudyInput::new(
                     "hours_only",
@@ -694,7 +791,35 @@ impl ProfileStudy {
         if !schema.accepts(&value) {
             return Err(crate::studies::StudyError::rejected(&self.inputs(), id));
         }
-        match (id, value) {
+        let window = (0..CustomProfileSessions::MAX).find_map(|i| {
+            let prefix = if i == 0 {
+                "session_".to_owned()
+            } else {
+                format!("session_{}_", i + 1)
+            };
+            id.strip_prefix(&prefix)
+                .filter(|field| matches!(*field, "start" | "end" | "zone"))
+                .map(|field| (i, field))
+        });
+        let (i, field) = window.unwrap_or((0, id));
+        match (field, value) {
+            ("start", InputValue::TimeOfDay(time)) if window.is_some() => {
+                self.custom[i].start = time
+            }
+            ("end", InputValue::TimeOfDay(time)) if window.is_some() => self.custom[i].end = time,
+            ("zone", InputValue::TimeZone(text)) if window.is_some() => {
+                self.custom[i].zone = if text.is_empty() {
+                    None
+                } else {
+                    Some(TimezoneId::named(&text).ok_or_else(|| {
+                        crate::studies::StudyError::InvalidInput {
+                            id: id.into(),
+                            reason: "names no known time zone".into(),
+                        }
+                    })?)
+                }
+            }
+
             ("show_rows", InputValue::Toggle(v)) => self.show_rows = v,
             ("extend_right", InputValue::Toggle(v)) => self.extend_right = v,
             ("show_values", InputValue::Toggle(v)) => self.show_values = v,
@@ -720,20 +845,15 @@ impl ProfileStudy {
             ("adaptive_rows", InputValue::Toggle(v)) => self.adaptive = v,
             ("sessions", InputValue::Choice(v)) => self.sessions = v,
             ("hours_only", InputValue::Toggle(v)) => self.hours_only = v,
-            ("session_start", InputValue::TimeOfDay(time)) => self.custom.start = time,
-            ("session_end", InputValue::TimeOfDay(time)) => self.custom.end = time,
-            ("session_zone", InputValue::TimeZone(text)) => {
-                self.custom.zone = if text.is_empty() {
-                    None
+            ("custom_sessions", InputValue::Choice(n @ 0..=4)) => self.custom_count = n + 1,
+            ("session_overlap", InputValue::Choice(n @ 0..=1)) => {
+                self.overlap = if n == 0 {
+                    SessionOverlap::OwnProfile
                 } else {
-                    Some(TimezoneId::named(&text).ok_or_else(|| {
-                        crate::studies::StudyError::InvalidInput {
-                            id: id.into(),
-                            reason: "names no known time zone".into(),
-                        }
-                    })?)
+                    SessionOverlap::InBoth
                 }
             }
+            ("clip_hours", InputValue::Toggle(clip)) => self.clip_hours = clip,
             ("start_time", InputValue::Text(text)) => {
                 self.start_time = parse_time(&text, -8e15).map_err(|reason| {
                     crate::studies::StudyError::InvalidInput {
@@ -1001,7 +1121,6 @@ impl ProfileStudy {
         let choice = match self.sessions {
             1 => ProfileSession::Regular,
             2 => ProfileSession::Extended,
-            3 => ProfileSession::Custom(self.custom.clone()),
             4 => ProfileSession::PreMarket,
             5 => ProfileSession::PostMarket,
             6 => ProfileSession::Segments,
@@ -1339,6 +1458,30 @@ impl ProfileStudy {
                 } else {
                     Vec::new()
                 }
+            }
+            Kind::Session
+                if self.sessions == 3
+                    && self.interval.duration_ms() < Timeframe::Day1.duration_ms() =>
+            {
+                let regular = self.hours.1.as_ref().map(|hours| {
+                    BarClock::new(self.interval).with_session(
+                        self.hours.0.clone(),
+                        hours.clone(),
+                        false,
+                    )
+                });
+                self.custom_sessions()
+                    .with_zone(&self.hours.0)
+                    .parts(
+                        data,
+                        0..data.len(),
+                        self.interval,
+                        regular.as_ref(),
+                        self.hours_only,
+                    )
+                    .into_iter()
+                    .map(|p| p.bars)
+                    .collect()
             }
             Kind::Session => match self.session_clock() {
                 // A session starts at each bar whose trading date differs from the bar before;
@@ -3130,9 +3273,15 @@ mod tests {
                     ("end_time", text("2026-03-07 00:00:00")),
                 ],
                 "Vol Profile Anchored" => vec![("start_time", text("2026-03-07 00:00:00"))],
-                "Vol Profile Session" => {
-                    vec![("session_zone", InputValue::TimeZone(String::new()))]
-                }
+                "Vol Profile Session" => [
+                    "session_zone",
+                    "session_2_zone",
+                    "session_3_zone",
+                    "session_4_zone",
+                    "session_5_zone",
+                ]
+                .map(|id| (id, InputValue::TimeZone(String::new())))
+                .to_vec(),
                 _ => Vec::new(),
             };
             assert_eq!(
