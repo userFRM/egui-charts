@@ -14,6 +14,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 mod checkpoint;
 #[cfg(all(feature = "widget", feature = "studies"))]
 pub(crate) use checkpoint::{PackedTradeRate, RateGuard};
+#[cfg(feature = "widget")]
+mod footprint_checkpoint;
+#[cfg(feature = "widget")]
+pub(crate) use footprint_checkpoint::{FootprintGuard, PackedFootprintInput};
 
 /// Fixed stream aggregation performed before a feed coalesces its updates for painting.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -636,7 +640,7 @@ impl OrderFlowInput {
             let filter = (filter != OrderFilter::default()).then_some(filter);
             if state.filter != filter {
                 state.filter = filter;
-                state.rate_state_changed();
+                state.checkpoint_state_changed();
             }
         }
         self
@@ -654,7 +658,7 @@ impl OrderFlowInput {
             if state.basis != basis {
                 state.pending = PendingParts::default();
                 state.basis = basis;
-                state.rate_state_changed();
+                state.checkpoint_state_changed();
             }
         }
         self
@@ -735,7 +739,7 @@ impl OrderFlowInput {
             return;
         }
         state.tick_size = tick_size;
-        state.rate_state_changed();
+        state.checkpoint_state_changed();
         if state.footprint.take().is_some() {
             state.changes.clear();
             state.revision = state.revision.wrapping_add(1);
@@ -778,18 +782,13 @@ impl OrderFlowInput {
     #[cfg(feature = "widget")]
     pub(crate) fn copy_footprint(&self, target: &mut Footprint, since: u64) -> u64 {
         let state = self.state();
-        if state.revision != since {
-            let from = if state.restart_revision() > since {
-                None
-            } else {
-                state
-                    .changes
-                    .iter()
-                    .find(|(_, changed)| **changed > since)
-                    .map(|(time, _)| *time)
-            };
-            if let Some(flow) = &state.footprint {
-                target.copy_trade_bars(flow.view(), from);
+        if state.revision != since
+            && let Some(flow) = &state.footprint
+        {
+            if since > state.revision || state.restart_revision() > since {
+                target.copy_trade_bars(flow.view(), None);
+            } else if let Some((&open, _)) = state.changes.iter().find(|(_, rev)| **rev > since) {
+                target.copy_trade_bars(flow.view(), Some(open));
             }
         }
         state.revision
@@ -986,17 +985,20 @@ impl OrderFlowInput {
         state.discard_paged_rate();
         if matches!(state.source, Source::Footprint) {
             state.push_footprint(clock, trade, Some((open, size)));
+            if state.trade_bars.forming.replace(open) != Some(open) {
+                state.checkpoint_state_changed();
+            }
         } else {
             state.add_trade(trade, open, size, first);
+            state.trade_bars.forming = Some(open);
         }
-        state.trade_bars.forming = Some(open);
     }
 
     pub(crate) fn set_trade_bar(&self, open: DateTime<Utc>) {
         let mut state = self.state();
         state.discard_paged_rate();
         if state.trade_bars.forming.replace(open) != Some(open) {
-            state.rate_state_changed();
+            state.checkpoint_state_changed();
         }
     }
 
@@ -1047,7 +1049,7 @@ impl OrderFlowInput {
     pub(crate) fn forget_trade_bar(&self) {
         let mut state = self.state();
         if state.trade_bars.forming.take().is_some() {
-            state.rate_state_changed();
+            state.checkpoint_state_changed();
         }
     }
 
@@ -1227,6 +1229,7 @@ impl OrderFlowInput {
                     flow.live.trade_bars = bars.clone();
                 }
                 state.trade_bars = bars;
+                state.checkpoint_state_changed();
             } else if trade_based && lost.is_some() {
                 // After a loss the oldest live execution held need not open a chart bar: without
                 // the original live anchor, take the sink's allocations, of queued executions too.
@@ -1264,7 +1267,7 @@ impl OrderFlowInput {
             {
                 let mut state = self.state();
                 let lost = lost.max(left_out);
-                state.rate_state_changed();
+                state.checkpoint_state_changed();
                 state.window.lost_until = lost;
                 state.instant.lost_until = lost;
                 state.extremes.lost_until = lost;
@@ -1283,7 +1286,7 @@ impl OrderFlowInput {
                 }
                 if previous.is_none() {
                     // The grouping changes even when the rebuild had no rows to `finish`.
-                    state.rate_state_changed();
+                    state.checkpoint_state_changed();
                 }
                 state.trade_bars = bars;
             } else if !trade_based || lost.is_none() {
@@ -1313,7 +1316,7 @@ impl OrderFlowInput {
                 state.pending = PendingParts::default();
                 state.changes.retain(|open, _| *open > cut);
                 state.cut = Some(cut);
-                state.rate_state_changed();
+                state.checkpoint_state_changed();
             }
         }
         if let Some(now) = as_of {
@@ -1850,13 +1853,40 @@ fn balance([bid, ask]: [f64; 2]) -> f64 {
 }
 
 impl State {
-    /// A Trade Rate plan also observes the grouping, rolling windows and source settings.
-    /// A change to these can invalidate the plan without adding a visible bar row in `finish`.
-    fn rate_state_changed(&mut self) {
-        #[cfg(all(feature = "widget", feature = "studies"))]
-        if matches!(self.source, Source::Fixed(OrderFlowKind::TradeRate { .. })) {
+    /// A replay plan observes the source settings and allocation, even when no row changes.
+    fn checkpoint_state_changed(&mut self) {
+        #[cfg(feature = "widget")]
+        if matches!(self.source, Source::Footprint)
+            || cfg!(feature = "studies")
+                && matches!(self.source, Source::Fixed(OrderFlowKind::TradeRate { .. }))
+        {
             self.revision = self.revision.wrapping_add(1);
         }
+    }
+
+    /// Neither supported checkpoint owns a book, a time placement or pending order fills.
+    /// A rate rebuild may mark all the unused auxiliary windows with the same loss.
+    #[cfg(feature = "widget")]
+    fn plain_checkpoint_state(&self) -> bool {
+        self.trade_bars.is_plain()
+            && self.placement.is_empty()
+            && self.filter.is_none()
+            && self.books.is_empty()
+            && self.book_rows == 0
+            && self.pending.sizes.checkpoint_empty()
+            && self.pending.parts.is_empty()
+            && self.pending.rows.is_empty()
+            && self.inside.is_none()
+            && self.last_price == [None; 2]
+            && self.extremes.high.is_empty()
+            && self.extremes.low.is_empty()
+            && self.extremes.now.is_none()
+            && self.distinct.iter().all(|d| {
+                d.events.is_empty()
+                    && d.counts.is_empty()
+                    && d.now.is_none()
+                    && d.lost_until == self.extremes.lost_until
+            })
     }
 
     /// The revision from which readers start over: the latest reset or drop.
@@ -2035,7 +2065,7 @@ impl State {
         let latest = self.last.map_or(trade.ts, |t| t.max(trade.ts));
         if self.cut.is_some_and(|cut| open <= cut) {
             self.last = Some(latest);
-            self.rate_state_changed();
+            self.checkpoint_state_changed();
             return;
         }
         self.bars.insert(open, (row, 0));
@@ -2180,7 +2210,8 @@ impl State {
         let Some(tick_size) = self.tick_size else {
             return;
         };
-        if self.footprint.is_none() {
+        let new_source = self.footprint.is_none();
+        if new_source {
             let Ok(mut flow) = Footprint::new(clock.clone(), tick_size, 1) else {
                 return;
             };
@@ -2202,11 +2233,10 @@ impl State {
         {
             return;
         }
+        let trade_based = clock.timeframe().is_some_and(|tf| tf.is_trade_based());
         let changed = match part {
             Some((open, _)) => Some(open),
-            None if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) => {
-                flow.live.bars().last_key_value().map(|(open, _)| *open)
-            }
+            None if trade_based => flow.live.bars().last_key_value().map(|(open, _)| *open),
             None => Some(self.placement.open(clock, trade.ts)),
         };
         let result = match part {
@@ -2214,6 +2244,11 @@ impl State {
             None => flow.live.push(trade),
         };
         if !matches!(result, Ok(true)) {
+            // Only trade-based clocks keep grouping state for the next execution
+            // when a fill adds no footprint row.
+            if trade_based && (new_source || (result.is_ok() && part.is_none())) {
+                self.checkpoint_state_changed();
+            }
             return;
         }
         flow.seal();
@@ -2225,7 +2260,7 @@ impl State {
             .bars()
             .last_key_value()
             .map_or(trade.ts, |(open, _)| *open);
-        if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+        if trade_based {
             self.trade_bars.forming = Some(open);
         }
         self.finish(latest, changed.or(first).unwrap_or(open));

@@ -1,7 +1,14 @@
 //! Order, bracket and position lines from a broker's state. Changes are host intents: rendering
 //! never changes an order or a position.
 
+mod format;
 mod position;
+
+pub use format::TradingFormatter;
+pub(crate) use format::quantity_text;
+use format::settled;
+#[cfg(feature = "ui")]
+pub(crate) use format::{grouped, quantity_decimals};
 
 #[cfg(feature = "ui")]
 pub(crate) use position::exit_request;
@@ -222,6 +229,11 @@ pub struct TradingLineOptions<'a> {
     pub point_value: f64,
     /// The account's currency, such as "USD".
     pub currency: &'a str,
+    /// Host text for the quantities of order, bracket and position labels, asked with the
+    /// order's or position's symbol. Without it, or where it returns `None`, a quantity is
+    /// written at its own decimals, up to eight, with thousands separators, as the trading
+    /// panel's account tables write it.
+    pub formatter: Option<&'a dyn TradingFormatter>,
     /// The positive tick size used to round dragged prices.
     pub tick_size: f64,
     /// The zone in which good-till-date order labels write their expiry.
@@ -231,7 +243,7 @@ pub struct TradingLineOptions<'a> {
 impl<'a> TradingLineOptions<'a> {
     /// Orders and positions with 1-point lines starting at their labels at the right edge,
     /// offering no buttons, drags or menus, with no profit or loss, no coverage marks, no last
-    /// price and a
+    /// price, no host formatter and a
     /// [`point_value`](Self::point_value) of one. `currency` names the account's currency and
     /// `tick_size` rounds dragged prices. Assign the other fields to offer more.
     ///
@@ -266,6 +278,7 @@ impl<'a> TradingLineOptions<'a> {
             last_price: None,
             point_value: 1.0,
             currency,
+            formatter: None,
             tick_size,
             timezone: TimezoneMode::Utc,
         }
@@ -439,7 +452,7 @@ pub fn render_trading_lines<'a>(
             .and_then(|look| look.color)
             .unwrap_or_else(|| side_color(order.request.side));
         let request = &order.request;
-        let open = request.quantity - order.filled;
+        let open = settled(request.quantity - order.filled);
         let kind = match request.order_type {
             OrderType::Limit(_) => "Limit",
             OrderType::Stop(_) => "Stop",
@@ -492,7 +505,7 @@ pub fn render_trading_lines<'a>(
                 .filter(|level| level.stop_loss.is_none())
                 .map(|level| level.quantity)
                 .sum();
-            without.min(open)
+            settled(without).min(open)
         } else {
             open
         };
@@ -615,7 +628,7 @@ pub fn render_trading_lines<'a>(
                 line_length: look
                     .and_then(|look| look.line_length)
                     .unwrap_or(options.line_length),
-                quantity,
+                quantity: quantity_text(options.formatter, &request.symbol, quantity),
                 coverage: (options.coverage
                     && level == Level::Entry
                     && request.position_bracket.is_none())
@@ -1118,7 +1131,8 @@ struct Label<'a> {
     hover_text: Option<&'a str>,
     cancel_hover_text: Option<&'a str>,
     line_length: f32,
-    quantity: f64,
+    /// The open quantity's text.
+    quantity: String,
     /// The coverage mark after the quantity, if shown.
     coverage: Option<(f64, f64)>,
     buttons: &'a [Button],
@@ -1165,7 +1179,7 @@ impl Label<'_> {
         let layout = |text: String, color| painter.layout_no_wrap(text, font.clone(), color);
         let body = (self.body)(staged.unwrap_or(line.price));
         let body = (!body.is_empty()).then(|| layout(body, self.body_color));
-        let quantity = layout(format!("{}", self.quantity), line.color);
+        let quantity = layout(self.quantity.clone(), line.color);
         let width = |galley: &egui::Galley| galley.size().x + 2.0 * PADDING;
         let total = body.as_deref().map_or(0.0, width)
             + width(&quantity)
@@ -1467,6 +1481,82 @@ fn connector(ui: &Ui, mapping: &ChartMapping, entry: f64, exit: f64, color: Colo
 mod tests {
     use super::*;
     use crate::model::{OrderId, OrderStatus};
+
+    /// Order, bracket and position labels keep the account tables' quantity text.
+    #[test]
+    fn labels_write_quantities_in_the_host_text_or_at_their_own_decimals() {
+        struct Lots;
+        impl TradingFormatter for Lots {
+            fn quantity(&self, symbol: &str, quantity: f64) -> Option<String> {
+                (symbol == "SYM").then(|| format!("{quantity} lots"))
+            }
+        }
+        type Row<'a> = (
+            Option<&'a dyn TradingFormatter>,
+            f64,
+            f64,
+            f64,
+            &'a str,
+            &'a str,
+        );
+        let rows: [Row<'_>; 3] = [
+            (None, 0.3, 0.1, 0.1 + 0.2, "0.2", "0.3"),
+            (None, 2500.0, 0.0, 1500.0, "2,500", "1,500"),
+            (Some(&Lots), 0.3, 0.1, 2.0, "0.2 lots", "2 lots"),
+        ];
+        for (formatter, quantity, filled, position_quantity, order_text, position_text) in rows {
+            let ctx = egui::Context::default();
+            let mut chart = crate::widget::test_frames::chart(&[90.0], &[115.0]);
+            let mut request =
+                OrderRequest::new("SYM", OrderSide::Buy, quantity, OrderType::Limit(95.0));
+            request.take_profit = Some(100.0);
+            request.stop_loss = Some(93.0);
+            let mut order = Order::new(OrderId::new("A"), request, OrderStatus::Working);
+            order.filled = filled;
+            let position = Position::new("SYM", position_quantity, 108.0);
+            let mut options = TradingLineOptions::new("USD", 0.01);
+            options.formatter = formatter;
+            for frame in 0..3 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.show(ui);
+                        render_trading_lines(
+                            ui,
+                            &chart.get_chart_mapping(),
+                            [&order],
+                            [&position],
+                            &options,
+                        );
+                    },
+                );
+                if frame == 2 {
+                    let texts: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) => Some(text.galley.text()),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(
+                        texts.iter().filter(|&&text| text == order_text).count(),
+                        3,
+                        "{order_text}: {texts:?}"
+                    );
+                    assert_eq!(
+                        texts.iter().filter(|&&text| text == position_text).count(),
+                        1,
+                        "{position_text}: {texts:?}"
+                    );
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
 
     /// Coverage uses quantities and remaining exits, ignores another symbol or side, and paints
     /// entry and position labels only. Both themes distinguish full, partial and empty tracks.
@@ -2277,6 +2367,7 @@ mod tests {
                     last_price: None,
                     point_value: 1.0,
                     currency: "USD",
+                    formatter: None,
                     tick_size: 0.01,
                 };
                 for frame in 0..3 {

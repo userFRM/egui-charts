@@ -193,6 +193,9 @@ pub enum KeyboardAction {
     /// Show the previous symbol of the active watchlist (Up or Shift+Space), as
     /// [`NextWatchlistSymbol`](Self::NextWatchlistSymbol) does the next one.
     PreviousWatchlistSymbol,
+    /// Add the chart symbol to the active watchlist (Alt+W). The host receives a shortcut
+    /// request and answers with `WatchlistPanel::add_symbol`, which refuses duplicates.
+    AddToWatchlist,
 
     // Trading
     /// A buy limit order at the pointer's price (Alt+Shift+B). `ChartMenus::show` returns the
@@ -302,6 +305,7 @@ impl KeyboardAction {
             Self::CycleChartFocusBack => "Previous chart",
             Self::NextWatchlistSymbol => "Next watchlist symbol",
             Self::PreviousWatchlistSymbol => "Previous watchlist symbol",
+            Self::AddToWatchlist => "Add symbol to watchlist",
             Self::BuyLimitAtPointer => "Buy limit at pointer price",
             Self::SellLimitAtPointer => "Sell limit at pointer price",
         }
@@ -450,6 +454,7 @@ impl KeyboardAction {
                     )]
                 }
             }
+            Self::AddToWatchlist => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::W)] },
             Self::NextWatchlistSymbol => const { &[key(Key::ArrowDown), key(Key::Space)] },
             Self::PreviousWatchlistSymbol => {
                 const {
@@ -525,6 +530,7 @@ impl KeyboardAction {
             Self::CycleChartFocusBack => "Shift+Tab",
             Self::NextWatchlistSymbol => "↓ / Space",
             Self::PreviousWatchlistSymbol => "↑ / Shift+Space",
+            Self::AddToWatchlist => "Alt+W",
             Self::BuyLimitAtPointer => "Alt+Shift+B",
             Self::SellLimitAtPointer => "Alt+Shift+S",
             Self::DrawingTool(crate::config::DrawingToolType::TrendLine) => "Alt+T",
@@ -613,7 +619,11 @@ impl KeyboardAction {
             ),
             (
                 "Watchlist",
-                vec![Self::NextWatchlistSymbol, Self::PreviousWatchlistSymbol],
+                vec![
+                    Self::NextWatchlistSymbol,
+                    Self::PreviousWatchlistSymbol,
+                    Self::AddToWatchlist,
+                ],
             ),
             (
                 "Trading",

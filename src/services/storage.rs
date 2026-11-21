@@ -31,6 +31,10 @@ pub enum StoreKind {
     RecentSymbols,
     /// Named screener screens: the universe, column set, filters, sort order and description.
     Screens,
+    /// The news panel's named views: the scope, symbols, topics, providers and countries of
+    /// each, the view shown last and its named news alerts. One document per panel, named `news`
+    /// or `highlights`.
+    NewsViews,
 }
 
 /// The host's revision of a stored document, such as a version counter, an entity tag or a
@@ -110,11 +114,11 @@ pub enum ConflictChoice {
 /// unnoticed: a refused save keeps the unsaved document in memory until it is settled with a
 /// [`ConflictChoice`]. `Chart::storage_conflict`, `SettingsStore::conflict` and the
 /// `storage_conflict` methods of `LayoutMenu`, `TemplateStore`, `AlertDialog`,
-/// `SymbolDetailsPanel` and `ScreenerPanel` name the refused documents. Recent symbols are the
-/// exception: each client writes its newest list over the stored one. A host that answers
-/// `load_versioned` or `save_versioned` with [`FeedError::NotSupported`], as the defaults do,
-/// keeps the plain behaviour above. Switching accounts means a new `Storage`; the library drops
-/// the old one's pending answers and streams, so nothing of the old account reaches the new one.
+/// `SymbolDetailsPanel`, `ScreenerPanel` and `NewsPanel` name the refused documents. Recent symbols
+/// are the exception: each client writes its newest list over the stored one. A host that answers
+/// `load_versioned` or `save_versioned` with [`FeedError::NotSupported`], as the defaults do, keeps
+/// the plain behaviour above. Switching accounts means a new `Storage`; the library drops the old
+/// one's pending answers and streams, so nothing of the old account reaches the new one.
 ///
 /// ```
 /// use std::collections::HashMap;

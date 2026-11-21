@@ -2,8 +2,7 @@
 //! requires a strict inequality now and the opposite inequality or equality one bar ago.
 
 use super::{StrategyFactory, length, number, number_input, set_input, timeframe};
-use crate::model::{Bar, BarClock, OrderSide, OrderType, PriceSource, StudySource, Timeframe};
-use crate::strategies::backtest::valid_bar;
+use crate::model::{Bar, OrderSide, OrderType, PriceSource, StudySource, Timeframe};
 use crate::strategies::{OrderSize, Strategy, StrategyContext};
 use crate::studies::{
     ATR, BollingerBands, Indicator, InputKind, InputValue, KeltnerChannels, MACD, Momentum,
@@ -52,6 +51,8 @@ struct StudyStrategy {
     signals: Vec<[Option<OrderType>; 2]>,
     timeframe: Option<Timeframe>,
     atr: Vec<Option<f64>>,
+    /// The instrument's own bars of the Indicator timeframe and each chart bar's last closed one.
+    calculation: (Vec<Bar>, Vec<Option<usize>>),
 }
 
 impl StudyStrategy {
@@ -106,6 +107,7 @@ impl StudyStrategy {
             signals: Vec::new(),
             timeframe: None,
             atr: Vec::new(),
+            calculation: (Vec::new(), Vec::new()),
         }
     }
 
@@ -177,60 +179,6 @@ fn crosses(a: &[f64], b: &[f64], at: usize) -> bool {
     [a, b, pa, pb].iter().all(|v| v.is_finite()) && a > b && pa <= pb
 }
 
-/// Whether no chart bar spans two bars of `interval` on UTC boundaries, so that
-/// `data::resample` can build the longer bars from the chart's.
-fn nests_in(chart: Timeframe, interval: Timeframe) -> bool {
-    use Timeframe::{Month1, Months, Week1, Weeks};
-    const DAY: i64 = 86_400_000;
-    let (c, h) = (chart.duration_ms(), interval.duration_ms());
-    if chart.is_trade_based()
-        || interval.is_trade_based()
-        || matches!(chart, Week1 | Weeks(_) | Month1 | Months(_))
-    {
-        return false;
-    }
-    // Chart bars shorter than a day start at midnight and the last one ends there early when
-    // they do not divide the day; longer bars count from the epoch.
-    match interval {
-        // Months start at midnight, a boundary of daily bars but not of longer ones.
-        Month1 | Months(_) => c <= DAY,
-        // Weeks start on Monday 1970-01-05, four days after the epoch.
-        Week1 | Weeks(_) => c < DAY || (4 * DAY % c == 0 && h % c == 0),
-        _ if c < DAY && h >= DAY => h % DAY == 0 || (DAY % c == 0 && h % c == 0),
-        _ => h % c == 0,
-    }
-}
-
-/// Builds higher bars and maps each chart bar to the last higher bar closed by its end.
-/// Returns `None` when the chart bars cannot nest in the requested interval.
-fn closed_higher_bars(
-    bars: &[Bar],
-    chart: Timeframe,
-    interval: Timeframe,
-) -> Option<(Vec<Bar>, Vec<Option<usize>>)> {
-    let valid: Vec<Bar> = bars.iter().filter(|bar| valid_bar(bar)).cloned().collect();
-    let built = crate::data::resample(&valid, chart, interval)?;
-    let (chart, higher) = (BarClock::from(chart), BarClock::from(interval));
-    let read = bars
-        .iter()
-        .map(|bar| {
-            let open = chart.bar_open(bar.time);
-            let slot = higher.bar_open(open);
-            let before = built.partition_point(|built| built.time < slot);
-            let closed = built.get(before).is_some_and(|built| built.time == slot)
-                && chart
-                    .next_open(open)
-                    .is_some_and(|end| higher.bar_open(end) != slot);
-            if closed {
-                Some(before)
-            } else {
-                before.checked_sub(1)
-            }
-        })
-        .collect();
-    Some((built, read))
-}
-
 impl Strategy for StudyStrategy {
     fn study_inputs(&self) -> Vec<StudyInput> {
         let mut inputs = Vec::new();
@@ -295,10 +243,10 @@ impl Strategy for StudyStrategy {
             && let (Some(chart), Some(interval)) =
                 (self.timeframe, timeframe(&self.inputs, "timeframe"))
             && interval != chart
-            && !nests_in(chart, interval)
+            && (chart.is_trade_based() || interval.is_trade_based())
         {
             return Err(
-                "indicator timeframe must be the chart interval or a longer time interval made of whole chart bars",
+                "indicator timeframe must be the chart interval or a time interval on a time-based chart",
             );
         }
         Ok(())
@@ -317,29 +265,26 @@ impl Strategy for StudyStrategy {
         self.signals.clear();
     }
 
-    fn prepare(&mut self, bars: &[Bar]) {
-        // Read a higher rating only once its bar has closed by this chart bar's end.
-        let mut read: Option<Vec<Option<usize>>> = None;
-        let mut higher = Vec::new();
-        if matches!(self.rule, Rule::Rating)
-            && let Some(interval) = timeframe(&self.inputs, "timeframe")
-            && Some(interval) != self.timeframe
-        {
-            read = Some(
-                self.timeframe
-                    .filter(|chart| nests_in(*chart, interval))
-                    .and_then(|chart| closed_higher_bars(bars, chart, interval))
-                    .map_or_else(
-                        || vec![None; bars.len()],
-                        |(built, read)| {
-                            higher = built;
-                            read
-                        },
-                    ),
-            );
+    fn calculation_timeframe(&self) -> Option<Timeframe> {
+        if !matches!(self.rule, Rule::Rating) {
+            return None;
         }
+        timeframe(&self.inputs, "timeframe").filter(|interval| Some(*interval) != self.timeframe)
+    }
+
+    fn set_calculation_bars(&mut self, bars: &[Bar], closed: &[Option<usize>]) {
+        self.calculation = (bars.to_vec(), closed.to_vec());
+        self.signals.clear();
+    }
+
+    fn prepare(&mut self, bars: &[Bar]) {
+        let calculation = self.calculation_timeframe().is_some();
         for study in &mut self.studies {
-            study.calculate(if read.is_some() { &higher } else { bars });
+            study.calculate(if calculation {
+                &self.calculation.0
+            } else {
+                bars
+            });
         }
         self.atr = if matches!(self.rule, Rule::Rating) {
             let mut atr = ATR::new(14);
@@ -448,10 +393,16 @@ impl Strategy for StudyStrategy {
                     // Strong Buy and Strong Sell, strictly beyond 0.5. Every such bar places the
                     // entry; the pyramiding limit keeps a held position from growing.
                     Rule::Rating => {
-                        let rating = read.as_ref().map_or_else(
-                            || value(2),
-                            |read| read[i].and_then(|at| values.value(2, at)),
-                        );
+                        let rating = if calculation {
+                            self.calculation
+                                .1
+                                .get(i)
+                                .copied()
+                                .flatten()
+                                .and_then(|at| values.value(2, at))
+                        } else {
+                            value(2)
+                        };
                         [
                             market(rating.is_some_and(|rating| rating > 0.5)),
                             market(rating.is_some_and(|rating| rating < -0.5)),
