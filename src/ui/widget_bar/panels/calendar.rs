@@ -165,6 +165,7 @@ impl CalendarPanel {
             importance: self
                 .importance
                 .filter(|_| self.kind == CalendarKind::Economic),
+            symbols: Vec::new(),
         };
         feed.calendar(query, self.inbox.reply(self.request));
     }

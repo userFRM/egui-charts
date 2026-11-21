@@ -133,11 +133,13 @@ const ROW_KEYS: &[(&str, KeyboardAction)] = &[
 
 /// The quick search rows. A row whose action has a key shows the first one bound in `shortcuts`,
 /// and each saved indicator template of `templates` (id and name) has a row of its own,
-/// as does each study `factory` lists.
+/// as does each study `factory` lists. Each drawing tool row has a star, filled for the tools
+/// in `favorites`.
 pub(super) fn quick_search_commands(
     shortcuts: &ShortcutMap,
     templates: &[(String, String)],
     factory: &IndicatorFactory,
+    favorites: &[DrawingToolType],
 ) -> Vec<Command> {
     let keyed = |command: Command, action: Option<KeyboardAction>| match action
         .and_then(|action| shortcuts.shortcut(action))
@@ -220,7 +222,8 @@ pub(super) fn quick_search_commands(
                 commands.push(keyed(
                     Command::new(format!("tool:{}", tool.data_name()), tool.as_str())
                         .category("Drawing tools")
-                        .keywords([*category]),
+                        .keywords([*category])
+                        .starred(favorites.contains(&tool)),
                     Some(KeyboardAction::DrawingTool(tool)),
                 ));
             }
@@ -234,6 +237,15 @@ pub(super) fn quick_search_commands(
             .keywords([factory.category(&name).unwrap_or_default()])
     }));
     commands
+}
+
+/// The drawing tool whose quick search id is `tool:<name>`.
+fn search_tool(id: &str) -> Option<DrawingToolType> {
+    let name = id.strip_prefix("tool:")?;
+    DrawingToolType::all()
+        .iter()
+        .copied()
+        .find(|tool| tool.data_name() == name)
 }
 
 impl DemoApp {
@@ -281,12 +293,26 @@ impl DemoApp {
 
     /// Opens quick search with the chart's current key bindings and saved templates.
     pub(super) fn open_quick_search(&mut self) {
+        let recent = self.quick_search.recent().to_vec();
         self.quick_search = CommandPaletteHandler::new(quick_search_commands(
             self.chart.shortcuts(),
             &self.top_toolbar.indicator_templates,
             self.indicator_dialog.factory(),
+            &self.drawing_toolbar.state.favorites,
         ));
+        self.quick_search.set_recent(recent);
         self.quick_search.open();
+    }
+
+    /// Shows quick search and applies its star presses to the drawing favourites.
+    pub(super) fn show_quick_search(&mut self, ctx: &egui::Context) -> Option<String> {
+        let id = self.quick_search.show(ctx);
+        for star in self.quick_search.take_star_toggles() {
+            if let Some(tool) = search_tool(&star) {
+                self.drawing_toolbar.toggle_favorite(tool);
+            }
+        }
+        id
     }
 
     pub(super) fn execute_search_command(&mut self, ctx: &egui::Context, id: &str) {
@@ -314,12 +340,9 @@ impl DemoApp {
             }
             return;
         }
-        if let Some(name) = id.strip_prefix("tool:") {
-            if let Some(tool) = DrawingToolType::all()
-                .iter()
-                .find(|tool| tool.data_name() == name)
-            {
-                self.chart.drawings_mut().set_active_tool(Some(*tool));
+        if id.starts_with("tool:") {
+            if let Some(tool) = search_tool(id) {
+                self.chart.drawings_mut().set_active_tool(Some(tool));
             }
             return;
         }
@@ -337,13 +360,15 @@ impl DemoApp {
             return;
         }
         if let Some(scene) = match id {
-            "smile" => Some(SampleScene::Numeric(
+            "smile" => Some(Box::new(SampleScene::Numeric(
                 super::numeric_scenes::volatility_smile(),
-            )),
-            "yield" => Some(SampleScene::Numeric(super::numeric_scenes::yield_curve())),
-            "primitives" => Some(SampleScene::Extensions(
+            ))),
+            "yield" => Some(Box::new(SampleScene::Numeric(
+                super::numeric_scenes::yield_curve(),
+            ))),
+            "primitives" => Some(Box::new(SampleScene::Extensions(
                 super::primitive_scene::PrimitiveScene::new(),
-            )),
+            ))),
             _ => None,
         } {
             self.sample_scene = Some(scene);
@@ -629,7 +654,7 @@ impl DemoApp {
             self.sample_scene = None;
             self.execute_search_command(ui.ctx(), command);
         }
-        let Some(scene) = &mut self.sample_scene else {
+        let Some(scene) = self.sample_scene.as_deref_mut() else {
             return false;
         };
         let mut search = false;
@@ -658,7 +683,7 @@ impl DemoApp {
         if search {
             self.open_quick_search();
         }
-        if let Some(id) = self.quick_search.show(ui.ctx()) {
+        if let Some(id) = self.show_quick_search(ui.ctx()) {
             self.sample_scene = None;
             self.execute_search_command(ui.ctx(), &id);
         }
@@ -831,7 +856,7 @@ mod tests {
                 let mut charts: Vec<_> = app
                     .extra_charts
                     .iter_mut()
-                    .map(|slot| &mut slot.chart)
+                    .map(|slot| &mut *slot.chart)
                     .collect();
                 charts.insert(app.layout_slot, &mut app.chart);
                 for (slot, chart) in charts.into_iter().enumerate().take(count) {
@@ -1217,6 +1242,66 @@ mod tests {
     }
 
     #[test]
+    fn quick_search_stars_drawing_tools_and_lists_recent_entries() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        assert!(!app.drawing_toolbar.is_favorite(&DrawingToolType::TrendLine));
+        app.open_quick_search();
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![egui::Event::Text("Trend Line".into())])
+            .drop_without_applying_deltas();
+        click(&mut app, &ctx, "Favourite Trend Line");
+        assert!(app.drawing_toolbar.is_favorite(&DrawingToolType::TrendLine));
+        assert!(app.quick_search.is_open());
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(
+            app.chart.drawings().active_tool(),
+            Some(DrawingToolType::TrendLine)
+        );
+        assert!(!app.quick_search.is_open());
+        app.open_quick_search();
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        let output = frame(&mut app, &ctx, vec![]);
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Recent")));
+        let nodes = &output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes;
+        assert!(
+            nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Trend Line")
+                    && node.role() == egui::accesskit::Role::Button)
+        );
+        let star = &nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some("Favourite Trend Line"))
+            .unwrap()
+            .1;
+        assert_eq!(star.toggled(), Some(egui::accesskit::Toggled::True));
+        output.drop_without_applying_deltas();
+        click(&mut app, &ctx, "Favourite Trend Line");
+        assert!(!app.drawing_toolbar.is_favorite(&DrawingToolType::TrendLine));
+        assert!(app.quick_search.is_open());
+    }
+
+    #[test]
     fn menu_icons_are_distinct_labels_align_and_toggles_keep_their_state_and_position() {
         for width in [393.0, 1440.0] {
             let ctx = egui::Context::default();
@@ -1589,7 +1674,7 @@ mod tests {
         shortcuts
             .bindings
             .retain(|(_, action)| *action != KeyboardAction::Snapshot);
-        let commands = quick_search_commands(&shortcuts, &[], &IndicatorFactory::new());
+        let commands = quick_search_commands(&shortcuts, &[], &IndicatorFactory::new(), &[]);
         let shortcut = |id: &str| commands.iter().find(|row| row.id == id).unwrap().shortcut;
         assert_eq!(shortcut("undo"), Some(edited));
         assert_eq!(shortcut("snapshot"), None);
