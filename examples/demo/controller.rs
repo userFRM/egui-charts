@@ -914,6 +914,9 @@ impl DemoApp {
                     session.scope = ReplayScope::AllCharts;
                 }
                 session.symbol = DemoSymbol::current(&session.symbol);
+                for chart in &mut session.charts {
+                    chart.symbol = DemoSymbol::current(&chart.symbol);
+                }
                 Some((session, interval))
             }),
             replay_slots: Vec::new(),
@@ -959,6 +962,7 @@ impl DemoApp {
         }
         app.alerts.set_service(app.alert_host.clone());
         app.alerts.set_popup_actions(true);
+        app.stop_restored_strategy_alerts();
         app.alerts.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.top_toolbar.state.can_trade = true;
         app.top_toolbar.state.can_publish_ideas = true;
@@ -3980,6 +3984,7 @@ impl DemoApp {
                     }
                 }
                 self.trading.show(ui, &mut self.chart);
+                self.show_sample_fill(ui);
             });
         // The chart's rectangular background covers the frame; restore its top-left cutout.
         let corner = chart.response.rect.min;
@@ -4492,16 +4497,7 @@ impl DemoApp {
     fn handle_replay_control(&mut self, action: ReplayControlAction) {
         match action {
             ReplayControlAction::Start(start) => return self.apply_replay_start(start),
-            ReplayControlAction::SetScope(scope) => {
-                if !self.recording_files.opened {
-                    self.replay_scope = scope;
-                    if self.replay_control.uses_automatic_update_interval() {
-                        self.set_automatic_replay_interval();
-                    }
-                    self.push_replay_window_to_chart();
-                }
-                return;
-            }
+            ReplayControlAction::SetScope(scope) => return self.set_replay_scope(scope),
             // Without a replay the bar is only there to select its start.
             ReplayControlAction::Stop | ReplayControlAction::Close if self.replay.is_none() => {
                 return self.stop_replay();
@@ -7668,6 +7664,98 @@ mod tests {
         assert!(app.replay_start.is_open);
     }
 
+    /// Select date reads the typed day on the chart's calendar: replay starts at the first bar
+    /// of that day in the chart's zone. New York is on EST from 1 November 2026, Tokyo is UTC+9.
+    #[test]
+    fn select_date_starts_at_the_first_bar_of_the_local_day() {
+        use egui::accesskit::{Action, ActionData, ActionRequest, Role, TreeId};
+        use egui_charts::config::TimezoneMode;
+        use egui_charts::ui::replay::ReplayStartAction;
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-03T02:00:00Z".parse().unwrap(),
+            true,
+        );
+        app.switch_symbol("TOKENA");
+        app.switch_timeframe(Timeframe::Hour1);
+        settle(&mut app, &ctx);
+        let frame = |app: &mut DemoApp, events: Vec<egui::Event>| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_replay_start(ui.ctx()),
+            )
+        };
+        for (zone, expected) in [
+            (
+                TimezoneMode::Timezone("America/New_York".parse().unwrap()),
+                "2026-11-02T05:00:00Z",
+            ),
+            (
+                TimezoneMode::Timezone("Asia/Tokyo".parse().unwrap()),
+                "2026-11-01T15:00:00Z",
+            ),
+            (TimezoneMode::Utc, "2026-11-02T00:00:00Z"),
+        ] {
+            app.stop_replay();
+            apply_timezone_mode(&mut app.chart, &mut app.timeframe_toolbar, zone.clone());
+            let bars = app.chart.bars(SeriesId::MAIN).to_vec();
+            app.apply_replay_start(ReplayStartAction::SelectDate);
+            assert!(app.replay_start.is_open);
+            // A new window lays itself out on its first frame and shows on the next.
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+            let output = frame(&mut app, vec![]);
+            let update = output.platform_output.accesskit_update.as_ref().unwrap();
+            let target_node = (update.nodes.iter())
+                .find(|(_, node)| node.role() == Role::TextInput)
+                .map(|(id, _)| *id);
+            output.drop_without_applying_deltas();
+            let target_node = target_node.unwrap();
+            frame(
+                &mut app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::SetValue,
+                    target_tree: TreeId::ROOT,
+                    target_node,
+                    data: Some(ActionData::Value("2026-11-02".into())),
+                })],
+            )
+            .drop_without_applying_deltas();
+            let output = frame(&mut app, vec![]);
+            let point = (output.shapes.iter()).find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Start at date" => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            let point = point.unwrap();
+            let press = |pressed| egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(
+                &mut app,
+                vec![egui::Event::PointerMoved(point), press(true), press(false)],
+            )
+            .drop_without_applying_deltas();
+            let expected: chrono::DateTime<chrono::Utc> = expected.parse().unwrap();
+            let start = app.replay.as_ref().unwrap().state.curr_bar;
+            assert_eq!(bars[start].time, expected, "{zone:?}");
+            assert!(start > 0 && bars[start - 1].time < expected, "{zone:?}");
+        }
+    }
+
     #[test]
     fn replay_finer_source_and_saved_position_keep_the_shared_cutoff() {
         let ctx = egui::Context::default();
@@ -7732,18 +7820,30 @@ mod tests {
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(&storage);
         let mut restored = DemoApp::new(&cc);
-        assert_eq!(
-            restored.replay_session,
-            Some((saved.clone(), Timeframe::Hour1))
-        );
+        // The session records the three charts, every one a copy of the source at one hour.
+        let mut expected = saved.clone();
+        expected.charts = (0..3)
+            .map(|slot| {
+                egui_charts::ui::replay::ReplayChart::new(
+                    slot,
+                    app.state.symbol.clone(),
+                    Timeframe::Hour1,
+                )
+            })
+            .collect();
+        assert_eq!(restored.replay_session, Some((expected, Timeframe::Hour1)));
         restored.apply_replay_start(egui_charts::ui::replay::ReplayStartAction::Resume);
         assert_eq!(restored.chart.replay_time(), Some(cutoff));
         assert!(!restored.replay.as_ref().unwrap().state.is_playing());
 
-        // Before scopes were saved, the demo replayed every chart in the default layout.
+        // Before scopes and charts were saved, the demo replayed every chart in the default layout.
         let session = storage.0.get_mut("replay_session").unwrap();
-        assert!(session.contains(",scope:AllCharts"));
-        *session = session.replace(",scope:AllCharts", "");
+        let (from, to) = (
+            session.find(",scope:AllCharts").unwrap(),
+            session.rfind("),").unwrap(),
+        );
+        session.replace_range(from..to, "");
+        assert!(!session.contains("charts"));
         let mut cc = eframe::CreationContext::_new_kittest(ctx);
         cc.storage = Some(&storage);
         let mut restored = DemoApp::new(&cc);

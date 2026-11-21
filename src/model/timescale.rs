@@ -45,7 +45,7 @@ impl NumericPositions {
     #[cfg(feature = "widget")]
     pub(crate) fn position_at(&self, time: DateTime<Utc>) -> f64 {
         let elapsed = time - self.origin;
-        let seconds = elapsed.num_seconds() as f64 + f64::from(elapsed.subsec_nanos()) / 1e9;
+        let seconds = elapsed.as_seconds_f64();
         self.position(0.0) + seconds / self.unit.unwrap_or(1.0)
     }
 

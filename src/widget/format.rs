@@ -225,6 +225,11 @@ impl Chart {
         }
     }
 
+    /// The zone of the calendar that dates the bars, the one [`Self::go_to_local_time`] reads.
+    pub(crate) fn bar_date_timezone(&self) -> crate::scales::TimezoneMode {
+        self.label_timezone(|| self.time_label_seconds())
+    }
+
     /// Resolves local fields on the calendar that dates the bars. A skipped wall time opens at
     /// the clock jump, a repeated one at its first occurrence; unrepresentable dates give `None`.
     pub(super) fn local_date_instant(
@@ -233,7 +238,7 @@ impl Chart {
         time: Option<chrono::NaiveTime>,
     ) -> Option<chrono::DateTime<chrono::Utc>> {
         let local = date.and_time(time.unwrap_or(chrono::NaiveTime::MIN));
-        match Self::calendar_zone(self.label_timezone(|| self.time_label_seconds())) {
+        match Self::calendar_zone(self.bar_date_timezone()) {
             Some(zone) => crate::model::local_instant(zone, local),
             None => crate::model::local_instant(chrono::Local, local),
         }

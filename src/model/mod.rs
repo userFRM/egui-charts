@@ -114,7 +114,7 @@ pub use range_bar::{
     RangeBar, RangeBarConfig, RangeBarSource, to_range_bars_from_ohlc, to_range_bars_from_ticks,
 };
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
-pub use replay::{ReplayScope, ReplaySession};
+pub use replay::{ReplayChart, ReplayScope, ReplaySession};
 pub(crate) use revision::next_revision;
 pub use series_scale::{AxisSide, PaneAxisOptions, SeriesScale};
 pub use series_style::{

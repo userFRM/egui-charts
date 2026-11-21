@@ -3,7 +3,6 @@
 //! Individual panels for alerts, object tree, watchlists, symbol details, time and sales, news,
 //! the event calendars, the screener, hotlists, notifications, chats and the products launcher.
 
-use crate::scales::{CurrencyFormatter, PriceFormatter};
 use egui::text::TextFormat;
 use egui::{Color32, FontId};
 
@@ -36,24 +35,6 @@ fn weighted(size: f32, weight: f32, color: Color32) -> TextFormat {
     let mut format = TextFormat::simple(FontId::proportional(size), color);
     format.coords.push("wght", weight);
     format
-}
-
-/// `value` with an explicit sign, unsigned when it rounds to zero, or a dash when not finite.
-fn signed(value: f64, decimals: usize) -> String {
-    let text = grouped(value, decimals);
-    if value > 0.0 && text.bytes().any(|b| matches!(b, b'1'..=b'9')) {
-        format!("+{text}")
-    } else {
-        text
-    }
-}
-
-/// A price with thousands separators and `decimals` decimals, or a dash when not finite.
-fn grouped(value: f64, decimals: usize) -> String {
-    if !value.is_finite() {
-        return "-".to_owned();
-    }
-    CurrencyFormatter::new("", decimals).format(value)
 }
 
 /// Format price with decimals chosen by its magnitude, so a negative price
@@ -371,25 +352,6 @@ mod tests {
                     }
                 }
             }
-        }
-    }
-
-    #[test]
-    fn panel_numbers_group_digits_and_omit_signs_at_rounded_zero() {
-        for (value, decimals, price, change) in [
-            (43237.45, 2, "43,237.45", "+43,237.45"),
-            (-1234567.0, 0, "-1,234,567", "-1,234,567"),
-            (863.83, 2, "863.83", "+863.83"),
-            (100000.5, 1, "100,000.5", "+100,000.5"),
-            (0.000123, 6, "0.000123", "+0.000123"),
-            (-0.0, 2, "0.00", "0.00"),
-            (-0.001, 2, "0.00", "0.00"),
-            (0.001, 2, "0.00", "0.00"),
-            (f64::INFINITY, 2, "-", "-"),
-            (f64::NAN, 2, "-", "-"),
-        ] {
-            assert_eq!(grouped(value, decimals), price);
-            assert_eq!(signed(value, decimals), change);
         }
     }
 

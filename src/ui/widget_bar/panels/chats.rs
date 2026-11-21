@@ -8,7 +8,7 @@ use std::sync::Arc;
 use chrono::Offset;
 use egui::{RichText, Ui};
 
-use super::controls::dropdown;
+use super::controls::dropdown_as_given;
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
 use crate::icons::icons;
@@ -596,9 +596,9 @@ impl ChatsPanel {
                 .show(ui);
             return;
         };
-        dropdown(ui, "chat_room", &room, |ui| {
+        dropdown_as_given(ui, "chat_room", &room, |ui| {
             for (index, name) in self.rooms.iter().enumerate() {
-                ui.selectable_value(&mut self.room, index, l10n::text(ui.ctx(), name));
+                ui.selectable_value(&mut self.room, index, name.as_str());
             }
         });
         let room = self.rooms[self.room].clone();
@@ -650,7 +650,7 @@ impl ChatsPanel {
                             .show(ui)
                             .clicked();
                         self.draft = std::mem::take(&mut self.draft)
-                            .placeholder(l10n::format_text(
+                            .placeholder_as_given(l10n::format_text(
                                 ui.ctx(),
                                 "Message {room}",
                                 &[("room", room.as_str())],
@@ -768,9 +768,7 @@ impl ChatsPanel {
                                 ui.set_width(ui.available_width());
                                 ui.set_min_height(26.0);
                                 ui.horizontal(|ui| {
-                                    let author =
-                                        RichText::new(l10n::text(ui.ctx(), &message.author))
-                                            .strong();
+                                    let author = RichText::new(&message.author).strong();
                                     let reply = capabilities.replies && message.id.is_some();
                                     let ignore =
                                         capabilities.ignore_users && message.author_id.is_some();
@@ -835,12 +833,9 @@ impl ChatsPanel {
                                         local.offset().fix().local_minus_utc(),
                                     );
                                     ui.label(
-                                        RichText::new(l10n::text(
-                                            ui.ctx(),
-                                            local.format("%H:%M").to_string(),
-                                        ))
-                                        .size(theme.text.small)
-                                        .color(theme.ui.text_secondary),
+                                        RichText::new(local.format("%H:%M").to_string())
+                                            .size(theme.text.small)
+                                            .color(theme.ui.text_secondary),
                                     )
                                     .on_hover_text(format!(
                                         "{} {zone}",
@@ -858,11 +853,7 @@ impl ChatsPanel {
                                         .map_or_else(
                                             || l10n::text(ui.ctx(), "Reply to an earlier message"),
                                             |held| {
-                                                format!(
-                                                    "{}: {}",
-                                                    l10n::text(ui.ctx(), &held.author),
-                                                    l10n::text(ui.ctx(), &held.text)
-                                                )
+                                                format!("{}: {}", held.author, held.text)
                                             },
                                         );
                                     ui.add(
@@ -874,7 +865,7 @@ impl ChatsPanel {
                                         .truncate(),
                                     );
                                 }
-                                ui.label(l10n::text(ui.ctx(), &message.text));
+                                ui.label(&message.text);
                             });
                     });
                     ui.add_space(theme.spacing.sm);
@@ -935,7 +926,7 @@ impl ChatsPanel {
         for user in &self.ignored {
             ui.push_id(&user.id, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(l10n::text(ui.ctx(), &user.name));
+                    ui.label(&user.name);
                     if Button::new("Stop ignoring")
                         .small()
                         .enabled(!pending)
@@ -992,9 +983,7 @@ impl ChatsPanel {
         let mut picked = None;
         for user in &self.found {
             if !skip.iter().any(|known| known.id == user.id)
-                && ui
-                    .selectable_label(false, l10n::text(ui.ctx(), &user.name))
-                    .clicked()
+                && ui.selectable_label(false, &user.name).clicked()
             {
                 picked = Some(user.clone());
             }
@@ -1040,7 +1029,7 @@ impl ChatsPanel {
         for (index, user) in self.composer.recipients.iter().enumerate() {
             ui.push_id(&user.id, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(l10n::text(ui.ctx(), &user.name));
+                    ui.label(&user.name);
                     if IconButton::new(&icons::CLOSE)
                         .tooltip("Remove")
                         .show(ui)
@@ -1106,7 +1095,7 @@ impl ChatsPanel {
         for user in &members {
             ui.push_id(&user.id, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(l10n::text(ui.ctx(), &user.name));
+                    ui.label(&user.name);
                     if IconButton::new(&icons::CLOSE)
                         .tooltip("Remove from room")
                         .enabled(!pending)
