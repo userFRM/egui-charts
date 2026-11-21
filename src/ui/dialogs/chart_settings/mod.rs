@@ -617,7 +617,7 @@ impl SettingsDialog {
 
     fn draw_template_button(&self, ui: &mut Ui, theme: &Theme) -> Response {
         let template_label = if self.template_name.is_empty() {
-            "Template".to_string()
+            l10n::text(ui.ctx(), "Template")
         } else {
             self.template_name.clone()
         };
@@ -627,7 +627,7 @@ impl SettingsDialog {
                 DESIGN_TOKENS.sizing.settings_dialog.button_height,
             ),
             egui::Button::new((
-                RichText::new(l10n::text(ui.ctx(), &template_label))
+                RichText::new(&template_label)
                     .size(theme.text.title)
                     .color(theme.ui.text),
                 embedded_icons::CHEVRON_DOWN.as_image_tinted(Vec2::splat(12.0), theme.ui.text),
@@ -644,7 +644,7 @@ impl SettingsDialog {
                 DESIGN_TOKENS.sizing.settings_dialog.button_height,
             )),
         )
-        .on_hover_text(l10n::text(ui.ctx(), template_label))
+        .on_hover_text(template_label)
     }
 
     fn draw_template_menu(
@@ -821,16 +821,16 @@ impl SettingsDialog {
     ) -> SettingsAction {
         let is_sel = self.template_name == name;
         let text = if is_sel {
-            RichText::new(l10n::text(ui.ctx(), &name))
+            RichText::new(&name)
                 .size(theme.text.body)
                 .color(theme.ui.text)
         } else {
-            RichText::new(l10n::text(ui.ctx(), &name)).size(theme.text.body)
+            RichText::new(&name).size(theme.text.body)
         };
 
         if ui
             .add_enabled(self.templates.ready(), egui::Button::new(text).truncate())
-            .on_hover_text(l10n::text(ui.ctx(), &name))
+            .on_hover_text(&name)
             .clicked()
         {
             if let Some(template) = self.templates.entries().get(&name) {
