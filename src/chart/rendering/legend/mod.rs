@@ -129,11 +129,16 @@ pub struct Legend<'a> {
     pub statuses: &'a [LegendStatus<'a>],
     /// Studies on the chart. Overlay studies retain a row while hidden so they can be shown again.
     pub studies: &'a [Box<dyn Indicator>],
-    /// Display inputs supplied by the host, in `studies` order. Missing entries are omitted.
+    /// Captions shown after each study's name, in `studies` order. Missing or empty entries
+    /// show none.
     pub study_inputs: &'a [&'a str],
     /// Host formatters for the price values of `studies`, in their order. A missing or `None`
     /// entry keeps the built-in decimals and thousands grouping.
     pub study_formatters: &'a [Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>],
+    /// The chart's ids of `studies`, in their order. A study row's held controls, touch
+    /// selection and focus follow its id, so the study that takes a removed study's row draws
+    /// its own buttons. The chart sets it; a row without an entry is keyed by its index.
+    pub(crate) study_ids: &'a [crate::chart::selection::SeriesId],
     /// Global index of `bar` in each study's values.
     pub bar_index: usize,
     /// Whether this series has volume.
@@ -231,6 +236,7 @@ impl<'a> Legend<'a> {
             studies: &[],
             study_inputs: &[],
             study_formatters: &[],
+            study_ids: &[],
             bar_index: 0,
             show_volume: true,
             show_title: true,
@@ -762,7 +768,10 @@ impl<'a> Legend<'a> {
                     continue;
                 }
                 let (row_start, row_end, row_height) = (layout.pos, layout.row_end, layout.height);
-                let controls_id = id.with(("study", index));
+                let controls_id = id.with((
+                    "study",
+                    self.study_ids.get(index).map_or(index, |study| study.0),
+                ));
                 let held = held_study_controls(ui, controls_id, Some(row_start.y)).map(|held| {
                     let width = controls_width(study.as_ref(), self.show_settings);
                     let end = if held.top() >= row_start.y + row_height {
@@ -1553,6 +1562,65 @@ mod mark_tests {
 
 #[cfg(all(test, feature = "studies"))]
 mod tests {
+    /// Library-added studies paint their inputs in both legends, gated by the Inputs switch.
+    #[test]
+    fn library_studies_show_their_derived_inputs_in_both_legends() {
+        use crate::model::{Bar, BarData};
+        use crate::studies::{RSI, SMA};
+        use crate::widget::{Chart, test_frames::shapes};
+        use chrono::{TimeZone, Utc};
+
+        let bars = (0..60)
+            .map(|i| {
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    10.0,
+                    11.0,
+                    9.0,
+                    10.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        let sma = chart.add_indicator(Box::new(SMA::new(7)));
+        let rsi = chart.add_indicator(Box::new(RSI::new(9)));
+        let ctx = egui::Context::default();
+        for (at, inputs) in [true, false].into_iter().enumerate() {
+            chart.config_mut().show_indicator_inputs = inputs;
+            shapes(&ctx, &mut chart, at as f64, vec![]);
+            let painted = shapes(&ctx, &mut chart, at as f64 + 0.1, vec![]);
+            let text: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text) => Some(text),
+                    _ => None,
+                })
+                .collect();
+            let price_rect = chart.get_rendered_price_rect();
+            let pane_rect = chart.get_rendered_indicator_panes()[0].chart_rect;
+            assert_eq!(
+                text.iter().any(|text| {
+                    text.galley.text() == "7 close" && price_rect.contains(text.pos)
+                }),
+                inputs
+            );
+            assert_eq!(
+                text.iter().any(|text| {
+                    text.galley.text().starts_with("RSI 9 close") && pane_rect.contains(text.pos)
+                }),
+                inputs
+            );
+            if !inputs {
+                assert!(!text.iter().any(|text| {
+                    text.galley.text() == "7 close" || text.galley.text().contains("9 close")
+                }));
+            }
+        }
+        assert_eq!(chart.indicator_inputs(sma), Some("7 close"));
+        assert_eq!(chart.indicator_inputs(rsi), Some("9 close"));
+    }
+
     #[cfg(feature = "icons")]
     use super::*;
     #[cfg(feature = "icons")]

@@ -82,6 +82,10 @@ impl Indicator for TypicalPrice {
         true // Overlay on price chart
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }
@@ -171,6 +175,10 @@ impl Indicator for WeightedClose {
     }
 
     fn is_overlay(&self) -> bool {
+        true
+    }
+
+    fn draws_only_plots(&self) -> bool {
         true
     }
 
@@ -265,6 +273,10 @@ impl Indicator for MedianPrice {
     }
 
     fn is_overlay(&self) -> bool {
+        true
+    }
+
+    fn draws_only_plots(&self) -> bool {
         true
     }
 

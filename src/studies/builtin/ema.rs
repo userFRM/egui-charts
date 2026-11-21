@@ -60,6 +60,11 @@ pub struct EMA {
 }
 
 impl EMA {
+    #[cfg(feature = "widget")]
+    pub(crate) fn replay_period(&self) -> usize {
+        self.period
+    }
+
     /// Create a new EMA indicator.
     ///
     /// # Arguments

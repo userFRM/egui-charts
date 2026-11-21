@@ -18,7 +18,8 @@ pub fn trade_profile_menu(
     index: usize,
     split_at: Option<DateTime<Utc>>,
 ) -> bool {
-    let merge = index < ranges.ranges().len().saturating_sub(1);
+    let editable = !ranges.ranges().windows(2).any(|r| r[0].end > r[1].start);
+    let merge = editable && index < ranges.ranges().len().saturating_sub(1);
     if ui
         .add_enabled(
             merge,
@@ -30,10 +31,11 @@ pub fn trade_profile_menu(
         return ranges.merge_next(index);
     }
     let split = split_at.filter(|time| {
-        ranges
-            .ranges()
-            .get(index)
-            .is_some_and(|r| r.start < *time && *time < r.end)
+        editable
+            && ranges
+                .ranges()
+                .get(index)
+                .is_some_and(|r| r.start < *time && *time < r.end)
     });
     if ui
         .add_enabled(
@@ -80,21 +82,22 @@ impl TradeProfileMenu {
     }
 
     pub(super) fn entries(&self) -> Vec<MenuEntry<ContextMenuAction>> {
+        let editable = !self.ranges.windows(2).any(|r| r[0].end > r[1].start);
         [
             (
                 "Merge with previous profile",
                 ContextMenuAction::MergeTradeProfilePrevious,
-                self.index > 0,
+                editable && self.index > 0,
             ),
             (
                 "Merge with next profile",
                 ContextMenuAction::MergeTradeProfileNext,
-                self.index + 1 < self.ranges.len(),
+                editable && self.index + 1 < self.ranges.len(),
             ),
             (
                 "Split profile at selected bar",
                 ContextMenuAction::SplitTradeProfile,
-                self.time > self.ranges[self.index].start,
+                editable && self.time > self.ranges[self.index].start,
             ),
             (
                 "Reset merges and splits",
@@ -278,13 +281,18 @@ mod tests {
                     Shape::LineSegment { points, .. } if *points == [a, b])
                 })
             };
+            let step = |a: Pos2, b: Pos2| {
+                let corner = Pos2::new(b.x, a.y);
+                [[a, corner], [corner, b]]
+            };
             // Session 1 totals [4, 7] at [100, 101]: its cumulative POC moves from
             // 100 (4 > 1) to 101 (7 > 4), independent of its deltas [+4, +5].
-            assert!(has_line(
-                &painted,
+            for [a, b] in step(
                 Pos2::new(map.idx_to_x(2), map.price_to_y(100.0)),
-                Pos2::new(map.idx_to_x(3), map.price_to_y(101.0))
-            ));
+                Pos2::new(map.idx_to_x(3), map.price_to_y(101.0)),
+            ) {
+                assert!(has_line(&painted, a, b));
+            }
             for label in ["HVN", "LVN"] {
                 assert!(
                     painted
@@ -318,11 +326,12 @@ mod tests {
                 settings.value_area_guides = false;
                 chart.set_trade_profile_settings(settings);
                 let (_, hidden) = frame(&mut chart, &mut menus, vec![]);
-                assert!(!has_line(
-                    &hidden,
+                for [a, b] in step(
                     Pos2::new(map.idx_to_x(2), map.price_to_y(100.0)),
-                    Pos2::new(map.idx_to_x(3), map.price_to_y(101.0))
-                ));
+                    Pos2::new(map.idx_to_x(3), map.price_to_y(101.0)),
+                ) {
+                    assert!(!has_line(&hidden, a, b));
+                }
                 assert!(!hidden.iter().any(|s| matches!(&s.shape, Shape::Text(t) if ["HVN", "LVN"].contains(&t.galley.text()))));
                 assert!(!has_line(
                     &hidden,
@@ -471,11 +480,12 @@ mod tests {
             let session_one_alone = |chart: &mut Chart, menus: &mut ChartMenus| {
                 let (_, split) = frame(chart, menus, vec![]);
                 let map = chart.get_chart_mapping();
-                assert!(has_line(
-                    &split,
+                for [a, b] in step(
                     Pos2::new(map.idx_to_x(2), map.price_to_y(100.0)),
-                    Pos2::new(map.idx_to_x(3), map.price_to_y(101.0))
-                ));
+                    Pos2::new(map.idx_to_x(3), map.price_to_y(101.0)),
+                ) {
+                    assert!(has_line(&split, a, b));
+                }
                 let left = (map.idx_to_x(2) - map.bar_spacing * 0.45).max(map.rect.left());
                 let width = map.idx_to_x(3) + map.bar_spacing * 0.5 - left;
                 let centre = left + width * 0.5;

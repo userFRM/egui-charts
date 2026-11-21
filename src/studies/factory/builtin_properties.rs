@@ -253,6 +253,17 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(
             MissedPivots::new(l(0), l(1), x(0.1), l(2)).with_period(MissedPivotPeriod::Monthly),
         ),
+        Box::new(MissedPivots::default()),
+        {
+            let mut touched = MissedPivots::default();
+            touched
+                .set_input("show_touched", InputValue::Toggle(true))
+                .unwrap();
+            touched
+                .set_input("days_back", InputValue::Length(l(3).clamp(1, 730)))
+                .unwrap();
+            Box::new(touched)
+        },
         Box::new(KeyLevels::new(l(0), l(1), l(2), x(0.25))),
         Box::new(AutoKeyLevels::new()),
         {

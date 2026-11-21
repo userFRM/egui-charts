@@ -894,7 +894,7 @@ mod tests {
         let create = |name: &str| factory.create(name).unwrap();
         // An offered output that holds no value on these bars.
         let offered = |output: usize, name: &str| -> Output { (output, name.to_owned(), vec![]) };
-        // Each bar closes at its open, which counts as up.
+        // Each bar closes at its open, which counts as down in Bollinger Bars and up in Volume.
         let closes: Vec<_> = level_bars().iter().map(|bar| Some(bar.close)).collect();
         let volumes: Vec<_> = level_bars().iter().map(|bar| Some(bar.volume)).collect();
         let rows: Vec<Row> = vec![
@@ -948,7 +948,7 @@ mod tests {
             // Wicks only colours the candle blocks.
             (
                 create("Bollinger Bars"),
-                vec![(1, "Up".into(), closes), offered(2, "Down")],
+                vec![offered(1, "Up"), (2, "Down".into(), closes)],
                 2,
             ),
             // The moving average is off by default.
@@ -1173,6 +1173,23 @@ mod tests {
                     assert!(
                         (chart.alert_value(&sources[1], 3).unwrap() - expected[1]).abs() < 1e-9
                     );
+                    let config = chart.drawings_mut().drawings[0].pitchfork.as_mut().unwrap();
+                    config.levels[0].visible = true;
+                    config.extend_lines = false;
+                    for (i, source) in sources.iter().enumerate() {
+                        let visible = tool == DrawingToolType::Pitchfan
+                            || i == 2
+                            || (i == 0 && tool == DrawingToolType::InsidePitchfork);
+                        let got = chart.alert_value(source, 3);
+                        if visible {
+                            assert!(
+                                (got.unwrap() - expected[i]).abs() < 1e-9,
+                                "{tool:?}: finite endpoint"
+                            );
+                        } else {
+                            assert_eq!(got, None, "{tool:?}: past finite endpoint");
+                        }
+                    }
                     chart.drawings_mut().drawings[0].pitchfork = None;
                     let stored = crate::drawings::persistence::drawing_to_stored(
                         &chart.drawings().drawings[0],

@@ -583,7 +583,7 @@ impl Chart {
                 config.show_values = self.config.show_indicator_last_val;
                 config.inputs = match study {
                     Some(idx) if self.config.show_indicator_inputs => {
-                        self.study_inputs[idx].clone()
+                        self.study_caption(idx).to_owned()
                     }
                     _ => String::new(),
                 };
@@ -621,6 +621,13 @@ impl Chart {
                         )
                     }),
                 });
+                // As the grid, once in a pane: beneath every member.
+                if Some(entry) == first {
+                    panel.session_breaks = Some((
+                        self.session_break_renderer(),
+                        self.last_session_break_x.clone(),
+                    ));
+                }
                 panel.axis_options = crate::config::PriceAxisOptions {
                     show_study_values: self.config.price_axis.show_study_values,
                     ..self.config.price_axis
@@ -821,7 +828,7 @@ impl Chart {
                                     return Vec::new();
                                 };
                                 let study = studies.indicators()[idx].as_ref();
-                                if !self.shows_study(study) {
+                                if !self.shows_study(study) || study.plots_on_price() {
                                     return Vec::new();
                                 }
                                 let map = if matches!(
@@ -1061,8 +1068,13 @@ impl Chart {
                                 .min(chart_rect.bottom()),
                         ),
                     );
+                    let toggle_id = ui.scope_id().with((key, "toggle"));
+                    // A maximized pane is drawn alone and expanded: its header has nothing to collapse.
                     let toggle = ui
-                        .interact(header, ui.scope_id().with((key, "toggle")), Sense::click())
+                        .add_enabled_ui(maximized.is_none(), |ui| {
+                            ui.interact(header, toggle_id, Sense::click())
+                        })
+                        .inner
                         .on_hover_text(l10n::text(
                             ui.ctx(),
                             if collapsed {
@@ -1259,6 +1271,7 @@ impl Chart {
                             drawing.is_none()
                                 && pane_response.hovered()
                                 && !pane_response.dragged()
+                                && !self.zoom_mode_active
                                 && !eraser_mode
                                 && !drawing_tool_active
                         }) {
@@ -1689,6 +1702,8 @@ impl Chart {
                 }
             }
         }
+        // Over every pane, wherever the selection began.
+        crate::widget::pan_zoom::render_box_zoom(ui.painter(), &self.box_zoom);
         let drawn: Vec<_> = panes
             .iter()
             .zip(&rects)

@@ -1,11 +1,11 @@
 //! Signals read public study columns at the signal bar and its predecessor. A crossing
 //! requires a strict inequality now and the opposite inequality or equality one bar ago.
 
-use super::{StrategyFactory, length, number, number_input, set_input};
-use crate::model::{Bar, OrderSide, OrderType, PriceSource, StudySource};
+use super::{StrategyFactory, length, number, number_input, set_input, timeframe};
+use crate::model::{Bar, OrderSide, OrderType, PriceSource, StudySource, Timeframe};
 use crate::strategies::{OrderSize, Strategy, StrategyContext};
 use crate::studies::{
-    BollingerBands, Indicator, InputKind, InputValue, KeltnerChannels, MACD, Momentum,
+    ATR, BollingerBands, Indicator, InputKind, InputValue, KeltnerChannels, MACD, Momentum,
     ParabolicSAR, RSI, SMA, Stochastic, StudyInput, SuperTrend, TechnicalRatings,
 };
 
@@ -49,6 +49,10 @@ struct StudyStrategy {
     studies: Vec<Box<dyn Indicator>>,
     inputs: Vec<StudyInput>,
     signals: Vec<[Option<OrderType>; 2]>,
+    timeframe: Option<Timeframe>,
+    atr: Vec<Option<f64>>,
+    /// The instrument's own bars of the Indicator timeframe and each chart bar's last closed one.
+    calculation: (Vec<Bar>, Vec<Option<usize>>),
 }
 
 impl StudyStrategy {
@@ -77,6 +81,12 @@ impl StudyStrategy {
                 InputValue::Choice(0),
                 InputKind::Choice(vec!["Long".into(), "Short".into()]),
             )],
+            Rule::Rating => vec![StudyInput::new(
+                "timeframe",
+                "Indicator timeframe",
+                InputValue::Timeframe(None),
+                InputKind::Timeframe,
+            )],
             Rule::Rsi | Rule::Stochastic => {
                 let (low, high) = if matches!(rule, Rule::Rsi) {
                     (30., 70.)
@@ -95,6 +105,9 @@ impl StudyStrategy {
             studies,
             inputs,
             signals: Vec::new(),
+            timeframe: None,
+            atr: Vec::new(),
+            calculation: (Vec::new(), Vec::new()),
         }
     }
 
@@ -226,6 +239,16 @@ impl Strategy for StudyStrategy {
         {
             return Err("oversold must be below overbought");
         }
+        if matches!(self.rule, Rule::Rating)
+            && let (Some(chart), Some(interval)) =
+                (self.timeframe, timeframe(&self.inputs, "timeframe"))
+            && interval != chart
+            && (chart.is_trade_based() || interval.is_trade_based())
+        {
+            return Err(
+                "indicator timeframe must be the chart interval or a time interval on a time-based chart",
+            );
+        }
         Ok(())
     }
 
@@ -237,10 +260,39 @@ impl Strategy for StudyStrategy {
         }
     }
 
-    fn prepare(&mut self, bars: &[Bar]) {
-        for study in &mut self.studies {
-            study.calculate(bars);
+    fn set_timeframe(&mut self, timeframe: Timeframe) {
+        self.timeframe = Some(timeframe);
+        self.signals.clear();
+    }
+
+    fn calculation_timeframe(&self) -> Option<Timeframe> {
+        if !matches!(self.rule, Rule::Rating) {
+            return None;
         }
+        timeframe(&self.inputs, "timeframe").filter(|interval| Some(*interval) != self.timeframe)
+    }
+
+    fn set_calculation_bars(&mut self, bars: &[Bar], closed: &[Option<usize>]) {
+        self.calculation = (bars.to_vec(), closed.to_vec());
+        self.signals.clear();
+    }
+
+    fn prepare(&mut self, bars: &[Bar]) {
+        let calculation = self.calculation_timeframe().is_some();
+        for study in &mut self.studies {
+            study.calculate(if calculation {
+                &self.calculation.0
+            } else {
+                bars
+            });
+        }
+        self.atr = if matches!(self.rule, Rule::Rating) {
+            let mut atr = ATR::new(14);
+            atr.calculate(bars);
+            (0..bars.len()).map(|i| atr.values().value(0, i)).collect()
+        } else {
+            Vec::new()
+        };
         let close: Vec<_> = bars.iter().map(|bar| bar.close).collect();
         let source = self.source();
         let source: Vec<_> = bars
@@ -340,10 +392,22 @@ impl Strategy for StudyStrategy {
                     ],
                     // Strong Buy and Strong Sell, strictly beyond 0.5. Every such bar places the
                     // entry; the pyramiding limit keeps a held position from growing.
-                    Rule::Rating => [
-                        market(value(2).is_some_and(|rating| rating > 0.5)),
-                        market(value(2).is_some_and(|rating| rating < -0.5)),
-                    ],
+                    Rule::Rating => {
+                        let rating = if calculation {
+                            self.calculation
+                                .1
+                                .get(i)
+                                .copied()
+                                .flatten()
+                                .and_then(|at| values.value(2, at))
+                        } else {
+                            value(2)
+                        };
+                        [
+                            market(rating.is_some_and(|rating| rating > 0.5)),
+                            market(rating.is_some_and(|rating| rating < -0.5)),
+                        ]
+                    }
                 }
             })
             .collect();
@@ -397,6 +461,16 @@ impl Strategy for StudyStrategy {
                 context.entry(if index == 0 { "Long" } else { "Short" }, side, None, order);
             } else if expired[index] {
                 context.cancel(if index == 0 { "Long" } else { "Short" });
+            }
+        }
+        if matches!(self.rule, Rule::Rating)
+            && let Some(atr) = self.atr.get(at).copied().flatten().filter(|atr| *atr > 0.0)
+        {
+            for (id, side) in [
+                ("Long stop", OrderSide::Buy),
+                ("Short stop", OrderSide::Sell),
+            ] {
+                context.exit_trailing(id, side, Some(3.0 * atr), 5.0 * atr, 2.0 * atr);
             }
         }
     }

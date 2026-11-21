@@ -210,6 +210,10 @@ impl Indicator for RelativeVolumeAtTime {
         }
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
         let value = self.values.value(0, bar)?;
         Some(self.colors[usize::from(value <= 1.0)])

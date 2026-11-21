@@ -7,7 +7,6 @@ use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
 use crate::model::Timeframe;
 use crate::styles::focus::focus_ring_color;
-use crate::styles::icons as icon_sizes;
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::top_toolbar::buttons::Trigger;
@@ -134,7 +133,10 @@ const PRESETS: &[Timeframe] = &[
     Timeframe::Ticks(NonZeroU64::new(1000).unwrap()),
     Timeframe::Volume(NonZeroU64::new(100).unwrap()),
     Timeframe::Volume(NonZeroU64::new(1000).unwrap()),
+    Timeframe::Range(NonZeroU64::new(1).unwrap()),
     Timeframe::Range(NonZeroU64::new(10).unwrap()),
+    Timeframe::Range(NonZeroU64::new(100).unwrap()),
+    Timeframe::Range(NonZeroU64::new(1000).unwrap()),
     Timeframe::Delta(NonZeroU64::new(100).unwrap()),
     // Milliseconds
     Timeframe::Ms100,
@@ -230,7 +232,7 @@ pub struct TimeframeSelector {
     is_open: bool,
     /// Favorite timeframes
     pub favorites: HashSet<Timeframe>,
-    /// Custom timeframes
+    /// Custom timeframes in menu order. An entry equal to a preset is listed once, as the preset.
     pub custom_timeframes: Vec<Timeframe>,
     /// Configuration
     pub config: TimeframeSelectorConfig,
@@ -340,7 +342,11 @@ impl TimeframeSelector {
             .filter(|tf| self.supports(*tf));
         let favorites: Vec<_> = PRESETS
             .iter()
-            .chain(&self.custom_timeframes)
+            .chain(
+                self.custom_timeframes
+                    .iter()
+                    .filter(|tf| !PRESETS.contains(tf)),
+            )
             .copied()
             .filter(|tf| {
                 self.favorites.contains(tf)
@@ -547,7 +553,11 @@ impl TimeframeSelector {
                     .custom_timeframes
                     .iter()
                     .copied()
-                    .filter(|tf| self.supports(*tf) && !self.hidden_timeframes.contains(tf))
+                    .filter(|tf| {
+                        !PRESETS.contains(tf)
+                            && self.supports(*tf)
+                            && !self.hidden_timeframes.contains(tf)
+                    })
                     .collect();
                 if !custom.is_empty() && section_header(ui, theme, "Custom", !first) {
                     for tf in &custom {
@@ -690,7 +700,10 @@ pub(super) fn favorite_star(
 ) -> bool {
     let rect = context.rect;
     let star_rect = Rect::from_center_size(
-        pos2(rect.right() - icon_sizes::SM / 2.0, rect.center().y),
+        pos2(
+            rect.right() - DESIGN_TOKENS.sizing.icon_sm / 2.0,
+            rect.center().y,
+        ),
         vec2(STAR_SLOT_W, rect.height()),
     );
     let star = ui.interact(
@@ -718,11 +731,17 @@ pub(super) fn favorite_star(
         } else {
             &embedded_icons::STAR_EMPTY
         };
-        icon.as_image_tinted(vec2(icon_sizes::SM, icon_sizes::SM), color)
-            .paint_at(
-                ui,
-                Rect::from_center_size(star_rect.center(), vec2(icon_sizes::SM, icon_sizes::SM)),
-            );
+        icon.as_image_tinted(
+            vec2(DESIGN_TOKENS.sizing.icon_sm, DESIGN_TOKENS.sizing.icon_sm),
+            color,
+        )
+        .paint_at(
+            ui,
+            Rect::from_center_size(
+                star_rect.center(),
+                vec2(DESIGN_TOKENS.sizing.icon_sm, DESIGN_TOKENS.sizing.icon_sm),
+            ),
+        );
     }
     menu_row_focus(ui, &star);
     let clicked = star.clicked();
@@ -814,7 +833,10 @@ impl ListItemContent for TimeframeRow<'_> {
         });
 
         let hide_rect = Rect::from_center_size(
-            pos2(rect.right() - icon_sizes::SM / 2.0 - 28.0, rect.center().y),
+            pos2(
+                rect.right() - DESIGN_TOKENS.sizing.icon_sm / 2.0 - 28.0,
+                rect.center().y,
+            ),
             vec2(28.0, ROW_H),
         );
         let hide = ui.interact(
@@ -832,12 +854,15 @@ impl ListItemContent for TimeframeRow<'_> {
             || ui.memory(|m| m.has_focus(context.response.id.with("favorite")));
         if shown {
             embedded_icons::CLOSE
-                .as_image_tinted(vec2(icon_sizes::SM, icon_sizes::SM), text)
+                .as_image_tinted(
+                    vec2(DESIGN_TOKENS.sizing.icon_sm, DESIGN_TOKENS.sizing.icon_sm),
+                    text,
+                )
                 .paint_at(
                     ui,
                     Rect::from_center_size(
                         hide_rect.center(),
-                        vec2(icon_sizes::SM, icon_sizes::SM),
+                        vec2(DESIGN_TOKENS.sizing.icon_sm, DESIGN_TOKENS.sizing.icon_sm),
                     ),
                 );
         }
@@ -985,7 +1010,10 @@ mod tests {
                 assert_eq!(
                     click(
                         &mut selector,
-                        pos2(row.right() - icon_sizes::SM / 2.0, row.center().y)
+                        pos2(
+                            row.right() - DESIGN_TOKENS.sizing.icon_sm / 2.0,
+                            row.center().y
+                        )
                     ),
                     TimeframeAction::ToggleFavorite(tf)
                 );
@@ -1133,7 +1161,10 @@ mod tests {
                         .y;
                     let action = click(
                         &mut selector,
-                        pos2(right - theme.spacing.lg - icon_sizes::SM / 2.0, y),
+                        pos2(
+                            right - theme.spacing.lg - DESIGN_TOKENS.sizing.icon_sm / 2.0,
+                            y,
+                        ),
                     );
                     assert_eq!(action, TimeframeAction::ToggleFavorite(custom));
                     assert_eq!(selector.favorites.contains(&custom), favorite);
@@ -1151,7 +1182,13 @@ mod tests {
                     assert_eq!(
                         click(
                             &mut selector,
-                            pos2(right - theme.spacing.lg - icon_sizes::SM / 2.0 - 28.0, y)
+                            pos2(
+                                right
+                                    - theme.spacing.lg
+                                    - DESIGN_TOKENS.sizing.icon_sm / 2.0
+                                    - 28.0,
+                                y
+                            )
                         ),
                         TimeframeAction::Hide(tf)
                     );
@@ -1272,6 +1309,86 @@ mod tests {
             selector.set_supported_timeframes(symbol_list);
             assert_eq!(selector.supports(Model::Min1), min1);
             assert_eq!(selector.supports(Model::Day1), day1);
+        }
+    }
+
+    /// The menu lists range bars of 1, 10, 100 and 1,000 ticks, and an interval has one menu row
+    /// and at most one toolbar button however it was stored: restored from a save that held it as
+    /// a custom interval, or written into the custom list by the host.
+    #[test]
+    fn an_interval_is_listed_once_however_it_was_stored() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let range = |n| Model::Range(NonZeroU64::new(n).unwrap());
+        // A save from before the range presets: a starred custom 100 range and a custom 25 range.
+        let saved = r#"{"favorites":[{"Range":100},"Min5"],"custom_timeframes":[{"Range":100},{"Range":25}],"hidden_timeframes":[]}"#;
+        for setup in ["saved", "field"] {
+            let mut selector = TimeframeSelector::new(Model::Min1);
+            if setup == "saved" {
+                selector.set_preferences(serde_json::from_str(saved).unwrap());
+                assert_eq!(
+                    selector.preferences(),
+                    TimeframePreferences {
+                        favorites: vec![range(100), Model::Min5],
+                        custom_timeframes: vec![range(25)],
+                        hidden_timeframes: Vec::new(),
+                    }
+                );
+            } else {
+                selector.custom_timeframes = vec![Model::Min5, range(100), range(25)];
+                selector.favorites = HashSet::from([Model::Min5, range(100)]);
+            }
+            selector.set_supported_timeframes(Some(vec![
+                Model::Min1,
+                Model::Min5,
+                range(1),
+                range(10),
+                range(100),
+                range(1000),
+                range(25),
+            ]));
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(vec2(800.0, 1400.0))
+                .build_ui_state(
+                    |ui, selector: &mut TimeframeSelector| {
+                        ui.horizontal(|ui| selector.show(ui));
+                    },
+                    selector,
+                );
+            harness.run();
+            harness.get_by_label("Chart interval").click();
+            harness.run();
+            let mut top = f32::NEG_INFINITY;
+            // Labels in menu order, with their toolbar buttons and menu rows.
+            for (label, buttons, rows) in [
+                ("1 range tick", 0, 1),
+                ("10 range ticks", 0, 1),
+                ("100 range ticks", 1, 1),
+                ("1000 range ticks", 0, 1),
+                ("5 minutes", 1, 1),
+                ("25 range ticks", 0, 1),
+            ] {
+                assert_eq!(
+                    harness
+                        .query_all_by_role_and_label(Role::Button, label)
+                        .count(),
+                    buttons,
+                    "{setup}: {label} buttons"
+                );
+                assert_eq!(
+                    harness
+                        .query_all_by_role_and_label(Role::MenuItemRadio, label)
+                        .count(),
+                    rows,
+                    "{setup}: {label} rows"
+                );
+                let row = harness
+                    .get_by_role_and_label(Role::MenuItemRadio, label)
+                    .rect()
+                    .top();
+                assert!(row > top, "{setup}: {label} out of order");
+                top = row;
+            }
         }
     }
 

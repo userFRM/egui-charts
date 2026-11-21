@@ -1,6 +1,6 @@
 //! Horizontal price-row histograms shared by drawing and study profiles.
 
-use crate::data::{ProfileDisplay, ProfileSource, StudyProfile};
+use crate::data::{ProfileDisplay, StudyProfile};
 use egui::{Pos2, Rect};
 use std::ops::Range;
 
@@ -22,9 +22,6 @@ pub(crate) fn profile_span(plot: &StudyProfile, coords: &super::ChartMapping) ->
         } else {
             coords.rect.left()..coords.rect.left() + width
         }
-    } else if plot.profile.source() == ProfileSource::Options {
-        // Strikes have no bars to stand beside.
-        coords.rect.left()..coords.rect.left() + coords.rect.width() * 0.3
     } else {
         (coords.idx_to_x(plot.bars.start) - coords.bar_spacing * 0.5).max(coords.rect.left())
             ..(coords.idx_to_x(plot.bars.end - 1) + coords.bar_spacing * 0.5)
@@ -84,10 +81,13 @@ pub(crate) fn hit_profile(
         }
         let (poc, (va_low, va_high)) = profile.poc_and_value_area(plot.config.value_area())?;
         let y_at = |row: usize| price_to_y(profile.low + row as f64 * profile.row_height);
+        let levels = crate::painting::volume_profile::marks_levels(profile);
         let on_poc = plot.config.show_poc
+            && levels
             && (point.y - (y_at(poc) + y_at(poc + 1)) * 0.5).abs() <= tolerance;
         // Value area lines select only where they are painted.
         let on_value_area = in_span
+            && levels
             && [
                 (
                     y_at(va_high + 1),

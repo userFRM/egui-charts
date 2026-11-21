@@ -161,8 +161,9 @@ fn set_unless_resolved(current: &mut Option<Color32>, fallback: Color32, color: 
 }
 
 impl ChartSettingsState {
-    /// Read the chart's current display settings. Host-managed trading and alert groups and
-    /// futures data choices retain defaults; hosts preserve them when refreshing settings.
+    /// Read the chart's current display settings and the futures data choices it recorded.
+    /// Host-managed trading and alert groups retain defaults; hosts preserve them when refreshing
+    /// settings.
     pub fn from_chart(chart: &Chart) -> Self {
         let config = chart.config();
         let mut settings = Self {
@@ -173,6 +174,8 @@ impl ChartSettingsState {
             show_session_breaks: Some(config.show_session_breaks),
             extended_hours: Some(chart.extended_hours()),
             overnight_hours: Some(chart.overnight_hours()),
+            back_adjust_futures: chart.back_adjust_futures,
+            settlement_as_close: chart.settlement_as_close,
             session_background: Some(super::SessionBackgroundSettings {
                 show_extended_hours: config.show_extended_hours,
                 extended_hours_color: config.extended_hours_color,
@@ -509,7 +512,8 @@ impl ChartSettingsState {
 
     /// Apply the display controls offered by the dialog without rebuilding the chart or feed.
     /// A changed hours choice reloads history on the next frame.
-    /// Host-owned trading and alerts are left to their providers. Invalid timezone,
+    /// Host-owned trading and alerts are left to their providers. The futures data choices are
+    /// recorded on the chart, which leaves reloading history for them to the host. Invalid timezone,
     /// margins or crosshair width returns an error before changing the chart. The optional
     /// choices that hold `None`, as in settings saved before they existed, keep the chart's,
     /// while the optional colours apply as they are: `None` gives the last price its candle
@@ -550,6 +554,8 @@ impl ChartSettingsState {
         if let Some(extended) = self.extended_hours {
             chart.set_extended_hours(extended);
         }
+        chart.back_adjust_futures = self.back_adjust_futures;
+        chart.settlement_as_close = self.settlement_as_close;
         if let Some(background) = &self.session_background {
             let config = chart.config_mut();
             config.show_extended_hours = background.show_extended_hours;

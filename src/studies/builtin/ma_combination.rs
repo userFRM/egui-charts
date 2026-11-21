@@ -258,6 +258,11 @@ impl MACombination {
 }
 
 impl Indicator for MACombination {
+    /// Crossing markers stay on their bars, so only an unmarked combination can be offset.
+    fn draws_only_plots(&self) -> bool {
+        self.crossing_pair().is_none()
+    }
+
     fn inputs(&self) -> Vec<crate::studies::StudyInput> {
         use crate::studies::InputValue;
         let kinds = [
@@ -641,6 +646,9 @@ macro_rules! impl_ma_preset {
             })?
             fn markers(&self) -> &[crate::studies::IndicatorMarker] {
                 self.inner.markers()
+            }
+            fn draws_only_plots(&self) -> bool {
+                self.inner.draws_only_plots()
             }
             fn line_style(&self, line: usize) -> crate::studies::IndicatorLineStyle {
                 self.inner.line_style(line)

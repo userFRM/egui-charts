@@ -139,6 +139,7 @@ fn shift_months(
     }
 }
 
+#[cfg(feature = "widget")]
 fn add_seconds(time: DateTime<Utc>, seconds: f64) -> Option<DateTime<Utc>> {
     if !seconds.is_finite() || seconds.abs() >= i64::MAX as f64 {
         return None;
@@ -149,10 +150,12 @@ fn add_seconds(time: DateTime<Utc>, seconds: f64) -> Option<DateTime<Utc>> {
     time.checked_add_signed(duration)
 }
 
+#[cfg(feature = "widget")]
 pub(crate) fn time_at(bars: &[Bar], index: f64) -> Option<DateTime<Utc>> {
     time_at_with_timeframe(bars, index, None, Some(&TimezoneId::utc()))
 }
 
+#[cfg(feature = "widget")]
 pub(crate) fn time_at_with_timeframe(
     bars: &[Bar],
     index: f64,
@@ -198,6 +201,7 @@ pub(crate) fn time_at_with_timeframe(
     )
 }
 
+#[cfg(feature = "widget")]
 pub(crate) fn index_at(bars: &[Bar], time: DateTime<Utc>) -> Option<f64> {
     index_at_with_timeframe(bars, time, None, Some(&TimezoneId::utc()))
 }
@@ -252,6 +256,7 @@ pub(crate) fn index_at_with_timeframe(
 }
 
 /// Positions share the same interpolation and edge cadence as keys mapped through row indices.
+#[cfg(feature = "widget")]
 pub(crate) fn numeric_positions(bars: &[Bar], unit: Option<f64>) -> crate::model::NumericPositions {
     let Some(first) = bars.first() else {
         return crate::model::NumericPositions::new(Vec::new(), unit, DateTime::UNIX_EPOCH);

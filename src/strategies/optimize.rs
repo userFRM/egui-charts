@@ -86,6 +86,7 @@ pub fn optimise<'a>(
             }
             values.push((id.clone(), value));
         }
+        strategy.set_timeframe(backtest.timeframe);
         // A combination refused as a whole is skipped without a run; the next one follows.
         let trial = strategy.validate_inputs().and_then(|()| {
             let report = backtest.run(strategy.as_mut(), bars, lower);

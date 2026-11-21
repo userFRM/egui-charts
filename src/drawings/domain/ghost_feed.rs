@@ -8,7 +8,7 @@ pub const MAX_GHOST_CANDLES: usize = 1000;
 
 /// How a Ghost Feed builds its projected candles from the clicked path, and how it paints them.
 /// Older saved `spacing` and `wick` settings are ignored and use these defaults. The defaults
-/// paint the candles in the colours of feeds saved before these could be set; a new Ghost Feed
+/// keep the range, noise and colours of feeds saved before these could be set; a new Ghost Feed
 /// starts from [`Self::drawing_default`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -74,11 +74,13 @@ pub struct GhostCandle {
 }
 
 impl GhostFeedConfig {
-    /// Settings a new Ghost Feed starts with: light teal `#ACE5DC` rising and pink `#FAA1A4`
-    /// falling bodies, and otherwise the defaults, with teal and red borders and a grey wick at
-    /// 50% transparency.
+    /// Settings a new Ghost Feed starts with: an average range of 20 ticks with a noise of 50
+    /// ticks, light teal `#ACE5DC` rising and pink `#FAA1A4` falling bodies, and otherwise the
+    /// defaults, with teal and red borders and a grey wick at 50% transparency.
     pub fn drawing_default() -> Self {
         Self {
+            average_range_ticks: 20.0,
+            noise_ticks: 50.0,
             body_up: [172, 229, 220, 255],
             body_down: [250, 161, 164, 255],
             ..Self::default()
@@ -281,5 +283,42 @@ mod tests {
         }
         let long = [ChartPoint::new(0.0, 10.0), ChartPoint::new(1e9, 10.0)];
         assert_eq!(config.candles(&long, 0.25, "1404").len(), MAX_GHOST_CANDLES);
+    }
+
+    /// A new feed starts at an average range of 20 ticks and a noise of 50 ticks and draws its
+    /// candles with them: at 0.25 a tick, closes stray up to 12.5 from the path, past the 1.25
+    /// that 5 ticks allow. A feed saved without these two settings reads them back as 10 and 5
+    /// and keeps its other settings.
+    #[test]
+    fn new_feeds_start_at_20_and_50_ticks_and_saved_feeds_keep_10_and_5() {
+        let mut drawing = Drawing::new(1404, super::super::DrawingToolType::GhostFeed);
+        let placed = drawing.ghost_feed.unwrap();
+        assert_eq!(
+            (placed.average_range_ticks, placed.noise_ticks),
+            (20.0, 50.0)
+        );
+        drawing.chart_points = vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(32.0, 11.0)];
+        let strays: Vec<f64> = drawing
+            .ghost_candles(0.25)
+            .iter()
+            .map(|c| (c.close - (10.0 + (f64::from(c.bar_idx) + 1.0) / 32.0)).abs())
+            .collect();
+        assert_eq!(strays.len(), 32);
+        assert!(strays.iter().all(|&stray| stray <= 12.5), "{strays:?}");
+        assert!(strays.iter().any(|&stray| stray > 1.25), "{strays:?}");
+
+        let mut saved = serde_json::to_value(&drawing).unwrap();
+        let feed = saved["ghost_feed"].as_object_mut().unwrap();
+        feed.remove("average_range_ticks");
+        feed.remove("noise_ticks");
+        let read = serde_json::from_value::<Drawing>(saved)
+            .unwrap()
+            .ghost_feed
+            .unwrap();
+        assert_eq!((read.average_range_ticks, read.noise_ticks), (10.0, 5.0));
+        assert_eq!(
+            (read.body_up, read.body_down),
+            ([172, 229, 220, 255], [250, 161, 164, 255])
+        );
     }
 }

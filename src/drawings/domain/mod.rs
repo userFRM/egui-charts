@@ -16,6 +16,7 @@ mod image;
 mod options;
 mod pitchfork;
 mod projection;
+mod table;
 mod template;
 mod vwap;
 
@@ -32,13 +33,14 @@ pub use gann::{GannConfig, GannFanDirection, GannLevel};
 pub use ghost_feed::{GhostCandle, GhostFeedConfig, MAX_GHOST_CANDLES};
 pub use image::ImageConfig;
 pub use options::{
-    AnnotationMarker, ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight,
-    HandlePos, LineMeasurementPosition, LineMeasurements, LineTextHorizontalAlign,
-    LineTextOrientation, LineTextVerticalAlign, MiddleLineStyle, NoteTextStyle, PositionReadout,
-    PositionSize, PositionSizing, PositionStyle, RangeSettings, RegressionBandLine,
-    RegressionTrendConfig, TimeframeVisibility,
+    AnnotationMarker, ArrowStyle, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos,
+    LineMeasurementPosition, LineMeasurements, LineTextHorizontalAlign, LineTextOrientation,
+    LineTextVerticalAlign, MiddleLineStyle, NoteTextStyle, PositionReadout, PositionSize,
+    PositionSizing, PositionStyle, RangeSettings, RegressionBandLine, RegressionTrendConfig,
+    TimeframeVisibility,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use projection::{ProjectionConfig, ProjectionLevel};
+pub use table::{TableCellStyle, TableConfig};
 pub use template::DrawingTemplate;
 pub use vwap::{VwapBand, VwapBandLine, VwapBandMode, VwapConfig, VwapFill, VwapPlotType};

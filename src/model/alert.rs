@@ -13,6 +13,58 @@ pub struct AlertId(
     pub String,
 );
 
+/// One trigger as the alert log keeps it, also after its alert is removed. `AlertEngine` keeps
+/// the newest ones for the host to store beside the alerts.
+///
+/// ```
+/// use chrono::{TimeZone, Utc};
+/// use egui_charts::model::{AlertId, AlertTrigger};
+///
+/// let time = Utc.with_ymd_and_hms(2026, 10, 23, 12, 0, 0).unwrap();
+/// let mut trigger = AlertTrigger::new(AlertId("1".into()), "AAPL", time);
+/// trigger.name = "Breakout".into();
+/// trigger.price = Some(101.0);
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct AlertTrigger {
+    /// Host alert identifier.
+    pub id: AlertId,
+    /// The alert's [`display_name`](Alert::display_name) when the trigger arrived, empty if its
+    /// alert was not yet supplied.
+    #[serde(default)]
+    pub name: String,
+    /// Symbol as known when the trigger arrived, empty if its alert was not yet supplied.
+    #[serde(default)]
+    pub symbol: String,
+    /// Host trigger time, including triggers missed while the application was closed.
+    pub time: DateTime<Utc>,
+    /// Finite trigger price, if supplied.
+    #[serde(default)]
+    pub price: Option<f64>,
+    /// The alert's message with its placeholders filled in, empty if there is none.
+    #[serde(default)]
+    pub message: String,
+    /// The trigger fell outside the alert's notification schedule: logged without a popup.
+    #[serde(default)]
+    pub silent: bool,
+}
+
+impl AlertTrigger {
+    /// A trigger of `id` on `symbol` at `time`, without a name, price or message, and not silent.
+    pub fn new(id: AlertId, symbol: impl Into<String>, time: DateTime<Utc>) -> Self {
+        Self {
+            id,
+            name: String::new(),
+            symbol: symbol.into(),
+            time,
+            price: None,
+            message: String::new(),
+            silent: false,
+        }
+    }
+}
+
 /// An alert as the host stores and evaluates it. The library creates and edits alerts through
 /// [`Alerts::save`](crate::services::Alerts::save) and shows the ones the host pushes. It evaluates
 /// them only through the host's service; `AlertEngine` (feature `alert-engine`) is one.
@@ -30,9 +82,19 @@ pub struct Alert {
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
     /// Most recent firing time, including firings while the application was closed.
-    /// Hosts retain it on every trigger, even for alerts that remain active.
+    /// Hosts retain it on every trigger, even for alerts that remain active. `AlertEngine`
+    /// counts it as a restored alert's last firing.
     #[serde(default)]
     pub last_triggered_at: Option<DateTime<Utc>>,
+    /// Most recent firing time of each member of [`watchlist`](Self::watchlist) that fired, by
+    /// symbol; empty for an alert on one symbol. Hosts keep it with the alert, as they keep
+    /// `last_triggered_at`. `AlertEngine` fills it, and after a restart does not fire a member
+    /// again in the bar or minute of its time: with frequency [`Once`](AlertFrequency::Once)
+    /// a member it holds never fires again, and the alert becomes
+    /// [`Triggered`](AlertStatus::Triggered) once it holds every member of the list. The engine
+    /// clears it when a save changes what the alert watches or its status.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub member_triggered_at: BTreeMap<String, DateTime<Utc>>,
     /// Draw the threshold across the pane in addition to its marker. Enabled by default.
     #[serde(default = "alert_display_enabled")]
     pub extend_line: bool,
@@ -76,8 +138,9 @@ pub struct Alert {
     #[serde(default)]
     pub frequency: AlertFrequency,
     /// The alert starts monitoring at this time; `None` monitors from the moment it is saved.
-    /// Before it, evaluation ignores the alert, so its first evaluation after the start compares
-    /// with the value one bar earlier, as for a new alert. Earlier than `expires` when both are set.
+    /// Before it, evaluation ignores the alert, so its first evaluation after the start is its
+    /// first one: for a new or edited alert a crossing then needs a value observed from the start
+    /// on. Earlier than `expires` when both are set.
     #[serde(default)]
     pub starts: Option<DateTime<Utc>>,
     /// The alert expires at this time; `None` never expires.
@@ -105,7 +168,9 @@ fn alert_display_enabled() -> bool {
 }
 
 /// Where a firing is delivered. The alerts panel honours `popup` and `sound`; the host sends the
-/// others itself, reading them from the saved alert. The trigger log records every firing.
+/// others itself, reading them from the saved alert, and
+/// [`AlertNotice`](crate::services::AlertNotice) gives it what to send. The trigger log records
+/// every firing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -114,8 +179,16 @@ pub struct AlertDelivery {
     pub popup: bool,
     /// Play the sound chosen in the alert settings, if they turn sound on. Enabled by default.
     pub sound: bool,
-    /// Ask the host to send an email.
+    /// Ask the host to send an email to the account's address.
     pub email: bool,
+    /// Ask the host to send a plain-text email, without formatting, as pagers and mail-to-text
+    /// gateways need, to [`plain_text_address`](Self::plain_text_address). Independent of
+    /// `email`, so one alert can send both.
+    pub plain_text: bool,
+    /// Where the host sends the plain-text email, such as a pager or a mail-to-text gateway;
+    /// empty sends it to the alternative address the user's account holds. Send to it without
+    /// surrounding spaces. Presets leave it out.
+    pub plain_text_address: String,
     /// Ask the host to send a push notification to the user's mobile app.
     pub push: bool,
     /// Ask the host to post to [`webhook_url`](Self::webhook_url).
@@ -130,6 +203,8 @@ impl Default for AlertDelivery {
             popup: true,
             sound: true,
             email: false,
+            plain_text: false,
+            plain_text_address: String::new(),
             push: false,
             webhook: false,
             webhook_url: String::new(),
@@ -138,8 +213,32 @@ impl Default for AlertDelivery {
 }
 
 impl AlertDelivery {
-    /// Whether an enabled webhook has an `http` or `https` URL.
+    /// Whether an enabled plain-text email's address, when given, is one email address and an
+    /// enabled webhook has an `http` or `https` URL.
     pub fn is_valid(&self) -> bool {
+        self.plain_text_is_valid() && self.webhook_is_valid()
+    }
+
+    /// Whether an enabled plain-text email's address is empty or one `local@domain` address: a
+    /// domain of two or more labels, none empty, and no spaces, control characters or
+    /// `@,;:<>()[]\"` in either part. Surrounding spaces do not count.
+    pub(crate) fn plain_text_is_valid(&self) -> bool {
+        let address = self.plain_text_address.trim();
+        let forbidden =
+            |c: char| c.is_whitespace() || c.is_control() || "@,;:<>()[]\\\"".contains(c);
+        !self.plain_text
+            || address.is_empty()
+            || address.split_once('@').is_some_and(|(local, domain)| {
+                !local.is_empty()
+                    && domain.split('.').count() > 1
+                    && domain.split('.').all(|label| !label.is_empty())
+                    && !local.contains(forbidden)
+                    && !domain.contains(forbidden)
+            })
+    }
+
+    /// Whether an enabled webhook has an `http` or `https` URL.
+    pub(crate) fn webhook_is_valid(&self) -> bool {
         let url = self.webhook_url.trim();
         !self.webhook
             || url.split_once("://").is_some_and(|(scheme, rest)| {
@@ -304,6 +403,7 @@ impl Alert {
             id: None,
             created_at: None,
             last_triggered_at: None,
+            member_triggered_at: BTreeMap::new(),
             extend_line: true,
             blink_on_trigger: true,
             symbol: symbol.into(),
@@ -336,6 +436,8 @@ impl Alert {
         let mut copy = self.clone();
         copy.created_at = other.created_at;
         copy.last_triggered_at = other.last_triggered_at;
+        copy.member_triggered_at
+            .clone_from(&other.member_triggered_at);
         copy.extend_line = other.extend_line;
         copy.blink_on_trigger = other.blink_on_trigger;
         copy.delivery.clone_from(&other.delivery);
@@ -627,6 +729,7 @@ pub enum AlertCondition {
         upper: f64,
     },
     /// Signed change from `bars` bars ago reaches `value`: at least for positive, at most for negative.
+    /// The dialog offers positive values as Moving up and negative values as Moving down.
     MovingBy {
         /// Signed, nonzero change in source units.
         value: f64,
@@ -634,7 +737,8 @@ pub enum AlertCondition {
         bars: u32,
     },
     /// Signed percentage change, 100 * (current - previous) / abs(previous), over `bars` bars.
-    /// A zero previous value cannot satisfy this condition.
+    /// A zero previous value cannot satisfy this condition. The dialog offers positive percentages
+    /// as Moving up % and negative percentages as Moving down %.
     MovingByPercent {
         /// Signed, nonzero percentage, with 1 meaning 1%.
         percent: f64,
@@ -1046,9 +1150,21 @@ impl std::fmt::Display for AlertCondition {
             Self::ExitingChannel { lower, upper } => write!(f, "Exiting {lower} to {upper}"),
             Self::InsideChannel { lower, upper } => write!(f, "Inside {lower} to {upper}"),
             Self::OutsideChannel { lower, upper } => write!(f, "Outside {lower} to {upper}"),
-            Self::MovingBy { value, bars } => write!(f, "Moving by {value} over {bars} bars"),
+            Self::MovingBy { value, bars } => {
+                let direction = if value.is_sign_negative() {
+                    "down"
+                } else {
+                    "up"
+                };
+                write!(f, "Moving {direction} {} over {bars} bars", value.abs())
+            }
             Self::MovingByPercent { percent, bars } => {
-                write!(f, "Moving by {percent}% over {bars} bars")
+                let direction = if percent.is_sign_negative() {
+                    "down"
+                } else {
+                    "up"
+                };
+                write!(f, "Moving {direction} {}% over {bars} bars", percent.abs())
             }
             Self::Compare { comparison, .. } => write!(f, "{} another output", comparison),
             Self::Channel { comparison, .. } => write!(f, "{comparison}"),
@@ -1119,6 +1235,16 @@ impl Alert {
                 .starts
                 .zip(self.expires)
                 .is_none_or(|(starts, expires)| starts < expires)
+    }
+
+    /// The alert's name, or its condition when the name is blank, as the alert log and trigger
+    /// popups name it.
+    pub fn display_name(&self) -> String {
+        if self.name.trim().is_empty() {
+            self.condition.to_string()
+        } else {
+            self.name.clone()
+        }
     }
 }
 
@@ -1203,7 +1329,8 @@ impl NotificationSchedule {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum AlertFrequency {
-    /// Fires once; the host then reports the alert with status `Triggered`.
+    /// Fires once; the host then reports the alert with status `Triggered`. On a watchlist it
+    /// fires once for each member and becomes `Triggered` when every member has fired.
     #[default]
     Once,
     /// Stays active and fires on every new occurrence; how often a lasting condition fires again
@@ -1480,7 +1607,11 @@ mod tests {
                 progress: AlertPositionProgress::AwaitingEntry,
             }
         }
-        let rows: [(Edit, bool); 47] = [
+        fn plain_text(a: &mut Alert, address: &str) {
+            a.delivery.plain_text = true;
+            a.delivery.plain_text_address = address.into();
+        }
+        let rows: [(Edit, bool); 57] = [
             (
                 |a| {
                     a.source = AlertSource::StudyCondition {
@@ -1576,6 +1707,22 @@ mod tests {
                 },
                 false,
             ),
+            (|a| plain_text(a, "pager@example.com"), true),
+            (|a| plain_text(a, " pager@example.com "), true),
+            (|a| plain_text(a, ""), true),
+            (|a| plain_text(a, "José@exämple.com"), true),
+            (
+                |a| {
+                    a.delivery.email = true;
+                    a.delivery.plain_text_address = "pager".into();
+                },
+                true,
+            ),
+            (|a| plain_text(a, "pager@example"), false),
+            (|a| plain_text(a, "@example.com"), false),
+            (|a| plain_text(a, "pager@example..com"), false),
+            (|a| plain_text(a, "a@example.com, b@example.com"), false),
+            (|a| plain_text(a, "pager@example.com\r\nBcc: x@y.z"), false),
             (
                 |a| {
                     a.delivery.webhook = true;
@@ -1855,6 +2002,7 @@ mod tests {
                 id: None,
                 created_at: None,
                 last_triggered_at: None,
+                member_triggered_at: BTreeMap::new(),
                 extend_line: true,
                 blink_on_trigger: true,
                 name: String::new(),

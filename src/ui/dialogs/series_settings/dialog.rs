@@ -187,6 +187,54 @@ mod tests {
     use crate::model::ChartType;
 
     #[test]
+    fn the_sidebar_paints_the_full_scales_and_lines_label() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let mut dialog = SeriesSettingsDialog::new();
+            dialog.open(SeriesId::MAIN, SeriesSettings::default());
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &theme);
+                })
+                .with_size(Vec2::new(1440.0, 900.0))
+                .build_ui_state(
+                    |ui, dialog: &mut SeriesSettingsDialog| {
+                        dialog.show(ui.ctx());
+                    },
+                    dialog,
+                );
+            h.run();
+            for selected in [false, true] {
+                if selected {
+                    h.get_by_role_and_label(Role::Tab, "Scales and lines")
+                        .click();
+                    h.run();
+                }
+                let label = h
+                    .output()
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "Scales and lines" => {
+                            Some((shape.clip_rect, text))
+                        }
+                        _ => None,
+                    })
+                    .expect("tab label is painted");
+                assert!(!label.1.galley.elided, "selected: {selected}");
+                assert!(label.0.contains_rect(egui::Rect::from_min_size(
+                    label.1.pos,
+                    label.1.galley.size()
+                )));
+            }
+        }
+    }
+
+    #[test]
     fn accepting_preserves_candle_colours_and_reset_uses_the_active_theme() {
         for (_, theme) in crate::theme::presets() {
             for chart_type in [ChartType::Candles, ChartType::HlcArea] {
@@ -576,6 +624,260 @@ mod tests {
             .restore(&serde_json::from_str(&json).unwrap())
             .unwrap();
         assert_eq!(restored.chart_type_params(), &settings.chart_type_params);
+    }
+
+    /// Each placement, width, values and box control of the session profile edits only the draft:
+    /// Cancel drops the edit, and Ok applies it as one undoable step.
+    #[test]
+    fn session_profile_layout_controls_apply_on_ok_only_and_undo() {
+        use egui::Color32;
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        use serde_json::json;
+        let picked =
+            serde_json::to_value(Color32::from_rgba_unmultiplied(49, 27, 146, 128)).unwrap();
+        // Colour wells are found by their seeded colour, so their label is unused.
+        let cases = [
+            ("Placement", Role::ComboBox, "right_aligned", json!(true)),
+            ("Width", Role::SpinButton, "width", json!(0.99)),
+            ("Volume values", Role::CheckBox, "values", json!(true)),
+            ("", Role::ColorWell, "values_color", picked.clone()),
+            ("Session box", Role::CheckBox, "session_box", json!(false)),
+            ("", Role::ColorWell, "session_box_color", picked),
+        ];
+        for (label, role, field, value) in cases {
+            for accept in [false, true] {
+                let mut chart = crate::ChartBuilder::new().build();
+                chart.set_chart_type(ChartType::SessionVolumeProfile);
+                // Theme colours can repeat across rows; seeded ones label each well apart.
+                let mut params = chart.chart_type_params().clone();
+                params.profile.values_color =
+                    Some(Color32::from_rgba_unmultiplied(10, 20, 30, 128));
+                params.profile.session_box_color =
+                    Some(Color32::from_rgba_unmultiplied(40, 50, 60, 128));
+                chart.set_chart_type_params(params);
+                let seeded = chart.trade_profile_settings().clone();
+                let saved = serde_json::to_value(&seeded).unwrap();
+                let mut expected = saved.clone();
+                expected[field] = value.clone();
+                let label = if role == Role::ColorWell {
+                    let color: Color32 = serde_json::from_value(saved[field].clone()).unwrap();
+                    let [r, g, b, _] = color.to_srgba_unmultiplied();
+                    format!("#{r:02X}{g:02X}{b:02X}")
+                } else {
+                    label.to_owned()
+                };
+                let mut dialog = SeriesSettingsDialog::new();
+                dialog.open(SeriesId::MAIN, chart.series_settings());
+                let mut harness = Harness::builder()
+                    .with_context_setup(|ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                    })
+                    .with_size(Vec2::new(1440.0, 900.0))
+                    .build_ui_state(
+                        |ui, (dialog, chart): &mut (SeriesSettingsDialog, crate::Chart)| {
+                            if let SeriesSettingsAction::Apply(_, settings) = dialog.show(ui.ctx())
+                            {
+                                chart.user_action(|c| c.apply_series_settings(&settings));
+                            }
+                        },
+                        (dialog, chart),
+                    );
+                harness.run();
+                // The profile section is taller than the dialog.
+                harness.get_by_role_and_label(role, &label).scroll_to_me();
+                harness.run();
+                let control = harness.get_by_role_and_label(role, &label);
+                match role {
+                    Role::SpinButton => control.decrement_accesskit(),
+                    _ => control.click(),
+                }
+                harness.run();
+                match role {
+                    Role::ComboBox => harness.get_by_label("Right").click(),
+                    Role::ColorWell => harness
+                        .get_by_role_and_label(Role::ColorWell, "#311B92")
+                        .click(),
+                    _ => {}
+                }
+                harness.run();
+                assert_eq!(
+                    harness.state().1.trade_profile_settings(),
+                    &seeded,
+                    "{field}: draft only"
+                );
+                harness
+                    .get_by_label(if accept { "Ok" } else { "Cancel" })
+                    .click();
+                harness.run();
+                let chart = &mut harness.state_mut().1;
+                let current = |chart: &crate::Chart| {
+                    serde_json::to_value(chart.trade_profile_settings()).unwrap()
+                };
+                if accept {
+                    assert_eq!(current(chart), expected, "{field}");
+                    assert!(chart.undo(), "{field}");
+                    assert_eq!(current(chart), saved, "{field}");
+                    assert!(chart.redo(), "{field}");
+                    assert_eq!(current(chart), expected, "{field}");
+                } else {
+                    assert_eq!(current(chart), saved, "{field}");
+                }
+            }
+        }
+    }
+
+    /// Custom windows use host labels, edit a draft, cap the list at five and apply as one history step.
+    #[test]
+    fn session_profile_custom_sessions_apply_on_ok_only_and_undo() {
+        use egui::accesskit::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        for accept in [false, true] {
+            let mut chart = crate::ChartBuilder::new().build();
+            chart.set_chart_type(ChartType::SessionVolumeProfile);
+            let seeded = chart.trade_profile_settings().clone();
+            let mut dialog = SeriesSettingsDialog::new();
+            dialog.open(SeriesId::MAIN, chart.series_settings());
+            let mut h = Harness::builder()
+                .with_size(Vec2::new(1440.0, 900.0))
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                    crate::localization::set_translator(ctx, |english| {
+                        matches!(
+                            english,
+                            "Session start"
+                                | "Session end"
+                                | "Session zone"
+                                | "Session {0} start"
+                                | "Session {0} end"
+                                | "Session {0} zone"
+                                | "Remove session {0}"
+                                | "Add session"
+                                | "Overlapping hours"
+                                | "Own profile"
+                                | "In both sessions"
+                                | "Clip to trading hours"
+                        )
+                        .then(|| format!("Translated: {english}"))
+                    });
+                })
+                .build_ui_state(
+                    |ui, (dialog, chart): &mut (SeriesSettingsDialog, crate::Chart)| {
+                        if let SeriesSettingsAction::Apply(_, settings) = dialog.show(ui.ctx()) {
+                            chart.user_action(|c| c.apply_series_settings(&settings));
+                        }
+                    },
+                    (dialog, chart),
+                );
+            h.run();
+            h.get_by_role_and_label(Role::ComboBox, "Session")
+                .scroll_to_me();
+            h.run();
+            h.get_by_role_and_label(Role::ComboBox, "Session").click();
+            h.run();
+            h.get_by_label("Custom").click();
+            h.run();
+            for label in ["Translated: Session start", "Translated: Session end"] {
+                assert!(
+                    h.get_all_by_role_and_label(Role::SpinButton, label)
+                        .next()
+                        .is_some()
+                );
+            }
+            h.get_by_role_and_label(Role::ComboBox, "Translated: Session zone");
+            h.get_by_label("Translated: Add session").scroll_to_me();
+            h.run();
+            h.get_by_label("Translated: Add session").click();
+            h.run();
+            assert!(
+                h.get_all_by_role_and_label(Role::SpinButton, "Translated: Session 2 end")
+                    .next()
+                    .is_some()
+            );
+            h.get_by_role_and_label(Role::ComboBox, "Translated: Session 2 zone");
+            h.get_all_by_role_and_label(Role::SpinButton, "Translated: Session 2 start")
+                .next()
+                .unwrap()
+                .scroll_to_me();
+            h.run();
+            for _ in 0..12 {
+                h.get_all_by_role_and_label(Role::SpinButton, "Translated: Session 2 start")
+                    .next()
+                    .unwrap()
+                    .increment_accesskit();
+                h.run();
+            }
+            h.get_by_role_and_label(Role::ComboBox, "Translated: Overlapping hours")
+                .scroll_to_me();
+            h.run();
+            h.get_by_role_and_label(Role::ComboBox, "Translated: Overlapping hours")
+                .click();
+            h.run();
+            h.get_by_label("Translated: Own profile");
+            h.get_by_label("Translated: In both sessions").click();
+            h.run();
+            h.get_by_label("Translated: Clip to trading hours")
+                .scroll_to_me();
+            h.run();
+            h.get_by_label("Translated: Clip to trading hours").click();
+            h.run();
+            h.get_by_label("Translated: Remove session 2")
+                .scroll_to_me();
+            h.run();
+            h.get_by_label("Translated: Remove session 2").click();
+            h.run();
+            h.get_by_label("Translated: Add session").click();
+            h.run();
+            assert_eq!(h.state().1.trade_profile_settings(), &seeded);
+            // Adding reaches five, then stops. Removing the extra three returns to two.
+            for _ in 0..3 {
+                h.get_by_label("Translated: Add session").scroll_to_me();
+                h.run();
+                h.get_by_label("Translated: Add session").click();
+                h.run();
+            }
+            h.get_by_label("Translated: Add session").scroll_to_me();
+            h.run();
+            assert!(
+                h.get_by_label("Translated: Add session")
+                    .accesskit_node()
+                    .is_disabled()
+            );
+            for n in (3..=5).rev() {
+                let label = format!("Translated: Remove session {n}");
+                h.get_by_label(&label).scroll_to_me();
+                h.run();
+                h.get_by_label(&label).click();
+                h.run();
+            }
+            h.get_by_label(if accept { "Ok" } else { "Cancel" }).click();
+            h.run();
+            let chart = &mut h.state_mut().1;
+            if accept {
+                let applied = chart.trade_profile_settings().clone();
+                let saved = serde_json::to_value(&applied.session).unwrap();
+                assert_eq!(
+                    saved,
+                    serde_json::json!({"Custom": {
+                        "sessions": [
+                            {"start":"00:00:00", "end":"00:00:00", "zone":null},
+                            {"start":"00:00:00", "end":"00:00:00", "zone":null}
+                        ], "overlap":"InBoth", "trading_hours_only":true
+                    }})
+                );
+                assert!(chart.undo());
+                assert_eq!(chart.trade_profile_settings(), &seeded);
+                assert!(chart.redo());
+                assert_eq!(chart.trade_profile_settings(), &applied);
+            } else {
+                assert_eq!(chart.trade_profile_settings(), &seeded);
+            }
+        }
     }
 
     #[test]

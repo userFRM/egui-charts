@@ -15,6 +15,9 @@ mod rebinding;
 #[path = "partial_tests.rs"]
 mod partial;
 
+#[path = "checkpoint_tests.rs"]
+mod checkpoint;
+
 #[derive(Debug, Clone, PartialEq)]
 enum Call {
     Resolve(String),

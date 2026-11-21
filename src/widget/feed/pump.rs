@@ -292,6 +292,7 @@ impl Chart {
                 self.replace_main_data(Vec::new());
                 link.resumed_from = None;
                 link.pushed_from = None;
+                link.non_trade_bars = false;
                 self.quote = None;
                 self.session_quote = None;
                 link.trades = Trades::new(TRADE_CAPACITY);
@@ -673,6 +674,7 @@ impl Chart {
         } else {
             // Timestamp anchors survive the empty interval between history requests.
             self.replace_main_data(Vec::new());
+            link.non_trade_bars = false;
             link.resumed_from = None;
         }
         self.feed = FeedState::default();
@@ -849,6 +851,7 @@ impl Chart {
         }
         let oldest = self.bars(SeriesId::MAIN).first().map(|bar| bar.time);
         let empty = page.bars.is_empty();
+        link.non_trade_bars |= !empty;
         let continuation = page.continue_before.filter(|_| empty);
         if let Some(error) = non_progressing(asked.before, continuation) {
             link.paging_stopped = true;

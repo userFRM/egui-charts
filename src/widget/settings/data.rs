@@ -121,7 +121,8 @@ pub struct StatusLineOptions {
     pub quote_panel: bool,
     /// Display study names.
     pub show_indicator_titles: bool,
-    /// Display host-supplied study inputs.
+    /// Display study inputs after their names: the host's caption, else one built from the
+    /// study's inputs.
     pub show_indicator_inputs: bool,
     /// Display historical study output values.
     pub show_indicator_values: bool,
@@ -311,7 +312,7 @@ impl Default for ScalesAppearanceSettings {
     }
 }
 
-/// Canvas tab: Buttons visibility settings
+/// Canvas tab: Buttons visibility settings. Both groups show on mouse over by default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ButtonsSettings {
     /// Visibility of chart navigation controls.
@@ -323,7 +324,7 @@ pub struct ButtonsSettings {
 impl Default for ButtonsSettings {
     fn default() -> Self {
         Self {
-            navigation: ButtonVisibility::Hidden,
+            navigation: ButtonVisibility::VisibleOnMouseOver,
             pane: ButtonVisibility::VisibleOnMouseOver,
         }
     }
@@ -622,6 +623,9 @@ pub struct TradingSettings {
     /// saved without this field keep labels off, as they were drawn when saved.
     #[serde(default)]
     pub show_execution_labels: bool,
+    /// Add the quantity-weighted average fill price to each mark's label, as in "Buy 2 @ 101.25".
+    /// Off by default, including for settings saved without this field.
+    pub show_execution_prices: bool,
 }
 
 impl Default for TradingSettings {
@@ -646,6 +650,7 @@ impl Default for TradingSettings {
             bracket_pnl_unit: PnlUnit::Money,
             show_executions: true,
             show_execution_labels: true,
+            show_execution_prices: false,
         }
     }
 }
@@ -833,16 +838,18 @@ pub struct ChartSettingsState {
     /// settings, which keep the chart's current backgrounds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_background: Option<SessionBackgroundSettings>,
-    /// Ask the host for continuous futures history back-adjusted at each roll. The host owns
-    /// the data, so [`apply_to_chart`](Self::apply_to_chart) leaves reloading to the host;
-    /// [`from_chart`](Self::from_chart) leaves this off.
+    /// Ask the host for continuous futures history back-adjusted at each roll.
+    /// [`apply_to_chart`](Self::apply_to_chart) records the choice on the chart, and
+    /// [`from_chart`](Self::from_chart) and layouts keep it; the host owns the data and reloads
+    /// its history when the choice changes. Off by default, also in settings saved without it.
     #[serde(default)]
     pub back_adjust_futures: bool,
-    /// Ask the host to use settlement prices as the close of daily and longer futures bars.
-    /// The host owns the data, so [`apply_to_chart`](Self::apply_to_chart) leaves reloading to
-    /// the host. New settings enable this; older saves without it keep last-trade closes.
-    /// Intraday history is unchanged. Hosts preserve their choice when refreshing settings.
-    #[serde(default)]
+    /// Ask the host to use settlement prices as the close of daily and longer futures bars;
+    /// intraday history is unchanged. [`apply_to_chart`](Self::apply_to_chart) records the
+    /// choice on the chart, and [`from_chart`](Self::from_chart) and layouts keep it; the host
+    /// owns the data and reloads its history when the choice changes. On by default, also in
+    /// settings saved without it.
+    #[serde(default = "settlement_closes")]
     pub settlement_as_close: bool,
 
     // Order flow tab
@@ -920,6 +927,11 @@ impl<'de> serde::Deserialize<'de> for ChartSettingsState {
         }
         Ok(state)
     }
+}
+
+/// Settlement closes, the default also for settings saved before the choice existed.
+fn settlement_closes() -> bool {
+    true
 }
 
 impl Default for ChartSettingsState {

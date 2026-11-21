@@ -2,7 +2,10 @@
 
 use super::{SessionBreak, SessionBreakType, SessionProvider, local_instant, local_time};
 use crate::model::{Bar, OverrideWindow, Session, Timeframe, TimezoneId};
-use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{
+    DateTime, Datelike, Days, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, TimeZone, Utc,
+};
+use std::sync::OnceLock;
 
 /// The hours a window belongs to, by the list of [`Session`] that holds it. Where windows
 /// overlap, the earlier kind holds the instant.
@@ -50,6 +53,63 @@ pub(crate) enum MarketSession {
     Closed,
 }
 
+/// Trading dates as days after 1970-01-01: a weekly pattern and the dates that break it, so that
+/// bars of several days count trading dates without visiting every date since 1970.
+#[derive(Clone, Debug)]
+struct TradingDates {
+    /// Whether the date `n` days after 1970-01-01 trades by its weekday, at `n % 7`.
+    pattern: [bool; 7],
+    /// The dates whose trading differs from the pattern, as days after 1970-01-01 in order, each
+    /// with the running sum of the differences: +1 for an opening, -1 for a closure.
+    exceptions: Vec<(i64, i64)>,
+}
+
+impl TradingDates {
+    /// The trading dates from 1970-01-01 through day `n`; for an earlier `n`, minus those after
+    /// it and before 1970-01-01. The count grows by one on each trading date and only there.
+    fn through(&self, n: i64) -> i64 {
+        let trading = |days: &[bool]| days.iter().filter(|&&on| on).count() as i64;
+        let sum = |len: usize| len.checked_sub(1).map_or(0, |last| self.exceptions[last].1);
+        let after = n + 1;
+        after.div_euclid(7) * trading(&self.pattern)
+            + trading(&self.pattern[..after.rem_euclid(7) as usize])
+            + sum(self.exceptions.partition_point(|&(day, _)| day <= n))
+            - sum(self.exceptions.partition_point(|&(day, _)| day < 0))
+    }
+
+    /// The trading date that [`Self::through`] counts as `count`, as days after 1970-01-01,
+    /// searched from `min` to `max`; `None` when it lies outside them.
+    fn day_counting(&self, count: i64, min: i64, max: i64) -> Option<i64> {
+        // through(lo) < count <= through(hi)
+        let (mut lo, mut hi) = (min - 1, max);
+        if self.through(lo) >= count || self.through(hi) < count {
+            return None;
+        }
+        while hi - lo > 1 {
+            let mid = lo + (hi - lo) / 2;
+            if self.through(mid) >= count {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        Some(hi)
+    }
+}
+
+/// [`TradingDates`] found on first use. They follow from the session, so providers equal in
+/// everything else are equal whether or not they have found them.
+#[derive(Clone, Debug, Default)]
+struct LazyTradingDates(OnceLock<TradingDates>);
+
+impl PartialEq for LazyTradingDates {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for LazyTradingDates {}
+
 /// Daily session provider for an exchange: a day starts at each session open of its trading
 /// hours, in its time zone, so bars outside the hours stay with the session before them.
 /// Without trading hours a day starts at midnight in the time zone.
@@ -60,6 +120,8 @@ pub struct ExchangeSessionProvider {
     session: Option<Session>,
     timeframe: Timeframe,
     local_zone: bool,
+    /// The trading dates of bars of several days, found on first use.
+    trading_dates: LazyTradingDates,
 }
 
 impl ExchangeSessionProvider {
@@ -71,6 +133,7 @@ impl ExchangeSessionProvider {
             session,
             timeframe: Timeframe::Min1,
             local_zone: false,
+            trading_dates: LazyTradingDates::default(),
         }
     }
 
@@ -279,9 +342,9 @@ impl ExchangeSessionProvider {
             .max()
     }
 
-    /// Close of the last trading window in a daily, weekly or monthly bar. Daily and longer
-    /// bars are dated as [`trading_date`](Self::trading_date) dates them; intraday bars use their
-    /// active exchange window.
+    /// Close of the last trading window in a daily, multi-day, weekly or monthly bar. Daily and
+    /// longer bars are dated as [`trading_date`](Self::trading_date) dates them; intraday bars use
+    /// their active exchange window.
     pub fn bar_session_close(
         &self,
         open: DateTime<Utc>,
@@ -312,6 +375,9 @@ impl ExchangeSessionProvider {
             Timeframe::Months(count) => date
                 .with_day(1)?
                 .checked_add_months(chrono::Months::new(count.get()))?,
+            Timeframe::Custom(_) => {
+                self.trading_run(date, crate::model::clock::days_per_bar(timeframe)?, 1)?
+            }
             _ => return None,
         };
         let start = date;
@@ -397,6 +463,71 @@ impl ExchangeSessionProvider {
                 .is_some_and(|session| !session.holidays.contains(&date))
         } else {
             !self.hours_on(date).is_empty()
+        }
+    }
+
+    /// The first trading date of the run of `days` trading dates `ahead` runs after the run that
+    /// holds `date`, or the last trading date before it when nothing trades on `date`. Runs count
+    /// trading dates from 1970-01-01: the first holds the first `days` from that day on, the one
+    /// before it the `days` before. On a session that trades every day they are the periods of
+    /// `days` calendar days from the Unix epoch. `None` when the run does not start on a date
+    /// chrono represents, as when nothing trades on or before `date`.
+    pub(crate) fn trading_run(&self, date: NaiveDate, days: i64, ahead: i64) -> Option<NaiveDate> {
+        let epoch = DateTime::<Utc>::UNIX_EPOCH.date_naive();
+        let day = |date: NaiveDate| (date - epoch).num_days();
+        let dates = (self.trading_dates.0).get_or_init(|| self.find_trading_dates());
+        // A run's first trading date is the one counted one past a multiple of `days`.
+        let run = (dates.through(day(date)) - 1)
+            .checked_div_euclid(days)?
+            .checked_add(ahead)?
+            .checked_mul(days)?;
+        let first = dates.day_counting(
+            run.checked_add(1)?,
+            day(NaiveDate::MIN),
+            day(NaiveDate::MAX),
+        )?;
+        epoch.checked_add_signed(TimeDelta::try_days(first)?)
+    }
+
+    /// The trading dates of [`Self::trades_on`] as a weekly pattern and its exceptions.
+    fn find_trading_dates(&self) -> TradingDates {
+        let epoch = DateTime::<Utc>::UNIX_EPOCH.date_naive();
+        let Some(session) = &self.session else {
+            return TradingDates {
+                pattern: [false; 7],
+                exceptions: Vec::new(),
+            };
+        };
+        let windows = (session.windows.iter())
+            .chain(&session.extended_windows)
+            .chain(&session.overnight_windows);
+        let continuous = windows.clone().next().is_none();
+        // A date without an override or holiday trades by its weekday, as `hours_on` finds it.
+        let pattern: [bool; 7] = std::array::from_fn(|n| {
+            let weekday = (epoch + Days::new(n as u64)).weekday();
+            continuous || windows.clone().any(|window| window.days.contains(&weekday))
+        });
+        let mut dates: Vec<NaiveDate> = (session.overrides.iter().map(|day| day.date))
+            .chain(session.holidays.iter().copied())
+            .collect();
+        dates.sort_unstable();
+        dates.dedup();
+        let mut sum = 0;
+        let exceptions = (dates.into_iter())
+            .filter_map(|date| {
+                let n = (date - epoch).num_days();
+                let change =
+                    i64::from(self.trades_on(date)) - i64::from(pattern[n.rem_euclid(7) as usize]);
+                if change == 0 {
+                    return None;
+                }
+                sum += change;
+                Some((n, sum))
+            })
+            .collect();
+        TradingDates {
+            pattern,
+            exceptions,
         }
     }
 
@@ -1222,6 +1353,11 @@ mod tests {
                 "2024-04-01T00:00:00Z",
                 "3month".parse().unwrap(),
                 Some("2024-06-28T20:00:00Z"),
+            ),
+            (
+                "2024-03-08T00:00:00Z",
+                "3D".parse().unwrap(),
+                Some("2024-03-12T20:00:00Z"),
             ),
             (
                 "2024-03-11T19:59:00Z",

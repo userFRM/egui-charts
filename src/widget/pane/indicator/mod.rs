@@ -113,6 +113,9 @@ pub struct IndicatorPane {
     /// The grid of the chart showing the pane. A pane shown on its own draws its own grid in
     /// the theme's grid colour.
     pub(super) grid: Option<PaneGrid>,
+    /// The session breaks of the chart showing the pane and their x positions, those of the
+    /// chart's price pane.
+    pub(super) session_breaks: Option<(crate::chart::rendering::SessionBreakRenderer, Vec<f32>)>,
 }
 
 impl std::fmt::Debug for IndicatorPane {
@@ -151,6 +154,7 @@ impl IndicatorPane {
             background: None,
             text_color: None,
             grid: None,
+            session_breaks: None,
         }
     }
 
@@ -512,6 +516,7 @@ impl IndicatorPane {
             if let Some(index) = self.bar_index {
                 pos.x = mapping.idx_to_x(index);
                 if options.mode.snaps()
+                    && !indicator.plots_on_price()
                     && chart_rect.contains(pos)
                     && let Some(value) = crate::chart::rendering::snap_to_values(
                         pos.y,
@@ -559,6 +564,9 @@ impl IndicatorPane {
             // Draw vertical grid lines (aligned with main chart)
             if self.config.show_grid {
                 self.draw_vertical_grid_aligned(plot_painter, chart_rect, &coords, grid_color);
+            }
+            if let Some((breaks, xs)) = &self.session_breaks {
+                breaks.paint(plot_painter, xs, chart_rect.y_range());
             }
 
             use crate::chart::primitives::PrimitivePass;

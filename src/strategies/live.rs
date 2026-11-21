@@ -41,8 +41,11 @@ pub(super) struct LiveState {
     tick: u64,
     margin_calls: Vec<(DateTime<Utc>, f64)>,
     peak_margin: f64,
+    range: Option<EquityRange>,
     instrument_currency: Option<String>,
     exchange_rates: Vec<Bar>,
+    calculation_bars: Vec<Bar>,
+    bar_clock: Option<BarClock>,
     rate: f64,
     unconverted: bool,
 }
@@ -94,8 +97,9 @@ impl Backtest {
     /// to a live run.
     ///
     /// A correction before the previous forming bar, removed history, changed settings, inputs or
-    /// instrument currency, or changed exchange rates while amounts convert, rebuilds from the
-    /// start using `Strategy::prepare` to reset decision state. Replayed fills before the previous
+    /// instrument currency, calculation bars or bar clock, or changed exchange rates while
+    /// amounts convert, rebuilds from the start using `Strategy::prepare` to reset decision state.
+    /// Replayed fills before the previous
     /// forming bar are not returned again. An observed forming bar can be
     /// revised freely without a rebuild. Start a new `Backtest` for a different strategy instance.
     ///
@@ -117,8 +121,9 @@ impl Backtest {
     ///
     /// The first call leaves [`Self::report`] equal to [`Self::run`] over the same bars; later
     /// calls process appended bars and return their fills. Corrections to processed bars or
-    /// finer bars, removed history, changed settings, inputs, instrument currency or conversion
-    /// rates rebuild the run without returning replayed fills again. Identical calls do nothing.
+    /// finer bars, removed history, changed settings, inputs, instrument currency, calculation
+    /// bars or bar clock, or changed exchange rates while amounts convert, rebuild the run
+    /// without returning replayed fills again. Identical calls do nothing.
     /// [`BacktestSettings::end_time`] bounds the run as in [`Self::run`]; there is no forming-bar
     /// decision, regardless of `recalculate_on_every_update`. Dropping an unfinished future
     /// discards the run, as a new `Backtest` would.
@@ -178,6 +183,8 @@ impl Backtest {
                 || live.report.name != self.name
                 || live.report.symbol != self.symbol
                 || live.report.timeframe != self.timeframe
+                || live.bar_clock != self.bar_clock
+                || !same_bars(&live.calculation_bars, &self.calculation_bars)
                 || live.instrument_currency != self.instrument_currency
                 || (self.conversion().is_some()
                     && !same_bars(&live.exchange_rates, &self.exchange_rates))
@@ -210,8 +217,11 @@ impl Backtest {
                 tick: 0,
                 margin_calls: Vec::new(),
                 peak_margin: 0.0,
+                range: None,
                 instrument_currency: self.instrument_currency.clone(),
                 exchange_rates: self.exchange_rates.clone(),
+                calculation_bars: self.calculation_bars.clone(),
+                bar_clock: self.bar_clock.clone(),
                 rate: if self.conversion().is_some() {
                     f64::NAN
                 } else {
@@ -251,6 +261,8 @@ impl Backtest {
         } else {
             &decision_bars[..closed]
         };
+        strategy.set_timeframe(self.timeframe);
+        let calculation = self.supply_calculation(strategy, decision_bars);
         if rebuild {
             strategy.prepare(calculation_bars);
         } else {
@@ -265,6 +277,7 @@ impl Backtest {
             rejected: live.rejected,
             settings: &self.settings,
             strategy,
+            calculation,
             history: Cow::Borrowed(&[]),
             prices: bars,
             trading: false,
@@ -274,6 +287,7 @@ impl Backtest {
             forming: false,
             margin_calls: std::mem::take(&mut live.margin_calls),
             peak_margin: live.peak_margin,
+            range: live.range,
             rates: self.rates(),
             rate: live.rate,
             unconverted: Cell::new(live.unconverted),
@@ -376,6 +390,7 @@ impl Backtest {
         live.tick = run.tick;
         live.margin_calls = run.margin_calls;
         live.peak_margin = run.peak_margin;
+        live.range = run.range;
         live.rate = run.rate;
         live.unconverted = run.unconverted.get();
         if live.unconverted {
@@ -419,6 +434,7 @@ impl<'a> Run<'a> {
         };
         if self.trading {
             if previous.is_none() {
+                self.range = None;
                 self.open_bar();
             }
             self.fill_along(
@@ -781,6 +797,9 @@ mod tests {
         let report = engine.report().unwrap();
         assert_eq!(report.equity.last().unwrap().1, 10_000.);
         assert!(report.trades[0].exit.is_none());
+        bars[1].low = 104.;
+        bars[1].close = 104.;
+        assert!(engine.update(&mut strategy, &bars, &[]).is_empty());
         bars[1].high = 112.;
         bars[1].close = 112.;
         let fills = engine.update(&mut strategy, &bars, &[]);
@@ -810,6 +829,13 @@ mod tests {
         let report = engine.report().unwrap();
         assert_eq!(report.margin.last(), Some(&(bars[1].time, 0.)));
         assert_eq!(report.peak_margin.last(), Some(&(bars[1].time, 220.)));
+        bars.push(bar(2, 112.));
+        engine.update(&mut strategy, &bars, &[]);
+        // Two units from 108 fall to 104, then exit at 110: fall 8 and rise 12.
+        assert_eq!(
+            engine.report().unwrap().equity_ranges.last(),
+            Some(&EquityRange::new(9992.0, 10_004.0, 8.0, 12.0))
+        );
         // A historical rebuild must not announce the observed forming-bar executions again.
         bars[0].high = 121.;
         assert!(engine.update(&mut strategy, &bars, &[]).is_empty());

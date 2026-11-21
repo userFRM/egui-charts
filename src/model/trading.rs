@@ -371,10 +371,14 @@ pub struct Execution {
     pub price: f64,
     /// Positive, in the symbol's trading units.
     pub quantity: f64,
+    /// The fill's symbol when the broker supplies it. The chart and account panel prefer the
+    /// order's symbol when known, otherwise this one, including for older history pages.
+    /// Keep it identical in the stream and history pages: repeated fills are matched by value.
+    pub symbol: Option<String>,
 }
 
 impl Execution {
-    /// A fill of `quantity` at `price`.
+    /// A fill of `quantity` at `price`, without a symbol.
     pub fn new(
         order: OrderId,
         time: DateTime<Utc>,
@@ -388,6 +392,7 @@ impl Execution {
             side,
             price,
             quantity,
+            symbol: None,
         }
     }
 }

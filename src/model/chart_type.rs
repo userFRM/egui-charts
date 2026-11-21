@@ -396,9 +396,20 @@ pub enum FootprintColor {
     /// Sell and buy volume shaded separately, each in one of four strengths of its own colour by
     /// the quarter it falls in between the smallest and the largest volume of its side in the
     /// bar, or in the bars in view, or between zero and an entered volume, as
-    /// [`FootprintIntensity`] chooses. The POC row takes the text colour, the value area is two
+    /// [`FootprintIntensity`] chooses. A total-volume column instead uses one shade mixed from
+    /// the neutral colour, by the quarter of the total-volume range; chosen side shades do not
+    /// apply to it. The POC row takes the text colour, the value area is two
     /// dotted lines, and a side that dominates under the imbalance settings gets a strip along its outer edge.
     VolumeSteps,
+    /// The cell of the side that traded more in its row, in the buy or sell colour at half
+    /// opacity; the other cell, and every cell of a row whose sell and buy volumes are equal,
+    /// stays unfilled. Unknown-side volume takes no part. A column with one cell per row fills
+    /// its left half for sells and its right half for buys. Both numbers stay.
+    LargerSide,
+    /// Every sell cell in the sell colour and every buy cell in the buy colour at half opacity,
+    /// whatever was traded. A column with one cell per row fills its left half in the sell colour
+    /// and its right half in the buy colour.
+    Side,
 }
 
 /// What footprint cell shades and number sizes are measured against: the shades of
@@ -487,13 +498,235 @@ impl CustomProfileSession {
     }
 }
 
+/// How custom sessions share the hours where they overlap.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum SessionOverlap {
+    /// Cut at every session boundary, giving the shared hours a separate profile.
+    #[default]
+    OwnProfile,
+    /// Keep shared bars in each session's profile.
+    InBoth,
+}
+
+/// Up to five daily windows, each with a profile and period clock of its own.
+/// Saved single windows restore as the only session, without clipping.
+///
+/// ```
+/// use chrono::NaiveTime;
+/// use egui_charts::model::{CustomProfileSession, CustomProfileSessions, ProfileSession, SessionOverlap};
+/// let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+/// let mut sessions = CustomProfileSessions::new([
+///     CustomProfileSession::new(at(8), at(12)),
+///     CustomProfileSession::new(at(12), at(16)),
+/// ]);
+/// sessions.overlap = SessionOverlap::InBoth;
+/// sessions.trading_hours_only = true;
+/// let session = ProfileSession::Custom(sessions);
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "SavedCustomSessions")]
+#[non_exhaustive]
+pub struct CustomProfileSessions {
+    /// Windows in input order. Only the first [`Self::MAX`] are used; an empty list profiles none.
+    pub sessions: Vec<CustomProfileSession>,
+    /// Whether shared hours get their own profile or stay in both sessions.
+    pub overlap: SessionOverlap,
+    /// Clip to the instrument's regular hours, including its nontrading days. Without instrument
+    /// hours, keep every bar. Periods count from the later of the custom and regular opens.
+    pub trading_hours_only: bool,
+}
+
+impl CustomProfileSessions {
+    /// Maximum number of custom sessions used each day.
+    pub const MAX: usize = 5;
+
+    /// Daily windows whose shared hours get a separate profile, without trading-hours clipping.
+    pub fn new(sessions: impl IntoIterator<Item = CustomProfileSession>) -> Self {
+        Self {
+            sessions: sessions.into_iter().collect(),
+            overlap: SessionOverlap::OwnProfile,
+            trading_hours_only: false,
+        }
+    }
+}
+
+impl Default for CustomProfileSessions {
+    fn default() -> Self {
+        Self::new([CustomProfileSession::new(
+            chrono::NaiveTime::MIN,
+            chrono::NaiveTime::MIN,
+        )])
+    }
+}
+
+impl From<CustomProfileSession> for CustomProfileSessions {
+    fn from(session: CustomProfileSession) -> Self {
+        Self::new([session])
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SavedCustomSessions {
+    Sessions {
+        sessions: Vec<CustomProfileSession>,
+        #[serde(default)]
+        overlap: SessionOverlap,
+        #[serde(default)]
+        trading_hours_only: bool,
+    },
+    One(CustomProfileSession),
+}
+
+impl From<SavedCustomSessions> for CustomProfileSessions {
+    fn from(saved: SavedCustomSessions) -> Self {
+        match saved {
+            SavedCustomSessions::Sessions {
+                sessions,
+                overlap,
+                trading_hours_only,
+            } => Self {
+                sessions,
+                overlap,
+                trading_hours_only,
+            },
+            SavedCustomSessions::One(session) => session.into(),
+        }
+    }
+}
+
+/// A custom profile's bar range, period origin and first owning session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CustomPart {
+    pub(crate) bars: std::ops::Range<usize>,
+    pub(crate) open: chrono::DateTime<chrono::Utc>,
+    pub(crate) date: chrono::NaiveDate,
+    pub(crate) session: usize,
+}
+
+impl CustomProfileSessions {
+    /// Fill unset zones with the instrument's exchange zone.
+    #[cfg(any(feature = "widget", feature = "studies"))]
+    pub(crate) fn with_zone(&self, zone: &super::TimezoneId) -> Self {
+        let mut resolved = self.clone();
+        for session in &mut resolved.sessions {
+            session.zone.get_or_insert_with(|| zone.clone());
+        }
+        resolved
+    }
+
+    /// Divide `range` on each window's clock, then share or cut overlaps. With `hours_only` off
+    /// and no clipping, retain each whole trading date, as the other session choices do.
+    pub(crate) fn parts(
+        &self,
+        bars: &[super::Bar],
+        range: std::ops::Range<usize>,
+        interval: super::Timeframe,
+        regular: Option<&super::BarClock>,
+        hours_only: bool,
+    ) -> Vec<CustomPart> {
+        use super::SessionProvider;
+        use chrono::Weekday::*;
+        if range.is_empty() {
+            return Vec::new();
+        }
+        let regular = regular.filter(|_| self.trading_hours_only);
+        let mut parts = Vec::new();
+        for (session, custom) in self.sessions.iter().take(Self::MAX).enumerate() {
+            let zone = custom.zone.clone().unwrap_or_else(super::TimezoneId::utc);
+            let window = super::SessionWindow::new(
+                [Mon, Tue, Wed, Thu, Fri, Sat, Sun],
+                custom.start,
+                custom.end,
+            );
+            let clock = super::BarClock::new(interval).with_session(
+                zone,
+                super::Session::new([window]),
+                false,
+            );
+            let provider = clock.sessions();
+            let mut cuts = vec![range.start];
+            for (i, _) in provider.session_breaks(&bars[range.clone()]) {
+                cuts.push(range.start + i);
+            }
+            cuts.push(range.end);
+            for day in cuts.windows(2) {
+                let mut inside = (day[0]..day[1]).filter(|&i| {
+                    provider.is_open(bars[i].time, true)
+                        && regular.is_none_or(|r| r.is_open(bars[i].time))
+                });
+                let kept = if !hours_only && regular.is_none() {
+                    day[0]..day[1]
+                } else {
+                    let Some(first) = inside.next() else { continue };
+                    first..inside.next_back().unwrap_or(first) + 1
+                };
+                if kept.is_empty() {
+                    continue;
+                }
+                let time = bars[kept.start].time;
+                let mut open = provider.session_open(time, false).unwrap_or(time);
+                if let Some(regular) = regular.and_then(|r| r.sessions().session_open(time, false))
+                {
+                    open = open.max(regular);
+                }
+                parts.push(CustomPart {
+                    bars: kept,
+                    open,
+                    date: provider.trading_date(time),
+                    session,
+                });
+            }
+        }
+        // Each window's days are disjoint, so no two parts share this key.
+        parts.sort_unstable_by_key(|p| (p.bars.start, p.session));
+        if self.overlap == SessionOverlap::InBoth {
+            return parts;
+        }
+        let mut cuts = Vec::with_capacity(parts.len() * 2);
+        for p in &parts {
+            cuts.extend([p.bars.start, p.bars.end]);
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut shared = Vec::with_capacity(cuts.len());
+        for pair in cuts.windows(2) {
+            // The latest open sets the origin and date, the first session breaking a tie.
+            let mut piece: Option<CustomPart> = None;
+            let mut first = usize::MAX;
+            for p in &parts {
+                if pair[0] < p.bars.start || p.bars.end < pair[1] {
+                    continue;
+                }
+                first = first.min(p.session);
+                let later = |q: &CustomPart| {
+                    (p.open, std::cmp::Reverse(p.session)) > (q.open, std::cmp::Reverse(q.session))
+                };
+                if piece.as_ref().is_none_or(later) {
+                    piece = Some(CustomPart {
+                        bars: pair[0]..pair[1],
+                        ..p.clone()
+                    });
+                }
+            }
+            if let Some(mut piece) = piece {
+                piece.session = first;
+                shared.push(piece);
+            }
+        }
+        shared
+    }
+}
+
 /// Which hours divide a session volume profile chart into sessions.
 ///
 /// Only intraday charts are divided this way: daily and longer bars profile by trading date.
 /// Every choice but [`Self::Chart`] profiles only the bars of its hours, each bar in the hours it
 /// opens in: a profile takes a day's bars from its first in those hours to its last, so the bars
 /// of a midday break inside them stay in it, and the bars before and after, such as the
-/// post-market of a regular-hours profile, join no profile.
+/// post-market of a regular-hours profile, join no profile. Custom windows use separate clocks,
+/// sharing their common bars according to [`CustomProfileSessions::overlap`].
 ///
 /// ```
 /// use egui_charts::model::{ProfileSession, TradeProfileSettings};
@@ -513,8 +746,8 @@ pub enum ProfileSession {
     /// The instrument's regular, extended and overnight windows. The chart's calendar without
     /// instrument hours.
     Extended,
-    /// The same hours every day, whatever the instrument trades.
-    Custom(CustomProfileSession),
+    /// Up to five daily windows, optionally clipped to the instrument's regular hours.
+    Custom(CustomProfileSessions),
     /// The instrument's pre-market hours alone, one profile per trading date: its extended hours
     /// that the date's regular hours follow. The chart's calendar without extended hours.
     PreMarket,
@@ -531,7 +764,8 @@ impl ProfileSession {
     /// instrument trading `hours` in `zone`: a window opening every day, in its own zone or else
     /// `zone`, or `hours` with or without their extended windows. `None` for [`Self::Chart`],
     /// for regular or extended hours without `hours`, for pre-market or post-market without
-    /// extended windows, and for segments without extended or overnight windows.
+    /// extended windows, and for segments without extended or overnight windows. Custom sessions
+    /// also return `None`: [`CustomProfileSessions::parts`] divides them on separate clocks.
     #[cfg(any(feature = "widget", feature = "studies"))]
     pub(crate) fn session_clock(
         &self,
@@ -539,15 +773,8 @@ impl ProfileSession {
         zone: &super::TimezoneId,
         hours: Option<&super::Session>,
     ) -> Option<super::BarClock> {
-        use chrono::Weekday::*;
         let (zone, session, extended) = match self {
-            Self::Chart => return None,
-            Self::Custom(custom) => {
-                let every_day = [Mon, Tue, Wed, Thu, Fri, Sat, Sun];
-                let window = super::SessionWindow::new(every_day, custom.start, custom.end);
-                let zone = custom.zone.as_ref().unwrap_or(zone);
-                (zone, super::Session::new([window]), false)
-            }
+            Self::Chart | Self::Custom(_) => return None,
             Self::Regular | Self::Extended => (zone, hours?.clone(), *self == Self::Extended),
             Self::PreMarket | Self::PostMarket => {
                 let hours = hours.filter(|hours| !hours.extended_windows.is_empty())?;
@@ -577,6 +804,7 @@ impl ProfileSession {
         sessions: &super::ExchangeSessionProvider,
         hours_only: bool,
     ) -> Vec<std::ops::Range<usize>> {
+        debug_assert!(!matches!(self, Self::Custom(_)));
         use super::session::MarketSession;
         let segments = matches!(self, Self::PreMarket | Self::PostMarket | Self::Segments);
         if !segments && !hours_only {
@@ -642,7 +870,7 @@ pub enum ProfileRows {
 pub struct TradeProfileSettings {
     /// Hours that divide the chart into sessions.
     pub session: ProfileSession,
-    /// Price row grouping.
+    /// Price row grouping; new charts start at about 24 rows a session.
     pub rows: ProfileRows,
     /// Bid/ask stacks, total volume or signed delta; `DeltaVolume` also draws signed delta.
     pub mode: FootprintMode,
@@ -651,9 +879,8 @@ pub struct TradeProfileSettings {
     /// Trace the outer value area edges after each complete execution bar; hidden without
     /// `value_area`. Uses that share and the same row selection as the final profile.
     pub developing_value_area: bool,
-    /// Extend a completed session's POC to the first later bar that trades in its row: a bar
-    /// with volume whose low-to-high range reaches the row. Untouched, it runs to the viewport's
-    /// right edge.
+    /// Extend a completed session's POC to the first later bar with volume whose low-to-high
+    /// range reaches its drawn price. Untouched, it runs to the viewport's right edge.
     pub extend_poc: bool,
     /// Extend a completed session's value area high, as for `extend_poc`; hidden without
     /// `value_area`.
@@ -689,13 +916,29 @@ pub struct TradeProfileSettings {
     pub value_area_up_color: Option<egui::Color32>,
     /// Colour of down volume inside the value area; `None` follows the chart theme.
     pub value_area_down_color: Option<egui::Color32>,
+    /// Grow each histogram from the right edge of its session instead of the left. The edge a
+    /// histogram grows from stays in view while its session runs past the viewport.
+    pub right_aligned: bool,
+    /// Share of the session's width that the longest row spans, from 0.01 to 1. Values outside
+    /// are clamped, and NaN spans the whole session.
+    pub width: f64,
+    /// Write each row's volume beside its bar when the row is at least as tall as the text:
+    /// `bid × ask` for bid/ask stacks, the total for total volume and the signed delta for delta,
+    /// abbreviated as footprint numbers are.
+    pub values: bool,
+    /// Colour of the row values; `None` follows the chart theme.
+    pub values_color: Option<egui::Color32>,
+    /// Draw the box behind each session.
+    pub session_box: bool,
+    /// Colour of the session box, painted with its own opacity; `None` follows the chart theme.
+    pub session_box_color: Option<egui::Color32>,
 }
 
 impl Default for TradeProfileSettings {
     fn default() -> Self {
         Self {
             session: ProfileSession::Chart,
-            rows: ProfileRows::Feed,
+            rows: ProfileRows::Count(24),
             mode: FootprintMode::BidAsk,
             developing_poc: false,
             developing_value_area: false,
@@ -715,6 +958,12 @@ impl Default for TradeProfileSettings {
             down_volume_color: None,
             value_area_up_color: None,
             value_area_down_color: None,
+            right_aligned: false,
+            width: 1.0,
+            values: false,
+            values_color: None,
+            session_box: true,
+            session_box_color: None,
         }
     }
 }
@@ -851,6 +1100,11 @@ pub struct ChartTypeParams {
     /// Footprint: buy and sell colours of imbalance strips, imbalance colouring and stacked
     /// imbalance zones. None follows the buy or sell colour.
     pub footprint_imbalance_colors: [Option<egui::Color32>; 2],
+    /// Footprint: the four shades of the buy cells and of the sell cells under
+    /// [`FootprintColor::VolumeSteps`], weakest first. None mixes the shade from the buy or sell
+    /// colour and the chart background, as when the field is missing from a saved chart.
+    /// Total-volume cells mix their shade from the neutral colour and ignore these side shades.
+    pub footprint_step_colors: [[Option<egui::Color32>; 4]; 2],
     /// Footprint: instrument ticks per row; zero groups automatically with zoom. Rows sized by
     /// `footprint_row_atr` use it only until the chart holds a complete bar.
     pub footprint_row_ticks: u32,
@@ -1084,6 +1338,7 @@ impl Default for ChartTypeParams {
             footprint_intensity: FootprintIntensity::Bar,
             footprint_colors: [None; 4],
             footprint_imbalance_colors: [None; 2],
+            footprint_step_colors: [[None; 4]; 2],
             footprint_row_ticks: 0,
             footprint_row_atr: false,
             footprint_row_atr_length: 14,
@@ -1393,9 +1648,14 @@ mod tests {
                 "value_area_low_color": [0, 0, 100, 128], "up_volume_color": [60, 0, 0, 60],
                 "down_volume_color": [0, 60, 0, 60], "value_area_up_color": [0, 0, 120, 120],
                 "value_area_down_color": [120, 120, 0, 120],
+                "right_aligned": true, "width": 0.5, "values": true,
+                "values_color": [1, 2, 3, 255], "session_box": false,
+                "session_box_color": [4, 5, 6, 128],
                 "nodes": {"smoothing": 2, "prominence": 0.1}});
         let mut settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
+            "footprint_color_by": "LargerSide",
+            "footprint_step_colors": [[null, null, null, [1, 2, 3, 255]], [[4, 5, 6, 255], null, null, null]],
             "footprint_intensity": {"Volume": 2500.0},
             "footprint_extend_bars": 8,
             "footprint_auto_row_height": 24.0, "footprint_min_text_height": 10.0,
@@ -1430,7 +1690,17 @@ mod tests {
                 "opening_price": true, "closing_price": true, "poor_high": false, "poor_low": true,
                 "single_prints": true, "prices": true});
         settings["tpo_level_tags"] = true.into();
+        assert_eq!(TradeProfileSettings::default().rows, ProfileRows::Count(24));
+        for (saved, expected) in [
+            (r#"{}"#, ProfileRows::Count(24)),
+            (r#"{"rows":"Feed"}"#, ProfileRows::Feed),
+            (r#"{"rows":{"Ticks":4}}"#, ProfileRows::Ticks(4)),
+        ] {
+            let restored: TradeProfileSettings = serde_json::from_str(saved).unwrap();
+            assert_eq!(restored.rows, expected);
+        }
         let params: ChartTypeParams = serde_json::from_value(settings.clone()).unwrap();
+        assert_eq!(params.profile.rows, ProfileRows::Count(24));
         let saved = serde_json::to_value(&params).unwrap();
         for (name, expected) in settings.as_object().unwrap() {
             if name == "profile" {
@@ -1505,6 +1775,7 @@ mod tests {
                     "footprint_auto_row_height",
                     "footprint_min_text_height",
                     "footprint_extend_bars",
+                    "footprint_step_colors",
                 ] {
                     assert!(fields.remove(name).is_some(), "{path}: {name}");
                 }
@@ -1514,6 +1785,7 @@ mod tests {
             expected.footprint_auto_row_height = 16.0;
             expected.footprint_min_text_height = 12.0;
             expected.footprint_extend_bars = None;
+            expected.footprint_step_colors = [[None; 4]; 2];
             // A sparse layout written and restored on main before these settings existed.
             let older = r#"{"charts":[{"bar_spacing":6.0,"chart_type":"VolumeFootprint","chart_type_params":{"footprint_color_by":"VolumeSteps","footprint_modes":["Ladder"],"footprint_naked_poc":true,"footprint_row_atr":false,"footprint_row_ticks":0},"drawings":{"drawings":[],"metadata":{"app_version":null,"created_at":1795116037269,"modified_at":1795116037269},"saved_by":17567378796323732970,"symbol":"","timeframe":null,"version":10},"extended_hours":false,"interval":null,"main_series_visible":true,"panes":[{"axes":{"hide_unused":true,"side":null},"collapsed":null,"main":true,"members":[0],"preserve":false,"scale":null,"scales":[],"stretch":3.0}],"right_offset":2.5,"settings":{"alerts":{"alert_color":[255,152,0,255],"close_toasts":true,"desktop_notifications":false,"notification_seconds":20,"play_sound":false,"show_active_only":true,"show_alert_labels":true,"show_alerts":true,"sound":"","sound_volume":1.0},"btns":{"navigation":"Hidden","pane":"VisibleOnMouseOver"},"candle_colors":{"body_down":[242,54,69,255],"body_up":[8,153,129,255],"border_down":[242,54,69,255],"border_up":[8,153,129,255],"color_by_previous_close":false,"show_body":true,"show_border":false,"show_wick":true,"wick_down":[242,54,69,255],"wick_up":[8,153,129,255]},"chart_basic_styles":{"background_color":[0,0,0,255],"background_gradient_bottom":[0,0,0,255],"background_gradient_top":[0,0,0,255],"background_type":"Solid"},"crosshair":{"color":[64,254,0,128],"line_style":"Dashed","line_width":1.0},"events":{"show_dividends":true,"show_earnings":false,"show_earnings_breaks":false,"show_economic_events":false,"show_ideas":true,"show_news":true,"show_news_notifications":false,"show_splits":true},"grid_lines":{"horizontal_color":[34,34,34,255],"mode":"Both","vertical_color":[34,34,34,255]},"margins":{"bottom_percent":10.0,"right_bars":2.5,"top_percent":10.0},"precision":"Default","scales_and_lines":{"allow_label_overlap":false,"auto_scale":true,"axis_layout":{"hide_unused":true,"side":null},"currency_unit_on_hover":false,"date_format":"Default","extended_session_price_color":[251,142,1,255],"indexed_to_100":false,"invert_scale":false,"lock_price_to_bar_ratio":false,"log_scale":false,"percentage_scale":false,"prev_close_line":{"color":null,"style":"Dotted","width":1.0},"price_line_source":"LastBar","price_line_style":"Dashed","price_line_width":1.0,"price_scale_left":false,"price_to_bar_ratio":1.0,"show_bid_ask":false,"show_bid_ask_lines":null,"show_countdown":true,"show_currency":true,"show_extended_session_price":true,"show_high_low":false,"show_high_low_lines":null,"show_last_price_change":false,"show_last_price_label":true,"show_plus_button":true,"show_prev_close":false,"show_prev_close_label":false,"show_price_line":true,"show_scale_mode_buttons":true,"show_study_names":false,"show_study_values":true,"show_symbol_name":false,"show_unit":true,"study_value_color":null,"symbol_price_color":null,"thousands_sep":"Comma","use_24_hour":true,"weekday_names":"Default"},"scales_appearance":{"font_family":"Proportional","font_size":12,"lines_color":[0,0,0,0],"text_color":[255,255,255,255]},"status_line":{"indicator_background_opacity":60,"show_change":true,"show_change_percent":true,"show_indicator_inputs":true,"show_indicator_titles":true,"show_indicator_values":true,"show_last_day_change":false,"show_logo":true,"show_market_status":true,"show_ohlc":true,"show_quote_boxes":true,"show_symbol":true,"show_volume":true,"title_as_description":true},"timezone":"UTC","trading":{"bid_ask_labels":false,"bracket_pnl":true,"bracket_pnl_unit":"Money","execution_sound":"","execution_sound_volume":1.0,"extend_lines":true,"include_in_image":false,"instant_orders":false,"label_alignment":"Right","notifications":"All","play_execution_sound":false,"position_pnl":true,"position_pnl_unit":"Money","reverse_button":true,"show_execution_labels":true,"show_executions":true,"show_orders":true,"show_positions":true},"watermark":{"color":[34,34,34,255],"mode":"ReplayMode"}},"studies":[],"symbol":""}],"mode":"Single","version":3}"#;
             let mut older_expected = ChartTypeParams {
@@ -1543,11 +1815,57 @@ mod tests {
                 assert_eq!(restored.chart_type_params(), &expected);
             }
         }
-        // A profile saved before level styles existed, including its enabled guides.
+        for (saved, count, overlap) in [
+            (
+                r#"{"Custom":{"start":"08:00:00","end":"12:30:00","zone":"America/New_York"}}"#,
+                1,
+                SessionOverlap::OwnProfile,
+            ),
+            (
+                r#"{"Custom":{"sessions":[],"overlap":"InBoth"}}"#,
+                0,
+                SessionOverlap::InBoth,
+            ),
+        ] {
+            let saved = if cfg!(feature = "timezones") {
+                saved.to_owned()
+            } else {
+                saved.replace("America/New_York", "-05:00")
+            };
+            let session: ProfileSession = serde_json::from_str(&saved).unwrap();
+            let ProfileSession::Custom(custom) = &session else {
+                unreachable!()
+            };
+            assert_eq!(custom.sessions.len(), count);
+            assert_eq!(custom.overlap, overlap);
+            assert!(!custom.trading_hours_only);
+            if count == 1 {
+                assert_eq!(
+                    custom.sessions[0].start,
+                    chrono::NaiveTime::from_hms_opt(8, 0, 0).unwrap()
+                );
+                assert_eq!(
+                    custom.sessions[0].end,
+                    chrono::NaiveTime::from_hms_opt(12, 30, 0).unwrap()
+                );
+            }
+            let new = serde_json::to_value(&session).unwrap();
+            assert_eq!(new["Custom"]["sessions"].as_array().unwrap().len(), count);
+            assert_eq!(
+                serde_json::from_value::<ProfileSession>(new).unwrap(),
+                session
+            );
+        }
+        // A profile saved before level styles existed, including its enabled guides, and one
+        // saved before histogram placement, width, values and box options existed.
         for (saved, guides) in [
             (r#"{"tpo_row_ticks":2}"#, false),
             (
                 r#"{"tpo_row_ticks":2,"profile":{"session":"Chart","rows":"Feed","mode":"BidAsk","developing_poc":false,"developing_value_area":false,"extend_poc":false,"extend_vah":false,"extend_val":false,"nodes":null,"value_area":0.7,"value_area_guides":true}}"#,
+                true,
+            ),
+            (
+                r#"{"tpo_row_ticks":2,"profile":{"session":"Chart","rows":"Feed","mode":"BidAsk","developing_poc":false,"developing_value_area":false,"extend_poc":false,"extend_vah":false,"extend_val":false,"nodes":null,"value_area":0.7,"value_area_guides":true,"poc":true,"poc_color":null,"value_area_high":true,"value_area_high_color":null,"value_area_low":true,"value_area_low_color":null,"up_volume_color":null,"down_volume_color":null,"value_area_up_color":null,"value_area_down_color":null}}"#,
                 true,
             ),
         ] {
@@ -1555,6 +1873,11 @@ mod tests {
             assert_eq!(
                 legacy.profile,
                 TradeProfileSettings {
+                    rows: if guides {
+                        ProfileRows::Feed
+                    } else {
+                        ProfileRows::Count(24)
+                    },
                     value_area_guides: guides,
                     ..Default::default()
                 }
@@ -1564,6 +1887,10 @@ mod tests {
             assert_eq!(legacy["footprint_extend_bars"], serde_json::Value::Null);
             assert_eq!(legacy["footprint_auto_row_height"], 16.0);
             assert_eq!(legacy["footprint_min_text_height"], 12.0);
+            assert_eq!(
+                legacy["footprint_step_colors"],
+                serde_json::json!([[null, null, null, null], [null, null, null, null]])
+            );
             assert_eq!(legacy["footprint_statistics"], false);
             assert_eq!(legacy["footprint_row_ticks"], 0);
             assert_eq!(legacy["footprint_row_atr"], false);
@@ -1640,6 +1967,104 @@ mod tests {
         assert!(partial.tpo_labels.poc);
     }
 
+    /// Nested windows retain the covering window's open after the inner one closes; identical
+    /// windows collapse only under segmentation. Extra saved windows survive but only five run.
+    #[test]
+    fn custom_session_parts_keep_nested_origins_and_bound_the_session_count() {
+        use chrono::{NaiveTime, TimeDelta};
+        let start: chrono::DateTime<chrono::Utc> = "2024-03-11T08:00:00Z".parse().unwrap();
+        let bars: Vec<_> = (0..10)
+            .map(|i| crate::model::Bar::from_value(start + TimeDelta::hours(i), 100.0))
+            .collect();
+        let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        let outer = CustomProfileSession::new(at(8), at(16));
+        for (overlap, expected) in [
+            (
+                SessionOverlap::OwnProfile,
+                vec![(0..2, 8), (2..4, 10), (4..8, 8)],
+            ),
+            (SessionOverlap::InBoth, vec![(0..8, 8), (2..4, 10)]),
+        ] {
+            let mut custom = CustomProfileSessions::new([
+                outer.clone(),
+                CustomProfileSession::new(at(10), at(12)),
+            ]);
+            custom.overlap = overlap;
+            let observed: Vec<_> = custom
+                .parts(
+                    &bars,
+                    0..bars.len(),
+                    crate::model::Timeframe::Hour1,
+                    None,
+                    true,
+                )
+                .iter()
+                .map(|p| (p.bars.clone(), 8 + (p.open - start).num_hours()))
+                .collect();
+            assert_eq!(observed, expected, "{overlap:?}");
+            custom.sessions[1] = outer.clone();
+            assert_eq!(
+                custom
+                    .parts(
+                        &bars,
+                        0..bars.len(),
+                        crate::model::Timeframe::Hour1,
+                        None,
+                        true
+                    )
+                    .len(),
+                if overlap == SessionOverlap::InBoth {
+                    2
+                } else {
+                    1
+                }
+            );
+        }
+        let mut custom = CustomProfileSessions::new(vec![outer; 6]);
+        custom.overlap = SessionOverlap::InBoth;
+        let saved = serde_json::to_string(&custom).unwrap();
+        let mut restored: CustomProfileSessions = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.sessions.len(), 6);
+        assert_eq!(
+            restored
+                .parts(
+                    &bars,
+                    0..bars.len(),
+                    crate::model::Timeframe::Hour1,
+                    None,
+                    true
+                )
+                .len(),
+            5
+        );
+        restored.sessions.clear();
+        assert!(
+            restored
+                .parts(
+                    &bars,
+                    0..bars.len(),
+                    crate::model::Timeframe::Hour1,
+                    None,
+                    true
+                )
+                .is_empty()
+        );
+        restored
+            .sessions
+            .push(CustomProfileSession::new(at(8), at(8)));
+        assert_eq!(
+            restored.parts(
+                &bars,
+                0..bars.len(),
+                crate::model::Timeframe::Hour1,
+                None,
+                true
+            )[0]
+            .bars,
+            0..10
+        );
+    }
+
     /// Rows from the average true range take the last `footprint_row_atr_length` complete bars,
     /// so older bars that a pan loads leave them as they are. Every bar closes at 100 with its
     /// range centred on it, so its true range is its own range. At length 3 the three bars of
@@ -1690,12 +2115,14 @@ mod tests {
                 chart_type: ChartType::SessionVolumeProfile,
                 ..Default::default()
             };
-            series.chart_type_params.profile.session =
-                ProfileSession::Custom(CustomProfileSession {
+            series.chart_type_params.profile.session = ProfileSession::Custom(
+                CustomProfileSession {
                     start: chrono::NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
                     end: chrono::NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
                     zone: Some(crate::model::TimezoneId::named(zone).unwrap()),
-                });
+                }
+                .into(),
+            );
             let ctx = egui::Context::default();
             // Room for every entry: rows scrolled out of a shorter list are not painted.
             ctx.all_styles_mut(|style| style.spacing.combo_height = 4000.0);
@@ -1741,7 +2168,10 @@ mod tests {
             let ProfileSession::Custom(custom) = &series.chart_type_params.profile.session else {
                 panic!("the session stays custom");
             };
-            assert_eq!(custom.zone.as_ref().map(|z| z.name()), Some(zone));
+            assert_eq!(
+                custom.sessions[0].zone.as_ref().map(|z| z.name()),
+                Some(zone)
+            );
         }
     }
 

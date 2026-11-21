@@ -67,10 +67,14 @@ impl Drawing {
         }
     }
 
-    /// Screen span shared by a date range's painted time edges and its hit area.
+    /// Screen span shared by the painted time edges of a date range or a date and price range
+    /// and their hit area.
     pub(super) fn time_edge_span(&self, pane: Rect, bounds: Rect) -> egui::Rangef {
         let mut span = bounds.y_range();
-        if self.tool_type == DrawingToolType::DateRange {
+        if matches!(
+            self.tool_type,
+            DrawingToolType::DateRange | DrawingToolType::DateAndPriceRange
+        ) {
             if self.range_settings.extend_top {
                 span.min = span.min.min(pane.min.y);
             }
@@ -82,8 +86,9 @@ impl Drawing {
     }
 
     /// Paints a range after the common style pass: fill, independently styled box edges, arrows
-    /// in the drawing's line style, centred custom text and the readout card. Date ranges can
-    /// extend their time edges to either pane edge; price edges follow the side extensions.
+    /// in the drawing's line style, centred custom text and the readout card. Date ranges and
+    /// date and price ranges can extend their time edges to either pane edge; price edges
+    /// follow the side extensions.
     pub(crate) fn render_range(
         &self,
         painter: &egui::Painter,
@@ -205,6 +210,7 @@ impl Drawing {
                 galley.clone(),
                 size,
                 Some(painter.ctx().active_theme().chart.bg_tooltip),
+                Color32::TRANSPARENT,
             );
             if self.tool_type == DrawingToolType::InfoLine
                 && self.font_weight == crate::drawings::FontWeight::Bold
@@ -765,7 +771,15 @@ impl Drawing {
                 .background_color
                 .map_or(theme.chart.bg_tooltip, rgba)
         });
-        paint_stats_card(painter, align, pos, galley, size, fill);
+        paint_stats_card(
+            painter,
+            align,
+            pos,
+            galley,
+            size,
+            fill,
+            rgba(settings.shadow_color),
+        );
     }
 }
 
@@ -788,12 +802,24 @@ fn paint_stats_card(
     galley: std::sync::Arc<egui::Galley>,
     size: egui::Vec2,
     fill: Option<Color32>,
+    shadow_color: Color32,
 ) -> Rect {
     let theme = painter.ctx().active_theme();
     let chart = theme.chart;
     let card = card_rect(painter.clip_rect(), align, pos, size);
     // The border keeps the white light-theme card visible on the white chart.
     if let Some(fill) = fill {
+        if shadow_color.a() > 0 {
+            painter.add(
+                egui::Shadow {
+                    offset: [0, 2],
+                    blur: 8,
+                    spread: 0,
+                    color: shadow_color,
+                }
+                .as_shape(card, DESIGN_TOKENS.rounding.md),
+            );
+        }
         painter.rect(
             card,
             DESIGN_TOKENS.rounding.md,
@@ -940,7 +966,7 @@ mod tests {
     /// Every range readout and style reaches the painted shapes; extensions share their hit area.
     #[test]
     fn range_settings_reach_the_card_text_colours_and_edges() {
-        use crate::drawings::services::DrawingInteraction;
+        use crate::drawings::services::hit_test;
         use crate::drawings::{FontWeight, RangeSettings};
         use crate::theme::{Theme, apply_to_egui};
         use egui::Shape;
@@ -1065,6 +1091,28 @@ mod tests {
             drawing.stroke_width = 2.0;
             drawing.fill_color = None;
             drawing.theme_shade = false;
+            for theme in [Theme::light(), Theme::dark()] {
+                let mut saved = serde_json::to_value(&drawing).unwrap();
+                saved["range_settings"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("shadow_color");
+                let mut restored: Drawing = serde_json::from_value(saved).unwrap();
+                restored.points = drawing.points.clone();
+                restored.chart_points = drawing.chart_points.clone();
+                for (card, shadow) in [(&drawing, true), (&restored, false)] {
+                    let shapes = paint(card, &theme);
+                    let shadow_index = shapes.iter().position(|shape| {
+                        matches!(shape, Shape::Rect(rect) if rect.fill == Color32::from_black_alpha(51) && rect.blur_width > 0.0)
+                    });
+                    assert_eq!(shadow_index.is_some(), shadow, "{tool:?}: shadow {shadow}");
+                    if let Some(index) = shadow_index {
+                        assert!(
+                            matches!(&shapes[index + 1], Shape::Rect(rect) if rect.blur_width == 0.0)
+                        );
+                    }
+                }
+            }
             // -50 / 300 = -16.666...%; -50 / 0.5 = -100 ticks. Bars 1..=4 sum to 900.
             for (i, &(edit, price, date)) in rows.iter().enumerate() {
                 drawing.range_settings = RangeSettings::default();
@@ -1154,21 +1202,16 @@ mod tests {
                         ..Default::default()
                     };
                     let shapes = paint(&drawing, &Theme::dark());
-                    let extended = tool == DrawingToolType::DateRange;
-                    let ymin = if extended && top { 0.0 } else { 200.0 };
-                    let ymax = if extended && bottom { 400.0 } else { 250.0 };
+                    let ymin = if top { 0.0 } else { 200.0 };
+                    let ymax = if bottom { 400.0 } else { 250.0 };
                     for x in [10.0, 40.0] {
                         let found=shapes.iter().any(|s|matches!(s,Shape::LineSegment {points,stroke} if *points==[Pos2::new(x,ymin),Pos2::new(x,ymax)] && *stroke==drawing.stroke()));
                         assert_eq!(found, border, "{tool:?} {top}/{bottom}/{border}");
                     }
                     for (y, on) in [(50.0, top), (350.0, bottom)] {
                         assert_eq!(
-                            DrawingInteraction::new().hit_test(
-                                Pos2::new(10.0, y),
-                                std::slice::from_ref(&drawing),
-                                "1D"
-                            ),
-                            (extended && on && border).then_some(1),
+                            hit_test(Pos2::new(10.0, y), std::slice::from_ref(&drawing), "1D"),
+                            (on && border).then_some(1),
                             "{tool:?} hit {top}/{bottom}/{border}/{y}"
                         );
                     }

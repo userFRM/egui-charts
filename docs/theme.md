@@ -1,6 +1,6 @@
 # Themes and scales
 
-A `theme::Theme` owns UI colours, chart colours, font sizes, spacing and corner radii. Start with `Theme::dark()`, `Theme::light()` or `Theme::high_contrast()`, change public fields, then call `theme::apply_to_egui` at startup and after a change. `Theme::with_accent` derives its interaction shades and readable text colours. With the `serde` feature, hosts can serialise the theme in their own settings storage.
+A `theme::Theme` owns UI colours, chart colours, font sizes, spacing and corner radii. Start with `Theme::dark()`, `Theme::light()` or `Theme::high_contrast()`, change public fields, then call `theme::apply_to_egui` at startup and after a change. `Theme::with_accent` derives its interaction shades and readable text colours. `Theme` implements serde's `Serialize` and `Deserialize`, so hosts can keep it in their own settings storage.
 
 ```rust
 use egui_charts::theme::{Theme, apply_to_egui};

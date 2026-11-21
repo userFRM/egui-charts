@@ -59,14 +59,14 @@ mod watchlist;
 pub use alert::{
     Alert, AlertCalendar, AlertChannelComparison, AlertComparison, AlertCondition, AlertDelivery,
     AlertFrequency, AlertId, AlertInputs, AlertPositionProgress, AlertRule, AlertSource,
-    AlertSourceName, AlertStatus, AlertStudy, CustomAlertEvent, NotificationSchedule,
+    AlertSourceName, AlertStatus, AlertStudy, AlertTrigger, CustomAlertEvent, NotificationSchedule,
     NotificationWindow,
 };
+#[cfg(any(feature = "widget", feature = "studies"))]
+pub(crate) use bar::index_at_with_timeframe;
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
-pub(crate) use bar::{
-    index_at, index_at_with_timeframe, numeric_positions, time_at, time_at_with_timeframe,
-};
+pub(crate) use bar::{index_at, numeric_positions, time_at, time_at_with_timeframe};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 #[cfg(feature = "widget")]
@@ -78,8 +78,8 @@ pub use chart_style::{
 };
 pub use chart_type::{
     BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams, CustomProfileSession,
-    FootprintColor, FootprintIntensity, FootprintMode, FootprintStatistic, NodeSensitivity,
-    ProfileRows, ProfileSession, TradeProfileSettings,
+    CustomProfileSessions, FootprintColor, FootprintIntensity, FootprintMode, FootprintStatistic,
+    NodeSensitivity, ProfileRows, ProfileSession, SessionOverlap, TradeProfileSettings,
 };
 pub use clock::BarClock;
 pub(crate) use clock::Placement;
@@ -114,7 +114,7 @@ pub use range_bar::{
     RangeBar, RangeBarConfig, RangeBarSource, to_range_bars_from_ohlc, to_range_bars_from_ticks,
 };
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
-pub use replay::ReplaySession;
+pub use replay::{ReplayScope, ReplaySession};
 pub(crate) use revision::next_revision;
 pub use series_scale::{AxisSide, PaneAxisOptions, SeriesScale};
 pub use series_style::{
@@ -128,9 +128,9 @@ pub use session::{
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
 pub use strategy::{
-    StrategyAnalysis, StrategyComparison, StrategyExcursion, StrategyExit, StrategyHolding,
-    StrategyPerformance, StrategyPeriod, StrategyReport, StrategyResultBin, StrategyTrade,
-    StrategyTradeGroup, StrategyTradeStats,
+    EquityRange, StrategyAnalysis, StrategyComparison, StrategyExcursion, StrategyExit,
+    StrategyHolding, StrategyPerformance, StrategyPeriod, StrategyReport, StrategyResultBin,
+    StrategyTrade, StrategyTradeGroup, StrategyTradeStats,
 };
 #[cfg(feature = "ui")]
 pub(crate) use strategy::{SummaryUnit, run_figures, trade_figures};
@@ -152,7 +152,7 @@ pub use trading::{
     TakeProfitLevel, TimeInForce, TradingRules,
 };
 
-pub use watchlist::{Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
+pub use watchlist::{SkippedEntries, Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
 
 #[cfg(test)]
 mod tests {

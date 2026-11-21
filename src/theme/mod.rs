@@ -32,12 +32,10 @@ use egui::Color32;
 
 /// The colours and scales of the UI and the chart.
 ///
-/// With the `serde` feature, a theme serialises with any serde format. The `dark`
-/// flag and both complete colour palettes are required; omitted text, spacing and
-/// radius scales use their defaults. Colours are egui's premultiplied `[r, g, b, a]`
-/// arrays.
-#[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// A theme serialises with any serde format. The `dark` flag and both complete
+/// colour palettes are required; omitted text, spacing and radius scales use their
+/// defaults. Colours are egui's premultiplied `[r, g, b, a]` arrays.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Theme {
     /// Whether the UI is dark: selects egui's base visuals and the shadow strength.
     pub dark: bool,
@@ -46,13 +44,13 @@ pub struct Theme {
     /// Colours of the chart surface.
     pub chart: ChartColors,
     /// Type scale and chart text roles, also applied to egui's built-in text styles.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[serde(default)]
     pub text: TextSizes,
     /// Spacing scale.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[serde(default)]
     pub spacing: Spacing,
     /// Corner radius scale.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[serde(default)]
     pub radius: Radii,
 }
 
@@ -78,8 +76,7 @@ impl Default for Theme {
 /// let mut radii = Radii::default();
 /// radii.sm = 3.0;
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct UiColors {
     /// Panels, toolbars and inputs.
@@ -131,10 +128,10 @@ pub struct UiColors {
     /// Success text and icons.
     pub success: Color32,
     /// Take-profit lines, labels and controls.
-    #[cfg_attr(feature = "serde", serde(default = "default_take_profit"))]
+    #[serde(default = "default_take_profit")]
     pub take_profit: Color32,
     /// Stop-loss lines, labels and controls.
-    #[cfg_attr(feature = "serde", serde(default = "default_stop_loss"))]
+    #[serde(default = "default_stop_loss")]
     pub stop_loss: Color32,
     /// Warning text and icons.
     pub warning: Color32,
@@ -144,25 +141,20 @@ pub struct UiColors {
     pub info: Color32,
 }
 
-#[cfg(feature = "serde")]
 fn default_take_profit() -> Color32 {
     Color32::from_rgb(0, 166, 147)
 }
-#[cfg(feature = "serde")]
 fn default_stop_loss() -> Color32 {
     Color32::from_rgb(255, 166, 0)
 }
 /// The light theme's, which also reads at 3:1 or more on black, for a theme saved without it.
-#[cfg(feature = "serde")]
 fn default_order_notable() -> Color32 {
     Theme::light().chart.order_notable
 }
-#[cfg(feature = "serde")]
 fn default_order_large() -> Color32 {
     Theme::light().chart.order_large
 }
 /// The blue of every preset, for a theme saved without it.
-#[cfg(feature = "serde")]
 fn default_session_break() -> Color32 {
     Theme::dark().chart.session_break
 }
@@ -174,8 +166,7 @@ impl Default for UiColors {
 }
 
 /// Colours of the chart surface.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ChartColors {
     /// Plot background.
@@ -189,7 +180,7 @@ pub struct ChartColors {
     /// Major grid lines.
     pub grid_line_major: Color32,
     /// Session break lines.
-    #[cfg_attr(feature = "serde", serde(default = "default_session_break"))]
+    #[serde(default = "default_session_break")]
     pub session_break: Color32,
     /// Axis labels.
     pub axis_text: Color32,
@@ -208,10 +199,10 @@ pub struct ChartColors {
     /// Resting orders that reach the notable size tier of an
     /// [`OrderBookView`](crate::chart::overlays::OrderBookView): heatmap cells, book profile bars
     /// and depth ladder cells.
-    #[cfg_attr(feature = "serde", serde(default = "default_order_notable"))]
+    #[serde(default = "default_order_notable")]
     pub order_notable: Color32,
     /// Resting orders that reach the large size tier.
-    #[cfg_attr(feature = "serde", serde(default = "default_order_large"))]
+    #[serde(default = "default_order_large")]
     pub order_large: Color32,
     /// Opacity of the volume colours returned by [`Self::volume_up`] and [`Self::volume_down`].
     pub volume_alpha: u8,
@@ -239,12 +230,8 @@ impl ChartColors {
 ///
 /// Components choose a role; the built-in egui text styles use the same scale.
 /// Assign the roles to change on a theme's `text` or on `TextSizes::default()`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 #[non_exhaustive]
 pub struct TextSizes {
     /// Small badges.
@@ -325,12 +312,8 @@ impl TextSizes {
 }
 
 /// Spacing scale, in points.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 #[non_exhaustive]
 pub struct Spacing {
     /// Extra small, in egui logical points.
@@ -364,12 +347,8 @@ impl Default for Spacing {
 }
 
 /// Corner radius scale, in points.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 #[non_exhaustive]
 pub struct Radii {
     /// Extra small, in egui logical points.
@@ -467,7 +446,7 @@ impl Theme {
     }
 }
 
-#[cfg(all(test, feature = "serde"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

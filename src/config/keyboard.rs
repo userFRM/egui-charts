@@ -185,6 +185,18 @@ pub enum KeyboardAction {
     /// Cycle focus to previous chart (Shift+Tab)
     CycleChartFocusBack,
 
+    // Watchlist
+    /// Show the next symbol of the active watchlist (Down or Space). The chart passes it to the
+    /// host as a shortcut request; answer it with `WatchlistPanel::select_next_symbol`. A
+    /// selected drawing takes Down first, and a shown replay bar takes Space.
+    NextWatchlistSymbol,
+    /// Show the previous symbol of the active watchlist (Up or Shift+Space), as
+    /// [`NextWatchlistSymbol`](Self::NextWatchlistSymbol) does the next one.
+    PreviousWatchlistSymbol,
+    /// Add the chart symbol to the active watchlist (Alt+W). The host receives a shortcut
+    /// request and answers with `WatchlistPanel::add_symbol`, which refuses duplicates.
+    AddToWatchlist,
+
     // Trading
     /// A buy limit order at the pointer's price (Alt+Shift+B). `ChartMenus::show` returns the
     /// order of the chart menu's buy limit row there, and nothing where the menu has no such
@@ -291,6 +303,9 @@ impl KeyboardAction {
             Self::ShowKeyboardHelp => "Keyboard shortcuts",
             Self::CycleChartFocus => "Next chart",
             Self::CycleChartFocusBack => "Previous chart",
+            Self::NextWatchlistSymbol => "Next watchlist symbol",
+            Self::PreviousWatchlistSymbol => "Previous watchlist symbol",
+            Self::AddToWatchlist => "Add symbol to watchlist",
             Self::BuyLimitAtPointer => "Buy limit at pointer price",
             Self::SellLimitAtPointer => "Sell limit at pointer price",
         }
@@ -439,6 +454,16 @@ impl KeyboardAction {
                     )]
                 }
             }
+            Self::AddToWatchlist => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::W)] },
+            Self::NextWatchlistSymbol => const { &[key(Key::ArrowDown), key(Key::Space)] },
+            Self::PreviousWatchlistSymbol => {
+                const {
+                    &[
+                        key(Key::ArrowUp),
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::Space),
+                    ]
+                }
+            }
             Self::BuyLimitAtPointer => {
                 const {
                     &[KeyboardShortcut::new(
@@ -503,6 +528,9 @@ impl KeyboardAction {
             Self::ShowKeyboardHelp => "Ctrl+/ / ? / F1",
             Self::CycleChartFocus => "Tab",
             Self::CycleChartFocusBack => "Shift+Tab",
+            Self::NextWatchlistSymbol => "↓ / Space",
+            Self::PreviousWatchlistSymbol => "↑ / Shift+Space",
+            Self::AddToWatchlist => "Alt+W",
             Self::BuyLimitAtPointer => "Alt+Shift+B",
             Self::SellLimitAtPointer => "Alt+Shift+S",
             Self::DrawingTool(crate::config::DrawingToolType::TrendLine) => "Alt+T",
@@ -587,6 +615,14 @@ impl KeyboardAction {
                     Self::CycleChartFocus,
                     Self::CycleChartFocusBack,
                     Self::ShowKeyboardHelp,
+                ],
+            ),
+            (
+                "Watchlist",
+                vec![
+                    Self::NextWatchlistSymbol,
+                    Self::PreviousWatchlistSymbol,
+                    Self::AddToWatchlist,
                 ],
             ),
             (

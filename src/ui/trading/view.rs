@@ -230,6 +230,8 @@ impl Trading {
             timezone: chart.display_timezone(),
             show_orders: display.show_orders,
             extend_lines: display.extend_lines,
+            line_width: 1.0,
+            line_length: 0.0,
             label_alignment: display.label_alignment,
             show_positions: display.show_positions,
             submit: false,
@@ -255,6 +257,7 @@ impl Trading {
                 .account
                 .as_ref()
                 .map_or("", |account| account.currency.as_str()),
+            formatter: self.formatter.as_deref(),
             tick_size: tick,
         };
         let mut shown_orders = self.orders.clone();
@@ -277,18 +280,12 @@ impl Trading {
                 .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
             // Under the lines, so that no mark covers an order's or a position's label.
             if display.show_executions {
-                let fills: Vec<_> = self
-                    .account_panel
-                    .fills
+                let fills = &self.account_panel.fills;
+                let marks: Vec<_> = fills
                     .executions
                     .iter()
-                    .filter(|fill| {
-                        self.account_panel
-                            .fills
-                            .orders
-                            .get(&fill.order)
-                            .is_some_and(|request| request.symbol == symbol)
-                    })
+                    .filter(|fill| fills.symbol(fill) == Some(symbol))
+                    .map(super::ExecutionMark::new)
                     .collect();
                 // `Trading::numbers` takes the ticket's decimals; prices here keep the market's.
                 let numbers = Numbers {
@@ -296,7 +293,7 @@ impl Trading {
                     decimals,
                     formatter: self.formatter.as_deref(),
                 };
-                executions::show(ui, chart, &fills, display.show_execution_labels, numbers);
+                executions::show(ui, chart, &marks, display, numbers);
             }
             render_trading_lines(
                 ui,
@@ -354,6 +351,8 @@ impl Trading {
 
     /// Draws the chart symbol's working orders, brackets, positions and execution marks,
     /// respecting [`display`](Self::display). Hovering a mark lists the fills of its bar.
+    /// [`render_executions`](super::render_executions) draws other fills, such as imported trades,
+    /// with the same marks.
     /// Asks the user to confirm a change made on a line or in the depth ladder before sending it.
     pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
         chart.trading_bid_ask = self.display.bid_ask_labels;
@@ -523,6 +522,8 @@ impl Trading {
                 timezone: chart.display_timezone(),
                 show_orders: true,
                 extend_lines: self.display.extend_lines,
+                line_width: 1.0,
+                line_length: 0.0,
                 label_alignment: self.display.label_alignment,
                 show_positions: false,
                 submit: true,
@@ -547,6 +548,7 @@ impl Trading {
                     .account
                     .as_ref()
                     .map_or("", |account| account.currency.as_str()),
+                formatter: self.formatter.as_deref(),
                 tick_size: tick,
             };
             let order = Order::new(
@@ -1398,7 +1400,8 @@ mod tests {
 
     /// Rows of differently formatted symbols keep their own price decimals, host text and pip
     /// value instead of the chart symbol's decimals or a fixed two. A regression writes every
-    /// symbol with the chart's decimals, ignores the host's formatter, loses the pip value or shows
+    /// symbol with the chart's decimals, ignores the host's formatter in the tables or on the
+    /// chart's order and position lines, loses the pip value or shows
     /// another symbol's logo. A row's cancellation is confirmed in the order's own decimals too.
     #[test]
     fn symbols_keep_their_own_decimals_host_text_pip_values_and_logos() {
@@ -1485,6 +1488,41 @@ mod tests {
         }
         let asked = "Cancel the order to BUY 1 USDJPY limit 151.234?";
         assert!(texts.iter().any(|text| text == asked), "{texts:?}");
+
+        trading.pending = None;
+        chart.set_symbol("BTC");
+        trading.orders = vec![Order::new(
+            OrderId::new("btc"),
+            OrderRequest::new("BTC", OrderSide::Buy, 2.0, OrderType::Limit(95.0)),
+            OrderStatus::Working,
+        )];
+        trading.positions = vec![Position::new("BTC", 3.0, 105.0)];
+        for _ in 0..2 {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                    trading.draw_overlays(ui, &chart);
+                },
+            );
+            texts = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+        }
+        assert!(texts.iter().any(|text| text == "2 coins"), "{texts:?}");
+        assert!(texts.iter().any(|text| text == "3 coins"), "{texts:?}");
     }
 
     #[test]
@@ -1913,6 +1951,11 @@ mod tests {
             !defaults.show_execution_labels,
             "settings saved before labels were on by default keep them off"
         );
+        assert!(
+            !defaults.show_execution_prices,
+            "older settings keep fill prices off"
+        );
+        assert!(!TradingSettings::default().show_execution_prices);
         assert!(TradingSettings::default().show_execution_labels);
         assert!(
             !defaults.compact_ticket,

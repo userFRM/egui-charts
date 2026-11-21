@@ -1129,3 +1129,82 @@ fn heartbeat_outside_the_session_opens_no_candle() {
         }
     }
 }
+
+#[cfg(feature = "widget")]
+mod checkpoint {
+    use super::*;
+
+    fn feed(capacity: usize) -> (Arc<Inbox>, Sink) {
+        let inbox = Arc::new(Inbox::default());
+        let tf: Timeframe = "10v".parse().unwrap();
+        let sink = inbox.subscribe("A".into(), tf.into(), capacity, None);
+        (inbox, sink)
+    }
+
+    #[test]
+    fn pending_replies_and_buffered_depth_do_not_cross_the_checkpoint() {
+        let (inbox, sink) = feed(2);
+        let revision = || inbox.checkpoint_guard(sink.id).unwrap().revision();
+        let before = revision();
+        inbox.reply::<()>(99).send(Ok(()));
+        assert!(matches!(
+            inbox.checkpoint_guard(sink.id),
+            Err(SinkCheckpointError::NotReady)
+        ));
+        inbox.drain();
+        assert_ne!(before, revision());
+        let before = revision();
+        sink.advance_time(at(0, 0)); // No candle and no wake for a volume stream.
+        assert_ne!(before, revision());
+        let before = revision();
+        sink.push_depth_delta(
+            2,
+            &OrderBook {
+                ts: at(0, 0),
+                symbol: "A".into(),
+                bids: vec![],
+                asks: vec![],
+            },
+        );
+        inbox.drain();
+        // A buffered delta is book state even without a snapshot or displayed levels.
+        assert!(matches!(
+            inbox.checkpoint_guard(sink.id),
+            Err(SinkCheckpointError::Unsupported)
+        ));
+        sink.reset_replay(at(0, 0));
+        inbox.drain();
+        assert_ne!(before, revision());
+    }
+
+    #[test]
+    fn restore_resumes_dedup_eviction_order_and_feed_clock() {
+        let (inbox, sink) = feed(2);
+        sink.set_server_time(at(0, 0));
+        for id in 1..=3 {
+            sink.push_tick(tick(at(0, 0), 100.0, 1.0).with_id(id));
+        }
+        inbox.drain();
+        let source = inbox.checkpoint_guard(sink.id).unwrap();
+        assert_eq!(source.heap_bytes(), 2 * size_of::<u64>());
+        let saved = source.capture();
+        drop(source);
+
+        let (inbox, sink) = feed(2);
+        sink.set_server_time(at(240, 0));
+        let mut dest = inbox.checkpoint_guard(sink.id).unwrap();
+        assert!(dest.compatible(&saved));
+        let before = dest.revision();
+        dest.restore(&saved);
+        assert_ne!(dest.revision(), before);
+        drop(dest);
+        for id in [3, 4, 2] {
+            sink.push_tick(tick(at(0, 0), 100.0, 1.0).with_id(id));
+        }
+        sink.push_tick(tick(at(120, 0), 100.0, 1.0).with_id(5));
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        assert_eq!(updates.repeated_ticks, 1);
+        assert_eq!(updates.rejected, 1);
+        assert!(updates.trades.iter().filter_map(|t| t.id).eq([4, 2]));
+    }
+}

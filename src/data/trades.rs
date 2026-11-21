@@ -21,6 +21,11 @@ use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
+#[cfg(feature = "widget")]
+mod checkpoint;
+#[cfg(feature = "widget")]
+pub(crate) use checkpoint::PackedTrades;
+
 /// Size taken from one resting order, or from an unidentified one, at one price.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -162,6 +167,11 @@ pub(crate) struct OrderSizes {
 }
 
 impl OrderSizes {
+    #[cfg(feature = "widget")]
+    pub(crate) fn checkpoint_empty(&self) -> bool {
+        self.at.is_none() && self.sizes.is_empty()
+    }
+
     /// Whether `fill` is at the timestamp of the orders held.
     pub(crate) fn holds(&self, fill: &Tick) -> bool {
         self.at == Some(fill.ts)
@@ -239,16 +249,16 @@ pub(crate) struct Trades {
     /// held, and until the sink drops live trades, which are at or after it. The list goes when the
     /// store evicts, or the sink drops, a trade of that instant or a later one.
     unheld_live: Option<(DateTime<Utc>, Vec<Tick>)>,
-    /// First revision of this store, unchanged by paging, pushes and evictions.
+    /// First revision of this timeline, unchanged by paging, pushes and evictions.
     #[cfg(feature = "widget")]
     pub(crate) generation: u64,
-    /// Revision of the last page that added executions, independent of streamed appends.
+    /// Revision of the last page that added execution data, or the timeline's first revision.
     #[cfg(feature = "widget")]
     page_revision: u64,
-    /// Number of streamed executions admitted to this tape, including those since evicted.
+    /// Streamed executions admitted since the timeline began, including those since evicted.
     #[cfg(feature = "widget")]
     live_count: usize,
-    /// Changes whenever a trade is added or evicted.
+    /// Changes when the held trades or their history coverage changes.
     revision: u64,
     /// Whether the sink dropped live trades since the subscription began, after which no more are
     /// kept apart.
@@ -292,7 +302,7 @@ impl Trades {
         (self.page_revision, self.trades.len().saturating_sub(added))
     }
 
-    /// Identifies the held trades: it differs after any trade was added or evicted.
+    /// Identifies the held trades and their history coverage.
     #[cfg_attr(
         not(feature = "widget"),
         expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -382,6 +392,7 @@ impl Trades {
         expect(dead_code, reason = "only the chart widget consumes a feed")
     )]
     pub(crate) fn reanchor(&mut self) {
+        self.revision = next_revision();
         // No page reached the first instant of the stream, which may lack trades that traded
         // before the stream began.
         if self.paged == 0
@@ -497,8 +508,13 @@ impl Trades {
             && let Some(at) = trade.id.and_then(|id| self.ids.get(&id))
         {
             let held = &mut self.trades[at.wrapping_sub(self.front)];
-            held.aggressor_order_id = held.aggressor_order_id.or(trade.aggressor_order_id);
-            held.resting_order_id = held.resting_order_id.or(trade.resting_order_id);
+            if (held.aggressor_order_id.is_none() && trade.aggressor_order_id.is_some())
+                || (held.resting_order_id.is_none() && trade.resting_order_id.is_some())
+            {
+                held.aggressor_order_id = held.aggressor_order_id.or(trade.aggressor_order_id);
+                held.resting_order_id = held.resting_order_id.or(trade.resting_order_id);
+                self.revision = next_revision();
+            }
         }
     }
 
@@ -506,10 +522,11 @@ impl Trades {
     /// added, and keeps apart those left to a page at the first instant where one is. Calls
     /// `changed` with each trade added (`true`) or evicted (`false`).
     pub(crate) fn append(&mut self, newer: Trades, changed: &mut impl FnMut(&Tick, bool)) {
-        self.lost_until = self.lost_until.max(newer.lost_until);
         // The sink drops its oldest live trades, at or after the stream's first instant: kept
         // trades the loss reaches guard nothing, and no later instant is the stream's first.
         if let Some(lost) = newer.lost_until {
+            self.revision = next_revision();
+            self.lost_until = self.lost_until.max(Some(lost));
             self.live_lost = true;
             if (self.unheld_live.as_ref()).is_some_and(|(at, _)| lost >= *at) {
                 self.unheld_live = None;
@@ -557,7 +574,6 @@ impl Trades {
         mut page: Vec<Tick>,
         changed: &mut impl FnMut(&Tick, bool),
     ) -> u64 {
-        #[cfg(feature = "widget")]
         let before = self.revision;
         let received = page.len();
         page.retain(valid);
@@ -631,9 +647,14 @@ impl Trades {
             self.paged += 1;
             self.trades.push_front(trade);
         }
-        #[cfg(feature = "widget")]
-        if self.revision != before {
-            self.page_revision = self.revision;
+        if self.revision == before {
+            // Even an empty page can complete the front without adding execution data.
+            self.revision = next_revision();
+        } else {
+            #[cfg(feature = "widget")]
+            {
+                self.page_revision = self.revision;
+            }
         }
         rejected
     }
@@ -768,6 +789,25 @@ mod tests {
         Reanchor,
     }
     use Step::{Live, Page, Reanchor};
+
+    #[cfg(feature = "widget")]
+    #[test]
+    fn page_progress_distinguishes_new_rows_from_coverage() {
+        let mut tape = Trades::new(2);
+        tape.push(trade(1, 100.));
+        let mut cursor = 0;
+        let progress = tape.progress(&mut cursor);
+        let revision = tape.revision();
+        tape.prepend(Vec::new(), &mut |_, _| ());
+        assert!(tape.front_reached);
+        assert_ne!(tape.revision(), revision);
+        assert_eq!(tape.progress(&mut cursor), progress);
+
+        tape.prepend(vec![trade(0, 99.)], &mut |_, _| ());
+        let (page, first_live) = tape.progress(&mut cursor);
+        assert_ne!(page, progress.0);
+        assert_eq!(first_live, 2);
+    }
 
     /// Group only explicit aggressor ids, across pages and drains, without moving price volume.
     #[test]

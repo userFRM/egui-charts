@@ -15,6 +15,7 @@ mod widgets;
 pub use account_panel::{AccountPanel, AccountPanelAction};
 pub use broker_picker::{BrokerFact, BrokerPicker, BrokerPickerAction, BrokerTile};
 pub use dom::DepthPanel;
+pub use executions::{ExecutionMark, render_executions};
 pub use format::TradingFormatter;
 pub use ticket::{Bracket, BracketMode, Kind as OrderKind, OrderPreset, PresetLevel, PresetSizing};
 
@@ -236,20 +237,7 @@ impl Default for Trading {
     }
 }
 
-/// `quantity` of `symbol` in the host's text, else at its own decimals, up to eight,
-/// with thousands separators, as the account tables write it.
-pub(crate) fn quantity_text(
-    formatter: Option<&dyn TradingFormatter>,
-    symbol: &str,
-    quantity: f64,
-) -> String {
-    Numbers {
-        symbol,
-        decimals: 2,
-        formatter,
-    }
-    .quantity(quantity, account_panel::quantity_decimals(quantity))
-}
+pub(crate) use crate::chart::quantity_text;
 
 impl Trading {
     /// Sets the latest quote of `symbol`, such as the one `WatchlistPanel::quote` holds for the
@@ -271,8 +259,9 @@ impl Trading {
     }
 
     /// Writes the prices, quantities, spreads and pip values of the ticket, the depth ladder and
-    /// the account tables, and the prices and quantities of order and fill notifications, with
-    /// `formatter`, where it returns text. `None` restores the built-in text.
+    /// the account tables and fill marks, and the prices and quantities of order and fill
+    /// notifications and the quantities of order, bracket and position lines, with `formatter`,
+    /// where it returns text. `None` restores the built-in text.
     pub fn set_formatter(&mut self, formatter: Option<Arc<dyn TradingFormatter>>) {
         self.formatter = formatter;
     }
