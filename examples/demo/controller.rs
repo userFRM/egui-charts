@@ -994,8 +994,10 @@ impl DemoApp {
             .set_countries(feeds::COUNTRIES.map(String::from));
         app.hotlists.set_feed(app.live.clone());
         app.notifications.set_service(app.notification_host.clone());
-        app.chats
-            .set_service(Arc::new(feeds::DemoChats::new(chrono::Utc::now())));
+        app.chats.set_service(Arc::new(feeds::DemoChats::new(
+            chrono::Utc::now(),
+            app.notification_host.clone(),
+        )));
         app.calendar
             .set_countries(feeds::COUNTRIES.iter().map(|code| code.to_string()));
         app.calendar
@@ -1531,6 +1533,7 @@ impl DemoApp {
         let _ = self.keyboard_shortcuts.show_for_chart(ctx, &self.chart);
         self.show_interval_entry(ctx);
         self.show_open_layout(ctx);
+        self.show_idea(ctx);
 
         // Export dialog (screenshot / CSV).
         match self.export_dialog.show(ctx) {
@@ -5033,7 +5036,7 @@ mod tests {
     use egui_charts::ui::dialogs::DrawingProps;
     use egui_kittest::{Harness, kittest::Queryable};
 
-    fn calendar_news_harness(panel: SidePanel) -> Harness<'static, Box<DemoApp>> {
+    pub(super) fn calendar_news_harness(panel: SidePanel) -> Harness<'static, Box<DemoApp>> {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new_at(
             &eframe::CreationContext::_new_kittest(ctx.clone()),

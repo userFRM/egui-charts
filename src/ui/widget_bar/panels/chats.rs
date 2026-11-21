@@ -100,7 +100,9 @@ fn allowed(kind: NewChatRoomKind, capabilities: &ChatCapabilities) -> bool {
 /// [`find_users`](Chats::find_users), and to add or remove the members of a room whose members
 /// the service pushes. Each action shows while it is pending and its failure, and attaching
 /// another service clears them. Call [`poll`](Self::poll) each frame, even while the panel is
-/// hidden, then [`show`](Self::show) while it is open. Accounts and moderation are the host's.
+/// hidden, then [`show`](Self::show) while it is open. [`open_room`](Self::open_room) shows a room
+/// by its host identifier, such as the one a notification names. Accounts and moderation are the
+/// host's.
 #[derive(Default)]
 pub struct ChatsPanel {
     service: Option<Arc<dyn Chats>>,
@@ -175,6 +177,30 @@ impl ChatsPanel {
         self.open = None;
         self.action_error = None;
         self.watch();
+    }
+
+    /// Shows the room with the host identifier `room`, with its messages and composer, such as
+    /// for [`NotificationsAction::OpenRoom`](crate::ui::widget_bar::NotificationsAction::OpenRoom).
+    /// A room the service has not pushed joins the room list until the list starts over (on
+    /// [`ChatEvent::Clear`], a renewed stream or another service); once it shows, the panel asks a
+    /// service that offers [`history`](Chats::history) for its newest messages. The New chat and
+    /// Members views close, and a created room that is still to be pushed no longer opens when it
+    /// is.
+    pub fn open_room(&mut self, room: impl Into<String>) {
+        let room = room.into();
+        self.room = match self.rooms.iter().position(|known| *known == room) {
+            Some(index) => index,
+            None => {
+                self.rooms.push(room);
+                self.rooms.len() - 1
+            }
+        };
+        self.open = None;
+        if self.view != View::Room {
+            self.view = View::Room;
+            self.reset_search();
+            self.action_error = None;
+        }
     }
 
     fn next_key(&mut self) -> u64 {
@@ -1140,5 +1166,63 @@ mod tests {
         panel.ask("desk");
         let (_, before, _, _) = host.asked.lock().unwrap().pop().unwrap();
         assert_eq!(before.as_deref(), Some("desk 1"));
+    }
+
+    /// Guards opening a room by its host identifier, as a notification's Open room does: a listed
+    /// room shows at once with its messages and composer, leaving the New chat view, and an
+    /// unlisted one joins the list and shows the newest messages it asks a service with history
+    /// for.
+    #[test]
+    fn open_room_shows_a_listed_or_unlisted_room_with_its_messages_and_composer() {
+        let host = Arc::new(Host::default());
+        let mut panel = ChatsPanel::new();
+        panel.set_service(host.clone());
+        let events = host.events.lock().unwrap().clone().unwrap();
+        for room in ["desk", "news"] {
+            let text = format!("{room} 0");
+            let time = chrono::DateTime::UNIX_EPOCH;
+            let message = ChatMessage::new(room, "Ann", time, text.clone()).with_id(text);
+            events.push(ChatEvent::Message(message));
+        }
+        let ctx = egui::Context::default();
+        panel.poll(&ctx);
+        panel.view = View::NewChat;
+        let mut h = Harness::builder()
+            .with_size(Vec2::new(320.0, 600.0))
+            .with_context_setup(|ctx| {
+                crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                egui_extras::install_image_loaders(ctx);
+            })
+            .build_ui_state(|ui, panel: &mut ChatsPanel| panel.show(ui), panel);
+        h.run();
+
+        h.state_mut().open_room("news");
+        h.run();
+        h.get_by_role_and_label(Role::TextInput, "Message news");
+        h.get_by_label("news 0");
+        assert!(h.query_by_label("desk 0").is_none());
+        assert_eq!(h.state().rooms, ["desk", "news"]);
+
+        host.history.store(true, Ordering::Relaxed);
+        h.state_mut().open_room("dm-ada");
+        // Steps, not runs: the request on its way shows a spinner, which repaints.
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::TextInput, "Message dm-ada");
+        assert_eq!(h.state().rooms, ["desk", "news", "dm-ada"]);
+        let (room, before, limit, reply) = {
+            let mut asked = host.asked.lock().unwrap();
+            assert_eq!(asked.len(), 1);
+            asked.pop().unwrap()
+        };
+        assert_eq!(
+            (room.as_str(), before.as_deref(), limit),
+            ("dm-ada", None, 50)
+        );
+        let time = chrono::DateTime::UNIX_EPOCH;
+        let message = ChatMessage::new("dm-ada", "Ada", time, "Can you check the open?");
+        reply.send(Ok(vec![message.with_id("a1")]));
+        h.state_mut().poll(&ctx);
+        h.run_steps(3);
+        h.get_by_label("Can you check the open?");
     }
 }
