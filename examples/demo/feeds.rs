@@ -28,12 +28,11 @@ pub(super) fn search_catalog(
     let mut symbols = DemoSymbol::symbols();
     for symbol in &mut symbols {
         symbol.source = Some("Synthetic".into());
-        if matches!(
-            symbol.exchange.as_deref(),
-            Some("Stocks" | "Futures" | "Index")
-        ) {
-            symbol.country = Some("US".into());
-        }
+        symbol.country = symbol
+            .exchange
+            .as_deref()
+            .and_then(country)
+            .map(String::from);
         symbol.sector = match symbol.symbol.as_str() {
             "STOCKA" | "STOCKB" | "STOCKC" => Some("Technology".into()),
             "STOCKD" => Some("Consumer discretionary".into()),
@@ -572,33 +571,57 @@ fn compact(value: f64) -> String {
 }
 
 /// The demo's hotlists.
-pub(super) const HOTLISTS: [&str; 3] = ["Top gainers", "Top losers", "Most volatile"];
+pub(super) const HOTLISTS: [&str; 4] =
+    ["Top gainers", "Top losers", "Most volatile", "Most active"];
+
+/// The same country metadata used by symbol search; other markets have no country assigned.
+fn country(exchange: &str) -> Option<&str> {
+    matches!(exchange, "Stocks" | "Futures" | "Index").then_some("US")
+}
 
 /// The catalog symbols ranked for `query.list` on their shared execution quotes.
 pub(super) fn hotlist(query: &HotlistQuery, live: &LiveFeed) -> Vec<HotlistEntry> {
-    let mut entries: Vec<HotlistEntry> = DemoSymbol::catalog()
+    let mut entries: Vec<_> = DemoSymbol::catalog()
         .iter()
+        .filter(|spec| {
+            query.exchanges.is_empty() || query.exchanges.iter().any(|code| code == spec.exchange)
+        })
+        .filter(|spec| {
+            query.countries.is_empty()
+                || query
+                    .countries
+                    .iter()
+                    .any(|code| Some(code.as_str()) == country(spec.exchange))
+        })
         .filter_map(|spec| {
             let quote = live.market_quote(spec.symbol, live.now())?;
             let change = quote.change_percent();
             let mut entry = HotlistEntry::new(spec.symbol, quote.last, change);
             entry.price_decimals = super::live::price_decimals(spec.symbol);
-            Some(entry)
+            let rank = match query.list.as_str() {
+                "Most active" => {
+                    let volume = quote.volume.unwrap_or(0.0);
+                    entry.figure = Some(("Volume".into(), format!("{volume:.0}")));
+                    volume
+                }
+                "Top gainers" => change,
+                "Top losers" => -change,
+                _ => change.abs(),
+            };
+            Some((rank, entry))
         })
         .collect();
     match query.list.as_str() {
-        "Top gainers" => {
-            entries.retain(|entry| entry.change_percent > 0.0);
-            entries.sort_by(|a, b| b.change_percent.total_cmp(&a.change_percent));
-        }
-        "Top losers" => {
-            entries.retain(|entry| entry.change_percent < 0.0);
-            entries.sort_by(|a, b| a.change_percent.total_cmp(&b.change_percent));
-        }
-        _ => entries.sort_by(|a, b| b.change_percent.abs().total_cmp(&a.change_percent.abs())),
+        "Top gainers" => entries.retain(|(_, entry)| entry.change_percent > 0.0),
+        "Top losers" => entries.retain(|(_, entry)| entry.change_percent < 0.0),
+        _ => {}
     }
-    entries.truncate(query.limit);
+    entries.sort_by(|a, b| b.0.total_cmp(&a.0));
     entries
+        .into_iter()
+        .take(query.limit)
+        .map(|(_, entry)| entry)
+        .collect()
 }
 
 /// The demo's event log: what it reported to the user, newest last, kept for a new stream.
