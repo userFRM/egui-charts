@@ -108,7 +108,7 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
             properties_height: 450.0,
             label_width: 100.0,
             input_width: 100.0,
-            series_sidebar_width: 140.0,
+            series_sidebar_width: 200.0,
             grid_dropdown_width: 140.0,
             indicator_item_width: 130.0,
             button_min_width_xs: 60.0,
