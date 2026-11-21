@@ -240,7 +240,10 @@ mod tests {
         };
         use std::sync::Mutex;
         #[derive(Default)]
-        struct Host(Mutex<(bool, Vec<(ShareKind, String, Reply<()>)>)>);
+        struct Host {
+            stopped: Mutex<bool>,
+            calls: Mutex<Vec<(ShareKind, String, Reply<()>)>>,
+        }
         impl Sharing for Host {
             fn offers(&self, _: ShareKind) -> ShareOffer {
                 let mut offer = ShareOffer::default();
@@ -248,13 +251,12 @@ mod tests {
                 offer
             }
             fn shared(&self, _: ShareKind, name: &str) -> bool {
-                name == "Shared" && !self.0.lock().unwrap().0
+                name == "Shared" && !*self.stopped.lock().unwrap()
             }
             fn revoke(&self, kind: ShareKind, name: &str, reply: Reply<()>) {
-                self.0
+                self.calls
                     .lock()
                     .unwrap()
-                    .1
                     .push((kind, name.to_owned(), reply));
             }
         }
@@ -281,11 +283,11 @@ mod tests {
                 .is_disabled()
         );
         assert!(h.query_by_value("Stopping sharing…").is_some());
-        host.0.lock().unwrap().0 = true;
+        *host.stopped.lock().unwrap() = true;
         h.run();
         assert!(h.query_by_value("Stopping sharing…").is_some());
-        host.0.lock().unwrap().0 = false;
-        let (kind, name, reply) = host.0.lock().unwrap().1.pop().unwrap();
+        *host.stopped.lock().unwrap() = false;
+        let (kind, name, reply) = host.calls.lock().unwrap().pop().unwrap();
         assert_eq!((kind, name.as_str()), (ShareKind::Watchlist, "Shared"));
         reply.send(Err(FeedError::Other("locked".into())));
         h.run();
@@ -297,8 +299,8 @@ mod tests {
         );
         h.get_by_label("Stop sharing").click();
         h.run();
-        let (_, _, reply) = host.0.lock().unwrap().1.pop().unwrap();
-        host.0.lock().unwrap().0 = true;
+        let (_, _, reply) = host.calls.lock().unwrap().pop().unwrap();
+        *host.stopped.lock().unwrap() = true;
         reply.send(Ok(()));
         h.run();
         assert!(h.query_by_value("Sharing stopped").is_some());
