@@ -47,7 +47,7 @@ fn study_from_tree_id(id: usize) -> Option<SeriesId> {
 #[derive(Default)]
 pub(super) struct State {
     toolbar: DrawingToolbar,
-    pub(super) selection_toolbar: FloatingSelectionToolbar,
+    selection_toolbar: FloatingSelectionToolbar,
     object_tree: ObjectTreePanel,
     properties: DrawingPropertiesDialog,
     /// The copies of the active chart's drawings that the user kept in a conflict.

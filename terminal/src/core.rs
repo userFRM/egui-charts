@@ -135,9 +135,6 @@ impl Terminal {
         self.menus.set_control_visible(control, visible);
         self.panels.widget_bar.set_control_visible(control, visible);
         self.time.bar.set_control_visible(control, visible);
-        self.drawings
-            .selection_toolbar
-            .set_control_visible(control, visible);
     }
 
     /// Whether the host left `control` visible.
