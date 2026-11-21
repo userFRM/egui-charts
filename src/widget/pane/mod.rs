@@ -739,7 +739,8 @@ impl Chart {
                             .1
                             .iter()
                             .filter(|(id, _)| {
-                                !crate::studies::CHART_INPUT_IDS[1..].contains(&id.as_str())
+                                !crate::studies::settings::CHART_INPUT_IDS[1..]
+                                    .contains(&id.as_str())
                             })
                             .cloned()
                             .collect(),

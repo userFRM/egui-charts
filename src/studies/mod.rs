@@ -79,14 +79,13 @@ pub use inputs::{InputKind, InputValue, StudyInput, StudySource};
 pub use metric::MetricStudy;
 pub(crate) mod plots;
 pub(crate) mod projection;
-mod settings;
+pub(crate) mod settings;
 pub(crate) mod table;
 pub use plots::{
     FillBoundary, LabelPlacement, StudyCandle, StudyFill, StudyGradient, StudyLabel, StudySegment,
     StudyZone,
 };
 pub use projection::StudyProjection;
-pub(crate) use settings::CHART_INPUT_IDS;
 pub use settings::{
     ConfiguredStudy, FillStyle, GradientStyle, LevelStyle, PlotStyle, PlotType, PlotVariant,
     StudySettings, StudySettingsSnapshot,
