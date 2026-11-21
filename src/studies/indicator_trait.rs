@@ -934,6 +934,15 @@ pub trait Indicator: Send + ConcreteStudy {
         false
     }
 
+    /// Keep the plots, their fills and the [`projections`](Self::projections) on the main price
+    /// chart when the study has its own pane, using the main series' price scale. Its pane then
+    /// shows the [`table`](Self::table) and legend alone, without a value axis. The price scale
+    /// fits the plots as it fits an overlay's. They are selected from the study's pane. On the
+    /// price pane the study uses its chosen scale as other overlays do. Off by default.
+    fn plots_on_price(&self) -> bool {
+        false
+    }
+
     /// Straight lines on the main price chart, in the main series' price scale, also when the
     /// study has its own pane. Each uses the colour, width and pattern of its
     /// [`plot`](super::StudySegment::plot) while that output is visible. Empty by default. Keep
