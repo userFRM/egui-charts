@@ -25,7 +25,7 @@ use crate::ui_kit::{
     buttons::Button,
     tab_bar::{TabBar, TabLabel},
 };
-use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeDelta, Utc};
 use egui::{RichText, Ui};
 use egui_extras::{Column, TableBuilder};
 use std::ops::Range;
@@ -57,12 +57,19 @@ pub enum StrategyReportAction {
     /// Reveal this trade on the chart.
     SelectTrade(StrategyTradeSelection),
     /// Save these valid trades as CSV, written by [`StrategyReport::trades_csv_with_excursions`]
-    /// with the excursions the list of trades shows.
-    ExportCsv(String),
+    /// with the excursions the list of trades shows, under the suggested file name.
+    ExportCsv {
+        /// File name from the run's name, symbol and interval, `trades` and the local time of
+        /// the export to the second, ending in `.csv`.
+        filename: String,
+        /// The CSV text.
+        content: String,
+    },
     /// Save the whole-run summary metrics and run properties, as [`StrategyReport::summary_csv`]
     /// writes them, under the suggested file name.
     ExportSummaryCsv {
-        /// File name derived from the run's name and symbol, ending in `.csv`.
+        /// File name from the run's name, symbol and interval, `summary` and the local time of
+        /// the export to the second, ending in `.csv`.
         filename: String,
         /// The CSV text.
         content: String,
@@ -314,13 +321,22 @@ impl StrategyReportPanel {
             ));
             if available {
                 if Button::new("Export trades CSV").show(ui).clicked() {
-                    action = StrategyReportAction::ExportCsv(
-                        data.report.trades_csv_with_excursions(&data.comparison),
-                    );
+                    action = StrategyReportAction::ExportCsv {
+                        filename: export_filename(
+                            &data.report,
+                            "trades",
+                            chrono::Local::now().naive_local(),
+                        ),
+                        content: data.report.trades_csv_with_excursions(&data.comparison),
+                    };
                 }
                 if Button::new("Export summary CSV").show(ui).clicked() {
                     action = StrategyReportAction::ExportSummaryCsv {
-                        filename: summary_filename(&data.report),
+                        filename: export_filename(
+                            &data.report,
+                            "summary",
+                            chrono::Local::now().naive_local(),
+                        ),
                         content: data.report.summary_csv(&data.performance, &data.comparison),
                     };
                 }
@@ -488,17 +504,28 @@ impl StrategyReportPanel {
     }
 }
 
-/// `name-symbol-summary.csv`, with runs of characters other than letters and digits as one `-`.
-fn summary_filename(report: &StrategyReport) -> String {
-    let name = format!("{} {}", report.name, report.symbol);
-    let mut words: Vec<_> = name
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|word| !word.is_empty())
+/// Suggested export file name: the run's name, symbol and interval, `kind` and `time` to the
+/// second, such as `First_run_2_EUR___USD_1min_trades_2026-11-21_14-03-07.csv`. Every character
+/// other than an ASCII letter, a digit, `-` or `_` becomes `_`; the name and symbol keep their
+/// first 64 characters, so the whole name stays far below file system limits, and an empty one
+/// is left out.
+fn export_filename(report: &StrategyReport, kind: &str, time: NaiveDateTime) -> String {
+    let plain = |c: char| {
+        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') {
+            c
+        } else {
+            '_'
+        }
+    };
+    let mut parts: Vec<String> = [report.name.as_str(), report.symbol.as_str()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .map(|part| part.chars().take(64).map(plain).collect())
         .collect();
-    if words.is_empty() {
-        words.push("strategy");
-    }
-    format!("{}-summary.csv", words.join("-"))
+    parts.push(report.timeframe.to_string().chars().map(plain).collect());
+    parts.push(kind.to_owned());
+    parts.push(time.format("%Y-%m-%d_%H-%M-%S").to_string());
+    format!("{}.csv", parts.join("_"))
 }
 
 fn number(value: Option<f64>) -> String {

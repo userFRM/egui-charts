@@ -1,5 +1,6 @@
 use super::*;
 use crate::model::{EquityRange, StrategyExit, StrategyTrade};
+use chrono::Timelike;
 use egui::{Role, Vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
@@ -17,10 +18,19 @@ fn row<State>(h: &Harness<'_, State>, name: &str, cells: usize) -> Vec<String> {
     labels[i + 1..=i + cells].to_vec()
 }
 
+/// The local time in an export `filename` that starts with `prefix` and ends in `.csv`.
+fn export_time(filename: &str, prefix: &str) -> NaiveDateTime {
+    let stamp = filename
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_suffix(".csv"))
+        .unwrap_or_else(|| panic!("{filename}"));
+    NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d_%H-%M-%S").unwrap()
+}
+
 #[test]
 fn report_replacement_selection_export_and_clear() {
     let start = DateTime::UNIX_EPOCH + chrono::TimeDelta::milliseconds(250);
-    let mut report = StrategyReport::new("First run", "FIRST", Timeframe::Min1, 1000.0);
+    let mut report = StrategyReport::new("First run/2", "EUR / USD", Timeframe::Min1, 1000.0);
     let mut closed = StrategyTrade::new(OrderSide::Buy, 1.0, start, 0.00001234);
     closed.exit = Some(StrategyExit::new(
         start + chrono::TimeDelta::minutes(1),
@@ -70,23 +80,38 @@ fn report_replacement_selection_export_and_clear() {
                 (panel, Vec::new()),
             );
         h.run();
+        let before = chrono::Local::now()
+            .naive_local()
+            .with_nanosecond(0)
+            .unwrap();
         h.get_by_role_and_label(Role::Button, "Export trades CSV")
             .click();
         h.run();
-        assert_eq!(
-            h.state().1,
-            [StrategyReportAction::ExportCsv(report.trades_csv())]
-        );
+        let after = chrono::Local::now().naive_local();
+        let [StrategyReportAction::ExportCsv { filename, content }] = h.state().1.as_slice() else {
+            panic!("{:?}", h.state().1);
+        };
+        assert_eq!(content, &report.trades_csv());
+        let time = export_time(filename, "First_run_2_EUR___USD_1min_trades_");
+        assert!((before..=after).contains(&time), "{filename}");
+        let before = chrono::Local::now()
+            .naive_local()
+            .with_nanosecond(0)
+            .unwrap();
         h.get_by_role_and_label(Role::Button, "Export summary CSV")
             .click();
         h.run();
+        let after = chrono::Local::now().naive_local();
+        let Some(StrategyReportAction::ExportSummaryCsv { filename, content }) = h.state().1.last()
+        else {
+            panic!("{:?}", h.state().1);
+        };
         assert_eq!(
-            h.state().1.last(),
-            Some(&StrategyReportAction::ExportSummaryCsv {
-                filename: "First-run-FIRST-summary.csv".into(),
-                content: report.summary_csv(&report.performance(), &report.comparison(&[])),
-            })
+            content,
+            &report.summary_csv(&report.performance(), &report.comparison(&[]))
         );
+        let time = export_time(filename, "First_run_2_EUR___USD_1min_summary_");
+        assert!((before..=after).contains(&time), "{filename}");
         h.get_by_role_and_label(Role::Tab, "List of trades").click();
         h.run();
         h.get_by_label("0.00001234");
@@ -98,7 +123,7 @@ fn report_replacement_selection_export_and_clear() {
             h.state().1.last(),
             Some(&StrategyReportAction::SelectTrade(StrategyTradeSelection {
                 trade_index: 2,
-                symbol: "FIRST".into(),
+                symbol: "EUR / USD".into(),
                 timeframe: Timeframe::Min1,
                 entry_time: start,
                 exit_time: report.trades[2].exit.as_ref().map(|e| e.time),
@@ -415,16 +440,31 @@ fn range_limits_summary_charts_and_trades() {
             h.get_by_role_and_label(Role::Button, label).click();
             h.run();
         }
+        let exports = &h.state().1[1..];
+        assert!(matches!(
+            exports,
+            [
+                StrategyReportAction::ExportCsv { .. },
+                StrategyReportAction::ExportSummaryCsv { .. }
+            ]
+        ));
+        let contents: Vec<&str> = exports
+            .iter()
+            .map(|action| match action {
+                StrategyReportAction::ExportCsv { content, .. }
+                | StrategyReportAction::ExportSummaryCsv { content, .. } => content.as_str(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
         assert_eq!(
-            &h.state().1[1..],
-            &[
-                StrategyReportAction::ExportCsv(
-                    report.trades_csv_with_excursions(&report.comparison(&bars))
-                ),
-                StrategyReportAction::ExportSummaryCsv {
-                    filename: "Range-SAMPLE-summary.csv".into(),
-                    content: report.summary_csv(&report.performance(), &report.comparison(&bars)),
-                },
+            contents,
+            [
+                report
+                    .trades_csv_with_excursions(&report.comparison(&bars))
+                    .as_str(),
+                report
+                    .summary_csv(&report.performance(), &report.comparison(&bars))
+                    .as_str(),
             ]
         );
         h.get_by_role_and_label(Role::TextInput, "To (UTC)").click();
@@ -630,4 +670,93 @@ fn summary_shows_trade_figures_for_all_long_and_short() {
     };
     assert!(content.contains("summary,Net profit,50.25,money,,long\n"));
     assert!(content.contains("summary,Net profit,-30.5,money,,short\n"));
+}
+
+#[test]
+fn export_filenames_name_the_run_kind_and_second() {
+    let t = NaiveDate::from_ymd_opt(2026, 11, 21)
+        .unwrap()
+        .and_hms_opt(14, 3, 7)
+        .unwrap();
+    let (long, long_expected) = (
+        "a".repeat(70),
+        format!("{}_S_90min_trades_2026-11-21_14-03-07.csv", "a".repeat(64)),
+    );
+    let minutes_90 = Timeframe::Custom(std::num::NonZeroU64::new(5400).unwrap());
+    let run = "First run/2";
+    let pair = "EUR / USD";
+    for (name, symbol, timeframe, kind, seconds, expected) in [
+        (
+            run,
+            pair,
+            Timeframe::Min1,
+            "trades",
+            0,
+            "First_run_2_EUR___USD_1min_trades_2026-11-21_14-03-07.csv",
+        ),
+        (
+            run,
+            pair,
+            Timeframe::Min1,
+            "trades",
+            1,
+            "First_run_2_EUR___USD_1min_trades_2026-11-21_14-03-08.csv",
+        ),
+        (
+            run,
+            pair,
+            Timeframe::Hour1,
+            "trades",
+            0,
+            "First_run_2_EUR___USD_1h_trades_2026-11-21_14-03-07.csv",
+        ),
+        (
+            run,
+            pair,
+            Timeframe::Min1,
+            "summary",
+            0,
+            "First_run_2_EUR___USD_1min_summary_2026-11-21_14-03-07.csv",
+        ),
+        (
+            run,
+            pair,
+            Timeframe::Min1,
+            "summary",
+            1,
+            "First_run_2_EUR___USD_1min_summary_2026-11-21_14-03-08.csv",
+        ),
+        (
+            run,
+            pair,
+            Timeframe::Hour1,
+            "summary",
+            0,
+            "First_run_2_EUR___USD_1h_summary_2026-11-21_14-03-07.csv",
+        ),
+        (
+            "Ré_x-1",
+            "",
+            Timeframe::Day1,
+            "summary",
+            0,
+            "R__x-1_1D_summary_2026-11-21_14-03-07.csv",
+        ),
+        (
+            long.as_str(),
+            "S",
+            minutes_90,
+            "trades",
+            0,
+            long_expected.as_str(),
+        ),
+    ] {
+        let report = StrategyReport::new(name, symbol, timeframe, 1000.0);
+        let time = t + TimeDelta::seconds(seconds);
+        assert_eq!(
+            export_filename(&report, kind, time),
+            expected,
+            "{name} {timeframe} {kind}"
+        );
+    }
 }
