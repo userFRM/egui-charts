@@ -1557,6 +1557,18 @@ mod tests {
                 assert_eq!(Some(restored.scale()), saved.scale);
             }
             for (id, value) in &saved.inputs {
+                // The saved calculation controls no longer apply to the pattern's drawings.
+                if matches!(
+                    id.as_str(),
+                    "calculation_symbol" | "calculation_timeframe" | "wait_for_close"
+                ) {
+                    assert!(
+                        !inputs.iter().any(|input| input.id == *id),
+                        "{} {id}",
+                        saved.name
+                    );
+                    continue;
+                }
                 assert_eq!(
                     inputs
                         .iter()
