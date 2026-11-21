@@ -13,8 +13,7 @@ use egui_charts::data::{
 use egui_charts::model::{Bar, PostContent, Quote};
 use egui_charts::services::{
     ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, Events, Notification,
-    NotificationTarget,
-    Notifications, Posts, Quotes,
+    NotificationTarget, Notifications, Posts, Quotes,
 };
 
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};

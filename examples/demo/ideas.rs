@@ -350,8 +350,7 @@ mod tests {
 
         h.get_by_role_and_label(Role::Button, "Ideas").click();
         h.run();
-        h.get_by(|node| node.placeholder() == Some("Title"))
-            .focus();
+        h.get_by(|node| node.placeholder() == Some("Title")).focus();
         h.run();
         h.get_by(|node| node.placeholder() == Some("Title"))
             .type_text("Higher low");
@@ -367,7 +366,12 @@ mod tests {
         h.run();
         let idea = &h.state().ideas.feed[0];
         assert_eq!(
-            (idea.kind, idea.title.as_str(), idea.direction, idea.tags.clone()),
+            (
+                idea.kind,
+                idea.title.as_str(),
+                idea.direction,
+                idea.tags.clone()
+            ),
             (
                 IdeaKind::Idea,
                 "Higher low",

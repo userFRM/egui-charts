@@ -889,7 +889,13 @@ mod tests {
             (IdeaKind::Idea, "Breakout", "Above the range", "", false),
             (IdeaKind::Idea, "Breakout", "Above the range", "AAPL", true),
             (IdeaKind::ShortPost, "", "Quick note", "", true),
-            (IdeaKind::ShortPost, "Ignored title", "Quick note", "AAPL", true),
+            (
+                IdeaKind::ShortPost,
+                "Ignored title",
+                "Quick note",
+                "AAPL",
+                true,
+            ),
             (IdeaKind::ShortPost, "", "  ", "AAPL", false),
         ] {
             let mut panel = IdeasPanel::new();

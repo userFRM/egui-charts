@@ -551,7 +551,11 @@ impl ChatsPanel {
             }
         });
         let room = self.rooms[self.room].clone();
-        if self.replying.as_ref().is_some_and(|message| message.room != room) {
+        if self
+            .replying
+            .as_ref()
+            .is_some_and(|message| message.room != room)
+        {
             self.replying = None;
         }
         if let Some(error) = &self.error {
@@ -722,7 +726,9 @@ impl ChatsPanel {
                                         ui.menu_button(author, |ui| {
                                             let mut pick = None;
                                             if reply
-                                                && ui.button(l10n::text(ui.ctx(), "Reply")).clicked()
+                                                && ui
+                                                    .button(l10n::text(ui.ctx(), "Reply"))
+                                                    .clicked()
                                             {
                                                 pick = Some(MessageAction::Reply);
                                             }
@@ -1380,7 +1386,11 @@ mod tests {
     #[test]
     fn times_follow_the_zone_with_a_separator_per_local_day() {
         use chrono::TimeZone;
-        let utc = |day, hour| chrono::Utc.with_ymd_and_hms(2026, 11, day, hour, 30, 0).unwrap();
+        let utc = |day, hour| {
+            chrono::Utc
+                .with_ymd_and_hms(2026, 11, day, hour, 30, 0)
+                .unwrap()
+        };
         for (zone, expected, hover) in [
             (
                 None,
@@ -1412,7 +1422,10 @@ mod tests {
                 panel.set_timezone(zone);
             }
             let events = host.events.lock().unwrap().clone().unwrap();
-            for (n, time) in [utc(20, 23), utc(21, 4), utc(21, 5)].into_iter().enumerate() {
+            for (n, time) in [utc(20, 23), utc(21, 4), utc(21, 5)]
+                .into_iter()
+                .enumerate()
+            {
                 let message = ChatMessage::new("desk", "Ann", time, format!("m{n}"));
                 events.push(ChatEvent::Message(message));
             }
@@ -1537,11 +1550,16 @@ mod tests {
             h.run();
             assert!(h.query_by_label("Morning").is_none());
             assert!(h.query_by_label("Ana: Morning").is_none());
-            assert_eq!(h.query_all_by_label("Reply to an earlier message").count(), 2);
-            h.get_by_role_and_label(Role::Button, "Ignored users").click();
+            assert_eq!(
+                h.query_all_by_label("Reply to an earlier message").count(),
+                2
+            );
+            h.get_by_role_and_label(Role::Button, "Ignored users")
+                .click();
             h.run();
             h.get_by_label("Ana");
-            h.get_by_role_and_label(Role::Button, "Stop ignoring").click();
+            h.get_by_role_and_label(Role::Button, "Stop ignoring")
+                .click();
             // Steps, not a run: the pending request shows a spinner, which repaints.
             h.run_steps(3);
             let (user, ignore, _) = host.ignores.lock().unwrap().pop().unwrap();
