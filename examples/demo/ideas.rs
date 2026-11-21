@@ -5,7 +5,7 @@ use egui_charts::drawings::DrawingToolType;
 use egui_charts::ui::ideas::{Idea, IdeaDraft, IdeaKind, IdeaPage, IdeasAction, IdeasPanel};
 use egui_charts::ui::widget_bar::NotificationsAction;
 
-use super::{DemoApp, SidePanel};
+use super::{DemoApp, ExportFormat, SidePanel};
 
 /// Ideas and posts published in this session, newest first.
 pub(super) struct DemoIdeas {
@@ -35,13 +35,26 @@ impl DemoIdeas {
 }
 
 impl DemoApp {
-    fn publish_idea(&mut self, draft: &IdeaDraft) {
+    fn publish_idea(&mut self, ctx: &egui::Context, draft: &IdeaDraft) {
         let id = format!("demo-{}", self.ideas.next);
-        self.ideas.next += 1;
         let mut idea = Idea::new(&id, IdeaKind::Idea, &draft.body, "You", Utc::now());
         idea.title = draft.title.clone();
         idea.symbol = draft.symbol.clone();
         idea.interval = draft.interval.clone();
+        if draft.attach_chart {
+            match self.export_image_bytes(ctx, &Default::default(), ExportFormat::Png, false) {
+                Ok(png) => {
+                    let uri = format!("bytes://{id}.png");
+                    ctx.include_bytes(uri.clone(), png);
+                    idea.attachment = Some(uri);
+                }
+                Err(error) => {
+                    self.ideas.panel.publish_failed(error.to_string());
+                    return;
+                }
+            }
+        }
+        self.ideas.next += 1;
         self.ideas.add(idea);
         self.ideas.panel.publish_succeeded(&id, None);
         self.notification_host
@@ -79,9 +92,9 @@ impl DemoApp {
         }
     }
 
-    pub(super) fn handle_ideas(&mut self, action: IdeasAction) {
+    pub(super) fn handle_ideas(&mut self, ctx: &egui::Context, action: IdeasAction) {
         match action {
-            IdeasAction::Publish(draft) => self.publish_idea(&draft),
+            IdeasAction::Publish(draft) => self.publish_idea(ctx, &draft),
             IdeasAction::OpenChart { symbol, interval } => {
                 self.open_catalog_symbol(&symbol);
                 if let Ok(timeframe) = interval.parse() {
@@ -156,7 +169,7 @@ mod tests {
         let attached = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Chart attached")));
         output.drop_without_applying_deltas();
         assert!(attached);
-        app.publish_idea(&app.ideas.panel.draft().clone());
+        app.publish_idea(&ctx, &app.ideas.panel.draft().clone());
         assert_eq!(app.ideas.feed[0].kind, IdeaKind::Idea);
         let id = app.ideas.feed[0].id.clone();
         app.open_panel = None;
@@ -169,11 +182,19 @@ mod tests {
             .symbol;
         let timeframe = egui_charts::model::Timeframe::Day1;
         assert_ne!(app.state.timeframe, timeframe);
-        app.handle_ideas(IdeasAction::OpenChart {
-            symbol: symbol.into(),
-            interval: timeframe.as_str().into(),
-        });
+        app.handle_ideas(
+            &ctx,
+            IdeasAction::OpenChart {
+                symbol: symbol.into(),
+                interval: timeframe.as_str().into(),
+            },
+        );
         assert_eq!(app.state.symbol, symbol);
         assert_eq!(app.state.timeframe, timeframe);
+        assert!(app.ideas.feed[0].attachment.is_some());
+        let mut draft = app.ideas.panel.draft().clone();
+        draft.attach_chart = false;
+        app.publish_idea(&ctx, &draft);
+        assert!(app.ideas.feed[0].attachment.is_none());
     }
 }

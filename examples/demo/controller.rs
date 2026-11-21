@@ -2876,7 +2876,7 @@ impl DemoApp {
                         .panel
                         .set_context(&self.state.symbol, self.state.timeframe.as_str());
                     let action = self.ideas.panel.show(ui);
-                    self.handle_ideas(action);
+                    self.handle_ideas(ui.ctx(), action);
                 }
                 SidePanel::Chats => self.chats.show(ui),
                 SidePanel::Products => {
