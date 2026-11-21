@@ -18,6 +18,9 @@ pub struct TopToolbarState {
     /// Enables Copy link and Post image in the snapshot menu. Handle
     /// [`TopToolbarAction::CopyImageLink`](super::TopToolbarAction::CopyImageLink) and
     /// [`TopToolbarAction::PostImage`](super::TopToolbarAction::PostImage) through that service.
+    /// The menu then shows the keys of
+    /// [`KeyboardAction::Snapshot`](crate::config::KeyboardAction::Snapshot) beside Copy link
+    /// instead of Download image, so run Copy link for that shortcut.
     pub can_publish_image: bool,
     /// Whether the host publishes ideas; the Publish button is hidden while this is `false`.
     /// Handle [`TopToolbarAction::Publish`](super::TopToolbarAction::Publish).
