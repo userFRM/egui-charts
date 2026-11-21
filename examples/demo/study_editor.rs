@@ -306,7 +306,7 @@ mod tests {
             .zip(&times)
             .map(|(close, &time)| Bar::from_value(time, close))
             .collect();
-        app.chart = egui_charts::Chart::new(BarData::from_bars(bars));
+        *app.chart = egui_charts::Chart::new(BarData::from_bars(bars));
         edit(&mut app, &ctx, "close - close[10]", "close - close[1]");
         click(&mut app, &ctx, "Apply");
         let id = app

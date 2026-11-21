@@ -338,9 +338,11 @@ enum RangeFit {
 }
 
 /// The full demo application.
+///
+/// Members over 1 KiB are boxed: `new_at` assembles this struct on its stack before boxing it.
 pub struct DemoApp {
-    pub chart: Chart,
-    pub(crate) layout: ChartLayout,
+    pub chart: Box<Chart>,
+    pub(crate) layout: Box<ChartLayout>,
     layout_slot: usize,
     images: images::Images,
     extra_charts: Vec<DemoChart>,
@@ -349,7 +351,7 @@ pub struct DemoApp {
     live: Arc<LiveFeed>,
     /// Whether an object tree colour picker is editing a drawing, as one undo step.
     colour_drag: bool,
-    menus: ChartMenus,
+    menus: Box<ChartMenus>,
     last_chart_click: Option<egui_charts::widget::ChartPointer>,
     /// The latest crosshair payload of the active chart, from which the data window reads.
     crosshair: Option<egui_charts::widget::ChartPointer>,
@@ -366,18 +368,18 @@ pub struct DemoApp {
     formatting: formatting::Formatting,
 
     // Persistent toolbars.
-    pub(crate) top_toolbar: TopToolbar,
+    pub(crate) top_toolbar: Box<TopToolbar>,
     drawing_toolbar: DrawingToolbar,
     selection_toolbar: FloatingSelectionToolbar,
     pub(crate) timeframe_toolbar: TimeframeToolbar,
     widget_bar: WidgetBar,
 
     // Dialogs (each owns its open/closed state).
-    indicator_dialog: IndicatorDialog,
-    indicator_settings: IndicatorSettingsDialog,
-    settings_dialog: SettingsDialog,
-    settings_state: ChartSettingsState,
-    symbol_search: SymbolSearchDialog,
+    indicator_dialog: Box<IndicatorDialog>,
+    indicator_settings: Box<IndicatorSettingsDialog>,
+    settings_dialog: Box<SettingsDialog>,
+    settings_state: Box<ChartSettingsState>,
+    symbol_search: Box<SymbolSearchDialog>,
     compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog,
     comparison_settings: Option<comparison::ComparisonSettings>,
     comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
@@ -385,15 +387,15 @@ pub struct DemoApp {
     spreads: Vec<comparison::Spread>,
     storage: Arc<storage::DemoStorage>,
     workspace_recovery: storage::WorkspaceRecovery,
-    settings: egui_charts::services::SettingsStore,
+    settings: Box<egui_charts::services::SettingsStore>,
     /// Changes of the chart arrangement, which autosave counts with the charts' edits.
     grid_edits: u64,
     study_templates: TemplateDialog<StudyTemplateSet>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
-    sample_scene: Option<commands::SampleScene>,
+    sample_scene: Option<Box<commands::SampleScene>>,
     sample_study: study_editor::SampleStudyEditor,
-    alert_dialog: AlertDialog,
-    drawing_props: DrawingPropertiesDialog,
+    alert_dialog: Box<AlertDialog>,
+    drawing_props: Box<DrawingPropertiesDialog>,
     keyboard_shortcuts: KeyboardShortcutsDialog,
     data_table: egui_charts::ui::dialogs::DataTableDialog,
     interval_entry: Option<String>,
@@ -409,7 +411,7 @@ pub struct DemoApp {
     date_picker: DatePicker,
 
     // A finished host-run sample, independent of subsequent chart navigation.
-    strategy_report: egui_charts::ui::strategy_report::StrategyTester,
+    strategy_report: Box<egui_charts::ui::strategy_report::StrategyTester>,
     live_strategy: Option<(egui_charts::strategies::Backtest, String)>,
     strategy_trade: Option<usize>,
     strategy_session: SessionType,
@@ -422,7 +424,7 @@ pub struct DemoApp {
     data_window_expanded: bool,
 
     // Host-owned session-only alerts, shown through the library service connection.
-    pub(crate) alerts: AlertsPanel,
+    pub(crate) alerts: Box<AlertsPanel>,
     alert_host: Arc<crate::panel_alerts::DemoAlerts>,
     audio: audio::AudioPlayer,
     alert_evaluator: egui_charts::services::AlertEvaluator,
@@ -430,7 +432,7 @@ pub struct DemoApp {
 
     // Session-only paper account, connected from the broker picker and traded through the
     // library's order ticket and account panel.
-    pub(crate) trading: egui_charts::ui::trading::Trading,
+    pub(crate) trading: Box<egui_charts::ui::trading::Trading>,
     pub(crate) paper: Arc<egui_charts::services::PaperAccount>,
     broker_picker: egui_charts::ui::trading::BrokerPicker,
     account_panel: AccountPanelSize,
@@ -460,7 +462,7 @@ pub struct DemoApp {
     depth: egui_charts::ui::trading::DepthPanel,
     order_flow: egui_charts::ui::widget_bar::OrderFlowPanel,
     // Below the watchlist: the chart symbol's synthetic details and notes kept in app storage.
-    symbol_details: SymbolDetailsPanel,
+    symbol_details: Box<SymbolDetailsPanel>,
     /// The chart symbol's financials, shown in place of the chart while they are open.
     financials: Option<(String, egui_charts::ui::financials::FinancialsPanel)>,
     // Synthetic highlights and headlines from the live feed.
@@ -508,7 +510,7 @@ pub struct DemoApp {
     /// Set while the chart shows a visitor's own data.
     own_data: Option<owndata::app::OwnData>,
     /// The Data source dialog.
-    data_source: owndata::dialog::DataSourceDialog,
+    data_source: Box<owndata::dialog::DataSourceDialog>,
 }
 
 fn sample_widgets() -> [WidgetBarWidget; 2] {
@@ -562,16 +564,18 @@ impl DemoApp {
         let live = Arc::new(LiveFeed::new(symbol, now));
         live.set_paused(paused);
         let quotes = Arc::new(feeds::DemoQuotes::new(live.clone()));
-        let mut chart = egui_charts::ChartBuilder::new()
-            .with_feed(live.clone())
-            // The generated week of minutes, so the first reply holds the whole history.
-            .with_initial_bars(10_080)
-            .with_symbol(symbol)
-            .with_timeframe(timeframe)
-            .with_theme(theme.clone())
-            .with_visible_candles(0)
-            .with_chart_options(options)
-            .build();
+        let mut chart = Box::new(
+            egui_charts::ChartBuilder::new()
+                .with_feed(live.clone())
+                // The generated week of minutes, so the first reply holds the whole history.
+                .with_initial_bars(10_080)
+                .with_symbol(symbol)
+                .with_timeframe(timeframe)
+                .with_theme(theme.clone())
+                .with_visible_candles(0)
+                .with_chart_options(options)
+                .build(),
+        );
         chart.config_mut().volume_height_fraction = 0.25;
         chart.config_mut().volume_baseline_inset = 0.0;
         chart.config_mut().candle_width = 0.75;
@@ -598,9 +602,9 @@ impl DemoApp {
         chart.set_post_source(Some(Arc::new(feeds::DemoPosts(live.clone()))));
         let notification_host: Arc<feeds::DemoNotifications> = Arc::default();
 
-        let mut top_toolbar = TopToolbar::new().with_config(
+        let mut top_toolbar = Box::new(TopToolbar::new().with_config(
             egui_charts::ui::top_toolbar::TopToolbarConfig::default().with_height(38.0),
-        );
+        ));
         top_toolbar.timeframe_selector.current = Timeframe::Min1;
         // A host's own call to action sits at the right end; the demo only reports it.
         top_toolbar.call_to_action = Some(("upgrade".into(), "Upgrade".into()));
@@ -608,7 +612,7 @@ impl DemoApp {
             .into_iter()
             .map(|(name, _)| (name.to_owned(), name.to_owned()))
             .collect();
-        let mut menus = ChartMenus::default();
+        let mut menus = Box::<ChartMenus>::default();
         menus.host_entries.extend([
             HostMenuEntry::new("research", "Open in research")
                 .with_icon(&egui_charts::icons::icons::QUICK_SEARCH),
@@ -653,14 +657,15 @@ impl DemoApp {
 
         let alert_live = Arc::new(live.fork());
         alert_live.set_view(SessionType::RTH, false);
-        let indicator_dialog =
-            IndicatorDialog::new().with_factory(study_editor::study_factory(theme.ui.accent));
+        let indicator_dialog = Box::new(
+            IndicatorDialog::new().with_factory(study_editor::study_factory(theme.ui.accent)),
+        );
         // Keep the controller off callers' stacks, including tests that restart it.
         let mut app = Box::new(Self {
             chart,
             order_flow: egui_charts::ui::widget_bar::OrderFlowPanel::new(live.detectors()),
             live,
-            layout: ChartLayout::default(),
+            layout: Box::default(),
             layout_slot: 0,
             images: images::Images::default(),
             extra_charts: Vec::new(),
@@ -699,24 +704,24 @@ impl DemoApp {
             timeframe_toolbar,
             widget_bar,
             indicator_dialog,
-            indicator_settings: IndicatorSettingsDialog::default(),
-            settings_dialog: {
+            indicator_settings: Box::default(),
+            settings_dialog: Box::new({
                 let mut dialog = SettingsDialog::new();
                 dialog.execution_sounds = DEMO_SOUNDS.map(str::to_owned).to_vec();
                 dialog
-            },
-            settings_state: ChartSettingsState::default(),
-            symbol_search: SymbolSearchDialog::new(),
+            }),
+            settings_state: Box::default(),
+            symbol_search: Box::new(SymbolSearchDialog::new()),
             compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog::new(),
             comparison_settings: None,
             comparisons: Vec::new(),
             spreads: Vec::new(),
-            settings: egui_charts::services::SettingsStore::new(storage.clone()),
+            settings: Box::new(egui_charts::services::SettingsStore::new(storage.clone())),
             own_data: None,
-            data_source: owndata::dialog::DataSourceDialog::new(
+            data_source: Box::new(owndata::dialog::DataSourceDialog::new(
                 storage.clone(),
                 cc.storage.is_some(),
-            ),
+            )),
             storage,
             workspace_recovery: storage::WorkspaceRecovery::default(),
             grid_edits: 0,
@@ -727,8 +732,8 @@ impl DemoApp {
             ),
             sample_scene: None,
             sample_study: Default::default(),
-            alert_dialog: AlertDialog::new(),
-            drawing_props: DrawingPropertiesDialog::new(),
+            alert_dialog: Box::new(AlertDialog::new()),
+            drawing_props: Box::new(DrawingPropertiesDialog::new()),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
             data_table: egui_charts::ui::dialogs::DataTableDialog::new(),
             interval_entry: None,
@@ -751,7 +756,7 @@ impl DemoApp {
                 .flatten()
                 .filter(|panel| *panel != SidePanel::TimeAndSales),
             data_window_expanded: true,
-            alerts: {
+            alerts: Box::new({
                 let mut panel = AlertsPanel::default();
                 if let Some(options) = cc
                     .storage
@@ -760,7 +765,7 @@ impl DemoApp {
                     panel.set_options(options);
                 }
                 panel
-            },
+            }),
             alert_host: {
                 let mut alerts: Vec<Alert> = cc
                     .storage
@@ -824,7 +829,7 @@ impl DemoApp {
                 .storage
                 .and_then(|storage| eframe::get_value(storage, "depth_panel"))
                 .unwrap_or_default(),
-            symbol_details: SymbolDetailsPanel::new(),
+            symbol_details: Box::new(SymbolDetailsPanel::new()),
             financials: None,
             highlights: NewsPanel::highlights(),
             news: NewsPanel::new(),
@@ -963,7 +968,7 @@ impl DemoApp {
             .storage
             .and_then(|storage| eframe::get_value(storage, "drawing_defaults"))
             .unwrap_or_default();
-        app.settings_state = ChartSettingsState::from_chart(&app.chart);
+        *app.settings_state = ChartSettingsState::from_chart(&app.chart);
         // The demo's storage answers at once, so the settings apply before the first frame.
         let current = app.user_settings();
         let recover_workspace = if let Some(settings) = app.settings.poll(&cc.egui_ctx, &current) {
@@ -1315,7 +1320,7 @@ impl DemoApp {
     }
 
     fn open_chart_settings_dialog(&mut self) {
-        self.settings_state = self.chart_settings_state();
+        *self.settings_state = self.chart_settings_state();
         self.settings_dialog
             .offer_apply_to_all(self.layout_has_other_charts());
         // Only the synthetic contracts have futures history to reload.
@@ -1327,7 +1332,7 @@ impl DemoApp {
                 .depth_history(SeriesId::MAIN)
                 .map(DepthHistory::config),
         );
-        self.settings_dialog.open(self.settings_state.clone());
+        self.settings_dialog.open((*self.settings_state).clone());
     }
 
     fn open_drawing_props_for(&mut self, drawing_id: usize) {
@@ -1508,7 +1513,7 @@ impl DemoApp {
         let news_changed = state.events.show_news_notifications
             != self.chart.event_visibility().show_news_notifications;
         self.chart.begin_user_action();
-        self.settings_state = state.clone();
+        *self.settings_state = state.clone();
         self.trading.display = state.trading.clone();
         let alerts = &state.alerts;
         self.alerts
@@ -1543,7 +1548,11 @@ impl DemoApp {
 
     /// Applies `copy` when every chart can take it, and otherwise first lists what they lack.
     fn request_layout_copy(&mut self, copy: LayoutCopy) {
-        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        let mut charts: Vec<_> = self
+            .extra_charts
+            .iter_mut()
+            .map(|c| &mut *c.chart)
+            .collect();
         charts.insert(self.layout_slot, &mut self.chart);
         let issues = self.layout.copy_issues(
             &charts,
@@ -1587,7 +1596,11 @@ impl DemoApp {
         if let LayoutCopy::Settings(state) = &copy {
             self.apply_chart_settings((**state).clone());
         }
-        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        let mut charts: Vec<_> = self
+            .extra_charts
+            .iter_mut()
+            .map(|c| &mut *c.chart)
+            .collect();
         charts.insert(self.layout_slot, &mut self.chart);
         self.layout.apply_copy(
             &mut charts,
@@ -1662,7 +1675,11 @@ impl DemoApp {
         end: chrono::NaiveDate,
         end_time: Option<chrono::NaiveTime>,
     ) {
-        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        let mut charts: Vec<_> = self
+            .extra_charts
+            .iter_mut()
+            .map(|c| &mut *c.chart)
+            .collect();
         charts.insert(self.layout_slot, &mut self.chart);
         self.layout
             .apply_local_date_range(&mut charts, start, start_time, end, end_time);
@@ -1671,7 +1688,11 @@ impl DemoApp {
     /// Goes to `time` on `date`, or to its start, on the active chart and the charts that share
     /// date ranges with it.
     fn go_to_date(&mut self, date: chrono::NaiveDate, time: Option<chrono::NaiveTime>) {
-        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        let mut charts: Vec<_> = self
+            .extra_charts
+            .iter_mut()
+            .map(|c| &mut *c.chart)
+            .collect();
         charts.insert(self.layout_slot, &mut self.chart);
         self.layout.go_to_local_time(&mut charts, date, time);
     }
@@ -3553,7 +3574,11 @@ impl DemoApp {
         if (self.layout.sync.sync_date_range || self.layout.sync.sync_time_axis)
             && let Some(range) = self.chart.visible_time_range()
         {
-            let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+            let mut charts: Vec<_> = self
+                .extra_charts
+                .iter_mut()
+                .map(|c| &mut *c.chart)
+                .collect();
             charts.insert(self.layout_slot, &mut self.chart);
             self.layout.apply_date_range(&mut charts, range);
         }
@@ -3674,8 +3699,11 @@ impl DemoApp {
                     .iter()
                     .map(|c| c.chart.symbol().to_owned())
                     .collect();
-                let mut charts: Vec<_> =
-                    self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+                let mut charts: Vec<_> = self
+                    .extra_charts
+                    .iter_mut()
+                    .map(|c| &mut *c.chart)
+                    .collect();
                 charts.insert(self.layout_slot, &mut self.chart);
                 let rect = self.layout.show(ui, &mut charts).rect;
                 let visible = self.layout.visible_chart_rects(rect, charts.len());
@@ -6014,7 +6042,7 @@ mod tests {
                 "2026-10-27T19:29:50Z".parse().unwrap(),
                 true,
             );
-            app.chart = Chart::new(BarData::new());
+            *app.chart = Chart::new(BarData::new());
             let mut drawing = Drawing::new(7, tool);
             drawing.chart_points = vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 110.0)];
             drawing.text = Some("Annotation".into());
@@ -7003,7 +7031,7 @@ mod tests {
         );
         let mut instrument = app.chart.instrument().unwrap().clone();
         instrument.services = Some(vec![]);
-        app.chart = egui_charts::ChartBuilder::new()
+        *app.chart = egui_charts::ChartBuilder::new()
             .with_symbol(&instrument.symbol)
             .build();
         app.chart.set_instrument(Some(instrument));
@@ -8072,7 +8100,7 @@ mod tests {
         assert_eq!(app.chart.timeframe(), Some(Timeframe::Min15));
         assert_eq!(app.top_toolbar.timeframe_selector.current, Timeframe::Min15);
         let original = app.chart.config().background_color;
-        let mut settings = app.settings_state.clone();
+        let mut settings = (*app.settings_state).clone();
         settings.chart_basic_styles.background_color = egui::Color32::RED;
         settings.scales_and_lines.invert_scale = true;
         settings.timezone = "America/New_York".into();
@@ -8991,7 +9019,7 @@ mod tests {
             })
             .collect();
         let time = bars[50].time;
-        app.chart = Chart::new(BarData::from_bars(bars));
+        *app.chart = Chart::new(BarData::from_bars(bars));
         app.chart.set_crosshair_position(Some((time, 103.0)));
         for _ in 0..2 {
             ctx.run_ui(Default::default(), |ui| {
@@ -9177,7 +9205,7 @@ mod tests {
         list_options.descending = false;
         list_options.sort = egui_charts::ui::widget_bar::AlertSortKey::Fired;
         app.alerts.set_options(list_options.clone());
-        let mut settings = app.settings_state.clone();
+        let mut settings = (*app.settings_state).clone();
         settings.alerts.notification_seconds = 12;
         settings.alerts.close_toasts = false;
         settings.alerts.desktop_notifications = true;
@@ -9520,7 +9548,7 @@ mod tests {
         app.live.set_paused(true);
         app.chart.set_feed_paused(true);
         app.chart.set_size(Some(egui::vec2(800.0, 600.0)));
-        let mut state = app.settings_state.clone();
+        let mut state = (*app.settings_state).clone();
         state.candle_colors = serde_json::from_str("{}").unwrap();
         state.chart_basic_styles.background_type = BackgroundType::VerticalGradient;
         state.chart_basic_styles.background_gradient_top = egui::Color32::RED;
@@ -9620,7 +9648,7 @@ mod tests {
         let initial = app.notifications.unread();
         let mut received = initial;
         for enabled in [false, true, true, false] {
-            let mut state = app.settings_state.clone();
+            let mut state = (*app.settings_state).clone();
             state.events.show_news = false;
             state.events.show_news_notifications = enabled;
             app.apply_chart_settings(state);
@@ -11074,7 +11102,7 @@ mod tests {
             assert_eq!(app.settings_state.timezone, "Europe/Paris");
 
             // A saved event still renders its legend and tooltip after the chart is gone.
-            app.chart = Chart::new(BarData::new());
+            *app.chart = Chart::new(BarData::new());
             app.api_samples = true;
             for theme in [Theme::light(), Theme::dark()] {
                 egui_charts::theme::apply_to_egui(&ctx, &theme);
@@ -11784,8 +11812,8 @@ mod tests {
         app.stop_replay();
         let mut options = app.chart.chart_options().clone();
         options.time_scale.timezone = egui_charts::config::TimezoneMode::nyse();
-        let chart = std::mem::replace(&mut app.chart, Chart::new(BarData::new()));
-        app.chart = chart.with_chart_options(options);
+        let chart = std::mem::replace(&mut *app.chart, Chart::new(BarData::new()));
+        *app.chart = chart.with_chart_options(options);
         let timeframe = "45min".parse().unwrap();
         app.switch_timeframe(timeframe);
         for _ in 0..3 {

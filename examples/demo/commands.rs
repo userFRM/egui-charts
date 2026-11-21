@@ -337,13 +337,15 @@ impl DemoApp {
             return;
         }
         if let Some(scene) = match id {
-            "smile" => Some(SampleScene::Numeric(
+            "smile" => Some(Box::new(SampleScene::Numeric(
                 super::numeric_scenes::volatility_smile(),
-            )),
-            "yield" => Some(SampleScene::Numeric(super::numeric_scenes::yield_curve())),
-            "primitives" => Some(SampleScene::Extensions(
+            ))),
+            "yield" => Some(Box::new(SampleScene::Numeric(
+                super::numeric_scenes::yield_curve(),
+            ))),
+            "primitives" => Some(Box::new(SampleScene::Extensions(
                 super::primitive_scene::PrimitiveScene::new(),
-            )),
+            ))),
             _ => None,
         } {
             self.sample_scene = Some(scene);
@@ -629,7 +631,7 @@ impl DemoApp {
             self.sample_scene = None;
             self.execute_search_command(ui.ctx(), command);
         }
-        let Some(scene) = &mut self.sample_scene else {
+        let Some(scene) = self.sample_scene.as_deref_mut() else {
             return false;
         };
         let mut search = false;
@@ -831,7 +833,7 @@ mod tests {
                 let mut charts: Vec<_> = app
                     .extra_charts
                     .iter_mut()
-                    .map(|slot| &mut slot.chart)
+                    .map(|slot| &mut *slot.chart)
                     .collect();
                 charts.insert(app.layout_slot, &mut app.chart);
                 for (slot, chart) in charts.into_iter().enumerate().take(count) {
