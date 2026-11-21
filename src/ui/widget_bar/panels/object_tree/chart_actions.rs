@@ -17,6 +17,9 @@ impl ObjectTreePanel {
     /// series; bar-series ordering stays within its pane. Deleting keeps locked drawings and
     /// those whose user edits are off selected, and reports only locked drawings with
     /// [`ChartEvent::LockedDrawingsKept`](crate::widget::ChartEvent::LockedDrawingsKept).
+    /// While [`DrawingManager::is_locked`](crate::drawings::DrawingManager::is_locked) holds,
+    /// `ToggleLock`, `LockAll`, `UnlockAll` and `SetFolderLocked` leave each drawing's own lock
+    /// unchanged.
     /// Duplicate and Duplicate selected add the study copies the
     /// [study caps](Chart::set_study_limit) allow, in the order of `sources`, and leave out the others.
     pub fn apply_to_chart(
@@ -126,6 +129,7 @@ impl ObjectTreePanel {
                 if path.is_empty() || !self.state().folders.contains(path) {
                     return false;
                 }
+                let all_locked = chart.drawings().is_locked();
                 let ids: Vec<_> = chart
                     .drawings()
                     .drawings
@@ -134,7 +138,7 @@ impl ObjectTreePanel {
                         d.folder.starts_with(path)
                             && match action {
                                 ObjectTreeAction::SetFolderVisible(_, _) => d.visible != *value,
-                                _ => d.locked != *value && d.user_edit_enabled,
+                                _ => d.locked != *value && d.user_edit_enabled && !all_locked,
                             }
                     })
                     .map(|d| d.id)
@@ -197,11 +201,12 @@ impl ObjectTreePanel {
                 }
             }
             ObjectTreeAction::ToggleLock(id) => {
+                let all_locked = chart.drawings().is_locked();
                 if chart
                     .drawings()
                     .drawings
                     .iter()
-                    .any(|d| d.id == *id && d.user_edit_enabled)
+                    .any(|d| d.id == *id && d.user_edit_enabled && !all_locked)
                 {
                     let _ = chart
                         .drawings_mut()
@@ -210,11 +215,12 @@ impl ObjectTreePanel {
             }
             ObjectTreeAction::LockAll | ObjectTreeAction::UnlockAll => {
                 let locked = matches!(action, ObjectTreeAction::LockAll);
+                let all_locked = chart.drawings().is_locked();
                 let ids: Vec<_> = chart
                     .drawings()
                     .drawings
                     .iter()
-                    .filter(|d| d.locked != locked && d.user_edit_enabled)
+                    .filter(|d| d.locked != locked && d.user_edit_enabled && !all_locked)
                     .map(|d| d.id)
                     .collect();
                 for id in ids {
@@ -495,50 +501,63 @@ mod tests {
         chart.user_action(|chart| tree.apply_to_chart(chart, &action, &rows));
     }
 
-    /// Every destructive tree command respects the drawing's host editing permission.
+    /// Every destructive tree command respects the drawing's host editing permission and
+    /// Lock all drawings, which also keeps each drawing's own lock.
     #[test]
     fn object_tree_commands_keep_drawings_without_user_edits() {
-        for row in 0..7 {
+        let folder = vec!["Levels".to_owned()];
+        for row in 0..8 {
             for enabled in [true, false] {
-                let mut chart = chart(&[100.0], &[200.0]);
-                let pane = chart.add_pane();
-                for id in [3, 4] {
-                    let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
-                    drawing.chart_points = vec![
-                        ChartPoint::new(10.0, 120.0 + id as f64),
-                        ChartPoint::new(20.0, 130.0 + id as f64),
-                    ];
-                    drawing.completed = true;
-                    drawing.user_edit_enabled = id != 3 || enabled;
-                    drawing.locked = id == 3 && row == 2;
-                    chart.drawings_mut().drawings.push(drawing);
+                for all_locked in [false, true] {
+                    let mut chart = chart(&[100.0], &[200.0]);
+                    let pane = chart.add_pane();
+                    for id in [3, 4] {
+                        let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+                        drawing.chart_points = vec![
+                            ChartPoint::new(10.0, 120.0 + id as f64),
+                            ChartPoint::new(20.0, 130.0 + id as f64),
+                        ];
+                        drawing.completed = true;
+                        drawing.user_edit_enabled = id != 3 || enabled;
+                        drawing.locked = id == 3 && row == 2;
+                        drawing.folder = folder.clone();
+                        chart.drawings_mut().drawings.push(drawing);
+                    }
+                    chart.drawings_mut().set_locked(all_locked);
+                    let mut tree = ObjectTreePanel::new();
+                    tree.state_mut().folders.insert(folder.clone());
+                    tree.state_mut().select(3);
+                    tree.state_mut().toggle_selection(4);
+                    chart.drawings_mut().select_drawings([3, 4]);
+                    let before = chart.drawings().drawings[0].clone();
+                    let action = [
+                        ObjectTreeAction::ToggleLock(3),
+                        ObjectTreeAction::LockAll,
+                        ObjectTreeAction::UnlockAll,
+                        ObjectTreeAction::SetFolderLocked(folder.clone(), true),
+                        ObjectTreeAction::MoveToPane(3, pane),
+                        ObjectTreeAction::Delete(3),
+                        ObjectTreeAction::DeleteSelected,
+                        ObjectTreeAction::RemoveAllDrawings,
+                    ][row]
+                        .clone();
+                    apply(&mut tree, &mut chart, action.clone());
+                    let unchanged = chart
+                        .drawings()
+                        .drawings
+                        .iter()
+                        .find(|d| d.id == 3)
+                        .is_some_and(|d| {
+                            serde_json::to_string(d).unwrap()
+                                == serde_json::to_string(&before).unwrap()
+                                && d.chart_points == before.chart_points
+                        });
+                    assert_eq!(
+                        unchanged,
+                        !enabled || all_locked,
+                        "{action:?}, enabled {enabled}, all locked {all_locked}"
+                    );
                 }
-                let mut tree = ObjectTreePanel::new();
-                tree.state_mut().select(3);
-                tree.state_mut().toggle_selection(4);
-                chart.drawings_mut().select_drawings([3, 4]);
-                let before = chart.drawings().drawings[0].clone();
-                let action = [
-                    ObjectTreeAction::ToggleLock(3),
-                    ObjectTreeAction::LockAll,
-                    ObjectTreeAction::UnlockAll,
-                    ObjectTreeAction::MoveToPane(3, pane),
-                    ObjectTreeAction::Delete(3),
-                    ObjectTreeAction::DeleteSelected,
-                    ObjectTreeAction::RemoveAllDrawings,
-                ][row]
-                    .clone();
-                apply(&mut tree, &mut chart, action.clone());
-                let unchanged = chart
-                    .drawings()
-                    .drawings
-                    .iter()
-                    .find(|d| d.id == 3)
-                    .is_some_and(|d| {
-                        serde_json::to_string(d).unwrap() == serde_json::to_string(&before).unwrap()
-                            && d.chart_points == before.chart_points
-                    });
-                assert_eq!(unchanged, !enabled, "{action:?}, enabled {enabled}");
             }
         }
     }

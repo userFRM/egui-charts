@@ -8,15 +8,16 @@ use std::time::Duration;
 use chrono::{DateTime, Offset, Utc};
 use egui::{RichText, Sense, Ui, vec2};
 
+use super::ROW_HEIGHT;
 use super::controls::{self, cell, row};
 use super::symbol_details::zone_label;
-use super::{ROW_HEIGHT, signed};
 use super::{format_price, price_decimals};
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, HotlistEntry, HotlistQuery};
 use crate::icons::icons;
 use crate::model::TimezoneId;
 use crate::theme::ThemeExt;
+use crate::ui::trading::grouped;
 use crate::ui_kit::buttons::ButtonSize;
 use crate::ui_kit::status_message::{MessageKind, status_message, translated_status_message};
 use crate::ui_kit::{EmptyState, IconButton, LoadingIndicator, PanelHeader};
@@ -361,7 +362,7 @@ impl HotlistsPanel {
                 let mut texts = vec![
                     entry.symbol.clone(),
                     format_price(entry.last, Some(decimals)),
-                    format!("{}%", signed(entry.change_percent, 2)),
+                    format!("{}%", grouped(entry.change_percent, 2, true)),
                 ];
                 if heading.is_some() {
                     texts.push(
