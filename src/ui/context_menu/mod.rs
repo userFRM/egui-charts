@@ -142,43 +142,7 @@ impl ContextMenuAction {
 pub(crate) fn format_price(price: f64) -> String {
     let formatted = format!("{price:.*}", standalone_decimals(price));
 
-    // Add thousands separators
-    let parts: Vec<&str> = formatted.split('.').collect();
-    let integer_part = parts[0];
-    let decimal_part = parts.get(1).unwrap_or(&"");
-
-    let negative = integer_part.starts_with('-');
-    let digits: String = integer_part
-        .chars()
-        .filter(|c| c.is_ascii_digit())
-        .collect();
-
-    let with_commas: String = digits
-        .chars()
-        .rev()
-        .enumerate()
-        .fold(String::new(), |mut acc, (i, c)| {
-            if i > 0 && i % 3 == 0 {
-                acc.push(',');
-            }
-            acc.push(c);
-            acc
-        })
-        .chars()
-        .rev()
-        .collect();
-
-    if decimal_part.is_empty() {
-        if negative {
-            format!("-{with_commas}")
-        } else {
-            with_commas
-        }
-    } else if negative {
-        format!("-{with_commas}.{decimal_part}")
-    } else {
-        format!("{with_commas}.{decimal_part}")
-    }
+    crate::scales::group_thousands(formatted, Some(','))
 }
 
 /// Decimals used by a menu shown without its chart.

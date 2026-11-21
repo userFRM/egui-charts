@@ -359,12 +359,10 @@ impl SymbolHeader {
                             "volume",
                             match self.instrument.volume_decimals {
                                 Some(precision) if self.ohlc.volume.is_finite() => {
-                                    crate::scales::PriceFormatter::format(
-                                        &crate::scales::VolumeFormatter {
-                                            precision: usize::from(precision),
-                                        },
-                                        self.ohlc.volume,
-                                    )
+                                    crate::scales::VolumeFormatter {
+                                        precision: usize::from(precision),
+                                    }
+                                    .format_with_min_unit_decimals(self.ohlc.volume, 2)
                                 }
                                 _ => crate::scales::StudyFormat::Volume
                                     .format(self.ohlc.volume, None),
@@ -542,6 +540,7 @@ mod tests {
             (0.0, 5.0, 0.0, None, 0.75, "Vol 1"),
             (100.0, 105.0, 5.0, Some(3), 1234.56, "Vol 1.235K"),
             (100.0, 105.0, 5.0, None, 1234.56, "Vol 1.23K"),
+            (100.0, 105.0, 5.0, Some(0), 1234.56, "Vol 1.23K"),
         ] {
             let data = OhlcData::new(open, close, open, close, volume);
             assert_eq!(data.change_percent, expected, "{open} -> {close}");
