@@ -1260,7 +1260,10 @@ mod tests {
             _ => None,
         });
         h.run();
-        assert!(h.query_by_label("Zulu").is_none(), "a given name shows as saved");
+        assert!(
+            h.query_by_label("Zulu").is_none(),
+            "a given name shows as saved"
+        );
         let top = |name: &str| h.get_by_label(name).rect().top();
         assert!(top("Alpha") < top("Ligne de tendance"), "sorted as shown");
         assert!(
