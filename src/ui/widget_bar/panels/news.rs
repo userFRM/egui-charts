@@ -554,7 +554,7 @@ impl NewsPanel {
                     response.request_focus();
                 }
                 back = response.clicked()
-                    || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)));
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             });
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
@@ -1365,6 +1365,20 @@ mod tests {
             h.get_by_role_and_label(egui::Role::Button, "Second")
                 .is_focused()
         );
+
+        h.get_by_role_and_label(egui::Role::Button, "First").click();
+        h.run();
+        assert_eq!(h.state().open.as_deref(), Some("First"));
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.state().open.is_none());
+        h.get_by_role_and_label(egui::Role::Button, "First").click();
+        h.run();
+        h.get_by_label("Show on chart").focus();
+        h.run();
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.state().open.is_none());
 
         // With more than a page of rows, paging reaches an interior story, rather than one row
         // down or the end, and paging back returns to the first row.
