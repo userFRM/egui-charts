@@ -62,8 +62,6 @@ pub struct SeriesContextMenu {
     pub symbol: String,
     /// Price at click position
     pub click_price: f64,
-    /// Price named by the alert row, rounded by `ChartMenus`.
-    pub(crate) alert_price: f64,
     /// Last action taken
     pub last_action: SeriesContextMenuAction,
     /// Skip close detection on first frame
@@ -88,7 +86,6 @@ impl SeriesContextMenu {
             series_id: None,
             symbol: String::new(),
             click_price: 0.0,
-            alert_price: 0.0,
             last_action: SeriesContextMenuAction::None,
             just_opened: false,
             hidden: HashSet::new(),
@@ -108,7 +105,6 @@ impl SeriesContextMenu {
     pub fn set_context(&mut self, symbol: impl Into<String>, price: f64) {
         self.symbol = symbol.into();
         self.click_price = price;
-        self.alert_price = price;
     }
 
     /// Close the context menu
@@ -131,6 +127,7 @@ impl SeriesContextMenu {
         &self,
         ctx: &Context,
         shortcuts: &crate::widget::ShortcutMap,
+        alert_price: f64,
         price_text: &dyn Fn(f64) -> String,
     ) -> Vec<MenuEntry<SeriesContextMenuAction>> {
         let price_str = price_text(self.click_price);
@@ -140,7 +137,7 @@ impl SeriesContextMenu {
         let mut items = Vec::new();
         // An alert needs an instrument.
         if has_symbol && !self.hidden.contains(&Control::Alerts) {
-            let alert_price_str = price_text(self.alert_price);
+            let alert_price_str = price_text(alert_price);
             items.push(MenuEntry::Item(
                 MenuItem::new(
                     l10n::format_text(
@@ -215,7 +212,7 @@ impl SeriesContextMenu {
         if !self.is_open {
             return;
         }
-        let entries = self.build_menu_items(ctx, shortcuts, &format_price);
+        let entries = self.build_menu_items(ctx, shortcuts, self.click_price, &format_price);
         if entries.is_empty() {
             self.close();
             return;
