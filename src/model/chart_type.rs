@@ -646,15 +646,11 @@ impl CustomProfileSessions {
                 false,
             );
             let provider = clock.sessions();
-            let cuts: Vec<_> = std::iter::once(range.start)
-                .chain(
-                    provider
-                        .session_breaks(&bars[range.clone()])
-                        .into_iter()
-                        .map(|(i, _)| range.start + i),
-                )
-                .chain([range.end])
-                .collect();
+            let mut cuts = vec![range.start];
+            for (i, _) in provider.session_breaks(&bars[range.clone()]) {
+                cuts.push(range.start + i);
+            }
+            cuts.push(range.end);
             for day in cuts.windows(2) {
                 let mut inside = (day[0]..day[1]).filter(|&i| {
                     provider.is_open(bars[i].time, true)
@@ -683,33 +679,43 @@ impl CustomProfileSessions {
                 });
             }
         }
-        parts.sort_by_key(|p| (p.bars.start, p.session));
+        // Each window's days are disjoint, so no two parts share this key.
+        parts.sort_unstable_by_key(|p| (p.bars.start, p.session));
         if self.overlap == SessionOverlap::InBoth {
             return parts;
         }
-        let mut cuts: Vec<_> = parts
-            .iter()
-            .flat_map(|p| [p.bars.start, p.bars.end])
-            .collect();
+        let mut cuts = Vec::with_capacity(parts.len() * 2);
+        for p in &parts {
+            cuts.extend([p.bars.start, p.bars.end]);
+        }
         cuts.sort_unstable();
         cuts.dedup();
-        cuts.windows(2)
-            .filter_map(|pair| {
-                let covering: Vec<_> = parts
-                    .iter()
-                    .filter(|p| p.bars.start <= pair[0] && pair[1] <= p.bars.end)
-                    .collect();
-                Some(CustomPart {
-                    bars: pair[0]..pair[1],
-                    open: covering.iter().map(|p| p.open).max()?,
-                    date: covering
-                        .iter()
-                        .max_by_key(|p| (p.open, std::cmp::Reverse(p.session)))?
-                        .date,
-                    session: covering.iter().map(|p| p.session).min()?,
-                })
-            })
-            .collect()
+        let mut shared = Vec::with_capacity(cuts.len());
+        for pair in cuts.windows(2) {
+            // The latest open sets the origin and date, the first session breaking a tie.
+            let mut piece: Option<CustomPart> = None;
+            let mut first = usize::MAX;
+            for p in &parts {
+                if pair[0] < p.bars.start || p.bars.end < pair[1] {
+                    continue;
+                }
+                first = first.min(p.session);
+                let later = |q: &CustomPart| {
+                    (p.open, std::cmp::Reverse(p.session)) > (q.open, std::cmp::Reverse(q.session))
+                };
+                if piece.as_ref().is_none_or(later) {
+                    piece = Some(CustomPart {
+                        bars: pair[0]..pair[1],
+                        ..p.clone()
+                    });
+                }
+            }
+            if let Some(mut piece) = piece {
+                piece.session = first;
+                shared.push(piece);
+            }
+        }
+        shared
     }
 }
 

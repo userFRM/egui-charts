@@ -657,90 +657,76 @@ pub(crate) fn profile_parts(
     config: &TPOConfig,
     interval: Option<crate::model::Timeframe>,
 ) -> Vec<ProfilePart> {
-    let ranges = if config.session == ProfileSession::Chart {
+    let whole = |bars| ProfilePart {
+        bars,
+        opens: true,
+        open: None,
+        date: None,
+        layer: 0,
+    };
+    let mut parts = Vec::new();
+    if let ProfileSession::Custom(custom) = &config.session {
+        let shared = custom.overlap == crate::model::SessionOverlap::InBoth;
+        for part in custom.parts(
+            bars,
+            0..bars.len(),
+            interval.unwrap_or_default(),
+            config.regular_hours.as_ref(),
+            true,
+        ) {
+            parts.push(ProfilePart {
+                bars: part.bars,
+                opens: true,
+                open: Some(part.open),
+                date: Some(part.date),
+                layer: if shared { part.session } else { 0 },
+            });
+        }
+    } else if config.session == ProfileSession::Chart {
         let starts = session_starts(bars, sessions, config.split_hours(), &[]);
-        let ends = starts.iter().skip(1).copied().chain([bars.len()]);
-        starts
-            .iter()
-            .copied()
-            .zip(ends)
-            .map(|(start, end)| start..end)
-            .collect()
-    } else if matches!(config.session, ProfileSession::Custom(_)) {
-        Vec::new()
+        for (n, &start) in starts.iter().enumerate() {
+            let end = starts.get(n + 1).copied().unwrap_or(bars.len());
+            parts.push(whole(start..end));
+        }
     } else {
         // Whole trading days, unusable bars included: a day of them must not join the day before.
-        let breaks: Vec<_> = (sessions.session_breaks(bars).into_iter())
-            .map(|(i, _)| i)
-            .collect();
-        let starts = std::iter::once(0).chain(breaks.iter().copied());
-        let ends = breaks.iter().copied().chain([bars.len()]);
-        starts
-            .zip(ends)
-            .flat_map(|(start, end)| config.session.profiled(bars, start..end, sessions, true))
-            .collect::<Vec<_>>()
-    };
-    let parts = if let ProfileSession::Custom(custom) = &config.session {
-        custom
-            .parts(
-                bars,
-                0..bars.len(),
-                interval.unwrap_or_default(),
-                config.regular_hours.as_ref(),
-                true,
-            )
-            .into_iter()
-            .map(|p| ProfilePart {
-                bars: p.bars,
-                opens: true,
-                open: Some(p.open),
-                date: Some(p.date),
-                layer: if custom.overlap == crate::model::SessionOverlap::InBoth {
-                    p.session
-                } else {
-                    0
-                },
-            })
-            .collect::<Vec<_>>()
-    } else {
-        ranges
-            .into_iter()
-            .map(|bars| ProfilePart {
-                bars,
-                opens: true,
-                open: None,
-                date: None,
-                layer: 0,
-            })
-            .collect()
-    };
+        let mut start = 0;
+        let breaks = sessions.session_breaks(bars).into_iter().map(|(i, _)| i);
+        for end in breaks.chain([bars.len()]) {
+            for range in config.session.profiled(bars, start..end, sessions, true) {
+                parts.push(whole(range));
+            }
+            start = end;
+        }
+    }
     let mut cuts: Vec<_> = (config.splits.iter())
         .map(|split| bars.partition_point(|bar| bar.time < *split))
         .collect();
     cuts.sort_unstable();
     cuts.dedup();
-    parts
-        .into_iter()
-        .flat_map(|part| {
-            let inside = cuts
-                .iter()
-                .copied()
-                .filter(|&i| part.bars.start < i && i < part.bars.end);
-            let starts = std::iter::once(part.bars.start).chain(inside.clone());
-            let ends = inside.chain([part.bars.end]);
-            starts
-                .zip(ends)
-                .enumerate()
-                .map(|(n, (start, end))| ProfilePart {
-                    bars: start..end,
-                    opens: n == 0,
-                    open: part.open,
-                    date: part.date,
-                    layer: part.layer,
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
+    if cuts.is_empty() {
+        return parts;
+    }
+    let mut split = Vec::with_capacity(parts.len() + cuts.len());
+    for part in parts {
+        let mut start = part.bars.start;
+        for &cut in &cuts {
+            if start < cut && cut < part.bars.end {
+                split.push(ProfilePart {
+                    bars: start..cut,
+                    opens: start == part.bars.start,
+                    ..part.clone()
+                });
+                start = cut;
+            }
+        }
+        split.push(ProfilePart {
+            bars: start..part.bars.end,
+            opens: start == part.bars.start,
+            ..part
+        });
+    }
+    split
 }
 
 /// Transform bars into TPO profiles
@@ -794,14 +780,14 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
     if parts.iter().all(|part| part.layer == 0) {
         return profiles_for_parts(bars, config, clock, parts);
     }
-    let mut layers = std::collections::BTreeMap::<usize, Vec<ProfilePart>>::new();
-    for part in parts {
-        layers.entry(part.layer).or_default().push(part);
+    let top = parts.iter().map(|part| part.layer).max().unwrap_or(0);
+    let mut profiles = Vec::new();
+    for layer in 0..=top {
+        let layer_parts: Vec<_> = parts.iter().filter(|p| p.layer == layer).cloned().collect();
+        if !layer_parts.is_empty() {
+            profiles.extend(profiles_for_parts(bars, config, clock, layer_parts));
+        }
     }
-    let mut profiles: Vec<_> = layers
-        .into_values()
-        .flat_map(|parts| profiles_for_parts(bars, config, clock, parts))
-        .collect();
     profiles.sort_by_key(|p| p.session_date);
     profiles
 }
