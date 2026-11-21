@@ -167,7 +167,9 @@ impl ShareControls {
             ))
         } else {
             self.last.as_ref().and_then(|(operation, outcome)| {
-                let (Operation::Link(shared) | Operation::Copy(shared) | Operation::Revoke(shared)) = operation;
+                let (Operation::Link(shared)
+                | Operation::Copy(shared)
+                | Operation::Revoke(shared)) = operation;
                 (shared == name).then(|| match outcome {
                     Outcome::Link(link) => (
                         false,
@@ -189,7 +191,11 @@ impl ShareControls {
                         true,
                         l10n::format_text(
                             ui.ctx(),
-                            if matches!(operation, Operation::Revoke(_)) { "Could not stop sharing: {0}" } else { "Could not share: {0}" },
+                            if matches!(operation, Operation::Revoke(_)) {
+                                "Could not stop sharing: {0}"
+                            } else {
+                                "Could not share: {0}"
+                            },
                             &[("0", error.to_string())],
                         ),
                     ),

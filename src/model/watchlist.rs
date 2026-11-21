@@ -258,8 +258,8 @@ impl Watchlist {
     }
 
     /// A copy named after this list and `taken` names: "Name copy", then "Name copy 2" and so on.
-    /// Sections, symbol order, flags, the descriptions, logos, tickers and columns settings and widths carry
-    /// over; the copy is not starred.
+    /// Sections, symbol order, flags, the descriptions, logos, tickers and columns settings and
+    /// widths carry over; the copy is not starred.
     pub fn duplicate<'a>(&self, taken: impl IntoIterator<Item = &'a str>) -> Self {
         let taken: Vec<&str> = taken.into_iter().collect();
         let base = format!("{} copy", self.name);
