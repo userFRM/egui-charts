@@ -285,6 +285,12 @@ impl ChartMenus {
         self.chart.watchlists = names.into_iter().map(Into::into).collect();
     }
 
+    /// Shows the binding of [`KeyboardAction::AddToWatchlist`] on the row at `list` in
+    /// [`set_watchlists`](Self::set_watchlists), such as the panel's active list.
+    pub fn set_active_watchlist(&mut self, list: Option<usize>) {
+        self.chart.active_watchlist = list;
+    }
+
     /// Lets the host place, reorder and leave out the rows of every chart menu: the chart, series,
     /// study and drawing menus and the price and time axis menus.
     ///

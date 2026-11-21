@@ -3756,6 +3756,8 @@ impl DemoApp {
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
         self.menus
             .set_watchlists(self.watchlist.lists().iter().map(|list| list.name.as_str()));
+        self.menus
+            .set_active_watchlist(Some(self.watchlist.active_list()));
         self.menus.set_layout_copies(self.layout_has_other_charts());
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
             self.handle_context_action(ui.ctx(), action);
@@ -4368,6 +4370,11 @@ impl DemoApp {
                 self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::OpenLayout)
             }
             A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
+            A::AddToWatchlist => {
+                let symbol = self.chart.symbol().to_owned();
+                let list = self.watchlist.active_list();
+                self.handle_context_action(ctx, ContextMenuAction::AddToWatchlist { list, symbol });
+            }
             A::NextWatchlistSymbol | A::PreviousWatchlistSymbol => {
                 let step = if action == A::NextWatchlistSymbol {
                     self.watchlist.select_next_symbol()
@@ -8061,6 +8068,75 @@ mod tests {
                 _ => assert!(app.settings_dialog.is_open),
             }
         }
+    }
+
+    /// The focused chart adds to the shown list, reports duplicates and restores that list.
+    #[test]
+    fn the_shown_watchlist_takes_alt_w_and_survives_a_restart() {
+        use eframe::App;
+        use egui::{Event, Key, Modifiers};
+        use egui_charts::model::Watchlist;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.watchlist = WatchlistPanel::new(vec![
+            Watchlist::from_text("One", "STOCKA"),
+            Watchlist::from_text("Two", "STOCKB"),
+        ]);
+        app.watchlist.set_active_list(1);
+        app.open_catalog_symbol("STOCKC");
+        settle(&mut app, &ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        ui_frame(&ctx, size, vec![], |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        let chart = app.chart.get_chart_mapping().rect.center();
+        ui_click(&ctx, size, chart, |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        for duplicate in [false, true] {
+            ui_frame(
+                &ctx,
+                size,
+                vec![
+                    Event::ModifiersChanged(Modifiers::ALT),
+                    Event::Key {
+                        key: Key::W,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::ALT,
+                    },
+                    Event::Key {
+                        key: Key::W,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers: Modifiers::ALT,
+                    },
+                ],
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+            assert_eq!(app.watchlist.lists()[0].to_text(), "STOCKA");
+            assert_eq!(app.watchlist.lists()[1].to_text(), "STOCKB,STOCKC");
+            if duplicate {
+                assert!(
+                    app.toasts
+                        .toasts().iter()
+                        .any(|toast| toast.message == "STOCKC is already in that watchlist")
+                );
+            }
+        }
+        let mut storage = AppStorage::default();
+        app.save(&mut storage);
+        let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
+        cc.storage = Some(&storage);
+        let restored = DemoApp::new(&cc);
+        assert_eq!(restored.watchlist.active_list(), 1);
+        assert_eq!(
+            restored.watchlist.symbols().collect::<Vec<_>>(),
+            ["STOCKB", "STOCKC"]
+        );
     }
 
     #[test]

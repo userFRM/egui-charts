@@ -91,7 +91,7 @@ fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
                 entries
                     .into_iter()
                     .filter_map(|entry| match entry {
-                        MenuEntry::Item(item) => Some(item.action),
+                        MenuEntry::Item(item) => Some((item.action, item.shortcut)),
                         _ => None,
                     })
                     .collect::<Vec<_>>(),
@@ -108,7 +108,27 @@ fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
     };
     assert_eq!(
         submenu(&menu),
-        Some(("Add AAPL to watchlist".into(), vec![add(0), add(1)]))
+        Some((
+            "Add AAPL to watchlist".into(),
+            vec![(add(0), None), (add(1), None)]
+        ))
+    );
+    menu.active_watchlist = Some(1);
+    assert_eq!(
+        submenu(&menu),
+        Some((
+            "Add AAPL to watchlist".into(),
+            vec![
+                (add(0), None),
+                (
+                    add(1),
+                    Some(egui::KeyboardShortcut::new(
+                        egui::Modifiers::ALT,
+                        egui::Key::W
+                    ))
+                )
+            ]
+        ))
     );
     menu.watchlists.clear();
     assert_eq!(submenu(&menu), None, "no lists");
