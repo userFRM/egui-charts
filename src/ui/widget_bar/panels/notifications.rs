@@ -29,6 +29,9 @@ pub enum NotificationsAction {
     OpenProfile(ProfileId),
     /// Show the chat room an entry is about.
     OpenRoom(String),
+    /// Show the idea or post an entry is about, by the host's identifier, as the ideas panel's
+    /// [`IdeasAction::Open`](crate::ui::ideas::IdeasAction::Open) does.
+    OpenPost(String),
 }
 
 /// The log pushed by the host's [`Notifications`] service.
@@ -171,6 +174,9 @@ impl NotificationsPanel {
                                             "Open room",
                                             NotificationsAction::OpenRoom(room.clone()),
                                         ),
+                                        NotificationTarget::Post(id) => {
+                                            ("Open post", NotificationsAction::OpenPost(id.clone()))
+                                        }
                                     };
                                     if Button::new(l10n::text(ui.ctx(), label))
                                         .small()
@@ -201,6 +207,88 @@ mod tests {
     impl Notifications for Host {
         fn watch(&self, events: Events<Notification>) {
             *self.0.lock().unwrap() = Some(events);
+        }
+    }
+
+    /// Every entry button carries the host's identifier for the thing it opens.
+    #[test]
+    fn each_entry_button_reports_its_own_action() {
+        use egui::{Event, Modifiers, PointerButton, RawInput, Rect, Shape};
+        for (symbol, target, label, expected) in [
+            (
+                Some("AAPL"),
+                None,
+                "AAPL",
+                NotificationsAction::SelectSymbol("AAPL".into()),
+            ),
+            (
+                None,
+                Some(NotificationTarget::Profile(ProfileId("ada".into()))),
+                "Open profile",
+                NotificationsAction::OpenProfile(ProfileId("ada".into())),
+            ),
+            (
+                None,
+                Some(NotificationTarget::Room("desk".into())),
+                "Open room",
+                NotificationsAction::OpenRoom("desk".into()),
+            ),
+            (
+                Some("AAPL"),
+                Some(NotificationTarget::Post("42".into())),
+                "Open post",
+                NotificationsAction::OpenPost("42".into()),
+            ),
+            (
+                None,
+                Some(NotificationTarget::Post(String::new())),
+                "Open post",
+                NotificationsAction::OpenPost(String::new()),
+            ),
+        ] {
+            let mut panel = NotificationsPanel::new();
+            let mut entry =
+                Notification::new(chrono::DateTime::from_timestamp(1, 0).unwrap(), "Update");
+            entry.symbol = symbol.map(str::to_owned);
+            entry.target = target;
+            panel.push(entry);
+            let ctx = egui::Context::default();
+            let mut action = NotificationsAction::None;
+            let mut step = |events| {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        action = panel.show(ui);
+                    },
+                )
+            };
+            let output = step(vec![]);
+            let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                Shape::Text(text) if text.galley.text() == label => {
+                    Some(Rect::from_min_size(text.pos, text.galley.size()).center())
+                }
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            let pos = pos.expect(label);
+            step(vec![Event::PointerMoved(pos)]).drop_without_applying_deltas();
+            for pressed in [true, false] {
+                step(vec![Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                }])
+                .drop_without_applying_deltas();
+            }
+            assert_eq!(action, expected, "{label}");
         }
     }
 

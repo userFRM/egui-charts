@@ -47,6 +47,8 @@ pub struct IndicatorSettingsDialog {
     /// with a checkbox each until the dialog closes.
     exact_hidden: Vec<Timeframe>,
     sources: Vec<(crate::studies::StudySource, String)>,
+    /// The zones time zone inputs list; `None` lists `default_time_zones`.
+    time_zones: Option<Vec<crate::model::TimezoneId>>,
     overlay: bool,
     price_scale: bool,
     original: Option<crate::studies::StudySettingsSnapshot>,
@@ -86,6 +88,15 @@ fn width_picker(ui: &mut egui::Ui, width: &mut f32) {
 }
 
 impl IndicatorSettingsDialog {
+    /// Offers `zones` in the lists of time zone inputs, after Exchange time where an input offers
+    /// it and after the zone an input holds when `zones` lacks it, in place of
+    /// [`default_time_zones`](crate::ui::timeframe_toolbar::default_time_zones). Pass the zones
+    /// given to [`SettingsDialog::set_time_zones`](crate::ui::dialogs::chart_settings::SettingsDialog::set_time_zones)
+    /// to list the chart's.
+    pub fn set_time_zones(&mut self, zones: Vec<crate::model::TimezoneId>) {
+        self.time_zones = Some(zones);
+    }
+
     /// Open on the current values of the study identified by `id`.
     /// The edit leaves out exact hidden intervals that the study's interval ranges already hide.
     pub fn open(&mut self, id: SeriesId, study: &dyn Indicator, interval: Option<Timeframe>) {
@@ -313,6 +324,15 @@ impl IndicatorSettingsDialog {
                                 .iter()
                                 .map(|input| input.is_shown(&self.inputs))
                                 .collect();
+                            let default_zones;
+                            let zones = match &self.time_zones {
+                                Some(zones) => zones.as_slice(),
+                                None => {
+                                    default_zones =
+                                        crate::ui::timeframe_toolbar::default_time_zones();
+                                    default_zones.as_slice()
+                                }
+                            };
                             FormGrid::new("study_inputs").show(ui, |ui| {
                                 for (input, shown) in self.inputs.iter_mut().zip(shown) {
                                     if study_source
@@ -345,6 +365,7 @@ impl IndicatorSettingsDialog {
                                         } else {
                                             &[]
                                         },
+                                        zones,
                                     ) && let (
                                         InputKind::Choice(choices),
                                         InputValue::Choice(choice),
@@ -404,6 +425,7 @@ impl IndicatorSettingsDialog {
                                             crate::ui::strategy_report::inputs::show_input(
                                                 ui,
                                                 input,
+                                                &[],
                                                 &[],
                                             );
                                         }
@@ -2672,6 +2694,79 @@ mod tests {
             }
         }
     }
+
+    /// A session start saved as 570 minutes shows as 09:30 in two fields that edit it, and the
+    /// session's zone is picked from the zones the host set in place of the default list.
+    #[test]
+    fn session_start_and_zone_are_edited_as_a_time_and_a_listed_zone() {
+        use crate::model::TimezoneId;
+        use crate::studies::TradingSessions;
+        use chrono::NaiveTime;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut study = TradingSessions::new();
+        study
+            .set_input("start [0]", InputValue::Length(570))
+            .unwrap();
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let id = chart.add_indicator(Box::new(study));
+        let mut dialog = IndicatorSettingsDialog::default();
+        // Available without the `timezones` feature, where UTC also starts the default list.
+        dialog.set_time_zones(vec![TimezoneId::fixed_offset(19_800).unwrap()]);
+        assert!(dialog.open_for_chart(&chart, id));
+        let mut edit = None;
+        let mut harness = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .with_size(egui::vec2(1440.0, 900.0))
+            .build_ui(|ui| {
+                if let Some(applied) = dialog.show(ui.ctx(), &Theme::dark()) {
+                    edit = Some(applied);
+                }
+            });
+        harness.run();
+        let field = |harness: &Harness<'_>, label: &str| harness.get_by_label(label).value();
+        assert_eq!(
+            [
+                field(&harness, "First session start hours"),
+                field(&harness, "First session start minutes"),
+            ],
+            [Some("09".to_owned()), Some("30".to_owned())]
+        );
+        harness
+            .get_by_label("First session start hours")
+            .set_value_accesskit(10.0);
+        harness.run();
+        assert_eq!(
+            field(&harness, "First session start hours").as_deref(),
+            Some("10")
+        );
+        harness.get_by_label("First session time zone").click();
+        harness.run();
+        assert!(harness.query_by_label("UTC").is_none());
+        harness.get_by_label("+05:30").click();
+        harness.run();
+        harness.get_by_label("Apply").click();
+        harness.run();
+        drop(harness);
+        let edit = edit.unwrap();
+        let expected = [
+            (
+                "start [0]",
+                InputValue::TimeOfDay(NaiveTime::from_hms_opt(10, 30, 0).unwrap()),
+            ),
+            ("zone [0]", InputValue::TimeZone("+05:30".to_owned())),
+        ];
+        let study = chart.indicator_mut(id).unwrap();
+        study.apply_settings(&edit.inputs, edit.settings).unwrap();
+        let inputs = study.inputs();
+        for (id, value) in expected {
+            let edited = edit.inputs.iter().find(|(input, _)| input == id);
+            assert_eq!(edited.map(|(_, value)| value), Some(&value), "{id}");
+            let applied = inputs.iter().find(|input| input.id == id);
+            assert_eq!(applied.map(|input| &input.value), Some(&value), "{id}");
+        }
+    }
+
     /// Other studies' outputs are offered only to the source the chart supplies: not to a custom
     /// study's other Source inputs, nor to the source of a study that declares histories.
     #[test]
