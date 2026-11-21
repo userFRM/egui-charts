@@ -895,6 +895,8 @@ impl Backtest {
             open_tick: 0,
             fills: None,
             forming: false,
+            margin_calls: Vec::new(),
+            peak_margin: 0.0,
             range: None,
             rate: if rates.is_some() { f64::NAN } else { 1.0 },
             rates,
@@ -1116,8 +1118,8 @@ impl Backtest {
         Some(rates)
     }
 
-    /// Replaces the trades and equity of a run that needed a rate where none applied with the
-    /// reason. Its properties stay.
+    /// Replaces the trades, equity and margin data of a run that needed a rate where none applied
+    /// with the reason. Its properties stay.
     fn withhold(&self, report: &mut StrategyReport) {
         if let Some((from, to)) = self.conversion() {
             report.unavailable = Some(format!(
@@ -1126,6 +1128,9 @@ impl Backtest {
         }
         report.trades.clear();
         report.equity.clear();
+        report.margin.clear();
+        report.peak_margin.clear();
+        report.margin_calls.clear();
         report.equity_ranges.clear();
     }
 }
@@ -1242,6 +1247,10 @@ struct Run<'a> {
     open_tick: u64,
     fills: Option<&'a mut Vec<StrategyFill>>,
     forming: bool,
+    /// Time and quantity of each filled margin call.
+    margin_calls: Vec<(DateTime<Utc>, f64)>,
+    /// Largest margin used since the last equity mark.
+    peak_margin: f64,
     /// Equity movements reached along the current bar, retained across live updates.
     range: Option<EquityRange>,
     /// Exchange rates in time order while amounts convert into the account currency.
@@ -1277,12 +1286,13 @@ impl<'a> Run<'a> {
         }) {
             let interval = timeframe.duration().max(TimeDelta::milliseconds(1));
             let before = first.time.checked_sub_signed(interval);
-            report.equity.push((
-                self.settings
-                    .start_time
-                    .unwrap_or(before.unwrap_or(DateTime::<Utc>::MIN_UTC)),
-                self.settings.initial_capital,
-            ));
+            let time = self
+                .settings
+                .start_time
+                .unwrap_or(before.unwrap_or(DateTime::<Utc>::MIN_UTC));
+            report.equity.push((time, self.settings.initial_capital));
+            report.margin.push((time, 0.0));
+            report.peak_margin.push((time, 0.0));
             let capital = self.settings.initial_capital;
             report
                 .equity_ranges
@@ -1389,6 +1399,16 @@ impl<'a> Run<'a> {
             };
             self.fill_close(execution.close, close_time);
         }
+        let mark_time = if self.settings.start_time.is_some() {
+            // A final execution bar has no known end; keep its mark after its last price.
+            end.unwrap_or_else(|| {
+                last_price_time
+                    .checked_add_signed(TimeDelta::nanoseconds(1))
+                    .unwrap_or(last_price_time)
+            })
+        } else {
+            bar.time
+        };
         // A trade-based mark's stamp is known only when the next bar closes; convert at its price.
         self.set_rate(last_price_time);
         let (equity, range) = if valid {
@@ -1408,20 +1428,17 @@ impl<'a> Run<'a> {
                 EquityRange::new(f64::NAN, f64::NAN, f64::NAN, f64::NAN),
             )
         };
-        report.equity.push((
-            if self.settings.start_time.is_some() {
-                // A final execution bar has no known end; keep its mark after its last price.
-                end.unwrap_or_else(|| {
-                    last_price_time
-                        .checked_add_signed(TimeDelta::nanoseconds(1))
-                        .unwrap_or(last_price_time)
-                })
-            } else {
-                bar.time
-            },
-            equity,
-        ));
+        report.equity.push((mark_time, equity));
         report.equity_ranges.push(range);
+        let (margin, peak) = if valid {
+            let margin = self.margin_used(execution.close);
+            (margin, self.peak_margin.max(margin))
+        } else {
+            (f64::NAN, f64::NAN)
+        };
+        report.margin.push((mark_time, margin));
+        report.peak_margin.push((mark_time, peak));
+        self.peak_margin = 0.0;
     }
 
     fn report_trades(&self, report: &mut StrategyReport) {
@@ -1432,6 +1449,7 @@ impl<'a> Run<'a> {
             .properties
             .push(("Rejected orders".into(), self.rejected.to_string()));
         report.trades = self.trades.clone();
+        report.margin_calls = self.margin_calls.clone();
         report.trades.extend(self.lots.iter().map(|lot| {
             let mut trade = StrategyTrade::new(lot.side, lot.quantity, lot.time, lot.price);
             trade.exchange_rate = self.rate;
@@ -1493,6 +1511,23 @@ impl<'a> Run<'a> {
         }
     }
 
+    /// Absolute position market value times the funding fraction of its side, zero while flat.
+    fn margin_used(&self, price: f64) -> f64 {
+        self.lots.first().map_or(0.0, |lot| {
+            let fraction = self.settings.funding(lot.side);
+            // An unfunded side uses no margin, so it needs no exchange rate between its marks.
+            if fraction == 0.0 {
+                return 0.0;
+            }
+            self.convert(self.position().abs() * price.abs() * fraction)
+        })
+    }
+
+    /// Include the margin at this observed market price in the current bar's peak.
+    fn note_margin(&mut self, price: f64) {
+        self.peak_margin = self.peak_margin.max(self.margin_used(price));
+    }
+
     /// Count the next account value reached along the fill path, including both sides of costs.
     fn reach_equity(&mut self, price: f64) {
         let equity = self.equity(price);
@@ -1552,6 +1587,7 @@ impl<'a> Run<'a> {
             }
             if self.trading {
                 self.fill_segment(previous, price, bar.time, point != 0);
+                self.note_margin(price);
                 if point != 0 {
                     self.pass_delays();
                 }
@@ -1788,9 +1824,7 @@ impl<'a> Run<'a> {
         if fraction == 0.0 {
             return None;
         }
-        let available = |price: f64| {
-            self.equity(price) - self.convert(self.position().abs() * price.abs() * fraction)
-        };
+        let available = |price: f64| self.equity(price) - self.margin_used(price);
         if !self.legacy_margin() {
             return [start, end]
                 .into_iter()
@@ -1829,14 +1863,14 @@ impl<'a> Run<'a> {
             return held;
         }
         let fraction = self.settings.funding(self.lots[0].side);
-        let notional = self.convert(held * price.abs() * fraction);
-        let deficit = notional - self.equity(price);
+        let required = self.margin_used(price);
+        let deficit = required - self.equity(price);
         let step = self.settings.liquidation_increment;
         if !step.is_finite() || step <= 0.0 {
             return held;
         }
         // A fully funded fractional position sits at zero available funds give or take rounding.
-        if held < step && deficit > rounding_tolerance(notional, 1e-9) {
+        if held < step && deficit > rounding_tolerance(required, 1e-9) {
             return held;
         }
         let needed = deficit / fraction / self.convert(price.abs());
@@ -1852,6 +1886,7 @@ impl<'a> Run<'a> {
     /// Fills orders and margin calls in price order along a bar segment.
     fn fill_along(&mut self, start: f64, end: f64, time: DateTime<Utc>) {
         self.fill_segment(start, end, time, true);
+        self.note_margin(end);
         self.pass_delays();
     }
 
@@ -1896,6 +1931,7 @@ impl<'a> Run<'a> {
 
     fn fill_segment(&mut self, mut start: f64, end: f64, time: DateTime<Utc>, advance: bool) {
         self.set_rate(time);
+        self.note_margin(start);
         let mut at_end = !advance;
         loop {
             self.reach_equity(start);
@@ -1911,13 +1947,7 @@ impl<'a> Run<'a> {
             if let Some(price) = self.margin_call(start, end)
                 && next.is_none_or(|(_, best, _)| {
                     (price - start).abs() < (best - start).abs()
-                        || (price == start
-                            && self.equity(start)
-                                < self.convert(
-                                    self.position().abs()
-                                        * start.abs()
-                                        * self.settings.funding(self.lots[0].side),
-                                ))
+                        || (price == start && self.equity(start) < self.margin_used(start))
                 })
             {
                 if price != start {
@@ -1928,10 +1958,11 @@ impl<'a> Run<'a> {
                 start = price;
                 self.reach_equity(price);
                 let held = self.position().abs();
+                let quantity = self.liquidation_size(price);
                 self.fill(
                     Working {
                         id: "Margin call".into(),
-                        quantity: Some(self.liquidation_size(price)),
+                        quantity: Some(quantity),
                         kind: Kind::Exit(None, None, exit_side(self.position())),
                         deferred: None,
                         delay: 0,
@@ -1947,6 +1978,7 @@ impl<'a> Run<'a> {
                     self.reach_equity(end);
                     return;
                 }
+                self.margin_calls.push((time, quantity));
                 continue;
             }
             let Some((index, price, pricing)) = next else {
@@ -1987,6 +2019,7 @@ impl<'a> Run<'a> {
     }
 
     fn fill(&mut self, order: Working, mark: f64, pricing: Pricing, time: DateTime<Utc>) {
+        self.note_margin(mark);
         let side = match order.kind {
             Kind::Entry(side, _) => side,
             Kind::RelativeExit(_, _, side) | Kind::TrailingExit { side, .. } => {
@@ -2083,6 +2116,7 @@ impl<'a> Run<'a> {
                 }
             }
         }
+        self.note_margin(mark);
         let position = self.position();
         if let Some(fills) = &mut self.fills {
             fills.push(StrategyFill {
@@ -2427,6 +2461,36 @@ mod tests {
             };
             assert_eq!(asynchronous, report);
         }
+        struct AtLow;
+        impl Strategy for AtLow {
+            fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+                if context.position() == 0.0 {
+                    context.entry("Low", OrderSide::Buy, 1.0, OrderType::Limit(50.0));
+                }
+            }
+        }
+        let gapped_source = [Bar::new(hour(0), 100.0, 110.0, 50.0, 60.0, 10.0)];
+        let gapped = [
+            Bar::new(hour(0), 100.0, 110.0, 50.0, 100.0, 4.0),
+            Bar::new(
+                hour(0) + TimeDelta::minutes(30),
+                60.0,
+                60.0,
+                60.0,
+                60.0,
+                6.0,
+            ),
+        ];
+        // The high occurs before entry at the low. One unit then uses 100 at the finer close,
+        // before the next finer bar gaps to 60; the chart path alone holds it only from 50 to 60.
+        for (finer, peak) in [(&[][..], 60.0), (&gapped[..], 100.0)] {
+            let mut engine = Backtest::new("Ticks", "TEST", Timeframe::Hour1, 1000.0);
+            engine.settings.recalculate_on_history = true;
+            let report = engine.run(&mut AtLow, &gapped_source, finer);
+            assert_eq!(report.margin.last(), Some(&(hour(0), 60.0)));
+            assert_eq!(report.peak_margin.last(), Some(&(hour(0), peak)));
+        }
+
         struct ClosedOnly(usize);
         impl Strategy for ClosedOnly {
             fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
@@ -3547,6 +3611,58 @@ mod tests {
         // a 1% fee costs 2 + 2.2, and two ticks of 0.5 reduce that gross profit to 16.
         // At 2x leverage, 15 long from 100 have equity 15p-500 and margin 7.5p:
         // the call is at p=200/3, equity=500, even if the bar later recovers to 100.
+        // At 2x leverage 15 units at 100 use 750. At half funding a deficit of 50 at 60
+        // buys 50 / 0.5 / 60 units of funding: truncate to 1, close 4, leave 11 * 70 / 2 = 385.
+        type MarginRow = (&'static str, [f64; 4], [f64; 4], &'static [(i64, f64)]);
+        let margins: [MarginRow; 7] = [
+            (
+                "leverage alone closes the whole position at the margin crossing",
+                [0.0, 0.0, 750.0, 0.0],
+                [0.0, 0.0, 750.0, 750.0],
+                &[(2, 15.0)],
+            ),
+            (
+                "funding at that leverage closes four times the shortfall at a price point",
+                [0.0, 0.0, 750.0, 385.0],
+                [0.0, 0.0, 750.0, 750.0],
+                &[(2, 4.0)],
+            ),
+            (
+                "intrabar long margin call",
+                [0.0, 0.0, 750.0, 0.0],
+                [0.0, 0.0, 750.0, 787.5],
+                &[(2, 15.0)],
+            ),
+            (
+                "intrabar short margin call",
+                [0.0, 0.0, 500.0, 0.0],
+                [0.0, 0.0, 500.0, 2000.0 / 3.0],
+                &[(2, 10.0)],
+            ),
+            (
+                "zero long funding disables both entry and liquidation checks",
+                [0.0; 4],
+                [0.0; 4],
+                &[],
+            ),
+            (
+                // Two units at 105 use 2 * 105 * 0.9 = 189 EUR. Before the next bar's exit,
+                // its 0.8 rate funds 2 * 110 * 0.8 = 176 EUR.
+                "an account currency converts sizing, funding, fees and profit at each fill's rate",
+                [0.0, 0.0, 189.0, 0.0],
+                [0.0, 0.0, 189.0, 176.0],
+                &[],
+            ),
+            (
+                // The rate changes before the gap: 10 * 68 * 0.5 * 0.8 = 272 before the call;
+                // six units remain, using 6 * 68 * 0.5 * 0.8 = 163.2 at the close.
+                "a converted funding deficit sells the units the rate in force needs",
+                [0.0, 0.0, 450.0, 163.2],
+                [0.0, 0.0, 450.0, 272.0],
+                &[(2, 4.0)],
+            ),
+        ];
+        let mut margin_rows = 0;
         let mut run_properties = Vec::new();
         for (name, script, settings, prices, expected, equity, rejected) in [
             (
@@ -4880,6 +4996,41 @@ mod tests {
                     "{name}: {actual} != {expected}"
                 );
             }
+            let times =
+                |curve: &[(DateTime<Utc>, f64)]| curve.iter().map(|p| p.0).collect::<Vec<_>>();
+            assert_eq!(times(&report.margin), times(&report.equity), "{name}");
+            assert_eq!(times(&report.peak_margin), times(&report.equity), "{name}");
+            if let Some((_, margin, peak, calls)) = margins.iter().find(|row| row.0 == name) {
+                margin_rows += 1;
+                for (curve, expected) in [(&report.margin, margin), (&report.peak_margin, peak)] {
+                    assert_eq!(curve.len(), expected.len(), "{name}");
+                    for (&(_, actual), expected) in curve.iter().zip(expected) {
+                        assert!(
+                            (actual - expected).abs() < 1e-9,
+                            "{name}: {actual} != {expected}"
+                        );
+                    }
+                }
+                assert_eq!(report.margin_calls.len(), calls.len(), "{name}");
+                for (&(time, actual), &(bar, expected)) in report.margin_calls.iter().zip(*calls) {
+                    assert_eq!(time, hour(bar), "{name}");
+                    assert!((actual - expected).abs() < 1e-10, "{name}");
+                }
+                let p = report.performance();
+                let largest = peak.iter().copied().fold(0.0, f64::max);
+                assert!((p.largest_margin.unwrap() - largest).abs() < 1e-9, "{name}");
+                assert_eq!(p.margin_calls, Some(calls.len()), "{name}");
+                assert_eq!(
+                    p.liquidated_quantity,
+                    Some(calls.iter().map(|c| c.1).sum()),
+                    "{name}"
+                );
+                assert_eq!(
+                    p.largest_liquidation,
+                    calls.iter().map(|c| c.1).reduce(f64::max),
+                    "{name}"
+                );
+            }
             let p = report.performance();
             assert_eq!(
                 p.intrabar_max_drawdown.is_some(),
@@ -4889,6 +5040,7 @@ mod tests {
             assert!(p.intrabar_max_drawdown >= p.max_drawdown, "{name}");
         }
 
+        assert_eq!(margin_rows, margins.len());
         // A run that needs a rate where none applies says so instead of reporting figures. A
         // flat account needs none; rates apply in time order, the last of one time winning.
         let source: Vec<_> = converted_prices
@@ -4923,11 +5075,35 @@ mod tests {
                 assert!(
                     report.trades.is_empty()
                         && report.equity.is_empty()
+                        && report.margin.is_empty()
+                        && report.peak_margin.is_empty()
+                        && report.margin_calls.is_empty()
                         && report.equity_ranges.is_empty(),
                     "{rates:?}"
                 );
             }
         }
+
+        // Intrabar equity converts at every observed price of a held position, so a rate unusable
+        // at one finer bar withholds the run even on a side funded at zero, which uses no margin.
+        let quarter = |part: i64| hour(2) + TimeDelta::minutes(15 * part);
+        let point = |time, value: f64| Bar::new(time, value, value, value, value, 0.0);
+        let held: Vec<_> = (0..3).map(|bar| point(hour(bar), 100.0)).collect();
+        let finer: Vec<_> = (0..4).map(|part| point(quarter(part), 100.0)).collect();
+        let mut engine = Backtest::new("Terms", "TEST", Timeframe::Hour1, 1000.0);
+        engine.settings = BacktestSettings {
+            currency: Some("EUR".into()),
+            long_funding: Some(0.0),
+            ..terms.clone()
+        };
+        engine.instrument_currency = Some("USD".into());
+        engine.exchange_rates = vec![rate(0, 0.9), point(quarter(1), 0.0), point(quarter(2), 0.8)];
+        let report = engine.run(&mut Script(hold), &held, &finer);
+        assert_eq!(
+            report.unavailable.as_deref(),
+            Some("Exchange rates from USD to EUR are unavailable")
+        );
+        assert!(report.equity_ranges.is_empty() && report.margin.is_empty());
 
         let [whole, partial] = [
             "leverage alone closes the whole position at the margin crossing",

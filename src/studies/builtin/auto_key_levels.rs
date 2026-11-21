@@ -719,6 +719,10 @@ impl Indicator for AutoKeyLevels {
         Vec::new()
     }
 
+    fn plot_holds_values(&self, _line: usize) -> bool {
+        false
+    }
+
     fn table(&self) -> Option<&StudyTable> {
         self.notice.as_ref()
     }
@@ -759,6 +763,11 @@ impl Indicator for AutoKeyLevels {
 
     fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
+    }
+
+    // Its labels sit on source bars, which another symbol or interval does not place.
+    fn draws_on_other_bars(&self) -> bool {
+        false
     }
 
     fn clone_box(&self) -> Box<dyn Indicator> {
