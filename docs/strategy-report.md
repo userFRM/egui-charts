@@ -244,7 +244,10 @@ usable margin points the margin chart takes no space. Curve positions and hover
 values retain submillisecond timestamps. Time labels along the axis follow its span. Hover a curve
 for timestamped values. The virtualized trade list uses entry-time order, keeps equal-time
 trades in input order, filters to the range's trades and shows fill prices, net profit,
-cumulative profit, fees, labels and excursions. Cumulative profit adds the net profit of the
+cumulative profit, fees, labels and excursions. Fill prices show at least the report's
+`price_decimals`, which a backtest takes from its price increment, and more where a price has
+them; quantities show their own decimals, up to eight. Neither shows binary rounding digits, and
+the trade markers write them the same way. The trades CSV keeps full precision. Cumulative profit adds the net profit of the
 listed trades closed in the range, in list order up to and including the row. An open trade
 has an empty cell and adds nothing, as does a trade that closes at or after the range's end,
 which the range counts as open like the Summary.
