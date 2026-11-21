@@ -287,10 +287,26 @@ impl Default for GannConfig {
 }
 
 impl GannConfig {
-    /// The levels, fan lines and arcs a new Gann box, square, fixed square or fan starts from,
-    /// which a drawing without [`Drawing::gann`](crate::drawings::Drawing::gann) draws. Start a
-    /// configuration from the drawing's own tool here rather than from
-    /// [`GannConfig::default`], which is the Gann box's. A fixed square starts without its label.
+    /// Settings a new Gann drawing starts with: a box labels all four sides, and a square or
+    /// fixed square uses a 12 point regular, upright label. The fixed square's label stays off.
+    /// Saved drawings without settings keep [`Self::for_tool`] instead.
+    pub fn drawing_default(tool: DrawingToolType) -> Self {
+        let mut config = Self::for_tool(tool);
+        match tool {
+            DrawingToolType::GannBox => {
+                config.labels_right = true;
+                config.labels_top = true;
+            }
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed => config.label_size = 12.0,
+            _ => {}
+        }
+        config
+    }
+
+    /// The settings a saved Gann box, square, fixed square or fan uses when it lacks a
+    /// [`Drawing::gann`](crate::drawings::Drawing::gann) object or fields in it. Boxes keep left
+    /// and bottom labels, squares keep 10 point labels, and fixed squares keep their labels off.
+    /// New drawings use [`Self::drawing_default`].
     pub fn for_tool(tool: DrawingToolType) -> Self {
         match tool {
             DrawingToolType::GannSquare | DrawingToolType::GannFixed => {

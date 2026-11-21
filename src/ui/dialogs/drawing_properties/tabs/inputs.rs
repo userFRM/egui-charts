@@ -2277,7 +2277,7 @@ mod tests {
                     time_levels: one.clone(),
                     fan_ratios: one.clone(),
                     arc_ratios: one,
-                    ..GannConfig::for_tool(tool)
+                    ..drawing.gann.clone().unwrap()
                 };
                 drawing.gann = Some(original.clone());
                 let mut expected = original.clone();
@@ -2343,8 +2343,8 @@ mod tests {
                         h.run();
                     }
                     expected.labels_left = false;
-                    expected.labels_right = true;
-                    expected.labels_top = true;
+                    expected.labels_right = false;
+                    expected.labels_top = false;
                     expected.labels_bottom = false;
                     expected.show_time_background = Some(false);
                     expected.time_background_opacity = Some(original.background_opacity);

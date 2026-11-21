@@ -1201,6 +1201,14 @@ mod tests {
         drawing
     }
 
+    fn placed(manager: &mut crate::drawings::DrawingManager, tool: DrawingToolType) -> Drawing {
+        let x_to_bar = |x: f32| x / 10.0;
+        let y_to_price = |y: f32| 300.0 - f64::from(y);
+        manager.start_drawing_with_coords(tool, Pos2::new(0.0, 200.0), x_to_bar, y_to_price);
+        manager.add_point_with_coords(Pos2::new(40.0, 160.0), x_to_bar, y_to_price);
+        manager.drawings.pop().unwrap()
+    }
+
     /// The stroked lines among `shapes`, segments and arcs alike, as their ends, width and colour.
     fn strokes(shapes: &[egui::Shape]) -> Vec<([Pos2; 2], f32, Color32)> {
         shapes
@@ -1221,28 +1229,33 @@ mod tests {
             .collect()
     }
 
-    /// Screen sides stay on their sides when reversed; y(0.5) = 180 and x(0.25) = 10.
+    /// A newly placed box labels all four sides, which stay on their sides when reversed.
+    /// y(0.5) = 180 and x(0.25) = 10.
     /// Price and time bands span (0,160)-(40,200) and (0,160)-(20,200), respectively.
     #[test]
     fn gann_box_labels_sides_and_band_fills_follow_their_settings() {
         const GREY: [u8; 4] = [128, 128, 128, 255];
         for (sides, show, reverse) in [
-            ([true, false, false, true], true, false),
-            ([false, true, false, false], true, false),
-            ([false, false, true, false], true, false),
-            ([true; 4], true, false),
-            ([true; 4], false, false),
-            ([false; 4], true, false),
-            ([true; 4], true, true),
+            (None, true, false),
+            (Some([true, false, false, true]), true, false),
+            (Some([false, true, false, false]), true, false),
+            (Some([false, false, true, false]), true, false),
+            (Some([true; 4]), true, false),
+            (Some([true; 4]), false, false),
+            (Some([false; 4]), true, false),
+            (Some([true; 4]), true, true),
         ] {
-            let drawing = anchored(DrawingToolType::GannBox, |c| {
-                c.price_levels = vec![GannLevel::new(0.5, GREY)];
-                c.time_levels = vec![GannLevel::new(0.25, GREY)];
-                c.show_background = false;
-                c.show_labels = show;
-                c.reverse = reverse;
+            let mut drawing = placed(&mut Default::default(), DrawingToolType::GannBox);
+            let c = drawing.gann.get_or_insert_with(GannConfig::default);
+            c.price_levels = vec![GannLevel::new(0.5, GREY)];
+            c.time_levels = vec![GannLevel::new(0.25, GREY)];
+            c.show_background = false;
+            c.show_labels = show;
+            c.reverse = reverse;
+            if let Some(sides) = sides {
                 [c.labels_left, c.labels_right, c.labels_top, c.labels_bottom] = sides;
-            });
+            }
+            let sides = sides.unwrap_or([true; 4]);
             let shapes = painted(&drawing);
             let labels: Vec<_> = shapes
                 .iter()
@@ -1319,7 +1332,8 @@ mod tests {
         }
     }
 
-    /// Each square's label switch, typography and paint bounds reach the painted text.
+    /// New squares use 12 point labels and restored squares keep 10; each square's label switch,
+    /// typography and paint bounds reach the painted text.
     #[test]
     fn gann_square_labels_follow_their_switch_and_text_style() {
         use DrawingToolType::{GannFixed, GannSquare};
@@ -1330,11 +1344,13 @@ mod tests {
             f32,
             bool,
         );
-        let rows: [Row; 8] = [
+        let rows: [Row; 10] = [
+            (GannSquare, Some(|_| {}), 1, 12.0, false),
+            (GannFixed, Some(|_| {}), 0, 12.0, false),
             (GannSquare, None, 1, 10.0, false),
-            (GannSquare, Some(|c| c.show_labels = false), 0, 10.0, false),
+            (GannSquare, Some(|c| c.show_labels = false), 0, 12.0, false),
             (GannFixed, None, 0, 10.0, false),
-            (GannFixed, Some(|c| c.show_labels = true), 1, 10.0, false),
+            (GannFixed, Some(|c| c.show_labels = true), 1, 12.0, false),
             (
                 GannSquare,
                 Some(|c| {
@@ -1345,7 +1361,7 @@ mod tests {
                 20.0,
                 true,
             ),
-            (GannSquare, Some(|c| c.label_bold = true), 2, 10.0, false),
+            (GannSquare, Some(|c| c.label_bold = true), 2, 12.0, false),
             (GannSquare, Some(|c| c.label_size = 96.0), 1, 96.0, false),
             (
                 GannFixed,
@@ -1359,12 +1375,14 @@ mod tests {
             ),
         ];
         for (tool, edit, count, size, italic) in rows {
-            let mut drawing = anchored(tool, |c| {
-                if let Some(edit) = edit {
-                    edit(c);
-                }
-            });
-            if edit.is_none() {
+            let mut drawing = placed(&mut Default::default(), tool);
+            if let Some(edit) = edit {
+                edit(
+                    drawing
+                        .gann
+                        .get_or_insert_with(|| GannConfig::for_tool(tool)),
+                );
+            } else {
                 drawing.gann = None;
             }
             let shapes = painted(&drawing);
@@ -1691,7 +1709,7 @@ mod tests {
     /// A saved `gann` object without fields draws what no `gann` draws, for every Gann tool: the
     /// fan's nine lines, and the square's six levels at whole units rather than the box's seven
     /// fractions. An object saved before levels had a width and the tools their label, reverse
-    /// and one colour switches draws its settings as then: labels as the tool starts with them,
+    /// and one colour switches draws its settings as then: labels as the tool restored them,
     /// counted from the first anchor, in the level colours at the drawing's width.
     #[test]
     fn an_empty_gann_object_draws_the_tool_defaults() {
@@ -1747,6 +1765,7 @@ mod tests {
             let mut drawing = Drawing::new(0, tool);
             drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(4.0, 140.0)];
             for (saved, gann) in [
+                ("null", None),
                 ("{}", None),
                 (
                     SAVED,
@@ -1764,7 +1783,35 @@ mod tests {
                 for d in [&mut drawing, &mut loaded] {
                     d.update_screen_coords(|b| b * 10.0, |p| 300.0 - p as f32);
                 }
+                let config = loaded.gann_config();
+                assert_eq!(
+                    [
+                        config.labels_left,
+                        config.labels_right,
+                        config.labels_top,
+                        config.labels_bottom
+                    ],
+                    [true, false, false, true],
+                );
+                assert_eq!(config.label_size, 10.0);
                 assert_eq!(painted(&loaded), painted(&drawing), "{tool:?} {saved}");
+
+                let template = crate::drawings::DrawingTemplate::from_drawing(&loaded);
+                let mut fresh = placed(&mut Default::default(), tool);
+                template.apply_to(&mut fresh).unwrap();
+                assert_eq!(
+                    painted(&fresh),
+                    painted(&loaded),
+                    "template {tool:?} {saved}"
+                );
+                let mut manager = crate::drawings::DrawingManager::new();
+                manager.tool_defaults.insert(tool, template);
+                let fresh = placed(&mut manager, tool);
+                assert_eq!(
+                    painted(&fresh),
+                    painted(&loaded),
+                    "default {tool:?} {saved}"
+                );
             }
         }
 
