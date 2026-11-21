@@ -8,11 +8,41 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Pixels per point of a PNG, clipboard or frame export. A higher density draws the same layout
+/// with more pixels, for high-density screens, documents and print; SVG ignores it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PixelDensity {
+    /// One pixel per point, the default.
+    #[default]
+    One,
+    /// Two pixels per point.
+    Two,
+    /// Three pixels per point.
+    Three,
+}
+
+impl PixelDensity {
+    /// Every density, lowest first, as the export dialog offers them.
+    pub const ALL: [Self; 3] = [Self::One, Self::Two, Self::Three];
+
+    /// The number of pixels per point: 1, 2 or 3.
+    pub fn pixels_per_point(self) -> u32 {
+        match self {
+            Self::One => 1,
+            Self::Two => 2,
+            Self::Three => 3,
+        }
+    }
+}
+
 /// Image options shared by the export dialog and offscreen rendering.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ImageExportOptions {
-    /// Output width and height in pixels.
+    /// Width and height of the layout in points. A PNG, clipboard or frame export has
+    /// [`pixel_density`](Self::pixel_density) times as many pixels on each side; an SVG document
+    /// has this size. Defaults to 1440 by 900.
     pub size: [u32; 2],
     /// Include the symbol above the chart.
     pub include_title: bool,
@@ -39,6 +69,9 @@ pub struct ImageExportOptions {
     /// collide with the offscreen frame's own textures return an error. [`ChartImage`] frames
     /// include the supplied pixels too.
     pub textures: HashMap<egui::TextureId, Arc<egui::ColorImage>>,
+    /// Pixels per point of PNG and frame exports; SVG ignores it. The size limits of
+    /// [`ExportError::InvalidSize`] apply to the pixels. Defaults to [`PixelDensity::One`].
+    pub pixel_density: PixelDensity,
 }
 
 impl Default for ImageExportOptions {
@@ -52,13 +85,15 @@ impl Default for ImageExportOptions {
             include_crosshair: false,
             include_foreground: true,
             textures: HashMap::new(),
+            pixel_density: PixelDensity::One,
         }
     }
 }
 
-/// A complete offscreen frame for an egui renderer, at one pixel per point.
-/// Upload `textures_delta.set`, draw `primitives` over transparent black at `size`, then
-/// release the textures. The host owns GPU readback, PNG encoding and file/clipboard delivery.
+/// A complete offscreen frame for an egui renderer at [`pixels_per_point`](Self::pixels_per_point).
+/// Upload `textures_delta.set`, draw `primitives` over transparent black into `size` pixels with
+/// that many pixels per point, as an egui renderer's screen description takes them, then release
+/// the textures. The host owns GPU readback, PNG encoding and file/clipboard delivery.
 /// This uses its own texture namespace; render with a dedicated egui renderer. Hosts must also
 /// bind any user textures referenced by their image sources whose pixels were not supplied in
 /// [`ImageExportOptions::textures`] before drawing.
@@ -66,12 +101,15 @@ impl Default for ImageExportOptions {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct ChartImage {
-    /// Exact output dimensions in pixels.
+    /// Exact output dimensions in pixels: the options' size times the pixel density.
     pub size: [u32; 2],
     /// Tessellated chart, header, study panes and requested layout widgets.
     pub primitives: Vec<egui::ClippedPrimitive>,
     /// Textures referenced by the primitives.
     pub textures_delta: egui::TexturesDelta,
+    /// Pixels per point the primitives were laid out and tessellated for: 1, 2 or 3, from
+    /// [`ImageExportOptions::pixel_density`]. Primitive positions are in points.
+    pub pixels_per_point: f32,
 }
 
 /// A column of a [`DataTable`]. A study column carries the original id and title of its study
@@ -180,11 +218,13 @@ fn held_decimals(prices: impl IntoIterator<Item = f64>) -> usize {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExportError {
-    /// A side is outside 100 to 7680 pixels, or the image has more than 33,177,600 pixels.
+    /// A side of the output is outside 100 to 7680 pixels, or the output has more than
+    /// 33,177,600 pixels. PNG, clipboard and frame exports have the options' size times the pixel
+    /// density in pixels; SVG has the size itself.
     InvalidSize {
-        /// The requested width in pixels.
+        /// The output width in pixels, saturating at `u32::MAX`.
         width: u32,
-        /// The requested height in pixels.
+        /// The output height in pixels, saturating at `u32::MAX`.
         height: u32,
     },
     /// The egui context has not run its first frame, so it has no fonts to lay the chart out.
@@ -411,8 +451,9 @@ impl Chart {
     /// scales as the widget. Does not poll feeds, change live viewport state, call the lifecycle
     /// hooks of primitives or capture host panels/dialogs. A pane primitive attached since the
     /// last frame is left out, as it draws only after its `attached` hook.
-    /// `ctx` supplies the host's fonts and style after its first frame. Images use one pixel per point and dimensions
-    /// between 100 and 7680 on each axis, with at most 33,177,600 pixels.
+    /// `ctx` supplies the host's fonts and style after its first frame. The image lays out
+    /// `options.size` points at [`ImageExportOptions::pixel_density`]; its pixels, the size times
+    /// the density, are 100 to 7680 on each axis, with at most 33,177,600 in all.
     /// Pass the returned frame to an egui renderer; see [`ChartImage`] for delivery responsibilities.
     ///
     /// # Errors
@@ -438,7 +479,8 @@ impl Chart {
     ///
     /// ```no_run
     /// # fn capture(chart: &egui_charts::Chart, ctx: &egui::Context) -> Result<(), egui_charts::widget::ExportError> {
-    /// let options = egui_charts::widget::ImageExportOptions::default();
+    /// let mut options = egui_charts::widget::ImageExportOptions::default();
+    /// options.pixel_density = egui_charts::widget::PixelDensity::Two;
     /// let image = chart.export_layout_image(ctx, &options, |ui, snapshot| {
     ///     ui.horizontal(|ui| {
     ///         ui.label(snapshot.symbol());
@@ -455,20 +497,24 @@ impl Chart {
         options: &ImageExportOptions,
         layout: impl FnMut(&mut egui::Ui, &mut Chart),
     ) -> Result<ChartImage, ExportError> {
-        let (shapes, textures_delta, image_ctx) = self.export_shapes(ctx, options, layout)?;
+        let pixels_per_point = options.pixel_density.pixels_per_point();
+        let (shapes, textures_delta, image_ctx) =
+            self.export_shapes(ctx, options, pixels_per_point, layout)?;
         Ok(ChartImage {
-            size: options.size,
-            primitives: image_ctx.tessellate(shapes, 1.0),
+            size: options.size.map(|side| side * pixels_per_point),
+            primitives: image_ctx.tessellate(shapes, pixels_per_point as f32),
             textures_delta,
+            pixels_per_point: pixels_per_point as f32,
         })
     }
 
-    /// The shapes of the last pass of the offscreen frame, the textures it sets and the context
-    /// whose fonts laid it out.
+    /// The shapes of the last pass of the offscreen frame laid out at `pixels_per_point`, the
+    /// textures it sets and the context whose fonts laid it out.
     fn export_shapes(
         &self,
         ctx: &egui::Context,
         options: &ImageExportOptions,
+        pixels_per_point: u32,
         mut layout: impl FnMut(&mut egui::Ui, &mut Chart),
     ) -> Result<
         (
@@ -478,15 +524,19 @@ impl Chart {
         ),
         ExportError,
     > {
-        let size = options.size;
-        if size.iter().any(|&side| !(100..=7680).contains(&side))
-            || u64::from(size[0]) * u64::from(size[1]) > 33_177_600
+        let pixels = options
+            .size
+            .map(|side| u64::from(side) * u64::from(pixels_per_point));
+        // The area is only multiplied once both sides are at most 7680, so it cannot overflow.
+        if pixels.iter().any(|&side| !(100..=7680).contains(&side))
+            || pixels[0] * pixels[1] > 33_177_600
         {
             return Err(ExportError::InvalidSize {
-                width: size[0],
-                height: size[1],
+                width: u32::try_from(pixels[0]).unwrap_or(u32::MAX),
+                height: u32::try_from(pixels[1]).unwrap_or(u32::MAX),
             });
         }
+        let size = options.size;
         if ctx.cumulative_pass_nr() == 0 {
             return Err(ExportError::NoFrame);
         }
@@ -503,13 +553,17 @@ impl Chart {
             .include_timestamp
             .then(|| self.export_time(Utc::now()));
         let title = options.include_title.then(|| self.symbol().to_owned());
-        let input = egui::RawInput {
+        let mut input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(size[0] as f32, size[1] as f32),
             )),
             ..Default::default()
         };
+        // Text is laid out and its glyphs rasterized at the density, as on a screen with it.
+        if let Some(viewport) = input.viewports.get_mut(&egui::ViewportId::ROOT) {
+            viewport.native_pixels_per_point = Some(pixels_per_point as f32);
+        }
         let mut textures_delta = egui::TexturesDelta::default();
         // Resolve pane layout, axis measurement and each pending element study before the final frame.
         let passes = chart.studies.indicators().len() + 3;
@@ -581,7 +635,12 @@ impl Chart {
         layout: impl FnMut(&mut egui::Ui, &mut Chart),
     ) -> Result<Vec<u8>, ExportError> {
         let mut image = self.export_layout_image(ctx, options, layout)?;
-        let pixels = super::raster::rasterize(image.size, &image.primitives, &image.textures_delta);
+        let pixels = super::raster::rasterize(
+            image.size,
+            image.pixels_per_point,
+            &image.primitives,
+            &image.textures_delta,
+        );
         image.textures_delta.clear();
         super::raster::png(image.size, &pixels.map_err(ExportError::Unsupported)?)
             .map_err(ExportError::Encode)
@@ -593,7 +652,8 @@ impl Chart {
     /// as PNG with `png-export` enabled, with the host's [`ImageExportOptions::textures`].
     /// Fails with the reason for content SVG cannot take over unchanged, such as host paint
     /// callbacks and textures the host binds itself without supplying their pixels, instead of
-    /// leaving it out.
+    /// leaving it out. [`ImageExportOptions::pixel_density`] does not apply: the document is the
+    /// options' size.
     ///
     /// # Errors
     /// Returns the errors of [`Self::export_image`] or [`ExportError::Unsupported`] for content
@@ -616,7 +676,7 @@ impl Chart {
         options: &ImageExportOptions,
         layout: impl FnMut(&mut egui::Ui, &mut Chart),
     ) -> Result<String, ExportError> {
-        let (shapes, mut textures_delta, _) = self.export_shapes(ctx, options, layout)?;
+        let (shapes, mut textures_delta, _) = self.export_shapes(ctx, options, 1, layout)?;
         let svg = super::svg::svg(options.size, &shapes, &textures_delta);
         textures_delta.clear();
         // shortcut: an encoder failure while embedding a texture arrives as Unsupported; split it when svg.rs returns ExportError.
@@ -1377,18 +1437,35 @@ mod tests {
                 }), visible, "drawing visibility at {timeframe:?}");
             }
         }
-        for [width, height] in [[0, 320], [480, u32::MAX], [7680, 7680]] {
+        // The limits apply to the output pixels, the size times the density.
+        for (size, pixel_density, expected) in [
+            ([0, 320], PixelDensity::One, Some([0, 320])),
+            ([480, u32::MAX], PixelDensity::One, Some([480, u32::MAX])),
+            ([7680, 7680], PixelDensity::One, Some([7680, 7680])),
+            ([50, 50], PixelDensity::Two, None),
+            ([33, 200], PixelDensity::Three, Some([99, 600])),
+            ([3841, 100], PixelDensity::Two, Some([7682, 200])),
+            ([3840, 2161], PixelDensity::Two, Some([7680, 4322])),
+            ([480, u32::MAX], PixelDensity::Three, Some([1440, u32::MAX])),
+        ] {
+            let image = chart.export_image(
+                &ctx,
+                &ImageExportOptions {
+                    size,
+                    pixel_density,
+                    ..base.clone()
+                },
+            );
             assert_eq!(
-                chart
-                    .export_image(
-                        &ctx,
-                        &ImageExportOptions {
-                            size: [width, height],
-                            ..base.clone()
-                        }
-                    )
-                    .err(),
-                Some(ExportError::InvalidSize { width, height })
+                image.map(|mut image| {
+                    image.textures_delta.clear();
+                    image.size
+                }),
+                match expected {
+                    Some([width, height]) => Err(ExportError::InvalidSize { width, height }),
+                    None => Ok([100, 100]),
+                },
+                "{size:?} at {pixel_density:?}"
             );
         }
     }
@@ -1951,6 +2028,7 @@ mod tests {
             let mut image = chart.export_image(&ctx, &options).unwrap();
             let raster = super::super::raster::rasterize(
                 image.size,
+                image.pixels_per_point,
                 &image.primitives,
                 &image.textures_delta,
             )
@@ -2013,6 +2091,73 @@ mod tests {
             chart.drawings.deselect();
         }
         assert_eq!(decode(&chart, false, false), images[0]);
+    }
+
+    /// Guards #3596: a PNG at density d has d times the pixels on each side and draws the same
+    /// layout, and an SVG ignores the density.
+    #[test]
+    #[cfg(feature = "png-export")]
+    fn png_density_multiplies_pixels_and_keeps_the_layout() {
+        let ctx = egui::Context::default();
+        ctx.run_ui(Default::default(), |_| {})
+            .drop_without_applying_deltas();
+        // Every bar rises, so every candle body has the bullish colour.
+        let chart = crate::widget::test_frames::chart(&[100.0, 104.0], &[110.0, 108.0]);
+        let bullish = chart.config().bullish_color.to_srgba_unmultiplied();
+        // The PNG's width and height and the bounding box of its candle bodies.
+        let measure = |pixel_density| {
+            let options = ImageExportOptions {
+                size: [480, 320],
+                include_title: false,
+                include_timestamp: false,
+                pixel_density,
+                ..Default::default()
+            };
+            let png = chart.export_png(&ctx, &options).unwrap();
+            let mut reader = png::Decoder::new(png.as_slice()).read_info().unwrap();
+            let mut pixels = vec![0; reader.output_buffer_size()];
+            let info = reader.next_frame(&mut pixels).unwrap();
+            let width = info.width as usize;
+            let mut bbox = [usize::MAX, usize::MAX, 0, 0];
+            for (at, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+                if *pixel == bullish {
+                    let (x, y) = (at % width, at / width);
+                    bbox = [
+                        bbox[0].min(x),
+                        bbox[1].min(y),
+                        bbox[2].max(x + 1),
+                        bbox[3].max(y + 1),
+                    ];
+                }
+            }
+            (info.width, info.height, bbox)
+        };
+        let measured = PixelDensity::ALL.map(measure);
+        let one = measured[0].2;
+        for (density, (width, height, bbox)) in PixelDensity::ALL.into_iter().zip(measured) {
+            let d = density.pixels_per_point();
+            assert_eq!((width, height), (480 * d, 320 * d), "{density:?}");
+            // egui rounds text, and with it the axis and legend heights, to the density's pixel
+            // grid, as on a screen of that density, which moves an edge by less than two points.
+            let d = d as usize;
+            for (edge, edge_at_one) in bbox.into_iter().zip(one) {
+                assert!(
+                    edge.abs_diff(edge_at_one * d) <= 2 * d,
+                    "{density:?}: bodies at {bbox:?}, at one pixel per point {one:?}"
+                );
+            }
+        }
+        // 8000 by 4000 pixels would be too large, but an SVG document keeps the options' size.
+        let svg = |pixel_density| {
+            let options = ImageExportOptions {
+                size: [4000, 2000],
+                include_timestamp: false,
+                pixel_density,
+                ..Default::default()
+            };
+            chart.export_svg(&ctx, &options).unwrap()
+        };
+        assert_eq!(svg(PixelDensity::Two), svg(PixelDensity::One));
     }
 
     /// An export uses the same scales as the widget, so a main series that reserves 60 and 70
