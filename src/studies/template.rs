@@ -361,15 +361,7 @@ impl StudyTemplate {
         study.apply_settings(&inputs, settings.clone())?;
         study.set_visible(template.visible);
         if let Some(scale) = template.scale {
-            // Keep an overlay's saved pin before its saved pane is restored.
-            let own_pane = study.plots_on_price() && !study.is_overlay();
-            if own_pane {
-                study.set_overlay(true);
-            }
             study.set_scale(scale);
-            if own_pane {
-                study.set_overlay(false);
-            }
         }
         Ok(study)
     }

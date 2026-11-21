@@ -200,6 +200,9 @@ impl Chart {
                 // Expose saved overlay pins before additional scales are renumbered.
                 if set.price_pane.contains(&at) {
                     study.set_overlay(true);
+                    if let Some(scale) = template.scale {
+                        study.set_scale(scale);
+                    }
                 }
                 Ok(keep.adds(study.as_ref()).then_some(study))
             })
@@ -367,7 +370,7 @@ mod tests {
     use crate::widget::{Chart, SeriesId};
 
     /// Studies saved on the price pane keep their placement, pinned scales and fitted table
-    /// sizes on restore.
+    /// sizes on restore. A separate Seasonality pane's implicit scale does not become a pin.
     #[test]
     fn studies_saved_on_the_price_pane_restore_there() {
         use crate::model::SeriesScale;
@@ -432,6 +435,81 @@ mod tests {
                     .scale(),
                 scale
             );
+        }
+
+        for (overlay, scale) in [
+            (false, StudyScale::None),
+            (true, StudyScale::Main),
+            (true, StudyScale::None),
+            (true, StudyScale::Shared(SeriesScale::Left)),
+            (true, StudyScale::Shared(SeriesScale::Separate(0))),
+            (true, StudyScale::Shared(SeriesScale::Overlay(0))),
+        ] {
+            let mut source = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+            let id = source.add_indicator(Box::new(crate::studies::Seasonality::new()));
+            if overlay {
+                assert!(source.move_series_to_pane(id, PaneId::MAIN));
+                assert!(source.set_indicator_scale(id, scale));
+            }
+            let check = |mut restored: Chart, id| {
+                let study = restored
+                    .indicators()
+                    .find(|(found, _)| *found == id)
+                    .unwrap()
+                    .1;
+                assert_eq!(study.is_overlay(), overlay);
+                assert_eq!(study.scale(), scale);
+                assert!(restored.move_series_to_pane(id, PaneId::MAIN));
+                assert_eq!(
+                    restored
+                        .indicators()
+                        .find(|(found, _)| *found == id)
+                        .unwrap()
+                        .1
+                        .scale(),
+                    if overlay { scale } else { StudyScale::Main }
+                );
+            };
+            let set = source.study_template_set();
+            let mut restored = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+            let ids = restored.apply_study_template_set(&set).unwrap();
+            check(restored, ids[0]);
+            #[cfg(feature = "ui")]
+            {
+                let mut restored = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+                restored.restore(&source.snapshot().unwrap()).unwrap();
+                let restored_id = restored.restored_series_id(id.0).unwrap();
+                check(restored, restored_id);
+            }
+            #[cfg(feature = "drawings")]
+            {
+                let mut restored = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+                let pasted = restored
+                    .paste_indicator(
+                        &source.copy_indicator(id).unwrap(),
+                        &crate::studies::IndicatorFactory::new(),
+                    )
+                    .unwrap();
+                check(restored, pasted);
+            }
+            if scale == StudyScale::Shared(SeriesScale::Separate(0)) {
+                let ids = source
+                    .place_study_template_set(
+                        &set,
+                        &crate::studies::IndicatorFactory::new(),
+                        super::Keep::All,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    source
+                        .indicators()
+                        .find(|(id, _)| Some(*id) == ids[0])
+                        .unwrap()
+                        .1
+                        .scale(),
+                    StudyScale::Shared(SeriesScale::Separate(1))
+                );
+            }
         }
     }
 
