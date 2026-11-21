@@ -2488,6 +2488,103 @@ fn drawings_keep_their_place_when_the_series_and_studies_change() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
+/// A new study's temporary price-pane placement does not edit that pane's drawings.
+#[cfg(all(feature = "drawings", feature = "studies"))]
+#[test]
+fn chained_studies_only_restack_the_pane_they_join() {
+    use crate::studies::{
+        ConfiguredStudy, Indicator, InputValue, RSI, SMA, StudySource, StudyTemplate,
+        StudyTemplateSet,
+    };
+    use crate::widget::{Chart, ChartEvent, SeriesId};
+    use egui::Color32;
+
+    const FILL: Color32 = Color32::from_rgb(200, 0, 200);
+    let mut failures = Vec::new();
+    for (name, action, template_pane) in [
+        ("add in action", true, None),
+        ("host add", false, None),
+        ("unlisted template in action", true, Some(false)),
+        ("listed template in action", true, Some(true)),
+        ("host unlisted template", false, Some(false)),
+        ("host listed template", false, Some(true)),
+    ] {
+        for layer in [1, 2] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0, 100.0], &[110.0, 104.0]);
+            chart.config.show_volume = false;
+            chart.set_visible_bars(20);
+            let rsi = if template_pane.is_none() {
+                chart.add_indicator(Box::new(RSI::new(14)))
+            } else {
+                SeriesId(0) // Templates refer to their source by its position in the set.
+            };
+            let id = add_rect(&mut chart, None, [109.0, 101.0], FILL);
+            chart
+                .drawings_mut()
+                .edit_drawing(id, |d| d.series_layer = Some(layer))
+                .unwrap();
+            chart.drain_events().for_each(drop);
+            chart.drawings().pending_sync.lock().unwrap().clear();
+
+            let add = |chart: &mut Chart| {
+                let mut study = ConfiguredStudy::new(Box::new(SMA::new(2)));
+                study
+                    .set_input(
+                        "source",
+                        InputValue::Source(StudySource::Study { id: rsi.0, plot: 0 }),
+                    )
+                    .unwrap();
+                if let Some(listed) = template_pane {
+                    let set = StudyTemplateSet {
+                        studies: vec![
+                            StudyTemplate::from_study(&RSI::new(14)),
+                            StudyTemplate::from_study(&study),
+                        ],
+                        panes: if listed { vec![vec![0, 1]] } else { vec![] },
+                        ..StudyTemplateSet::default()
+                    };
+                    chart.apply_study_template_set(&set).unwrap();
+                } else {
+                    let added = chart.add_indicator(Box::new(study));
+                    assert_eq!(chart.series_pane(added), chart.series_pane(rsi));
+                }
+            };
+            if action {
+                chart.user_action(add);
+            } else {
+                add(&mut chart);
+            }
+            let events: Vec<_> = chart
+                .drain_events()
+                .filter(|event| matches!(event, ChartEvent::Drawing { .. }))
+                .collect();
+            let saves = chart.drawings().pending_sync.lock().unwrap().clone();
+            let actual = chart.drawings().drawings[0].series_layer;
+            if actual != Some(layer) || !events.is_empty() || !saves.is_empty() {
+                failures.push(format!(
+                    "{name}, layer {layer}: count {actual:?}, events {events:?}, saves {saves:?}"
+                ));
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let rect = rect_at(&painted, FILL);
+            let candles: Vec<_> = painted
+                .iter()
+                .enumerate()
+                .filter_map(|(at, shape)| {
+                    matches!(shape, Shape::Rect(r) if r.fill == chart.config().bullish_color
+                        && chart.get_rendered_price_rect().contains_rect(r.rect))
+                    .then_some(at)
+                })
+                .collect();
+            assert!(!candles.is_empty());
+            assert!(candles.iter().all(|&at| at < rect), "{name}, layer {layer}");
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 #[cfg(all(feature = "drawings", feature = "studies"))]
 fn color_of(chart: &crate::widget::Chart, id: crate::widget::SeriesId) -> egui::Color32 {
     let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();

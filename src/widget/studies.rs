@@ -156,11 +156,11 @@ impl Chart {
         #[cfg(feature = "drawings")]
         let stack = self.pane_stack(SeriesId(self.next_series));
         let id = self.insert_indicator(indicator);
+        self.place_on_source(id);
         #[cfg(feature = "drawings")]
         if let Some(stack) = stack {
             self.keep_stack(stack);
         }
-        self.place_on_source(id);
         id
     }
 
@@ -183,7 +183,7 @@ impl Chart {
             return;
         };
         if !overlay && let Some(pane) = self.series_pane(source) {
-            self.move_series_to_pane(id, pane);
+            self.move_series_keeping_layers(id, pane);
         }
         let own = self
             .indicators()

@@ -256,10 +256,6 @@ impl Chart {
             .into_iter()
             .map(|study| study.map(|study| self.insert_indicator(study)))
             .collect();
-        #[cfg(feature = "drawings")]
-        if let Some(stack) = stack {
-            self.keep_stack(stack);
-        }
         for (id, template) in ids.iter().zip(&set.studies) {
             let Some(id) = *id else {
                 continue;
@@ -290,14 +286,16 @@ impl Chart {
             }
         }
         for id in set.price_pane.iter().filter_map(|&at| ids[at]) {
-            self.move_series_to_pane(id, self.main_series_pane());
+            self.move_series_keeping_layers(id, self.main_series_pane());
         }
         for pane in &set.panes {
             let pane: Vec<_> = pane.iter().filter_map(|&at| ids[at]).collect();
             if let Some((&first, rest)) = pane.split_first() {
-                self.move_indicator_to_pane(first, first);
-                for &id in rest {
-                    self.move_indicator_to_pane(id, first);
+                self.move_to_new_pane_keeping_layers(first);
+                if let Some(pane) = self.series_pane(first).filter(|pane| *pane != PaneId::MAIN) {
+                    for &id in rest {
+                        self.move_series_keeping_layers(id, pane);
+                    }
                 }
             }
         }
@@ -313,6 +311,10 @@ impl Chart {
             .collect();
         for id in unlisted {
             self.place_on_source(id);
+        }
+        #[cfg(feature = "drawings")]
+        if let Some(stack) = stack {
+            self.keep_stack(stack);
         }
         // Removing the volume study turns the volume setting off; applying one turns it on.
         let volume = self
