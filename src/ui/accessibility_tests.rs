@@ -917,9 +917,29 @@ fn user_names_show_as_saved_under_a_translator() {
             &["Watchlist", "NEW SECTION"],
         ),
         (
-            "alert dialog watchlist",
+            "alert dialog watchlist and presets",
             || {
+                use crate::data::Reply;
+                use crate::services::{Storage, StoreKind};
+                /// A host holding one saved preset named "Active".
+                struct Presets;
+                impl Storage for Presets {
+                    fn list(&self, _: StoreKind, reply: Reply<Vec<String>>) {
+                        reply.send(Ok(Vec::new()));
+                    }
+                    fn load(&self, _: StoreKind, _: &str, reply: Reply<Option<String>>) {
+                        let document = r#"{"version":3,"presets":{"Active":{}}}"#;
+                        reply.send(Ok(Some(document.into())));
+                    }
+                    fn save(&self, _: StoreKind, _: &str, _: String, reply: Reply<()>) {
+                        reply.send(Ok(()));
+                    }
+                    fn delete(&self, _: StoreKind, _: &str, reply: Reply<()>) {
+                        reply.send(Ok(()));
+                    }
+                }
                 let mut dialog = super::dialogs::AlertDialog::new();
+                dialog.set_storage(std::sync::Arc::new(Presets));
                 dialog.open("SAMPLE".into(), 100.0);
                 dialog.watchlists = vec![
                     ("saved".into(), "Active".into()),
@@ -931,6 +951,9 @@ fn user_names_show_as_saved_under_a_translator() {
                 });
                 let mut texts = shown(&harness);
                 harness.state_mut().alert.watchlist = Some("default".into());
+                harness.run();
+                texts.extend(shown(&harness));
+                harness.get_by_label("T:Apply preset").click();
                 harness.run();
                 texts.extend(shown(&harness));
                 texts

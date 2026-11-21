@@ -1224,10 +1224,7 @@ impl AlertDialog {
                 .selected_text(l10n::text(ui.ctx(), "Apply preset"))
                 .show_ui(ui, |ui| {
                     for name in self.presets.keys() {
-                        if ui
-                            .selectable_label(false, l10n::text(ui.ctx(), name))
-                            .clicked()
-                        {
+                        if ui.selectable_label(false, name).clicked() {
                             apply = Some(name.clone());
                         }
                     }
