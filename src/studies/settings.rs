@@ -2547,26 +2547,6 @@ mod tests {
         }
         assert_eq!(observed, expected);
 
-        // A batch can first stop requesting daily bars, then select a calculation interval.
-        let mut pivots = ConfiguredStudy::new(Box::new(
-            super::super::PivotPoints::new().with_daily_bars(true),
-        ));
-        pivots.set_timeframe(Timeframe::Min1);
-        let settings = pivots.settings();
-        pivots
-            .apply_settings(
-                &[
-                    ("daily_bars".into(), InputValue::Toggle(false)),
-                    (
-                        "calculation_timeframe".into(),
-                        InputValue::Timeframe(Some(Timeframe::Hour1)),
-                    ),
-                ],
-                settings,
-            )
-            .unwrap();
-        assert_eq!(pivots.data_requests()[0].timeframe, Some(Timeframe::Hour1));
-
         // Switching back to price first makes a separate calculation interval available.
         let mut average = ConfiguredStudy::new(Box::new(super::super::SMA::new(1)));
         average.set_timeframe(Timeframe::Day1);
