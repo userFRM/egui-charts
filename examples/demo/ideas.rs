@@ -48,6 +48,8 @@ impl DemoIdeas {
             now - TimeDelta::hours(5),
         );
         video.title = "Reading the open".into();
+        video.symbol = "INDEXA".into();
+        video.interval = "5min".into();
         let mut ideas = Self {
             panel,
             feed: vec![idea, video],

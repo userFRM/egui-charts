@@ -776,49 +776,58 @@ impl ChatsPanel {
                                         capabilities.ignore_users && message.author_id.is_some();
                                     let profile = profiles && message.author_id.is_some();
                                     if reply || capabilities.links || ignore || profile {
-                                        ui.menu_button(author, |ui| {
-                                            let mut pick = None;
-                                            if reply
-                                                && ui
-                                                    .button(l10n::text(ui.ctx(), "Reply"))
-                                                    .clicked()
-                                            {
-                                                pick = Some(MessageAction::Reply);
-                                            }
-                                            if capabilities.links
-                                                && ui
-                                                    .button(l10n::text(ui.ctx(), "Copy link"))
-                                                    .clicked()
-                                            {
-                                                pick = Some(MessageAction::CopyLink);
-                                            }
-                                            let name = l10n::format_text(
-                                                ui.ctx(),
-                                                "Ignore {name}",
-                                                &[("name", message.author.as_str())],
-                                            );
-                                            if ignore
-                                                && ui
-                                                    .add_enabled(
-                                                        ignore_free,
-                                                        egui::Button::new(name),
-                                                    )
-                                                    .clicked()
-                                            {
-                                                pick = Some(MessageAction::Ignore);
-                                            }
-                                            if profile
-                                                && ui
-                                                    .button(l10n::text(ui.ctx(), "View profile"))
-                                                    .clicked()
-                                            {
-                                                pick = Some(MessageAction::ViewProfile);
-                                            }
-                                            if let Some(pick) = pick {
-                                                picked = Some((pick, message.clone()));
-                                                ui.close();
-                                            }
-                                        });
+                                        // Framed on hover only, so the name reads as it does without a menu.
+                                        let button =
+                                            egui::Button::new(author).frame_when_inactive(false);
+                                        egui::containers::menu::MenuButton::from_button(button).ui(
+                                            ui,
+                                            |ui| {
+                                                let mut pick = None;
+                                                if reply
+                                                    && ui
+                                                        .button(l10n::text(ui.ctx(), "Reply"))
+                                                        .clicked()
+                                                {
+                                                    pick = Some(MessageAction::Reply);
+                                                }
+                                                if capabilities.links
+                                                    && ui
+                                                        .button(l10n::text(ui.ctx(), "Copy link"))
+                                                        .clicked()
+                                                {
+                                                    pick = Some(MessageAction::CopyLink);
+                                                }
+                                                let name = l10n::format_text(
+                                                    ui.ctx(),
+                                                    "Ignore {name}",
+                                                    &[("name", message.author.as_str())],
+                                                );
+                                                if ignore
+                                                    && ui
+                                                        .add_enabled(
+                                                            ignore_free,
+                                                            egui::Button::new(name),
+                                                        )
+                                                        .clicked()
+                                                {
+                                                    pick = Some(MessageAction::Ignore);
+                                                }
+                                                if profile
+                                                    && ui
+                                                        .button(l10n::text(
+                                                            ui.ctx(),
+                                                            "View profile",
+                                                        ))
+                                                        .clicked()
+                                                {
+                                                    pick = Some(MessageAction::ViewProfile);
+                                                }
+                                                if let Some(pick) = pick {
+                                                    picked = Some((pick, message.clone()));
+                                                    ui.close();
+                                                }
+                                            },
+                                        );
                                     } else {
                                         ui.label(author);
                                     }
