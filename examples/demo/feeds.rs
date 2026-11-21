@@ -12,7 +12,8 @@ use egui_charts::data::{
 };
 use egui_charts::model::{Bar, PostContent, Quote};
 use egui_charts::services::{
-    ChatCapabilities, ChatEvent, ChatMessage, Chats, Events, Notification, NotificationTarget,
+    ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, Events, Notification,
+    NotificationTarget,
     Notifications, Posts, Quotes,
 };
 
@@ -800,17 +801,19 @@ impl Notifications for DemoNotifications {
     }
 }
 
-/// Two rooms with recent messages, a fixed older backlog and echoes of what the user posts.
+/// Two rooms with recent messages, a fixed older backlog, echoes of what the user posts and the
+/// authors the user ignores.
 pub(super) struct DemoChats(
-    Mutex<(Vec<ChatMessage>, Option<Events<ChatEvent>>)>,
+    Mutex<(Vec<ChatMessage>, Option<Events<ChatEvent>>, Vec<ChatUser>)>,
     Vec<ChatMessage>,
 );
 
 impl DemoChats {
     pub(super) fn new(now: DateTime<Utc>) -> Self {
-        let message = |room, author, minutes, text| {
+        let message = |room, author: &str, minutes, text| {
             ChatMessage::new(room, author, now - TimeDelta::minutes(minutes), text)
                 .with_id(format!("{room}-seed-{minutes}"))
+                .with_author_id(author.to_lowercase())
         };
         let history = ["General", "Crypto"]
             .into_iter()
@@ -823,6 +826,7 @@ impl DemoChats {
                         format!("{room} history {n}"),
                     )
                     .with_id(format!("{room}-history-{n}"))
+                    .with_author_id("ana")
                 })
             })
             .collect();
@@ -851,9 +855,23 @@ impl DemoChats {
                     ),
                 ],
                 None,
+                Vec::new(),
             )),
             history,
         )
+    }
+
+    /// Posts the user's `text` to `room`, answering the message `to` when set.
+    fn post(&self, room: String, text: String, to: Option<String>, reply: Reply<()>) {
+        let mut state = self.0.lock().unwrap();
+        let mut message = ChatMessage::new(room, "You", Utc::now(), text)
+            .with_id(format!("live-{}", state.0.len()));
+        message.reply_to = to;
+        if let Some(events) = &state.1 {
+            events.push(ChatEvent::Message(message.clone()));
+        }
+        state.0.push(message);
+        reply.send(Ok(()));
     }
 }
 
@@ -863,23 +881,49 @@ impl Chats for DemoChats {
         for message in &state.0 {
             events.push(ChatEvent::Message(message.clone()));
         }
+        events.push(ChatEvent::Ignored(state.2.clone()));
         state.1 = Some(events);
     }
 
     fn send(&self, room: String, text: String, reply: Reply<()>) {
+        self.post(room, text, None, reply);
+    }
+
+    fn send_reply(&self, room: String, text: String, to: String, reply: Reply<()>) {
+        self.post(room, text, Some(to), reply);
+    }
+
+    fn link(&self, message: &ChatMessage) -> Option<String> {
+        // shortcut: the demo has no chat server, so its links resolve nowhere; a host returns its own URL.
+        message
+            .id
+            .as_ref()
+            .map(|id| format!("demo://chats/{}/{id}", message.room))
+    }
+
+    fn ignore_user(&self, user: String, ignore: bool, reply: Reply<()>) {
         let mut state = self.0.lock().unwrap();
-        let message = ChatMessage::new(room, "You", Utc::now(), text)
-            .with_id(format!("live-{}", state.0.len()));
-        if let Some(events) = &state.1 {
-            events.push(ChatEvent::Message(message.clone()));
+        state.2.retain(|ignored| ignored.id != user);
+        if ignore {
+            let name = state
+                .0
+                .iter()
+                .find(|message| message.author_id.as_ref() == Some(&user))
+                .map_or_else(|| user.clone(), |message| message.author.clone());
+            state.2.push(ChatUser::new(user, name));
         }
-        state.0.push(message);
+        if let Some(events) = &state.1 {
+            events.push(ChatEvent::Ignored(state.2.clone()));
+        }
         reply.send(Ok(()));
     }
 
     fn capabilities(&self) -> ChatCapabilities {
         let mut capabilities = ChatCapabilities::default();
         capabilities.history = true;
+        capabilities.replies = true;
+        capabilities.links = true;
+        capabilities.ignore_users = true;
         capabilities
     }
 
