@@ -443,9 +443,10 @@ impl Drawing {
 
     /// The profile of `bars`, the span that starts at bar `first`: the executed volume in the
     /// drawing's rows when the view holds complete executions in the span, else the finer bars
-    /// where they cover chart bars, else estimated from the chart bars. A row count takes whole
-    /// ticks of the view's instrument, as the volume profile studies lay theirs: from the price
-    /// span of `bars` for bars and finer bars, and from the traded rows for executions.
+    /// where they cover chart bars, else estimated from the chart bars, a single one of which is
+    /// up volume only when it closes above its open. A row count takes whole ticks of the view's
+    /// instrument, as the volume profile studies lay theirs: from the price span of `bars` for
+    /// bars and finer bars, and from the traded rows for executions.
     fn span_profile(
         &self,
         view: &ChartView,
@@ -486,17 +487,32 @@ impl Drawing {
         if let Some(profile) = finer_profile(view, config.rows(), config.row_size(), first, bars) {
             return profile;
         }
-        span_profile(view, config.rows(), config.row_size(), first, bars)
+        let profile = span_profile(view, config.rows(), config.row_size(), first, bars);
+        // One bar is up volume only when it closes above its open, several also at an unchanged
+        // close. Applied here, not in the cache, whose profile of one bar later bars extend.
+        if let [bar] = bars
+            && bar.close == bar.open
+            && let Some(estimate) = &*profile
+        {
+            let mut estimate = estimate.clone();
+            for (up, down) in estimate.up.iter_mut().zip(&mut estimate.down) {
+                *down += std::mem::take(up);
+            }
+            return Rc::new(Some(estimate));
+        }
+        profile
     }
 
     /// The profile that a fixed range or anchored volume profile shows over the view's bars,
     /// with its [source](VolumeProfile::source): executed volume, in the drawing's rows as the
     /// volume profile studies group executions, when [`ChartView::executions`] holds complete
     /// bars in the selected span, including prepared bars before a missing join, else the finer
-    /// bars of [`ChartView::finer`], else the bar estimate. Rows set in ticks take the tick size
-    /// of [`ChartView::instrument`], or the row count without one. A row count draws the whole
-    /// number of those ticks per row whose row total lies closest to it, on multiples of that
-    /// height, and equal rows without a tick size.
+    /// bars of [`ChartView::finer`], else the bar estimate. An estimate from a single chart bar
+    /// counts it as up volume only when it closes above its open, so a bar that closes at its open
+    /// is down volume; over two or more bars an unchanged close is up. Rows set in ticks take the
+    /// tick size of [`ChartView::instrument`], or the row count without one. A row count draws the
+    /// whole number of those ticks per row whose row total lies closest to it, on multiples of
+    /// that height, and equal rows without a tick size.
     /// `None` for other tools, a drawing without its anchors, or an empty selection.
     pub fn volume_profile_of(&self, view: &ChartView) -> Option<VolumeProfile> {
         let (first, bars) = self.profile_span(view.bars)?;
@@ -3056,5 +3072,77 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// A profile estimated from one chart bar counts its volume as up only when the bar closes
+    /// above its open, so a bar that closes at its open is down volume. Over two or more bars, and
+    /// over the forming bar once the next bar opens, an unchanged close is up, and executions keep
+    /// their aggressor side.
+    #[test]
+    fn single_bar_profile_counts_an_unchanged_close_as_down() {
+        use crate::data::Footprint;
+        use crate::drawings::ChartPoint;
+        use crate::model::{BarClock, OrderSide, Tick};
+        // Bars that open and close at 10.50 between 10 and 11, with 100 traded each.
+        let bars: Vec<_> = (0..3)
+            .map(|i| {
+                let time = DateTime::from_timestamp(i * 60, 0).unwrap();
+                Bar::new(time, 10.5, 11.0, 10.0, 10.5, 100.0)
+            })
+            .collect();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        flow.push(&Tick::new(bars[0].time, 10.0, 5.0, Some(OrderSide::Buy)))
+            .unwrap();
+        let mut failures = Vec::new();
+        // In order: "two bars" and "next bar" extend the cached profiles of "one bar" and
+        // "forming bar", which start at the same bar.
+        for (case, held, anchors, executed, up, down) in [
+            ("one bar", 2, &[0.0, 0.0][..], false, 0.0, 100.0),
+            ("two bars", 2, &[0.0, 1.0][..], false, 200.0, 0.0),
+            ("forming bar", 2, &[1.0][..], false, 0.0, 100.0),
+            ("next bar", 3, &[1.0][..], false, 200.0, 0.0),
+            ("executions", 2, &[0.0, 0.0][..], true, 5.0, 0.0),
+        ] {
+            let view = ChartView {
+                price_formatter: None,
+                thousands_sep: None,
+                time_formatter: None,
+                bar_seconds: 0,
+                instrument: None,
+                bars: &bars[..held],
+                revision: 0,
+                bar_to_x: &|x| x,
+                bar_spacing: 1.0,
+                price_to_y: &|price| price as f32,
+                y_to_price: &f64::from,
+                time_axis: true,
+                executions: executed.then_some((&flow).into()),
+                timeframe: None,
+                finer: &[],
+            };
+            let mut drawing = Drawing::new(
+                1,
+                if anchors.len() == 1 {
+                    DrawingToolType::AnchoredVolumeProfile
+                } else {
+                    DrawingToolType::FixedRangeVolumeProfile
+                },
+            );
+            drawing.chart_points = anchors
+                .iter()
+                .map(|&bar| ChartPoint::new(bar, 10.5))
+                .collect();
+            let profile = drawing.volume_profile_of(&view).unwrap();
+            let sides = (
+                profile.up().iter().sum::<f64>(),
+                profile.down().iter().sum::<f64>(),
+            );
+            if (sides.0 - up).abs() > 1e-9 || (sides.1 - down).abs() > 1e-9 {
+                failures.push(format!(
+                    "{case}: up and down {sides:?}, expected ({up}, {down})"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 }
