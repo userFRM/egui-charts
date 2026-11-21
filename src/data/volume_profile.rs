@@ -231,7 +231,10 @@ impl VolumeProfileConfig {
 
     /// A profile of `rows` equal price rows whose value area holds the
     /// `value_area` share of its volume (above 0, at most 1); `None` when
-    /// either is out of bounds.
+    /// either is out of bounds. A volume profile drawing on an instrument with a tick size draws
+    /// the whole number of ticks per row whose row total lies closest to `rows`, as the volume
+    /// profile studies do with Row count; [`VolumeProfile::from_bars`] splits the span into exactly
+    /// `rows`.
     pub fn new(rows: usize, value_area: f64) -> Option<Self> {
         (Self::ROWS.contains(&rows) && value_area > 0.0 && value_area <= 1.0).then_some(Self {
             rows,
@@ -299,6 +302,20 @@ impl VolumeProfileConfig {
         (height.is_finite() && height > 0.0).then_some(height)
     }
 
+    /// `self` in rows a whole number of `unit`s high over the span `low` to `high`, given in
+    /// `unit`s: the count whose row total lies closest to [`Self::rows`], as the volume profile
+    /// studies lay a row count on whole ticks. Unchanged with a price height, and for a span or
+    /// height that cannot be represented.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn with_whole_rows(self, unit: f64, low: f64, high: f64) -> Self {
+        if self.row_size.is_some() {
+            return self;
+        }
+        whole_tick_rows(low, high, self.rows)
+            .and_then(|units| self.with_row_size(Some(units as f64 * unit)))
+            .unwrap_or(self)
+    }
+
     /// `self` with the row layout and value area of `layout`, keeping every display setting.
     #[cfg(feature = "ui")]
     pub(crate) fn with_layout(self, layout: Self) -> Self {
@@ -311,7 +328,7 @@ impl VolumeProfileConfig {
         }
     }
 
-    /// Number of price rows.
+    /// Number of price rows asked for.
     pub fn rows(&self) -> usize {
         self.rows
     }
@@ -1167,7 +1184,7 @@ fn grid_edge(value: f64, scale: f64) -> Option<f64> {
 /// Whole ticks per row closest to the requested row count on a zero-aligned grid.
 /// Compares the span per row rounded down and up, taking the larger tick count on a tie.
 /// Rejects nonfinite, reversed or unrepresentable spans and zero rows.
-#[cfg(feature = "studies")]
+#[cfg(any(feature = "studies", feature = "drawings"))]
 pub(crate) fn whole_tick_rows(low: f64, high: f64, rows: usize) -> Option<u64> {
     let span = high - low;
     if !low.is_finite() || !high.is_finite() || !span.is_finite() || span < 0.0 || rows == 0 {
