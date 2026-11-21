@@ -824,17 +824,10 @@ impl SymbolTab {
     }
 
     /// Session hours: the chart's calendar, the instrument's regular or extended windows, its
-    /// pre-market or post-market alone or each segment apart, or a daily window of its own.
+    /// pre-market or post-market alone or each segment apart, or up to five custom windows.
     fn profile_session(ui: &mut Ui, session: &mut ProfileSession) {
         let label = ui.label(l10n::text(ui.ctx(), "Session"));
-        let custom = || {
-            let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
-            ProfileSession::Custom(crate::model::CustomProfileSession {
-                start: at(0),
-                end: at(0),
-                zone: None,
-            })
-        };
+        let custom = || ProfileSession::Custom(crate::model::CustomProfileSessions::default());
         let choice = |session: &ProfileSession| match session {
             ProfileSession::Chart => 0,
             ProfileSession::Regular => 1,
@@ -875,60 +868,130 @@ impl SymbolTab {
         let ProfileSession::Custom(custom) = session else {
             return;
         };
-        for (name, time) in [
-            ("Session start", &mut custom.start),
-            ("Session end", &mut custom.end),
-        ] {
-            let label = ui.label(l10n::text(ui.ctx(), name));
-            ui.horizontal(|ui| {
-                let (mut hour, mut minute) = (time.hour(), time.minute());
-                ui.add(egui::DragValue::new(&mut hour).range(0..=23))
-                    .labelled_by(label.id);
-                ui.label(":");
-                ui.add(egui::DragValue::new(&mut minute).range(0..=59))
-                    .labelled_by(label.id);
-                *time = NaiveTime::from_hms_opt(hour, minute, 0).unwrap_or(*time);
+        let mut remove = None;
+        for (i, window) in custom
+            .sessions
+            .iter_mut()
+            .take(crate::model::CustomProfileSessions::MAX)
+            .enumerate()
+        {
+            let [start, end, zone] = if i == 0 {
+                ["Session start", "Session end", "Session zone"]
+                    .map(|label| l10n::text(ui.ctx(), label))
+            } else {
+                ["Session {0} start", "Session {0} end", "Session {0} zone"]
+                    .map(|label| l10n::format_text(ui.ctx(), label, &[("0", (i + 1).to_string())]))
+            };
+            for (name, time) in [(start, &mut window.start), (end, &mut window.end)] {
+                let label = ui.label(name);
+                ui.horizontal(|ui| {
+                    let (mut hour, mut minute) = (time.hour(), time.minute());
+                    ui.add(egui::DragValue::new(&mut hour).range(0..=23))
+                        .labelled_by(label.id);
+                    ui.label(":");
+                    ui.add(egui::DragValue::new(&mut minute).range(0..=59))
+                        .labelled_by(label.id);
+                    *time = NaiveTime::from_hms_opt(hour, minute, 0).unwrap_or(*time);
+                });
+                ui.end_row();
+            }
+            let label = ui.label(zone);
+            let zones: &[&str] = if cfg!(feature = "timezones") {
+                &[
+                    "UTC",
+                    "America/New_York",
+                    "America/Chicago",
+                    "America/Los_Angeles",
+                    "Europe/London",
+                    "Europe/Paris",
+                    "Asia/Tokyo",
+                    "Asia/Hong_Kong",
+                    "Asia/Singapore",
+                    "Australia/Sydney",
+                ]
+            } else {
+                &[
+                    "UTC", "-08:00", "-06:00", "-05:00", "+01:00", "+08:00", "+09:00", "+10:00",
+                ]
+            };
+            ui.label_inputs_by(label.id, |ui| {
+                let mut options: Vec<_> = std::iter::once(None)
+                    .chain(
+                        zones
+                            .iter()
+                            .filter_map(|zone| TimezoneId::named(zone))
+                            .map(Some),
+                    )
+                    .collect();
+                // A saved zone outside the list stays selectable.
+                if !options.contains(&window.zone) {
+                    options.push(window.zone.clone());
+                }
+                ui.combo_select(("profile_zone", i), &mut window.zone, options, |zone| {
+                    zone.as_ref()
+                        .map_or("Exchange", |zone| zone.name())
+                        .to_owned()
+                });
             });
             ui.end_row();
-        }
-        let label = ui.label(l10n::text(ui.ctx(), "Session zone"));
-        let zones: &[&str] = if cfg!(feature = "timezones") {
-            &[
-                "UTC",
-                "America/New_York",
-                "America/Chicago",
-                "America/Los_Angeles",
-                "Europe/London",
-                "Europe/Paris",
-                "Asia/Tokyo",
-                "Asia/Hong_Kong",
-                "Asia/Singapore",
-                "Australia/Sydney",
-            ]
-        } else {
-            &[
-                "UTC", "-08:00", "-06:00", "-05:00", "+01:00", "+08:00", "+09:00", "+10:00",
-            ]
-        };
-        ui.label_inputs_by(label.id, |ui| {
-            let mut options: Vec<_> = std::iter::once(None)
-                .chain(
-                    zones
-                        .iter()
-                        .filter_map(|zone| TimezoneId::named(zone))
-                        .map(Some),
-                )
-                .collect();
-            // A saved zone outside the list stays selectable.
-            if !options.contains(&custom.zone) {
-                options.push(custom.zone.clone());
+            if i > 0 {
+                ui.label("");
+                if ui
+                    .button(l10n::format_text(
+                        ui.ctx(),
+                        "Remove session {0}",
+                        &[("0", (i + 1).to_string())],
+                    ))
+                    .clicked()
+                {
+                    remove = Some(i);
+                }
+                ui.end_row();
             }
-            ui.combo_select("profile_zone", &mut custom.zone, options, |zone| {
-                zone.as_ref()
-                    .map_or("Exchange", |zone| zone.name())
+        }
+        if let Some(i) = remove {
+            custom.sessions.remove(i);
+        }
+        ui.label("");
+        if ui
+            .add_enabled(
+                custom.sessions.len() < crate::model::CustomProfileSessions::MAX,
+                egui::Button::new(l10n::text(ui.ctx(), "Add session")),
+            )
+            .clicked()
+        {
+            custom
+                .sessions
+                .push(crate::model::CustomProfileSession::new(
+                    NaiveTime::MIN,
+                    NaiveTime::MIN,
+                ));
+        }
+        ui.end_row();
+        let label = ui.label(l10n::text(ui.ctx(), "Overlapping hours"));
+        ui.label_inputs_by(label.id, |ui| {
+            ui.combo_select(
+                "profile_overlap",
+                &mut custom.overlap,
+                [
+                    crate::model::SessionOverlap::OwnProfile,
+                    crate::model::SessionOverlap::InBoth,
+                ],
+                |choice| {
+                    match choice {
+                        crate::model::SessionOverlap::OwnProfile => "Own profile",
+                        crate::model::SessionOverlap::InBoth => "In both sessions",
+                    }
                     .to_owned()
-            });
+                },
+            );
         });
+        ui.end_row();
+        ui.label("");
+        ui.checkbox(
+            &mut custom.trading_hours_only,
+            l10n::text(ui.ctx(), "Clip to trading hours"),
+        );
         ui.end_row();
     }
 

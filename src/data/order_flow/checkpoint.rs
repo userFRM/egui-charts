@@ -93,26 +93,8 @@ impl RateGuard<'_> {
     pub(crate) fn eligible(&self) -> bool {
         let s = &self.0;
         self.kind().is_some()
-            && s.trade_bars.is_plain()
-            && s.placement.is_empty()
-            && s.filter.is_none()
+            && s.plain_checkpoint_state()
             && s.footprint.is_none()
-            && s.books.is_empty()
-            && s.book_rows == 0
-            && s.pending.sizes.checkpoint_empty()
-            && s.pending.parts.is_empty()
-            && s.pending.rows.is_empty()
-            && s.inside.is_none()
-            && s.last_price == [None; 2]
-            && s.extremes.high.is_empty()
-            && s.extremes.low.is_empty()
-            && s.extremes.now.is_none()
-            && s.distinct.iter().all(|d| {
-                d.events.is_empty()
-                    && d.counts.is_empty()
-                    && d.now.is_none()
-                    && d.lost_until == s.extremes.lost_until
-            })
             && s.replay
                 .as_ref()
                 .is_none_or(|r| r.footprint.is_none() && r.book.is_none())

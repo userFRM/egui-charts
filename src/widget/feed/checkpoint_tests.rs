@@ -18,10 +18,15 @@ impl Datafeed for ReplayFeed {
 }
 
 fn ready(lots: u64) -> (Chart, Sink, Frames) {
+    ready_with_type(lots, ChartType::Candles)
+}
+
+fn ready_with_type(lots: u64, chart_type: ChartType) -> (Chart, Sink, Frames) {
     let feed = Arc::new(ReplayFeed::default());
     let mut chart = ChartBuilder::new()
         .with_feed(feed.clone())
         .with_symbol("A")
+        .with_chart_type(chart_type)
         .with_timeframe(Timeframe::Volume(NonZeroU64::new(lots).unwrap()))
         .build();
     #[cfg(feature = "studies")]
@@ -86,27 +91,197 @@ fn resume_inside_shared_timestamp_volume_split() {
         for _ in 0..6 {
             dest_frames.run(&mut dest);
         }
-        assert_eq!(dest.bars(SeriesId::MAIN), reference.bars(SeriesId::MAIN));
-        assert!(
-            dest.trades(SeriesId::MAIN)
-                .eq(reference.trades(SeriesId::MAIN))
-        );
+        assert_replay_outputs(&dest, &reference);
         assert_eq!(dest.feed.repeated_ticks, reference.feed.repeated_ticks + 1);
-        #[cfg(feature = "studies")]
-        for ((_, left), (_, right)) in dest.indicators().zip(reference.indicators()) {
-            assert_eq!(
-                left.values().columns().len(),
-                right.values().columns().len()
-            );
-            for bar in 0..2 {
-                for line in 0..right.values().columns().len() {
-                    assert_eq!(
-                        left.values().value(line, bar).map(f64::to_bits),
-                        right.values().value(line, bar).map(f64::to_bits)
-                    );
-                }
+    }
+}
+
+fn assert_replay_outputs(chart: &Chart, reference: &Chart) {
+    assert_eq!(chart.bars(SeriesId::MAIN), reference.bars(SeriesId::MAIN));
+    assert!(
+        chart
+            .trades(SeriesId::MAIN)
+            .eq(reference.trades(SeriesId::MAIN))
+    );
+    #[cfg(feature = "studies")]
+    for ((_, left), (_, right)) in chart.indicators().zip(reference.indicators()) {
+        assert_eq!(
+            left.values().columns().len(),
+            right.values().columns().len()
+        );
+        for bar in 0..reference.bars(SeriesId::MAIN).len() {
+            for line in 0..right.values().columns().len() {
+                assert_eq!(
+                    left.values().value(line, bar).map(f64::to_bits),
+                    right.values().value(line, bar).map(f64::to_bits)
+                );
             }
         }
+    }
+}
+
+#[test]
+fn footprint_continues_same_time_split_after_retained_rows_are_evicted() {
+    use crate::model::OrderSide::{Buy, Sell};
+
+    let (mut chart, sink, mut frames) = ready_with_type(10, ChartType::VolumeFootprint);
+    let (mut reference, control, mut control_frames) =
+        ready_with_type(10, ChartType::VolumeFootprint);
+    let at = trade(0, 1.0).ts;
+    for (chart, sink, frames) in [
+        (&mut chart, &sink, &mut frames),
+        (&mut reference, &control, &mut control_frames),
+    ] {
+        chart.feed_link.as_mut().unwrap().trades = Trades::new(6);
+        // Evict the first bars before capture, independently of the checkpoint implementation.
+        for id in 1..=7 {
+            let mut tick = trade(id, 10.0);
+            tick.ts = at - TimeDelta::seconds(8 - id as i64);
+            sink.push_tick(tick);
+        }
+        sink.push_tick(Tick::new(at, 100.0, 4.0, Some(Sell)).with_id(8));
+        sink.push_tick(Tick::new(at, 100.0, 5.0, Some(Buy)).with_id(9));
+        for _ in 0..6 {
+            frames.run(chart);
+        }
+    }
+    let before = prepared_view(&chart);
+    assert!(before.bar_at(at - TimeDelta::seconds(7)).is_none());
+    let forming = before.bar_at(at).unwrap();
+    assert_eq!(
+        (forming.volume(), forming.min_delta, forming.max_delta),
+        (9.0, -4.0, 1.0)
+    );
+    let saved_rows: Vec<_> = before
+        .bars(..)
+        .map(crate::data::FootprintBar::copy_from)
+        .collect();
+    let mark = chart
+        .capture_trade_replay_checkpoint(chart.plan_trade_replay_checkpoint().unwrap())
+        .unwrap();
+    let next = Tick::new(at, 101.0, 3.0, Some(Sell)).with_id(10);
+    control.push_tick(next.clone());
+    for _ in 0..6 {
+        control_frames.run(&mut reference);
+    }
+
+    // All rows from the mark leave its source. A mark must not borrow that source's live rows.
+    for id in 11..=18 {
+        let mut tick = trade(id, 10.0);
+        tick.ts = at + TimeDelta::seconds(id as i64);
+        sink.push_tick(tick);
+    }
+    frames.run(&mut chart);
+    assert!(prepared_view(&chart).bar_at(at).is_none());
+    chart.restore_trade_replay_checkpoint(&mark).unwrap();
+    assert!(
+        prepared_view(&chart)
+            .bars(..)
+            .eq(saved_rows.iter().map(crate::data::FootprintBarView::from))
+    );
+    sink.push_tick(next);
+    for _ in 0..6 {
+        frames.run(&mut chart);
+    }
+    assert_replay_outputs(&chart, &reference);
+    let view = prepared_view(&chart);
+    let expected = prepared_view(&reference);
+    assert!(view.bars(..).eq(expected.bars(..)));
+    for bar in chart.bars(SeriesId::MAIN) {
+        assert_eq!(view.complete_at(bar.time), expected.complete_at(bar.time));
+    }
+    let closed = view.bar_at(at).unwrap();
+    let open = view.bars(..).next_back().unwrap();
+    assert_ne!(open.time, closed.time);
+    assert_eq!((closed.volume(), open.volume()), (10.0, 2.0));
+    let level = view.level_of(101.0).unwrap();
+    assert_eq!(closed.levels.get(&level).unwrap().bid, 1.0);
+    assert_eq!(open.levels.get(&level).unwrap().bid, 2.0);
+    assert_eq!((closed.min_delta, closed.max_delta), (-4.0, 1.0));
+    assert_eq!((open.min_delta, open.max_delta), (-2.0, 0.0));
+}
+
+#[test]
+fn incompatible_footprint_grouping_preserves_destination_allocation() {
+    let (mut source, source_sink, mut source_frames) =
+        ready_with_type(10, ChartType::VolumeFootprint);
+    let (mut dest, sink, mut frames) = ready_with_type(10, ChartType::VolumeFootprint);
+    for (chart, ticks) in [(&mut source, 1), (&mut dest, 4)] {
+        chart.set_chart_type_params(crate::model::ChartTypeParams {
+            footprint_row_ticks: ticks,
+            footprint_row_atr: false,
+            ..Default::default()
+        });
+    }
+    source_sink.push_tick(trade(1, 9.0));
+    source_frames.run(&mut source);
+    let mark = source
+        .capture_trade_replay_checkpoint(source.plan_trade_replay_checkpoint().unwrap())
+        .unwrap();
+    sink.push_tick(trade(2, 8.0));
+    frames.run(&mut dest);
+    assert!(matches!(
+        dest.restore_trade_replay_checkpoint(&mark),
+        Err(Error::Incompatible)
+    ));
+    assert_footprint_continuation(&mut dest, &sink, &mut frames);
+}
+
+#[test]
+fn shared_footprint_owner_without_a_byte_bound_refuses_capture() {
+    use crate::data::{FootprintBar, FootprintBars, FootprintState};
+
+    let (mut chart, sink, mut frames) = ready_with_type(10, ChartType::VolumeFootprint);
+    sink.push_tick(trade(2, 8.0));
+    frames.run(&mut chart);
+    let plan = chart.plan_trade_replay_checkpoint().unwrap();
+
+    // Prepared pages are normally requested only on time intervals. Attach just their
+    // opaque owner so the volume clock, live rows, sink and trade position stay identical.
+    let (feed, _, _) = prepared_chart();
+    let mut request = footprint_requests(&feed).pop().unwrap();
+    let view = prepared_view(&chart);
+    request.tick_size = view.tick_size();
+    let mut old = FootprintBar::copy_from(view.bars(..).next().unwrap());
+    let at = request.clock.bar_open(old.time - TimeDelta::minutes(2));
+    old.time = at;
+    let page = FootprintBars::Shared(Arc::new(vec![old]));
+    let mut shared = FootprintState::from_page(&request, page, true).unwrap();
+    let display = chart
+        .feed_link
+        .as_mut()
+        .unwrap()
+        .footprint
+        .as_mut()
+        .unwrap();
+    std::mem::swap(&mut display.live, &mut shared.live);
+    *display = shared;
+
+    assert!(matches!(
+        chart.plan_trade_replay_checkpoint(),
+        Err(Error::Unsupported)
+    ));
+    assert!(matches!(
+        chart.capture_trade_replay_checkpoint(plan),
+        Err(Error::StalePlan)
+    ));
+    assert_eq!(prepared_view(&chart).bar_at(at).unwrap().volume(), 8.0);
+    assert_footprint_continuation(&mut chart, &sink, &mut frames);
+}
+
+fn assert_footprint_continuation(chart: &mut Chart, sink: &Sink, frames: &mut Frames) {
+    let at = trade(2, 8.0).ts;
+    assert_eq!(prepared_view(chart).bar_at(at).unwrap().volume(), 8.0);
+    assert_eq!(chart.bars(SeriesId::MAIN).last().unwrap().volume, 8.0);
+    assert!(chart.trades(SeriesId::MAIN).eq([&trade(2, 8.0)]));
+    sink.push_tick(trade(3, 3.0));
+    frames.run(chart);
+    let bars = chart.bars(SeriesId::MAIN);
+    assert_eq!(bars.len(), 2);
+    let view = prepared_view(chart);
+    for (bar, volume) in bars.iter().zip([10.0, 1.0]) {
+        assert_eq!(bar.volume, volume);
+        assert_eq!(view.bar_at(bar.time).unwrap().volume(), volume);
     }
 }
 
@@ -444,11 +619,18 @@ fn named_security_identifiers_count_against_the_hosts_capture_budget() {
 
 #[cfg(feature = "studies")]
 #[test]
-fn planned_bytes_cover_capture_of_retained_trades_and_volume_bars() {
+fn planned_bytes_cover_retained_trades_volume_bars_and_footprint_rows() {
+    for chart_type in [ChartType::Candles, ChartType::VolumeFootprint] {
+        assert_planned_capture_bytes(chart_type);
+    }
+}
+
+#[cfg(feature = "studies")]
+fn assert_planned_capture_bytes(chart_type: ChartType) {
     use crate::widget::studies_data::tests::requested_bytes;
 
-    // Both copies must dwarf the plan's fixed allowance, not just the tape.
-    let (mut chart, sink, frames) = ready(8);
+    // Make the tape, bars and (when enabled) retained footprint levels dwarf fixed costs.
+    let (mut chart, sink, frames) = ready_with_type(8, chart_type);
     for batch in 0..32 {
         for id in batch * 128..(batch + 1) * 128 {
             let mut tick = trade(id, 1.0);
@@ -461,6 +643,15 @@ fn planned_bytes_cover_capture_of_retained_trades_and_volume_bars() {
     let bars = chart.bars(SeriesId::MAIN);
     assert_eq!(bars.len(), 512);
     assert!(bars.iter().all(|bar| bar.volume == 8.0));
+    if chart_type == ChartType::VolumeFootprint {
+        assert_eq!(
+            prepared_view(&chart)
+                .bars(..)
+                .map(|bar| bar.levels.len())
+                .sum::<usize>(),
+            4096
+        );
+    }
 
     let (requested, (bound, _mark)) = requested_bytes(|| {
         let plan = chart.plan_trade_replay_checkpoint().unwrap();

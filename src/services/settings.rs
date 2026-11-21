@@ -85,6 +85,9 @@ pub struct UserSettings {
     pub drawing_defaults: BTreeMap<String, serde_json::Value>,
     /// The watchlists, in order.
     pub watchlists: Vec<Watchlist>,
+    /// The index of the last shown watchlist. Older documents read zero. Restore it with
+    /// `WatchlistPanel::set_active_list`, which ignores an index past the last list.
+    pub active_watchlist: usize,
     /// The market heatmap's universe, size metric and colour metric.
     pub market_heatmap: MarketHeatmapSelection,
     /// The replay position to resume, with the interval its history was fetched at. A position
@@ -508,6 +511,7 @@ mod tests {
             time: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
             speed: 2.0,
             scope: Default::default(),
+            charts: Vec::new(),
         };
         let rows = [
             (
@@ -835,6 +839,7 @@ mod tests {
             time: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
             speed,
             scope: Default::default(),
+            charts: Vec::new(),
         };
         let ctrl_k = |modifiers| ShortcutMap {
             bindings: vec![(

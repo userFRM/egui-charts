@@ -727,6 +727,26 @@ impl Chart {
             .collect();
         shown.len() == studies.len()
             && shown.iter().zip(studies).all(|((_, study), stored)| {
+                // A study whose outputs cannot follow another symbol or interval was stored with
+                // the inputs it no longer lists.
+                let kept: PaneStudy;
+                let stored = if study.draws_on_other_bars() {
+                    stored
+                } else {
+                    kept = (
+                        stored.0.clone(),
+                        stored
+                            .1
+                            .iter()
+                            .filter(|(id, _)| {
+                                !crate::studies::settings::CHART_INPUT_IDS[1..]
+                                    .contains(&id.as_str())
+                            })
+                            .cloned()
+                            .collect(),
+                    );
+                    &kept
+                };
                 let inputs = study.inputs();
                 #[cfg(feature = "studies")]
                 let upgraded = upgraded_study(stored, *study, &inputs);
