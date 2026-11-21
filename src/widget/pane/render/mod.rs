@@ -828,7 +828,7 @@ impl Chart {
                                     return Vec::new();
                                 };
                                 let study = studies.indicators()[idx].as_ref();
-                                if !self.shows_study(study) {
+                                if !self.shows_study(study) || study.plots_on_price() {
                                     return Vec::new();
                                 }
                                 let map = if matches!(

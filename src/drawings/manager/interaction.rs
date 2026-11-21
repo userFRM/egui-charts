@@ -934,7 +934,7 @@ impl DrawingManager {
             } else {
                 let mut before = std::mem::take(&mut self.drag_group);
                 for drawing in &before {
-                    self.queue_change(drawing, true);
+                    self.queue_change(drawing, moved);
                 }
                 before.push(old_state);
                 let snapshot = self
@@ -946,7 +946,11 @@ impl DrawingManager {
                         Some((index, old.clone()))
                     })
                     .collect();
-                self.history.push_moved_snapshot(snapshot);
+                if moved {
+                    self.history.push_moved_snapshot(snapshot);
+                } else {
+                    self.history.push_snapshot(snapshot);
+                }
             }
         }
         self.dragging_handle = None;
