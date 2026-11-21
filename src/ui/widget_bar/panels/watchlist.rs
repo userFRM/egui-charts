@@ -6,6 +6,7 @@ use crate::localization as l10n;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{self, AtomicU64};
 
 use egui::text::LayoutJob;
 use egui::{
@@ -350,11 +351,13 @@ impl Default for WatchlistPanel {
 
 impl WatchlistPanel {
     /// A panel showing the first of `lists`, or one empty list when there are none.
-    /// Conflicting saved flags take the first flagged entry in list order, then row order.
+    /// Conflicting saved flags take the first flagged entry in list order, then row order. Each
+    /// list without an [`id`](Watchlist::id), or with an earlier list's, gets one of its own.
     pub fn new(mut lists: Vec<Watchlist>) -> Self {
         if lists.is_empty() {
             lists.push(Watchlist::new(DEFAULT_LIST));
         }
+        assign_ids(&mut lists);
         let flags = first_flags(&lists);
         for list in &mut lists {
             adopt_flags(&mut list.items, &flags);
@@ -608,10 +611,10 @@ impl WatchlistPanel {
     }
 
     /// Offers sharing operations and shared state on the active list, as `sharing` reports them for
-    /// [`ShareKind::Watchlist`]. A saved copy holds the list as it was when Save a copy was
-    /// chosen, whatever its name or place when the host answers, and is added under the name
-    /// the host answers; like a duplicate, it is not starred. [`poll`](Self::poll) receives the
-    /// answers.
+    /// [`ShareKind::Watchlist`] by the list's [`Watchlist::id`]. A saved copy holds the list as it
+    /// was when Save a copy was chosen, whatever its name or place when the host answers, and is
+    /// added under the name the host answers, with an id of its own; like a duplicate, it is not
+    /// starred. [`poll`](Self::poll) receives the answers.
     pub fn set_sharing(&mut self, sharing: Arc<dyn Sharing>) {
         self.share.set_service(sharing);
         self.copy_source = None;
@@ -624,8 +627,10 @@ impl WatchlistPanel {
             && let Some(mut copy) = self.copy_source.take()
         {
             (copy.name, copy.favorite) = (name, false);
+            copy.id.clear();
             adopt_flags(&mut copy.items, &self.flags);
             self.lists.push(copy);
+            assign_ids(&mut self.lists);
         }
         let Some(service) = &self.service else {
             return;
@@ -807,6 +812,7 @@ impl WatchlistPanel {
         let (mut list, skipped) = Watchlist::read_text(name, text);
         adopt_flags(&mut list.items, &self.flags);
         self.lists.push(list);
+        assign_ids(&mut self.lists);
         (self.active, self.flag_filter) = (self.lists.len() - 1, None);
         self.import_note = (skipped != SkippedEntries::default()).then_some((self.active, skipped));
     }
@@ -1059,13 +1065,19 @@ impl WatchlistPanel {
                     (*active, *flag_filter) = (edit.list, None);
                     ui.close();
                 }
-                if ui
-                    .add_enabled(
-                        flag_filter.is_none() && lists.len() > 1,
-                        egui::Button::new(l10n::text(ui.ctx(), "Delete list")),
-                    )
-                    .clicked()
-                {
+                // A deleted list's link could not be revoked from the panel any more.
+                let stoppable = share.can_stop_sharing(ShareKind::Watchlist, &lists[*active].id);
+                let mut delete = ui.add_enabled(
+                    flag_filter.is_none() && lists.len() > 1 && !stoppable,
+                    egui::Button::new(l10n::text(ui.ctx(), "Delete list")),
+                );
+                if stoppable {
+                    delete = delete.on_disabled_hover_text(l10n::text(
+                        ui.ctx(),
+                        "Stop sharing the list before deleting it",
+                    ));
+                }
+                if delete.clicked() {
                     if *active < collapsed_sections.len() {
                         collapsed_sections.remove(*active);
                     }
@@ -1077,6 +1089,8 @@ impl WatchlistPanel {
                     ui.close();
                 }
             });
+        // New and duplicated lists get their ids before the More menu names the list to the host.
+        assign_ids(lists);
         egui::Popup::menu(&more)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
@@ -1143,7 +1157,8 @@ impl WatchlistPanel {
                     };
                     ui.close();
                 }
-                if share.show(ui, ShareKind::Watchlist, &lists[*active].name) {
+                if flag_filter.is_none() && share.show(ui, ShareKind::Watchlist, &lists[*active].id)
+                {
                     *copy_source = Some(lists[*active].clone());
                 }
             });
@@ -2207,6 +2222,31 @@ fn flag_view(
         .collect()
 }
 
+/// A list identifier no list of this run had: the time in milliseconds and a counter.
+fn fresh_id() -> String {
+    static MADE: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{:x}-{:x}",
+        chrono::Utc::now().timestamp_millis(),
+        MADE.fetch_add(1, atomic::Ordering::Relaxed)
+    )
+}
+
+/// Gives each list without an identifier, or with one an earlier list has, a fresh one.
+fn assign_ids(lists: &mut [Watchlist]) {
+    for at in 0..lists.len() {
+        if lists[at].id.is_empty() || lists[..at].iter().any(|list| list.id == lists[at].id) {
+            let id = loop {
+                let id = fresh_id();
+                if lists.iter().all(|list| list.id != id) {
+                    break id;
+                }
+            };
+            lists[at].id = id;
+        }
+    }
+}
+
 /// Where each symbol flagged `flag` first appears: its list and item index, in list order.
 fn flagged_symbols(lists: &[Watchlist], flag: WatchlistFlag) -> Vec<(usize, usize)> {
     let mut seen = HashSet::new();
@@ -2625,11 +2665,13 @@ mod tests {
     /// Stars, the descriptions and logos settings and column widths survive the settings document,
     /// a list saved before they existed reads with stars and descriptions off and logos on, and
     /// the width of a column a newer release added is left out while the rest reads, as is an
-    /// unlisted symbol's flag a newer release added.
+    /// unlisted symbol's flag a newer release added. Lists saved without an identifier, or with an
+    /// earlier list's, get one of their own.
     #[test]
     fn list_settings_survive_the_settings_document() {
         use crate::services::UserSettings;
         let mut list = Watchlist::from_text("Main", "A,###S");
+        list.id = "main".into();
         (list.favorite, list.show_descriptions, list.show_logos) = (true, true, false);
         list.show_tickers = false;
         list.columns = Some(vec![WatchlistColumn::Last, WatchlistColumn::Volume]);
@@ -2652,6 +2694,7 @@ mod tests {
         );
         let prior = r#"{"version":1,"watchlists":[{"name":"Main","items":[{"Symbol":{"symbol":"A","flag":null}},{"Section":"S"}],"favorite":true,"show_descriptions":true,"show_logos":false,"column_widths":{"Last":70.0}}]}"#;
         let mut expected_prior = settings.watchlists[0].clone();
+        expected_prior.id.clear();
         expected_prior.host_column_widths.clear();
         expected_prior.show_tickers = true;
         expected_prior.columns = None;
@@ -2672,6 +2715,11 @@ mod tests {
             UserSettings::from_json(flags).unwrap().unlisted_flags,
             [("TSLA".to_owned(), WatchlistFlag::Red)]
         );
+        let saved = r#"{"version":1,"watchlists":[{"name":"Dup","items":[]},{"name":"Dup","items":[]},{"name":"A","items":[],"id":"x"},{"name":"B","items":[],"id":"x"}]}"#;
+        let panel = WatchlistPanel::new(UserSettings::from_json(saved).unwrap().watchlists);
+        let ids: HashSet<&str> = panel.lists().iter().map(|list| list.id.as_str()).collect();
+        assert!(ids.len() == 4 && !ids.contains(""), "{ids:?}");
+        assert_eq!(panel.lists()[2].id, "x");
     }
 
     /// The More menu's Symbol logos box starts checked for a new list. Unchecked, the rows of both
@@ -2982,6 +3030,116 @@ mod tests {
         );
         assert!(lists[0].favorite);
         assert_eq!(h.state().active, 3);
+    }
+
+    /// Two equally named lists are shared apart: a link, its progress and Stop sharing belong to
+    /// the list shared, also after a rename, Delete list waits for Stop sharing, and a flag view
+    /// shares nothing.
+    #[test]
+    fn sharing_follows_the_list_through_equal_names_and_renames() {
+        use crate::data::Reply;
+        use crate::services::{ShareLink, ShareOffer};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        use std::sync::Mutex;
+
+        #[derive(Default)]
+        struct Host {
+            shared: Mutex<HashSet<String>>,
+            links: Mutex<Vec<(String, Reply<ShareLink>)>>,
+            revoked: Mutex<Vec<String>>,
+        }
+        impl Sharing for Host {
+            fn offers(&self, _: ShareKind) -> ShareOffer {
+                let mut offer = ShareOffer::new(true, false);
+                offer.revoke = true;
+                offer
+            }
+            fn shared(&self, _: ShareKind, document: &str) -> bool {
+                self.shared.lock().unwrap().contains(document)
+            }
+            fn link(&self, _: ShareKind, document: &str, reply: Reply<ShareLink>) {
+                self.links
+                    .lock()
+                    .unwrap()
+                    .push((document.to_owned(), reply));
+            }
+            fn revoke(&self, _: ShareKind, document: &str, reply: Reply<()>) {
+                self.shared.lock().unwrap().remove(document);
+                self.revoked.lock().unwrap().push(document.to_owned());
+                reply.send(Ok(()));
+            }
+        }
+        let host = Arc::new(Host::default());
+        let mut panel = WatchlistPanel::new(vec![
+            Watchlist::from_text("Imported", "STOCKA"),
+            Watchlist::from_text("Imported", "STOCKB"),
+        ]);
+        panel.set_sharing(host.clone());
+        let ids: Vec<String> = panel.lists().iter().map(|list| list.id.clone()).collect();
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 800.0))
+            .build_ui_state(
+                |ui, panel: &mut WatchlistPanel| {
+                    panel.poll(ui.ctx());
+                    panel.show(ui);
+                },
+                panel,
+            );
+        let shows =
+            |h: &Harness<'_, WatchlistPanel>, label: &str| h.query_by_label(label).is_some();
+        let shared_rows = [
+            "Shared by link",
+            "Link copied. Recipients can only view it.",
+            "Stop sharing",
+        ];
+        h.get_by_label("More").click();
+        h.run();
+        h.get_by_label("Copy link").click();
+        h.run();
+        assert!(shows(&h, "Getting the link…"));
+        h.state_mut().set_active_list(1);
+        h.run();
+        assert!(!shows(&h, "Getting the link…"));
+        let (document, reply) = host.links.lock().unwrap().pop().unwrap();
+        assert_eq!(document, ids[0]);
+        host.shared.lock().unwrap().insert(document);
+        reply.send(Ok(ShareLink::new("https://host/1", false)));
+        h.run();
+        for label in shared_rows {
+            assert!(!shows(&h, label), "{label} on the other list");
+        }
+        h.state_mut().set_active_list(0);
+        h.state_mut().lists[0].name = "Renamed".into();
+        h.run();
+        for label in shared_rows {
+            assert!(shows(&h, label), "{label} after the rename");
+        }
+        h.get_by_label("Renamed").click();
+        h.run();
+        assert!(h.get_by_label("Delete list").accesskit_node().is_disabled());
+        h.get_by_label("Duplicate list").click();
+        h.run();
+        let copy = h.state().lists()[2].id.clone();
+        assert!(!copy.is_empty() && !ids.contains(&copy), "{copy}");
+        h.get_by_label("More").click();
+        h.run();
+        assert!(!shows(&h, "Shared by link"));
+        h.state_mut().set_active_list(0);
+        h.state_mut().set_flag_filter(Some(WatchlistFlag::Red));
+        h.run();
+        assert!(!shows(&h, "Shared by link") && !shows(&h, "Copy link"));
+        h.state_mut().set_active_list(0);
+        h.run();
+        h.get_by_label("Stop sharing").click();
+        h.run();
+        assert_eq!(*host.revoked.lock().unwrap(), [ids[0].clone()]);
+        h.get_by_label("Renamed").click();
+        h.run();
+        assert!(!h.get_by_label("Delete list").accesskit_node().is_disabled());
     }
 
     /// Equal section titles collapse separately, and rename, move, undo, heading drag and
@@ -3714,9 +3872,11 @@ mod tests {
             flagged("NVDA", Some(WatchlistFlag::Blue)),
             flagged("AAPL", Some(WatchlistFlag::Red)),
         ];
+        tech.id = "tech".into();
         let copy = tech.duplicate(["Tech", "Tech copy"]);
         assert_eq!(copy.name, "Tech copy 2");
         assert_eq!(copy.items, tech.items);
+        assert!(copy.id.is_empty());
 
         let mut other = Watchlist::new("Other");
         other.items = vec![
