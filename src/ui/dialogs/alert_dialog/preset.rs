@@ -29,7 +29,7 @@ pub(super) struct PresetFields {
     pub(super) frequency: bool,
     /// The time left until expiry, or no expiry.
     pub(super) expiry: bool,
-    /// The alert's name and message.
+    /// The alert's name and message, each only where the alert has one.
     pub(super) text: bool,
     /// The delivery choices, without the webhook and plain-text email addresses.
     pub(super) delivery: bool,
@@ -81,7 +81,9 @@ pub(super) struct AlertPreset {
     frequency: AlertFrequency,
     /// Seconds from applying the preset to the expiry; `None` never expires.
     expires_after: Option<i64>,
+    /// Empty when the saved alert had no name; applying then leaves the alert's own.
     name: String,
+    /// Empty when the saved alert had no message; applying then leaves the alert's own.
     message: String,
     delivery: AlertDelivery,
     schedule: Option<Box<NotificationSchedule>>,
@@ -168,7 +170,8 @@ impl AlertPreset {
     /// operator would drop the drawings or plots it tests or needs levels it lacks. A stored
     /// study that `sources` does not offer under its stored name is not reused, and an alert on
     /// host events keeps its condition, interval and any frequency it cannot use; a position
-    /// alert keeps its condition and frequency.
+    /// alert keeps its condition and frequency. The alert also keeps its name or its message
+    /// where the preset holds none.
     pub(super) fn apply(
         &self,
         alert: &mut Alert,
@@ -259,8 +262,12 @@ impl AlertPreset {
                 .and_then(|after| now.checked_add_signed(after));
         }
         if self.fields.text {
-            alert.name.clone_from(&self.name);
-            alert.message.clone_from(&self.message);
+            if !self.name.is_empty() {
+                alert.name.clone_from(&self.name);
+            }
+            if !self.message.is_empty() {
+                alert.message.clone_from(&self.message);
+            }
         }
         if self.fields.delivery {
             alert.delivery = AlertDelivery {
@@ -1103,6 +1110,44 @@ mod tests {
         let mut alert = Alert::new("NEW", AlertCondition::Above(1.0));
         fills.apply(&mut alert, &[], now);
         assert_eq!(alert.condition, AlertCondition::Above(1.0));
+    }
+
+    /// Each row saves an alert with the stored name and message and applies the preset, and the
+    /// document earlier versions wrote for it, to an alert that has both.
+    #[test]
+    fn a_preset_without_a_name_or_a_message_leaves_the_alerts_own() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
+        for (name, message, expected) in [
+            ("", "Stored message", ("Own name", "Stored message")),
+            ("Stored name", "", ("Stored name", "Own message")),
+            ("", "", ("Own name", "Own message")),
+        ] {
+            let mut saved = Alert::new("OLD", AlertCondition::Below(9.0));
+            saved.name = name.into();
+            saved.message = message.into();
+            let captured = AlertPreset::capture(&saved, &[], PresetFields::default(), now);
+            // Every version wrote a missing name or message as empty text.
+            let document = serde_json::json!({
+                "version": 3,
+                "presets": {"P": {"name": name, "message": message}},
+            });
+            let stored = from_document(&document.to_string(), now)
+                .unwrap()
+                .0
+                .remove("P")
+                .unwrap();
+            for (preset, origin) in [(captured, "captured"), (stored, "stored")] {
+                let mut alert = Alert::new("NEW", AlertCondition::Crossing(100.0));
+                alert.name = "Own name".into();
+                alert.message = "Own message".into();
+                preset.apply(&mut alert, &[], now);
+                assert_eq!(
+                    (alert.name.as_str(), alert.message.as_str()),
+                    expected,
+                    "{origin} {name:?} and {message:?}"
+                );
+            }
+        }
     }
 
     /// Rules that a preset adds to an alert with fewer rules replace nothing, so the drawing the

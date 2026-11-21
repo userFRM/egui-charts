@@ -325,6 +325,29 @@ fn range_limits_summary_charts_and_trades() {
                 .as_deref(),
             Some("2024-04-01")
         );
+        // The whole run closes 200 and then -300: the last closed trade stands at -100.
+        h.get_by_role_and_label(Role::Tab, "List of trades").click();
+        h.run();
+        let cells = labels(&h);
+        let at = |text: &str| cells.iter().position(|l| l == text).expect(text);
+        assert_eq!(at("Cumulative profit"), at("Net profit") + 1);
+        assert_eq!(at("-100.00"), at("-300.00") + 1);
+        // To 15 February the second trade is still open in the range: only the first adds profit.
+        h.get_by_role_and_label(Role::TextInput, "To (UTC)").click();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_role_and_label(Role::TextInput, "To (UTC)")
+            .type_text("2024-02-15");
+        h.run();
+        let cells = labels(&h);
+        let count = |text: &str| cells.iter().filter(|l| *l == text).count();
+        assert_eq!(
+            [count("200.00"), count("-300.00"), count("-100.00")],
+            [2, 1, 0]
+        );
+        h.get_by_role_and_label(Role::Button, "Whole run").click();
+        h.run();
+        h.get_by_role_and_label(Role::Tab, "Summary").click();
+        h.run();
         h.get_by_role_and_label(Role::TextInput, "From (UTC)")
             .click();
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -370,6 +393,8 @@ fn range_limits_summary_charts_and_trades() {
         }));
         h.get_by_role_and_label(Role::Tab, "List of trades").click();
         h.run();
+        // From 15 February the list starts at the second trade, and so does its total.
+        assert_eq!(labels(&h).iter().filter(|l| *l == "-300.00").count(), 2);
         h.get_by_role_and_label(Role::Button, "1").click();
         h.run();
         assert!(h.query_by_role_and_label(Role::Button, "2").is_none());
