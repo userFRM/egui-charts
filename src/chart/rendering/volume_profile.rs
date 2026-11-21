@@ -81,10 +81,13 @@ pub(crate) fn hit_profile(
         }
         let (poc, (va_low, va_high)) = profile.poc_and_value_area(plot.config.value_area())?;
         let y_at = |row: usize| price_to_y(profile.low + row as f64 * profile.row_height);
+        let levels = crate::painting::volume_profile::marks_levels(profile);
         let on_poc = plot.config.show_poc
+            && levels
             && (point.y - (y_at(poc) + y_at(poc + 1)) * 0.5).abs() <= tolerance;
         // Value area lines select only where they are painted.
         let on_value_area = in_span
+            && levels
             && [
                 (
                     y_at(va_high + 1),

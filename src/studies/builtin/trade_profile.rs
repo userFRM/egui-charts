@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use std::ops::Range;
 
 /// Half-open session ranges. Adjacent sessions can be merged and split again by the user.
+/// Chart-generated custom sessions may overlap when shared hours stay in both profiles.
 #[derive(Clone, Debug)]
 pub struct TradeProfileRanges(Vec<Range<DateTime<Utc>>>);
 
@@ -30,22 +31,46 @@ impl TradeProfileRanges {
         Ok(Self(ranges))
     }
 
+    /// Ordered ranges that can overlap when custom sessions share their bars.
+    #[cfg(feature = "widget")]
+    pub(crate) fn overlapping(ranges: Vec<Range<DateTime<Utc>>>) -> Result<Self, FeedError> {
+        if let Some(i) = ranges.iter().position(|r| r.start >= r.end) {
+            return Err(FeedError::InvalidData(format!(
+                "trade profile range {i} must end after it starts, got {} to {}",
+                ranges[i].start, ranges[i].end
+            )));
+        }
+        if let Some(i) = ranges.windows(2).position(|r| r[0].start > r[1].start) {
+            return Err(FeedError::InvalidData(format!(
+                "trade profile range {} starts before range {i}",
+                i + 1
+            )));
+        }
+        Ok(Self(ranges))
+    }
+
     /// The current ranges in time order.
     pub fn ranges(&self) -> &[Range<DateTime<Utc>>] {
         &self.0
     }
 
     /// Combines this profile with its next neighbour, including any intervening gap.
+    /// Overlapping profiles cannot be merged or split.
     pub fn merge_next(&mut self, index: usize) -> bool {
-        if index >= self.0.len().saturating_sub(1) {
+        if self.0.windows(2).any(|r| r[0].end > r[1].start)
+            || index >= self.0.len().saturating_sub(1)
+        {
             return false;
         }
         self.0[index].end = self.0.remove(index + 1).end;
         true
     }
 
-    /// Splits a profile at an interior bar boundary. An endpoint leaves it unchanged.
+    /// Splits a profile at an interior bar boundary. An endpoint or overlapping profiles leave it unchanged.
     pub fn split(&mut self, index: usize, time: DateTime<Utc>) -> bool {
+        if self.0.windows(2).any(|r| r[0].end > r[1].start) {
+            return false;
+        }
         let Some(range) = self.0.get_mut(index) else {
             return false;
         };
@@ -209,9 +234,15 @@ pub(crate) fn trade_profiles_with_rows_read(
                         .fold((i64::MAX, i64::MIN), |(low, high), l| {
                             (low.min(l), high.max(l))
                         });
-                    let span = (i128::from(high) - i128::from(low) + 1).max(1);
-                    let count = i128::from(count.max(1));
-                    i64::try_from((span + count - 1) / count).unwrap_or(i64::MAX)
+                    // The volume profile studies' rule, so both lay a span in the same rows.
+                    // An empty session, or keys too far from zero for its float grid, keep
+                    // the feed's rows.
+                    crate::data::whole_tick_rows(
+                        low as f64,
+                        high as f64 + 1.0,
+                        count.max(1) as usize,
+                    )
+                    .map_or(1, |height| height as i64)
                 }
             };
             let mut volume = FootprintBar::empty(range.start);
@@ -401,11 +432,11 @@ mod tests {
     fn row_rules_group_footprint_rows_in_whole_ticks() {
         let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
         let end = start + TimeDelta::minutes(1);
-        // Ten ticks, 100.0 to 109.0, with the most volume at 107.0.
-        let build = |ticks_per_row| {
+        // One lot at each of the `ticks` prices from 100.0, and five at 107.0.
+        let build = |ticks_per_row, ticks: i32| {
             let mut flow =
                 Footprint::new(BarClock::new(Timeframe::Min1), 1.0, ticks_per_row).unwrap();
-            for price in 100..110 {
+            for price in 100..100 + ticks {
                 let size = if price == 107 { 5.0 } else { 1.0 };
                 flow.push(&Tick::new(start, f64::from(price), size, None))
                     .unwrap();
@@ -413,31 +444,29 @@ mod tests {
             flow
         };
         let ranges = TradeProfileRanges::new(vec![start..end]).unwrap();
-        // (ticks per feed row, rule, rows grouped, POC key, rows held)
-        for (feed, rows, group, poc, held) in [
-            (1, ProfileRows::Feed, 1, 107, 10),
-            (1, ProfileRows::Ticks(5), 5, 21, 2),
+        // (ticks per feed row, ticks traded, rule, rows grouped, POC key, rows held)
+        for (feed, ticks, rows, group, poc, held) in [
+            (1, 10, ProfileRows::Feed, 1, 107, 10),
+            (1, 10, ProfileRows::Ticks(5), 5, 21, 2),
             // A row is never finer than the feed's, and holds at least the ticks asked for.
-            (2, ProfileRows::Ticks(1), 1, 53, 5),
-            (2, ProfileRows::Ticks(3), 2, 26, 3),
-            // Ten ticks over four rows need three ticks each, so over three rows.
-            (1, ProfileRows::Count(4), 3, 35, 4),
-            (1, ProfileRows::Count(100), 1, 107, 10),
+            (2, 10, ProfileRows::Ticks(1), 1, 53, 5),
+            (2, 10, ProfileRows::Ticks(3), 2, 26, 3),
+            // Ten ticks in four rows: rows of two ticks make five rows, rows of three make four.
+            (1, 10, ProfileRows::Count(4), 3, 35, 4),
+            (1, 10, ProfileRows::Count(100), 1, 107, 10),
+            // A hundred ticks, 100 to 199: rows of four make 25 rows and rows of five 20, so 24
+            // and 25 take four; for 30, rows of three make 34 against 25 rows of four.
+            (1, 100, ProfileRows::Count(24), 4, 26, 25),
+            (1, 100, ProfileRows::Count(25), 4, 26, 25),
+            (1, 100, ProfileRows::Count(30), 3, 35, 34),
         ] {
-            let profiles = trade_profiles_with_rows(&build(feed), &ranges, rows);
+            let profiles = trade_profiles_with_rows(&build(feed, ticks), &ranges, rows);
             let profile = &profiles[0];
-            assert_eq!(profile.group, group, "{rows:?} over {feed}-tick rows");
-            assert_eq!(
-                profile.volume.poc(),
-                Some(poc),
-                "{rows:?} over {feed}-tick rows"
-            );
-            assert_eq!(
-                profile.volume.levels.len(),
-                held,
-                "{rows:?} over {feed}-tick rows"
-            );
-            assert_eq!(profile.volume.volume(), 14.0);
+            let case = format!("{rows:?} over {ticks} ticks in {feed}-tick rows");
+            assert_eq!(profile.group, group, "{case}");
+            assert_eq!(profile.volume.poc(), Some(poc), "{case}");
+            assert_eq!(profile.volume.levels.len(), held, "{case}");
+            assert_eq!(profile.volume.volume(), f64::from(ticks + 4));
             assert_eq!(profile.developing_poc, [(start, poc)]);
         }
     }

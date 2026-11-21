@@ -404,6 +404,10 @@ pub struct Chart {
     pub(crate) zoom_mode_active: bool,
     /// Whether a box zoom was completed in the last frame.
     pub(crate) zoom_just_applied: bool,
+    /// For each entry of the zoom history of `state`, the scales its box zoom set in a study
+    /// pane, as the zoom found them: empty for a zoom of the main series' pane, whose scale the
+    /// history restores itself. Entries left by a cleared history go at the next zoom.
+    zoom_scales: Vec<Vec<(PaneId, crate::model::SeriesScale, PriceScale)>>,
     /// Current symbol being displayed (for legend)
     pub(crate) symbol: String,
     /// Metadata supplied directly by a host without a feed.
@@ -757,6 +761,7 @@ impl Chart {
             && bars >= 0.0
             && (options.right_offset != bars || options.right_offset_pixels.is_some())
         {
+            self.history.clear_view_restore();
             options.right_offset = bars;
             options.right_offset_pixels = None;
             let scale = self.state.time_scale_mut();
@@ -803,10 +808,13 @@ impl Chart {
 
     /// Activates or deactivates box-zoom mode.
     ///
-    /// While active, a left-button drag on the plot draws a selection rectangle and zooms into
-    /// it. The mode applies to one selection: it ends once a zoom is applied (see
-    /// [`Chart::zoom_was_applied`]), while a selection of 20 points or less zooms nothing and
-    /// keeps it. A drawing tool or the eraser owns the plot's drags, so the next frame with
+    /// While active, a left-button drag that starts on a plot, in the price pane or another
+    /// expanded pane, draws a selection rectangle and zooms into it: the selected bars fill the
+    /// width and the selected values fill the pane the selection began in, while the other panes
+    /// keep their scales. A press on an axis scales that axis, and a press on a drawing drags the
+    /// drawing, as without the mode. The mode applies to one selection: it ends once a zoom is
+    /// applied (see [`Chart::zoom_was_applied`]). A selection of 20 points or less zooms nothing
+    /// and keeps it. A drawing tool or the eraser owns the plot's drags, so the next frame with
     /// either active ends the mode. [`Chart::is_zoom_mode_active`] reports it.
     pub fn set_zoom_mode(&mut self, active: bool) {
         self.zoom_mode_active = active;
@@ -817,11 +825,19 @@ impl Chart {
         self.zoom_mode_active
     }
 
-    /// Restore the view preceding the last box zoom. Drawing and chart edit history is unchanged.
+    /// Restore the view preceding the last box zoom: the time range, the price pane's scale and
+    /// the scales of the pane the selection began in. A scale that fitted its values before the
+    /// zoom fits them again, and one with a manual range gets that range back. Drawing and chart
+    /// edit history is unchanged.
     pub fn zoom_back(&mut self) -> bool {
         self.pending_scroll_time = None;
         self.tracking_mode_active = false;
-        self.state.pop_zoom_state()
+        let popped = self.state.pop_zoom_state();
+        if popped {
+            self.history.clear_view_restore();
+            self.restore_box_zoom_scales();
+        }
+        popped
     }
 
     /// Returns `true` if a box zoom was completed in the most recent frame. Box-zoom mode has
@@ -970,7 +986,8 @@ impl Chart {
     /// Pass the result to `SeriesSettingsDialog::open`, then apply its accepted settings with
     /// [`Self::apply_series_settings`]. The active chart type selects the dialog's controls and
     /// where the candle colors are read from and written to; applying keeps the chart's type.
-    /// Its price source is the one the active chart type draws.
+    /// Its price source is the one the active chart type draws. Its `chart_alert_color` is the
+    /// default alert colour; set it to the host's chart-wide alert colour before opening the dialog.
     pub fn series_settings(&self) -> SeriesSettings {
         let mut settings = SeriesSettings {
             chart_type: self.chart_type,
@@ -1118,6 +1135,12 @@ impl Chart {
             new.right_offset,
             new.right_offset_pixels,
         ) {
+            if new.bar_spacing != old.bar_spacing
+                || (new.right_offset, new.right_offset_pixels)
+                    != (old.right_offset, old.right_offset_pixels)
+            {
+                self.history.clear_view_restore();
+            }
             let scale = self.state.time_scale_mut();
             let offset = scale.right_offset_precise();
             let spacing = if new.bar_spacing == old.bar_spacing {
