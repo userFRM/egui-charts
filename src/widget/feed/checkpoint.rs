@@ -1,13 +1,14 @@
 //! In-memory continuation of a drained, trade-only volume feed. The host owns the recording.
 
 use super::{Chart, FeedLink, SeriesId, SubscriptionId, checkpoint_key::CheckpointKey};
-#[cfg(feature = "studies")]
-use crate::data::{PackedTradeRate, RateGuard};
 use crate::data::{
+    FootprintGuard, FootprintState, PackedFootprintInput, PackedFootprintState,
     inbox::{SinkCheckpoint, SinkCheckpointError, SinkCheckpointGuard},
     merge::Origin,
     trades::PackedTrades,
 };
+#[cfg(feature = "studies")]
+use crate::data::{PackedTradeRate, RateGuard};
 use crate::model::Bar;
 use chrono::{DateTime, Utc};
 use std::{fmt, mem::size_of_val};
@@ -71,6 +72,7 @@ struct Stamp {
     tape: u64,
     bars: u64,
     edits: u64,
+    footprint: Option<(u64, u64)>,
     close_time: Option<DateTime<Utc>>,
     progress: FeedProgress,
 }
@@ -92,6 +94,11 @@ impl Stamp {
             tape: link.trades.revision(),
             bars: chart.state.revision(),
             edits: chart.readout_revision,
+            footprint: link
+                .footprint
+                .as_ref()
+                .zip(link.footprint_input.as_ref())
+                .map(|(view, (_, seen))| (view.live.revision(), *seen)),
             close_time: chart.bar_close_time,
             progress: FeedProgress {
                 history_complete: chart.feed.history_complete,
@@ -112,6 +119,7 @@ pub struct TradeReplayCheckpoint {
     key: CheckpointKey,
     sink: SinkCheckpoint,
     tape: PackedTrades,
+    footprint: Option<Box<SavedFootprint>>,
     bars: Vec<Bar>,
     origins: Vec<(DateTime<Utc>, Origin)>,
     time: Option<DateTime<Utc>>,
@@ -130,6 +138,33 @@ impl fmt::Debug for TradeReplayCheckpoint {
     }
 }
 
+/// The producer owns the next trade allocation. Its chart mirror can also contain a
+/// different retained prefix or coverage boundary. Neither alone is a faithful rewind.
+struct SavedFootprint {
+    input: PackedFootprintInput,
+    display: PackedFootprintState,
+}
+
+struct LockedFootprint<'a> {
+    input: FootprintGuard<'a>,
+    display: &'a FootprintState,
+}
+
+impl LockedFootprint<'_> {
+    fn heap_bytes(&self) -> Option<usize> {
+        size_of::<SavedFootprint>()
+            .checked_add(self.input.heap_bytes()?)?
+            .checked_add(self.display.checkpoint_bytes()?)
+    }
+
+    fn capture(&self) -> Box<SavedFootprint> {
+        Box::new(SavedFootprint {
+            input: self.input.snapshot(),
+            display: self.display.pack_checkpoint(),
+        })
+    }
+}
+
 fn validate_tape(chart: &Chart, link: &FeedLink) -> Result<(), Error> {
     if !link.trades.checkpoint_eligible()
         || chart
@@ -142,13 +177,12 @@ fn validate_tape(chart: &Chart, link: &FeedLink) -> Result<(), Error> {
     Ok(())
 }
 
-#[cfg(feature = "studies")]
-fn rate_guards<'a>(
+fn footprint_guard<'a>(
     link: &'a FeedLink,
     sink: &SinkCheckpointGuard<'_>,
-) -> Result<Vec<RateGuard<'a>>, Error> {
-    // A host can hold an OrderFlowInput independently of the sink. Hold *all* input locks
-    // during the copy and check the revisions observed by this chart's last drain.
+) -> Result<Option<LockedFootprint<'a>>, Error> {
+    // A host can hold an input independently of the sink. Verify the complete list before
+    // separating the built-in footprint from the optional study inputs.
     if !link
         .study_inputs
         .iter()
@@ -159,8 +193,28 @@ fn rate_guards<'a>(
     {
         return Err(Error::NotDrained);
     }
-    let mut guards = Vec::with_capacity(link.study_inputs.len());
-    for (input, seen) in &link.study_inputs {
+    let Some((input, seen)) = &link.footprint_input else {
+        return Ok(None);
+    };
+    let display = link.footprint.as_ref().ok_or(Error::Unsupported)?;
+    let input = input.try_checkpoint_footprint().ok_or(Error::NotDrained)?;
+    if input.revision() != *seen {
+        return Err(Error::NotDrained);
+    }
+    if !input.eligible(&link.clock)
+        || display.view().clock() != &link.clock
+        || !display.checkpoint_eligible()
+    {
+        return Err(Error::Unsupported);
+    }
+    Ok(Some(LockedFootprint { input, display }))
+}
+
+#[cfg(feature = "studies")]
+fn rate_guards(link: &FeedLink) -> Result<Vec<RateGuard<'_>>, Error> {
+    let studies = link.checkpoint_studies()?;
+    let mut guards = Vec::with_capacity(studies.len());
+    for (input, seen) in studies {
         let guard = input.try_checkpoint_rate().ok_or(Error::NotDrained)?;
         if guard.revision() != *seen {
             return Err(Error::NotDrained);
@@ -174,8 +228,9 @@ fn rate_guards<'a>(
 }
 
 impl Chart {
-    /// Plan a checkpoint for this chart after its replay feed has drained. No bars, tape or
-    /// study data are copied. The plan is single use and tied to this chart and subscription;
+    /// Plan a checkpoint for this chart after its replay feed has drained. No bars, tape,
+    /// footprint rows or study data are copied. Built-in volume footprints must have bounded,
+    /// trade-derived rows. The plan is single use and tied to this chart and subscription;
     /// new input or changed replay state invalidates it. On refusal chart and sink are untouched.
     ///
     /// A host can capture after pumping its feed, retain the checkpoint while playback
@@ -218,12 +273,13 @@ impl Chart {
         validate_tape(self, link)?;
         let subscription = link.subscription.ok_or(Error::NotDrained)?;
         let sink = link.inbox.checkpoint_guard(subscription)?;
+        let footprint = footprint_guard(link, &sink)?;
+        let footprint_bytes = match &footprint {
+            Some(f) => f.heap_bytes().ok_or(Error::Unsupported)?,
+            None => 0,
+        };
         #[cfg(feature = "studies")]
-        let guards = rate_guards(link, &sink)?;
-        #[cfg(not(feature = "studies"))]
-        if !sink.inputs().is_empty() {
-            return Err(Error::Unsupported);
-        }
+        let guards = rate_guards(link)?;
         let bytes = size_of::<TradeReplayCheckpoint>()
             .checked_add(key.heap_bytes())
             .and_then(|n| n.checked_add(size_of_val(self.bars(SeriesId::MAIN))))
@@ -235,6 +291,7 @@ impl Chart {
                 )
             })
             .and_then(|n| n.checked_add(link.trades.checkpoint_bytes()?))
+            .and_then(|n| n.checked_add(footprint_bytes))
             .and_then(|n| n.checked_add(sink.heap_bytes()))
             .ok_or(Error::Unsupported)?;
         #[cfg(feature = "studies")]
@@ -277,12 +334,13 @@ impl Chart {
         if Stamp::new(self, link, &sink) != plan.stamp {
             return Err(Error::StalePlan);
         }
+        let footprint = footprint_guard(link, &sink).map_err(|_| Error::StalePlan)?;
         #[cfg(feature = "studies")]
         let rates = {
-            if link.study_inputs.len() != plan.inputs.len() {
+            let guards = rate_guards(link).map_err(|_| Error::StalePlan)?;
+            if guards.len() != plan.inputs.len() {
                 return Err(Error::StalePlan);
             }
-            let guards = rate_guards(link, &sink).map_err(|_| Error::StalePlan)?;
             if !guards
                 .iter()
                 .map(|g| g.revision())
@@ -298,6 +356,7 @@ impl Chart {
             key: plan.key,
             sink: sink.capture(),
             tape: link.trades.pack_checkpoint(),
+            footprint: footprint.as_ref().map(LockedFootprint::capture),
             bars: self.bars(SeriesId::MAIN).to_vec(),
             origins,
             time: link.time,
@@ -331,9 +390,16 @@ impl Chart {
         if !sink.compatible(&checkpoint.sink) || !checkpoint.tape.compatible(&link.trades) {
             return Err(Error::Incompatible);
         }
+        let footprint = footprint_guard(link, &sink)?;
+        match (&footprint, &checkpoint.footprint) {
+            (None, None) => {}
+            (Some(f), Some(saved))
+                if f.input.compatible(&saved.input) && saved.display.compatible(f.display) => {}
+            _ => return Err(Error::Incompatible),
+        }
         #[cfg(feature = "studies")]
         let revisions = {
-            let mut guards = rate_guards(link, &sink)?;
+            let mut guards = rate_guards(link)?;
             if guards.len() != checkpoint.rates.len()
                 || !guards
                     .iter()
@@ -351,10 +417,12 @@ impl Chart {
                 })
                 .collect::<Vec<_>>()
         };
-        #[cfg(not(feature = "studies"))]
-        if !sink.inputs().is_empty() {
-            return Err(Error::Unsupported);
-        }
+        let restored = footprint
+            .zip(checkpoint.footprint.as_deref())
+            .map(|(mut f, saved)| {
+                f.input.restore(&saved.input, &link.clock);
+                (f.input.revision(), saved.display.restore(&link.clock))
+            });
         sink.restore(&checkpoint.sink);
         let link = self.feed_link.as_mut().unwrap();
         checkpoint.tape.restore(&mut link.trades);
@@ -365,6 +433,12 @@ impl Chart {
         #[cfg(feature = "studies")]
         for ((_, seen), revision) in link.study_inputs.iter_mut().zip(revisions) {
             *seen = revision;
+        }
+        if let Some((revision, display)) = restored {
+            // The pump registered this same input last; both readers have observed the mark.
+            link.study_inputs.last_mut().unwrap().1 = revision;
+            link.footprint_input.as_mut().unwrap().1 = revision;
+            link.footprint = Some(display);
         }
         self.replace_main_data(checkpoint.bars.clone());
         self.from_ticks.extend(checkpoint.origins.iter().copied());

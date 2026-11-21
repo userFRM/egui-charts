@@ -690,6 +690,11 @@ impl Indicator for AutoDrawing {
     fn set_visible(&mut self, visible: bool) {
         self.zigzag.set_visible(visible);
     }
+    // Its drawings sit on source bars, which another symbol or interval does not place.
+    fn draws_on_other_bars(&self) -> bool {
+        false
+    }
+
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
     }

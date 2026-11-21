@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use super::market_details::{MarketDetail, MarketDetailRequest, PeriodReturn, Seasonality};
 use super::news::NewsAction;
 use super::price_decimals;
-use super::{HEADER_HEIGHT, grouped, signed, weighted};
+use super::{HEADER_HEIGHT, weighted};
 use crate::data::inbox::Inbox;
 use crate::data::{
     CalendarEvent, CalendarKind, CalendarQuery, CompanyFinancials, Datafeed, FeedError, NewsQuery,
@@ -27,6 +27,7 @@ use crate::services::revisions::{Revisions, Settled, Written};
 use crate::services::{ConflictChoice, Storage, StoreKind};
 use crate::studies::{Indicator, TechnicalRatings, technical_rating};
 use crate::theme::ThemeExt;
+use crate::ui::trading::grouped;
 use crate::ui_kit::IconButton;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 
@@ -949,6 +950,7 @@ impl SymbolDetailsPanel {
                         let (session, color) = match extended.session {
                             ExtendedSession::PreMarket => ("Pre-market", theme.ui.warning),
                             ExtendedSession::PostMarket => ("Post-market", theme.ui.info),
+                            ExtendedSession::Overnight => ("Overnight", theme.ui.accent),
                         };
                         ui.horizontal(|ui| {
                             ui.label(
@@ -969,7 +971,14 @@ impl SymbolDetailsPanel {
                     && shown("Volume")
                 {
                     ui.add_space(theme.spacing.md);
-                    let decimals = instrument.volume_decimals.map(usize::from);
+                    // Volume decimals stand below a thousand; K, M and B values keep two.
+                    let volume_text = |value: f64| match instrument.volume_decimals {
+                        Some(decimals) if value.is_finite() => crate::scales::VolumeFormatter {
+                            precision: usize::from(decimals).min(12),
+                        }
+                        .format_with_min_unit_decimals(value, 2),
+                        _ => StudyFormat::Volume.format(value, None),
+                    };
                     for (left, right, size, color) in [
                         (
                             "Volume".to_owned(),
@@ -978,8 +987,8 @@ impl SymbolDetailsPanel {
                             theme.ui.text_secondary,
                         ),
                         (
-                            StudyFormat::Volume.format(volume, decimals),
-                            StudyFormat::Volume.format(average, decimals),
+                            volume_text(volume),
+                            volume_text(average),
                             theme.text.label,
                             theme.ui.text,
                         ),
@@ -1263,7 +1272,7 @@ impl SymbolDetailsPanel {
 fn percent_text(percent: Option<f64>, theme: &crate::theme::Theme) -> (String, Color32) {
     match percent.filter(|percent| percent.is_finite()) {
         Some(percent) => (
-            format!("{}%", signed(percent, 2)),
+            format!("{}%", grouped(percent, 2, true)),
             if percent > 0.0 {
                 theme.chart.candle_up
             } else if percent < 0.0 {
@@ -1321,7 +1330,7 @@ fn price_line(
     };
     // One text, so the figures of different sizes share a baseline.
     let mut job = LayoutJob::single_section(
-        l10n::text(ui.ctx(), grouped(price, usize::from(decimals))),
+        l10n::text(ui.ctx(), grouped(price, usize::from(decimals), false)),
         weighted(size, 700.0, theme.ui.text),
     );
     if let Some(currency) = currency {
@@ -1333,8 +1342,8 @@ fn price_line(
     }
     let change_size = (size * 2.0 / 3.0).max(theme.text.body);
     for text in [
-        signed(change, usize::from(decimals)),
-        format!("{}%", signed(percent, 2)),
+        grouped(change, usize::from(decimals), true),
+        format!("{}%", grouped(percent, 2, true)),
     ] {
         job.append(&text, theme.spacing.sm, weighted(change_size, 600.0, color));
     }
@@ -1723,20 +1732,31 @@ mod tests {
         panel.set_instrument(&Instrument::new("QQQ").with_price_decimals(2));
         panel.set_timezone("Europe/Berlin".parse().unwrap());
         let quote = Quote::new(704.47, 725.20, "2026-10-22T19:59:00Z".parse().unwrap());
-        panel.set_quote(quote.with_extended(crate::model::ExtendedHoursQuote {
-            session: ExtendedSession::PreMarket,
-            last: 703.65,
-            // Summer time ends in Berlin on October 25.
-            time: "2026-10-26T12:30:00Z".parse().unwrap(),
-        }));
-        let shown = texts(&ctx, &mut panel);
-        for text in [
-            "704.47-20.73-2.86%",
-            "Last update at 21:59 GMT+2",
-            "703.65-0.82-0.12%",
-            "Last update at 13:30 GMT+1",
+        for (session, label) in [
+            (ExtendedSession::PreMarket, "Pre-market"),
+            (ExtendedSession::PostMarket, "Post-market"),
+            (ExtendedSession::Overnight, "Overnight"),
         ] {
-            assert!(shown.contains(&text.into()), "{text}: {shown:?}");
+            panel.set_quote(
+                quote
+                    .clone()
+                    .with_extended(crate::model::ExtendedHoursQuote {
+                        session,
+                        last: 703.65,
+                        // Summer time ends in Berlin on October 25.
+                        time: "2026-10-26T12:30:00Z".parse().unwrap(),
+                    }),
+            );
+            let shown = texts(&ctx, &mut panel);
+            for text in [
+                label,
+                "704.47-20.73-2.86%",
+                "Last update at 21:59 GMT+2",
+                "703.65-0.82-0.12%",
+                "Last update at 13:30 GMT+1",
+            ] {
+                assert!(shown.contains(&text.into()), "{text}: {shown:?}");
+            }
         }
         for (offset, label) in [(0, "UTC"), (-5 * 3600, "GMT-5"), (-12600, "GMT-3:30")] {
             assert_eq!(zone_label(offset), label);

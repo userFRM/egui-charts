@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Built-in volume footprints can resume a drained trade replay from an in-memory checkpoint. The checkpoint retains price levels and the forming bar's trade allocation; a different row grouping or an unbounded footprint is refused without changing the destination. ([#3911](https://github.com/userFRM/egui-charts/issues/3911))
+
 - Volume-bar charts driven by a trade replay feed can plan, capture and restore in-memory checkpoints, including a partially filled candle, the execution tape and supported study inputs. The host controls the recording cursor and cache budget. ([#3724](https://github.com/userFRM/egui-charts/issues/3724))
 
 - `FootprintPage::partial` admits explicitly incomplete prepared bar slots through either owned or shared rows, with borrowing `partial_slots` metadata. Marked rows show a translated “Partial data” warning and explanation and survive frozen image exports without repair or promotion from later trades. Coverage follows the resolved footprint slot even when an OHLC timestamp falls inside it; ordinary join/loss fragments remain hidden. Unmarked neighbors remain complete, including a cutoff-session bar whose pre-cutoff executions seed the live bar; only marked slots must be sealed. Profiles, statistics, annotations, study readers and replay exclude marked slots. Corrections require an explicit reload or feed replacement. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))

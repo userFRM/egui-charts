@@ -647,17 +647,20 @@ fn change_text(
 }
 
 /// Measured volume as the chart's volume readouts write it: with the instrument's volume
-/// decimals, else two decimals without trailing zeros.
+/// decimals below a thousand and at least two in K, M and B values. Without volume decimals,
+/// or with fewer than two in units, drop trailing zeros.
 fn volume_text(volume: f64, instrument: Option<&crate::model::Instrument>) -> String {
-    if let Some(decimals) = instrument.and_then(|instrument| instrument.volume_decimals) {
-        return VolumeFormatter {
-            precision: usize::from(decimals),
-        }
-        .format(volume);
+    let decimals = instrument.and_then(|instrument| instrument.volume_decimals);
+    let text = VolumeFormatter {
+        precision: decimals.map_or(2, usize::from),
     }
-    let text = VolumeFormatter::default().format(volume);
+    .format_with_min_unit_decimals(volume, 2);
     let digits = text.trim_end_matches(char::is_alphabetic);
     let unit = &text[digits.len()..];
+    // Volume decimals stand below a thousand, and from two up in K, M and B values too.
+    if decimals.is_some_and(|decimals| decimals >= 2 || unit.is_empty()) {
+        return text;
+    }
     // Precision 2 writes a point, so trimming zeros never eats an integer digit.
     let digits = digits.trim_end_matches('0').trim_end_matches('.');
     format!("{digits}{unit}")
@@ -1465,14 +1468,14 @@ mod tests {
             "{label}"
         );
         // Inclusive volume is 0.375 + 1234.5 = 1234.875: 1.235K at three decimals,
-        // 1K at zero, or the former 1.23K without metadata. Explicit decimals keep zeros.
+        // 1.23K at zero or without metadata. Explicit decimals keep zeros below a thousand.
         let mut fractional = bars[..2].to_vec();
         fractional[0].volume = 0.375;
         fractional[1].volume = 1234.5;
         for (decimals, to, want) in [
             (None, 1.0, "Vol 1.23K"),
             (Some(3), 1.0, "Vol 1.235K"),
-            (Some(0), 1.0, "Vol 1K"),
+            (Some(0), 1.0, "Vol 1.23K"),
             (None, 0.0, "Vol 0.38"),
             (Some(3), 0.0, "Vol 0.375"),
             (Some(0), 0.0, "Vol 0"),

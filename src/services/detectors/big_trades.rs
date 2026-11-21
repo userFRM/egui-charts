@@ -9,7 +9,7 @@ use crate::data::meets_threshold;
 use crate::model::{
     BarClock, Direction, OrderSide, Placement, Signal, SignalId, SignalShape, Tick,
 };
-use crate::scales::{PriceFormatter, VolumeFormatter};
+use crate::scales::VolumeFormatter;
 use crate::services::SignalEvent;
 
 /// Combined trade sizes the automatic threshold is calibrated on.
@@ -425,7 +425,8 @@ impl BigTrades {
             category: super::DetectionKind::BigTrade.category().into(),
             label: Some(format!(
                 "{} {}",
-                self.sizes_label.format(trade.size),
+                self.sizes_label
+                    .format_with_min_unit_decimals(trade.size, 2),
                 kind.word()
             )),
             tooltip: None,
