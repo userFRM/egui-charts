@@ -3261,6 +3261,7 @@ mod tests {
                 clock: BarClock::new(Timeframe::Hour1),
                 instrument: None,
                 timeframe: Timeframe::Hour1,
+                chart: None,
             };
             study.update_data(&bars, 0, &[source]);
             let other = kinds(&study);

@@ -2955,6 +2955,7 @@ pub(super) mod tests {
             );
         }
     }
+
     /// Guards #3925: a custom study reads an hourly history on a 30-minute chart as each chart
     /// bar knew it, through `StudyData::closed_at`, and the chart's Wait for interval close,
     /// offered on by default, decides whether the latest bar reads the developing hour. Rows: a
