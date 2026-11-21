@@ -152,7 +152,7 @@ pub use trading::{
     TakeProfitLevel, TimeInForce, TradingRules,
 };
 
-pub use watchlist::{Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
+pub use watchlist::{SkippedEntries, Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
 
 #[cfg(test)]
 mod tests {

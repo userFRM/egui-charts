@@ -1102,7 +1102,7 @@ impl DemoApp {
         let mut charts: Vec<_> = self
             .extra_charts
             .iter_mut()
-            .map(|extra| &mut extra.chart)
+            .map(|extra| &mut *extra.chart)
             .collect();
         charts.insert(source, &mut self.chart);
         self.layout
