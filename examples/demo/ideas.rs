@@ -146,7 +146,7 @@ mod tests {
         ] {
             app.handle_top_toolbar(&ctx, action);
             assert!(
-                matches!(app.screenshot_requested, Some((ScreenshotTarget::Post { copy_link }, _)) if copy_link == expected)
+                matches!(app.screenshot_requested, Some((ScreenshotTarget::Post { copy_link }, ..)) if copy_link == expected)
             );
         }
         app.post_image(&ctx, vec![0], false);

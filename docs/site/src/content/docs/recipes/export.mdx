@@ -25,7 +25,10 @@ count or an error; it leaves delivery to the host.
 works with `widget` alone. The scene converts the returned string into bytes
 without another encoding step. Set
 [`ImageExportOptions::size`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ImageExportOptions.html#structfield.size)
-in physical output pixels. The first chart frame must have completed, or export
+in points; a PNG has
+[`pixel_density`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ImageExportOptions.html#structfield.pixel_density)
+times as many pixels on each side, and an SVG document has the size itself.
+The first chart frame must have completed, or export
 returns
 [`ExportError::NoFrame`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ExportError.html#variant.NoFrame).
 Unsupported content is reported as an error rather than silently omitted.
