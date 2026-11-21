@@ -110,8 +110,10 @@ impl Figure {
                 MarketCap,
                 Surprise,
             ],
-            CalendarKind::Dividends => &[Actual, Yield, PaymentDate],
-            CalendarKind::Ipos => &[Actual, DealAmount, Shares, MarketCap, Exchange],
+            CalendarKind::Dividends => &[Actual, Forecast, Prior, Yield, PaymentDate],
+            CalendarKind::Ipos => &[
+                Actual, Forecast, Prior, DealAmount, Shares, MarketCap, Exchange,
+            ],
         }
     }
 
@@ -1066,21 +1068,25 @@ mod tests {
                 CalendarKind::Dividends,
                 vec![
                     ("Amount", "1.2"),
+                    ("Forecast", "1.1"),
+                    ("Prior", "1.0"),
                     ("Yield", "3.2%"),
                     ("Payment date", "Nov 30, 2026"),
                 ],
-                vec!["Forecast", "Prior", "Revenue"],
+                vec!["Revenue"],
             ),
             (
                 CalendarKind::Ipos,
                 vec![
                     ("Offer price", "1.2"),
+                    ("Forecast", "1.1"),
+                    ("Prior", "1.0"),
                     ("Deal amount", "500M"),
                     ("Shares offered", "25M"),
                     ("Market cap", "120B"),
                     ("Exchange", "XNAS"),
                 ],
-                vec!["Actual", "Forecast", "Revenue"],
+                vec!["Actual", "Revenue"],
             ),
         ] {
             let mut panel = CalendarPanel::new();
