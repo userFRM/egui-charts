@@ -744,12 +744,10 @@ impl<'a> Legend<'a> {
                                             .format(self.bar.volume, None)
                                     },
                                     |decimals| {
-                                        crate::scales::PriceFormatter::format(
-                                            &crate::scales::VolumeFormatter {
-                                                precision: usize::from(decimals),
-                                            },
-                                            self.bar.volume,
-                                        )
+                                        crate::scales::VolumeFormatter {
+                                            precision: usize::from(decimals),
+                                        }
+                                        .format_with_min_unit_decimals(self.bar.volume, 2)
                                     },
                                 )
                         }),

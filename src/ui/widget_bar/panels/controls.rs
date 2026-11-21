@@ -13,16 +13,24 @@ pub(super) fn dropdown(
     text: &str,
     contents: impl FnOnce(&mut Ui),
 ) -> Response {
+    let shown = l10n::text(ui.ctx(), text);
+    dropdown_as_given(ui, id, &shown, contents)
+}
+
+/// [`dropdown`] showing `label` as given, for a name the host or the user chose.
+pub(super) fn dropdown_as_given(
+    ui: &mut Ui,
+    id: &str,
+    label: &str,
+    contents: impl FnOnce(&mut Ui),
+) -> Response {
     ui.push_id(id, |ui| {
         let button = ui.add(
-            egui::Button::new((
-                l10n::text(ui.ctx(), text),
-                icons::CHEVRON_DOWN.as_image_square(16.0),
-            ))
-            .frame_when_inactive(false)
-            .image_tint_follows_text_color(true)
-            .min_size(vec2(0.0, 28.0))
-            .truncate(),
+            egui::Button::new((label, icons::CHEVRON_DOWN.as_image_square(16.0)))
+                .frame_when_inactive(false)
+                .image_tint_follows_text_color(true)
+                .min_size(vec2(0.0, 28.0))
+                .truncate(),
         );
         egui::Popup::menu(&button).show(|ui| {
             egui::ScrollArea::vertical()
