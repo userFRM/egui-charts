@@ -646,7 +646,9 @@ impl Chart {
         drawings.edit_drawing(id, |d| d.pane = owner).is_ok()
     }
 
-    /// Deletes the selected drawings as one undo step, as Delete and Backspace do. Locked drawings
+    /// Deletes the selected drawings as one undo step, as Delete and Backspace do. Locked drawings,
+    /// and every drawing while
+    /// [`DrawingManager::set_locked`](crate::drawings::DrawingManager::set_locked) locks them all,
     /// stay selected and in place, and
     /// [`ChartEvent::LockedDrawingsKept`](super::ChartEvent::LockedDrawingsKept) reports how many,
     /// so the host can tell the user why. Drawings whose user edits are off also stay selected
@@ -656,21 +658,24 @@ impl Chart {
         self.delete_drawings_keeping_locked(&ids);
     }
 
-    /// Deletes the drawings in `ids` as one undo step, keeping the locked ones, and reports how
+    /// Deletes the drawings in `ids` as one undo step. Locked drawings, and every drawing while
+    /// [`DrawingManager::set_locked`](crate::drawings::DrawingManager::set_locked) locks them all,
+    /// stay selected and in place. Reports how
     /// many it kept with [`ChartEvent::LockedDrawingsKept`](super::ChartEvent::LockedDrawingsKept).
     /// Drawings whose user edits are off also stay selected and in place, and are not counted.
     pub(crate) fn delete_drawings_keeping_locked(&mut self, ids: &[usize]) {
+        let all_locked = self.drawings.is_locked();
         let kept = self
             .drawings
             .drawings
             .iter()
-            .filter(|d| d.locked && d.user_edit_enabled && ids.contains(&d.id))
+            .filter(|d| (d.locked || all_locked) && d.user_edit_enabled && ids.contains(&d.id))
             .count();
         let ids: Vec<_> = self
             .drawings
             .drawings
             .iter()
-            .filter(|d| d.user_edit_enabled && ids.contains(&d.id))
+            .filter(|d| self.drawings.accepts_user_edits(d) && ids.contains(&d.id))
             .map(|d| d.id)
             .collect();
         self.drawings.delete_drawings(&ids);
