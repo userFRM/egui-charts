@@ -23,9 +23,36 @@ pub(super) struct CheckpointKey {
 struct Grouping {
     lots: NonZeroU64,
     bar_limit: Option<NonZeroUsize>,
+    footprint: Option<FootprintGrouping>,
     extended_hours: bool,
     overnight_hours: bool,
     adjusted: bool,
+}
+
+/// Configured row grouping, not the current viewport or the ATR of a particular execution.
+#[derive(Debug, PartialEq, Eq)]
+struct FootprintGrouping {
+    ticks: u32,
+    atr_length: Option<u32>,
+    auto_height_bits: Option<u32>,
+}
+
+impl FeedLink {
+    // The pump appends the chart's own footprint input after the studies' inputs.
+    pub(super) fn checkpoint_studies(
+        &self,
+    ) -> Result<&[(crate::data::OrderFlowInput, u64)], Error> {
+        let Some((footprint, seen)) = &self.footprint_input else {
+            return Ok(&self.study_inputs);
+        };
+        let Some(((last, last_seen), studies)) = self.study_inputs.split_last() else {
+            return Err(Error::NotDrained);
+        };
+        if !last.same_source(footprint) || last_seen != seen {
+            return Err(Error::NotDrained);
+        }
+        Ok(studies)
+    }
 }
 
 struct Binding<'a> {
@@ -41,6 +68,7 @@ impl<'a> Binding<'a> {
         let Some(Timeframe::Volume(lots)) = chart.timeframe else {
             return Err(Error::Unsupported);
         };
+        let footprint = chart.chart_type == ChartType::VolumeFootprint;
         if !chart.main_series_present
             || !chart.price_series.is_empty()
             || chart.replay.is_some()
@@ -60,9 +88,7 @@ impl<'a> Binding<'a> {
             || chart.chart_type.transforms_data()
             || matches!(
                 chart.chart_type,
-                ChartType::TimePriceOpportunity
-                    | ChartType::VolumeFootprint
-                    | ChartType::SessionVolumeProfile
+                ChartType::TimePriceOpportunity | ChartType::SessionVolumeProfile
             )
             || link.paused
             || link.resumed_from.is_some()
@@ -72,8 +98,9 @@ impl<'a> Binding<'a> {
             || link.trade_cursor.is_some()
             || link.depth_cursor.is_some()
             || link.bubbles.is_some()
-            || link.footprint.is_some()
-            || link.footprint_input.is_some()
+            || link.footprint.is_some() != footprint
+            || link.footprint_input.is_some() != footprint
+            || (footprint && link.footprints_stopped)
             || link.replay_footprint.is_some()
             || !link.footprint_unavailable.is_empty()
             || link.order_book.is_some()
@@ -129,7 +156,7 @@ impl<'a> Binding<'a> {
             return Err(Error::NotDrained);
         }
         #[cfg(not(feature = "studies"))]
-        if !chart.studies.indicators().is_empty() || !link.study_inputs.is_empty() {
+        if !chart.studies.indicators().is_empty() || !link.checkpoint_studies()?.is_empty() {
             return Err(Error::Unsupported);
         }
         Ok(Self {
@@ -139,6 +166,17 @@ impl<'a> Binding<'a> {
             grouping: Grouping {
                 lots,
                 bar_limit: chart.bar_limit(SeriesId::MAIN),
+                footprint: footprint.then(|| {
+                    let p = &chart.chart_type_params;
+                    FootprintGrouping {
+                        ticks: p.footprint_row_ticks,
+                        atr_length: p
+                            .footprint_row_atr
+                            .then(|| p.footprint_row_atr_length.clamp(1, 200)),
+                        auto_height_bits: (p.footprint_row_ticks == 0)
+                            .then(|| p.footprint_auto_row_height.to_bits()),
+                    }
+                }),
                 extended_hours: link.extended_hours,
                 overnight_hours: link.overnight_hours,
                 adjusted: link.adjusted,
@@ -244,7 +282,7 @@ fn visit_studies(
     mut visit: impl FnMut(StudyKey),
 ) -> Result<(), Error> {
     use crate::studies::{ConfiguredStudy, EMA, Indicator, OrderFlowStudy, StudySource, Volume};
-    let mut inputs = link.study_inputs.iter();
+    let mut inputs = link.checkpoint_studies()?.iter();
     for (&id, study) in chart.study_ids.iter().zip(chart.studies.indicators()) {
         let configured = study
             .as_ref()
