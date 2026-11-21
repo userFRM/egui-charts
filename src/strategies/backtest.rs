@@ -1425,10 +1425,7 @@ impl<'a> Run<'a> {
                 EquityRange::new(f64::NAN, f64::NAN, f64::NAN, f64::NAN),
             )
         };
-        report.equity.push((
-            mark_time,
-            equity,
-        ));
+        report.equity.push((mark_time, equity));
         report.equity_ranges.push(range);
         let (margin, peak) = if valid {
             let margin = self.margin_used(execution.close);
