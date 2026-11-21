@@ -142,6 +142,7 @@ fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
         )),
     ] {
         if let Some(binding) = binding {
+            shortcuts.bindings.retain(|(key, _)| *key != binding);
             shortcuts
                 .bindings
                 .push((binding, KeyboardAction::AddToWatchlist));
