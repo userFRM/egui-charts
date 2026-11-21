@@ -313,7 +313,7 @@ pub fn hit_test_pane_indicator(
         .then(|| crate::chart::rendering::study_mapping(indicator, coords));
     let coords = mapped.as_ref().unwrap_or(coords);
     // Only test non-overlay indicators
-    if indicator.is_overlay() || !indicator.is_visible() {
+    if indicator.is_overlay() || indicator.plots_on_price() || !indicator.is_visible() {
         return None;
     }
 

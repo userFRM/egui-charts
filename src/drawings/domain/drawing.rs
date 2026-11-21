@@ -681,6 +681,8 @@ impl Drawing {
 
     /// Whether the user can edit this drawing now: it is not [locked](Self::locked) and
     /// [user edits](Self::user_edit_enabled) are on.
+    /// Lock all drawings is not part of it: see
+    /// [`DrawingManager::accepts_user_edits`](crate::drawings::DrawingManager::accepts_user_edits).
     pub fn accepts_user_edits(&self) -> bool {
         self.user_edit_enabled && !self.locked
     }
