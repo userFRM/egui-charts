@@ -871,14 +871,16 @@ impl DemoApp {
             replay_selecting: false,
             replay_interval: Timeframe::Hour1,
             replay_scope: ReplayScope::AllCharts,
-            replay_session: cc
-                .storage
-                .and_then(|storage| eframe::get_value(storage, "replay_session"))
-                .flatten()
-                .map(|(mut session, interval): (ReplaySession, Timeframe)| {
-                    session.symbol = DemoSymbol::current(&session.symbol);
-                    (session, interval)
-                }),
+            replay_session: cc.storage.and_then(|storage| {
+                let (mut session, interval): (ReplaySession, Timeframe) =
+                    eframe::get_value::<Option<_>>(storage, "replay_session")??;
+                // Older demo sessions replayed all charts.
+                if !storage.get_string("replay_session")?.contains("scope:") {
+                    session.scope = ReplayScope::AllCharts;
+                }
+                session.symbol = DemoSymbol::current(&session.symbol);
+                Some((session, interval))
+            }),
             replay_slots: Vec::new(),
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
@@ -6437,6 +6439,7 @@ mod tests {
         app.push_replay_window_to_chart();
         app.stop_replay();
         assert!(app.extra_charts[0].chart.replay_time().is_none());
+        settle(&mut app, &ctx);
         let mut storage = AppStorage::default();
         eframe::App::save(&mut *app, &mut storage);
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -6449,6 +6452,24 @@ mod tests {
         restored.apply_replay_start(egui_charts::ui::replay::ReplayStartAction::Resume);
         assert_eq!(restored.chart.replay_time(), Some(cutoff));
         assert!(!restored.replay.as_ref().unwrap().state.is_playing());
+
+        // Before scopes were saved, the demo replayed every chart in the default layout.
+        let session = storage.0.get_mut("replay_session").unwrap();
+        assert!(session.contains(",scope:AllCharts"));
+        *session = session.replace(",scope:AllCharts", "");
+        let mut cc = eframe::CreationContext::_new_kittest(ctx);
+        cc.storage = Some(&storage);
+        let mut restored = DemoApp::new(&cc);
+        assert_eq!(restored.extra_charts.len(), 2);
+        restored.apply_replay_start(egui_charts::ui::replay::ReplayStartAction::Resume);
+        assert_eq!(restored.chart.replay_time(), Some(cutoff));
+        assert!(
+            restored
+                .extra_charts
+                .iter()
+                .all(|extra| extra.chart.replay_time() == Some(cutoff))
+        );
+        assert_eq!(restored.replay_slots, [0, 1, 2]);
     }
 
     #[derive(Default)]
