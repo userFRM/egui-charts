@@ -2301,19 +2301,59 @@ mod tests {
         );
     }
 
-    /// A level chosen from a channel keeps its lower bound instead of a quote or stale text;
-    /// changing single-level operators alone still follows the quote until the level is entered.
+    /// A level chosen from a finite channel keeps its lower bound; other conditions preserve
+    /// the previous level text and keep following the quote until the level is entered.
     #[test]
     fn inline_channel_to_level_keeps_lower_bound() {
         use egui_kittest::{
             Harness,
             kittest::{NodeT, Queryable},
         };
-        for (quote, typed) in [
-            (Some(99.0), None),
-            (None, None),
-            (Some(99.0), Some("120")),
-            (None, Some("120")),
+        let mut failures = Vec::new();
+        for (origin, quote, typed, bound, level, text) in [
+            (
+                "Entering channel",
+                Some(99.0),
+                None,
+                Some(95.0),
+                Some(95.0),
+                "95",
+            ),
+            ("Entering channel", None, None, Some(95.0), Some(95.0), "95"),
+            (
+                "Entering channel",
+                Some(99.0),
+                Some("120"),
+                Some(95.0),
+                Some(95.0),
+                "95",
+            ),
+            (
+                "Entering channel",
+                None,
+                Some("120"),
+                Some(95.0),
+                Some(95.0),
+                "95",
+            ),
+            (
+                "Moving by value",
+                Some(99.0),
+                None,
+                None,
+                Some(99.0),
+                "99.00",
+            ),
+            ("Moving by value", None, None, None, None, ""),
+            (
+                "Moving by value",
+                Some(99.0),
+                Some("120"),
+                None,
+                Some(120.0),
+                "120",
+            ),
+            ("Entering channel", None, None, None, None, ""),
         ] {
             let mut panel = AlertsPanel::default();
             panel.set_price("SIM", quote, None);
@@ -2345,37 +2385,66 @@ mod tests {
             }
             h.get_by_label("Condition").click();
             h.run();
-            h.get_by_label("Entering channel").click();
+            h.get_by_label(origin).scroll_to_me();
             h.run();
-            h.state_mut().draft.condition = AlertCondition::EnteringChannel {
-                lower: 95.0,
-                upper: 100.0,
-            };
+            h.get_by_label(origin).click();
             h.run();
+            assert_eq!(
+                matches!(h.state().draft.condition, AlertCondition::MovingBy { .. }),
+                origin == "Moving by value",
+                "{origin}: {:?}",
+                h.state().draft.condition
+            );
+            if let Some(lower) = bound {
+                h.state_mut().draft.condition = AlertCondition::EnteringChannel {
+                    lower,
+                    upper: 100.0,
+                };
+                h.run();
+            }
             h.get_by_label("Condition").click();
+            h.run();
+            h.get_by_label("Crossing").scroll_to_me();
             h.run();
             h.get_by_label("Crossing").click();
             h.run();
-            assert_eq!(
-                h.state().draft.condition,
-                AlertCondition::Crossing(95.0),
-                "quote={quote:?}, typed={typed:?}"
-            );
-            assert_eq!(
-                h.get_by_role_and_label(egui::Role::TextInput, "Level")
-                    .value()
-                    .as_deref(),
-                Some("95")
-            );
-            assert!(
-                !h.get_by_label("Create alert")
-                    .accesskit_node()
-                    .is_disabled()
-            );
-            h.state_mut().set_price("SIM", Some(102.0), None);
-            h.run();
-            assert_eq!(h.state().draft.condition, AlertCondition::Crossing(95.0));
+            let follows_quote = bound.is_none() && typed.is_none();
+            for (quote_update, level, text) in [
+                (None, level, text),
+                (
+                    Some(101.0),
+                    if follows_quote { Some(101.0) } else { level },
+                    if follows_quote { "101.00" } else { text },
+                ),
+            ] {
+                if let Some(price) = quote_update {
+                    h.state_mut().set_price("SIM", Some(price), None);
+                    h.run();
+                }
+                let AlertCondition::Crossing(actual_level) = h.state().draft.condition else {
+                    panic!(
+                        "expected Crossing after {origin}: {:?}",
+                        h.state().draft.condition
+                    );
+                };
+                let actual = (
+                    (!actual_level.is_nan()).then_some(actual_level),
+                    h.get_by_role_and_label(egui::Role::TextInput, "Level")
+                        .value()
+                        .unwrap_or_default(),
+                    h.get_by_label("Create alert")
+                        .accesskit_node()
+                        .is_disabled(),
+                );
+                let expected = (level, text.to_owned(), level.is_none());
+                if actual != expected {
+                    failures.push(format!(
+                        "{origin}, quote={quote:?}, typed={typed:?}, bound={bound:?}, quote_update={quote_update:?}: expected {expected:?}, got {actual:?}"
+                    ));
+                }
+            }
         }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[cfg(feature = "alert-engine")]

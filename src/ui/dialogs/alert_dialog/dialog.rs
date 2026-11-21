@@ -1508,8 +1508,14 @@ pub(crate) fn rule_form(
                     {
                         *source = AlertSource::Price;
                     }
-                    if condition.level().is_none()
-                        && let Some(level) = value.level()
+                    if matches!(
+                        condition,
+                        AlertCondition::EnteringChannel { .. }
+                            | AlertCondition::ExitingChannel { .. }
+                            | AlertCondition::InsideChannel { .. }
+                            | AlertCondition::OutsideChannel { .. }
+                    ) && let Some(level) = value.level()
+                        && level.is_finite()
                         && let Some(text) = level_text.as_deref_mut()
                     {
                         *text = level.to_string();
