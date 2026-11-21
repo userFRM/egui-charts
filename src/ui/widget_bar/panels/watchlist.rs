@@ -328,6 +328,11 @@ impl std::fmt::Debug for WatchlistPanel {
     }
 }
 
+/// The name of the list a panel starts with when the host gives none.
+pub(crate) const DEFAULT_LIST: &str = "Watchlist";
+/// The title of a section the user adds.
+const NEW_SECTION: &str = "New section";
+
 impl Default for WatchlistPanel {
     fn default() -> Self {
         Self::new(Vec::new())
@@ -338,7 +343,7 @@ impl WatchlistPanel {
     /// A panel showing the first of `lists`, or one empty list when there are none.
     pub fn new(mut lists: Vec<Watchlist>) -> Self {
         if lists.is_empty() {
-            lists.push(Watchlist::new("Watchlist"));
+            lists.push(Watchlist::new(DEFAULT_LIST));
         }
         Self {
             lists,
@@ -794,7 +799,7 @@ impl WatchlistPanel {
                         "{0} flagged",
                         &[("0", l10n::text(ui.ctx(), format!("{flag:?}")))],
                     ),
-                    None => l10n::text(ui.ctx(), lists[*active].name.clone()),
+                    None => l10n::saved_name(ui.ctx(), &lists[*active].name, DEFAULT_LIST),
                 };
                 let title = LayoutJob::single_section(
                     name,
@@ -839,7 +844,7 @@ impl WatchlistPanel {
                     if ui
                         .selectable_label(
                             flag_filter.is_none() && index == *active,
-                            l10n::text(ui.ctx(), &list.name),
+                            l10n::saved_name(ui.ctx(), &list.name, DEFAULT_LIST),
                         )
                         .clicked()
                     {
@@ -957,7 +962,7 @@ impl WatchlistPanel {
             if ui.button(l10n::text(ui.ctx(), "Add section")).clicked() {
                 lists[*active]
                     .items
-                    .push(WatchlistItem::Section("New section".to_owned()));
+                    .push(WatchlistItem::Section(NEW_SECTION.to_owned()));
             }
             ui.checkbox(
                 &mut lists[*active].show_descriptions,
@@ -1412,9 +1417,10 @@ impl WatchlistPanel {
                         let id = group_id(label);
                         let collapsed = ui.data(|d| d.get_temp(id).unwrap_or(false));
                         let response = ui.interact(rect, id, Sense::click());
-                        let title = label
-                            .clone()
-                            .unwrap_or_else(|| l10n::text(ui.ctx(), "Other"));
+                        let title = label.as_deref().map_or_else(
+                            || l10n::text(ui.ctx(), "Other"),
+                            |label| l10n::text(ui.ctx(), label),
+                        );
                         heading(ui, rect, &response, &title, collapsed, &theme);
                         if response.clicked() {
                             ui.data_mut(|d| d.insert_temp(id, !collapsed));
@@ -1461,7 +1467,8 @@ impl WatchlistPanel {
                     match &mut list.items[index] {
                         WatchlistItem::Section(title) => {
                             let is_collapsed = collapsed.contains(&index);
-                            heading(ui, rect, &response, title, is_collapsed, &theme);
+                            let label = l10n::saved_name(ui.ctx(), title, NEW_SECTION);
+                            heading(ui, rect, &response, &label, is_collapsed, &theme);
                             if response.clicked()
                                 && let Some(at) =
                                     sections.iter().position(|&section| section == index)
@@ -2054,18 +2061,17 @@ fn cell_text(
     (text, color)
 }
 
-/// Paints a collapsible section or generated group heading with the same accessible state.
+/// Paints `label` as shown for a collapsible section or generated group heading.
 fn heading(
     ui: &mut Ui,
     rect: egui::Rect,
     response: &egui::Response,
-    title: &str,
+    label: &str,
     collapsed: bool,
     theme: &Theme,
 ) {
-    let label = l10n::text(ui.ctx(), title);
     response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), &label));
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), label));
     ui.ctx()
         .accesskit_node_builder(response.id, |node| node.set_expanded(!collapsed));
     if response.hovered() {
@@ -2091,7 +2097,7 @@ fn heading(
     )
     .add(
         Label::new(
-            RichText::new(l10n::text(ui.ctx(), title.to_uppercase()))
+            RichText::new(label.to_uppercase())
                 .font(TextStyle::Small.resolve(ui.style()))
                 .color(theme.ui.text_secondary),
         )
@@ -3445,6 +3451,14 @@ mod tests {
             h.state().lists()[0].to_text(),
             "AAA,BBB,###Second,CCC,DDD,EEE"
         );
+        // Generated headings still translate once when user section names are shown as saved.
+        l10n::set_translator(&h.ctx, |key| Some(format!("T:{key}")));
+        h.run();
+        let painted = texts(&h);
+        for label in ["Energy", "Tech", "Other"] {
+            h.get_by_role_and_label(Role::Button, &format!("T:{label}"));
+            assert!(painted.contains(&format!("T:{}", label.to_uppercase())));
+        }
     }
 
     /// Summary arithmetic stays finite at the numeric limits and handles empty and single values.

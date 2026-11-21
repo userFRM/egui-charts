@@ -141,6 +141,9 @@ impl std::fmt::Debug for LayoutMenu {
     }
 }
 
+/// The name of a layout before the user names it.
+const UNNAMED: &str = "Unnamed";
+
 impl Default for LayoutMenu {
     fn default() -> Self {
         Self::new()
@@ -151,7 +154,7 @@ impl LayoutMenu {
     /// Creates an unnamed layout menu.
     pub fn new() -> Self {
         Self {
-            curr_layout: Some("Unnamed".into()),
+            curr_layout: Some(UNNAMED.into()),
             layouts: Vec::new(),
             config: LayoutMenuConfig::default(),
             autosave: false,
@@ -714,9 +717,14 @@ impl LayoutMenu {
         }
     }
 
+    /// The current layout's name as saved, or the default name translated.
+    fn current_label(&self, ctx: &egui::Context) -> String {
+        l10n::saved_name(ctx, self.curr_layout.as_deref().unwrap_or(UNNAMED), UNNAMED)
+    }
+
     /// Width of the named trigger.
     pub fn width(&self, ui: &Ui) -> f32 {
-        let label = l10n::text(ui.ctx(), self.curr_layout.as_deref().unwrap_or("Unnamed"));
+        let label = self.current_label(ui.ctx());
         ui.fonts_mut(|f| {
             f.layout_no_wrap(
                 label,
@@ -749,7 +757,7 @@ impl LayoutMenu {
             .text(
                 rect.left_center() + egui::vec2(4.0, 0.0),
                 egui::Align2::LEFT_CENTER,
-                l10n::text(ui.ctx(), self.curr_layout.as_deref().unwrap_or("Unnamed")),
+                self.current_label(ui.ctx()),
                 egui::FontId::proportional(14.0),
                 ui.visuals().text_color(),
             );
@@ -936,12 +944,12 @@ impl LayoutMenu {
                                     (ui.available_width() - 28.0).max(0.0),
                                     ui.spacing().interact_size.y,
                                 ),
-                                egui::Button::new(l10n::text(ui.ctx(), layout))
+                                egui::Button::new(l10n::saved_name(ui.ctx(), layout, UNNAMED))
                                     .selected(self.curr_layout.as_deref() == Some(layout.as_str()))
                                     .frame(false)
                                     .truncate(),
                             )
-                            .on_hover_text(l10n::text(ui.ctx(), layout))
+                            .on_hover_text(l10n::saved_name(ui.ctx(), layout, UNNAMED))
                             .clicked()
                         {
                             action = LayoutAction::Open(layout.clone());
