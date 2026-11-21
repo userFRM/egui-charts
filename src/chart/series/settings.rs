@@ -79,6 +79,11 @@ pub struct SeriesSettings {
 
     /// Visibility and style of this series' alert levels
     pub alerts: SeriesAlerts,
+    /// The chart-wide alert colour, [`AlertsSettings::alert_color`](crate::widget::settings::AlertsSettings::alert_color),
+    /// which the dialog shows for alert levels without a colour of their own. Applying the
+    /// settings ignores it. [`Chart::series_settings`](crate::Chart::series_settings) fills the
+    /// default; a host with other alert settings sets it before opening the dialog.
+    pub chart_alert_color: Color32,
 
     // === Canvas Tab ===
     /// Background type: 0 = Solid, 1 = Gradient
@@ -119,6 +124,7 @@ impl Default for SeriesSettings {
             show_prev_close_line: false,
             invert_scale: false,
             alerts: SeriesAlerts::default(),
+            chart_alert_color: crate::studies::palette::WARM_ORANGE,
             // Canvas Tab
             background_type: 0, // Solid
             show_vertical_grid: true,

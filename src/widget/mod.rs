@@ -980,7 +980,8 @@ impl Chart {
     /// Pass the result to `SeriesSettingsDialog::open`, then apply its accepted settings with
     /// [`Self::apply_series_settings`]. The active chart type selects the dialog's controls and
     /// where the candle colors are read from and written to; applying keeps the chart's type.
-    /// Its price source is the one the active chart type draws.
+    /// Its price source is the one the active chart type draws. Its `chart_alert_color` is the
+    /// default alert colour; set it to the host's chart-wide alert colour before opening the dialog.
     pub fn series_settings(&self) -> SeriesSettings {
         let mut settings = SeriesSettings {
             chart_type: self.chart_type,

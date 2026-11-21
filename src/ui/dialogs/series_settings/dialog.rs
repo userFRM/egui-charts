@@ -158,6 +158,7 @@ impl SeriesSettingsDialog {
                         chart_type: self.settings.chart_type,
                         bullish_color: theme.chart.candle_up,
                         bearish_color: theme.chart.candle_down,
+                        chart_alert_color: self.settings.chart_alert_color,
                         ..Default::default()
                     };
                     // The theme does not change on Ok, so the chart will not follow it afterwards.
@@ -783,6 +784,64 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// The Alert colour swatch shows the chart-wide colour until the series has its own. Ticking
+    /// Custom makes the shown colour the series' own; unticking it or Reset to defaults returns
+    /// the series to the chart-wide colour.
+    #[test]
+    fn alert_colour_swatch_shows_the_colour_that_applies() {
+        use egui::Color32;
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let orange = Color32::from_rgb(255, 152, 0);
+        let blue = Color32::from_rgb(0, 0, 255);
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let mut settings = SeriesSettings::default();
+            settings.chart_alert_color = blue;
+            let mut dialog = SeriesSettingsDialog::new();
+            dialog.open(SeriesId::MAIN, settings);
+            dialog.active_tab = SeriesSettingsTab::ScalesAndLines;
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &theme);
+                })
+                .with_size(Vec2::new(1440.0, 900.0))
+                .build_ui_state(
+                    |ui, dialog: &mut SeriesSettingsDialog| {
+                        dialog.show(ui.ctx());
+                    },
+                    dialog,
+                );
+            let filled = |h: &Harness<'_, SeriesSettingsDialog>, color| {
+                h.output().shapes.iter().any(
+                    |shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == color),
+                )
+            };
+            h.run();
+            assert!(filled(&h, blue) && !filled(&h, orange));
+            assert_eq!(h.state().settings.alerts.color, None);
+            h.get_by_role_and_label(Role::CheckBox, "Custom").click();
+            h.run();
+            assert_eq!(h.state().settings.alerts.color, Some(blue));
+            h.state_mut().settings.alerts.color = Some(orange);
+            h.run();
+            assert!(filled(&h, orange) && !filled(&h, blue));
+            h.get_by_role_and_label(Role::CheckBox, "Custom").click();
+            h.run();
+            assert_eq!(h.state().settings.alerts.color, None);
+            assert!(filled(&h, blue) && !filled(&h, orange));
+            // Resetting drops the series' own colour, not the chart-wide one.
+            h.state_mut().settings.alerts.color = Some(orange);
+            h.get_by_role_and_label(Role::Button, "Reset to defaults")
+                .click();
+            h.run();
+            assert_eq!(h.state().settings.alerts.color, None);
+            assert!(filled(&h, blue) && !filled(&h, orange));
         }
     }
 }
