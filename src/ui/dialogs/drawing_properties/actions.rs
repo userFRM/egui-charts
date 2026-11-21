@@ -203,17 +203,20 @@ impl DrawingProps {
             .iter()
             .find(|d| d.id == id.0)
             .ok_or("Drawing was removed")?;
-        if !target.accepts_user_edits()
+        if !chart.drawings().accepts_user_edits(target)
             && (self.save_as_default
                 || !chart.drawings().is_selected(id.0)
                 || !chart.drawings().drawings.iter().any(|drawing| {
-                    drawing.accepts_user_edits() && chart.drawings().is_selected(drawing.id)
+                    chart.drawings().accepts_user_edits(drawing)
+                        && chart.drawings().is_selected(drawing.id)
                 }))
         {
-            return Err(if target.user_edit_enabled {
-                "Unlock the drawing before editing its properties"
-            } else {
+            return Err(if !target.user_edit_enabled {
                 "This drawing cannot be edited"
+            } else if chart.drawings().is_locked() {
+                "Unlock all drawings before editing its properties"
+            } else {
+                "Unlock the drawing before editing its properties"
             });
         }
         let adds_position_stop = matches!(
@@ -259,7 +262,7 @@ impl DrawingProps {
             .drawings
             .iter()
             .filter(|drawing| {
-                drawing.accepts_user_edits()
+                chart.drawings().accepts_user_edits(drawing)
                     && if selected {
                         chart.drawings().is_selected(drawing.id)
                     } else {
@@ -762,6 +765,17 @@ mod tests {
             .drawings_mut()
             .edit_drawing(7, |d| d.user_edit_enabled = true)
             .unwrap();
+        chart.drawings_mut().set_locked(true);
+        assert_eq!(
+            DrawingProps {
+                font_size: 40.0,
+                ..props.clone()
+            }
+            .apply_to_chart(DrawingId(7), &mut chart),
+            Err("Unlock all drawings before editing its properties")
+        );
+        assert_eq!(chart.drawings().drawings[0].font_size, 24.0);
+        chart.drawings_mut().set_locked(false);
         // A size the drawings file would refuse cannot be applied.
         assert!(
             DrawingProps {

@@ -25,7 +25,10 @@ fn edits_in_place(tool: DrawingToolType) -> bool {
 
 pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize, placed: bool) {
     let Some(drawing) = manager.drawings.iter().find(|d| {
-        d.id == id && d.accepts_user_edits() && d.is_visible_on_timeframe(&manager.curr_timeframe)
+        d.id == id
+            // Typing the first text of a drawing just placed is part of placing it.
+            && if placed { d.accepts_user_edits() } else { manager.accepts_user_edits(d) }
+            && d.is_visible_on_timeframe(&manager.curr_timeframe)
     }) else {
         return;
     };
@@ -76,7 +79,7 @@ pub(super) fn begin_fibonacci_edit(
             DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension
         ) && hit.is_none_or(|id| id == drawing.id)
             && drawing.selectable
-            && drawing.accepts_user_edits()
+            && manager.accepts_user_edits(drawing)
             && manager.owns_pane(drawing)
             && manager.shows(drawing)
     }) {
@@ -186,7 +189,8 @@ pub(super) fn begin_shape_edit(ui: &Ui, manager: &mut DrawingManager, response: 
         .request_repaint_after(std::time::Duration::from_secs_f64(delay));
 }
 
-/// The selected rectangle, circle, ellipse, horizontal line or horizontal ray `id` that accepts user edits.
+/// The selected rectangle, circle, ellipse, horizontal line or horizontal ray `id` that the
+/// user can edit.
 fn editable_shape(manager: &DrawingManager, id: usize) -> Option<&crate::drawings::Drawing> {
     manager.drawings.iter().find(|drawing| {
         drawing.id == id
@@ -198,7 +202,7 @@ fn editable_shape(manager: &DrawingManager, id: usize) -> Option<&crate::drawing
                     | DrawingToolType::HorizontalLine
                     | DrawingToolType::HorizontalRay
             )
-            && drawing.accepts_user_edits()
+            && manager.accepts_user_edits(drawing)
             && manager.is_selected(id)
     })
 }
@@ -242,7 +246,11 @@ pub(super) fn show_editor(
     };
     let Some(drawing) = manager.drawings.iter().find(|d| {
         d.id == editor.id
-            && d.accepts_user_edits()
+            && if editor.placed {
+                d.accepts_user_edits()
+            } else {
+                manager.accepts_user_edits(d)
+            }
             && d.is_visible_on_timeframe(&manager.curr_timeframe)
     }) else {
         return;
@@ -1238,6 +1246,8 @@ mod tests {
             }
             frame(&ctx, &mut chart, 0.0, vec![]);
             chart.drawings_mut().set_active_tool(Some(tool));
+            // A study pane also exercises placement and its first text while all are locked.
+            chart.drawings_mut().set_locked(pane);
             let rect = if pane {
                 chart.get_rendered_indicator_panes()[0].chart_rect
             } else {
@@ -1310,6 +1320,7 @@ mod tests {
                 Some(expected),
                 "{tool:?}"
             );
+            chart.drawings_mut().set_locked(false);
             let saved = chart.save_drawings().unwrap().to_json().unwrap();
             let mut restored = crate::Chart::new(crate::model::BarData::default());
             restored.load_drawings(&saved).unwrap();
@@ -1367,12 +1378,17 @@ mod tests {
                 "{tool:?}"
             );
             assert_eq!(chart.drawings().sel_drawing(), Some(id), "{tool:?}");
-            for locked in [true, false] {
+            for (locked, user_edit, all_locked) in [
+                (true, true, false),
+                (false, false, false),
+                (false, true, true),
+            ] {
+                chart.drawings_mut().set_locked(all_locked);
                 chart
                     .drawings_mut()
                     .edit_drawing(id, |drawing| {
                         drawing.locked = locked;
-                        drawing.user_edit_enabled = locked;
+                        drawing.user_edit_enabled = user_edit;
                     })
                     .unwrap();
                 for _ in 0..2 {
@@ -1391,6 +1407,7 @@ mod tests {
                 );
                 assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some(expected));
             }
+            chart.drawings_mut().set_locked(false);
             chart
                 .drawings_mut()
                 .edit_drawing(id, |d| d.user_edit_enabled = true)

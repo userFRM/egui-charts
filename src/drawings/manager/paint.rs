@@ -283,12 +283,15 @@ impl DrawingManager {
                 tool.implementation.render(drawing, painter, rect, view);
             }
         } else {
-            drawing.render_with_selection(
-                painter,
-                rect,
-                view,
-                self.selection.is_selected(drawing.id),
-            );
+            let selected = self.selection.is_selected(drawing.id);
+            if selected && self.locked && !drawing.locked {
+                // A selected drawing offers no text hints while every drawing is locked.
+                let mut held = drawing.clone();
+                held.locked = true;
+                held.render_with_selection(painter, rect, view, true);
+            } else {
+                drawing.render_with_selection(painter, rect, view, selected);
+            }
         }
     }
 
