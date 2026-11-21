@@ -97,10 +97,11 @@ pub(crate) use options_volume::OptionsVolumeSource;
 pub use options_volume::{
     OptionsVolume, OptionsVolumeQuery, OptionsVolumeReader, OptionsVolumeSink,
 };
+#[cfg(any(feature = "studies", feature = "drawings"))]
+pub(crate) use volume_profile::price_span;
 #[cfg(feature = "studies")]
 pub(crate) use volume_profile::{
-    DevelopingVolume, ExposureProfile, OptionWalls, StrikeExposure, grid_row, price_span,
-    whole_tick_rows,
+    DevelopingVolume, ExposureProfile, OptionWalls, StrikeExposure, grid_row, whole_tick_rows,
 };
 #[cfg_attr(
     not(any(test, feature = "widget")),
@@ -430,8 +431,8 @@ pub trait Datafeed: MaybeSend + 'static {
     }
 
     /// Up to `query.limit` symbols of the hotlist `query.list`, in the list's order, for the
-    /// hotlists panel. Answer [`FeedError::NotSupported`] (the default) to have the panel say the
-    /// feed has none.
+    /// hotlists panel, only of `query.exchanges` and `query.countries` when they are not empty.
+    /// Answer [`FeedError::NotSupported`] (the default) to have the panel say the feed has none.
     fn hotlist(&self, query: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
         let _ = query;
         reply.send(Err(FeedError::NotSupported));

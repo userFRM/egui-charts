@@ -287,7 +287,7 @@ impl TopToolbar {
     fn is_shown(&self, slot: Slot) -> bool {
         !self.host_hidden.contains(&slot.host_control())
             && (slot != S::Trade || self.state.can_trade)
-            && (slot != S::Publish || self.state.can_publish_image)
+            && (slot != S::Publish || self.state.can_publish_ideas)
     }
 
     /// Show the full toolbar, reading the active symbol from app state.
@@ -706,7 +706,7 @@ impl TopToolbar {
                                     (
                                         "Post image",
                                         &embedded_icons::PUBLISH,
-                                        TopToolbarAction::Publish,
+                                        TopToolbarAction::PostImage,
                                         self.state.can_publish_image,
                                     ),
                                 ] {
@@ -1298,6 +1298,7 @@ mod tests {
                 toolbar.state.can_undo = true;
                 toolbar.state.can_redo = true;
                 toolbar.state.can_publish_image = true;
+                toolbar.state.can_publish_ideas = true;
                 ctx.global_style_mut(|style| {
                     style.scroll_animation = egui::style::ScrollAnimation::none();
                     style.spacing.scroll.kinetic.decay_time = 0.0;
@@ -1602,7 +1603,7 @@ mod tests {
                     TopToolbarAction::OpenImage,
                 ),
                 (S::Screenshot, "Copy link", TopToolbarAction::CopyImageLink),
-                (S::Screenshot, "Post image", TopToolbarAction::Publish),
+                (S::Screenshot, "Post image", TopToolbarAction::PostImage),
                 (
                     S::Save,
                     "Save layout",
@@ -1677,6 +1678,7 @@ mod tests {
                 let mut toolbar = TopToolbar::new();
                 let publishing = label != "Copy image";
                 toolbar.state.can_publish_image = publishing;
+                toolbar.state.can_publish_ideas = publishing;
                 toolbar.state.can_undo = expected != TopToolbarAction::None;
                 toolbar.state.can_redo = expected != TopToolbarAction::None;
                 // A built-in set is listed also when none is saved.
@@ -1861,7 +1863,7 @@ mod tests {
             (|t| t.state.can_undo = false, &[TopToolbarAction::Undo]),
             (|t| t.state.can_redo = false, &[TopToolbarAction::Redo]),
             (
-                |t| t.state.can_publish_image = false,
+                |t| t.state.can_publish_ideas = false,
                 &[TopToolbarAction::Publish],
             ),
             (
@@ -1923,7 +1925,7 @@ mod tests {
         let broker = || {
             let mut toolbar = TopToolbar::default();
             toolbar.state.can_trade = true;
-            toolbar.state.can_publish_image = true;
+            toolbar.state.can_publish_ideas = true;
             toolbar.timeframe_selector.favorites.insert(Timeframe::Min5);
             toolbar
         };

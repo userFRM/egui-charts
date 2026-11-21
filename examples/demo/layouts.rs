@@ -886,6 +886,7 @@ impl DemoApp {
             .filter(|name| self.layout_is_saved(name));
         settings.layout_autosave = menu.autosave;
         settings.layout_favorites = menu.favorites.clone();
+        settings.hotlist_favorites = self.hotlist_favorites.clone();
         settings.indicator_favorites = self
             .indicator_dialog
             .preferences()
@@ -929,6 +930,8 @@ impl DemoApp {
         toolbar.magnet_hint_dismissed |= settings.magnet_hint_dismissed;
         self.top_toolbar.layout_menu.autosave = settings.layout_autosave;
         self.top_toolbar.layout_menu.favorites = settings.layout_favorites;
+        self.hotlist_favorites = settings.hotlist_favorites;
+        self.hotlists.set_starred(self.hotlist_favorites.clone());
         let mut preferences =
             egui_charts::ui::dialogs::indicator_dialog::IndicatorPreferences::default();
         preferences.favorites = settings.indicator_favorites.into_iter().collect();
