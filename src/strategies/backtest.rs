@@ -5081,8 +5081,8 @@ mod tests {
             }
         }
 
-        // A side funded at zero needs rates at its fills and marks only: a rate unusable at one
-        // finer bar of a held bar leaves the report available, with no margin used.
+        // Intrabar equity converts at every observed price of a held position, so a rate unusable
+        // at one finer bar withholds the run even on a side funded at zero, which uses no margin.
         let quarter = |part: i64| hour(2) + TimeDelta::minutes(15 * part);
         let point = |time, value: f64| Bar::new(time, value, value, value, value, 0.0);
         let held: Vec<_> = (0..3).map(|bar| point(hour(bar), 100.0)).collect();
@@ -5096,9 +5096,11 @@ mod tests {
         engine.instrument_currency = Some("USD".into());
         engine.exchange_rates = vec![rate(0, 0.9), point(quarter(1), 0.0), point(quarter(2), 0.8)];
         let report = engine.run(&mut Script(hold), &held, &finer);
-        assert_eq!(report.unavailable, None);
-        let margin: Vec<_> = report.margin.iter().map(|mark| mark.1).collect();
-        assert_eq!(margin, [0.0; 4]);
+        assert_eq!(
+            report.unavailable.as_deref(),
+            Some("Exchange rates from USD to EUR are unavailable")
+        );
+        assert!(report.equity_ranges.is_empty() && report.margin.is_empty());
 
         let [whole, partial] = [
             "leverage alone closes the whole position at the margin crossing",
