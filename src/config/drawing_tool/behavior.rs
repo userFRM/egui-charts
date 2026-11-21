@@ -89,6 +89,8 @@ impl DrawingToolType {
                 | Self::ArrowMarkLeft
                 | Self::ArrowMarkRight
                 | Self::Sticker
+                // A picture covers its frame, and its placeholder follows the theme.
+                | Self::Image
         )
     }
 
