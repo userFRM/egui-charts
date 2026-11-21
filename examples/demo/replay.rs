@@ -2005,7 +2005,7 @@ mod tests {
                 "2024-01-01 00:02:00",
                 "110",
                 "9.79 EUR",
-                "0.21 EUR",
+                "9.79 EUR", // Cumulative profit; the fees column now starts beyond the frame.
             ];
             assert!(
                 texts.windows(row.len()).any(|texts| texts == row),
