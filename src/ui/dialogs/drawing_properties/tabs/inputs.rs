@@ -2,9 +2,9 @@
 
 use crate::drawings::domain::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
 use crate::drawings::{
-    BarsPatternMode, Drawing, DrawingToolType as Tool, ElliottDegree, FibonacciLevel, GannFanDirection,
-    GannLevel, PitchforkConfig, PitchforkLevel, PositionSize, ProjectionLevel, VwapBand, VwapBandLine,
-    VwapBandMode, VwapFill, VwapPlotType,
+    BarsPatternMode, Drawing, DrawingToolType as Tool, ElliottDegree, FibonacciLevel,
+    GannFanDirection, GannLevel, PitchforkConfig, PitchforkLevel, PositionSize, ProjectionLevel,
+    VwapBand, VwapBandLine, VwapBandMode, VwapFill, VwapPlotType,
 };
 
 use crate::data::{ProfileDisplay, VolumeProfileConfig};
