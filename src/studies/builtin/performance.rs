@@ -3,7 +3,8 @@
 //!
 //! Each reference is the last finite close on or before the same trading date a period earlier,
 //! a number of days, weeks, months or years; month subtraction clamps to the last day of a
-//! shorter month, and year to date uses the last close of the previous calendar year. Dates
+//! shorter month, and year to date starts on 1 January, from the latest close on or before it,
+//! or from the latest earlier close on 1 January itself. Dates
 //! follow the instrument's trading calendar, as VWAP does. On every interval but one day the
 //! study requests the symbol's daily bars. Below a day it takes the later of the daily close and
 //! the chart's own close on or before each date, the daily close on the same date. On bars longer
@@ -61,7 +62,8 @@ enum Period {
     Days(u64),
     /// The same date this many months earlier, clamped to the last day of a shorter month.
     Months(u32),
-    /// The last day of the previous calendar year.
+    /// 1 January of the date's year, or the day before on 1 January itself, whose own close
+    /// is still developing.
     YearToDate,
 }
 
@@ -71,9 +73,9 @@ impl Period {
         match self {
             Self::Days(days) => date.checked_sub_days(Days::new(days)),
             Self::Months(months) => date.checked_sub_months(Months::new(months)),
-            Self::YearToDate => {
-                NaiveDate::from_ymd_opt(date.year(), 1, 1).and_then(|day| day.pred_opt())
-            }
+            Self::YearToDate => NaiveDate::from_ymd_opt(date.year(), 1, 1)
+                .filter(|first| *first < date)
+                .or_else(|| date.pred_opt()),
         }
     }
 }
@@ -685,18 +687,12 @@ mod tests {
 
     /// Calendar lookbacks use the last close on or before the target date, not bar counts, and
     /// a study saved before Performance had inputs shows the chart symbol alone over the six
-    /// periods, fitted at the lower right, with falling changes in the red it had.
+    /// periods, fitted at the lower right, with falling changes in the red it had. Year to date
+    /// starts from 1 January's close when the symbol trades then, and from the latest earlier
+    /// close otherwise.
     #[test]
     fn performance_uses_calendar_dates_and_missing_history() {
-        let bars: Vec<_> = [
-            (2023, 9, 29, 80.0),
-            (2023, 12, 29, 100.0),
-            (2024, 2, 28, 120.0),
-            (2024, 2, 29, 125.0),
-            (2024, 3, 22, 150.0),
-            (2024, 3, 31, 180.0),
-        ]
-        .map(|(y, m, d, c)| {
+        let bar = |(y, m, d, c)| {
             Bar::new(
                 Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap(),
                 c,
@@ -705,7 +701,16 @@ mod tests {
                 c,
                 1.0,
             )
-        })
+        };
+        let bars: Vec<_> = [
+            (2023, 9, 29, 80.0),
+            (2023, 12, 29, 100.0),
+            (2024, 2, 28, 120.0),
+            (2024, 2, 29, 125.0),
+            (2024, 3, 22, 150.0),
+            (2024, 3, 31, 180.0),
+        ]
+        .map(bar)
         .to_vec();
         // A literal template saved before Performance had inputs.
         let saved: StudyTemplate = serde_json::from_str(
@@ -793,11 +798,45 @@ mod tests {
                 |shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == "Symbol")
             ));
         }
+        // Year to date starts at 1 January: from its close when the symbol trades then, from the
+        // latest earlier close otherwise. 1 March closes at 121: from 1 January's 110,
+        // 100 * 11 / 110 = 10; from 31 December's 100, 21.
+        let trades_new_year = [
+            (2024, 12, 31, 100.0),
+            (2025, 1, 1, 110.0),
+            (2025, 3, 1, 121.0),
+        ];
+        let closed_new_year = [(2024, 12, 31, 100.0), (2025, 3, 1, 121.0)];
+        for (closes, ytd, from) in [
+            (&trades_new_year[..], 10.0, "01 Jan 2025"),
+            (&closed_new_year[..], 21.0, "31 Dec 2024"),
+        ] {
+            let bars: Vec<_> = closes.iter().copied().map(bar).collect();
+            let mut study = Performance::new();
+            study
+                .set_input("symbols", InputValue::Text(String::new()))
+                .unwrap();
+            study
+                .set_input("periods", InputValue::Text("YTD".into()))
+                .unwrap();
+            study.calculate(&bars);
+            let table = study.table().unwrap();
+            assert_eq!(
+                (&table.rows[0][1], table.cell_tooltips[0][1].as_str()),
+                (&StudyCell::Percent(Some(ytd)), from),
+                "{from}"
+            );
+            assert_eq!(
+                study.values().value(4, bars.len() - 1),
+                Some(ytd),
+                "plot, {from}"
+            );
+        }
     }
 
     /// On an intraday chart each period starts from the requested daily bars, the daily close
     /// winning on the same date, and from the chart's own bars when none are supplied or they
-    /// are out of time order.
+    /// are out of time order, and on 1 January year to date starts from the year before.
     #[test]
     fn performance_takes_period_starts_from_daily_bars() {
         use crate::model::{BarClock, Timeframe};
@@ -837,11 +876,17 @@ mod tests {
         let from_daily = [20.0, 44.0, 100.0, 125.0, 80.0, 260.0].map(Some);
         let without_daily = [Some(12.5), None, None, None, None, None];
         let reversed: Vec<_> = daily.iter().rev().cloned().collect();
+        // On 1 January, year to date starts from the year before, never from the day's
+        // developing daily bar.
+        let new_year = [(2024, 12, 31, 0, 0, 100.0), (2025, 1, 1, 0, 0, 999.0)].map(bar);
+        let new_year_day = [(2025, 1, 1, 14, 30, 105.0), (2025, 1, 1, 14, 31, 110.0)].map(bar);
+        let ytd_only = [None, None, None, None, Some(10.0), None];
         for (chart, supplied, expected) in [
             (today.to_vec(), &daily[..], from_daily),
             (week_before.clone(), &daily[..], from_daily),
             (week_before.clone(), &[][..], without_daily),
             (week_before, &reversed[..], without_daily),
+            (new_year_day.to_vec(), &new_year[..], ytd_only),
         ] {
             let mut study = Performance::new();
             study
@@ -855,6 +900,7 @@ mod tests {
                 clock: BarClock::new(Timeframe::Day1),
                 instrument: None,
                 timeframe: Timeframe::Day1,
+                chart: None,
             };
             study.update_data(&chart, 0, &[source]);
             for (line, expected) in expected.into_iter().enumerate() {
@@ -950,6 +996,7 @@ mod tests {
                     clock: BarClock::new(Timeframe::Day1),
                     instrument: None,
                     timeframe: Timeframe::Day1,
+                    chart: None,
                 };
                 study.update_data(chart, 0, &[source]);
                 let table = study.table().unwrap();
@@ -993,6 +1040,7 @@ mod tests {
             clock: BarClock::new(Timeframe::Day1),
             instrument: None,
             timeframe: Timeframe::Day1,
+            chart: None,
         }];
         let mut updated = new(Timeframe::Month1);
         updated.update_data(&monthly, 0, &sources);
@@ -1069,6 +1117,7 @@ mod tests {
                 clock: BarClock::new(Timeframe::Day1),
                 instrument,
                 timeframe: Timeframe::Day1,
+                chart: None,
             }
         }
         let source = supplied(&msft, None);
