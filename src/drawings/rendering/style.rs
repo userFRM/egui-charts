@@ -421,7 +421,11 @@ impl Drawing {
                 stroke
             }
             Shape::Circle(c) => {
-                if dash.is_none() || c.stroke.is_empty() {
+                // Anchor outlines stay solid, just like the forecast's card frames.
+                if dash.is_none()
+                    || c.stroke.is_empty()
+                    || self.tool_type == DrawingToolType::Forecast
+                {
                     return;
                 }
                 path = ellipse_arc(

@@ -579,6 +579,12 @@ mod tests {
                     ],
                 ),
             ];
+            let mut cases = Vec::from(cases);
+            for line_style in [LineStyle::LargeDashed, LineStyle::SparseDotted] {
+                let mut case = cases[0].clone();
+                case.4 = line_style;
+                cases.push(case);
+            }
             for (case, up, mut drawing, fill, line_style, cards) in cases {
                 drawing.fill_color = fill;
                 drawing.line_style = line_style;
@@ -692,23 +698,34 @@ mod tests {
                 let mut shapes: Vec<_> = output.shapes.iter().map(|s| &s.shape).collect();
                 let mut dots = Vec::new();
                 while let Some(shape) = shapes.pop() {
-                    let (center, fill) = match shape {
+                    if let Shape::LineSegment { points, .. } = shape {
+                        let on_ring = drawing.points.iter().any(|anchor| {
+                            points.iter().all(|p| {
+                                (p.distance(*anchor) - DESIGN_TOKENS.rounding.sm).abs() < 0.1
+                            })
+                        });
+                        assert!(!on_ring, "{case}: dash on an anchor outline");
+                    }
+                    let (center, fill, outlined) = match shape {
                         Shape::Vec(children) => {
                             shapes.extend(children);
                             continue;
                         }
-                        Shape::Circle(circle) => (circle.center, circle.fill),
+                        Shape::Circle(circle) => {
+                            (circle.center, circle.fill, !circle.stroke.is_empty())
+                        }
                         Shape::Path(path) if path.closed && !path.points.is_empty() => {
                             let center = path
                                 .points
                                 .iter()
                                 .fold(egui::Vec2::ZERO, |sum, p| sum + p.to_vec2())
                                 / path.points.len() as f32;
-                            (center.to_pos2(), path.fill)
+                            (center.to_pos2(), path.fill, !path.stroke.is_empty())
                         }
                         _ => continue,
                     };
                     if drawing.points.iter().any(|p| p.distance(center) < 0.01) {
+                        assert!(outlined, "{case}: anchor outline must stay closed");
                         dots.push(fill);
                     }
                 }
