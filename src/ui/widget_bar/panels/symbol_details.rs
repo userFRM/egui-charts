@@ -100,9 +100,9 @@ struct Notes {
 struct Technicals {
     study: TechnicalRatings,
     timeframe: Timeframe,
-    /// How many bars were rated, the first one's time and the last bar.
+    /// How many bars were rated, the first and the last bar.
     len: usize,
-    first: DateTime<Utc>,
+    first: Bar,
     last: Bar,
     /// The moving-average, oscillator and summary scores of the latest bar with values.
     scores: [Option<f64>; 3],
@@ -388,8 +388,8 @@ impl SymbolDetailsPanel {
     /// such as `Chart::bars(SeriesId::MAIN)` and `Chart::timeframe`: an unchanged slice costs
     /// nothing, a changed or added last bar rates from the last rated bar on, and another
     /// interval, another first bar or fewer bars rate them all again. Bars changed in place
-    /// before the last rated one, keeping their times, are rated again after a call without
-    /// bars. Without bars, and for a new symbol until its bars arrive, the section is hidden.
+    /// between the first and last rated ones, keeping their times, are rated again after a call
+    /// without bars. Without bars, and for a new symbol until its bars arrive, the section is hidden.
     pub fn set_bars(&mut self, timeframe: Timeframe, bars: &[Bar]) {
         let (Some(first), Some(last)) = (bars.first(), bars.last()) else {
             self.technicals = None;
@@ -398,7 +398,7 @@ impl SymbolDetailsPanel {
         match &mut self.technicals {
             Some(rated)
                 if rated.timeframe == timeframe
-                    && rated.first == first.time
+                    && same_bar(first, &rated.first)
                     && bars.len() >= rated.len
                     && bars[rated.len - 1].time == rated.last.time =>
             {
@@ -415,7 +415,7 @@ impl SymbolDetailsPanel {
                     study,
                     timeframe,
                     len: 0,
-                    first: first.time,
+                    first: first.clone(),
                     last: last.clone(),
                     scores: [None; 3],
                 });
@@ -1830,7 +1830,7 @@ mod tests {
         );
         let wave = bars(
             &(0..300)
-                .map(|i| 100.0 + 0.2 * i as f64 + 6.0 * (i as f64 / 7.0).sin())
+                .map(|i| 101.0 + 0.2 * i as f64 + 6.0 * (i as f64 / 7.0).sin())
                 .collect::<Vec<_>>(),
         );
         // A fresh study's words for the last of `bars`, in the order of the rows.
@@ -1880,8 +1880,13 @@ mod tests {
         // A live change of the last bar.
         panel.set_bars(Timeframe::Hour1, &wave);
         assert_eq!(rows(&mut panel), words(&wave));
+        panel.set_bars(Timeframe::Hour1, &trend);
         panel.set_instrument(&Instrument::new("BBB"));
         assert!(!texts(&ctx, &mut panel).contains(&"Technicals".into()));
+        // The chart names the new symbol before replacing its history on the same bar times.
+        panel.set_bars(Timeframe::Hour1, &trend);
+        panel.set_bars(Timeframe::Hour1, &wave);
+        assert_eq!(rows(&mut panel), words(&wave));
     }
 
     /// The panel asks for the shown symbol's earnings, dividends and headlines with the symbol in
