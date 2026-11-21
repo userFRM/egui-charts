@@ -2,7 +2,7 @@
 //!
 //! Floating toolbar for object customization.
 
-use crate::drawings::{ChartPoint, DrawingToolType, LineMeasurements};
+use crate::drawings::{ChartPoint, Drawing, DrawingToolType, LineMeasurements};
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::model::LineStyle;
@@ -318,15 +318,13 @@ impl FloatingSelectionToolbar {
         }
         let multiple = chart.drawings().selected_ids().nth(1).is_some();
         let action = self.show_with_shortcuts(ui, chart.shortcuts(), multiple)?;
-        // Only editable selected drawings that draw the property take its edit.
-        let targets = |chart: &Chart, draws: fn(&DrawingToolType) -> bool| -> Vec<usize> {
+        // Only editable selected drawings whose property changes take its edit.
+        let targets = |chart: &Chart, changes: &dyn Fn(&Drawing) -> bool| -> Vec<usize> {
             let drawings = chart.drawings();
             drawings
                 .drawings
                 .iter()
-                .filter(|d| {
-                    drawings.is_selected(d.id) && d.accepts_user_edits() && draws(&d.tool_type)
-                })
+                .filter(|d| drawings.is_selected(d.id) && d.accepts_user_edits() && changes(d))
                 .map(|d| d.id)
                 .collect()
         };
@@ -335,22 +333,28 @@ impl FloatingSelectionToolbar {
                 let fill = slot == fill_slot;
                 let (picked, custom) = self.last_pick.take().unwrap_or((color, true));
                 let [r, g, b, _] = picked.to_srgba_unmultiplied();
-                let ids = targets(
-                    chart,
-                    if fill {
-                        DrawingToolType::supports_fill
-                    } else {
-                        DrawingToolType::supports_color
-                    },
-                );
-                let edit = |d: &mut crate::drawings::Drawing| {
+                let rgba = |d: &Drawing| {
                     let own = if fill {
                         d.fill_color32().unwrap_or(Color32::TRANSPARENT)
                     } else {
                         d.color32()
                     };
                     // A swatch keeps each drawing's opacity; custom opacity reaches them all.
-                    let rgba = [r, g, b, keep_opacity(picked, own, custom).a()];
+                    [r, g, b, keep_opacity(picked, own, custom).a()]
+                };
+                let ids = targets(chart, &|d| {
+                    let rgba = rgba(d);
+                    if fill {
+                        d.tool_type.supports_fill() && d.fill_color != Some(rgba)
+                    } else {
+                        d.tool_type.supports_color()
+                            && d.text_color_override().map_or(d.color != rgba, |text| {
+                                text != rgba || d.color[..3] != rgba[..3]
+                            })
+                    }
+                });
+                let edit = |d: &mut Drawing| {
+                    let rgba = rgba(d);
                     if fill {
                         d.fill_color = Some(rgba)
                     } else {
@@ -358,17 +362,21 @@ impl FloatingSelectionToolbar {
                     }
                 };
                 let down = ui.input(|i| i.pointer.any_down());
-                chart.user_action(|chart| {
-                    let _ = if down {
-                        chart.drawings_mut().drag_edit_drawings(&ids, edit)
-                    } else {
-                        chart.drawings_mut().edit_drawings(&ids, edit)
-                    };
-                });
-                self.colour_drag = down;
+                if !ids.is_empty() {
+                    chart.user_action(|chart| {
+                        let _ = if down {
+                            chart.drawings_mut().drag_edit_drawings(&ids, edit)
+                        } else {
+                            chart.drawings_mut().edit_drawings(&ids, edit)
+                        };
+                    });
+                    self.colour_drag = down;
+                }
             }
             FloatingToolbarAction::ChangeWidth(width) if editable => {
-                let ids = targets(chart, DrawingToolType::supports_line_width);
+                let ids = targets(chart, &|d| {
+                    d.tool_type.supports_line_width() && d.stroke_width != width
+                });
                 chart.user_action(|chart| {
                     let _ = chart
                         .drawings_mut()
@@ -376,7 +384,9 @@ impl FloatingSelectionToolbar {
                 });
             }
             FloatingToolbarAction::ChangeStyle(style) if editable => {
-                let ids = targets(chart, DrawingToolType::supports_line_style);
+                let ids = targets(chart, &|d| {
+                    d.tool_type.supports_line_style() && d.line_style != style
+                });
                 chart.user_action(|chart| {
                     let _ = chart
                         .drawings_mut()
@@ -1072,16 +1082,50 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("missing control: {label}"))
         };
-        for property in ["colour", "same colour", "width", "style"] {
-            if property == "same colour" {
+        for property in [
+            "colour",
+            "unchanged colour",
+            "same colour",
+            "width",
+            "unchanged width",
+            "style",
+            "unchanged style",
+        ] {
+            let unchanged = property.starts_with("unchanged");
+            for drawing in &mut chart.drawings_mut().drawings {
+                drawing.color = if drawing.id == 1 {
+                    [242, 54, 69, 51]
+                } else {
+                    [41, 98, 255, 255]
+                };
+                drawing.stroke_width = 2.0;
+                drawing.line_style = LineStyle::Solid;
+            }
+            if property == "same colour" || property == "unchanged colour" {
                 chart.drawings_mut().drawings[0].color = [76, 175, 80, 51];
             }
+            match property {
+                "unchanged colour" => {
+                    chart.drawings_mut().drawings[1].color = [76, 175, 80, 255];
+                }
+                "unchanged width" => chart.drawings_mut().drawings[2].stroke_width = 4.0,
+                "unchanged style" => {
+                    chart.drawings_mut().drawings[2].line_style = LineStyle::Dashed;
+                }
+                _ => {}
+            }
+            chart.drawings().pending_sync.lock().unwrap().clear();
             let original = styles(&chart);
+            assert!(!chart.can_undo(), "{property}: starts without undo");
+            let could_redo = chart.can_redo();
             chart.drawings_mut().select_drawings([1, 2, 3]);
             for _ in 0..2 {
                 frame(&mut chart, &mut toolbar, vec![]).drop_without_applying_deltas();
             }
-            assert_eq!(toolbar.width, Some(Some(2.0)));
+            assert_eq!(
+                toolbar.width,
+                Some((property != "unchanged width").then_some(2.0))
+            );
             if property.ends_with("colour") {
                 toolbar.pickers[0].is_open = true;
                 frame(&mut chart, &mut toolbar, vec![]).drop_without_applying_deltas();
@@ -1100,8 +1144,14 @@ mod tests {
                 assert_eq!(chart.drawings().drawings[1].color, [76, 175, 80, 255]);
                 assert_eq!(chart.drawings().drawings[2].color, [41, 98, 255, 255]);
             } else {
-                let (current, chosen) = if property == "width" {
-                    ("2 px", "4 px")
+                let (current, chosen) = if property.ends_with("width") {
+                    if unchanged {
+                        ("Mixed", "2 px")
+                    } else {
+                        ("2 px", "4 px")
+                    }
+                } else if unchanged {
+                    ("Mixed", "Solid")
                 } else {
                     ("Solid", "Dashed")
                 };
@@ -1114,24 +1164,62 @@ mod tests {
                 output.drop_without_applying_deltas();
                 frame(&mut chart, &mut toolbar, click(pos)).drop_without_applying_deltas();
                 let drawings = &chart.drawings().drawings;
-                if property == "width" {
+                if property.ends_with("width") {
                     assert_eq!(
                         drawings.iter().map(|d| d.stroke_width).collect::<Vec<_>>(),
-                        [4.0, 4.0, 2.0]
+                        if unchanged {
+                            [2.0, 2.0, 4.0]
+                        } else {
+                            [4.0, 4.0, 2.0]
+                        }
                     );
                 } else {
                     assert_eq!(
                         drawings.iter().map(|d| d.line_style).collect::<Vec<_>>(),
-                        [LineStyle::Dashed, LineStyle::Dashed, LineStyle::Solid]
+                        if unchanged {
+                            [LineStyle::Solid, LineStyle::Solid, LineStyle::Dashed]
+                        } else {
+                            [LineStyle::Dashed, LineStyle::Dashed, LineStyle::Solid]
+                        }
                     );
                 }
                 frame(&mut chart, &mut toolbar, vec![]).drop_without_applying_deltas();
-                if property == "width" {
+                if property.ends_with("width") {
                     assert_eq!(toolbar.width, Some(None));
                 } else {
                     assert_eq!(toolbar.line_style, Some(None));
                 }
             }
+            if unchanged {
+                assert_eq!(styles(&chart), original, "{property}");
+                assert!(!chart.can_undo(), "{property}: no empty undo step");
+                assert_eq!(chart.can_redo(), could_redo, "{property}: preserves redo");
+                assert!(
+                    chart.drawings().pending_sync.lock().unwrap().is_empty(),
+                    "{property}: no storage updates"
+                );
+                continue;
+            }
+            let updated: Vec<_> = chart
+                .drawings()
+                .pending_sync
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|action| match action {
+                    crate::drawings::manager::DrawingSyncAction::UpdateDrawing(id) => *id,
+                    other => panic!("{property}: unexpected sync: {other:?}"),
+                })
+                .collect();
+            assert_eq!(
+                updated,
+                if property == "same colour" {
+                    vec![2]
+                } else {
+                    vec![1, 2]
+                },
+                "{property}: only changed drawings are saved"
+            );
             assert!(chart.undo(), "{property}");
             assert_eq!(styles(&chart), original, "{property}");
         }
