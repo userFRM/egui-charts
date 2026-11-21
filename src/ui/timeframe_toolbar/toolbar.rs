@@ -373,7 +373,12 @@ impl TimeframeToolbar {
             return false;
         };
         let choices = SessionType::choices(
-            chart.overnight_hours() || super::state::has_overnight_windows(chart.instrument()),
+            chart.overnight_hours()
+                || super::state::has_overnight_windows(
+                    chart
+                        .instrument()
+                        .and_then(|instrument| instrument.session.as_ref()),
+                ),
         );
         let mut chosen = None;
         egui::Popup::new(

@@ -17,6 +17,7 @@ use crate::model::{
 };
 use crate::services::revisions::{Revisions, Settled, Written};
 use crate::services::{ConflictChoice, Storage, StoreKind};
+use crate::ui::timeframe_toolbar::state::has_overnight_windows;
 use crate::ui_kit::FormGrid;
 use crate::ui_kit::dialog::{DialogFooter, dialog_header};
 use crate::ui_kit::modal::Modal;
@@ -774,6 +775,47 @@ impl AlertDialog {
                 .response
                 .accessible_name(l10n::text(ui.ctx(), "Watchlist"));
             ui.end_row();
+            let list = self.alert.watchlist.is_some();
+            if !self.alert.condition.is_event()
+                && let Some(inputs) = &mut self.alert.inputs
+            {
+                // Overnight hours count only beside extended hours, as in a history request.
+                let saved = (
+                    inputs.extended_hours,
+                    inputs.extended_hours && inputs.overnight_hours,
+                );
+                let overnight = list
+                    || saved.1
+                    || has_overnight_windows(
+                        inputs
+                            .calendar
+                            .as_ref()
+                            .and_then(|calendar| calendar.session.as_ref()),
+                    );
+                let choices = [
+                    ((false, false), "Regular hours"),
+                    ((true, false), "Extended hours"),
+                    ((true, true), "Extended and overnight hours"),
+                ];
+                let mut hours = saved;
+                let label = ui.label(l10n::text(ui.ctx(), "Session"));
+                egui::ComboBox::from_id_salt("alert_session")
+                    .selected_text(l10n::text(
+                        ui.ctx(),
+                        choices[usize::from(saved.0) + usize::from(saved.1)].1,
+                    ))
+                    .show_ui(ui, |ui| {
+                        for (value, label) in &choices[..if overnight { 3 } else { 2 }] {
+                            ui.selectable_value(&mut hours, *value, l10n::text(ui.ctx(), label));
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
+                ui.end_row();
+                if hours != saved {
+                    (inputs.extended_hours, inputs.overnight_hours) = hours;
+                }
+            }
             ui.label(l10n::text(ui.ctx(), "Frequency"));
             egui::ComboBox::from_id_salt("alert_frequency")
                 .selected_text(l10n::text(ui.ctx(), self.alert.frequency.to_string()))
@@ -1020,6 +1062,7 @@ impl AlertDialog {
                     &self.sources,
                     &self.strategy_runs,
                     true,
+                    None,
                 );
             } else {
                 let index = self.editing_condition - 1;
@@ -1039,6 +1082,7 @@ impl AlertDialog {
                     &self.sources,
                     &[],
                     false,
+                    None,
                 );
                 if ui
                     .button(l10n::text(ui.ctx(), "Remove condition"))
@@ -1379,6 +1423,7 @@ fn drawing_position(
     })
 }
 
+/// Returns whether a single threshold was entered through the optional text editor or menu.
 pub(crate) fn rule_form(
     ui: &mut Ui,
     source: &mut AlertSource,
@@ -1386,7 +1431,9 @@ pub(crate) fn rule_form(
     sources: &[(AlertSource, AlertSourceName)],
     runs: &[(String, String)],
     offer_position: bool,
-) {
+    mut level_text: Option<&mut String>,
+) -> bool {
+    let mut level_edited = false;
     ui.add_enabled_ui(
         !matches!(condition, AlertCondition::VolumeAboveAverage { .. }) && !condition.is_event(),
         |ui| source_picker(ui, "source", source, sources),
@@ -1503,6 +1550,19 @@ pub(crate) fn rule_form(
                     {
                         *source = AlertSource::Price;
                     }
+                    if matches!(
+                        condition,
+                        AlertCondition::EnteringChannel { .. }
+                            | AlertCondition::ExitingChannel { .. }
+                            | AlertCondition::InsideChannel { .. }
+                            | AlertCondition::OutsideChannel { .. }
+                    ) && let Some(level) = value.level()
+                        && level.is_finite()
+                        && let Some(text) = level_text.as_deref_mut()
+                    {
+                        *text = level.to_string();
+                        level_edited = true;
+                    }
                     *condition = value;
                 }
             }
@@ -1545,8 +1605,30 @@ pub(crate) fn rule_form(
         | AlertCondition::Above(v)
         | AlertCondition::Below(v) => {
             ui.label(l10n::text(ui.ctx(), "Level"));
-            ui.add(egui::DragValue::new(v).speed(0.01))
-                .accessible_name(l10n::text(ui.ctx(), "Level"));
+            if let Some(text) = level_text {
+                let mut field = egui::TextEdit::singleline(text)
+                    .desired_width(0.0)
+                    .clip_text(false)
+                    .min_size(ui.spacing().interact_size)
+                    .show(ui);
+                if field.response.gained_focus() {
+                    field
+                        .state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::select_all(&field.galley)));
+                    field.state.store(ui.ctx(), field.response.id);
+                }
+                level_edited |= field
+                    .response
+                    .response
+                    .accessible_name(l10n::text(ui.ctx(), "Level"))
+                    .changed();
+                let number: String = text.split_whitespace().collect();
+                *v = number.replace('−', "-").parse().unwrap_or(f64::NAN);
+            } else {
+                ui.add(egui::DragValue::new(v).speed(0.01))
+                    .accessible_name(l10n::text(ui.ctx(), "Level"));
+            }
         }
         AlertCondition::EnteringChannel { lower, upper }
         | AlertCondition::ExitingChannel { lower, upper }
@@ -1630,6 +1712,7 @@ pub(crate) fn rule_form(
                 .accessible_name(l10n::text(ui.ctx(), "Comparison"));
         }
     });
+    level_edited
 }
 
 #[cfg(test)]
@@ -1751,6 +1834,60 @@ mod tests {
         // A span captured on the source chart's interval does not describe another interval.
         let inputs = h.state().alert.inputs.as_ref().unwrap();
         assert_eq!((inputs.start, inputs.visible), (None, None));
+    }
+
+    /// The row writes the session into the inputs the chart prepared and offers overnight hours
+    /// where the symbol or list can have them.
+    #[test]
+    fn the_session_choice_reaches_the_inputs() {
+        use crate::model::{AlertCalendar, AlertInputs, Session, SessionWindow};
+        use chrono::{NaiveTime, Weekday::*};
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut dialog = AlertDialog::new();
+        dialog.edit(Alert::new("SAMPLE", AlertCondition::Above(100.0)));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(560.0, 900.0))
+            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+        h.run();
+        assert!(
+            h.query_by_label("Session").is_none(),
+            "no inputs to hold it"
+        );
+        let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        let weekdays = [Mon, Tue, Wed, Thu, Fri];
+        let session = Session::new([SessionWindow::new(weekdays, at(9), at(16))])
+            .with_extended_windows([SessionWindow::new(weekdays, at(4), at(9))]);
+        h.state_mut().alert.inputs = Some(Box::new(AlertInputs {
+            calendar: Some(AlertCalendar::new("SAMPLE", None, Some(session))),
+            ..Default::default()
+        }));
+        h.run();
+        let choose = |h: &mut Harness<'_, AlertDialog>, label: &str| {
+            h.get_by_label("Session").click();
+            h.run();
+            h.get_by_label(label).click();
+            h.run();
+            let inputs = h.state().alert.inputs.as_ref().unwrap();
+            (inputs.extended_hours, inputs.overnight_hours)
+        };
+        assert_eq!(choose(&mut h, "Extended hours"), (true, false));
+        // Without overnight windows the symbol has no overnight hours to offer.
+        h.get_by_label("Session").click();
+        h.run();
+        assert!(h.query_by_label("Extended and overnight hours").is_none());
+        h.get_by_label("Session").click();
+        h.run();
+        // A watchlist may hold symbols that trade overnight.
+        h.state_mut().alert.watchlist = Some("tech".into());
+        h.run();
+        assert_eq!(choose(&mut h, "Extended and overnight hours"), (true, true));
+        assert_eq!(choose(&mut h, "Regular hours"), (false, false));
+        h.state_mut().alert.condition = AlertCondition::CustomEvents("host".into());
+        h.run();
+        assert!(
+            h.query_by_label("Session").is_none(),
+            "host events read no bars"
+        );
     }
 
     /// The limits count characters, not bytes, and apply where the user edits the text. A

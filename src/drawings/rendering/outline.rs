@@ -184,6 +184,13 @@ impl Drawing {
                         [first.y, second.y]
                             .map(|y| [Pos2::new(edges.min.x, y), Pos2::new(edges.max.x, y)]),
                     );
+                    if self.tool_type == T::DateAndPriceRange {
+                        let span = self.time_edge_span(rect, Rect::from_two_pos(first, second));
+                        outline.lines.extend(
+                            [first.x, second.x]
+                                .map(|x| [Pos2::new(x, span.min), Pos2::new(x, span.max)]),
+                        );
+                    }
                 }
             }
             T::Circle => {

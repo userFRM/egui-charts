@@ -105,7 +105,9 @@ pub enum DrawingToolbarAction {
     ZoomOut,
     /// Toggle values tooltip on long press
     ToggleValuesTooltip,
-    /// Lock all drawings
+    /// Lock or unlock every drawing as a group, keeping each drawing's own lock. Apply the
+    /// requested `ToolbarState::lock_all` with
+    /// [`DrawingManager::set_locked`](crate::drawings::DrawingManager::set_locked).
     LockAllDrawings,
     /// Save current drawing properties as a template
     SaveTemplate {
