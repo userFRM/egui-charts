@@ -1,6 +1,6 @@
 //! Editing the drawing collection: add, delete, layer, group, file, edit, show, hide and lock.
 
-use super::{DrawingEventKind, DrawingManager, DrawingSyncAction, queue_sync, sync_id};
+use super::{DrawingEventKind, DrawingManager, DrawingSyncAction, sync_id};
 use crate::drawings::domain::{Drawing, DrawingToolType, FolderSync};
 use crate::drawings::services::{HistoryService, ZOrderService, in_z_order};
 use crate::model::PostContent;
@@ -82,7 +82,7 @@ impl DrawingManager {
             .filter(|&id| {
                 self.drawings
                     .iter()
-                    .any(|d| d.id == id && d.user_edit_enabled)
+                    .any(|d| d.id == id && self.accepts_user_edits(d))
             })
             .collect();
         self.delete_drawings(&ids);
@@ -243,12 +243,14 @@ impl DrawingManager {
     /// undo and queues deletion of stored records exactly as [`Self::clear_all`] does.
     /// Drawings whose user edits are off always stay.
     pub fn clear_all_with_locked(&mut self, include_locked: bool) {
+        let all_locked = self.locked;
         self.history.push_snapshot(
             self.drawings
                 .iter()
                 .enumerate()
                 .filter(|(_, drawing)| {
-                    drawing.user_edit_enabled && (include_locked || !drawing.locked)
+                    drawing.user_edit_enabled
+                        && (include_locked || (!drawing.locked && !all_locked))
                 })
                 .map(|(index, drawing)| (index, drawing.clone()))
                 .collect(),
@@ -257,7 +259,7 @@ impl DrawingManager {
         for drawing in self
             .drawings
             .iter()
-            .filter(|d| d.user_edit_enabled && (include_locked || !d.locked))
+            .filter(|d| d.user_edit_enabled && (include_locked || (!d.locked && !all_locked)))
         {
             if drawing.saveable {
                 self.notify(DrawingSyncAction::Delete(sync_id(drawing)));
@@ -268,7 +270,7 @@ impl DrawingManager {
             self.report(id, DrawingEventKind::Removed);
         }
         self.drawings
-            .retain(|d| !d.user_edit_enabled || (d.locked && !include_locked));
+            .retain(|d| !d.user_edit_enabled || ((d.locked || all_locked) && !include_locked));
         self.cancel_curr_drawing();
         self.selection.deselect_all();
     }
@@ -921,39 +923,34 @@ impl DrawingManager {
         self.hidden
     }
 
-    /// Toggles the lock of every drawing whose user edits are on: unlocks them all if all are
-    /// locked, otherwise locks them all.
-    pub fn toggle_lock_all(&mut self) {
-        let all_locked = self
-            .drawings
-            .iter()
-            .filter(|d| d.user_edit_enabled)
-            .all(|d| d.locked);
-        let mut before = Vec::new();
-        for (index, drawing) in self
-            .drawings
-            .iter_mut()
-            .enumerate()
-            .filter(|(_, d)| d.user_edit_enabled && d.locked == all_locked)
-        {
-            before.push((index, drawing.clone()));
-            drawing.locked = !all_locked;
-            if self.sync_enabled
-                && drawing.saveable
-                && let Ok(mut sync) = self.pending_sync.lock()
-            {
-                queue_sync(
-                    &mut sync,
-                    DrawingSyncAction::UpdateDrawing(drawing.id),
-                    Some(&sync_id(drawing)),
-                );
-            }
-        }
-        for (_, drawing) in &before {
-            self.stamp(drawing.id);
-            self.report_change(drawing.id, Some(drawing), false);
-        }
-        self.history.push_snapshot(before);
+    // === Group lock ===
+
+    /// Locks or unlocks every drawing as a group without changing [`Drawing::locked`]. While
+    /// locked, the user cannot move, reshape, restyle or delete any drawing, including drawings
+    /// added or loaded while locked; [`Self::accepts_user_edits`] tells which drawings the user
+    /// can edit. Drawings can still be placed, selected, hidden and reordered, and a text
+    /// drawing just placed still takes its first text. [`Self::clear_all_with_locked`] with
+    /// `true` still removes every drawing whose user edits are on. Methods that take drawing
+    /// ids, such as [`Self::edit_drawing`], [`Self::delete_drawings`] and
+    /// [`Self::set_selected_locked`], follow each drawing's own lock only.
+    ///
+    /// This is not a drawing edit: it queues no save or sync and changes no edit timestamp.
+    /// [`Chart`](crate::widget::Chart) records the flag in undo history and keeps it across
+    /// drawing loads and symbol changes, but does not save it with a layout.
+    pub fn set_locked(&mut self, locked: bool) {
+        self.locked = locked;
+    }
+
+    /// Whether [`Self::set_locked`] locks every drawing.
+    pub fn is_locked(&self) -> bool {
+        self.locked
+    }
+
+    /// Whether the user can edit `drawing` now: it
+    /// [accepts user edits](Drawing::accepts_user_edits) and [`Self::set_locked`] does not
+    /// lock every drawing.
+    pub fn accepts_user_edits(&self, drawing: &Drawing) -> bool {
+        !self.locked && drawing.accepts_user_edits()
     }
 
     /// Adds a completed drawing with validated chart coordinates and properties as one undo
