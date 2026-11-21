@@ -766,6 +766,7 @@ impl Chart {
         let pad = (scale.min_span() - (a - b).abs()).max(0.0) / 2.0;
         scale.set_range(a.min(b) - pad, a.max(b) + pad);
         self.pending_scroll_time = None;
+        self.history.clear_view_restore();
 
         true // Zoom successfully applied
     }
