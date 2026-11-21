@@ -246,9 +246,10 @@ mod tests {
         }
         impl Sharing for Host {
             fn offers(&self, _: ShareKind) -> ShareOffer {
-                let mut offer = ShareOffer::default();
-                offer.revoke = true;
-                offer
+                ShareOffer {
+                    revoke: true,
+                    ..Default::default()
+                }
             }
             fn shared(&self, _: ShareKind, name: &str) -> bool {
                 name == "Shared" && !*self.stopped.lock().unwrap()
