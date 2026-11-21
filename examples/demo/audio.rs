@@ -239,4 +239,48 @@ mod tests {
         assert!((f64::from(pcm[25]) - expected).abs() < 1e-7);
         assert_eq!(samples("Beep", 0.5)[25], pcm[25] * 0.5);
     }
+
+    /// Fills matching a time and sales size filter with sound play the alert sound chosen in the
+    /// chart settings, at their volume, once however many fills of the frame match; a filter
+    /// without sound plays nothing, and no notice stands in for the sound.
+    #[test]
+    fn time_and_sales_size_filters_with_sound_play_the_alert_sound_once() {
+        use egui_charts::ui::widget_bar::TradeSizeFilter;
+        let ctx = egui::Context::default();
+        let mut app = super::super::DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            chrono::Utc::now(),
+            true,
+        );
+        app.settings_state.alerts.sound = "Bell".into();
+        app.settings_state.alerts.sound_volume = 0.35;
+        let toasts = app.toasts.len();
+        let fill = |size| egui_charts::model::Tick::new(chrono::Utc::now(), 100.0, size, None);
+        for (sound, voices) in [(false, 0), (true, 1)] {
+            let mut filter = TradeSizeFilter::new(5.0);
+            filter.sound = sound;
+            app.time_and_sales.filters = vec![filter];
+            // Two fills of the frame reach the filter and one does not.
+            app.feed_time_and_sales(&ctx, vec![fill(5.0), fill(1.0), fill(7.0)]);
+            assert_eq!(app.audio.voices.len(), voices, "sound={sound}");
+        }
+        assert_eq!(app.toasts.len(), toasts);
+        // With one voice, the mix is the Bell tone at the alert volume.
+        let mut reader = app
+            .audio
+            .engine
+            .as_ref()
+            .unwrap()
+            .try_acquire_reader()
+            .unwrap();
+        let mut output = vec![0.0; SAMPLE_RATE as usize];
+        reader.read_pcm_frames_into(&mut output).unwrap();
+        let expected = samples("Bell", 0.35);
+        for (index, (actual, expected)) in output.iter().zip(&expected).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1e-5,
+                "sample {index}: {actual}, expected {expected}"
+            );
+        }
+    }
 }

@@ -3217,7 +3217,8 @@ impl DemoApp {
 
     /// Publishes the quotes the watchlist subscribed to through the demo's quote service, and
     /// passes the chart symbol's quote on to the details panel and the order ticket. Feeds time
-    /// and sales the executions of the live feed and reports matching filters as notifications.
+    /// and sales the executions of the live feed and plays the alert sound for matching size
+    /// filters with sound.
     fn feed_market_panels(&mut self, ctx: &egui::Context) {
         let timezone: egui_charts::model::TimezoneId = self
             .timeframe_toolbar
@@ -3233,7 +3234,7 @@ impl DemoApp {
         if let Some(own) = &self.own_data {
             let (symbol, timeframe) = (self.chart.symbol(), self.chart.timeframe());
             let tape = own.feed.drain_tape(symbol, timeframe);
-            self.feed_time_and_sales(tape);
+            self.feed_time_and_sales(ctx, tape);
             return;
         }
         // The simulation clock rather than the wall clock, which the pause freezes: a paused
@@ -3326,29 +3327,19 @@ impl DemoApp {
             self.highlights.refresh();
         }
         let tape = self.live.drain_tape();
-        self.feed_time_and_sales(tape);
+        self.feed_time_and_sales(ctx, tape);
     }
 
     /// Lists `tape`, the trades the chart's feed received since the last frame, in time and
-    /// sales, notifies a size filter that matched, and formats the panel for the chart's
-    /// instrument and the chosen zone.
-    fn feed_time_and_sales(&mut self, tape: Vec<Tick>) {
+    /// sales, plays the alert sound once when a size filter with sound matched, and formats the
+    /// panel for the chart's instrument and the chosen zone.
+    fn feed_time_and_sales(&mut self, ctx: &egui::Context, tape: Vec<Tick>) {
         let instrument = self.chart.instrument();
         // As the price scale writes it: the instrument's decimals, else those of its tick size.
         let decimals = instrument.and_then(egui_charts::scales::instrument_price_precision);
-        let mut alert = None;
+        let mut matched = false;
         for trade in tape {
-            if self.time_and_sales.push(trade.clone()).is_some() {
-                alert = Some(trade);
-            }
-        }
-        if let Some(trade) = alert {
-            self.toasts.info(format!(
-                "Size filter matched on fill: {} at {:.*}",
-                trade.size,
-                usize::from(decimals.unwrap_or(2)),
-                trade.price
-            ));
+            matched |= self.time_and_sales.push(trade).is_some();
         }
         let config = &mut self.time_and_sales.config;
         config.price_decimals = decimals;
@@ -3359,6 +3350,11 @@ impl DemoApp {
             .timezone
             .parse()
             .unwrap_or_default();
+        if matched {
+            let alerts = &self.settings_state.alerts;
+            let (name, volume) = (alerts.sound.clone(), alerts.sound_volume);
+            self.play_sound(ctx, &name, volume, false);
+        }
     }
 
     /// Saves exported `text` to `file` in the temporary directory, or downloads it on the web.
