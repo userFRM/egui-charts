@@ -208,7 +208,13 @@ impl OrderFlowStudy {
                             self.values.set_value(2, at, f64::NAN);
                         }
                         if self.delta.is_some() && self.candle_style {
-                            let plot = 1 + usize::from(row[0] < 0.0);
+                            // A zero bar delta sells; an unchanged cumulative total keeps buying.
+                            let down = if self.delta == Some(true) {
+                                row[0] < 0.0
+                            } else {
+                                row[0] <= 0.0
+                            };
+                            let plot = 1 + usize::from(down);
                             self.values.set_value(plot, at, close);
                             self.candles.push(StudyCandle {
                                 bars: at..at + 1,
@@ -2242,6 +2248,36 @@ mod tests {
             ));
         }
         assert_eq!(results, [(10_000.0, false, true), (10.0, true, true)]);
+    }
+
+    /// A bar with a buy of 5 and a sell of 5 is a down candle in Execution Delta, as Volume Delta
+    /// paints it, and the next bar's +5 an up candle; the cumulative form keeps an unchanged
+    /// total up (#4009). Hand values: minute 0 runs +5 then 0, so (0, 5, 0, 0); minute 1 opens
+    /// at the total of 0 in both forms, so (0, 5, 0, 5).
+    #[test]
+    fn execution_delta_paints_a_balanced_bar_down_unless_cumulative() {
+        use OrderSide::{Buy, Sell};
+        for (cumulative, balanced) in [(true, "Up"), (false, "Down")] {
+            let mut study = OrderFlowStudy::execution_delta(cumulative);
+            push(&study, 0, &[(5.0, Some(Buy)), (5.0, Some(Sell))]);
+            push(&study, 1, &[(5.0, Some(Buy))]);
+            study.calculate(&bars());
+            let names = study.line_names();
+            let candles: Vec<_> = (study.candles().iter())
+                .map(|c| {
+                    let b = &c.bar;
+                    ([b.open, b.high, b.low, b.close], names[c.plot].as_str())
+                })
+                .collect();
+            assert_eq!(
+                candles,
+                [
+                    ([0.0, 5.0, 0.0, 0.0], balanced),
+                    ([0.0, 5.0, 0.0, 5.0], "Up")
+                ],
+                "cumulative {cumulative}"
+            );
+        }
     }
 
     /// Executions +5, -8, +5 reach 5, -3, 2. A cumulative candle adds the previous
