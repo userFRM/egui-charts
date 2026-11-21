@@ -16,8 +16,8 @@ use crate::model::range_bar::price_path;
 use crate::model::rounding_tolerance;
 use crate::model::same_currency;
 use crate::model::{
-    Bar, ChartType, EquityRange, OrderSide, OrderType, StrategyExit, StrategyReport, StrategyTrade,
-    Timeframe,
+    Bar, BarClock, BarData, ChartType, EquityRange, OrderSide, OrderType, StrategyExit,
+    StrategyReport, StrategyTrade, Timeframe,
 };
 
 /// The default entry size, converted to units at the execution price.
@@ -356,9 +356,28 @@ pub trait Strategy {
     /// Receives the interval of the bars this strategy will see. [`Backtest::run`],
     /// [`Backtest::run_async`] and [`Backtest::update`] pass it before preparing;
     /// [`optimise`](crate::strategies::optimise) and the strategy tester pass it before
-    /// [`validate_inputs`](Self::validate_inputs). Does nothing by default.
+    /// [`validate_inputs`](Self::validate_inputs) and read
+    /// [`calculation_timeframe`](Self::calculation_timeframe) after it. Does nothing by default.
     fn set_timeframe(&mut self, timeframe: Timeframe) {
         let _ = timeframe;
+    }
+
+    /// The interval of the instrument's own bars this strategy reads besides the chart bars, or
+    /// `None` for the chart bars alone. Read it after [`set_timeframe`](Self::set_timeframe) and
+    /// setting the inputs; supply those bars in [`Backtest::calculation_bars`]. Returns `None`
+    /// by default.
+    fn calculation_timeframe(&self) -> Option<Timeframe> {
+        None
+    }
+
+    /// Receives valid calculation bars, oldest first, and for each chart bar the index of the
+    /// last calculation bar closed by its close, or `None` before the first closes. Before
+    /// preparation, [`Backtest`] supplies [`Backtest::calculation_bars`] on its instrument's
+    /// [`bar_clock`](Backtest::bar_clock), converted to Heikin Ashi when decisions use them.
+    /// `bars` is empty when the host supplied none. Read them only through `closed` to avoid
+    /// looking ahead. Does nothing by default.
+    fn set_calculation_bars(&mut self, bars: &[Bar], closed: &[Option<usize>]) {
+        let _ = (bars, closed);
     }
 
     /// Computes what the strategy needs from the whole run once, before the first bar, such as
@@ -726,6 +745,14 @@ pub struct Backtest {
     /// currencies differ. A run that needs a rate where none applies, or where it is not finite
     /// and positive, reports [`StrategyReport::unavailable`] instead of trades and equity.
     pub exchange_rates: Vec<Bar>,
+    /// The host's answer to [`Strategy::calculation_timeframe`]: the instrument's own bars of that
+    /// interval, in any order, stamped as [`Self::bar_clock`] places them. A strategy that names
+    /// an interval receives no bars without them.
+    pub calculation_bars: Vec<Bar>,
+    /// The instrument's calendar, including its zone and exchange session, used to place chart
+    /// and calculation bars. Each chart bar reads only calculation bars closed by its close.
+    /// The clock's interval is ignored. `None` uses UTC boundaries without a session.
+    pub bar_clock: Option<BarClock>,
     live: Option<Box<live::LiveState>>,
 }
 
@@ -744,6 +771,8 @@ impl Backtest {
             live: None,
             instrument_currency: None,
             exchange_rates: Vec::new(),
+            calculation_bars: Vec::new(),
+            bar_clock: None,
             settings: BacktestSettings {
                 initial_capital,
                 ..Default::default()
@@ -782,6 +811,9 @@ impl Backtest {
     /// remain on the chart interval unless historical tick decisions are enabled. Finer prices
     /// apply to regular candles and original-price execution; derived-price fills use their own
     /// candle path. Pass `&[]` to use chart bars alone.
+    ///
+    /// A strategy naming a [`calculation_timeframe`](Strategy::calculation_timeframe) receives
+    /// [`Self::calculation_bars`] with each chart bar's last closed one before preparation.
     ///
     /// With a start time, `prepare` still receives every bar that closes by the end time, or none
     /// with historical tick decisions, whose calculations refresh through `prepare_update`.
@@ -833,6 +865,7 @@ impl Backtest {
         lower.sort_by_key(|bar| bar.time);
         lower.dedup_by_key(|bar| bar.time);
         strategy.set_timeframe(self.timeframe);
+        self.supply_calculation(strategy, &bars[..last]);
         strategy.prepare(
             if settings.recalculate_on_history && !settings.chart_type.transforms_data() {
                 &[]
@@ -872,6 +905,49 @@ impl Backtest {
             self.withhold(&mut report);
         }
         report
+    }
+
+    /// Maps chart closes to completed calculation bars using the instrument's schedule alone.
+    fn supply_calculation(&self, strategy: &mut dyn Strategy, bars: &[Bar]) {
+        let Some(timeframe) = strategy.calculation_timeframe() else {
+            return;
+        };
+        let clock = self
+            .bar_clock
+            .clone()
+            .unwrap_or_else(|| BarClock::new(self.timeframe));
+        let (chart, own) = (
+            clock.for_timeframe(self.timeframe),
+            clock.for_timeframe(timeframe),
+        );
+        let mut calculation: Vec<Bar> = self
+            .calculation_bars
+            .iter()
+            .filter(|bar| valid_bar(bar))
+            .cloned()
+            .collect();
+        calculation.sort_by_key(|bar| bar.time);
+        calculation.dedup_by_key(|bar| bar.time);
+        if self.settings.chart_type == ChartType::Heikin {
+            calculation = BarData::from_bars(calculation).to_heikin_ashi().bars;
+        }
+        let opens: Vec<_> = calculation
+            .iter()
+            .map(|bar| own.bar_open(bar.time))
+            .collect();
+        // Trade-based bars have no scheduled close.
+        let timed = !self.timeframe.is_trade_based() && !timeframe.is_trade_based();
+        let closed: Vec<_> = bars
+            .iter()
+            .map(|bar| {
+                let next = chart
+                    .next_trading_open(chart.bar_open(bar.time))
+                    .filter(|_| timed)?;
+                let until = own.instant_open(chart.bar_start(next));
+                opens.partition_point(|open| *open < until).checked_sub(1)
+            })
+            .collect();
+        strategy.set_calculation_bars(&calculation, &closed);
     }
 
     fn new_report(&self, strategy: &dyn Strategy, lower_count: usize) -> StrategyReport {

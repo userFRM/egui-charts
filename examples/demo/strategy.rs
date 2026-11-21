@@ -65,12 +65,27 @@ fn sample_backtest(symbol: &str, timeframe: Timeframe, bars: &[Bar]) -> Strategy
     report
 }
 
+type StrategyHistory = (Vec<Bar>, Vec<Bar>, Vec<Bar>);
+
 impl DemoApp {
+    /// The UTC calendar used by synthetic history, with the selected exchange session.
+    fn strategy_clock(&self, timeframe: Timeframe) -> BarClock {
+        let mut clock = BarClock::new(timeframe);
+        if self.chart.bar_clock().has_session() {
+            clock = clock.with_session(
+                crate::sampledata::us_equity_zone(),
+                crate::sampledata::us_equity_session(),
+                self.chart.extended_hours(),
+            );
+        }
+        clock
+    }
+
     /// Supplies completed bars on the chart's session and adjustment basis, with warm-up history.
     fn strategy_history(
         &self,
         request: &StrategyHistoryRequest,
-    ) -> Result<(Vec<Bar>, Vec<Bar>), String> {
+    ) -> Result<StrategyHistory, String> {
         if self.replay.is_some() {
             return Err("Stop replay before requesting synthetic backtest history.".into());
         }
@@ -84,27 +99,17 @@ impl DemoApp {
                 "Synthetic history is still loading. Retry when chart loading finishes.".into(),
             );
         }
-        let clock_for = |timeframe| {
-            let mut clock = BarClock::new(timeframe);
-            if self.chart.bar_clock().has_session() {
-                clock = clock.with_session(
-                    crate::sampledata::us_equity_zone(),
-                    crate::sampledata::us_equity_session(),
-                    self.chart.extended_hours(),
-                );
-            }
-            clock
-        };
-        let history = |timeframe: Timeframe, fills: bool| {
+        let history = |timeframe: Timeframe, label: &str, completed: bool| {
             if timeframe.is_trade_based() {
                 return Err("Synthetic backtest history requires a time interval.".to_owned());
             }
-            let clock = clock_for(timeframe);
+            let clock = self.strategy_clock(timeframe);
             let mut bars =
                 self.live
                     .snapshot(timeframe, clock.clone(), self.chart.extended_hours());
-            bars.retain(|bar| bar.time < clock.bar_open(self.live.now()));
-            let label = if fills { "Finer fill" } else { "Decision" };
+            if completed {
+                bars.retain(|bar| bar.time < clock.bar_open(self.live.now()));
+            }
             let first = bars.first().ok_or_else(|| {
                 format!("{label} history has no completed {timeframe} bars in this session.")
             })?;
@@ -114,22 +119,25 @@ impl DemoApp {
                     first.time.format("%Y-%m-%d %H:%M:%S UTC")
                 ));
             }
-            if bars.last().is_none_or(|bar| bar.time < request.start) {
+            if bars
+                .last()
+                .is_none_or(|bar| bar.time < clock.bar_open(request.start))
+            {
                 return Err("The start date is after the last completed synthetic bar.".into());
             }
             Ok(bars)
         };
-        let bars = history(request.timeframe, false)?;
+        let bars = history(request.timeframe, "Decision", true)?;
         let lower = match request.lower_timeframe {
             Some(timeframe)
                 if timeframe.duration_ms() > 0
                     && timeframe.duration_ms() < request.timeframe.duration_ms() =>
             {
-                let lower = history(timeframe, true)?;
+                let lower = history(timeframe, "Finer fill", true)?;
                 if egui_charts::data::resample(
                     &lower,
-                    clock_for(timeframe),
-                    clock_for(request.timeframe),
+                    self.strategy_clock(timeframe),
+                    self.strategy_clock(request.timeframe),
                 )
                 .is_none()
                 {
@@ -144,7 +152,12 @@ impl DemoApp {
             }
             None => Vec::new(),
         };
-        Ok((bars, lower))
+        let calculation = request
+            .calculation_timeframe
+            .map(|timeframe| history(timeframe, "Calculation", false))
+            .transpose()?
+            .unwrap_or_default();
+        Ok((bars, lower, calculation))
     }
 
     pub(super) fn run_sample_backtest(&mut self) {
@@ -207,6 +220,8 @@ impl DemoApp {
                 .instrument()
                 .and_then(|instrument| instrument.currency.clone()),
         );
+        self.strategy_report
+            .set_bar_clock(self.strategy_clock(self.state.timeframe));
         let chart_type = self.chart.chart_type();
         if self.live_strategy.is_none() && self.strategy_report.settings().chart_type != chart_type
         {
@@ -274,9 +289,15 @@ impl DemoApp {
                     }
                     StrategyTesterAction::RequestHistory(request) => {
                         match self.strategy_history(&request) {
-                            Ok((bars, lower)) => {
+                            Ok((bars, lower, calculation)) => {
                                 if let Err(error) =
-                                    self.strategy_report.set_history(&request, bars, lower)
+                                    self.strategy_report.set_history_with_calculation(
+                                        &request,
+                                        bars,
+                                        lower,
+                                        Vec::new(),
+                                        calculation,
+                                    )
                                 {
                                     self.strategy_report.history_failed(&request, error);
                                 }
@@ -599,7 +620,7 @@ mod tests {
             })
             .expect("tester requests host history");
         request.lower_timeframe = Some(Timeframe::Min1);
-        let (bars, lower) = app.strategy_history(&request).unwrap();
+        let (bars, lower, _) = app.strategy_history(&request).unwrap();
         let hours = egui_charts::data::resample(&lower, Timeframe::Min1, Timeframe::Hour1).unwrap();
         assert_eq!(&bars[1..], &hours[1..]);
         assert!(lower.len() > bars.len() * 50);
@@ -609,6 +630,19 @@ mod tests {
                 .unwrap_err()
                 .contains("Finer fill history")
         );
+        request.lower_timeframe = None;
+        request.calculation_timeframe = Some(Timeframe::Hour4);
+        let (.., calculation) = app.strategy_history(&request).unwrap();
+        assert!(
+            calculation
+                .first()
+                .is_some_and(|bar| bar.time <= request.start)
+        );
+        // A continuation can begin inside a still-forming four-hour bar.
+        request.start = now - chrono::TimeDelta::hours(1);
+        let (.., calculation) = app.strategy_history(&request).unwrap();
+        let containing = app.strategy_clock(Timeframe::Hour4).bar_open(request.start);
+        assert!(calculation.iter().any(|bar| bar.time == containing));
         settings.start_time = Some("1990-01-01T00:00:00Z".parse().unwrap());
         app.strategy_report.set_settings(settings).unwrap();
         click(&mut app, "Run");
