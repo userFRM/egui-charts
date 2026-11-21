@@ -1050,7 +1050,7 @@ mod tests {
             page.view = view;
             page
         };
-        let panel = || {
+        let fresh = || {
             let mut panel = IdeasPanel::new();
             panel.set_browsing(true);
             panel.set_reactions(true);
@@ -1062,7 +1062,7 @@ mod tests {
             (IdeaRequest::Like, "Like", "Liking…", "Unlike"),
             (IdeaRequest::Follow, "Follow", "Following…", "Unfollow"),
         ] {
-            let mut panel = panel();
+            let mut panel = fresh();
             let like = request == IdeaRequest::Like;
             let asked = if like {
                 IdeasAction::Like {
@@ -1096,7 +1096,7 @@ mod tests {
             assert!(shows(&mut panel, &counts), "{counts}");
         }
 
-        let mut panel = panel();
+        let mut panel = fresh();
         click(&mut panel, "Comment", None);
         click(&mut panel, "Write a comment", Some("Nice "));
         let asked = IdeasAction::Comment {
@@ -1115,7 +1115,7 @@ mod tests {
         assert!(panel.comment.is_empty() && panel.commenting.is_none());
         assert!(shows(&mut panel, "Likes: 0 \u{b7} Comments: 1"));
 
-        let mut panel = panel();
+        let mut panel = fresh();
         assert_eq!(
             click(&mut panel, "Liked", None),
             IdeasAction::ShowView(IdeaView::Liked)
