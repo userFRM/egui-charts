@@ -938,6 +938,65 @@ mod tests {
             .collect()
     }
 
+    /// Pivot labels take the instrument's price precision, and a Precision chosen in the
+    /// study's settings wins from the next frame. 1.180958 rounds to 1.1810 at four decimals and
+    /// to 1.18096 at five, and 65845.4 to 65845 at none.
+    #[test]
+    fn pivot_labels_take_the_price_precision() {
+        type Row = (
+            &'static [f64],
+            &'static [f64],
+            f64,
+            Option<usize>,
+            [&'static str; 2],
+        );
+        let fx_lows: &'static [f64] = &[1.13, 1.14, 1.160958, 1.15, 1.14];
+        let fx_highs: &'static [f64] = &[1.15, 1.16, 1.180958, 1.17, 1.16];
+        let rows: [Row; 3] = [
+            (fx_lows, fx_highs, 0.0001, None, ["1.1300", "1.1810"]),
+            (fx_lows, fx_highs, 0.0001, Some(5), ["1.13000", "1.18096"]),
+            (
+                &[65500.4, 65520.6, 65545.4, 65530.2, 65510.0],
+                &[65800.4, 65820.6, 65845.4, 65830.2, 65810.0],
+                1.0,
+                None,
+                ["65500", "65845"],
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (lows, highs, tick, chosen, want) in rows {
+            let mut chart = chart(lows, highs);
+            chart.set_instrument(Some(
+                crate::model::Instrument::new("X").with_tick_size(tick),
+            ));
+            let id = chart.add_indicator(Box::new(crate::studies::PivotPointsHighLow::new(
+                2, 2, 2, 2,
+            )));
+            let ctx = Context::default();
+            shapes(&ctx, &mut chart, 0.0, Vec::new());
+            if chosen.is_some() {
+                let study = chart.indicator_mut(id).unwrap();
+                let mut settings = study.settings();
+                settings.precision = chosen;
+                study.apply_settings(&[], settings).unwrap();
+            }
+            let painted = shapes(&ctx, &mut chart, 1.0, Vec::new());
+            let mut got: Vec<String> =
+                painted_labels(&painted, Color32::from_rgb(54, 58, 69), |_| true)
+                    .into_iter()
+                    .map(|(text, _)| text)
+                    .collect();
+            got.sort();
+            got.dedup();
+            if got != want {
+                wrong.push(format!(
+                    "tick {tick}, precision {chosen:?}: {got:?}, want {want:?}"
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
     /// The label at the last bar reaches past the plot unless it is moved back, and the axis tags
     /// start right of the plot. Every bar of the Zig Zag series reverses the last by 9% or 10%, so
     /// the last pivot is bar 99, a high, and the last final one bar 98, a low.

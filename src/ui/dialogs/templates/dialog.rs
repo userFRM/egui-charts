@@ -107,8 +107,8 @@ impl<T: Clone + Serialize + DeserializeOwned> TemplateDialog<T> {
                             ui.label(l10n::text(ui.ctx(), "No saved templates"));
                         }
                         for name in names {
-                            ui.add(egui::Label::new(l10n::text(ui.ctx(), &name)).truncate())
-                                .on_hover_text(l10n::text(ui.ctx(), &name));
+                            ui.add(egui::Label::new(&name).truncate())
+                                .on_hover_text(&name);
                             ui.horizontal(|ui| {
                                 if ui
                                     .add_enabled(
