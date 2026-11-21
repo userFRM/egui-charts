@@ -23,12 +23,14 @@ for the handles a custom study returns from
 
 [`IndicatorFactory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/factory/struct.IndicatorFactory.html) includes Performance, Seasonality, Visible Average Price and Up/Down Volume.
 Performance compares the latest close with the last close on or before each calendar target in
-the instrument's trading calendar. On an interval shorter than a day it declares the chart
+the instrument's trading calendar. On every interval but one day it declares the chart
 symbol's daily bars in [`data_requests`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.data_requests) and reads each period's starting close from them, so the
-longer periods fill without scrolling back. Where the chart's own bars hold a later close on or
-before the target, as when the daily bars stop earlier, that close counts. Daily and longer
-charts, and hosts that supply no daily bars, use the chart's loaded bars. A connected feed pages
-the daily bars back to the start of the oldest period's date, five years before the last chart
+longer periods fill without scrolling back. Below a day, where the chart's own bars hold a later
+close on or before the target, as when the daily bars stop earlier, that close counts, and hosts
+that supply no daily bars get the chart's loaded bars. Bars longer than a day are dated by their
+first day, so there each period is measured from daily closes alone, from the date of the last
+daily close inside the bar, and reads No data without them. Daily charts use their own bars. A
+connected feed pages the daily bars back to the start of the oldest period's date, five years before the last chart
 bar's trading date with the default periods, and stops there or at the end of its history,
 whatever its page size and the chart's first bar. This also applies on price-based charts such as Renko: a study's stated
 start before the first chart bar is honored, while a later start loads to the first chart bar

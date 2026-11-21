@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::icons::icons;
 pub use crate::model::AlertTrigger;
-use crate::model::{Alert, AlertCondition, AlertId, AlertSource, AlertSourceName, AlertStatus};
+use crate::model::{
+    Alert, AlertCondition, AlertId, AlertPositionProgress, AlertSource, AlertSourceName,
+    AlertStatus,
+};
 use crate::services::{AlertEvent, Alerts, Listener, Notification, Notifications};
 use crate::theme::ThemeExt;
 use crate::ui::dialogs::alert_dialog::rule_form;
@@ -47,7 +50,8 @@ pub enum AlertPanelAction {
     /// is saved.
     EditAlert(Box<Alert>),
     /// Stage this copy of an alert, without an identifier and active, in the shared dialog
-    /// with [`AlertDialog::edit`](crate::ui::dialogs::alert_dialog::AlertDialog::edit).
+    /// with [`AlertDialog::edit`](crate::ui::dialogs::alert_dialog::AlertDialog::edit). The
+    /// copy of a position alert waits for its entry, whatever the original has reached.
     DuplicateAlert(Box<Alert>),
     /// Save this CSV text to a file chosen by the host.
     ExportLog(String),
@@ -1065,6 +1069,10 @@ impl AlertsPanel {
         copy.created_at = None;
         copy.last_triggered_at = None;
         copy.status = AlertStatus::Active;
+        // The copy has seen no entry of its own.
+        if let AlertCondition::Position { progress, .. } = &mut copy.condition {
+            *progress = AlertPositionProgress::AwaitingEntry;
+        }
         copy
     }
 
@@ -2917,6 +2925,50 @@ mod tests {
         h.state_mut().0.save(resumed);
         engine.tick(Utc::now());
         assert_eq!(status(), [Active, Active, Disabled]);
+    }
+
+    /// A copy is a new alert that has seen no entry: saved, it waits for one, and the original
+    /// stays where it was.
+    #[cfg(feature = "alert-engine")]
+    #[test]
+    fn a_duplicated_position_alert_waits_for_its_entry() {
+        use AlertPositionProgress::{AwaitingEntry, Entered};
+        use egui_kittest::{Harness, kittest::Queryable};
+        let position = |progress| AlertCondition::Position {
+            levels: Box::new(["p", "p#1", "p#2"].map(|id| AlertSource::Drawing(id.into()))),
+            progress,
+        };
+        let mut original = Alert::new("AAPL", position(Entered));
+        original.id = Some(AlertId("1".into()));
+        let engine = Arc::new(crate::services::AlertEngine::new().with_alerts(vec![original]));
+        let mut panel = AlertsPanel::new(AlertsPanelConfig { max_height: 800.0 });
+        panel.set_service(engine.clone());
+        let mut toasts = Toasts::new();
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(400.0, 1000.0))
+            .build_ui_state(
+                move |ui, (panel, actions): &mut (AlertsPanel, Vec<AlertPanelAction>)| {
+                    panel.poll(ui.ctx(), &mut toasts);
+                    let action = panel.show(ui);
+                    if action != AlertPanelAction::None {
+                        actions.push(action);
+                    }
+                },
+                (panel, Vec::new()),
+            );
+        h.run_steps(3);
+        h.get_by_label("Duplicate").click();
+        h.run_steps(3);
+        let [AlertPanelAction::DuplicateAlert(copy)] = h.state().1.as_slice() else {
+            panic!("{:?}", h.state().1);
+        };
+        let copy = (**copy).clone();
+        // A host that keeps alerts itself stores the copy as the panel returns it.
+        assert_eq!(copy.condition, position(AwaitingEntry));
+        h.state_mut().0.save(copy);
+        let saved: Vec<_> = engine.alerts().into_iter().map(|a| a.condition).collect();
+        assert_eq!(saved, [position(Entered), position(AwaitingEntry)]);
     }
 
     #[cfg(feature = "alert-engine")]
