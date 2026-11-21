@@ -337,7 +337,6 @@ impl Drawing {
                         | DrawingToolType::Table
                         | DrawingToolType::Comment
                         | DrawingToolType::Signpost
-                        | DrawingToolType::Image
                         | DrawingToolType::Tweet
                         | DrawingToolType::Idea
                 )
