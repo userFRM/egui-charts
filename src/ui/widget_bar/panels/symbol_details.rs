@@ -1059,7 +1059,7 @@ fn price_line(
 
 /// "UTC" for no offset, otherwise "GMT" and the signed offset in hours, with minutes when they
 /// are not zero, such as "GMT+2" or "GMT+5:30".
-fn zone_label(offset_seconds: i32) -> String {
+pub(super) fn zone_label(offset_seconds: i32) -> String {
     if offset_seconds == 0 {
         return "UTC".to_owned();
     }
