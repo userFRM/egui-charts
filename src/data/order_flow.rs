@@ -2233,11 +2233,10 @@ impl State {
         {
             return;
         }
+        let trade_based = clock.timeframe().is_some_and(|tf| tf.is_trade_based());
         let changed = match part {
             Some((open, _)) => Some(open),
-            None if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) => {
-                flow.live.bars().last_key_value().map(|(open, _)| *open)
-            }
+            None if trade_based => flow.live.bars().last_key_value().map(|(open, _)| *open),
             None => Some(self.placement.open(clock, trade.ts)),
         };
         let result = match part {
@@ -2245,9 +2244,9 @@ impl State {
             None => flow.live.push(trade),
         };
         if !matches!(result, Ok(true)) {
-            // Even without a counted row, creating the source or accepting a zero-sized
-            // unallocated fill can change its private grouping for the next execution.
-            if new_source || (result.is_ok() && part.is_none()) {
+            // Only trade-based clocks keep grouping state for the next execution
+            // when a fill adds no footprint row.
+            if trade_based && (new_source || (result.is_ok() && part.is_none())) {
                 self.checkpoint_state_changed();
             }
             return;
@@ -2261,7 +2260,7 @@ impl State {
             .bars()
             .last_key_value()
             .map_or(trade.ts, |(open, _)| *open);
-        if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+        if trade_based {
             self.trade_bars.forming = Some(open);
         }
         self.finish(latest, changed.or(first).unwrap_or(open));

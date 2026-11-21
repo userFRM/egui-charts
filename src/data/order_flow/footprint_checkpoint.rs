@@ -106,6 +106,26 @@ mod tests {
     }
 
     #[test]
+    fn zero_size_print_leaves_minute_footprint_revision_unchanged() {
+        let clock = BarClock::new(Timeframe::Min1);
+        let input = OrderFlowInput::footprint();
+        input.set_tick_size(Some(0.25));
+        let push = |minute: i64, size| {
+            let at = DateTime::from_timestamp(minute * 60, 0).unwrap();
+            input.push_trade(&clock, &Tick::new(at, 100.0, size, None));
+        };
+
+        let empty = input.revision();
+        push(0, 0.0);
+        assert_eq!(input.revision(), empty);
+        push(0, 1.0);
+        let populated = input.revision();
+        assert_ne!(populated, empty);
+        push(1, 0.0);
+        assert_eq!(input.revision(), populated);
+    }
+
+    #[test]
     fn producer_without_counted_rows_keeps_its_grouping() {
         let clock = clock();
         let source = OrderFlowInput::footprint();
