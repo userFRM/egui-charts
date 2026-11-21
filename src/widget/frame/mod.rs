@@ -352,13 +352,16 @@ impl Chart {
                     breaks.push(event.time);
                 }
                 if self.event_visibility.shows(event.kind) {
-                    events.push((
-                        key,
-                        crate::model::Marker::event(event.time, event.kind.label())
-                            .with_shape(crate::model::MarkerShape::Circle)
-                            .with_id(&event.id)
-                            .with_tooltip(format!("{}\n{}", event.title, event.details)),
-                    ));
+                    let mut marker = crate::model::Marker::event(event.time, event.kind.label())
+                        .with_shape(crate::model::MarkerShape::Circle)
+                        .with_id(&event.id)
+                        .with_tooltip(format!("{}\n{}", event.title, event.details));
+                    if event.kind == crate::model::EventKind::News {
+                        marker = marker
+                            .with_shape(crate::model::MarkerShape::Diamond)
+                            .with_color(ui.active_theme().ui.accent);
+                    }
+                    events.push((key, marker));
                 }
             }
             rendering::render_event_breaks(ui, &breaks, self.state.shown(), &coords);

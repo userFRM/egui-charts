@@ -1347,7 +1347,7 @@ mod tests {
             shapes
                 .iter()
                 .filter(|shape| matches!(shape,
-            Shape::Circle(circle) if circle.radius == 10.0 && circle.stroke.width == 1.2))
+            Shape::Path(path) if path.closed && path.points.len() == 4 && path.stroke.width == 1.2))
                 .count(),
             2
         );
@@ -1445,6 +1445,13 @@ mod tests {
                                 if circle.radius == 10.0 && circle.stroke.width == 1.2 =>
                             {
                                 Some(circle.center)
+                            }
+                            Shape::Path(path)
+                                if path.closed
+                                    && path.points.len() == 4
+                                    && path.stroke.width == 1.2 =>
+                            {
+                                Some(path.visual_bounding_rect().center())
                             }
                             _ => None,
                         })
