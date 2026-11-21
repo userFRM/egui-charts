@@ -345,6 +345,16 @@ pub trait Indicator: Send + ConcreteStudy {
         false
     }
 
+    /// Whether plot `line` holds per-bar values. Return false for a plot that only styles the
+    /// study's [`zones`](Self::zones): their edges are lines whatever the plot type, and a plot
+    /// without values puts no tag on the price scale and draws no latest value line, so the
+    /// settings dialog offers such a plot only its visibility, colour, width and line pattern.
+    /// True by default.
+    fn plot_holds_values(&self, line: usize) -> bool {
+        let _ = line;
+        true
+    }
+
     /// Editable alternate colour and width states, separate from the output's main style.
     fn plot_variants(&self, _line: usize) -> Vec<super::PlotVariant> {
         Vec::new()
@@ -381,6 +391,20 @@ pub trait Indicator: Send + ConcreteStudy {
     /// candles, profiles or drawings. False by default.
     fn draws_only_plots(&self) -> bool {
         false
+    }
+
+    /// Whether everything the study draws can follow a calculation on another symbol or interval:
+    /// plots, bands, fills, markers, zones, candles and profiles, which a chart places on its
+    /// own bars that share their time. Return false for a study that can draw drawings,
+    /// [`labels`](Self::labels), [`projections`](Self::projections) or
+    /// [`price_segments`](Self::price_segments) under any of its inputs, or whose output the
+    /// chart draws from its own bars or symbol, such as a [`tpo`](Self::tpo) profile. Such a
+    /// study offers no Symbol, Interval or Wait for interval close input, and restoring it drops
+    /// saved values of them. The answer must not depend on the inputs, so that saved inputs
+    /// restore in any order. True by default; while a study that returns true runs on other
+    /// bars, its drawings, labels, projections and price segments are not drawn.
+    fn draws_on_other_bars(&self) -> bool {
+        true
     }
 
     /// Optional per-bar colour, overriding the plot colour at a source bar.

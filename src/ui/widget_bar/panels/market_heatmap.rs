@@ -271,9 +271,9 @@ impl MarketHeatmapPanel {
                     + egui::Rgba::from(direction) * amount)
                     .into();
                 ui.painter().rect_filled(tile, 0.0, color);
-                let linear = egui::Rgba::from(color);
-                let luminance = 0.2126 * linear.r() + 0.7152 * linear.g() + 0.0722 * linear.b();
-                let text = if luminance > 0.179 {
+                let text = if crate::theme::contrast(Color32::BLACK, color)
+                    > crate::theme::contrast(Color32::WHITE, color)
+                {
                     Color32::BLACK
                 } else {
                     Color32::WHITE

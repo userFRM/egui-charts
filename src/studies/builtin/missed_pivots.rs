@@ -463,6 +463,10 @@ impl Indicator for MissedPivots {
         Vec::new()
     }
 
+    fn plot_holds_values(&self, _line: usize) -> bool {
+        false
+    }
+
     fn alert_outputs(&self) -> Vec<(usize, String)> {
         Vec::new()
     }
