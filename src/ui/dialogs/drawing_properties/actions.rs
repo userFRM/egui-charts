@@ -1471,7 +1471,7 @@ mod tests {
                     config.show_arcs = !config.show_arcs;
                 },
                 |d| {
-                    let mut config = GannConfig::for_tool(DrawingToolType::GannSquare);
+                    let mut config = GannConfig::saved_default(DrawingToolType::GannSquare);
                     config.show_arcs = !config.show_arcs;
                     d.gann = Some(config);
                 },

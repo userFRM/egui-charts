@@ -100,9 +100,9 @@ impl From<SavedGannLevel> for GannLevel {
 
 /// Levels, fan lines and arcs of the Gann tools, and the background between them.
 ///
-/// A field missing from a saved object takes the value of [`GannConfig::for_tool`] for the tool
-/// of the [`Drawing`](crate::drawings::Drawing) that holds it, or of [`GannConfig::default`]
-/// when the object is read on its own.
+/// Fields missing from a saved drawing take its former defaults: squares keep ten arcs and
+/// grey hidden fan lines. New squares store the lists from [`GannConfig::for_tool`]. An object
+/// read on its own takes [`GannConfig::default`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GannConfig {
@@ -127,7 +127,6 @@ pub struct GannConfig {
     pub show_arcs: bool,
     /// Arcs of a Gann square around its first anchor, as radii in units. Values must be positive
     /// and finite; the part outside the square is not drawn.
-    #[serde(default = "left_out_arc_ratios")]
     pub arc_ratios: Vec<GannLevel>,
     /// Whether bands are tinted: between the levels of a box, the arcs of a square and the
     /// lines of a fan, each in the colour of the band's outer line.
@@ -152,8 +151,8 @@ pub struct GannConfig {
 
 thread_local! {
     /// The fields whose default differs between the Gann tools that the last [`GannConfig`] read
-    /// on this thread left out: its price levels, time levels, fan lines and arcs.
-    static LEFT_OUT: Cell<[bool; 4]> = const { Cell::new([false; 4]) };
+    /// on this thread left out: its price levels, time levels and fan lines.
+    static LEFT_OUT: Cell<[bool; 3]> = const { Cell::new([false; 3]) };
 }
 
 /// Notes that the configuration being read left out `field`, and gives its [`Default`] value.
@@ -176,10 +175,6 @@ fn left_out_time_levels() -> Vec<GannLevel> {
 
 fn left_out_fan_ratios() -> Vec<GannLevel> {
     left_out(2, |config| config.fan_ratios)
-}
-
-fn left_out_arc_ratios() -> Vec<GannLevel> {
-    left_out(3, |config| config.arc_ratios)
 }
 
 fn levels(entries: &[(f32, [u8; 4])]) -> Vec<GannLevel> {
@@ -249,12 +244,40 @@ impl Default for GannConfig {
 }
 
 impl GannConfig {
-    /// The levels, fan lines and arcs a new Gann box, square, fixed square or fan starts from,
-    /// which a drawing without [`Drawing::gann`](crate::drawings::Drawing::gann) draws. Start a
-    /// configuration from the drawing's own tool here rather than from
+    /// The levels, fan lines and arcs a new Gann box, square, fixed square or fan starts from.
+    /// Start a configuration from the drawing's own tool here rather than from
     /// [`GannConfig::default`], which is the Gann box's. A Gann square or fixed square adds an
     /// arc at 1.5 units and colours each fan line.
     pub fn for_tool(tool: DrawingToolType) -> Self {
+        let mut config = Self::saved_default(tool);
+        if matches!(
+            tool,
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed
+        ) {
+            config.fan_ratios = levels(&[
+                (8.0, LAVENDER),
+                (5.0, RED),
+                (4.0, GREY),
+                (3.0, ORANGE),
+                (2.0, CYAN),
+                (1.0, GREEN),
+                (0.5, TEAL),
+                (1.0 / 3.0, TEAL),
+                (0.25, BLUE),
+                (0.2, VIOLET),
+                (0.125, LAVENDER),
+            ]);
+            for line in &mut config.fan_ratios {
+                line.visible = matches!(line.value, 2.0 | 1.0 | 0.5);
+            }
+            // 1.5 units, in the unit-1 colour, between the 1x1 arc (√2) and the 2x0 arc.
+            config.arc_ratios.insert(2, GannLevel::new(1.5, ORANGE));
+        }
+        config
+    }
+
+    /// Defaults for drawings and templates saved before squares stored their new lists.
+    pub(crate) fn saved_default(tool: DrawingToolType) -> Self {
         match tool {
             DrawingToolType::GannSquare | DrawingToolType::GannFixed => {
                 let units = levels(&[
@@ -265,30 +288,9 @@ impl GannConfig {
                     (4.0, TEAL),
                     (5.0, GREY),
                 ]);
-                let mut fan_ratios = levels(&[
-                    (8.0, LAVENDER),
-                    (5.0, RED),
-                    (4.0, GREY),
-                    (3.0, ORANGE),
-                    (2.0, CYAN),
-                    (1.0, GREEN),
-                    (0.5, TEAL),
-                    (1.0 / 3.0, TEAL),
-                    (0.25, BLUE),
-                    (0.2, VIOLET),
-                    (0.125, LAVENDER),
-                ]);
-                for line in &mut fan_ratios {
-                    line.visible = matches!(line.value, 2.0 | 1.0 | 0.5);
-                }
-                let mut arc_ratios = Self::default().arc_ratios;
-                // 1.5 units, in the unit-1 colour, between the 1x1 arc (√2) and the 2x0 arc.
-                arc_ratios.insert(2, GannLevel::new(1.5, ORANGE));
                 Self {
                     price_levels: units.clone(),
                     time_levels: units,
-                    fan_ratios,
-                    arc_ratios,
                     ..Self::default()
                 }
             }
@@ -313,18 +315,16 @@ impl GannConfig {
     /// Forgets the fields an earlier configuration read on this thread left out, before a
     /// drawing that may hold one is read.
     pub(crate) fn forget_left_out() {
-        LEFT_OUT.with(|left_out| left_out.set([false; 4]));
+        LEFT_OUT.with(|left_out| left_out.set([false; 3]));
     }
 
-    /// Takes the fields that this configuration, the last one read on this thread, left out from
-    /// [`GannConfig::for_tool`] of `tool` instead of [`GannConfig::default`].
+    /// Takes missing fields from the saved defaults of `tool`, preserving its former lists.
     pub(crate) fn fill_left_out(&mut self, tool: DrawingToolType) {
-        let [price_levels, time_levels, fan_ratios, arc_ratios] =
-            LEFT_OUT.with(|l| l.replace([false; 4]));
-        if !(price_levels || time_levels || fan_ratios || arc_ratios) {
+        let [price_levels, time_levels, fan_ratios] = LEFT_OUT.with(|l| l.replace([false; 3]));
+        if !(price_levels || time_levels || fan_ratios) {
             return;
         }
-        let defaults = Self::for_tool(tool);
+        let defaults = Self::saved_default(tool);
         if price_levels {
             self.price_levels = defaults.price_levels;
         }
@@ -333,9 +333,6 @@ impl GannConfig {
         }
         if fan_ratios {
             self.fan_ratios = defaults.fan_ratios;
-        }
-        if arc_ratios {
-            self.arc_ratios = defaults.arc_ratios;
         }
     }
 }

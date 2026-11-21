@@ -347,8 +347,8 @@ pub struct Drawing {
     #[serde(default)]
     pub vwap: Option<VwapConfig>,
 
-    /// Levels, fan lines, arcs and background of the Gann tools; `None` draws
-    /// [`GannConfig::for_tool`].
+    /// Levels, fan lines, arcs and background of the Gann tools. New squares store
+    /// [`GannConfig::for_tool`]; `None` keeps the former ten arcs and grey hidden fan lines.
     #[serde(default)]
     pub gann: Option<GannConfig>,
     /// Average range and noise, in ticks, and colours of the candles a Ghost Feed projects. New
@@ -851,7 +851,11 @@ impl Drawing {
             image: None,
             glyph_angle: 0.0,
             closed: false,
-            gann: None,
+            gann: matches!(
+                tool_type,
+                DrawingToolType::GannSquare | DrawingToolType::GannFixed
+            )
+            .then(|| GannConfig::for_tool(tool_type)),
             ghost_feed: (tool_type == DrawingToolType::GhostFeed)
                 .then(GhostFeedConfig::drawing_default),
             bars_pattern: (tool_type == DrawingToolType::BarsPattern).then(|| BarsPatternConfig {
@@ -1054,7 +1058,9 @@ impl Drawing {
             }
         }
         if matches!(tool, T::GannBox | T::GannSquare | T::GannFixed | T::GannFan) {
-            let config = self.gann.get_or_insert_with(|| GannConfig::for_tool(tool));
+            let config = self
+                .gann
+                .get_or_insert_with(|| GannConfig::saved_default(tool));
             for (list, levels) in [
                 (3, &mut config.price_levels),
                 (4, &mut config.time_levels),
@@ -1560,8 +1566,8 @@ impl Serialize for Drawing {
 }
 
 impl<'de> Deserialize<'de> for Drawing {
-    /// A saved `gann` object takes the fields it leaves out from [`GannConfig::for_tool`] of the
-    /// drawing's tool, which a drawing without one draws. Range settings it leaves out take
+    /// Missing Gann settings take the drawing's former defaults. Saved squares store them on
+    /// load so editing their Inputs also keeps their former lists. Missing range settings take
     /// the drawing's font size for the readouts.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         GannConfig::forget_left_out();
@@ -1572,6 +1578,11 @@ impl<'de> Deserialize<'de> for Drawing {
         drawing.range_settings.fill_left_out(drawing.font_size);
         if let Some(gann) = &mut drawing.gann {
             gann.fill_left_out(drawing.tool_type);
+        } else if matches!(
+            drawing.tool_type,
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed
+        ) {
+            drawing.gann = Some(GannConfig::saved_default(drawing.tool_type));
         }
         Ok(drawing)
     }
