@@ -456,7 +456,13 @@ mod tests {
             assert_eq!(arc.color, colour);
             assert!(arc.visible);
         }
-        assert_eq!(GannConfig::for_tool(DrawingToolType::GannFixed), square);
+        assert_eq!(
+            GannConfig::for_tool(DrawingToolType::GannFixed),
+            GannConfig {
+                show_labels: false,
+                ..square
+            }
+        );
         let fan = GannConfig::for_tool(DrawingToolType::GannFan);
         assert_eq!(fan.fan_ratios.iter().filter(|l| l.visible).count(), 9);
     }
