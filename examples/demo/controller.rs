@@ -1355,7 +1355,7 @@ impl DemoApp {
     // --- dialog wiring -----------------------------------------------------
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
-        if let Some(id) = self.quick_search.show(ctx) {
+        if let Some(id) = self.show_quick_search(ctx) {
             self.execute_search_command(ctx, &id);
         }
         // The metrics of the study dialog are those of the synthetic feed.
