@@ -8,7 +8,7 @@ use std::time::Duration;
 use chrono::{DateTime, Offset, Utc};
 use egui::{RichText, Sense, Ui, vec2};
 
-use super::controls::{cell, row};
+use super::controls::{self, cell, row};
 use super::symbol_details::zone_label;
 use super::{ROW_HEIGHT, signed};
 use super::{format_price, price_decimals};
@@ -237,7 +237,7 @@ impl HotlistsPanel {
         let mut starred = None;
         ui.horizontal_wrapped(|ui| {
             if let Some((name, _)) = self.lists.get(self.list) {
-                dropdown(ui, "hotlist", name, |ui| {
+                controls::dropdown(ui, "hotlist", name, |ui| {
                     for index in order {
                         let (name, star) = &self.lists[index];
                         ui.horizontal(|ui| {

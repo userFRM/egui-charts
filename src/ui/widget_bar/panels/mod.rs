@@ -129,10 +129,12 @@ mod tests {
                     "tape",
                     "tape_combined",
                     "hotlist",
+                    "hotlist_long",
                     "screener",
                     "news",
                 ] {
                     let tape = matches!(panel, "tape" | "tape_combined");
+                    let is_hotlist = matches!(panel, "hotlist" | "hotlist_long");
                     let ctx = egui::Context::default();
                     apply_to_egui(&ctx, &theme);
                     let symbol = "EXCHANGE:LONG_SYMBOL_NAME";
@@ -192,7 +194,12 @@ mod tests {
                         };
                         20
                     ];
-                    let mut hotlist = HotlistsPanel::new(vec!["Gainers".into()]);
+                    let hotlist_title = if panel == "hotlist_long" {
+                        "Most active by dollar volume in the pre-market"
+                    } else {
+                        "Gainers"
+                    };
+                    let mut hotlist = HotlistsPanel::new(vec![hotlist_title.into()]);
                     hotlist.set_exchanges(["NYSE".into(), "NASDAQ".into()]);
                     hotlist.set_countries(["US".into(), "DE".into()]);
                     hotlist.set_feed(std::sync::Arc::new(Feed));
@@ -219,7 +226,7 @@ mod tests {
                                 details.show(ui);
                             } else if panel == "news" {
                                 news.show(ui);
-                            } else if panel == "hotlist" {
+                            } else if is_hotlist {
                                 hotlist.show(ui);
                             } else if panel == "screener" {
                                 screener.show(ui);
@@ -267,7 +274,7 @@ mod tests {
                         assert!(texts.iter().any(|(text, _)| text == "Market"), "{texts:?}");
                         continue;
                     }
-                    if matches!(panel, "hotlist" | "screener") {
+                    if is_hotlist || panel == "screener" {
                         let bounds = |label: &str| {
                             texts
                                 .iter()
@@ -287,7 +294,13 @@ mod tests {
                             "{panel}: rows must have watchlist height: {texts:?}"
                         );
                         assert!(!bounds("AAA").intersects(bounds("123.45")), "{texts:?}");
-                        if panel == "hotlist" {
+                        if is_hotlist {
+                            if panel == "hotlist_long" {
+                                assert!(elided.contains(&hotlist_title.to_owned()), "{elided:?}");
+                            } else {
+                                bounds(hotlist_title);
+                                assert!(!elided.contains(&hotlist_title.to_owned()), "{elided:?}");
+                            }
                             // The list's figure heads its own column, a dash stands for a missing
                             // one, and four columns fit without cutting a heading or a value.
                             for label in ["123.4M", "-"] {
