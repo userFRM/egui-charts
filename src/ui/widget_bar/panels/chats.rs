@@ -50,6 +50,7 @@ enum MessageAction {
     Reply,
     CopyLink,
     Ignore,
+    ViewProfile,
 }
 
 #[derive(Debug)]
@@ -120,8 +121,11 @@ fn allowed(kind: NewChatRoomKind, capabilities: &ChatCapabilities) -> bool {
 /// [`find_users`](Chats::find_users), and to add or remove the members of a room whose members
 /// the service pushes. Where the capabilities allow, a message's author opens a menu to reply to
 /// the message, copy the host's link to it or ignore the author, whose messages then stay hidden
-/// until the user stops ignoring them from the header's list. Each action shows while it is
-/// pending and its failure, and attaching another service clears them. Message times and a separator for each day are written in the
+/// until the user stops ignoring them from the header's list, or, with
+/// [`set_profiles`](Self::set_profiles), to view the author's profile. The host starts or opens a
+/// direct chat with a user through [`start_direct`](Self::start_direct), such as from a profile
+/// card. Each action shows while it is pending and its failure, and attaching another service
+/// clears them. Message times and a separator for each day are written in the
 /// zone set with [`set_timezone`](Self::set_timezone), UTC until then. Call [`poll`](Self::poll)
 /// each frame, even while the panel is hidden, then [`show`](Self::show) while it is open.
 /// Accounts and moderation are the host's.
@@ -163,6 +167,10 @@ pub struct ChatsPanel {
     replying: Option<ChatMessage>,
     /// Inbox key of the pending ignore request, or 0 for none.
     ignore_key: u64,
+    /// Whether a message's menu offers its author's profile.
+    profiles: bool,
+    /// The author whose profile the user asked to see, until the host takes it.
+    profile_request: Option<ChatUser>,
 }
 
 impl std::fmt::Debug for ChatsPanel {
@@ -188,6 +196,8 @@ impl std::fmt::Debug for ChatsPanel {
             .field("ignored", &self.ignored)
             .field("replying", &self.replying)
             .field("ignore_key", &self.ignore_key)
+            .field("profiles", &self.profiles)
+            .field("profile_request", &self.profile_request)
             .finish_non_exhaustive()
     }
 }
@@ -217,6 +227,47 @@ impl ChatsPanel {
     /// Writes message times and day separators in `timezone`, such as the chart's. UTC until set.
     pub fn set_timezone(&mut self, timezone: TimezoneId) {
         self.timezone = timezone;
+    }
+
+    /// Starts a direct chat with `user`, or opens the existing one: asks the service to create a
+    /// direct room with them, which the host answers with the identifier of the existing room when
+    /// there is one, and shows that room once it is pushed. Without a service allowing direct
+    /// messages it shows that the action is not supported; while a chat is being created it does
+    /// nothing.
+    pub fn start_direct(&mut self, user: ChatUser) {
+        if self.create_key != 0 {
+            return;
+        }
+        let Some(service) = self
+            .service
+            .clone()
+            .filter(|service| service.capabilities().direct_messages)
+        else {
+            self.action_error = Some(FeedError::NotSupported);
+            return;
+        };
+        self.view = View::Room;
+        self.action_error = None;
+        self.create_key = self.next_key();
+        let room = NewChatRoom::new(NewChatRoomKind::Direct, "", vec![user.id]);
+        service.create_room(room, self.inbox.reply(self.create_key));
+    }
+
+    /// Shows `room` once the service pushes it, such as a room a notification names.
+    pub fn open_room(&mut self, room: impl Into<String>) {
+        self.open = Some(room.into());
+        self.view = View::Room;
+    }
+
+    /// Offers View profile in the menu of each message whose author has an identifier; hidden by
+    /// default. Read the request with [`take_profile_request`](Self::take_profile_request).
+    pub fn set_profiles(&mut self, available: bool) {
+        self.profiles = available;
+    }
+
+    /// The author whose profile the user asked to see, once.
+    pub fn take_profile_request(&mut self) -> Option<ChatUser> {
+        self.profile_request.take()
     }
 
     fn next_key(&mut self) -> u64 {
@@ -532,6 +583,12 @@ impl ChatsPanel {
                 ),
             );
         }
+        if self.view == View::Room && self.create_key != 0 {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(l10n::text(ui.ctx(), "Opening chat"));
+            });
+        }
         match self.view {
             View::NewChat => return self.show_new_chat(ui, &capabilities),
             View::Members => return self.show_members(ui),
@@ -626,6 +683,7 @@ impl ChatsPanel {
                 .is_some_and(|front| !same(was, front))
         });
         let ignore_free = self.ignore_key == 0;
+        let profiles = self.profiles;
         let mut picked = None;
         let mut first = None;
         let mut kept = false;
@@ -722,7 +780,8 @@ impl ChatsPanel {
                                     let reply = capabilities.replies && message.id.is_some();
                                     let ignore =
                                         capabilities.ignore_users && message.author_id.is_some();
-                                    if reply || capabilities.links || ignore {
+                                    let profile = profiles && message.author_id.is_some();
+                                    if reply || capabilities.links || ignore || profile {
                                         ui.menu_button(author, |ui| {
                                             let mut pick = None;
                                             if reply
@@ -753,6 +812,13 @@ impl ChatsPanel {
                                                     .clicked()
                                             {
                                                 pick = Some(MessageAction::Ignore);
+                                            }
+                                            if profile
+                                                && ui
+                                                    .button(l10n::text(ui.ctx(), "View profile"))
+                                                    .clicked()
+                                            {
+                                                pick = Some(MessageAction::ViewProfile);
                                             }
                                             if let Some(pick) = pick {
                                                 picked = Some((pick, message.clone()));
@@ -833,6 +899,12 @@ impl ChatsPanel {
 
     /// Carries out what the user picked in the menu of `message`.
     fn pick(&mut self, ctx: &egui::Context, pick: MessageAction, message: ChatMessage) {
+        if pick == MessageAction::ViewProfile {
+            if let Some(id) = message.author_id {
+                self.profile_request = Some(ChatUser::new(id, message.author));
+            }
+            return;
+        }
         let Some(service) = self.service.clone() else {
             return;
         };
@@ -849,6 +921,7 @@ impl ChatsPanel {
                     service.ignore_user(user, true, self.inbox.reply(self.ignore_key));
                 }
             }
+            MessageAction::ViewProfile => {}
         }
     }
 
@@ -1082,6 +1155,7 @@ mod tests {
         created: Mutex<Vec<(NewChatRoom, Reply<String>)>>,
         events: Mutex<Option<Events<ChatEvent>>>,
         history: AtomicBool,
+        no_direct_messages: AtomicBool,
         replies: AtomicBool,
         links: AtomicBool,
         ignore_users: AtomicBool,
@@ -1114,7 +1188,7 @@ mod tests {
         }
         fn capabilities(&self) -> ChatCapabilities {
             ChatCapabilities {
-                direct_messages: true,
+                direct_messages: !self.no_direct_messages.load(Ordering::Relaxed),
                 create_rooms: true,
                 manage_members: false,
                 history: self.history.load(Ordering::Relaxed),
@@ -1565,6 +1639,70 @@ mod tests {
             let (user, ignore, _) = host.ignores.lock().unwrap().pop().unwrap();
             assert_eq!((user.as_str(), ignore), ("ana", false));
         }
+    }
+
+    /// Guards starting a direct chat for the host, as from a profile card: one request names the
+    /// user, a second waits for its answer, the pushed room opens, a host without direct messages
+    /// gets no request; and View profile hands the author to the host once.
+    #[test]
+    fn start_direct_asks_the_host_once_and_opens_its_room() {
+        let host = Arc::new(Host::default());
+        let mut panel = ChatsPanel::new();
+        panel.set_service(host.clone());
+        panel.start_direct(ChatUser::new("u1", "Ada"));
+        panel.start_direct(ChatUser::new("u1", "Ada"));
+        let (room, reply) = {
+            let mut created = host.created.lock().unwrap();
+            assert_eq!(created.len(), 1);
+            created.pop().unwrap()
+        };
+        assert_eq!(
+            room,
+            NewChatRoom::new(NewChatRoomKind::Direct, "", vec!["u1".into()])
+        );
+        let events = host.events.lock().unwrap().clone().unwrap();
+        events.push(ChatEvent::Room("General".into()));
+        events.push(ChatEvent::Room("dm-ada".into()));
+        reply.send(Ok("dm-ada".into()));
+        let ctx = egui::Context::default();
+        panel.poll(&ctx);
+        assert_eq!(panel.rooms[panel.room], "dm-ada");
+
+        let other = Arc::new(Host::default());
+        other.no_direct_messages.store(true, Ordering::Relaxed);
+        let mut panel = ChatsPanel::new();
+        panel.set_service(other.clone());
+        panel.start_direct(ChatUser::new("u1", "Ada"));
+        assert!(other.created.lock().unwrap().is_empty());
+        assert_eq!(panel.action_error, Some(FeedError::NotSupported));
+
+        let mut panel = ChatsPanel::new();
+        panel.set_service(host.clone());
+        panel.set_profiles(true);
+        let events = host.events.lock().unwrap().clone().unwrap();
+        let message = ChatMessage::new("r", "Ana", chrono::DateTime::UNIX_EPOCH, "Morning")
+            .with_author_id("ana");
+        events.push(ChatEvent::Message(message));
+        panel.poll(&ctx);
+        let mut h = Harness::builder()
+            .with_size(Vec2::new(320.0, 600.0))
+            .with_context_setup(|ctx| {
+                crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                egui_extras::install_image_loaders(ctx);
+            })
+            .build_ui_state(|ui, panel: &mut ChatsPanel| panel.show(ui), panel);
+        h.run();
+        h.get_by_role_and_label(Role::Button, "Ana").click();
+        h.run();
+        h.get_by_role_and_label(Role::Button, "View profile")
+            .click();
+        h.run();
+        let panel = h.state_mut();
+        assert_eq!(
+            panel.take_profile_request(),
+            Some(ChatUser::new("ana", "Ana"))
+        );
+        assert_eq!(panel.take_profile_request(), None);
     }
 
     /// Guards a room's history against a hole: a page asked before a message the room has since

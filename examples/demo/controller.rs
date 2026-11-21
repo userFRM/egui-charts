@@ -48,8 +48,10 @@ mod study_editor;
 #[path = "templates.rs"]
 mod templates;
 use egui_charts::services::StoreKind;
+use egui_charts::services::{ChatUser, ProfileDirectory, ProfileId};
 use egui_charts::studies::StudyTemplateSet;
 use egui_charts::ui::dialogs::templates::TemplateDialog;
+use egui_charts::ui::profile::{ProfileAction, ProfileCard};
 #[path = "feeds.rs"]
 mod feeds;
 #[cfg(target_arch = "wasm32")]
@@ -483,6 +485,9 @@ pub struct DemoApp {
     notifications: NotificationsPanel,
     notification_host: Arc<feeds::DemoNotifications>,
     chats: ChatsPanel,
+    /// The chat authors' profiles, and the one whose card is open.
+    profiles: ProfileDirectory,
+    profile_open: Option<ProfileId>,
     ideas: ideas::DemoIdeas,
     products: ProductsPanel,
 
@@ -864,6 +869,8 @@ impl DemoApp {
             notifications: NotificationsPanel::new(),
             notification_host,
             chats: ChatsPanel::new(),
+            profiles: ProfileDirectory::new(),
+            profile_open: None,
             ideas: ideas::DemoIdeas::new(),
             products: ProductsPanel::new(vec![
                 product(
@@ -988,6 +995,9 @@ impl DemoApp {
         app.notifications.set_service(app.notification_host.clone());
         app.chats
             .set_service(Arc::new(feeds::DemoChats::new(chrono::Utc::now())));
+        app.chats.set_profiles(true);
+        app.profiles
+            .set_service(Arc::new(feeds::DemoProfiles::new()));
         app.calendar
             .set_countries(feeds::COUNTRIES.iter().map(|code| code.to_string()));
         app.calendar
@@ -1919,6 +1929,10 @@ impl eframe::App for DemoApp {
         self.hotlists.poll(&ctx);
         self.notifications.poll(&ctx);
         self.chats.poll(&ctx);
+        self.profiles.poll(&ctx);
+        if let Some(user) = self.chats.take_profile_request() {
+            self.profile_open = Some(ProfileId(user.id));
+        }
         self.widget_bar.set_notification_cnt(
             RightBarIcon::Notifications,
             self.notifications.unread() as u32,
@@ -2056,6 +2070,7 @@ impl eframe::App for DemoApp {
         self.show_dialogs(&ctx);
         self.show_watchlist_import(&ctx);
         self.show_wide_watchlist(&ctx);
+        self.show_profile(&ctx);
 
         // Transient status notice.
         self.show_notice(ui);
@@ -3469,6 +3484,35 @@ impl DemoApp {
         }
         if import || !open {
             self.watchlist_import = None;
+        }
+    }
+
+    /// The card of the chat author the user asked for; Message opens a direct chat with them.
+    fn show_profile(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.profile_open.clone() else {
+            return;
+        };
+        let mut open = true;
+        let mut action = ProfileAction::None;
+        egui::Window::new("Profile")
+            .open(&mut open)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                action = ProfileCard::new(&id)
+                    .messaging(true)
+                    .show(ui, &mut self.profiles);
+            });
+        if action == ProfileAction::Message {
+            let name = self
+                .profiles
+                .profile(&id)
+                .map_or_else(|| id.0.clone(), |profile| profile.name.clone());
+            self.chats.start_direct(ChatUser::new(id.0, name));
+            self.open_panel = Some(SidePanel::Chats);
+            open = false;
+        }
+        if !open {
+            self.profile_open = None;
         }
     }
 
@@ -5299,6 +5343,44 @@ mod tests {
         h.state_mut().open_panel = Some(SidePanel::Notifications);
         h.run_steps(5);
         h.get_by_label("Rates alert");
+    }
+
+    /// Guards the demo's chat author menu: Reply answers the message through the demo host, View
+    /// profile opens the author's card, and its Message opens a direct chat with them.
+    #[test]
+    fn chat_author_profile_messages_them_in_the_demo() {
+        use egui::Role;
+        let mut h = calendar_news_harness(SidePanel::Chats);
+        h.run_steps(5);
+        let author_menu = |h: &mut Harness<'static, Box<DemoApp>>, entry: &str| {
+            h.get_all_by_role_and_label(Role::Button, "Ana")
+                .last()
+                .unwrap()
+                .click();
+            h.run_steps(3);
+            h.get_by_role_and_label(Role::Button, entry).click();
+            h.run_steps(3);
+        };
+        author_menu(&mut h, "Reply");
+        h.get_by_label("Replying to Ana");
+        h.get_by(|node| node.placeholder() == Some("Message General"))
+            .focus();
+        h.run_steps(2);
+        h.get_by(|node| node.placeholder() == Some("Message General"))
+            .type_text("Agreed");
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::Button, "Send").click();
+        h.run_steps(5);
+        h.get_by_label("Ana: Volume looks light ahead of the CPI release.");
+
+        author_menu(&mut h, "View profile");
+        h.get_by_label("Index futures, mostly around the open.");
+        h.get_by_role_and_label(Role::Button, "Message").click();
+        h.run_steps(5);
+        assert!(h.state().open_panel == Some(SidePanel::Chats));
+        assert!(h.state().profile_open.is_none());
+        h.get_by_role_and_label(Role::Button, "Ana");
+        assert!(h.query_by_label("Agreed").is_none());
     }
 
     #[test]

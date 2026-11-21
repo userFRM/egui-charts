@@ -12,8 +12,9 @@ use egui_charts::data::{
 };
 use egui_charts::model::{Bar, PostContent, Quote};
 use egui_charts::services::{
-    ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, Events, Notification,
-    NotificationTarget, Notifications, Posts, Quotes,
+    ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, Events, NewChatRoom,
+    NewChatRoomKind, Notification, NotificationTarget, Notifications, Posts, Profile, ProfileEvent,
+    ProfileId, Profiles, Quotes,
 };
 
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
@@ -917,9 +918,29 @@ impl Chats for DemoChats {
         reply.send(Ok(()));
     }
 
+    /// A direct room is named after the other user, so asking again opens the same room.
+    fn create_room(&self, room: NewChatRoom, reply: Reply<String>) {
+        let (NewChatRoomKind::Direct, [member]) = (room.kind, room.members.as_slice()) else {
+            reply.send(Err(FeedError::NotSupported));
+            return;
+        };
+        let state = self.0.lock().unwrap();
+        let name = self
+            .1
+            .iter()
+            .chain(&state.0)
+            .find(|message| message.author_id.as_ref() == Some(member))
+            .map_or_else(|| member.clone(), |message| message.author.clone());
+        if let Some(events) = &state.1 {
+            events.push(ChatEvent::Room(name.clone()));
+        }
+        reply.send(Ok(name));
+    }
+
     fn capabilities(&self) -> ChatCapabilities {
         let mut capabilities = ChatCapabilities::default();
         capabilities.history = true;
+        capabilities.direct_messages = true;
         capabilities.replies = true;
         capabilities.links = true;
         capabilities.ignore_users = true;
@@ -957,6 +978,52 @@ impl Chats for DemoChats {
             .iter()
             .map(|message| (*message).clone())
             .collect()));
+    }
+}
+
+/// The profiles of the chat authors, whose follow requests the demo grants at once.
+pub(super) struct DemoProfiles(Mutex<(Vec<Profile>, Option<Events<ProfileEvent>>)>);
+
+impl DemoProfiles {
+    pub(super) fn new() -> Self {
+        let profiles = [
+            ("Ana", "Index futures, mostly around the open."),
+            ("Ravi", "Swing trades in large caps."),
+            ("Lee", "Crypto ranges and their breakouts."),
+            ("Mia", "Hourly charts and patient entries."),
+        ]
+        .into_iter()
+        .map(|(name, bio)| {
+            let mut profile = Profile::new(ProfileId(name.to_lowercase()), name);
+            profile.bio = bio.into();
+            profile
+        })
+        .collect();
+        Self(Mutex::new((profiles, None)))
+    }
+}
+
+impl Profiles for DemoProfiles {
+    fn watch(&self, events: Events<ProfileEvent>) {
+        let mut state = self.0.lock().unwrap();
+        for profile in &state.0 {
+            events.push(ProfileEvent::Upsert(profile.clone()));
+        }
+        state.1 = Some(events);
+    }
+
+    fn follow(&self, id: ProfileId, follow: bool, reply: Reply<()>) {
+        let mut state = self.0.lock().unwrap();
+        let (profiles, events) = &mut *state;
+        let Some(profile) = profiles.iter_mut().find(|profile| profile.id == id) else {
+            reply.send(Err(FeedError::InvalidData("Unknown profile".into())));
+            return;
+        };
+        profile.followed = follow;
+        if let Some(events) = events {
+            events.push(ProfileEvent::Upsert(profile.clone()));
+        }
+        reply.send(Ok(()));
     }
 }
 
