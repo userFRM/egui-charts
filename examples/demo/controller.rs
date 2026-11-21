@@ -381,6 +381,7 @@ pub struct DemoApp {
     indicator_dialog: Box<IndicatorDialog>,
     indicator_settings: Box<IndicatorSettingsDialog>,
     settings_dialog: Box<SettingsDialog>,
+    series_settings: Box<egui_charts::ui::dialogs::SeriesSettingsDialog>,
     settings_state: Box<ChartSettingsState>,
     symbol_search: Box<SymbolSearchDialog>,
     compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog,
@@ -415,7 +416,7 @@ pub struct DemoApp {
 
     // A finished host-run sample, independent of subsequent chart navigation.
     strategy_report: Box<egui_charts::ui::strategy_report::StrategyTester>,
-    live_strategy: Option<(egui_charts::strategies::Backtest, String)>,
+    live_strategy: Option<strategy_live::LiveStrategy>,
     strategy_trade: Option<usize>,
     strategy_session: SessionType,
     /// The symbol and tick size the tester's price increment last followed.
@@ -710,6 +711,7 @@ impl DemoApp {
             widget_bar,
             indicator_dialog,
             indicator_settings: Box::default(),
+            series_settings: Box::default(),
             settings_dialog: Box::new({
                 let mut dialog = SettingsDialog::new();
                 dialog.execution_sounds = DEMO_SOUNDS.map(str::to_owned).to_vec();
@@ -779,9 +781,17 @@ impl DemoApp {
                 for alert in &mut alerts {
                     alert.symbol = DemoSymbol::current(&alert.symbol);
                 }
+                let mut triggers: Vec<egui_charts::model::AlertTrigger> = cc
+                    .storage
+                    .and_then(|storage| eframe::get_value(storage, "alert_triggers"))
+                    .unwrap_or_default();
+                for trigger in &mut triggers {
+                    trigger.symbol = DemoSymbol::current(&trigger.symbol);
+                }
                 let notifications = notification_host.clone();
                 Arc::new(crate::panel_alerts::DemoAlerts::new(
                     alerts,
+                    triggers,
                     move |symbol| {
                         notifications.notify(format!("Alert triggered: {symbol}"), Some(symbol));
                     },
@@ -938,6 +948,7 @@ impl DemoApp {
             app.symbol_search.record_symbol(&row);
         }
         app.alerts.set_service(app.alert_host.clone());
+        app.alerts.set_popup_actions(true);
         app.alerts.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.top_toolbar.state.can_trade = true;
         app.top_toolbar.state.can_publish_ideas = true;
@@ -1250,7 +1261,7 @@ impl DemoApp {
         self.chart.prepare_alert(&mut self.alert_dialog.alert);
     }
 
-    /// Offers the studies' outputs and every level of the drawings as alert sources.
+    /// Offers study outputs, drawing levels and live strategy runs as alert sources.
     fn list_alert_sources(&mut self) {
         let inputs = self.chart.alert_inputs();
         self.alert_dialog.sources = inputs.sources.clone();
@@ -1261,6 +1272,11 @@ impl DemoApp {
             .lists()
             .iter()
             .map(|list| (list.name.clone(), list.name.clone()))
+            .collect();
+        self.alert_dialog.strategy_runs = self
+            .live_strategy
+            .iter()
+            .map(|live| (live.id.clone(), live.run.name.clone()))
             .collect();
     }
 
@@ -1430,6 +1446,11 @@ impl DemoApp {
             SettingsAction::Cancel => {}
             _ => {}
         }
+        if let egui_charts::ui::dialogs::SeriesSettingsAction::Apply(_, settings) =
+            self.series_settings.show(ctx)
+        {
+            self.user_action(|app| app.chart.apply_series_settings(&settings));
+        }
         self.show_layout_copy_prompt(ctx);
 
         // On own data the search offers the symbols of the profile and no others.
@@ -1476,8 +1497,10 @@ impl DemoApp {
             AlertDialogAction::Create(mut alert) => {
                 self.chart.prepare_alert(&mut alert);
                 self.alerts.save(*alert);
+                self.strategy_alert_closed(true);
             }
-            AlertDialogAction::Cancel | AlertDialogAction::None => {}
+            AlertDialogAction::Cancel => self.strategy_alert_closed(false),
+            AlertDialogAction::None => {}
             _ => {}
         }
 
@@ -1806,6 +1829,11 @@ impl eframe::App for DemoApp {
         eframe::set_value(storage, "watchlists", &self.watchlist.lists());
         eframe::set_value(storage, "watchlist_active", &self.watchlist.active_list());
         eframe::set_value(storage, "alerts", &self.alert_host.engine().alerts());
+        eframe::set_value(
+            storage,
+            "alert_triggers",
+            &self.alert_host.engine().triggers(),
+        );
         eframe::set_value(storage, "alert_list_options", self.alerts.options());
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
@@ -1846,6 +1874,13 @@ impl eframe::App for DemoApp {
         let alerts = &self.settings_state.alerts;
         self.alerts
             .set_sound(alerts.play_sound.then(|| alerts.sound.clone()));
+        self.alerts.set_timezone(
+            self.timeframe_toolbar
+                .state
+                .timezone
+                .parse()
+                .unwrap_or_default(),
+        );
         self.alerts.set_price(
             self.chart.symbol(),
             self.chart
@@ -1861,6 +1896,11 @@ impl eframe::App for DemoApp {
         self.alerts.poll(&ctx, &mut self.toasts);
         self.monitor_alerts(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
+        match self.alerts.take_popup_action() {
+            AlertPanelAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+            AlertPanelAction::EditAlert(alert) => self.edit_alert(*alert),
+            _ => {}
+        }
         self.symbol_details.poll(&ctx);
         self.highlights.poll(&ctx);
         self.news.poll(&ctx);
@@ -3414,11 +3454,8 @@ impl DemoApp {
         self.list_alert_sources();
         match self.alerts.show(ui) {
             AlertPanelAction::CreateAlert => self.open_alert(None),
-            AlertPanelAction::EditAlert(mut alert)
-            | AlertPanelAction::DuplicateAlert(mut alert) => {
-                self.list_alert_sources();
-                self.chart.prepare_alert(&mut alert);
-                self.alert_dialog.edit(*alert);
+            AlertPanelAction::EditAlert(alert) | AlertPanelAction::DuplicateAlert(alert) => {
+                self.edit_alert(*alert)
             }
             AlertPanelAction::ExportLog(csv) => {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -3437,6 +3474,12 @@ impl DemoApp {
             AlertPanelAction::None => {}
             _ => {}
         }
+    }
+
+    fn edit_alert(&mut self, mut alert: Alert) {
+        self.list_alert_sources();
+        self.chart.prepare_alert(&mut alert);
+        self.alert_dialog.edit(alert);
     }
 
     /// Advance the sample clock explicitly while preparing a paused session.
@@ -3766,31 +3809,40 @@ impl DemoApp {
                 }
                 self.highlight_strategy_trade(ui);
                 let mapping = self.chart.get_chart_mapping();
-                if self.settings_state.alerts.show_alerts && self.own_data.is_none() {
-                    let decimals = self
-                        .chart
-                        .instrument()
-                        .and_then(egui_charts::scales::instrument_price_precision)
-                        .map(usize::from)
-                        .unwrap_or(2);
-                    let currency = self
-                        .chart
-                        .instrument()
-                        .and_then(|i| i.currency.as_deref())
-                        .unwrap_or("");
-                    if let Some(alert) = egui_charts::chart::render_alert_levels(
-                        ui,
-                        &mapping,
-                        self.alerts
-                            .alerts()
-                            .iter()
-                            .filter(|a| a.symbol == self.chart.symbol() && a.watchlist.is_none()),
-                        self.settings_state.alerts.alert_color,
-                        self.settings_state.alerts.show_alert_labels,
-                        self.settings_state.alerts.show_active_only,
-                        |price| format!("{price:.decimals$} {currency}"),
-                    ) {
-                        self.alerts.save(alert);
+                if self.own_data.is_none() {
+                    let series = self.chart.series_settings().alerts;
+                    let chart_wide = &self.settings_state.alerts;
+                    if chart_wide.show_alerts && series.visible {
+                        let color =
+                            if series.color != egui_charts::model::SeriesAlerts::default().color {
+                                series.color
+                            } else {
+                                chart_wide.alert_color
+                            };
+                        let decimals = self
+                            .chart
+                            .instrument()
+                            .and_then(egui_charts::scales::instrument_price_precision)
+                            .map(usize::from)
+                            .unwrap_or(2);
+                        let currency = self
+                            .chart
+                            .instrument()
+                            .and_then(|i| i.currency.as_deref())
+                            .unwrap_or("");
+                        if let Some(alert) = egui_charts::chart::render_alert_levels(
+                            ui,
+                            &mapping,
+                            self.alerts.alerts().iter().filter(|a| {
+                                a.symbol == self.chart.symbol() && a.watchlist.is_none()
+                            }),
+                            color,
+                            chart_wide.show_alert_labels && series.labels,
+                            chart_wide.show_active_only,
+                            |price| format!("{price:.decimals$} {currency}"),
+                        ) {
+                            self.alerts.save(alert);
+                        }
                     }
                 }
                 if !self.keyboard_dialog_open() {
@@ -4178,7 +4230,9 @@ impl DemoApp {
             ContextMenuAction::OpenSettings => {
                 self.open_chart_settings_dialog();
             }
-            ContextMenuAction::OpenSeriesSettings => self.open_chart_settings_dialog(),
+            ContextMenuAction::OpenSeriesSettings => self
+                .series_settings
+                .open(SeriesId::MAIN, self.chart.series_settings()),
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::ApplyIndicatorsToLayout => {
@@ -4514,6 +4568,7 @@ impl DemoApp {
             || self.comparison_settings.is_some()
             || self.indicator_dialog.is_open()
             || self.settings_dialog.is_open
+            || self.series_settings.is_open
             || self.layout_copy_prompt.is_some()
             || self.drawing_toolbar.state.pending_removal.is_some()
             || self.drawing_props.is_open
@@ -12909,14 +12964,108 @@ mod tests {
     }
 
     #[test]
+    fn series_settings_show_and_colour_the_alert_levels() {
+        use egui_charts::ui::dialogs::SeriesSettingsTab;
+        const SIZE: egui::Vec2 = egui::vec2(1440.0, 900.0);
+        fn painted(app: &mut DemoApp, ctx: &egui::Context, color: egui::Color32) -> bool {
+            let mut painted = false;
+            for _ in 0..3 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                        ..Default::default()
+                    },
+                    |ui| app.show_chart(ui, app.theme.chart.bg),
+                );
+                painted = output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape,
+                    egui::Shape::LineSegment { stroke, .. } if stroke.color == color)
+                });
+                output.drop_without_applying_deltas();
+            }
+            painted
+        }
+        fn apply(app: &mut DemoApp, ctx: &egui::Context) {
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = ui_frame(ctx, SIZE, vec![], |ui| app.show_dialogs(ui.ctx()));
+            }
+            let at = texts
+                .iter()
+                .find(|(text, _)| text == "Ok")
+                .unwrap()
+                .1
+                .center();
+            ui_click(ctx, SIZE, at, |ui| app.show_dialogs(ui.ctx()));
+        }
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T17:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        let price = app.chart.bars(SeriesId::MAIN).last().unwrap().close;
+        let mut alert = Alert::new(app.chart.symbol(), AlertCondition::Above(price));
+        alert.id = Some(egui_charts::model::AlertId("level".into()));
+        app.alert_host = Arc::new(crate::panel_alerts::DemoAlerts::new(
+            vec![alert],
+            Vec::new(),
+            |_| {},
+        ));
+        app.alerts.set_service(app.alert_host.clone());
+        app.alerts.poll(&ctx, &mut app.toasts);
+        let default = egui_charts::model::SeriesAlerts::default().color;
+        assert!(painted(&mut app, &ctx, default));
+        app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
+        assert!(app.series_settings.is_open);
+        app.series_settings.active_tab = SeriesSettingsTab::ScalesAndLines;
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            texts = ui_frame(&ctx, SIZE, vec![], |ui| app.show_dialogs(ui.ctx()));
+        }
+        let at = texts
+            .iter()
+            .find(|(text, _)| text == "Show alerts")
+            .unwrap()
+            .1
+            .right_center()
+            + egui::vec2(24.0, 0.0);
+        // The label and its checkbox share the grid row; use the checkbox's column.
+        let checkbox_x = texts
+            .iter()
+            .find(|(text, _)| text == "Show alert labels")
+            .unwrap()
+            .1
+            .right()
+            + 24.0;
+        ui_click(&ctx, SIZE, egui::pos2(checkbox_x, at.y), |ui| {
+            app.show_dialogs(ui.ctx())
+        });
+        assert!(!app.series_settings.settings.alerts.visible);
+        apply(&mut app, &ctx);
+        assert!(!painted(&mut app, &ctx, default));
+        app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
+        app.series_settings.settings.alerts.visible = true;
+        let color = egui::Color32::from_rgb(156, 39, 176);
+        app.series_settings.settings.alerts.color = color;
+        apply(&mut app, &ctx);
+        assert!(painted(&mut app, &ctx, color));
+        assert!(!painted(&mut app, &ctx, default));
+    }
+
+    #[test]
     fn live_alerts_survive_symbol_changes_replay_and_watchlist_membership() {
         use eframe::App;
         for watchlist in [false, true] {
             for replay in [false, true] {
                 let ctx = egui::Context::default();
-                let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                let mut app = DemoApp::new_at(
+                    &eframe::CreationContext::_new_kittest(ctx.clone()),
+                    chrono::Utc::now(),
+                    true,
+                );
                 settle(&mut app, &ctx);
-                app.live.set_paused(true);
                 app.switch_symbol("STOCKA");
                 app.switch_timeframe(Timeframe::Hour1);
                 let mut list = Watchlist::new("Test list");
