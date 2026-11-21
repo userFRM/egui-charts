@@ -56,9 +56,14 @@ impl AudioPlayer {
             return Ok(());
         }
         if self.engine.is_none() {
+            let mut builder = EngineBuilder::new();
+            builder.set_sample_rate(SampleRate::Custom(SAMPLE_RATE));
+            // Tests mix into an engine without a device: none plays through the machine's
+            // speakers or depends on its audio hardware.
+            #[cfg(test)]
+            builder.no_device(1, SampleRate::Custom(SAMPLE_RATE));
             self.engine = Some(
-                EngineBuilder::new()
-                    .set_sample_rate(SampleRate::Custom(SAMPLE_RATE))
+                builder
                     .build()
                     .map_err(|error| format!("Could not open audio: {error}"))?,
             );

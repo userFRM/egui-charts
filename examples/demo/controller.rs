@@ -1345,6 +1345,40 @@ impl DemoApp {
         }
     }
 
+    /// Hands the alerts panel the chosen sound, zone and price, delivers the triggers of the
+    /// host's engine and opens what a trigger popup asked for.
+    fn poll_alerts(&mut self, ctx: &egui::Context) {
+        self.alerts
+            .set_sound(Some(self.settings_state.alerts.sound.clone()));
+        self.alerts.set_timezone(
+            self.timeframe_toolbar
+                .state
+                .timezone
+                .parse()
+                .unwrap_or_default(),
+        );
+        self.alerts.set_price(
+            self.chart.symbol(),
+            self.chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .rev()
+                .find(|bar| !bar.is_whitespace())
+                .map(|bar| bar.close),
+            self.chart
+                .instrument()
+                .and_then(|instrument| instrument.tick_size),
+        );
+        self.alerts.poll(ctx, &mut self.toasts);
+        self.monitor_alerts(ctx);
+        self.alerts.poll(ctx, &mut self.toasts);
+        match self.alerts.take_popup_action() {
+            AlertPanelAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+            AlertPanelAction::EditAlert(alert) => self.edit_alert(*alert),
+            _ => {}
+        }
+    }
+
     // --- selection / context helpers --------------------------------------
 
     fn chart_time_zones(&self) -> Vec<egui_charts::model::TimezoneId> {
@@ -1886,36 +1920,7 @@ impl eframe::App for DemoApp {
         for error in self.images.poll(&ctx, &mut self.chart, self.layout_slot) {
             self.notify(error);
         }
-        let alerts = &self.settings_state.alerts;
-        self.alerts
-            .set_sound(alerts.play_sound.then(|| alerts.sound.clone()));
-        self.alerts.set_timezone(
-            self.timeframe_toolbar
-                .state
-                .timezone
-                .parse()
-                .unwrap_or_default(),
-        );
-        self.alerts.set_price(
-            self.chart.symbol(),
-            self.chart
-                .bars(SeriesId::MAIN)
-                .iter()
-                .rev()
-                .find(|bar| !bar.is_whitespace())
-                .map(|bar| bar.close),
-            self.chart
-                .instrument()
-                .and_then(|instrument| instrument.tick_size),
-        );
-        self.alerts.poll(&ctx, &mut self.toasts);
-        self.monitor_alerts(&ctx);
-        self.alerts.poll(&ctx, &mut self.toasts);
-        match self.alerts.take_popup_action() {
-            AlertPanelAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
-            AlertPanelAction::EditAlert(alert) => self.edit_alert(*alert),
-            _ => {}
-        }
+        self.poll_alerts(&ctx);
         self.symbol_details.poll(&ctx);
         self.highlights.poll(&ctx);
         self.news.poll(&ctx);
@@ -13856,6 +13861,40 @@ mod tests {
             }
             app.alerts.poll(&ctx, &mut app.toasts);
             assert_eq!(app.alerts.log().len(), 2, "period {period}");
+        }
+    }
+
+    /// An alert created with the dialog's defaults requests the alert sound chosen in the chart
+    /// settings when it fires, with no other switch; one with Sound unticked requests none.
+    #[test]
+    fn alerts_from_the_dialog_request_the_alert_sound_only_with_sound_ticked() {
+        let ctx = egui::Context::default();
+        // A fixed time keeps the generated feed the same on every run.
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-04T17:30:00Z".parse().unwrap(),
+            false,
+        );
+        app.live.set_paused(true);
+        finish_feed(&app.live);
+        app.apply_session();
+        app.settings_state.alerts.sound = "Bell".into();
+        for sound in [true, false] {
+            app.open_alert(None);
+            let mut alert = app.alert_dialog.alert.clone();
+            // The dialog ticks Sound for a new alert.
+            assert!(alert.delivery.sound);
+            alert.delivery.sound = sound;
+            // Every close is above zero, so the alert fires once.
+            alert.condition = AlertCondition::Above(0.0);
+            let fired = app.alerts.log().len();
+            app.alerts.save(alert);
+            for _ in 0..4 {
+                finish_feed(&app.alert_live);
+                app.poll_alerts(&ctx);
+            }
+            assert_eq!(app.alerts.log().len(), fired + 1, "sound={sound}");
+            assert_eq!(app.alerts.take_sound(), sound.then(|| "Bell".to_owned()));
         }
     }
 
