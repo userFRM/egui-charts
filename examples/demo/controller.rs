@@ -4450,16 +4450,7 @@ impl DemoApp {
     fn handle_replay_control(&mut self, action: ReplayControlAction) {
         match action {
             ReplayControlAction::Start(start) => return self.apply_replay_start(start),
-            ReplayControlAction::SetScope(scope) => {
-                if !self.recording_files.opened {
-                    self.replay_scope = scope;
-                    if self.replay_control.uses_automatic_update_interval() {
-                        self.set_automatic_replay_interval();
-                    }
-                    self.push_replay_window_to_chart();
-                }
-                return;
-            }
+            ReplayControlAction::SetScope(scope) => return self.set_replay_scope(scope),
             // Without a replay the bar is only there to select its start.
             ReplayControlAction::Stop | ReplayControlAction::Close if self.replay.is_none() => {
                 return self.stop_replay();
