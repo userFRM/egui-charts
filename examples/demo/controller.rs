@@ -1197,6 +1197,8 @@ impl DemoApp {
             self.timeframe_toolbar.state.adjust_for_dividends,
         );
         self.loading_bars = true;
+        // New prices may keep the bar times, such as after a dividend adjustment: rate them anew.
+        self.symbol_details.set_bars(self.state.timeframe, &[]);
         self.bars = self.live.snapshot(
             self.state.timeframe,
             self.chart.bar_clock(),
@@ -2887,6 +2889,8 @@ impl DemoApp {
                             .frame(egui::Frame::NONE)
                             .show(ui, |ui| self.symbol_details.show(ui));
                     }
+                    let action = self.symbol_details.take_news_action();
+                    self.handle_news(ui.ctx(), action);
                     self.show_watchlist(ui);
                 }
                 SidePanel::TimeAndSales => self.time_and_sales.show(ui),
@@ -3176,6 +3180,12 @@ impl DemoApp {
                 .cloned()
                 .unwrap_or_else(|| egui_charts::model::Instrument::new(&chart_symbol)),
         );
+        if let Some(timeframe) = self.chart.timeframe()
+            && !self.loading_bars
+        {
+            self.symbol_details
+                .set_bars(timeframe, self.chart.bars(SeriesId::MAIN));
+        }
         if let Some(quote) = self.live.quote(now) {
             self.symbol_details.set_quote(quote.clone());
             self.trading.set_quote(&chart_symbol, quote);
@@ -4825,6 +4835,152 @@ mod tests {
     use egui_charts::model::DateRange;
     use egui_charts::model::{AlertSource, LineStyle};
     use egui_charts::ui::dialogs::DrawingProps;
+
+    /// The watchlist's details use the chart's bars and feed, open headline links and honour
+    /// the three section choices through the demo's menus and action handler.
+    #[test]
+    fn watchlist_details_sections_reach_the_demo() {
+        use eframe::App as _;
+        use egui::accesskit::Role;
+        use egui_charts::studies::{Indicator, StudyCell, TechnicalRatings};
+
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            chrono::Utc::now(),
+            true,
+        );
+        app.switch_symbol("STOCKA");
+        settle(&mut app, &ctx);
+        // The tall viewport fits all the details; the narrow toolbar offers its Panels menu.
+        let frame = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(560.0, 3600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+        };
+        let click = |app: &mut DemoApp, role, label: &str| {
+            let output = frame(app, vec![]);
+            let bounds = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find_map(|(_, node)| {
+                    (node.role() == role && node.label() == Some(label))
+                        .then(|| node.bounds())
+                        .flatten()
+                })
+                .unwrap_or_else(|| panic!("missing control: {label}"));
+            let pos = egui::pos2(
+                (bounds.x0 + bounds.x1) as f32 * 0.5,
+                (bounds.y0 + bounds.y1) as f32 * 0.5,
+            );
+            output.drop_without_applying_deltas();
+            frame(app, vec![egui::Event::PointerMoved(pos)]).drop_without_applying_deltas();
+            frame(
+                app,
+                [true, false]
+                    .map(|pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    })
+                    .to_vec(),
+            )
+        };
+        click(&mut app, Role::Button, "Menu").drop_without_applying_deltas();
+        click(&mut app, Role::MenuItem, "Panels").drop_without_applying_deltas();
+        click(&mut app, Role::MenuItem, "Watchlist and details").drop_without_applying_deltas();
+        assert!(app.open_panel == Some(SidePanel::Watchlist));
+        egui::Popup::close_all(&ctx);
+        // Let the side panel's initial sizing and feed replies settle.
+        for _ in 0..3 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
+        let painted = |output: &egui::FullOutput| {
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let output = frame(&mut app, vec![]);
+        let shown = painted(&output);
+        output.drop_without_applying_deltas();
+        let bars = app.chart.bars(SeriesId::MAIN);
+        assert!(!bars.is_empty());
+        let mut study = TechnicalRatings::new();
+        study.set_timeframe(app.chart.timeframe().unwrap());
+        study.calculate(bars);
+        let table = study.table().unwrap();
+        for (label, column) in [("Summary", 3), ("Moving averages", 1), ("Oscillators", 2)] {
+            let StudyCell::Text(word) = &table.rows[0][column] else {
+                panic!("rating word");
+            };
+            assert!(
+                shown.windows(2).any(|row| row == [label, word]),
+                "{label}: {shown:?}"
+            );
+        }
+        for title in [
+            "Technicals",
+            "Upcoming events",
+            "Earnings",
+            "Ex-dividend",
+            "News",
+        ] {
+            assert!(shown.iter().any(|text| text == title), "{title}: {shown:?}");
+        }
+        let mut query = egui_charts::data::NewsQuery::new(10);
+        query.symbols.push("STOCKA".into());
+        let stories = feeds::news(&query, app.live.now());
+        assert!(stories.len() > 3);
+        let headlines: Vec<_> = shown
+            .iter()
+            .filter(|text| stories.iter().any(|story| story.headline == **text))
+            .collect();
+        assert_eq!(
+            headlines,
+            stories[..3]
+                .iter()
+                .map(|story| &story.headline)
+                .collect::<Vec<_>>()
+        );
+        let output = click(&mut app, Role::Button, &stories[0].headline);
+        assert!(output.platform_output.commands.iter().any(|command| {
+            matches!(command, egui::OutputCommand::OpenUrl(url) if Some(&url.url) == stories[0].url.as_ref())
+        }));
+        output.drop_without_applying_deltas();
+        click(&mut app, Role::Button, "Layout").drop_without_applying_deltas();
+        for title in ["Technicals", "Upcoming events", "News"] {
+            click(&mut app, Role::CheckBox, title).drop_without_applying_deltas();
+        }
+        egui::Popup::close_all(&ctx);
+        let output = frame(&mut app, vec![]);
+        let shown = painted(&output);
+        output.drop_without_applying_deltas();
+        for title in ["Technicals", "Upcoming events", "News"] {
+            assert!(
+                !shown.iter().any(|text| text == title),
+                "{title}: {shown:?}"
+            );
+        }
+    }
 
     /// Study settings use the own-data chart's zones and apply the edited session clock.
     #[test]
