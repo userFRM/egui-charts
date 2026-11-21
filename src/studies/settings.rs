@@ -2085,6 +2085,10 @@ impl Indicator for ConfiguredStudy {
         self.study.value_format()
     }
     fn scale(&self) -> super::StudyScale {
+        // A pane whose plots stay on the price chart has no value scale of its own.
+        if self.study.plots_on_price() && !self.is_overlay() {
+            return super::StudyScale::None;
+        }
         self.scale.unwrap_or_else(|| self.study.scale())
     }
     fn precision(&self) -> Option<usize> {
@@ -2194,6 +2198,9 @@ impl Indicator for ConfiguredStudy {
     fn labels_on_price(&self) -> bool {
         self.study.labels_on_price()
     }
+    fn plots_on_price(&self) -> bool {
+        self.study.plots_on_price()
+    }
     fn price_segments(&self) -> &[super::StudySegment] {
         // Source bars of a study on another interval or symbol are not chart bars.
         if self.aligned.is_some() {
@@ -2295,6 +2302,9 @@ impl Indicator for ConfiguredStudy {
         true
     }
     fn set_scale(&mut self, scale: super::StudyScale) -> bool {
+        if self.study.plots_on_price() && !self.is_overlay() {
+            return false;
+        }
         self.scale_mapping = None;
         self.scale = Some(scale);
         true

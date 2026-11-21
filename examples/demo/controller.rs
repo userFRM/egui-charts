@@ -1692,15 +1692,7 @@ impl DemoApp {
 
     fn write_export(&mut self, save_path: Option<std::path::PathBuf>, extension: &str, out: &[u8]) {
         let from_dialog = save_path.is_some();
-        let path = save_path.unwrap_or_else(|| {
-            // A symbol of a visitor's own data must not carry a path into the file name.
-            let stem = owndata::store::file_stem(&self.state.symbol);
-            let filename = format!("{stem}_export.{extension}");
-            #[cfg(not(target_arch = "wasm32"))]
-            return std::env::temp_dir().join(filename);
-            #[cfg(target_arch = "wasm32")]
-            std::path::PathBuf::from(filename)
-        });
+        let path = save_path.unwrap_or_else(|| default_export_path(&self.state.symbol, extension));
         #[cfg(not(target_arch = "wasm32"))]
         let result = std::fs::write(&path, out).map_err(|e| e.to_string());
         #[cfg(target_arch = "wasm32")]
@@ -4515,13 +4507,7 @@ impl DemoApp {
         png: &[u8],
         path: Option<std::path::PathBuf>,
     ) -> Result<String, String> {
-        let path = path.unwrap_or_else(|| {
-            let filename = format!("{}_chart.png", self.state.symbol);
-            #[cfg(not(target_arch = "wasm32"))]
-            return std::env::temp_dir().join(filename);
-            #[cfg(target_arch = "wasm32")]
-            std::path::PathBuf::from(filename)
-        });
+        let path = path.unwrap_or_else(|| default_export_path(&self.state.symbol, "png"));
         #[cfg(not(target_arch = "wasm32"))]
         let result = std::fs::write(&path, png).map_err(|error| error.to_string());
         #[cfg(target_arch = "wasm32")]
@@ -4533,6 +4519,19 @@ impl DemoApp {
 // ---------------------------------------------------------------------------
 // Free helpers.
 // ---------------------------------------------------------------------------
+
+/// Default export destination, named from a path-safe symbol and the local time to the second,
+/// such as `SAMPLE_2026-11-20_06-50-12.png`. Native hosts save in the temporary directory;
+/// browsers download the file. A visitor's symbol must not carry a path into the file name.
+fn default_export_path(symbol: &str, extension: &str) -> std::path::PathBuf {
+    let stem = owndata::store::file_stem(symbol);
+    let time = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let filename = format!("{stem}_{time}.{extension}");
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::env::temp_dir().join(filename);
+    #[cfg(target_arch = "wasm32")]
+    std::path::PathBuf::from(filename)
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn open_image(ctx: &egui::Context, png: &[u8]) -> Result<String, String> {
@@ -6381,6 +6380,96 @@ mod tests {
             self.0.remove(key);
         }
         fn flush(&mut self) {}
+    }
+
+    /// The selection toolbar opens the same drawing alert editor as the drawing menu.
+    #[test]
+    fn selection_toolbar_add_alert_opens_the_dialog_for_the_drawing() {
+        use eframe::App as _;
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-04T17:30:00Z".parse().unwrap(),
+            false,
+        );
+        app.live.set_paused(true);
+        settle(&mut app, &ctx);
+        ctx.enable_accesskit();
+        let id = app
+            .chart
+            .drawings()
+            .drawings
+            .iter()
+            .map(|d| d.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let n = app.bars.len();
+        let price = app.bars.last().unwrap().close;
+        let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+        drawing.completed = true;
+        drawing.chart_points = vec![
+            ChartPoint::new((n - 20) as f32, price),
+            ChartPoint::new((n - 5) as f32, price),
+        ];
+        let source = drawing.alert_source(0);
+        app.chart.drawings_mut().drawings.push(drawing);
+        app.chart.drawings_mut().select(id);
+        let draw = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+        };
+        draw(&mut app, vec![]).drop_without_applying_deltas();
+        let output = draw(&mut app, vec![]);
+        let pos = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find_map(|(_, node)| {
+                if node.label() != Some("Add alert") || node.role() == egui::accesskit::Role::Label
+                {
+                    return None;
+                }
+                let rect = node.bounds()?;
+                Some(egui::pos2(
+                    (rect.x0 + rect.x1) as f32 / 2.0,
+                    (rect.y0 + rect.y1) as f32 / 2.0,
+                ))
+            })
+            .expect("missing control: Add alert");
+        output.drop_without_applying_deltas();
+        for pressed in [true, false] {
+            draw(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        pressed,
+                        button: egui::PointerButton::Primary,
+                        modifiers: Default::default(),
+                    },
+                ],
+            )
+            .drop_without_applying_deltas();
+        }
+        assert!(app.alert_dialog.is_open);
+        assert!(
+            matches!(&app.alert_dialog.alert.condition, AlertCondition::Compare { other, .. } if *other == source)
+        );
     }
 
     #[test]
@@ -8424,6 +8513,48 @@ mod tests {
                 }
             }
             output.drop_without_applying_deltas();
+        }
+
+        // Every download of a symbol is kept: the default name carries the capture time.
+        use chrono::Timelike;
+        fn paths_time(path: &std::path::Path) -> chrono::NaiveDateTime {
+            let name = path.file_name().unwrap().to_str().unwrap();
+            let stamp = name
+                .strip_prefix("BTC_USD_")
+                .and_then(|name| name.strip_suffix(".png"));
+            chrono::NaiveDateTime::parse_from_str(stamp.unwrap(), "%Y-%m-%d_%H-%M-%S").unwrap()
+        }
+        let now = || chrono::Local::now().naive_local();
+        app.state.symbol = "BTC/USD".into();
+        let mut paths: Vec<std::path::PathBuf> = Vec::new();
+        for _ in 0..2 {
+            // The second download is a second after the first.
+            while paths.len() == 1 && now().with_nanosecond(0).unwrap() <= paths_time(&paths[0]) {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let before = now().with_nanosecond(0).unwrap();
+            app.handle_top_toolbar(&ctx, TopToolbarAction::TakeScreenshot);
+            app.screenshot_requested.as_mut().unwrap().1.size = [200, 120];
+            app.handle_screenshot(&ctx);
+            let after = now();
+            let message = &app.toasts.toasts().last().unwrap().message;
+            let path = std::path::PathBuf::from(
+                message
+                    .strip_prefix("Export successful: ")
+                    .unwrap_or_else(|| panic!("{message}")),
+            );
+            assert_eq!(path.parent(), Some(std::env::temp_dir().as_path()));
+            assert!(
+                (before..=after).contains(&paths_time(&path)),
+                "{}",
+                path.display()
+            );
+            assert!(std::fs::read(&path).unwrap().starts_with(b"\x89PNG"));
+            paths.push(path);
+        }
+        assert_ne!(paths[0], paths[1]);
+        for path in paths {
+            std::fs::remove_file(path).unwrap();
         }
     }
 
