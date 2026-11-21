@@ -14,6 +14,8 @@ mod audio;
 mod commands;
 #[path = "formatting.rs"]
 mod formatting;
+#[path = "ideas.rs"]
+mod ideas;
 #[path = "images.rs"]
 mod images;
 #[path = "interval.rs"]
@@ -96,9 +98,9 @@ use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{
     CalendarAction, CalendarPanel, ChatsPanel, HotlistsAction, HotlistsPanel, NewsAction,
-    NewsPanel, NotificationsAction, NotificationsPanel, Product, ProductsAction, ProductsPanel,
-    ScreenerAction, ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel, WatchlistAction,
-    WatchlistPanel, WidgetBarSection, WidgetBarWidget,
+    NewsPanel, NotificationsPanel, Product, ProductsAction, ProductsPanel, ScreenerAction,
+    ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel, WatchlistAction, WatchlistPanel,
+    WidgetBarSection, WidgetBarWidget,
 };
 use egui_charts::ui::widget_bar::{DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
@@ -223,6 +225,7 @@ enum SidePanel {
     News,
     Notifications,
     Chats,
+    Ideas,
     Products,
 }
 
@@ -295,6 +298,7 @@ enum ScreenshotTarget {
     File(Option<std::path::PathBuf>),
     Clipboard,
     NewTab,
+    Post { copy_link: bool },
 }
 
 /// App state surfaced to the toolbars via `ChartAppState`.
@@ -466,11 +470,13 @@ pub struct DemoApp {
     calendar: CalendarPanel,
     screener: ScreenerPanel,
     hotlists: HotlistsPanel,
+    hotlist_favorites: Vec<String>,
     market_heatmap: egui_charts::ui::widget_bar::MarketHeatmapPanel,
     // The demo's event log: its messages and alert triggers.
     notifications: NotificationsPanel,
     notification_host: Arc<feeds::DemoNotifications>,
     chats: ChatsPanel,
+    ideas: ideas::DemoIdeas,
     products: ProductsPanel,
 
     // Replay engine and its floating transport. `None` until first toggled.
@@ -823,6 +829,7 @@ impl DemoApp {
             calendar: CalendarPanel::new(),
             screener: ScreenerPanel::new(feeds::screener_sets()),
             hotlists: HotlistsPanel::new(feeds::HOTLISTS.map(String::from).to_vec()),
+            hotlist_favorites: Vec::new(),
             market_heatmap: {
                 let mut panel = egui_charts::ui::widget_bar::MarketHeatmapPanel::default();
                 panel.universes = feeds::heatmap_universes();
@@ -832,6 +839,7 @@ impl DemoApp {
             notifications: NotificationsPanel::new(),
             notification_host,
             chats: ChatsPanel::new(),
+            ideas: ideas::DemoIdeas::new(),
             products: ProductsPanel::new(vec![
                 product(
                     "screener",
@@ -918,6 +926,8 @@ impl DemoApp {
         app.alerts.set_service(app.alert_host.clone());
         app.alerts.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.top_toolbar.state.can_trade = true;
+        app.top_toolbar.state.can_publish_ideas = true;
+        app.top_toolbar.state.can_publish_image = true;
         app.watchlist.set_selected(symbol);
         app.watchlist.set_service(app.quotes.clone());
         app.watchlist.set_mark("SAMPLE", SAMPLE_LOGO.into());
@@ -930,6 +940,16 @@ impl DemoApp {
         app.news.set_feed(app.live.clone());
         app.calendar.set_feed(app.live.clone());
         app.screener.set_feed(app.live.clone());
+        app.hotlists
+            .set_refresh_interval(Some(std::time::Duration::from_secs(60)));
+        app.hotlists.set_exchanges(
+            DemoSymbol::catalog()
+                .iter()
+                .map(|spec| spec.exchange.to_owned())
+                .collect::<std::collections::BTreeSet<_>>(),
+        );
+        app.hotlists
+            .set_countries(feeds::COUNTRIES.map(String::from));
         app.hotlists.set_feed(app.live.clone());
         app.notifications.set_service(app.notification_host.clone());
         app.chats
@@ -2383,14 +2403,25 @@ impl DemoApp {
             TopToolbarAction::OpenSettings => {
                 self.open_chart_settings_dialog();
             }
+            TopToolbarAction::Publish => {
+                self.open_panel =
+                    (self.open_panel != Some(SidePanel::Ideas)).then_some(SidePanel::Ideas);
+            }
             TopToolbarAction::TakeScreenshot
             | TopToolbarAction::CopyImage
-            | TopToolbarAction::OpenImage => {
+            | TopToolbarAction::OpenImage
+            | TopToolbarAction::PostImage
+            | TopToolbarAction::CopyImageLink => {
                 self.export_dialog.close();
                 self.toasts.clear();
                 let target = match action {
                     TopToolbarAction::CopyImage => ScreenshotTarget::Clipboard,
                     TopToolbarAction::OpenImage => ScreenshotTarget::NewTab,
+                    TopToolbarAction::PostImage | TopToolbarAction::CopyImageLink => {
+                        ScreenshotTarget::Post {
+                            copy_link: action == TopToolbarAction::CopyImageLink,
+                        }
+                    }
                     _ => ScreenshotTarget::File(None),
                 };
                 self.screenshot_requested = Some((target, {
@@ -2860,15 +2891,30 @@ impl DemoApp {
                         self.open_catalog_symbol(&symbol);
                     }
                 }
-                SidePanel::Hotlists => {
-                    if let HotlistsAction::SelectSymbol(symbol) = self.hotlists.show(ui) {
+                SidePanel::Hotlists => match self.hotlists.show(ui) {
+                    HotlistsAction::SelectSymbol(symbol) => {
                         self.open_catalog_symbol(&symbol);
                     }
-                }
+                    HotlistsAction::AddToWatchlist { list, symbol } => self.handle_context_action(
+                        ui.ctx(),
+                        ChartContextAction::Chart(ContextMenuAction::AddToWatchlist {
+                            list,
+                            symbol,
+                        }),
+                    ),
+                    HotlistsAction::Starred(names) => self.hotlist_favorites = names,
+                    _ => {}
+                },
                 SidePanel::Notifications => {
-                    if let NotificationsAction::SelectSymbol(symbol) = self.notifications.show(ui) {
-                        self.open_catalog_symbol(&symbol);
-                    }
+                    let action = self.notifications.show(ui);
+                    self.handle_notification(action);
+                }
+                SidePanel::Ideas => {
+                    self.ideas
+                        .panel
+                        .set_context(&self.state.symbol, self.state.timeframe.as_str());
+                    let action = self.ideas.panel.show(ui);
+                    self.handle_ideas(ui.ctx(), action);
                 }
                 SidePanel::Chats => self.chats.show(ui),
                 SidePanel::Products => {
@@ -3129,9 +3175,14 @@ impl DemoApp {
             }
         }
         self.feed_financials();
-        let timezone = self.timeframe_toolbar.state.timezone.parse();
-        self.symbol_details
-            .set_timezone(timezone.unwrap_or_default());
+        let timezone = self
+            .timeframe_toolbar
+            .state
+            .timezone
+            .parse::<egui_charts::model::TimezoneId>()
+            .unwrap_or_default();
+        self.symbol_details.set_timezone(timezone.clone());
+        self.hotlists.set_timezone(timezone);
         self.highlights.set_symbol(&chart_symbol);
         self.news.set_symbol(&chart_symbol);
         let tape = self.live.drain_tape();
@@ -3757,6 +3808,8 @@ impl DemoApp {
         self.menus
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
         self.menus
+            .set_watchlists(self.watchlist.lists().iter().map(|list| list.name.as_str()));
+        self.hotlists
             .set_watchlists(self.watchlist.lists().iter().map(|list| list.name.as_str()));
         self.menus.set_layout_copies(self.layout_has_other_charts());
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
@@ -4427,20 +4480,6 @@ impl DemoApp {
                 }
             },
             A::PasteDrawing => self.paste_drawing(),
-            A::CycleChartFocus | A::CycleChartFocusBack => {
-                let count = self
-                    .layout
-                    .mode
-                    .chart_count()
-                    .min(self.extra_charts.len() + 1);
-                let delta = if action == A::CycleChartFocus {
-                    1
-                } else {
-                    count - 1
-                };
-                self.activate_chart_slot((self.layout_slot + delta) % count);
-                self.layout.set_active(self.layout_slot);
-            }
             _ => {}
         }
     }
@@ -4489,6 +4528,7 @@ impl DemoApp {
             .and_then(|png| match target {
                 ScreenshotTarget::File(path) => self.save_screenshot(&png, path),
                 ScreenshotTarget::NewTab => open_image(ctx, &png),
+                ScreenshotTarget::Post { copy_link } => Ok(self.post_image(ctx, png, copy_link)),
                 ScreenshotTarget::Clipboard => {
                     let image = image::load_from_memory(&png)
                         .map_err(|error| error.to_string())?
@@ -4895,16 +4935,25 @@ mod tests {
         ctx: &egui::Context,
         size: egui::Vec2,
         events: Vec<egui::Event>,
-        mut draw: impl FnMut(&mut egui::Ui),
+        draw: impl FnMut(&mut egui::Ui),
     ) -> Vec<(String, egui::Rect)> {
-        let output = ctx.run_ui(
+        ui_frame_input(
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events,
                 ..Default::default()
             },
-            |ui| draw(ui),
-        );
+            draw,
+        )
+    }
+
+    fn ui_frame_input(
+        ctx: &egui::Context,
+        input: egui::RawInput,
+        mut draw: impl FnMut(&mut egui::Ui),
+    ) -> Vec<(String, egui::Rect)> {
+        let output = ctx.run_ui(input, |ui| draw(ui));
         let texts = output
             .shapes
             .iter()
@@ -4918,6 +4967,243 @@ mod tests {
             .collect();
         output.drop_without_applying_deltas();
         texts
+    }
+
+    fn hotlist_frame(
+        app: &mut DemoApp,
+        ctx: &egui::Context,
+        time: f64,
+        events: Vec<egui::Event>,
+    ) -> Vec<(String, egui::Rect)> {
+        ui_frame_input(
+            ctx,
+            egui::RawInput {
+                time: Some(time),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest()),
+        )
+    }
+
+    fn hotlist_click(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
+        let texts = hotlist_frame(app, ctx, 10.0, vec![]);
+        let point = texts
+            .iter()
+            .find(|(text, _)| text == label)
+            .unwrap_or_else(|| panic!("missing {label}: {texts:?}"))
+            .1
+            .center();
+        hotlist_pointer_click(app, ctx, point, egui::PointerButton::Primary);
+    }
+
+    fn hotlist_pointer_click(
+        app: &mut DemoApp,
+        ctx: &egui::Context,
+        point: egui::Pos2,
+        button: egui::PointerButton,
+    ) {
+        hotlist_frame(app, ctx, 10.0, vec![egui::Event::PointerMoved(point)]);
+        for pressed in [true, false] {
+            hotlist_frame(
+                app,
+                ctx,
+                10.0,
+                vec![egui::Event::PointerButton {
+                    pos: point,
+                    button,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        hotlist_frame(app, ctx, 10.0, vec![]);
+    }
+
+    /// The open demo panel narrows the real catalog, shows its ranking volume and asks for
+    /// moving quotes at the configured interval in the chart's zone.
+    #[test]
+    fn demo_hotlist_filters_figures_and_interval_are_reachable() {
+        let ctx = egui::Context::default();
+        let now = "2026-11-18T15:30:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        app.open_panel = Some(SidePanel::Hotlists);
+        apply_timezone(&mut app.chart, &mut app.timeframe_toolbar, "Asia/Tokyo");
+        settle(&mut app, &ctx);
+        hotlist_click(&mut app, &ctx, "All exchanges");
+        hotlist_click(&mut app, &ctx, "Stocks");
+        egui::Popup::close_all(&ctx);
+        hotlist_click(&mut app, &ctx, "All countries");
+        hotlist_click(&mut app, &ctx, "EU");
+        egui::Popup::close_all(&ctx);
+        let empty = hotlist_frame(&mut app, &ctx, 10.0, vec![]);
+        assert!(
+            DemoSymbol::catalog().iter().all(|spec| !empty
+                .iter()
+                .any(|(text, rect)| rect.left() > 1000.0 && text == spec.symbol)),
+            "{empty:?}"
+        );
+        hotlist_click(&mut app, &ctx, "EU");
+        hotlist_click(&mut app, &ctx, "US");
+        hotlist_click(&mut app, &ctx, "2 countries");
+        hotlist_click(&mut app, &ctx, "EU");
+        egui::Popup::close_all(&ctx);
+        hotlist_click(&mut app, &ctx, "Top gainers");
+        hotlist_click(&mut app, &ctx, "Most active");
+        egui::Popup::close_all(&ctx);
+        let texts = hotlist_frame(&mut app, &ctx, 10.0, vec![]);
+        let has = |label: &str| {
+            texts
+                .iter()
+                .any(|(text, rect)| rect.left() > 1000.0 && text == label)
+        };
+        assert!(has("Stocks") && has("US") && has("Volume"), "{texts:?}");
+        let mut volumes = Vec::new();
+        for spec in DemoSymbol::catalog() {
+            let shown = has(spec.symbol);
+            assert_eq!(
+                shown,
+                spec.exchange == "Stocks",
+                "{}: {texts:?}",
+                spec.symbol
+            );
+            if shown {
+                let quote = app.live.market_quote(spec.symbol, now).unwrap();
+                let volume = quote.volume.unwrap();
+                let value = format!("{volume:.0}");
+                let symbol_rect = texts
+                    .iter()
+                    .find(|(text, _)| text == spec.symbol)
+                    .unwrap()
+                    .1;
+                assert!(
+                    texts.iter().any(|(text, rect)| text == &value
+                        && (rect.center().y - symbol_rect.center().y).abs() < 2.0),
+                    "{texts:?}"
+                );
+                volumes.push((symbol_rect.top(), volume));
+            }
+        }
+        volumes.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert!(volumes.windows(2).all(|pair| pair[0].1 >= pair[1].1));
+        assert!(
+            texts
+                .iter()
+                .any(|(text, _)| text.starts_with("Last update at ") && text.ends_with("GMT+9")),
+            "{texts:?}"
+        );
+        let before = format!("{:.2}", app.live.market_quote("STOCKA", now).unwrap().last);
+        app.advance_sample_to(now + chrono::Duration::minutes(5));
+        let after = format!(
+            "{:.2}",
+            app.live
+                .market_quote("STOCKA", app.live.now())
+                .unwrap()
+                .last
+        );
+        assert_ne!(before, after);
+        let early = hotlist_frame(&mut app, &ctx, 69.9, vec![]);
+        assert!(early.iter().any(|(text, _)| text == &before), "{early:?}");
+        hotlist_frame(&mut app, &ctx, 70.0, vec![]);
+        let refreshed = hotlist_frame(&mut app, &ctx, 70.1, vec![]);
+        assert!(
+            refreshed.iter().any(|(text, _)| text == &after),
+            "{refreshed:?}"
+        );
+    }
+
+    /// Row menus update the demo watchlist, and starring a list survives the real settings save
+    /// and restart, including the menu order.
+    #[test]
+    fn demo_hotlist_watchlists_and_stars_survive_restart() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        let now = "2026-11-18T15:30:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        app.open_panel = Some(SidePanel::Hotlists);
+        settle(&mut app, &ctx);
+        hotlist_click(&mut app, &ctx, "Top gainers");
+        hotlist_click(&mut app, &ctx, "Most volatile");
+        egui::Popup::close_all(&ctx);
+        let texts = hotlist_frame(&mut app, &ctx, 10.0, vec![]);
+        let (symbol, rect) = texts
+            .iter()
+            .find(|(text, _)| {
+                DemoSymbol::catalog().iter().any(|spec| {
+                    spec.symbol == text
+                        && !app.watchlist.lists()[0]
+                            .symbols()
+                            .any(|symbol| symbol == text)
+                })
+            })
+            .unwrap();
+        let symbol = symbol.clone();
+        let point = rect.center();
+        hotlist_pointer_click(&mut app, &ctx, point, egui::PointerButton::Secondary);
+        hotlist_click(&mut app, &ctx, &format!("Add {symbol} to watchlist"));
+        let destination = app.watchlist.lists()[0].name.clone();
+        hotlist_click(&mut app, &ctx, &destination);
+        assert!(
+            app.watchlist.lists()[0]
+                .symbols()
+                .any(|entry| entry == symbol)
+        );
+        egui::Popup::close_all(&ctx);
+        hotlist_click(&mut app, &ctx, "Most volatile");
+        let texts = hotlist_frame(&mut app, &ctx, 10.0, vec![]);
+        let title = texts
+            .iter()
+            .find(|(text, _)| text == "Top losers")
+            .unwrap()
+            .1;
+        let star = egui::pos2(title.left() - 20.0, title.center().y);
+        hotlist_pointer_click(&mut app, &ctx, star, egui::PointerButton::Primary);
+        let mut storage = AppStorage::default();
+        app.save(&mut storage);
+        let documents: std::collections::HashMap<String, String> =
+            eframe::get_value(&storage, "templates").unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_str(&documents["Settings/settings"]).unwrap();
+        assert_eq!(
+            settings["hotlist_favorites"],
+            serde_json::json!(["Top losers"])
+        );
+        egui::Popup::close_all(&ctx);
+        let ctx = egui::Context::default();
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        let mut restored = DemoApp::new_at(&cc, now, true);
+        restored.open_panel = Some(SidePanel::Hotlists);
+        settle(&mut restored, &ctx);
+        assert_eq!(restored.user_settings().hotlist_favorites, ["Top losers"]);
+        egui::Popup::close_all(&ctx);
+        hotlist_click(&mut restored, &ctx, "Top gainers");
+        let mut texts = hotlist_frame(&mut restored, &ctx, 10.0, vec![]);
+        if !texts.iter().any(|(text, _)| text == "Top losers") {
+            hotlist_click(&mut restored, &ctx, "Top gainers");
+            texts = hotlist_frame(&mut restored, &ctx, 10.0, vec![]);
+        }
+        let row_y = |label| {
+            texts
+                .iter()
+                .filter(|(text, _)| text == label)
+                .map(|(_, rect)| rect.top())
+                .max_by(f32::total_cmp)
+                .unwrap_or_else(|| panic!("missing {label}: {texts:?}"))
+        };
+        assert!(row_y("Top losers") < row_y("Top gainers"), "{texts:?}");
     }
 
     pub(super) fn ui_click(
