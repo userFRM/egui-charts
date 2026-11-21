@@ -107,8 +107,12 @@ pub struct SavedPane {
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
 /// the host's feed. Take one with [`Chart::snapshot`] and apply it with [`Chart::restore`].
 /// The trading and alert settings of the settings dialog belong to the host and are not part of
-/// it. Its settings hold the futures data choices, which [`Chart::restore`] records on the chart;
-/// the host reloads its history for them.
+/// it. It keeps the data choices that decide what the feed sends: the extended and overnight
+/// hours, the currency or unit [`conversion`](Self::conversion) and, in its settings, the
+/// dividend adjustment and the futures data choices. [`Chart::restore`] applies the hours, the
+/// conversion and the dividend adjustment as their setters do, so a chart with a feed requests
+/// its data with them, and records the futures data choices on the chart; the host reloads its
+/// history for those.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ChartSnapshot {
@@ -125,6 +129,11 @@ pub struct ChartSnapshot {
     /// Whether overnight hours are requested together with extended hours. False in older saves.
     #[serde(default)]
     pub overnight_hours: bool,
+    /// The currency or unit the chart asks the feed for, as [`Chart::set_conversion`] chose it.
+    /// `None` asks for the instrument's own, also in layouts saved before it was recorded, so
+    /// that restoring one of those clears the chart's conversion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversion: Option<String>,
     /// The chart type.
     pub chart_type: ChartType,
     /// The parameters of the price-based chart types and of the baseline.
@@ -313,6 +322,7 @@ impl Chart {
             interval: self.timeframe,
             extended_hours: self.extended_hours,
             overnight_hours: self.overnight_hours,
+            conversion: self.conversion.clone(),
             chart_type: self.chart_type,
             chart_type_params: self.chart_type_params.clone(),
             main_series_visible: self.main_series_visible,
@@ -491,6 +501,7 @@ impl Chart {
         self.set_extended_hours(snapshot.extended_hours);
         self.set_overnight_hours(snapshot.overnight_hours);
         self.set_dividend_adjusted(snapshot.settings.adjust_for_dividends);
+        self.set_conversion(snapshot.conversion.clone());
         self.set_chart_type(snapshot.chart_type);
         self.set_chart_type_params(snapshot.chart_type_params.clone());
         self.set_main_series_visible(snapshot.main_series_visible);
@@ -2658,6 +2669,38 @@ mod tests {
         let older = SavedLayout::from_json(&older.to_string()).unwrap();
         restored.restore(&older.charts[0]).unwrap();
         assert_eq!(choices(&restored), (false, true));
+    }
+
+    /// The currency or unit conversion survives layouts; a layout saved without it restores no
+    /// conversion, also on a chart that had one.
+    #[test]
+    fn layouts_keep_the_conversion() {
+        use crate::widget::{ChartLayoutMode, SavedLayout, test_frames::chart};
+        for conversion in ["EUR", "oz"] {
+            let mut source = chart(&[100.0], &[110.0]);
+            source.set_conversion(Some(conversion.into()));
+            let json = SavedLayout::new(ChartLayoutMode::Single, vec![source.snapshot().unwrap()])
+                .to_json()
+                .unwrap();
+            let mut restored = chart(&[100.0], &[110.0]);
+            restored
+                .restore(&SavedLayout::from_json(&json).unwrap().charts[0])
+                .unwrap();
+            assert_eq!(restored.conversion(), Some(conversion));
+
+            // Saved before snapshots kept it.
+            let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+            older
+                .pointer_mut("/charts/0")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove("conversion")
+                .expect("conversion");
+            let older = SavedLayout::from_json(&older.to_string()).unwrap();
+            restored.restore(&older.charts[0]).unwrap();
+            assert_eq!(restored.conversion(), None, "{conversion} saved before");
+        }
     }
 
     /// An HLC area layout or template saved before the style held each line and fill restores as
