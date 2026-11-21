@@ -849,16 +849,15 @@ impl SymbolTab {
             .take(crate::model::CustomProfileSessions::MAX)
             .enumerate()
         {
-            let prefix = if i == 0 {
-                "Session".to_owned()
+            let [start, end, zone] = if i == 0 {
+                ["Session start", "Session end", "Session zone"]
+                    .map(|label| l10n::text(ui.ctx(), label))
             } else {
-                format!("Session {}", i + 1)
+                ["Session {0} start", "Session {0} end", "Session {0} zone"]
+                    .map(|label| l10n::format_text(ui.ctx(), label, &[("0", (i + 1).to_string())]))
             };
-            for (name, time) in [
-                (format!("{prefix} start"), &mut window.start),
-                (format!("{prefix} end"), &mut window.end),
-            ] {
-                let label = ui.label(l10n::text(ui.ctx(), &name));
+            for (name, time) in [(start, &mut window.start), (end, &mut window.end)] {
+                let label = ui.label(name);
                 ui.horizontal(|ui| {
                     let (mut hour, mut minute) = (time.hour(), time.minute());
                     ui.add(egui::DragValue::new(&mut hour).range(0..=23))
@@ -870,7 +869,7 @@ impl SymbolTab {
                 });
                 ui.end_row();
             }
-            let label = ui.label(format!("{prefix} zone"));
+            let label = ui.label(zone);
             let zones: &[&str] = if cfg!(feature = "timezones") {
                 &[
                     "UTC",
@@ -911,7 +910,14 @@ impl SymbolTab {
             ui.end_row();
             if i > 0 {
                 ui.label("");
-                if ui.button(format!("Remove session {}", i + 1)).clicked() {
+                if ui
+                    .button(l10n::format_text(
+                        ui.ctx(),
+                        "Remove session {0}",
+                        &[("0", (i + 1).to_string())],
+                    ))
+                    .clicked()
+                {
                     remove = Some(i);
                 }
                 ui.end_row();
@@ -924,7 +930,7 @@ impl SymbolTab {
         if ui
             .add_enabled(
                 custom.sessions.len() < crate::model::CustomProfileSessions::MAX,
-                egui::Button::new("Add session"),
+                egui::Button::new(l10n::text(ui.ctx(), "Add session")),
             )
             .clicked()
         {
@@ -936,7 +942,7 @@ impl SymbolTab {
                 ));
         }
         ui.end_row();
-        let label = ui.label("Overlapping hours");
+        let label = ui.label(l10n::text(ui.ctx(), "Overlapping hours"));
         ui.label_inputs_by(label.id, |ui| {
             ui.combo_select(
                 "profile_overlap",
@@ -956,7 +962,10 @@ impl SymbolTab {
         });
         ui.end_row();
         ui.label("");
-        ui.checkbox(&mut custom.trading_hours_only, "Clip to trading hours");
+        ui.checkbox(
+            &mut custom.trading_hours_only,
+            l10n::text(ui.ctx(), "Clip to trading hours"),
+        );
         ui.end_row();
     }
 

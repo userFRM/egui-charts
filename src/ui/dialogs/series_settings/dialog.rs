@@ -680,7 +680,7 @@ mod tests {
         }
     }
 
-    /// Custom windows edit a draft, cap the list at five and apply as one history step.
+    /// Custom windows use host labels, edit a draft, cap the list at five and apply as one history step.
     #[test]
     fn session_profile_custom_sessions_apply_on_ok_only_and_undo() {
         use egui::accesskit::Role;
@@ -699,6 +699,24 @@ mod tests {
                 .with_context_setup(|ctx| {
                     egui_extras::install_image_loaders(ctx);
                     crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                    crate::localization::set_translator(ctx, |english| {
+                        matches!(
+                            english,
+                            "Session start"
+                                | "Session end"
+                                | "Session zone"
+                                | "Session {0} start"
+                                | "Session {0} end"
+                                | "Session {0} zone"
+                                | "Remove session {0}"
+                                | "Add session"
+                                | "Overlapping hours"
+                                | "Own profile"
+                                | "In both sessions"
+                                | "Clip to trading hours"
+                        )
+                        .then(|| format!("Translated: {english}"))
+                    });
                 })
                 .build_ui_state(
                     |ui, (dialog, chart): &mut (SeriesSettingsDialog, crate::Chart)| {
@@ -716,53 +734,74 @@ mod tests {
             h.run();
             h.get_by_label("Custom").click();
             h.run();
-            h.get_by_label("Add session").scroll_to_me();
+            for label in ["Translated: Session start", "Translated: Session end"] {
+                assert!(
+                    h.get_all_by_role_and_label(Role::SpinButton, label)
+                        .next()
+                        .is_some()
+                );
+            }
+            h.get_by_role_and_label(Role::ComboBox, "Translated: Session zone");
+            h.get_by_label("Translated: Add session").scroll_to_me();
             h.run();
-            h.get_by_label("Add session").click();
+            h.get_by_label("Translated: Add session").click();
             h.run();
-            h.get_all_by_role_and_label(Role::SpinButton, "Session 2 start")
+            assert!(
+                h.get_all_by_role_and_label(Role::SpinButton, "Translated: Session 2 end")
+                    .next()
+                    .is_some()
+            );
+            h.get_by_role_and_label(Role::ComboBox, "Translated: Session 2 zone");
+            h.get_all_by_role_and_label(Role::SpinButton, "Translated: Session 2 start")
                 .next()
                 .unwrap()
                 .scroll_to_me();
             h.run();
             for _ in 0..12 {
-                h.get_all_by_role_and_label(Role::SpinButton, "Session 2 start")
+                h.get_all_by_role_and_label(Role::SpinButton, "Translated: Session 2 start")
                     .next()
                     .unwrap()
                     .increment_accesskit();
                 h.run();
             }
-            h.get_by_role_and_label(Role::ComboBox, "Overlapping hours")
+            h.get_by_role_and_label(Role::ComboBox, "Translated: Overlapping hours")
                 .scroll_to_me();
             h.run();
-            h.get_by_role_and_label(Role::ComboBox, "Overlapping hours")
+            h.get_by_role_and_label(Role::ComboBox, "Translated: Overlapping hours")
                 .click();
             h.run();
-            h.get_by_label("In both sessions").click();
+            h.get_by_label("Translated: Own profile");
+            h.get_by_label("Translated: In both sessions").click();
             h.run();
-            h.get_by_label("Clip to trading hours").scroll_to_me();
+            h.get_by_label("Translated: Clip to trading hours")
+                .scroll_to_me();
             h.run();
-            h.get_by_label("Clip to trading hours").click();
+            h.get_by_label("Translated: Clip to trading hours").click();
             h.run();
-            h.get_by_label("Remove session 2").scroll_to_me();
+            h.get_by_label("Translated: Remove session 2")
+                .scroll_to_me();
             h.run();
-            h.get_by_label("Remove session 2").click();
+            h.get_by_label("Translated: Remove session 2").click();
             h.run();
-            h.get_by_label("Add session").click();
+            h.get_by_label("Translated: Add session").click();
             h.run();
             assert_eq!(h.state().1.trade_profile_settings(), &seeded);
             // Adding reaches five, then stops. Removing the extra three returns to two.
             for _ in 0..3 {
-                h.get_by_label("Add session").scroll_to_me();
+                h.get_by_label("Translated: Add session").scroll_to_me();
                 h.run();
-                h.get_by_label("Add session").click();
+                h.get_by_label("Translated: Add session").click();
                 h.run();
             }
-            h.get_by_label("Add session").scroll_to_me();
+            h.get_by_label("Translated: Add session").scroll_to_me();
             h.run();
-            assert!(h.get_by_label("Add session").accesskit_node().is_disabled());
+            assert!(
+                h.get_by_label("Translated: Add session")
+                    .accesskit_node()
+                    .is_disabled()
+            );
             for n in (3..=5).rev() {
-                let label = format!("Remove session {n}");
+                let label = format!("Translated: Remove session {n}");
                 h.get_by_label(&label).scroll_to_me();
                 h.run();
                 h.get_by_label(&label).click();
