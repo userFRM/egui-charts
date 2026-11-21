@@ -78,8 +78,8 @@ pub use chart_style::{
 };
 pub use chart_type::{
     BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams, CustomProfileSession,
-    FootprintColor, FootprintIntensity, FootprintMode, FootprintStatistic, NodeSensitivity,
-    ProfileRows, ProfileSession, TradeProfileSettings,
+    CustomProfileSessions, FootprintColor, FootprintIntensity, FootprintMode, FootprintStatistic,
+    NodeSensitivity, ProfileRows, ProfileSession, SessionOverlap, TradeProfileSettings,
 };
 pub use clock::BarClock;
 pub(crate) use clock::Placement;
