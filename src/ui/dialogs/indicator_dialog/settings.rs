@@ -1656,7 +1656,7 @@ mod tests {
                 [&[293.0 / 24.0], &[101.0 / 24.0], &[749.0 / 48.0]],
             ),
             (
-                "VPT",
+                "PVT",
                 [
                     &[36919.0 / 12012.0],
                     &[20903.0 / 12012.0],
@@ -2018,7 +2018,7 @@ mod tests {
                 // Alternating open/close changes give this independent Wilder/SMA result.
                 assert!((loaded.plot_value(0, 10).unwrap() - 66.0).abs() < 1e-9);
             }
-            if matches!(name, "Force Index" | "VPT") {
+            if matches!(name, "Force Index" | "PVT") {
                 loaded
                     .set_input(
                         "source",
