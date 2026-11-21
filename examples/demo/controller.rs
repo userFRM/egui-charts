@@ -952,6 +952,7 @@ impl DemoApp {
         }
         app.alerts.set_service(app.alert_host.clone());
         app.alerts.set_popup_actions(true);
+        app.stop_restored_strategy_alerts();
         app.alerts.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.top_toolbar.state.can_trade = true;
         app.top_toolbar.state.can_publish_ideas = true;
