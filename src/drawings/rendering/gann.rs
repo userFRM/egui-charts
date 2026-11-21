@@ -1691,8 +1691,8 @@ mod tests {
     /// A saved `gann` object without fields draws what no `gann` draws, for every Gann tool: the
     /// fan's nine lines, and the square's six levels at whole units rather than the box's seven
     /// fractions. An object saved before levels had a width and the tools their label, reverse
-    /// and one colour switches draws its settings as then: labels as the tool starts with them, counted from the first
-    /// anchor, in the level colours at the drawing's width.
+    /// and one colour switches draws its settings as then: labels as the tool starts with them,
+    /// counted from the first anchor, in the level colours at the drawing's width.
     #[test]
     fn an_empty_gann_object_draws_the_tool_defaults() {
         use crate::drawings::ChartPoint;
