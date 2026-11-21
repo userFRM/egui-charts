@@ -77,7 +77,7 @@ use egui_charts::ui::dialogs::{
     KeyboardShortcutsDialog, SeriesContextMenuAction, StudyContextMenuAction,
 };
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
-use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
+use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse, ExportScope};
 use egui_charts::ui::floating_replay_control::{FloatingReplayControl, ReplayControlAction};
 use egui_charts::ui::floating_toolbar::FloatingSelectionToolbar;
 use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplaySession, ReplayStartPicker};
@@ -402,7 +402,6 @@ pub struct DemoApp {
     /// A copy across the layout waiting for the user to accept what its charts lack.
     layout_copy_prompt: Option<(LayoutCopy, String)>,
     export_dialog: ExportDialog,
-    export_arrangement: bool,
     date_picker: DatePicker,
 
     // A finished host-run sample, independent of subsequent chart navigation.
@@ -478,7 +477,11 @@ pub struct DemoApp {
     replay_control: FloatingReplayControl,
 
     // Pending offscreen image options and delivery destination.
-    screenshot_requested: Option<(ScreenshotTarget, egui_charts::widget::ImageExportOptions)>,
+    screenshot_requested: Option<(
+        ScreenshotTarget,
+        egui_charts::widget::ImageExportOptions,
+        ExportScope,
+    )>,
 
     toasts: Toasts,
     /// Handle of the demo's price line, moved and removed from the chart menu.
@@ -720,7 +723,6 @@ impl DemoApp {
             copied_study: None,
             layout_copy_prompt: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
-            export_arrangement: false,
             date_picker: DatePicker::new(),
             strategy_report: Default::default(),
             live_strategy: None,
@@ -1427,15 +1429,7 @@ impl DemoApp {
         self.show_open_layout(ctx);
 
         // Export dialog (screenshot / CSV).
-        match self.export_dialog.show_with(ctx, |ui, format| {
-            if !format.is_data_format() {
-                ui.horizontal(|ui| {
-                    ui.label("Image scope");
-                    ui.radio_value(&mut self.export_arrangement, false, "Active chart");
-                    ui.radio_value(&mut self.export_arrangement, true, "Visible arrangement");
-                });
-            }
-        }) {
+        match self.export_dialog.show(ctx) {
             ExportResponse::Export { config, save_path } => self.run_export(ctx, config, save_path),
             ExportResponse::Closed | ExportResponse::None => {}
         }
@@ -1644,9 +1638,11 @@ impl DemoApp {
             ExportFormat::Png => ScreenshotTarget::File(save_path),
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
             ExportFormat::Csv => return self.export_csv(save_path),
-            ExportFormat::Svg => return self.export_svg(ctx, &config.image, save_path),
+            ExportFormat::Svg => {
+                return self.export_svg(ctx, &config.image, config.scope, save_path);
+            }
         };
-        self.screenshot_requested = Some((target, config.image));
+        self.screenshot_requested = Some((target, config.image, config.scope));
         ctx.request_repaint();
     }
 
@@ -1662,9 +1658,10 @@ impl DemoApp {
         &mut self,
         ctx: &egui::Context,
         image: &egui_charts::widget::ImageExportOptions,
+        scope: ExportScope,
         save_path: Option<std::path::PathBuf>,
     ) {
-        match self.export_image_bytes(ctx, image, ExportFormat::Svg, self.export_arrangement) {
+        match self.export_image_bytes(ctx, image, ExportFormat::Svg, scope == ExportScope::Layout) {
             Ok(svg) => self.write_export(save_path, "svg", &svg),
             Err(error) => self.export_failed(save_path.is_some(), error.to_string()),
         }
@@ -2360,11 +2357,15 @@ impl DemoApp {
                     TopToolbarAction::OpenImage => ScreenshotTarget::NewTab,
                     _ => ScreenshotTarget::File(None),
                 };
-                self.screenshot_requested = Some((target, {
-                    let mut options = egui_charts::widget::ImageExportOptions::default();
-                    options.include_crosshair = true;
-                    options
-                }));
+                self.screenshot_requested = Some((
+                    target,
+                    {
+                        let mut options = egui_charts::widget::ImageExportOptions::default();
+                        options.include_crosshair = true;
+                        options
+                    },
+                    ExportScope::Layout,
+                ));
                 ctx.request_repaint();
             }
             TopToolbarAction::ToggleFullscreen => {
@@ -3593,7 +3594,16 @@ impl DemoApp {
                 let mut charts: Vec<_> =
                     self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
                 charts.insert(self.layout_slot, &mut self.chart);
-                self.layout.show(ui, &mut charts);
+                let rect = self.layout.show(ui, &mut charts).rect;
+                let visible = self.layout.visible_chart_rects(rect, charts.len());
+                self.export_dialog.set_chart_size(
+                    visible
+                        .iter()
+                        .find(|(slot, _)| *slot == self.layout.active())
+                        .map(|(_, rect)| rect.size()),
+                );
+                self.export_dialog
+                    .set_layout_size((visible.len() > 1).then_some(rect.size()));
                 // A chart that follows a linked symbol change shows the bars it would show had
                 // the symbol been chosen on it.
                 for (extra, symbol) in self.extra_charts.iter_mut().zip(symbols) {
@@ -4413,7 +4423,7 @@ impl DemoApp {
     }
 
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
-        let Some((target, options)) = self.screenshot_requested.take() else {
+        let Some((target, options, scope)) = self.screenshot_requested.take() else {
             return;
         };
         let result = self
@@ -4421,7 +4431,7 @@ impl DemoApp {
                 ctx,
                 &options,
                 ExportFormat::Png,
-                self.export_dialog.is_open() && self.export_arrangement,
+                scope == ExportScope::Layout,
             )
             .map_err(|error| error.to_string())
             .and_then(|png| match target {
@@ -8268,7 +8278,7 @@ mod tests {
         for action in [TopToolbarAction::CopyImage, TopToolbarAction::OpenImage] {
             let copy = action == TopToolbarAction::CopyImage;
             app.handle_top_toolbar(&ctx, action);
-            let (target, options) = app.screenshot_requested.as_mut().unwrap();
+            let (target, options, _) = app.screenshot_requested.as_mut().unwrap();
             assert_eq!(matches!(target, ScreenshotTarget::Clipboard), copy);
             options.size = [200, 120];
             let output = ctx.run_ui(Default::default(), |ui| app.handle_screenshot(ui.ctx()));
