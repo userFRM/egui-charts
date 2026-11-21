@@ -260,8 +260,10 @@ impl FloatingSelectionToolbar {
             ));
         }
         self.set_locked(drawing.locked);
-        self.set_user_edit_enabled(drawing.user_edit_enabled);
-        let (editable, unprotected) = (drawing.accepts_user_edits(), drawing.user_edit_enabled);
+        // While every drawing is locked, offer the controls for a drawing the user cannot edit.
+        let unprotected = drawing.user_edit_enabled && !chart.drawings().is_locked();
+        self.set_user_edit_enabled(unprotected);
+        let editable = chart.drawings().accepts_user_edits(drawing);
         self.set_object_visible(drawing.visible);
         // Without a colour slot, the fill is the first slot.
         let fill_slot = usize::from(drawing.tool_type.supports_color());
@@ -865,11 +867,12 @@ mod tests {
     fn first_colour_slot_edits_what_it_names() {
         use crate::drawings::{Drawing, DrawingToolType};
         use crate::ui_kit::color_picker::{MAIN_COLORS, tests::click};
-        for (tool, user_edit) in [
-            (DrawingToolType::PriceLabel, true),
-            (DrawingToolType::PriceLabel, false),
-            (DrawingToolType::Tweet, true),
-            (DrawingToolType::TextLabel, true),
+        for (tool, user_edit, all_locked) in [
+            (DrawingToolType::PriceLabel, true, false),
+            (DrawingToolType::PriceLabel, false, false),
+            (DrawingToolType::Tweet, true, false),
+            (DrawingToolType::TextLabel, true, false),
+            (DrawingToolType::PriceLabel, true, true),
         ] {
             let swatch = MAIN_COLORS[3];
             let ctx = egui::Context::default();
@@ -888,6 +891,8 @@ mod tests {
             label.completed = true;
             label.points = vec![Pos2::new(100.0, 100.0)];
             chart.drawings_mut().drawings = vec![label];
+            chart.drawings_mut().set_locked(all_locked);
+            let editable = user_edit && !all_locked;
             chart.drawings_mut().select(7);
             let mut toolbar = FloatingSelectionToolbar::new();
             let mut frame = |toolbar: &mut FloatingSelectionToolbar, events| {
@@ -915,14 +920,14 @@ mod tests {
             toolbar.pickers[0].is_open = true;
             frame(&mut toolbar, vec![]);
             let pos = frame(&mut toolbar, vec![]);
-            if user_edit {
+            if editable {
                 assert!(pos.is_some(), "the palette shows the swatch");
             }
             if let Some(pos) = pos {
                 frame(&mut toolbar, click(pos));
             }
             let label = &chart.drawings().drawings[0];
-            let green = if user_edit {
+            let green = if editable {
                 swatch.to_srgba_unmultiplied()
             } else {
                 original
