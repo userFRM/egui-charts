@@ -67,8 +67,8 @@ pub struct FootprintConfig {
     /// and labels vanish.
     pub text_color: Color32,
     /// Cell fill for balanced or unclassified executions; under [`FootprintColor::VolumeSteps`]
-    /// its weakest shade fills a row without classified volume, apart from a POC of the same
-    /// colour.
+    /// it shades total-volume cells, and its weakest shade fills a row without classified
+    /// volume, apart from a POC of the text colour.
     pub neutral_color: Color32,
     /// The colour behind the cells, which the volume shades and the patches behind numbers are
     /// mixed with, or `None`, the default, for the plot background of the painter's active theme.
@@ -578,6 +578,12 @@ pub(crate) fn render_footprint_read(
                         config.text_color
                     } else if row.bid + row.ask == 0.0 && row.unknown > 0.0 {
                         step_color(config.neutral_color, 0, text_background)
+                    } else if *mode == FootprintMode::Volume {
+                        step_color(
+                            config.neutral_color,
+                            volume_step(row.volume(), [scale.min_volume, scale.volume]),
+                            text_background,
+                        )
                     } else {
                         let step = volume_step(volume, scale.sides[side]);
                         chosen[step].unwrap_or_else(|| step_color(color, step, text_background))
@@ -664,7 +670,7 @@ pub(crate) fn render_footprint_read(
                         Some((fill, color.gamma_multiply(0.5))),
                         None,
                     ];
-                    if steps && ladder {
+                    if steps && (ladder || *mode == FootprintMode::Volume) {
                         fills[1] = Some((fill, shades[side]));
                     } else if steps {
                         let (bid, ask) = fill.split_left_right_at_x(fill.center().x);
@@ -709,7 +715,7 @@ pub(crate) fn render_footprint_read(
                     }
                     let inks = if !steps {
                         [config.text_color; 2]
-                    } else if ladder {
+                    } else if ladder || *mode == FootprintMode::Volume {
                         [contrasting_text(shades[side]); 2]
                     } else {
                         shades.map(contrasting_text)
@@ -1319,6 +1325,7 @@ fn ladder_sides(column: Rect) -> [Rect; 2] {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Scale {
     volume: f64,
+    min_volume: f64,
     delta: f64,
     /// Sell and buy minima and maxima, respectively.
     sides: [[f64; 2]; 2],
@@ -1329,12 +1336,14 @@ impl Scale {
         rows.into_iter().fold(
             Self {
                 volume: 0.0,
+                min_volume: f64::INFINITY,
                 delta: 0.0,
                 sides: [[f64::INFINITY, 0.0]; 2],
             },
             |scale, row| {
                 scale.merge(Self {
                     volume: row.volume(),
+                    min_volume: row.volume(),
                     delta: row.delta().abs(),
                     sides: [[row.bid; 2], [row.ask; 2]],
                 })
@@ -1351,6 +1360,7 @@ impl Scale {
         };
         Self {
             volume: self.volume.max(other.volume),
+            min_volume: self.min_volume.min(other.min_volume),
             delta: self.delta.max(other.delta),
             sides: [side(0), side(1)],
         }
@@ -1359,14 +1369,15 @@ impl Scale {
     fn entered(volume: f64) -> Self {
         Self {
             volume,
+            min_volume: 0.0,
             delta: volume,
             sides: [[0.0, volume]; 2],
         }
     }
 }
 
-/// The quarter of the `[smallest, largest]` range of its side that `volume` falls in, 0 to 3. A
-/// side that traded one volume throughout takes the strongest shade, or the weakest at zero.
+/// The quarter of the `[smallest, largest]` volume range that `volume` falls in, 0 to 3. A
+/// range with one volume throughout takes the strongest shade, or the weakest at zero.
 fn volume_step(volume: f64, [smallest, largest]: [f64; 2]) -> usize {
     if largest > smallest {
         (((volume - smallest) / (largest - smallest) * 4.0) as usize).min(3)
@@ -2800,6 +2811,91 @@ mod tests {
                 }
             }
         }
+        // A total-volume column uses the range of totals, even when the two sides disagree.
+        let mut totals_flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        let rows = [(103.0, 30.0, 10.0), (102.0, 5.0, 20.0), (101.0, 12.0, 12.0)];
+        for (price, sell, buy) in rows {
+            for (size, side) in [(sell, OrderSide::Sell), (buy, OrderSide::Buy)] {
+                totals_flow
+                    .push(&Tick::new(time, price, size, Some(side)))
+                    .unwrap();
+            }
+        }
+        let next = time + chrono::TimeDelta::minutes(1);
+        for (price, size) in [(100.0, 60.0), (99.0, 8.0)] {
+            totals_flow
+                .push(&Tick::new(next, price, size, Some(OrderSide::Buy)))
+                .unwrap();
+        }
+        let totals_bars = [
+            Bar::new(time, 101.0, 103.0, 101.0, 103.0, 89.0),
+            Bar::new(next, 99.0, 100.0, 99.0, 100.0, 68.0),
+        ];
+        config.modes = vec![FootprintMode::Volume];
+        config.min_text_height = 10.0;
+        config.font_size = [8.0; 2];
+        // Chosen shades belong to the buy and sell cells, not the neutral total cell.
+        config.ask_step_colors = [Some(Color32::YELLOW); 4];
+        config.bid_step_colors = [Some(Color32::BLUE); 4];
+        let totals_map = mapping(104.0);
+        for background in [Color32::BLACK, Color32::WHITE] {
+            config.background = Some(background);
+            for (intensity, expected) in [
+                (FootprintIntensity::Bar, [3, 0, 0]),
+                (FootprintIntensity::Visible, [2, 1, 1]),
+                (FootprintIntensity::Volume(80.0), [2, 1, 1]),
+            ] {
+                config.intensity = intensity;
+                let mut output = egui::Context::default().run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        render_footprint(
+                            ui.painter(),
+                            &totals_map,
+                            &totals_bars,
+                            &totals_flow,
+                            &config,
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                let fills = quads(&output.shapes);
+                for ((price, sell, buy), step) in rows.into_iter().zip(expected) {
+                    let shade = step_color(config.neutral_color, step, background);
+                    let y = totals_map.price_to_y(price);
+                    let x = totals_map.idx_to_x(0);
+                    assert_eq!(
+                        [-45.0, 45.0].map(|offset| color_at(&fills, pos2(x + offset, y))),
+                        [Some(shade); 2],
+                        "total {}: {intensity:?} on {background:?}, sell and buy edges",
+                        sell + buy
+                    );
+                    assert_eq!(
+                        fills
+                            .iter()
+                            .filter(|(r, _)| r.contains(pos2(x - 45.0, y))
+                                && r.contains(pos2(x + 45.0, y)))
+                            .count(),
+                        1,
+                        "one fill spans the total cell"
+                    );
+                    let number = format!("{}", sell + buy);
+                    let inks: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|s| match &s.shape {
+                            Shape::Text(t) if t.galley.text() == number => t.override_text_color,
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(inks, [contrasting_text(shade)], "total {number}");
+                }
+            }
+        }
+        config.modes = vec![FootprintMode::BidAsk];
         config.color_by = FootprintColor::Volume;
         config.min_text_height = 10.0;
         config.font_size = [8.0, 24.0];

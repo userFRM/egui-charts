@@ -396,7 +396,9 @@ pub enum FootprintColor {
     /// Sell and buy volume shaded separately, each in one of four strengths of its own colour by
     /// the quarter it falls in between the smallest and the largest volume of its side in the
     /// bar, or in the bars in view, or between zero and an entered volume, as
-    /// [`FootprintIntensity`] chooses. The POC row takes the text colour, the value area is two
+    /// [`FootprintIntensity`] chooses. A total-volume column instead uses one shade mixed from
+    /// the neutral colour, by the quarter of the total-volume range; chosen side shades do not
+    /// apply to it. The POC row takes the text colour, the value area is two
     /// dotted lines, and a side that dominates under the imbalance settings gets a strip along its outer edge.
     VolumeSteps,
     /// The cell of the side that traded more in its row, in the buy or sell colour at half
@@ -885,6 +887,7 @@ pub struct ChartTypeParams {
     /// Footprint: the four shades of the buy cells and of the sell cells under
     /// [`FootprintColor::VolumeSteps`], weakest first. None mixes the shade from the buy or sell
     /// colour and the chart background, as when the field is missing from a saved chart.
+    /// Total-volume cells mix their shade from the neutral colour and ignore these side shades.
     pub footprint_step_colors: [[Option<egui::Color32>; 4]; 2],
     /// Footprint: instrument ticks per row; zero groups automatically with zoom. Rows sized by
     /// `footprint_row_atr` use it only until the chart holds a complete bar.
