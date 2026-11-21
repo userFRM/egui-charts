@@ -906,15 +906,18 @@ impl ConfiguredStudy {
     /// on a chart of it: other symbols' bars, and bars of the chart's interval, while the study
     /// has no interval input of its own. A study with an interval it picks below the chart's
     /// ([`InputKind::AutoTimeframe`](super::InputKind::AutoTimeframe)) never qualifies. An
-    /// accepted interval stays available if calculating on it changes those requests.
+    /// accepted interval stays available if calculating on it changes those requests. A study
+    /// whose outputs cannot follow ([`Indicator::draws_on_other_bars`]) never qualifies, with or
+    /// without an interval set.
     fn runs_on_other_bars(&self) -> bool {
         let requests = self.study.data_requests();
         let follows = |request: &super::StudyDataRequest| {
             request.metric.is_none() && (request.timeframe.is_none() || !request.symbol.is_empty())
         };
-        self.calculation_timeframe.is_some()
-            || self.study.source().is_some()
-            || ((requests.is_empty()
+        self.study.draws_on_other_bars()
+            && (self.calculation_timeframe.is_some()
+                || self.study.source().is_some()
+                || ((requests.is_empty()
                 || self.study.requests_allow_other_intervals()
                 || (requests.iter().all(follows)
                     && !self
@@ -929,25 +932,27 @@ impl ConfiguredStudy {
                     .study
                     .inputs()
                     .iter()
-                    .any(|input| matches!(input.kind, super::InputKind::AutoTimeframe(_))))
+                    .any(|input| matches!(input.kind, super::InputKind::AutoTimeframe(_)))))
     }
 
     /// Whether the study reads one source, or only the chart symbol's bars on an interval it
-    /// can calculate on, without order flow, metrics or a Symbol input of its own. `own` holds
-    /// the wrapped study's inputs. A chosen symbol stays available until it is cleared.
+    /// can calculate on, without order flow, metrics or a Symbol input of its own. A study whose
+    /// outputs cannot follow never qualifies. `own` holds the wrapped study's inputs. A chosen
+    /// symbol stays available until it is cleared.
     fn runs_on_other_symbol(&self, own: &[super::StudyInput]) -> bool {
-        !self.calculation_symbol.is_empty()
-            || self.study.source().is_some()
-            || (self.runs_on_other_bars()
-                && !self.study.needs_order_flow()
-                && self
-                    .study
-                    .data_requests()
-                    .iter()
-                    .all(|request| request.metric.is_none() && request.symbol.is_empty())
-                && !own
-                    .iter()
-                    .any(|input| matches!(input.kind, super::InputKind::Symbol)))
+        self.study.draws_on_other_bars()
+            && (!self.calculation_symbol.is_empty()
+                || self.study.source().is_some()
+                || (self.runs_on_other_bars()
+                    && !self.study.needs_order_flow()
+                    && self
+                        .study
+                        .data_requests()
+                        .iter()
+                        .all(|request| request.metric.is_none() && request.symbol.is_empty())
+                    && !own
+                        .iter()
+                        .any(|input| matches!(input.kind, super::InputKind::Symbol))))
     }
 
     /// Whether the offset can move the study's plots, bands and fills together.
@@ -1043,7 +1048,9 @@ impl ConfiguredStudy {
 }
 
 /// Ids of the inputs [`ConfiguredStudy::inputs`] adds to a study itself, refused by
-/// `CustomIndicator::with_inputs`. Keep in step with the inputs listed there.
+/// `CustomIndicator::with_inputs`. Keep in step with the inputs listed there, with the
+/// calculation inputs after `plot_offset`, which restores of studies that cannot follow another
+/// symbol or interval drop.
 pub(crate) const CHART_INPUT_IDS: [&str; 4] = [
     "plot_offset",
     "calculation_symbol",
@@ -1698,6 +1705,9 @@ impl Indicator for ConfiguredStudy {
     }
     fn draws_only_plots(&self) -> bool {
         self.study.draws_only_plots()
+    }
+    fn draws_on_other_bars(&self) -> bool {
+        self.study.draws_on_other_bars()
     }
     fn alert_conditions(&self) -> Vec<String> {
         self.study.alert_conditions()
@@ -2522,13 +2532,8 @@ mod tests {
         let flat = |time| Bar::new(time, 10.0, 10.0, 10.0, 10.0, 1.0);
         let days: Vec<_> = (0..21).map(|day| flat(hour(24 * day))).collect();
         // Each study, the Interval set on it, and the hours between the bars of that Interval.
-        let cases: [(Box<dyn Indicator>, Timeframe, i64); 3] = [
+        let cases: [(Box<dyn Indicator>, Timeframe, i64); 2] = [
             (Box::new(performance_alone()), Timeframe::Hour1, 1),
-            (
-                Box::new(super::super::PivotPoints::new().with_daily_bars(true)),
-                Timeframe::Hour1,
-                1,
-            ),
             (
                 Box::new(super::super::Volume24h::new()),
                 Timeframe::Week1,
@@ -2615,26 +2620,6 @@ mod tests {
             ));
         }
         assert_eq!(observed, expected);
-
-        // A batch can first stop requesting daily bars, then select a calculation interval.
-        let mut pivots = ConfiguredStudy::new(Box::new(
-            super::super::PivotPoints::new().with_daily_bars(true),
-        ));
-        pivots.set_timeframe(Timeframe::Min1);
-        let settings = pivots.settings();
-        pivots
-            .apply_settings(
-                &[
-                    ("daily_bars".into(), InputValue::Toggle(false)),
-                    (
-                        "calculation_timeframe".into(),
-                        InputValue::Timeframe(Some(Timeframe::Hour1)),
-                    ),
-                ],
-                settings,
-            )
-            .unwrap();
-        assert_eq!(pivots.data_requests()[0].timeframe, Some(Timeframe::Hour1));
 
         // Switching back to price first makes a separate calculation interval available.
         let mut average = ConfiguredStudy::new(Box::new(super::super::SMA::new(1)));
@@ -3103,21 +3088,45 @@ mod tests {
         }
     }
 
-    /// The listed controls and accepted edits agree for bar-only and multi-output studies.
+    /// The listed controls and accepted edits agree for bar-only and multi-output studies,
+    /// and studies whose outputs cannot follow another symbol or interval offer neither.
     #[test]
     fn sourceless_studies_offer_symbol_and_offset_as_they_draw() {
-        for (name, symbol, offset) in [
-            ("PSAR", true, true),
-            ("MA Cross", true, false),
-            ("VWAP Auto Anchored", true, true),
-            ("Multi MA", true, true),
-            ("ZigZag", true, false),
-            ("Trading Sessions", true, false),
-            ("Donchian", true, false),
-            ("Volume", true, false),
-            ("Ratio", false, false),
-            ("Advance/Decline Ratio", false, false),
-            ("Quoted Spread", false, false),
+        for (name, symbol, interval, offset) in [
+            ("PSAR", true, true, true),
+            ("MA Cross", true, true, false),
+            ("VWAP Auto Anchored", true, true, true),
+            ("Multi MA", true, true, true),
+            ("Donchian", true, true, false),
+            ("Volume", true, true, false),
+            ("Ratio", false, true, false),
+            ("Advance/Decline Ratio", false, false, false),
+            ("Quoted Spread", false, false, false),
+            // Drawn by the chart from its own bars or symbol.
+            ("Time Price Opportunity", false, false, false),
+            ("Analyst price forecast", false, false, false),
+            // Labels, drawings, projections and segments sit on source bars.
+            ("ZigZag", false, false, false),
+            ("Trading Sessions", false, false, false),
+            #[cfg(feature = "drawings")]
+            ("Auto Trend Line", false, false, false),
+            #[cfg(feature = "drawings")]
+            ("Auto Fibonacci Retracement", false, false, false),
+            #[cfg(feature = "drawings")]
+            ("Auto Fibonacci Extension", false, false, false),
+            #[cfg(feature = "drawings")]
+            ("Auto Parallel Channel", false, false, false),
+            #[cfg(feature = "drawings")]
+            ("Auto Pitchfork", false, false, false),
+            ("Double Top", false, false, false),
+            ("Elliott Wave", false, false, false),
+            ("Auto Key Levels", false, false, false),
+            ("Ziv Ghost Pivots", false, false, false),
+            ("Knoxville Divergence", false, false, false),
+            ("Seasonality", false, false, true),
+            ("Intraday Pivot Points", false, false, false),
+            ("Pivot Points Standard", false, false, false),
+            ("Projected Pivot Points", false, false, false),
         ] {
             let factory = super::super::IndicatorFactory::new();
             let study = ConfiguredStudy::new(factory.create(name).unwrap());
@@ -3127,15 +3136,122 @@ mod tests {
                 symbol,
                 "{name}"
             );
+            // Breadth has its own close-wait input, independent of the chart's controls.
+            let wait = interval || name == "Advance/Decline Ratio";
+            for (id, offered) in [
+                ("calculation_timeframe", interval),
+                ("wait_for_close", wait),
+            ] {
+                assert_eq!(
+                    ids.iter().any(|listed| listed == id),
+                    offered,
+                    "{name} {id}"
+                );
+            }
             assert_eq!(ids.iter().any(|id| id == "plot_offset"), offset, "{name}");
             for (id, value, accepted) in [
                 ("calculation_symbol", InputValue::Symbol("X".into()), symbol),
+                (
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(Timeframe::Day1)),
+                    interval,
+                ),
+                ("wait_for_close", InputValue::Toggle(false), wait),
                 ("plot_offset", InputValue::Integer(1), offset),
             ] {
                 let mut study = study.clone();
                 assert_eq!(study.set_input(id, value).is_ok(), accepted, "{name} {id}");
             }
         }
+    }
+
+    /// Guards #3898: every catalogue study that lists Symbol draws, on a symbol whose history
+    /// has the chart's bar times, every kind of output it draws on the chart's own bars.
+    #[test]
+    fn studies_listing_symbol_keep_every_output_on_it() {
+        use crate::model::BarClock;
+        use crate::studies::{IndicatorFactory, StudyData};
+        let start: chrono::DateTime<chrono::Utc> = "2026-02-02T00:00:00Z".parse().unwrap();
+        let close = |i: f64| 100.0 + 10.0 * (i / 7.0).sin() + 5.0 * (i / 23.0).sin() + 0.02 * i;
+        let bars: Vec<_> = (0..600)
+            .map(|i| {
+                let price = close(f64::from(i));
+                let open = if i == 0 {
+                    100.0
+                } else {
+                    close(f64::from(i - 1))
+                };
+                Bar::new(
+                    start + chrono::TimeDelta::hours(i.into()),
+                    open,
+                    open.max(price) + 1.0,
+                    open.min(price) - 1.0,
+                    price,
+                    100.0 + f64::from(i),
+                )
+            })
+            .collect();
+        let kinds = |study: &ConfiguredStudy| {
+            [
+                #[cfg(feature = "drawings")]
+                ("drawings", !study.drawings().is_empty()),
+                ("labels", !study.labels().is_empty()),
+                ("projections", !study.projections().is_empty()),
+                ("price segments", !study.price_segments().is_empty()),
+                ("markers", !study.markers().is_empty()),
+                ("zones", !study.zones().is_empty()),
+                ("candles", !study.candles().is_empty()),
+                ("profiles", !study.volume_profiles(0..bars.len()).is_empty()),
+                (
+                    "profile levels",
+                    !study.profile_levels(0..bars.len()).is_empty(),
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(kind, shown)| shown.then_some(kind))
+            .collect::<Vec<_>>()
+        };
+        let factory = IndicatorFactory::new();
+        let mut names = factory.list();
+        names.sort();
+        let mut lost = Vec::new();
+        for name in names {
+            let mut study = ConfiguredStudy::new(factory.create(&name).unwrap());
+            study.set_timeframe(Timeframe::Hour1);
+            study.set_bar_clock(&BarClock::new(Timeframe::Hour1));
+            if !study
+                .inputs()
+                .iter()
+                .any(|input| input.id == "calculation_symbol")
+            {
+                continue;
+            }
+            study.update_data(&bars, 0, &[]);
+            let own = kinds(&study);
+            study
+                .set_input("calculation_symbol", InputValue::Symbol("X".into()))
+                .unwrap();
+            let source = StudyData {
+                request: study.data_requests().remove(0),
+                bars: &bars,
+                clock: BarClock::new(Timeframe::Hour1),
+                instrument: None,
+                timeframe: Timeframe::Hour1,
+            };
+            study.update_data(&bars, 0, &[source]);
+            let other = kinds(&study);
+            let missing: Vec<_> = own
+                .into_iter()
+                .filter(|kind| !other.contains(kind))
+                .collect();
+            if !missing.is_empty() {
+                lost.push((name, missing));
+            }
+        }
+        assert!(
+            lost.is_empty(),
+            "output kinds lost on another symbol: {lost:?}"
+        );
     }
 
     /// Studies that read the chart symbol's bars offer Symbol, Interval and close-wait, keep
@@ -3397,13 +3513,13 @@ mod tests {
     }
 
     /// Requests added after another symbol's bars arrive follow that symbol, including when a
-    /// chart interval change makes Volume24h, Performance without comparisons and daily pivots
+    /// chart interval change makes Volume24h and Performance without comparisons
     /// need bars of a stated interval. Each must accept the symbol and request its own bars.
     #[test]
     fn bar_study_on_another_symbol_reads_its_own_bars_on_that_symbol() {
-        use super::super::{PivotPoints, StudyData, StudyDataRequest, Volume24h};
+        use super::super::{StudyData, StudyDataRequest, Volume24h};
         use crate::model::BarClock;
-        let cases: [(Box<dyn Indicator>, Timeframe, Timeframe); 3] = [
+        let cases: [(Box<dyn Indicator>, Timeframe, Timeframe); 2] = [
             (
                 Box::new(Volume24h::new()),
                 Timeframe::Week1,
@@ -3411,11 +3527,6 @@ mod tests {
             ),
             (
                 Box::new(performance_alone()),
-                Timeframe::Min5,
-                Timeframe::Day1,
-            ),
-            (
-                Box::new(PivotPoints::new().with_daily_bars(true)),
                 Timeframe::Min5,
                 Timeframe::Day1,
             ),
@@ -3762,15 +3873,14 @@ mod tests {
         }
     }
 
-    /// Candles use chart bars sharing their time, while projections and drawings with unmapped
-    /// logical anchors are withheld. Withdrawing the history leaves no stale geometry.
+    /// Candles use chart bars sharing their time. Withdrawing the history leaves no stale geometry.
     #[test]
     fn geometry_of_another_history_never_uses_its_source_indices() {
-        use super::super::{BollingerBars, HigherIntervalCandles, ProjectedPivotPoints, StudyData};
+        use super::super::{BollingerBars, HigherIntervalCandles, StudyData};
         use chrono::{TimeDelta, TimeZone, Utc};
 
         let start = Utc.with_ymd_and_hms(2026, 3, 2, 0, 0, 0).unwrap();
-        // The trend-line fixture has confirmed swings; the other rows need only its first day.
+        // Hourly closes turning at the listed bars; the rows read the first 20.
         let turns = [
             (0, 100.0),
             (14, 100.0),
@@ -3823,32 +3933,11 @@ mod tests {
                 &four_hourly[..],
                 higher_bollinger,
             ),
-            (
-                Box::new(ProjectedPivotPoints::new().with_daily_bars(false)),
-                None,
-                &hourly[..20],
-                vec![],
-            ),
-            #[cfg(feature = "drawings")]
-            (
-                Box::new(super::super::AutoTrendLines::new()),
-                None,
-                &hourly[..],
-                vec![],
-            ),
         ] {
             let mut study = ConfiguredStudy::new(inner);
             study.set_timeframe(Timeframe::Hour1);
-            // The unaligned path must still expose the study's original geometry.
             study.update_data(history, 0, &[]);
             let name = study.name().to_owned();
-            if name == "Projected Pivot Points" {
-                assert!(!study.projections().is_empty());
-            }
-            #[cfg(feature = "drawings")]
-            if name == "Auto Trend Line" {
-                assert!(!study.drawings().is_empty());
-            }
             let (id, value, cleared) = if let Some(interval) = interval {
                 (
                     "calculation_timeframe",
@@ -3888,17 +3977,9 @@ mod tests {
             };
             assert_eq!(candles(&study), expected, "{name}");
             assert_eq!(candles(&study.clone()), expected, "{name} clone");
-            assert!(study.projections().is_empty(), "{name}");
-            #[cfg(feature = "drawings")]
-            assert!(study.drawings().is_empty(), "{name}");
 
             study.update_data(chart, 0, &[]);
-            assert!(
-                study.candles().is_empty() && study.projections().is_empty(),
-                "{name}"
-            );
-            #[cfg(feature = "drawings")]
-            assert!(study.drawings().is_empty(), "{name}");
+            assert!(study.candles().is_empty(), "{name}");
             study.update_data(
                 chart,
                 0,
@@ -3909,12 +3990,7 @@ mod tests {
                     ..source
                 }],
             );
-            assert!(
-                study.candles().is_empty() && study.projections().is_empty(),
-                "{name} empty history"
-            );
-            #[cfg(feature = "drawings")]
-            assert!(study.drawings().is_empty(), "{name} empty history");
+            assert!(study.candles().is_empty(), "{name} empty history");
             study.update_data(chart, 0, &[source]);
             assert_eq!(candles(&study), expected, "{name} restored history");
 
@@ -3925,17 +4001,6 @@ mod tests {
                 study.study.candles().len(),
                 "{name} follows chart"
             );
-            assert_eq!(
-                study.projections(),
-                study.study.projections(),
-                "{name} follows chart"
-            );
-            #[cfg(feature = "drawings")]
-            assert_eq!(
-                study.drawings().len(),
-                study.study.drawings().len(),
-                "{name} follows chart"
-            );
         }
     }
 
@@ -3943,7 +4008,31 @@ mod tests {
     #[test]
     fn studies_on_other_bars_offer_alerts_only_on_their_plots() {
         use crate::model::BarClock;
-        use crate::studies::{AutoKeyLevels, StudyData};
+        use crate::studies::StudyData;
+        #[derive(Clone, Default)]
+        struct Zoned(IndicatorValues);
+        impl Indicator for Zoned {
+            fn name(&self) -> &str {
+                "Zoned"
+            }
+            fn calculate(&mut self, data: &[Bar]) {
+                self.0 = IndicatorValues::missing(data.len());
+            }
+            fn values(&self) -> &IndicatorValues {
+                &self.0
+            }
+            fn colors(&self) -> Vec<Color32> {
+                vec![Color32::WHITE]
+            }
+            fn set_colors(&mut self, _: Vec<Color32>) {}
+            fn set_visible(&mut self, _: bool) {}
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                Box::new(self.clone())
+            }
+            fn alert_outputs(&self) -> Vec<(usize, String)> {
+                vec![(0, "Zoned".into()), (1, "Level".into())]
+            }
+        }
         let start: chrono::DateTime<chrono::Utc> = "2026-02-02T09:00:00Z".parse().unwrap();
         let bars = |count: i32, interval: Timeframe| -> Vec<Bar> {
             (0..count)
@@ -3956,20 +4045,12 @@ mod tests {
         };
         let chart = bars(10, Timeframe::Min1);
         let five = bars(2, Timeframe::Min5);
-        let mut study = ConfiguredStudy::new(Box::new(AutoKeyLevels::new()));
+        let mut study = ConfiguredStudy::new(Box::new(Zoned::default()));
         study.set_timeframe(Timeframe::Min1);
         study.calculate(&chart);
         assert_eq!(
             study.alert_outputs(),
-            [
-                (7, "dPOC"),
-                (8, "dVAL"),
-                (9, "dVAH"),
-                (14, "wPOC"),
-                (15, "wVAL"),
-                (16, "wVAH")
-            ]
-            .map(|(output, name)| (output, name.to_owned()))
+            [(0, "Zoned".into()), (1, "Level".into())]
         );
         study
             .set_input(
@@ -3989,8 +4070,7 @@ mod tests {
                 timeframe: Timeframe::Min5,
             }],
         );
-        assert_eq!(study.zones().len(), 6);
-        assert!(study.alert_outputs().is_empty());
+        assert_eq!(study.alert_outputs(), [(0, "Zoned".into())]);
     }
 
     /// Guards #3494: a volume profile offers the Interval and Wait for interval close whatever
