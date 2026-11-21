@@ -3258,7 +3258,7 @@ fn menu_rows_write_and_act_on_prices_as_the_price_scale_does() {
                     price: click,
                 },
                 vec![
-                    format!("Add alert on EURUSD at {text}…"),
+                    format!("Add alert on EURUSD at {order}…"),
                     format!("Copy price {text}"),
                 ],
             ),
@@ -3294,6 +3294,9 @@ fn menu_rows_write_and_act_on_prices_as_the_price_scale_does() {
                         })
                         .unwrap();
                 assert_eq!(price, alert, "{text}");
+            } else {
+                assert_eq!(menus.series_alert_price(), alert, "{text}");
+                assert_eq!(menus.series_click_price(), click, "{text}");
             }
         }
         // The shortcut reader must agree with the actual menu at this pointer.
@@ -3312,5 +3315,29 @@ fn menu_rows_write_and_act_on_prices_as_the_price_scale_does() {
             })
             .unwrap();
         assert_eq!(chart.alert_price_at(pos), Some(price));
+    }
+
+    // Standalone menus also accept prices through their public field after set_context.
+    let mut standalone = SeriesContextMenu::new();
+    standalone.set_context("EURUSD", 100.0);
+    standalone.click_price = 101.1;
+    standalone.open(Pos2::new(100.0, 100.0), SeriesId::MAIN);
+    let mut labels = Vec::new();
+    for _ in 0..2 {
+        let output = ctx.run_ui(RawInput::default(), |ui| {
+            standalone.show(ui.ctx(), &Theme::dark());
+        });
+        labels = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        output.drop_without_applying_deltas();
+    }
+    for expected in ["Add alert on EURUSD at 101.10…", "Copy price 101.10"] {
+        assert!(labels.iter().any(|label| label == expected), "{labels:?}");
     }
 }
