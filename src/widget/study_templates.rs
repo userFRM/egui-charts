@@ -192,10 +192,18 @@ impl Chart {
         let mut studies = set
             .studies
             .iter()
-            .map(|template| -> Result<_, String> {
-                let study = template
+            .enumerate()
+            .map(|(at, template)| -> Result<_, String> {
+                let mut study = template
                     .create_with(factory)
                     .map_err(|error| error.to_string())?;
+                // Expose saved overlay pins before additional scales are renumbered.
+                if set.price_pane.contains(&at) {
+                    study.set_overlay(true);
+                    if let Some(scale) = template.scale {
+                        study.set_scale(scale);
+                    }
+                }
                 Ok(keep.adds(study.as_ref()).then_some(study))
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -360,6 +368,150 @@ mod tests {
     use super::super::test_frames;
     use crate::studies::{CCI, EMA, MACD, RSI, SMA, StudySource, StudyTemplateSet, Volume};
     use crate::widget::{Chart, SeriesId};
+
+    /// Studies saved on the price pane keep their placement, pinned scales and fitted table
+    /// sizes on restore. A separate Seasonality pane's implicit scale does not become a pin.
+    #[test]
+    fn studies_saved_on_the_price_pane_restore_there() {
+        use crate::model::SeriesScale;
+        use crate::studies::{StudyScale, TablePosition};
+        use crate::widget::PaneId;
+
+        let saved: StudyTemplateSet = serde_json::from_str(r#"{"studies":[{"name":"Performance","inputs":[["symbols",{"Text":"AAPL, NASDAQ:AMZN, EURUSD, ES1!, BTCUSD"}],["include_chart_symbol",{"Toggle":true}],["periods",{"Text":"1W, 1M, 3M, 6M, 12M, YTD, 5Y"}],["positive_color",{"Color":[8,153,129,255]}],["negative_color",{"Color":[242,55,69,255]}],["color_cutoff",{"Number":10.0}],["table_position",{"Choice":4}],["table_width",{"Number":100.0}],["table_height",{"Number":95.0}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Performance.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[0,1,2,3,4,5],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"},{"name":"Seasonality","inputs":[["start_year",{"Integer":2015}],["ignored_months",{"Text":""}],["positive_color",{"Color":[8,153,129,255]}],["negative_color",{"Color":[242,54,69,255]}],["color_cutoff",{"Number":10.0}],["show_averages",{"Toggle":true}],["show_std_dev",{"Toggle":true}],["show_positive",{"Toggle":true}],["table_position",{"Choice":7}],["table_width",{"Number":0.0}],["table_height",{"Number":0.0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Seasonality.html","plots":[{"color":[8,153,129,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[1,10,8,16],"untagged_plots":[0,1,2,3,4],"price_line_plots":[],"plot_variants":[[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,31,26,51],"inverted_color":[48,11,14,51],"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":{"Shared":"Left"}}],"price_pane":[0,1],"panes":[]}"#).unwrap();
+        let mut chart = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+        let ids = chart.apply_study_template_set(&saved).unwrap();
+        assert_eq!(chart.panes().len(), 1);
+        for (id, position, width, height) in [
+            (ids[0], TablePosition::MiddleCenter, Some(1.0), Some(0.95)),
+            (ids[1], TablePosition::BottomCenter, None, None),
+        ] {
+            assert_eq!(chart.series_pane(id), Some(PaneId::MAIN));
+            let study = chart
+                .indicators()
+                .find(|(found, _)| *found == id)
+                .unwrap()
+                .1;
+            assert!(study.is_overlay());
+            let table = study.table().unwrap();
+            assert_eq!(
+                (table.position, table.width, table.height),
+                (position, width, height)
+            );
+        }
+        assert_eq!(
+            chart
+                .indicators()
+                .find(|(found, _)| *found == ids[1])
+                .unwrap()
+                .1
+                .scale(),
+            StudyScale::Shared(SeriesScale::Left)
+        );
+        #[cfg(feature = "ui")]
+        {
+            let mut restored = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+            restored.restore(&chart.snapshot().unwrap()).unwrap();
+            assert_eq!(restored.panes().len(), 1);
+            for (id, study) in restored.indicators() {
+                assert_eq!(restored.series_pane(id), Some(PaneId::MAIN));
+                assert!(study.is_overlay());
+                if study.name() == "Seasonality" {
+                    assert_eq!(study.scale(), StudyScale::Shared(SeriesScale::Left));
+                }
+            }
+        }
+        for scale in [
+            StudyScale::None,
+            StudyScale::Shared(SeriesScale::Separate(0)),
+            StudyScale::Shared(SeriesScale::Left),
+        ] {
+            assert!(chart.set_indicator_scale(ids[1], scale));
+            assert_eq!(
+                chart
+                    .indicators()
+                    .find(|(found, _)| *found == ids[1])
+                    .unwrap()
+                    .1
+                    .scale(),
+                scale
+            );
+        }
+
+        for (overlay, scale) in [
+            (false, StudyScale::None),
+            (true, StudyScale::Main),
+            (true, StudyScale::None),
+            (true, StudyScale::Shared(SeriesScale::Left)),
+            (true, StudyScale::Shared(SeriesScale::Separate(0))),
+            (true, StudyScale::Shared(SeriesScale::Overlay(0))),
+        ] {
+            let mut source = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+            let id = source.add_indicator(Box::new(crate::studies::Seasonality::new()));
+            if overlay {
+                assert!(source.move_series_to_pane(id, PaneId::MAIN));
+                assert!(source.set_indicator_scale(id, scale));
+            }
+            let check = |mut restored: Chart, id| {
+                let study = restored
+                    .indicators()
+                    .find(|(found, _)| *found == id)
+                    .unwrap()
+                    .1;
+                assert_eq!(study.is_overlay(), overlay);
+                assert_eq!(study.scale(), scale);
+                assert!(restored.move_series_to_pane(id, PaneId::MAIN));
+                assert_eq!(
+                    restored
+                        .indicators()
+                        .find(|(found, _)| *found == id)
+                        .unwrap()
+                        .1
+                        .scale(),
+                    if overlay { scale } else { StudyScale::Main }
+                );
+            };
+            let set = source.study_template_set();
+            let mut restored = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+            let ids = restored.apply_study_template_set(&set).unwrap();
+            check(restored, ids[0]);
+            #[cfg(feature = "ui")]
+            {
+                let mut restored = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+                restored.restore(&source.snapshot().unwrap()).unwrap();
+                let restored_id = restored.restored_series_id(id.0).unwrap();
+                check(restored, restored_id);
+            }
+            #[cfg(feature = "drawings")]
+            {
+                let mut restored = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+                let pasted = restored
+                    .paste_indicator(
+                        &source.copy_indicator(id).unwrap(),
+                        &crate::studies::IndicatorFactory::new(),
+                    )
+                    .unwrap();
+                check(restored, pasted);
+            }
+            if scale == StudyScale::Shared(SeriesScale::Separate(0)) {
+                let ids = source
+                    .place_study_template_set(
+                        &set,
+                        &crate::studies::IndicatorFactory::new(),
+                        super::Keep::All,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    source
+                        .indicators()
+                        .find(|(id, _)| Some(*id) == ids[0])
+                        .unwrap()
+                        .1
+                        .scale(),
+                    StudyScale::Shared(SeriesScale::Separate(1))
+                );
+            }
+        }
+    }
 
     /// New studies inherit host defaults while explicit edits and saved studies keep their
     /// settings through templates, copies, layout restore and undo.
