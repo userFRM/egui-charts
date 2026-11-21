@@ -322,6 +322,8 @@ impl SymbolTab {
                         FootprintColor::Imbalance,
                         FootprintColor::Fixed,
                         FootprintColor::DeltaOpacity,
+                        FootprintColor::LargerSide,
+                        FootprintColor::Side,
                     ],
                     |color| {
                         match color {
@@ -331,6 +333,8 @@ impl SymbolTab {
                             FootprintColor::Imbalance => "Imbalance",
                             FootprintColor::Fixed => "Fixed",
                             FootprintColor::DeltaOpacity => "Delta opacity",
+                            FootprintColor::LargerSide => "Larger side",
+                            FootprintColor::Side => "Side colours",
                         }
                         .to_owned()
                     },
@@ -391,6 +395,28 @@ impl SymbolTab {
                     default,
                     "Auto",
                 );
+            }
+            if params.footprint_color_by == FootprintColor::VolumeSteps {
+                // Unset shades show the mix painted on the theme's chart background.
+                let background = ui.active_theme().chart.bg.to_opaque();
+                for (side, (name, color)) in [
+                    ("Buy shade", params.footprint_colors[0].unwrap_or(up)),
+                    ("Sell shade", params.footprint_colors[1].unwrap_or(down)),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    for step in 0..4 {
+                        Self::followed_color(
+                            ui,
+                            &format!("{name} {}", step + 1),
+                            None,
+                            &mut params.footprint_step_colors[side][step],
+                            crate::chart::overlays::step_color(color, step, background),
+                            "Auto",
+                        );
+                    }
+                }
             }
         });
         Self::section(ui, "Rows", true, |ui| {
