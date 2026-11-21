@@ -258,7 +258,7 @@ impl Backtest {
             &decision_bars[..closed]
         };
         strategy.set_timeframe(self.timeframe);
-        self.supply_calculation(strategy, decision_bars);
+        let calculation = self.supply_calculation(strategy, decision_bars);
         if rebuild {
             strategy.prepare(calculation_bars);
         } else {
@@ -273,6 +273,7 @@ impl Backtest {
             rejected: live.rejected,
             settings: &self.settings,
             strategy,
+            calculation,
             history: Cow::Borrowed(&[]),
             prices: bars,
             trading: false,

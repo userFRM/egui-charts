@@ -903,6 +903,67 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             );
         }
     }
+    // The histories agree through minute 9's open. Its 5-minute close cannot cause an entry
+    // before that minute closes, including when historical fills refresh the calculations.
+    for (historical, after_fills) in [(false, false), (true, false), (true, true)] {
+        let mut early = Vec::new();
+        for last in [8., 10.] {
+            let source = bars(
+                &[
+                    vec![[10.; 4]; 9],
+                    vec![[10., 10., last, last]],
+                    vec![[last; 4]; 5],
+                    vec![[12.; 4]; 6],
+                ]
+                .concat(),
+            );
+            let inputs = [("timeframe", InputValue::Timeframe(Some(Timeframe::Min5)))];
+            let mut backtest = Backtest::new("Technical Ratings", "TEST", Timeframe::Min1, 10_000.);
+            backtest.settings.recalculate_on_history = historical;
+            backtest.settings.recalculate_after_fills = after_fills;
+            backtest.calculation_bars =
+                crate::data::resample(&source, Timeframe::Min1, Timeframe::Min5).unwrap();
+            let report = backtest.run(
+                configured("Technical Ratings", &inputs).as_mut(),
+                &source,
+                &[],
+            );
+            let found = entries(&report);
+            early.push(
+                found
+                    .iter()
+                    .copied()
+                    .filter(|entry| entry.0 <= 9)
+                    .collect::<Vec<_>>(),
+            );
+            if last == 8. {
+                assert_eq!(
+                    found.first(),
+                    Some(&(10, Sell, 8.)),
+                    "historical: {historical}, after fills: {after_fills}"
+                );
+            }
+            backtest.update(
+                configured("Technical Ratings", &inputs).as_mut(),
+                &source,
+                &[],
+            );
+            let continued = entries(backtest.report().unwrap());
+            assert_eq!(
+                continued
+                    .into_iter()
+                    .filter(|entry| entry.0 <= 10)
+                    .collect::<Vec<_>>(),
+                found
+                    .into_iter()
+                    .filter(|entry| entry.0 <= 10)
+                    .collect::<Vec<_>>(),
+                "live replay, historical: {historical}, after fills: {after_fills}"
+            );
+        }
+        assert_eq!(early[0], early[1], "after fills: {after_fills}");
+        assert!(early[0].is_empty());
+    }
     // The RSI signals read only the RSI line, so its smoothing and divergence are not inputs.
     let ids: Vec<_> = StrategyFactory::new()
         .create("RSI")

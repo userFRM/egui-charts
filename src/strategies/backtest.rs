@@ -378,7 +378,9 @@ pub trait Strategy {
     /// preparation, [`Backtest`] supplies [`Backtest::calculation_bars`] on its instrument's
     /// [`bar_clock`](Backtest::bar_clock), converted to Heikin Ashi when decisions use them.
     /// `bars` is empty when the host supplied none. Read them only through `closed` to avoid
-    /// looking ahead. Does nothing by default.
+    /// looking ahead. During historical tick recalculation a forming chart bar reads only
+    /// calculation bars closed by its open; live forming decisions use the host's current bars.
+    /// Does nothing by default.
     fn set_calculation_bars(&mut self, bars: &[Bar], closed: &[Option<usize>]) {
         let _ = (bars, closed);
     }
@@ -868,7 +870,7 @@ impl Backtest {
         lower.sort_by_key(|bar| bar.time);
         lower.dedup_by_key(|bar| bar.time);
         strategy.set_timeframe(self.timeframe);
-        self.supply_calculation(strategy, &bars[..last]);
+        let calculation = self.supply_calculation(strategy, &bars[..last]);
         strategy.prepare(
             if settings.recalculate_on_history && !settings.chart_type.transforms_data() {
                 &[]
@@ -885,6 +887,7 @@ impl Backtest {
             rejected: 0,
             settings,
             strategy,
+            calculation,
             history: Cow::Borrowed(&[]),
             prices,
             trading: false,
@@ -910,11 +913,13 @@ impl Backtest {
         report
     }
 
-    /// Maps chart closes to completed calculation bars using the instrument's schedule alone.
-    fn supply_calculation(&self, strategy: &mut dyn Strategy, bars: &[Bar]) {
-        let Some(timeframe) = strategy.calculation_timeframe() else {
-            return;
-        };
+    /// Maps chart closes and historical opens using the instrument's schedule alone.
+    fn supply_calculation(
+        &self,
+        strategy: &mut dyn Strategy,
+        bars: &[Bar],
+    ) -> Option<HistoricalCalculation> {
+        let timeframe = strategy.calculation_timeframe()?;
         let clock = self
             .bar_clock
             .clone()
@@ -951,6 +956,22 @@ impl Backtest {
             })
             .collect();
         strategy.set_calculation_bars(&calculation, &closed);
+        (self.settings.recalculate_on_history && !self.settings.chart_type.transforms_data()).then(
+            || HistoricalCalculation {
+                bars: calculation,
+                closed,
+                opened: bars
+                    .iter()
+                    .map(|bar| {
+                        if !timed {
+                            return None;
+                        }
+                        let until = own.instant_open(chart.bar_start(chart.bar_open(bar.time)));
+                        opens.partition_point(|open| *open < until).checked_sub(1)
+                    })
+                    .collect(),
+            },
+        )
     }
 
     fn new_report(&self, strategy: &dyn Strategy, lower_count: usize) -> StrategyReport {
@@ -1193,6 +1214,12 @@ fn sign(side: OrderSide) -> f64 {
     }
 }
 
+struct HistoricalCalculation {
+    bars: Vec<Bar>,
+    closed: Vec<Option<usize>>,
+    opened: Vec<Option<usize>>,
+}
+
 struct Run<'a> {
     orders: Vec<Working>,
     /// Open entries, oldest first, all on one side.
@@ -1203,6 +1230,7 @@ struct Run<'a> {
     rejected: usize,
     settings: &'a BacktestSettings,
     strategy: &'a mut dyn Strategy,
+    calculation: Option<HistoricalCalculation>,
     history: Cow<'a, [Bar]>,
     prices: &'a [Bar],
     trading: bool,
@@ -1223,6 +1251,21 @@ struct Run<'a> {
 }
 
 impl<'a> Run<'a> {
+    fn prepare_history_update(&mut self) {
+        if let Some(calculation) = &mut self.calculation {
+            let index = self.history.len() - 1;
+            let closed = calculation.closed[index];
+            // Finished host candles stay hidden until the historical chart candle closes.
+            if self.forming {
+                calculation.closed[index] = calculation.opened[index];
+            }
+            self.strategy
+                .set_calculation_bars(&calculation.bars, &calculation.closed);
+            calculation.closed[index] = closed;
+        }
+        self.strategy.prepare_update(&self.history);
+    }
+
     fn start_equity(&self, timeframe: Timeframe, bars: &[Bar], report: &mut StrategyReport) {
         if let Some(first) = bars.iter().find(|bar| {
             self.settings
@@ -1325,7 +1368,7 @@ impl<'a> Run<'a> {
         if !historical {
             self.history = Cow::Borrowed(&bars[..=index]);
             if self.settings.recalculate_on_history && !self.settings.chart_type.transforms_data() {
-                self.strategy.prepare_update(&self.history);
+                self.prepare_history_update();
             }
             self.decide(bar.close, false);
         }
@@ -1520,7 +1563,7 @@ impl<'a> Run<'a> {
                 candle.volume += bar.volume;
             }
             self.forming = complete.is_none();
-            self.strategy.prepare_update(&self.history);
+            self.prepare_history_update();
             self.decide(price, false);
             previous = price;
         }
@@ -2077,7 +2120,7 @@ impl<'a> Run<'a> {
                 candle.high = candle.high.max(mark);
                 candle.low = candle.low.min(mark);
                 candle.close = mark;
-                self.strategy.prepare_update(&self.history);
+                self.prepare_history_update();
             }
             self.decide(price, true);
         }
