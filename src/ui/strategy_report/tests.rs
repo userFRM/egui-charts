@@ -91,7 +91,7 @@ fn report_replacement_selection_export_and_clear() {
         h.run();
         h.get_by_label("0.00001234");
         h.get_by_label("1970-01-01 00:00:00.250");
-        assert!(h.get_by_label("98.92959251407622").rect().height() < 28.0);
+        assert!(h.get_by_label("98.9295925140762").rect().height() < 28.0);
         h.get_by_role_and_label(Role::Button, "1").click();
         h.run();
         assert_eq!(
@@ -193,6 +193,67 @@ fn equity_curve_fills_the_width_with_distinct_time_labels() {
 }
 
 #[test]
+fn margin_figures_and_chart_follow_margin_data() {
+    let hour = |h| DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(h);
+    let mut plain = StrategyReport::new("Leveraged", "LEV", Timeframe::Hour1, 1000.0);
+    let mut trade = StrategyTrade::new(OrderSide::Buy, 15.0, hour(2), 100.0);
+    trade.exit = Some(StrategyExit::new(hour(3), 200.0 / 3.0, -500.0));
+    trade.label = Some("A / Margin call".into());
+    plain.trades = vec![trade];
+    let curve = |values: [f64; 4]| {
+        values
+            .into_iter()
+            .enumerate()
+            .map(|(i, value)| (hour(i as i64), value))
+            .collect()
+    };
+    plain.equity = curve([1000.0, 1000.0, 1000.0, 500.0]);
+    let mut leveraged = plain.clone();
+    leveraged.margin = curve([0.0, 0.0, 750.0, 0.0]);
+    leveraged.peak_margin = curve([0.0, 0.0, 750.0, 750.0]);
+    leveraged.margin_calls = vec![(hour(3), 15.0)];
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        let mut unavailable = Vec::new();
+        for (report, with_margin) in [(&leveraged, true), (&plain, false)] {
+            let mut panel = StrategyReportPanel::default();
+            panel.set_report(Some(report.clone()), &[]);
+            let theme = theme.clone();
+            let color = theme.ui.info;
+            let mut h = Harness::builder()
+                .with_size(Vec2::new(1440.0, 1600.0))
+                .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
+                .build_ui_state(
+                    |ui, panel: &mut StrategyReportPanel| {
+                        panel.show(ui);
+                    },
+                    panel,
+                );
+            h.run();
+            h.get_by_label("Margin calls");
+            if with_margin {
+                // Peak 750 + drawdown 500; average (0 + 0 + 750 + 0) / 4; -500 / 1250.
+                h.get_by_label("1250.00");
+                h.get_by_label("187.50");
+                h.get_by_label("-40.00%");
+            }
+            assert_eq!(h.query_by_label("Margin used").is_some(), with_margin);
+            unavailable.push(h.query_all_by_label("N/A").count());
+            let paths = h
+                .output()
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(&shape.shape, egui::Shape::Path(path)
+                    if path.stroke.color == egui::epaint::ColorMode::Solid(color))
+                })
+                .count();
+            assert_eq!(paths > 0, with_margin);
+        }
+        assert_eq!(unavailable[1], unavailable[0] + 8);
+    }
+}
+
+#[test]
 fn summary_lists_open_profit_and_charts_switch_to_percent() {
     let hour = |h| DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(h);
     let mut report = StrategyReport::new("Held", "HELD", Timeframe::Hour1, 10_000.0);
@@ -267,6 +328,24 @@ fn range_limits_summary_charts_and_trades() {
         crate::model::EquityRange::new(950.0, 1250.0, 50.0, 300.0),
         crate::model::EquityRange::new(800.0, 1200.0, 400.0, 100.0),
         crate::model::EquityRange::new(850.0, 1100.0, 100.0, 250.0),
+    ];
+    report.margin = vec![
+        (day(1, 1), 0.0),
+        (day(2, 1), 100.0),
+        (day(3, 1), 200.0),
+        (day(4, 1), 0.0),
+    ];
+    report.peak_margin = vec![
+        (day(1, 1), 0.0),
+        (day(2, 1), 300.0),
+        (day(3, 1), 250.0),
+        (day(4, 1), 0.0),
+    ];
+    report.margin_calls = vec![
+        (day(1, 10), 5.0),
+        (day(2, 15), 2.0),
+        (day(3, 1), 1.0),
+        (day(4, 2), 10.0),
     ];
     for (entry, exit, profit) in [
         (day(1, 10), day(1, 20), 200.0),
@@ -356,6 +435,12 @@ fn range_limits_summary_charts_and_trades() {
         h.run();
         assert_eq!(row(&h, "Net return", 3), ["-33.33%", "-33.33%", "0.00%"]);
         let data = h.state().0.data.as_ref().unwrap();
+        assert_eq!(data.margin, report.margin[2..]);
+        assert_eq!(data.shown.average_margin, Some(100.0));
+        assert_eq!(data.shown.largest_margin, Some(250.0));
+        assert_eq!(data.shown.margin_calls, Some(2));
+        assert_eq!(data.shown.liquidated_quantity, Some(3.0));
+        assert_eq!(data.report, report);
         assert_eq!(data.initial_capital, 900.0);
         assert_eq!(data.shown.intrabar_max_drawdown, Some(400.0));
         assert_eq!(data.shown.intrabar_max_run_up, Some(300.0));
@@ -437,6 +522,9 @@ fn range_limits_summary_charts_and_trades() {
         h.get_by_role_and_label(Role::Button, "Whole run").click();
         h.run();
         assert_eq!(row(&h, "Net return", 3), ["-10.00%", "-10.00%", "0.00%"]);
+        let data = h.state().0.data.as_ref().unwrap();
+        assert_eq!(data.margin, report.margin);
+        assert_eq!(data.shown, report.performance());
         assert_eq!(
             h.get_by_role_and_label(Role::TextInput, "From (UTC)")
                 .value()
@@ -535,6 +623,72 @@ fn continuation_keeps_the_range_and_refreshes_its_figures() {
     assert_eq!(panel.range_text, ["1970-01-01", "1970-01-05"]);
     assert_eq!(panel.tab, Tab::Summary);
     assert!(panel.selected.is_none());
+}
+
+/// Fill prices read at the run's price increment, or finer where exact, and quantities
+/// without binary rounding digits, in the list of trades, the trade markers and the summary.
+#[cfg(feature = "strategies")]
+#[test]
+fn trades_and_markers_show_fills_without_rounding_digits() {
+    use crate::model::OrderType;
+    use crate::strategies::{Backtest, OrderSize, Slippage, Strategy, StrategyContext};
+    struct InThenOut;
+    impl Strategy for InThenOut {
+        fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+            match context.bars().len() {
+                1 => context.entry("In", OrderSide::Buy, None, OrderType::Market),
+                2 => context.exit("Out", None, None, None),
+                _ => {}
+            }
+        }
+    }
+    let minute = |m| DateTime::UNIX_EPOCH + TimeDelta::minutes(m);
+    let bars: Vec<_> = [100.0, 100.1, 101.02]
+        .into_iter()
+        .enumerate()
+        .map(|(i, price)| Bar::new(minute(i as i64), price, price, price, price, 1.0))
+        .collect();
+    let mut engine = Backtest::new("Digits", "TEST", Timeframe::Min1, 10_000.0);
+    engine.settings.slippage = Slippage::Increments(2);
+    engine.settings.order_size = OrderSize::EquityFraction(0.5);
+    let report = engine.run(&mut InThenOut, &bars, &[]);
+    // 100.1 + 2 * 0.01, 101.02 - 2 * 0.01 and 10_000 * 0.5 / 100.12, as binary arithmetic gives them.
+    let trade = &report.trades[0];
+    assert_eq!(trade.entry_price, 100.11999999999999);
+    assert_eq!(trade.exit.as_ref().unwrap().price, 101.0);
+    assert_eq!(trade.quantity, 49.94007191370356);
+    let tooltips: Vec<_> = report
+        .signals()
+        .into_iter()
+        .filter_map(|s| s.tooltip)
+        .collect();
+    assert!(
+        tooltips[0].contains("49.94007191 units @ 100.12"),
+        "{tooltips:?}"
+    );
+    assert!(
+        tooltips[1].contains("49.94007191 units @ 101.00"),
+        "{tooltips:?}"
+    );
+    let mut panel = StrategyReportPanel::default();
+    panel.set_report(Some(report), &bars);
+    panel.tab = Tab::Trades;
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(1440.0, 600.0))
+        .build_ui_state(
+            |ui, panel: &mut StrategyReportPanel| {
+                panel.show(ui);
+            },
+            panel,
+        );
+    h.run();
+    for cell in ["49.94007191", "100.12", "101.00"] {
+        h.get_by_label(cell);
+    }
+    // The summary's largest position writes the quantity as the list does.
+    h.state_mut().tab = Tab::Summary;
+    h.run();
+    assert!(h.query_all_by_label("49.94007191").count() > 0);
 }
 
 #[test]

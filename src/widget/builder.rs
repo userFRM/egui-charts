@@ -185,6 +185,7 @@ impl Chart {
             box_zoom: BoxZoomState::new(),
             zoom_mode_active: false,
             zoom_just_applied: false,
+            zoom_scales: Vec::new(),
             symbol: String::new(),
             legend_instrument: None,
             currency_choices: Vec::new(),

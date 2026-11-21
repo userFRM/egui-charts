@@ -108,6 +108,7 @@ struct ReportData {
     initial_capital: f64,
     equity: Vec<(DateTime<Utc>, f64)>,
     drawdown: Vec<(DateTime<Utc>, f64)>,
+    margin: Vec<(DateTime<Utc>, f64)>,
     run_up: Vec<(DateTime<Utc>, f64)>,
     /// Original indices of valid trades in the range, sorted by entry.
     trades: Vec<usize>,
@@ -133,6 +134,7 @@ impl ReportData {
             analysis,
             equity: Vec::new(),
             drawdown: Vec::new(),
+            margin: Vec::new(),
             run_up: Vec::new(),
             trades: Vec::new(),
             cumulative: Vec::new(),
@@ -162,6 +164,7 @@ impl ReportData {
         }
         self.analysis = run.analysis(&bars);
         self.equity = run.equity_curve();
+        self.margin = run.margin_curve();
         let excursions = run
             .excursion_curve(true)
             .or_else(|| run.excursion_curve(false))
@@ -223,9 +226,9 @@ impl ReportData {
     }
 }
 
-/// Standalone summary, equity, drawdown and run-up charts, trade list, period, distribution and trade
-/// time pages and run properties, for the whole run or a chosen date range. Exports always
-/// cover the whole run.
+/// Standalone summary, equity, drawdown, run-up and margin charts, trade list, period,
+/// distribution and trade time pages and run properties, for the whole run or a chosen date
+/// range. Exports always cover the whole run.
 ///
 /// Call [`Self::set_report`] once when the host supplies or replaces a run. Metrics and display
 /// ordering are cached there. Mount [`Self::show`] in the host's panel below the chart; without a
@@ -563,7 +566,7 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool, as_percent: &mut 
         SummaryUnit::Ratio | SummaryUnit::Bars => number(value),
         SummaryUnit::Count | SummaryUnit::Quantity => value
             .filter(|v| v.is_finite())
-            .map_or_else(|| "N/A".into(), |v| v.to_string()),
+            .map_or_else(|| "N/A".into(), StrategyReport::quantity_text),
     };
     let pairs = if ui.available_width() >= 760.0 { 2 } else { 1 };
     egui::ScrollArea::horizontal()
@@ -658,6 +661,10 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool, as_percent: &mut 
     plot::show(ui, &data.drawdown, &[], theme.ui.error, 125.0, scale);
     ui.label(RichText::new(l10n::text(ui.ctx(), "Run-up from trough")).strong());
     plot::show(ui, &data.run_up, &[], theme.ui.success, 125.0, scale);
+    if !data.margin.is_empty() {
+        ui.label(RichText::new(l10n::text(ui.ctx(), "Margin used")).strong());
+        plot::show(ui, &data.margin, &[], theme.ui.info, 125.0, scale);
+    }
 }
 
 fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Option<usize> {
@@ -736,16 +743,16 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
                                 },
                             )
                             .to_string(),
-                            t.quantity.to_string(),
+                            StrategyReport::quantity_text(t.quantity),
                             time(t.entry_time),
-                            t.entry_price.to_string(),
+                            data.report.price_text(t.entry_price),
                             t.exit.as_ref().map_or_else(
                                 || l10n::text(&ctx, "Open").to_string(),
                                 |e| time(e.time),
                             ),
                             t.exit
                                 .as_ref()
-                                .map_or_else(|| "N/A".into(), |e| e.price.to_string()),
+                                .map_or_else(|| "N/A".into(), |e| data.report.price_text(e.price)),
                             money(t.exit.as_ref().map(|e| e.profit), &data.report),
                             data.cumulative[ordinal]
                                 .map_or_else(String::new, |total| money(Some(total), &data.report)),

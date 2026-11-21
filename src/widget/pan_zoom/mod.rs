@@ -777,8 +777,13 @@ impl Chart {
             return false; // Zoom box too small
         }
 
-        // Save current zoom state to history before applying new zoom
+        // Save current zoom state to history before applying new zoom, with an entry for the
+        // study pane scales it sets. A history cleared since the last zoom drops their entries.
+        if !self.state.has_zoom_history() {
+            self.zoom_scales.clear();
+        }
         self.state.push_zoom_state();
+        self.zoom_scales.push(Vec::new());
 
         // Horizontal zoom: the box's bars fill the width (up to the maximum spacing), centred.
         // A box inside one bar shows that bar across the width, or keeps a wider spacing.
@@ -810,10 +815,15 @@ impl Chart {
             }
             for key in keys {
                 let scale = self.pane_price_scale_mut(pane, key);
+                let before = scale.clone();
                 let map = scale.map(scale.transform(), plot.top(), plot.bottom());
                 let (a, b) = (map.y_to_scale(min_y), map.y_to_scale(max_y));
                 let pad = (scale.min_span() - (a - b).abs()).max(0.0) / 2.0;
                 scale.set_range(a.min(b) - pad, a.max(b) + pad);
+                self.zoom_scales
+                    .last_mut()
+                    .expect("entry pushed with the zoom history")
+                    .push((pane, key, before));
             }
             self.pending_scroll_time = None;
             return true;
@@ -842,6 +852,41 @@ impl Chart {
         self.history.clear_view_restore();
 
         true // Zoom successfully applied
+    }
+
+    /// Gives the scales that the box zoom [`Self::zoom_back`] undoes set in a study pane their
+    /// state from before it: a manual range in the units it was shown in, or the fit of their
+    /// values. A scale locked to the bar spacing before the zoom and still locked gets its
+    /// ratio back. Scales that no longer exist, such as those of a pane removed since, and the
+    /// pane of the main series, whose scale the zoom history restores, are left alone.
+    pub(in crate::widget) fn restore_box_zoom_scales(&mut self) {
+        for (pane, key, before) in self.zoom_scales.pop().unwrap_or_default() {
+            let Some(item) = self.pane_layout.panes.iter().find(|item| item.id == pane) else {
+                continue;
+            };
+            // The scale `pane_price_scale_mut` reaches, which it would otherwise create.
+            let exists = if pane == PaneId::MAIN && key != self.main_series_scale {
+                self.series_scales.contains_key(&key)
+            } else {
+                pane == PaneId::MAIN || item.own_scale(key).is_some()
+            };
+            if !exists || pane == self.main_series_pane() {
+                continue;
+            }
+            let scale = self.pane_price_scale_mut(pane, key);
+            if before.is_manual() {
+                let ratio = scale.bar_ratio().and(before.bar_ratio());
+                // In the units of the transform it was shown in; the next fit rebases them.
+                scale.rebase(before.transform());
+                scale.set_range(before.range().min, before.range().max);
+                if ratio.is_some() {
+                    // Restoring the range is not a zoom, which would rescale the ratio.
+                    scale.set_bar_ratio(ratio);
+                }
+            } else {
+                scale.reset();
+            }
+        }
     }
 
     /// Apply pending timescale configuration: width, initial visible bars,
@@ -3085,16 +3130,19 @@ mod tests {
     /// Box-zoom mode takes one selection, in the price pane or a study pane, and a drawing tool
     /// or the eraser owns the plot's drags while it is on: a drag either zooms or draws, never
     /// both. The zoom-in cursor shows over the plots only, where a press starts a selection.
+    /// Zoom back returns a study pane to its fit or to its manual range, and skips a pane
+    /// removed since.
     #[test]
     #[cfg(feature = "drawings")]
     fn box_zoom_mode_ends_after_one_zoom_and_yields_to_drawing_modes() {
         use crate::drawings::DrawingToolType;
         use egui::CursorIcon;
-        for (tool, eraser, pane) in [
-            (None, false, false),
-            (Some(DrawingToolType::TrendLine), false, false),
-            (None, true, false),
-            (None, false, true),
+        for (tool, eraser, pane, manual_range) in [
+            (None, false, false, false),
+            (Some(DrawingToolType::TrendLine), false, false, false),
+            (None, true, false, false),
+            (None, false, true, false),
+            (None, false, true, true),
         ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], &[200.0]);
@@ -3109,6 +3157,21 @@ mod tests {
                 ));
             }
             frame(&ctx, &mut chart, 0.0, Vec::new());
+            let study_pane = |chart: &Chart| {
+                chart
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .find(|item| item.id != crate::widget::PaneId::MAIN)
+                    .expect("study pane")
+                    .id
+            };
+            if manual_range {
+                let study = study_pane(&chart);
+                chart
+                    .pane_price_scale_mut(study, crate::model::SeriesScale::Right)
+                    .set_range(20.0, 80.0);
+            }
             chart.set_zoom_mode(true);
             chart.drawings_mut().set_active_tool(tool);
             chart.drawings_mut().set_eraser_mode(eraser);
@@ -3129,7 +3192,7 @@ mod tests {
                 modifiers: Modifiers::NONE,
             };
             let mut t = 0.0;
-            let row = format!("tool {tool:?}, eraser {eraser}, pane {pane}");
+            let row = format!("tool {tool:?}, eraser {eraser}, pane {pane}, manual {manual_range}");
             if tool.is_none() && !eraser {
                 // The axes keep their own cursors: a drag there scales the axis.
                 for (at, expected) in [
@@ -3217,7 +3280,7 @@ mod tests {
             }
             let zoomed = chart.get_time_scale_state();
             assert!(zoomed.0 > view.0, "{row}: the first drag zooms");
-            if let (Some((before, false)), Some((after, manual))) = (before, study_values(&chart)) {
+            if let (Some((before, _)), Some((after, manual))) = (before, study_values(&chart)) {
                 // The selected values fill the study pane; the price pane keeps fitting its bars.
                 assert!(manual, "{row}: the study pane keeps the selected range");
                 assert!(!chart.state.price_scale().is_manual(), "{row}: price pane");
@@ -3241,7 +3304,31 @@ mod tests {
             );
             assert_ne!(panned.1, zoomed.1, "{row}: the second drag pans");
             assert!(chart.zoom_back(), "{row}");
+            // Zoom back returns the study pane to its fit or its manual range.
+            t += 0.1;
+            frame(&ctx, &mut chart, t, Vec::new());
+            if let (Some((before, was_manual)), Some((after, is_manual))) =
+                (before, study_values(&chart))
+            {
+                assert_eq!(is_manual, was_manual, "{row}: zoom back");
+                for y in [start.y, end.y] {
+                    let back = after.price_to_y(before.y_to_price(y));
+                    assert!(
+                        (back - y).abs() < 0.5,
+                        "{row}: y {y} at {back} after zoom back"
+                    );
+                }
+            }
             assert!(!chart.zoom_back(), "{row}: one zoom step");
+            if pane {
+                // A zoom in a pane removed before zoom back restores the time range alone.
+                let study = study_pane(&chart);
+                let view = chart.get_time_scale_state();
+                assert!(chart.zoom_to_box(start, end, price, price.width(), study, rect));
+                assert!(chart.remove_pane(study), "{row}");
+                assert!(chart.zoom_back(), "{row}: after removing the pane");
+                assert_eq!(chart.get_time_scale_state(), view, "{row}");
+            }
         }
 
         // A press on a drawing drags the drawing and starts no selection, so the mode stays on.
@@ -3294,6 +3381,70 @@ mod tests {
         assert!(chart.is_zoom_mode_active());
         let moved = chart.drawing_points(id).unwrap()[0].1;
         assert!(moved < 150.0, "the drag moves the line down, to {moved}");
+    }
+
+    /// Zoom back gives a scale locked to the bar spacing, in the price pane or in the study pane
+    /// the zoom began in, the range and ratio it had: the zoom rescaled the ratio with the
+    /// range, and the frames at the zoomed spacing applied it.
+    #[test]
+    fn zoom_back_restores_a_scale_locked_to_the_bar_spacing() {
+        for in_study_pane in [false, true] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[200.0]);
+            chart.add_indicator(Box::new(
+                crate::studies::CustomIndicator::new("Pane", |bars| {
+                    (0..bars.len())
+                        .map(|i| crate::studies::IndicatorValue::Single(i as f64))
+                        .collect()
+                })
+                .with_overlay(false),
+            ));
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            let price = chart.last_rendered_price_rect;
+            let (pane, plot) = if in_study_pane {
+                let study = chart
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .find(|item| item.id != crate::widget::PaneId::MAIN)
+                    .expect("study pane");
+                (
+                    study.id,
+                    Rect::from_x_y_ranges(price.x_range(), study.rect.y_range()),
+                )
+            } else {
+                (crate::widget::PaneId::MAIN, price)
+            };
+            let key = crate::model::SeriesScale::Right;
+            let spacing = chart.state.time_scale().bar_spacing();
+            chart.pane_price_scale_mut(pane, key).set_bar_ratio_locked(
+                true,
+                spacing,
+                plot.height(),
+            );
+            frame(&ctx, &mut chart, 0.1, Vec::new());
+            let read = |chart: &Chart| {
+                let scale = chart.pane_price_scale(pane, key);
+                (scale.range(), scale.bar_ratio())
+            };
+            let (range, ratio) = read(&chart);
+            let (start, end) = (
+                plot.center() - egui::vec2(100.0, 20.0),
+                plot.center() + egui::vec2(100.0, 20.0),
+            );
+            assert!(chart.zoom_to_box(start, end, price, price.width(), pane, plot));
+            frame(&ctx, &mut chart, 0.2, Vec::new());
+            assert!(chart.zoom_back());
+            frame(&ctx, &mut chart, 0.3, Vec::new());
+            let (back, back_ratio) = read(&chart);
+            let tolerance = (range.max - range.min) * 1e-9;
+            assert!(
+                (back.min - range.min).abs() < tolerance
+                    && (back.max - range.max).abs() < tolerance,
+                "study pane {in_study_pane}: {back:?}, was {range:?}"
+            );
+            assert_eq!(back_ratio, ratio, "study pane {in_study_pane}");
+        }
     }
 
     /// The bars and prices inside a zoom box fill the pane on the next frame. The box re-centres
