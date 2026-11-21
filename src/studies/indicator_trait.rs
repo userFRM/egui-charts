@@ -393,6 +393,20 @@ pub trait Indicator: Send + ConcreteStudy {
         false
     }
 
+    /// Whether everything the study draws can follow a calculation on another symbol or interval:
+    /// plots, bands, fills, markers, zones, candles and profiles, which a chart places on its
+    /// own bars that share their time. Return false for a study that can draw drawings,
+    /// [`labels`](Self::labels), [`projections`](Self::projections) or
+    /// [`price_segments`](Self::price_segments) under any of its inputs, or whose output the
+    /// chart draws from its own bars or symbol, such as a [`tpo`](Self::tpo) profile. Such a
+    /// study offers no Symbol, Interval or Wait for interval close input, and restoring it drops
+    /// saved values of them. The answer must not depend on the inputs, so that saved inputs
+    /// restore in any order. True by default; while a study that returns true runs on other
+    /// bars, its drawings, labels, projections and price segments are not drawn.
+    fn draws_on_other_bars(&self) -> bool {
+        true
+    }
+
     /// Optional per-bar colour, overriding the plot colour at a source bar.
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
         let _ = (line, bar);

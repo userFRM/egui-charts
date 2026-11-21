@@ -9,7 +9,7 @@ use crate::data::{Footprint, meets_threshold};
 use crate::model::{
     BarClock, Direction, OrderSide, Placement, Signal, SignalId, SignalShape, Tick,
 };
-use crate::scales::{PriceFormatter, VolumeFormatter};
+use crate::scales::VolumeFormatter;
 use crate::services::SignalEvent;
 
 /// A burst of same-side fills, each at most [`max_gap_ms`](Self::max_gap_ms) after the one
@@ -168,7 +168,8 @@ impl StopRuns {
             tooltip: Some(format!(
                 "{} fills, {ticks} ticks, size {}, {} ms",
                 burst.fills,
-                self.sizes_label.format(burst.size),
+                self.sizes_label
+                    .format_with_min_unit_decimals(burst.size, 2),
                 (burst.last - burst.first).num_milliseconds()
             )),
         }));
@@ -426,8 +427,9 @@ impl StopSweeps {
                     label: Some("Stop sweep".into()),
                     tooltip: Some(format!(
                         "Volume {}, delta {}, {count} diagonal imbalances",
-                        self.sizes_label.format(volume),
-                        self.sizes_label.format(bar.delta())
+                        self.sizes_label.format_with_min_unit_decimals(volume, 2),
+                        self.sizes_label
+                            .format_with_min_unit_decimals(bar.delta(), 2)
                     )),
                 }));
             }
@@ -468,6 +470,12 @@ mod tests {
                 1.0,
                 0.0,
                 "Volume 33, delta 27, 3 diagonal imbalances",
+            ),
+            (
+                Some(0),
+                100.0,
+                0.0,
+                "Volume 3.30K, delta 2.70K, 3 diagonal imbalances",
             ),
         ] {
             let mut instrument = Instrument::new("ES").with_tick_size(0.25);

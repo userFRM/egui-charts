@@ -970,7 +970,14 @@ impl SymbolDetailsPanel {
                     && shown("Volume")
                 {
                     ui.add_space(theme.spacing.md);
-                    let decimals = instrument.volume_decimals.map(usize::from);
+                    // Volume decimals stand below a thousand; K, M and B values keep two.
+                    let volume_text = |value: f64| match instrument.volume_decimals {
+                        Some(decimals) if value.is_finite() => crate::scales::VolumeFormatter {
+                            precision: usize::from(decimals).min(12),
+                        }
+                        .format_with_min_unit_decimals(value, 2),
+                        _ => StudyFormat::Volume.format(value, None),
+                    };
                     for (left, right, size, color) in [
                         (
                             "Volume".to_owned(),
@@ -979,8 +986,8 @@ impl SymbolDetailsPanel {
                             theme.ui.text_secondary,
                         ),
                         (
-                            StudyFormat::Volume.format(volume, decimals),
-                            StudyFormat::Volume.format(average, decimals),
+                            volume_text(volume),
+                            volume_text(average),
                             theme.text.label,
                             theme.ui.text,
                         ),
