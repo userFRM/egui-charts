@@ -1512,7 +1512,7 @@ mod tests {
                     config.show_arcs = !config.show_arcs;
                 },
                 |d| {
-                    let mut config = GannConfig::for_tool(DrawingToolType::GannSquare);
+                    let mut config = GannConfig::saved_default(DrawingToolType::GannSquare);
                     config.show_arcs = !config.show_arcs;
                     d.gann = Some(config);
                 },
@@ -1633,6 +1633,7 @@ mod tests {
                         failure_background: fill,
                         failure_text: None,
                         transparency: 0,
+                        ..ForecastStyle::default()
                     });
                 },
             ),

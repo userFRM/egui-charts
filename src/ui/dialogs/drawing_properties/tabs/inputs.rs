@@ -2,7 +2,7 @@
 
 use crate::drawings::domain::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
 use crate::drawings::{
-    BarsPatternMode, Drawing, DrawingToolType as Tool, ElliottDegree, FibonacciLevel, GannConfig,
+    BarsPatternMode, Drawing, DrawingToolType as Tool, ElliottDegree, FibonacciLevel,
     GannFanDirection, GannLevel, PitchforkConfig, PitchforkLevel, PositionSize, ProjectionLevel,
     VwapBand, VwapBandLine, VwapBandMode, VwapFill, VwapPlotType,
 };
@@ -1571,10 +1571,7 @@ fn gann(
     coordinates: &mut CoordinatesState,
 ) {
     let tool = drawing.tool_type;
-    let mut config = drawing
-        .gann
-        .clone()
-        .unwrap_or_else(|| GannConfig::for_tool(tool));
+    let mut config = drawing.gann_config().clone();
     let original = config.clone();
     let square = matches!(tool, Tool::GannSquare | Tool::GannFixed);
     let max = if square { GANN_SQUARE_UNITS } else { 1.0 };
@@ -1781,7 +1778,7 @@ fn level_color(ui: &mut Ui, color: &mut [u8; 4], state: &mut ColorPickerState) -
 mod tests {
     use super::*;
     use crate::Chart;
-    use crate::drawings::ChartPoint;
+    use crate::drawings::{ChartPoint, GannConfig};
     use crate::model::{BarData, Instrument};
     use crate::ui::dialogs::{DrawingId, DrawingPropertiesDialog, PropertiesTab};
     use egui::{Context, Event, Key, Modifiers, Pos2, Rect, Shape};

@@ -633,9 +633,9 @@ struct UiState {
     /// serve the ghost feed's rising and falling borders, and the background picker the regression
     /// trend's lower line.
     text_pickers: [ColorPickerState; 3],
-    /// Background, text and border pickers of a forecast's cards and badges in the Style tab, in
-    /// the order of its rows.
-    card_pickers: [ColorPickerState; 10],
+    /// Background, text, border and anchor pickers of a forecast in the Style tab, in the order
+    /// of its thirteen rows.
+    card_pickers: [ColorPickerState; 13],
     /// One list of colour pickers per level grid of the current tool.
     level_pickers: Vec<Vec<ColorPickerState>>,
     /// Whether a widget had keyboard focus at the end of the previous frame.
@@ -1040,6 +1040,9 @@ mod tests {
                 dialog.props.color = Color32::GREEN;
                 let forecast = crate::drawings::ForecastStyle {
                     start_border: Some([4, 5, 6, 255]),
+                    pending_background: Some([11, 12, 13, 128]),
+                    pending_text: Some([14, 15, 16, 255]),
+                    anchor_color: Some([7, 8, 9, 255]),
                     ..Default::default()
                 };
                 let settings = &mut dialog.props.tool_settings.as_mut().unwrap().settings;

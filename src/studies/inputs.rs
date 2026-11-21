@@ -1,6 +1,7 @@
 //! Typed input schemas for built-in and host studies.
 
 pub use crate::model::{InputValue, StudySource};
+use chrono::Timelike;
 
 /// The accepted values of a study input.
 #[derive(Clone, Debug)]
@@ -34,6 +35,14 @@ pub enum InputKind {
     Symbol,
     /// Text on one line.
     Text,
+    /// A time of day in hours and minutes, edited as two-digit hour and minute fields.
+    TimeOfDay,
+    /// A time zone named as [`TimezoneId::named`](crate::model::TimezoneId::named) reads it,
+    /// picked from the chart's time zones. The study resolves the name when it is set.
+    TimeZone {
+        /// Whether the empty name is offered, as Exchange time, for the instrument's zone.
+        exchange: bool,
+    },
 }
 
 /// An editable input, with a stable study-local id and its current value.
@@ -137,9 +146,46 @@ impl StudyInput {
             | (InputKind::Text, InputValue::Text(value)) => {
                 value.trim() == value && !value.chars().any(char::is_control)
             }
+            (InputKind::TimeOfDay, InputValue::TimeOfDay(time)) => {
+                time.second() == 0 && time.nanosecond() == 0
+            }
+            (InputKind::TimeZone { exchange }, InputValue::TimeZone(name)) => {
+                if name.is_empty() {
+                    *exchange
+                } else {
+                    name.trim() == name && !name.chars().any(char::is_control)
+                }
+            }
             _ => false,
         }
     }
+}
+
+/// `value` in the form `kind` takes now: a minute count below 1440 as a time of day, and text as
+/// a time zone, as the built-in studies saved them before inputs had those kinds. Any other value
+/// is returned unchanged, for `accepts` to judge.
+#[cfg(feature = "studies")]
+pub(crate) fn upgrade_saved_value(kind: &InputKind, value: InputValue) -> InputValue {
+    match (kind, value) {
+        (InputKind::TimeOfDay, InputValue::Length(minutes)) if minutes < 1440 => {
+            InputValue::TimeOfDay(clock(minutes))
+        }
+        (InputKind::TimeZone { .. }, InputValue::Text(name)) => InputValue::TimeZone(name),
+        (_, value) => value,
+    }
+}
+
+/// The time `minutes` after midnight, for `minutes` below 1440.
+#[cfg(feature = "studies")]
+pub(crate) fn clock(minutes: usize) -> chrono::NaiveTime {
+    chrono::NaiveTime::from_hms_opt((minutes / 60) as u32, (minutes % 60) as u32, 0)
+        .expect("a minute of the day")
+}
+
+/// Minutes after midnight of `time`, without its seconds.
+#[cfg(feature = "studies")]
+pub(crate) fn minutes(time: chrono::NaiveTime) -> usize {
+    (time.hour() * 60 + time.minute()) as usize
 }
 
 #[cfg(feature = "studies")]
@@ -297,3 +343,74 @@ macro_rules! study_inputs {
 
 #[cfg(feature = "studies")]
 pub(crate) use {input_assign, input_spec, study_inputs};
+
+#[cfg(all(test, feature = "studies"))]
+mod tests {
+    use super::*;
+    use chrono::NaiveTime;
+
+    /// A time of day takes whole minutes and a zone a name on one line, empty only where the
+    /// input offers Exchange time. Minute counts below 1440 and text, as the built-in studies saved
+    /// them, convert to those kinds; `accepts` itself refuses them, so host studies only ever
+    /// receive the kinds they declare.
+    #[test]
+    fn time_and_zone_inputs_accept_their_values() {
+        use InputKind::{Length, TimeOfDay, TimeZone};
+        let time = |h, m| InputValue::TimeOfDay(NaiveTime::from_hms_opt(h, m, 0).unwrap());
+        let zone = |name: &str| InputValue::TimeZone(name.into());
+        let text = |name: &str| InputValue::Text(name.into());
+        for (kind, value, upgraded, accepted) in [
+            (TimeOfDay, InputValue::Length(0), time(0, 0), true),
+            (TimeOfDay, InputValue::Length(570), time(9, 30), true),
+            (TimeOfDay, InputValue::Length(1439), time(23, 59), true),
+            (
+                TimeOfDay,
+                InputValue::Length(1440),
+                InputValue::Length(1440),
+                false,
+            ),
+            (
+                TimeOfDay,
+                InputValue::TimeOfDay(NaiveTime::from_hms_opt(9, 30, 15).unwrap()),
+                InputValue::TimeOfDay(NaiveTime::from_hms_opt(9, 30, 15).unwrap()),
+                false,
+            ),
+            (
+                TimeOfDay,
+                InputValue::TimeOfDay(NaiveTime::from_hms_nano_opt(9, 30, 0, 1).unwrap()),
+                InputValue::TimeOfDay(NaiveTime::from_hms_nano_opt(9, 30, 0, 1).unwrap()),
+                false,
+            ),
+            (TimeOfDay, text("09:30"), text("09:30"), false),
+            (TimeZone { exchange: false }, text("UTC"), zone("UTC"), true),
+            (TimeZone { exchange: false }, zone(""), zone(""), false),
+            (
+                TimeZone { exchange: false },
+                zone(" UTC"),
+                zone(" UTC"),
+                false,
+            ),
+            // A line break inside the name, which trimming leaves in place.
+            (
+                TimeZone { exchange: false },
+                zone("Europe/\nLondon"),
+                zone("Europe/\nLondon"),
+                false,
+            ),
+            (TimeZone { exchange: true }, text(""), zone(""), true),
+            (
+                Length(0, 1439),
+                InputValue::Length(570),
+                InputValue::Length(570),
+                true,
+            ),
+        ] {
+            let input = StudyInput::new("x", "X", value.clone(), kind);
+            if value != upgraded {
+                assert!(!input.accepts(&value), "{input:?}");
+            }
+            assert_eq!(upgrade_saved_value(&input.kind, value), upgraded);
+            assert_eq!(input.accepts(&upgraded), accepted, "{input:?}");
+        }
+    }
+}

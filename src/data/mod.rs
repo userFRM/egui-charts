@@ -97,10 +97,11 @@ pub(crate) use options_volume::OptionsVolumeSource;
 pub use options_volume::{
     OptionsVolume, OptionsVolumeQuery, OptionsVolumeReader, OptionsVolumeSink,
 };
+#[cfg(any(feature = "studies", feature = "drawings"))]
+pub(crate) use volume_profile::price_span;
 #[cfg(feature = "studies")]
 pub(crate) use volume_profile::{
-    DevelopingVolume, ExposureProfile, OptionWalls, StrikeExposure, grid_row, price_span,
-    whole_tick_rows,
+    DevelopingVolume, ExposureProfile, OptionWalls, StrikeExposure, grid_row, whole_tick_rows,
 };
 #[cfg_attr(
     not(any(test, feature = "widget")),

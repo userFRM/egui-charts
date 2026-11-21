@@ -1500,9 +1500,11 @@ pub struct RangeSettings {
     pub border_width: Option<f32>,
     /// Pattern of the box edges; `None` takes the drawing's line style.
     pub border_style: Option<crate::model::LineStyle>,
-    /// Whether a date range's time edges run up to the top of the pane.
+    /// Whether the time edges of a date range or a date and price range run up to the top of
+    /// the pane.
     pub extend_top: bool,
-    /// Whether a date range's time edges run down to the bottom of the pane.
+    /// Whether the time edges of a date range or a date and price range run down to the bottom
+    /// of the pane.
     pub extend_bottom: bool,
 }
 
