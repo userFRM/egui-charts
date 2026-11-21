@@ -674,7 +674,7 @@ mod tests {
                         ..Default::default()
                     };
                     config.cells = vec![vec![TableCellStyle::default(), cell]];
-                    table.table = Some(config);
+                    table.table = Some(Box::new(config));
                 },
                 |painted| {
                     let theme_text = crate::theme::Theme::default().ui.text;
@@ -705,7 +705,7 @@ mod tests {
                 "alignment",
                 "A\tA\tA\nA\tA\tA\nA\tA\tA",
                 |table| {
-                    table.table = Some(TableConfig {
+                    table.table = Some(Box::new(TableConfig {
                         column_widths: vec![Some(100.0); 3],
                         row_heights: vec![Some(40.0); 3],
                         cells: [V::Top, V::Middle, V::Bottom]
@@ -720,7 +720,7 @@ mod tests {
                             })
                             .to_vec(),
                         ..Default::default()
-                    });
+                    }));
                 },
                 |painted| {
                     let [(rect, ..)] = painted.fills[..] else {
@@ -742,11 +742,11 @@ mod tests {
                 "sizes and clipping",
                 "Symbol\tLast\tA cell much wider than thirty points\nAAPL\t189.50",
                 |table| {
-                    table.table = Some(TableConfig {
+                    table.table = Some(Box::new(TableConfig {
                         column_widths: vec![Some(120.0), None, Some(30.0)],
                         row_heights: vec![None, Some(50.0)],
                         ..Default::default()
-                    });
+                    }));
                 },
                 |painted| {
                     let [(rect, ..)] = painted.fills[..] else {

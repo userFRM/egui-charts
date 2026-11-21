@@ -384,9 +384,9 @@ pub struct Drawing {
     /// Column widths, row heights, cell styles and the Anchor to screen switch of a table, by
     /// the rows and columns of its [`text`](Self::text). `None`, as on tables saved before these
     /// settings, fits each column to its text and each row to one line, with no cell styles, on
-    /// the table's bar and price. Other tools ignore it.
+    /// the table's bar and price. Other tools ignore it. Boxed so their drawing copies stay small.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub table: Option<TableConfig>,
+    pub table: Option<Box<TableConfig>>,
     /// Clockwise rotation of an icon, emoji or sticker about its centre, in degrees; 0 is upright.
     /// Its handles, selection frame and hit area rotate with it. Other tools ignore this field.
     /// Drawings saved before this setting load upright.

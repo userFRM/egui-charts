@@ -807,7 +807,7 @@ fn table(ui: &mut Ui, drawing: &mut Drawing) {
         }
     });
     if config != *drawing.table_config() {
-        drawing.table = Some(config);
+        drawing.table = Some(Box::new(config));
     }
 }
 

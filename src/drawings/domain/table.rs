@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 /// config.cells = vec![vec![header; 2]];
 /// config.column_widths = vec![None, Some(120.0)];
 /// config.screen_anchored = true;
-/// table.table = Some(config);
+/// table.table = Some(Box::new(config));
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

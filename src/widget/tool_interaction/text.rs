@@ -35,7 +35,7 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize, placed: bool) 
     if !drawing.tool_type.edits_text_inline() {
         return;
     }
-    manager.text_editor = Some(TextEditState {
+    manager.text_editor = Some(Box::new(TextEditState {
         id,
         draft: if drawing.tool_type == DrawingToolType::Table {
             drawing.table_text()
@@ -50,7 +50,7 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize, placed: bool) 
         inline: edits_in_place(drawing.tool_type),
         fib_level: None,
         table: drawing.table_config().into_owned(),
-    });
+    }));
     manager.select(id);
 }
 
@@ -110,7 +110,7 @@ pub(super) fn begin_fibonacci_edit(
         }
     }
     if let Some((id, index, draft)) = target {
-        manager.text_editor = Some(TextEditState {
+        manager.text_editor = Some(Box::new(TextEditState {
             id,
             draft,
             focus: true,
@@ -119,7 +119,7 @@ pub(super) fn begin_fibonacci_edit(
             inline: true,
             fib_level: Some(index),
             table: TableConfig::default(),
-        });
+        }));
         manager.select(id);
     }
 }
@@ -220,7 +220,7 @@ fn open_shape_edit(ui: &Ui, manager: &mut DrawingManager, id: usize, pos: egui::
         .painted_text(id, &field)
         .is_some_and(|(min, galley)| Rect::from_min_size(min, galley.size()).contains(pos))
     {
-        manager.text_editor = Some(TextEditState {
+        manager.text_editor = Some(Box::new(TextEditState {
             id,
             draft: text.unwrap_or_default(),
             focus: true,
@@ -229,7 +229,7 @@ fn open_shape_edit(ui: &Ui, manager: &mut DrawingManager, id: usize, pos: egui::
             inline: true,
             fib_level: None,
             table: TableConfig::default(),
-        });
+        }));
     }
 }
 
@@ -502,12 +502,13 @@ pub(super) fn show_editor(
                 )
                 && is_address(address))
             .then(|| PostLink::new(address));
+            let editor = *editor;
             let _ = manager.edit_drawing(editor.id, |drawing| {
                 drawing.text = post.is_none().then_some(editor.draft);
                 drawing.post = post;
                 if table {
                     drawing.table =
-                        (editor.table != TableConfig::default()).then_some(editor.table);
+                        (editor.table != TableConfig::default()).then(|| Box::new(editor.table));
                 }
             });
         }
@@ -1204,7 +1205,7 @@ mod tests {
             }
             assert!(manager.text_editor.is_none(), "{text:?}");
             if edited {
-                assert_eq!(manager.drawings[0].table, Some(settings));
+                assert_eq!(manager.drawings[0].table, Some(Box::new(settings)));
                 assert!(manager.can_undo());
                 assert!(manager.undo());
             }
@@ -1754,10 +1755,10 @@ mod tests {
             let mut drawing = Drawing::new(7, tool);
             drawing.chart_points.push(ChartPoint::new(50.0, 15.0));
             if tool == DrawingToolType::Table && pinned {
-                drawing.table = Some(TableConfig {
+                drawing.table = Some(Box::new(TableConfig {
                     screen_anchored: true,
                     ..Default::default()
-                });
+                }));
             }
             chart.drawings_mut().drawings.push(drawing);
             frame(&ctx, &mut chart, 0.0, vec![]);

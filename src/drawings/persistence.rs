@@ -1616,7 +1616,7 @@ mod tests {
                 }],
                 ..Default::default()
             });
-            drawing.table = Some(crate::drawings::TableConfig {
+            drawing.table = Some(Box::new(crate::drawings::TableConfig {
                 column_widths: vec![None, Some(120.5)],
                 row_heights: vec![Some(30.0)],
                 cells: vec![
@@ -1629,7 +1629,7 @@ mod tests {
                     }],
                 ],
                 screen_anchored: true,
-            });
+            }));
             drawing.forecast = Some(crate::drawings::ForecastStyle {
                 start_text: None,
                 target_border: Some([11, 12, 13, 14]),
