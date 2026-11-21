@@ -686,7 +686,7 @@ pub(crate) fn render_quote_tags_with_countdown(
     allow_overlap: bool,
     close_name: &str,
 ) -> [Option<Rect>; 3] {
-    use crate::scales::{PriceFormatter, VolumeFormatter};
+    use crate::scales::VolumeFormatter;
     let mut tags = [None; 3];
     let transform = price_map.transform();
     let height = painter
@@ -766,7 +766,7 @@ pub(crate) fn render_quote_tags_with_countdown(
                     VolumeFormatter {
                         precision: usize::from(volume_precision.unwrap_or(2)),
                     }
-                    .format(value)
+                    .format_with_min_unit_decimals(value, 2)
                 },
                 |formatter| formatter.format(value),
             ),

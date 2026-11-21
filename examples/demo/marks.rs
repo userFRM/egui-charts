@@ -6,21 +6,36 @@ use egui::{Color32, Vec2};
 use egui_charts::data::Reply;
 use egui_charts::drawings::FontWeight;
 use egui_charts::model::{
-    BarClock, ChangeMarkers, EventKind, Marker, MarkerPos, MarkerShape, PriceLine, TimeScaleEvent,
-    Timeframe,
+    BarClock, ChangeMarkers, EventKind, Execution, Marker, MarkerPos, MarkerShape, OrderId,
+    OrderSide, PriceLine, TimeScaleEvent, Timeframe,
 };
 use egui_charts::services::{Marks, MarksPage, MarksRequest};
+use egui_charts::ui::trading::{ExecutionMark, ExecutionMarkStyle, render_executions};
 use egui_charts::widget::{SeriesId, Watermark, WatermarkLine};
 use std::sync::{Arc, Mutex, PoisonError};
 
 const LEVEL: Color32 = Color32::from_rgb(255, 152, 0);
 const FILL: Color32 = Color32::from_rgb(41, 98, 255);
+pub(super) const IMPORT: Color32 = Color32::from_rgb(156, 39, 176);
 const STOP: Color32 = Color32::from_rgb(242, 54, 69);
+
+/// Resolve the stable identity shared by a synthetic news badge and its full story.
+pub(super) fn news_story(id: &str) -> Option<egui_charts::data::NewsStory> {
+    let (symbol, time) = id.strip_prefix("demo-news-")?.split_once('-')?;
+    let time = DateTime::from_timestamp_millis(time.parse().ok()?)?;
+    let mut query = egui_charts::data::NewsQuery::new(1);
+    query.symbols = vec![symbol.into()];
+    let mut story = super::feeds::news(&query, time).into_iter().next()?;
+    story.id = id.into();
+    story.time = time;
+    Some(story)
+}
 
 impl DemoApp {
     /// Annotates the bars on show with the time-axis events and, when the API samples are on, a
-    /// fill and a stop marked at their prices, marks of the live changes of the close, signal bar
-    /// marks, a watermark of the symbol and its company and the demo level at the recent high.
+    /// fill and a stop marked at their prices, the fill also as a fill mark, marks of the live
+    /// changes of the close, signal bar marks, a watermark of the symbol and its company and the
+    /// demo level at the recent high.
     pub(super) fn annotate(&mut self) {
         if self.own_data.is_some() {
             return;
@@ -94,6 +109,33 @@ impl DemoApp {
         if high.is_finite() {
             self.set_demo_level(high);
         }
+    }
+
+    /// Marks the samples' fill, which no broker sent, as a fill in a style of its own: the
+    /// host's way to draw imported trades.
+    pub(super) fn show_sample_fill(&self, ui: &mut egui::Ui) {
+        let Some((time, price)) = (self.chart.markers(SeriesId::MAIN).iter()).find_map(|marker| {
+            let sample = marker.text.as_deref() == Some("Fill") && marker.color == FILL;
+            sample.then_some((marker.time, marker.price?))
+        }) else {
+            return;
+        };
+        let fill = Execution::new(
+            OrderId::new("sample-import"),
+            time,
+            OrderSide::Buy,
+            price,
+            3.0,
+        );
+        let mut style = ExecutionMarkStyle::default();
+        style.arrow_width = 10.0;
+        style.arrow_height = 12.0;
+        style.label_font = Some(egui::FontId::monospace(11.0));
+        let mark = ExecutionMark::new(&fill)
+            .with_color(IMPORT)
+            .with_hover("Imported fill (sample)")
+            .with_style(&style);
+        render_executions(ui, &self.chart, &[mark], &self.trading.display, None);
     }
 
     /// Moves the demo level to `price` through its handle, adding it when there is none.
@@ -236,6 +278,13 @@ impl DemoMarks {
                 format!("Synthetic {} event", kind.label()),
             );
             event.details = "Demonstration data supplied by the host.".into();
+            if kind == EventKind::News {
+                event.id = format!("demo-news-{}-{}", spec.symbol, time.timestamp_millis());
+                if let Some(story) = news_story(&event.id) {
+                    event.title = story.headline;
+                    event.details = story.body;
+                }
+            }
             page.events.push(event);
             if kind == EventKind::News
                 && let Some(notifications) = &self.notifications
@@ -306,12 +355,13 @@ mod tests {
         request.symbol = "TOKENA".into();
         let other = source.annotations(&request);
         assert!(!other.events.is_empty());
-        assert!(
-            other
-                .events
-                .iter()
-                .all(|event| event.id.starts_with("demo-event-TOKENA-"))
-        );
+        assert!(other.events.iter().all(|event| event.id.starts_with(
+            if event.kind == EventKind::News {
+                "demo-news-TOKENA-"
+            } else {
+                "demo-event-TOKENA-"
+            }
+        )));
         request.symbol = "SAMPLE".into();
         assert_eq!(source.annotations(&request).events, older.events);
         assert_eq!(

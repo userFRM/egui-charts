@@ -1,6 +1,63 @@
 use crate::widget::test_frames::{candle_ys, chart, frame, shapes};
 use egui::{Pos2, Rect, Shape};
 
+#[test]
+fn news_badge_has_a_distinct_icon_and_colour() {
+    use crate::model::{EventKind, TimeScaleEvent};
+    use crate::widget::SeriesId;
+    for dark in [false, true] {
+        let ctx = egui::Context::default();
+        ctx.set_visuals(if dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        });
+        let mut chart = chart(&[100.0], &[110.0]);
+        let kinds = [EventKind::News, EventKind::Economic, EventKind::Earnings];
+        let events = kinds
+            .iter()
+            .enumerate()
+            .map(|(index, kind)| {
+                TimeScaleEvent::new(
+                    kind.label(),
+                    chart.bars(SeriesId::MAIN)[90 + index * 2].time,
+                    *kind,
+                    kind.label(),
+                )
+            })
+            .collect();
+        chart.set_time_scale_events(events);
+        let mut visibility = chart.event_visibility().clone();
+        visibility.show_earnings = true;
+        visibility.show_economic_events = true;
+        chart.set_event_visibility(visibility);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let badges: Vec<_> = kinds
+            .iter()
+            .map(|kind| {
+                painted
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.text() == kind.label() => Some((
+                            text.pos + text.galley.size() * 0.5,
+                            text.galley.job.sections[0].format.color,
+                        )),
+                        _ => None,
+                    })
+                    .expect("event badge")
+            })
+            .collect();
+        assert_ne!(badges[0].1, badges[1].1);
+        assert_ne!(badges[0].1, badges[2].1);
+        assert!(painted.iter().any(|shape| matches!(shape, Shape::Path(path)
+            if path.closed && path.points.len() == 4 && path.visual_bounding_rect().contains(badges[0].0))));
+        for (centre, _) in &badges[1..] {
+            assert!(painted.iter().any(|shape| matches!(shape, Shape::Circle(circle) if circle.center.distance(*centre) < 1.0)));
+        }
+    }
+}
+
 /// Each chart of a layout carries the replay mark exactly while it replays itself.
 #[test]
 fn legend_marks_a_chart_only_while_it_replays() {
@@ -2893,10 +2950,18 @@ fn footprint_and_session_profile_write_the_instrument_volume_decimals() {
     use crate::studies::{InputValue, VolProfileSession};
     // Decimals, the bid-by-ask cell, a profile row value and the bar volume of the statistics,
     // 0.375 + 123.456; without decimals they read `0.375 × 123`, `913.58` and `124`. The trade
-    // count of the statistics stays `2`.
-    for (decimals, cell, row, volume) in [
-        (0, "0 × 123", "914", "124"),
-        (3, "0.375 × 123.456", "913.578", "123.831"),
+    // count of the statistics stays `2`. At a spacing too narrow for 1237566, the statistics of
+    // a bar of 618,783 by 618,783 write it as 1.2M at 0 decimals, as without them.
+    let sizes = [0.375, 123.456];
+    for (decimals, sizes, spacing, expected) in [
+        (0, sizes, 150.0, &["0 × 123", "914", "124", "2"][..]),
+        (
+            3,
+            sizes,
+            150.0,
+            &["0.375 × 123.456", "913.578", "123.831", "2"],
+        ),
+        (0, [618_783.0; 2], 30.0, &["1.2M", "2"]),
     ] {
         let bars = (0..10)
             .map(|minute| {
@@ -2915,10 +2980,10 @@ fn footprint_and_session_profile_write_the_instrument_volume_decimals() {
             crate::studies::Indicator::set_input(&mut profile, id, value).unwrap();
         }
         chart.add_indicator(Box::new(profile));
-        chart.apply_synced_time_scale(150.0, 1.0);
+        chart.apply_synced_time_scale(spacing, 1.0);
         let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
         for bar in chart.bars(crate::widget::SeriesId::MAIN).to_vec() {
-            for (size, side) in [(0.375, OrderSide::Sell), (123.456, OrderSide::Buy)] {
+            for (size, side) in sizes.into_iter().zip([OrderSide::Sell, OrderSide::Buy]) {
                 flow.push(&Tick::new(bar.time, 105.0, size, Some(side)))
                     .unwrap();
             }
@@ -2951,7 +3016,7 @@ fn footprint_and_session_profile_write_the_instrument_volume_decimals() {
                 })
                 .collect::<Vec<_>>();
         }
-        for expected in [cell, row, volume, "2"] {
+        for &expected in expected {
             assert!(
                 texts.iter().any(|text| text == expected),
                 "volume decimals {decimals}: {expected} not in {texts:?}"
