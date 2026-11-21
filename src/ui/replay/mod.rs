@@ -50,7 +50,7 @@ pub mod status;
 mod toolbar;
 mod trading;
 
-pub use crate::model::{ReplayScope, ReplaySession};
+pub use crate::model::{ReplayChart, ReplayScope, ReplaySession};
 pub use actions::{ReplayAction, ReplaySpeed};
 pub use config::{ReplayBehavior, ReplayColors, ReplayConfig, ReplayLayout};
 pub use controls::{CompactReplayControls, ReplayControls, ReplayKeyboardHandler};

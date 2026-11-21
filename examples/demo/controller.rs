@@ -907,6 +907,9 @@ impl DemoApp {
                     session.scope = ReplayScope::AllCharts;
                 }
                 session.symbol = DemoSymbol::current(&session.symbol);
+                for chart in &mut session.charts {
+                    chart.symbol = DemoSymbol::current(&chart.symbol);
+                }
                 Some((session, interval))
             }),
             replay_slots: Vec::new(),
@@ -952,6 +955,7 @@ impl DemoApp {
         }
         app.alerts.set_service(app.alert_host.clone());
         app.alerts.set_popup_actions(true);
+        app.stop_restored_strategy_alerts();
         app.alerts.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.top_toolbar.state.can_trade = true;
         app.top_toolbar.state.can_publish_ideas = true;
@@ -4448,16 +4452,7 @@ impl DemoApp {
     fn handle_replay_control(&mut self, action: ReplayControlAction) {
         match action {
             ReplayControlAction::Start(start) => return self.apply_replay_start(start),
-            ReplayControlAction::SetScope(scope) => {
-                if !self.recording_files.opened {
-                    self.replay_scope = scope;
-                    if self.replay_control.uses_automatic_update_interval() {
-                        self.set_automatic_replay_interval();
-                    }
-                    self.push_replay_window_to_chart();
-                }
-                return;
-            }
+            ReplayControlAction::SetScope(scope) => return self.set_replay_scope(scope),
             // Without a replay the bar is only there to select its start.
             ReplayControlAction::Stop | ReplayControlAction::Close if self.replay.is_none() => {
                 return self.stop_replay();
@@ -7742,18 +7737,30 @@ mod tests {
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(&storage);
         let mut restored = DemoApp::new(&cc);
-        assert_eq!(
-            restored.replay_session,
-            Some((saved.clone(), Timeframe::Hour1))
-        );
+        // The session records the three charts, every one a copy of the source at one hour.
+        let mut expected = saved.clone();
+        expected.charts = (0..3)
+            .map(|slot| {
+                egui_charts::ui::replay::ReplayChart::new(
+                    slot,
+                    app.state.symbol.clone(),
+                    Timeframe::Hour1,
+                )
+            })
+            .collect();
+        assert_eq!(restored.replay_session, Some((expected, Timeframe::Hour1)));
         restored.apply_replay_start(egui_charts::ui::replay::ReplayStartAction::Resume);
         assert_eq!(restored.chart.replay_time(), Some(cutoff));
         assert!(!restored.replay.as_ref().unwrap().state.is_playing());
 
-        // Before scopes were saved, the demo replayed every chart in the default layout.
+        // Before scopes and charts were saved, the demo replayed every chart in the default layout.
         let session = storage.0.get_mut("replay_session").unwrap();
-        assert!(session.contains(",scope:AllCharts"));
-        *session = session.replace(",scope:AllCharts", "");
+        let (from, to) = (
+            session.find(",scope:AllCharts").unwrap(),
+            session.rfind("),").unwrap(),
+        );
+        session.replace_range(from..to, "");
+        assert!(!session.contains("charts"));
         let mut cc = eframe::CreationContext::_new_kittest(ctx);
         cc.storage = Some(&storage);
         let mut restored = DemoApp::new(&cc);
