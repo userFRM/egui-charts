@@ -971,14 +971,51 @@ impl Chart {
         if let Some(formatter) = self.series_price_formatter(id) {
             return Some(formatter.format(value));
         }
-        let decimals = self
-            .series_price_scale(id)?
-            .price_precision()
-            .map_or_else(|| crate::scales::price_decimals(value), usize::from);
+        let decimals = self.menu_price_decimals(id, value)?;
         Some(crate::scales::group_thousands(
             crate::scales::DefaultPriceFormatter::with_precision(decimals).format(value),
             map.thousands_sep(),
         ))
+    }
+
+    /// The decimals the menu uses without a formatter: the scale's precision, else those of
+    /// the nearest axis label, at least two. Percentage and indexed scales use the precision,
+    /// else the price's magnitude. `None` while the series has no drawn pane.
+    #[cfg(feature = "ui")]
+    pub(crate) fn menu_price_decimals(&self, id: SeriesId, value: f64) -> Option<usize> {
+        let map = self.series_price_map(id)?;
+        if matches!(
+            map.transform().mode,
+            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+        ) {
+            return Some(
+                self.series_price_scale(id)?
+                    .price_precision()
+                    .map_or_else(|| crate::scales::price_decimals(value), usize::from),
+            );
+        }
+        Some(rendering::axes::tag_decimals(&map, map.price_to_y(value)))
+    }
+
+    /// The quick alert price offered by the chart menu at `pos`: the main series' pointer
+    /// price rounded to the instrument's tick, else the decimals the menu uses. Returns `None`
+    /// outside its pane, over a collapsed pane or at a non-finite price.
+    ///
+    /// Hosts use this for [`KeyboardAction::CreateAlert`](crate::config::KeyboardAction::CreateAlert),
+    /// bound to Alt+A unless the chart's [`ShortcutMap`](crate::widget::ShortcutMap) changes it.
+    #[cfg(feature = "ui")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
+    pub fn alert_price_at(&self, pos: egui::Pos2) -> Option<f64> {
+        let (pane, price) = self.pointer_price(pos)?;
+        if self.series_pane(SeriesId::MAIN) != Some(pane) {
+            return None;
+        }
+        let tick = self
+            .instrument()
+            .and_then(|instrument| instrument.tick_size);
+        let decimals = self.menu_price_decimals(SeriesId::MAIN, price)?;
+        let price = crate::scales::snap_price(price, tick, decimals);
+        price.is_finite().then_some(price)
     }
 }
 
