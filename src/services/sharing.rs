@@ -32,13 +32,26 @@ impl ShareLink {
     }
 }
 
+/// What the recipients of a shared document may do with it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ShareAccess {
+    /// Recipients may only view the document.
+    #[default]
+    ViewOnly,
+    /// Recipients may view the document and save a copy of it.
+    ViewAndCopy,
+}
+
 /// The sharing operations a [`Sharing`] service offers for one [`ShareKind`].
 ///
 /// ```
-/// use egui_charts::services::ShareOffer;
+/// use egui_charts::services::{ShareAccess, ShareOffer};
 /// let mut offer = ShareOffer::new(true, false);
 /// offer.revoke = true;
-/// assert!(offer.link && offer.revoke && !offer.copy);
+/// offer.switch = true;
+/// assert!(offer.link && offer.revoke && offer.switch && !offer.copy);
+/// assert_eq!(ShareAccess::default(), ShareAccess::ViewOnly);
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -49,6 +62,11 @@ pub struct ShareOffer {
     pub copy: bool,
     /// Whether menus offer [`Sharing::revoke`] on a document reported as shared.
     pub revoke: bool,
+    /// Whether menus show a switch that shares the document through [`Sharing::share`] and stops
+    /// sharing it through [`Sharing::revoke`], with a choice of [`ShareAccess`], and offer Copy
+    /// link only while [`Sharing::shared`] reports the document shared. Without it the menus keep
+    /// their Copy link, Save a copy and Stop sharing rows.
+    pub switch: bool,
 }
 
 impl ShareOffer {
@@ -58,6 +76,7 @@ impl ShareOffer {
             link,
             copy,
             revoke: false,
+            switch: false,
         }
     }
 }
@@ -89,6 +108,24 @@ pub trait Sharing: MaybeSend + 'static {
     /// reports false, or an error for the menu to display. Unsupported by default.
     fn revoke(&self, kind: ShareKind, name: &str, reply: Reply<()>) {
         let _ = (kind, name);
+        reply.send(Err(crate::data::FeedError::NotSupported));
+    }
+
+    /// What the recipients of the shared document `name` of `kind` may do. Read every frame the
+    /// menu is open while [`ShareOffer::switch`] is offered and [`shared`](Self::shared) reports
+    /// the document shared, so answer from memory. The default is [`ShareAccess::ViewOnly`].
+    fn access(&self, kind: ShareKind, name: &str) -> ShareAccess {
+        let _ = (kind, name);
+        ShareAccess::ViewOnly
+    }
+
+    /// Shares the document `name` of `kind` with `access`, or changes the access of a document
+    /// already shared. Answer success once [`shared`](Self::shared) reports it shared and
+    /// [`access`](Self::access) reports `access`, or an error for the menu to display. Links
+    /// answered by [`link`](Self::link) afterwards say whether a copy is allowed. Unsupported by
+    /// default.
+    fn share(&self, kind: ShareKind, name: &str, access: ShareAccess, reply: Reply<()>) {
+        let _ = (kind, name, access);
         reply.send(Err(crate::data::FeedError::NotSupported));
     }
 

@@ -1789,7 +1789,7 @@ mod tests {
     }
 
     #[test]
-    fn layout_menu_names_new_layouts_and_confirms_deletes() {
+    fn layout_menu_names_new_layouts_confirms_deletes_and_shares() {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -1864,6 +1864,60 @@ mod tests {
                 .layout_menu
                 .layouts
                 .contains(&"Morning".to_owned())
+        );
+
+        // Saved again, it is shared through the switch with the chosen access.
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
+        app.poll_storage(&ctx);
+        click(&mut app, &ctx, "Named layouts");
+        let labels = |app: &mut DemoApp| {
+            let output = frame(app, &ctx, vec![]);
+            let labels: Vec<String> = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .filter_map(|(_, node)| node.label().or(node.value()).map(str::to_owned))
+                .collect();
+            output.drop_without_applying_deltas();
+            labels
+        };
+        assert!(
+            !labels(&mut app).iter().any(|label| label == "Copy link"),
+            "Copy link waits for the layout to be shared"
+        );
+        click_lowest(&mut app, &ctx, "Share layout");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        click_lowest(&mut app, &ctx, "View and copy");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        click_lowest(&mut app, &ctx, "Copy link");
+        let copied = (0..2).find_map(|_| {
+            let output = frame(&mut app, &ctx, vec![]);
+            let copied = output
+                .platform_output
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                    _ => None,
+                });
+            output.drop_without_applying_deltas();
+            copied
+        });
+        assert!(
+            copied
+                .as_deref()
+                .is_some_and(|text| text.starts_with("https://demo.invalid/layout/")),
+            "{copied:?}"
+        );
+        let texts = labels(&mut app);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "Link copied. Recipients can view it and save a copy."),
+            "{texts:?}"
         );
     }
 

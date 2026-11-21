@@ -968,14 +968,15 @@ impl DemoApp {
             app.watchlist.set_active_list(active);
         }
         app.watchlist.set_service(app.quotes.clone());
-        app.watchlist
-            .set_sharing(Arc::new(feeds::ListSharing::default()));
+        let sharing = Arc::new(feeds::DemoSharing::default());
+        app.watchlist.set_sharing(sharing.clone());
         app.watchlist.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.alert_evaluator.set_storage(app.storage.clone());
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
         app.symbol_details.set_storage(app.storage.clone());
         app.top_toolbar.layout_menu.set_storage(app.storage.clone());
+        app.top_toolbar.layout_menu.set_sharing(sharing);
         app.highlights.set_feed(app.live.clone());
         app.news.set_feed(app.live.clone());
         for panel in [&mut app.news, &mut app.highlights] {

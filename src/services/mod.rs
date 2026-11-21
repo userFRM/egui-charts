@@ -87,6 +87,6 @@ pub use search::{ExpressionError, SymbolExpression, SymbolQuery, SymbolSearch};
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub use settings::{MarketHeatmapSelection, SettingsStore, UserSettings};
-pub use sharing::{ShareKind, ShareLink, ShareOffer, Sharing};
+pub use sharing::{ShareAccess, ShareKind, ShareLink, ShareOffer, Sharing};
 pub use signals::{SignalEvent, Signals};
 pub use storage::{ConflictChoice, Revision, SaveOutcome, Storage, StoreKind, Versioned};

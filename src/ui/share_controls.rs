@@ -4,7 +4,7 @@
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
 use crate::localization as l10n;
-use crate::services::{ShareKind, ShareLink, Sharing};
+use crate::services::{ShareAccess, ShareKind, ShareLink, Sharing};
 use egui::Ui;
 use std::sync::Arc;
 
@@ -14,6 +14,7 @@ enum Operation {
     Link(String),
     Copy(String),
     Revoke(String),
+    Share(String, ShareAccess),
 }
 
 /// What the last operation came to, for the document it was made on.
@@ -22,6 +23,7 @@ enum Outcome {
     Link(ShareLink),
     Copy(String),
     Revoked,
+    Shared(ShareAccess),
     Failed(FeedError),
 }
 
@@ -78,6 +80,15 @@ impl ShareControls {
                         Err(error) => Outcome::Failed(error),
                     },
                 ),
+                Operation::Share(_, access) => {
+                    answer.downcast::<Result<(), FeedError>>().map_or_else(
+                        |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
+                        |answer| match *answer {
+                            Ok(()) => Outcome::Shared(*access),
+                            Err(error) => Outcome::Failed(error),
+                        },
+                    )
+                }
                 Operation::Copy(_) => answer.downcast::<Result<String, FeedError>>().map_or_else(
                     |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
                     |answer| match *answer {
@@ -109,16 +120,60 @@ impl ShareControls {
         );
         let revoking =
             matches!(&self.pending, Some(Operation::Revoke(document)) if document == name);
-        if !offer.link && !offer.copy && !shared && !revoked && !revoking {
+        if !offer.link && !offer.copy && !offer.switch && !shared && !revoked && !revoking {
             return false;
         }
         ui.separator();
-        if shared {
+        let idle = self.pending.is_none();
+        if offer.switch {
+            let label = match kind {
+                ShareKind::Layout => "Share layout",
+                ShareKind::Watchlist => "Share list",
+            };
+            let mut on = shared;
+            // Sharing starts view only; the access choice below widens it.
+            if ui
+                .add_enabled(
+                    idle,
+                    egui::Checkbox::new(&mut on, l10n::text(ui.ctx(), label)),
+                )
+                .changed()
+            {
+                if on {
+                    self.pending = Some(Operation::Share(name.to_owned(), ShareAccess::ViewOnly));
+                    sharing.share(kind, name, ShareAccess::ViewOnly, self.inbox.reply(0));
+                } else {
+                    self.pending = Some(Operation::Revoke(name.to_owned()));
+                    sharing.revoke(kind, name, self.inbox.reply(0));
+                }
+                ui.ctx().request_repaint();
+            }
+            if shared {
+                let current = sharing.access(kind, name);
+                for (access, text) in [
+                    (ShareAccess::ViewOnly, "View only"),
+                    (ShareAccess::ViewAndCopy, "View and copy"),
+                ] {
+                    if ui
+                        .add_enabled(
+                            idle,
+                            egui::RadioButton::new(current == access, l10n::text(ui.ctx(), text)),
+                        )
+                        .clicked()
+                        && current != access
+                    {
+                        self.pending = Some(Operation::Share(name.to_owned(), access));
+                        sharing.share(kind, name, access, self.inbox.reply(0));
+                        ui.ctx().request_repaint();
+                    }
+                }
+            }
+        } else if shared {
             ui.weak(l10n::text(ui.ctx(), "Shared by link"));
         }
         let mut copy = false;
-        let idle = self.pending.is_none();
         if offer.link
+            && (!offer.switch || shared)
             && ui
                 .add_enabled(idle, egui::Button::new(l10n::text(ui.ctx(), "Copy link")))
                 .clicked()
@@ -142,6 +197,7 @@ impl ShareControls {
         }
         if offer.revoke
             && shared
+            && !offer.switch
             && ui
                 .add_enabled(
                     self.pending.is_none(),
@@ -162,6 +218,7 @@ impl ShareControls {
                         Operation::Link(_) => "Getting the link…",
                         Operation::Copy(_) => "Saving a copy…",
                         Operation::Revoke(_) => "Stopping sharing…",
+                        Operation::Share(..) => "Sharing…",
                     },
                 ),
             ))
@@ -169,7 +226,8 @@ impl ShareControls {
             self.last.as_ref().and_then(|(operation, outcome)| {
                 let (Operation::Link(shared)
                 | Operation::Copy(shared)
-                | Operation::Revoke(shared)) = operation;
+                | Operation::Revoke(shared)
+                | Operation::Share(shared, _)) = operation;
                 (shared == name).then(|| match outcome {
                     Outcome::Link(link) => (
                         false,
@@ -187,6 +245,18 @@ impl ShareControls {
                         l10n::format_text(ui.ctx(), "Saved as {0}", &[("0", copy.clone())]),
                     ),
                     Outcome::Revoked => (false, l10n::text(ui.ctx(), "Sharing stopped")),
+                    Outcome::Shared(access) => (
+                        false,
+                        l10n::text(
+                            ui.ctx(),
+                            match access {
+                                ShareAccess::ViewOnly => "Shared. Recipients can only view it.",
+                                ShareAccess::ViewAndCopy => {
+                                    "Shared. Recipients can view it and save a copy."
+                                }
+                            },
+                        ),
+                    ),
                     Outcome::Failed(error) => (
                         true,
                         l10n::format_text(
@@ -336,6 +406,130 @@ mod tests {
         assert!(h.query_by_label("Stop sharing").is_none());
     }
 
+    /// The switch shares view only, widens or narrows the access, gates Copy link on the shared
+    /// state the host reports and stops sharing; a host without it keeps its rows.
+    #[test]
+    fn the_sharing_switch_shares_with_the_chosen_access() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        use std::sync::Mutex;
+        type Calls = Vec<(Option<ShareAccess>, Reply<()>)>;
+        /// The access the document is shared with, if it is, and the calls waiting for answers.
+        #[derive(Default)]
+        struct Host(Mutex<(Option<ShareAccess>, Calls)>, bool);
+        impl Sharing for Host {
+            fn offers(&self, _: ShareKind) -> ShareOffer {
+                let mut offer = ShareOffer::new(true, false);
+                offer.switch = self.1;
+                offer
+            }
+            fn shared(&self, _: ShareKind, _: &str) -> bool {
+                self.0.lock().unwrap().0.is_some()
+            }
+            fn access(&self, _: ShareKind, _: &str) -> ShareAccess {
+                self.0.lock().unwrap().0.unwrap_or_default()
+            }
+            fn share(&self, _: ShareKind, _: &str, access: ShareAccess, reply: Reply<()>) {
+                self.0.lock().unwrap().1.push((Some(access), reply));
+            }
+            fn revoke(&self, _: ShareKind, _: &str, reply: Reply<()>) {
+                self.0.lock().unwrap().1.push((None, reply));
+            }
+        }
+        let harness = |host: Arc<Host>| {
+            let mut controls = ShareControls::default();
+            controls.set_service(host);
+            let mut h = Harness::builder().allow_missing_glyphs().build_ui_state(
+                |ui, controls: &mut ShareControls| {
+                    controls.poll(ui.ctx());
+                    controls.show(ui, ShareKind::Layout, "A");
+                },
+                controls,
+            );
+            h.run();
+            h
+        };
+        // Answers the one waiting call, after setting the state the host then reports.
+        let answer = |host: &Host, state: Option<ShareAccess>, result: Result<(), FeedError>| {
+            let mut guard = host.0.lock().unwrap();
+            let (access, reply) = guard.1.pop().unwrap();
+            assert!(guard.1.is_empty());
+            if result.is_ok() {
+                guard.0 = state;
+            }
+            drop(guard);
+            reply.send(result);
+            access
+        };
+        let shown = |h: &Harness<'_, ShareControls>, label: &str| {
+            h.query_by_role_and_label(egui::Role::Label, label)
+                .is_some()
+        };
+        let host = Arc::new(Host(Mutex::default(), true));
+        let mut h = harness(host.clone());
+        let switch = |h: &Harness<'_, ShareControls>| {
+            let node = h.get_by_label("Share layout");
+            let node = node.accesskit_node();
+            (
+                node.toggled() == Some(egui::accesskit::Toggled::True),
+                node.is_disabled(),
+            )
+        };
+        assert_eq!(switch(&h), (false, false));
+        assert!(h.query_by_label("Copy link").is_none());
+        assert!(h.query_by_label("View only").is_none());
+
+        h.get_by_label("Share layout").click();
+        h.run();
+        assert!(shown(&h, "Sharing…"));
+        assert_eq!(switch(&h), (false, true));
+        let sent = answer(&host, Some(ShareAccess::ViewOnly), Ok(()));
+        assert_eq!(sent, Some(ShareAccess::ViewOnly));
+        h.run();
+        assert!(shown(&h, "Shared. Recipients can only view it."));
+        assert_eq!(switch(&h), (true, false));
+        assert!(h.query_by_label("Copy link").is_some());
+        assert_eq!(
+            h.get_by_label("View only").accesskit_node().toggled(),
+            Some(egui::accesskit::Toggled::True)
+        );
+
+        h.get_by_label("View and copy").click();
+        h.run();
+        let sent = answer(&host, Some(ShareAccess::ViewAndCopy), Ok(()));
+        assert_eq!(sent, Some(ShareAccess::ViewAndCopy));
+        h.run();
+        assert!(shown(&h, "Shared. Recipients can view it and save a copy."));
+        h.get_by_label("View and copy").click();
+        h.run();
+        assert!(
+            host.0.lock().unwrap().1.is_empty(),
+            "the chosen access sends nothing"
+        );
+
+        h.get_by_label("Share layout").click();
+        h.run();
+        assert_eq!(answer(&host, None, Ok(())), None);
+        h.run();
+        assert!(shown(&h, "Sharing stopped"));
+        assert!(h.query_by_label("Copy link").is_none());
+        assert!(h.query_by_label("View only").is_none());
+
+        h.get_by_label("Share layout").click();
+        h.run();
+        answer(&host, None, Err(FeedError::Other("quota".into())));
+        h.run();
+        assert!(shown(&h, "Could not share: quota"));
+        assert_eq!(switch(&h), (false, false));
+
+        // Without the switch the host's link row stays as it was.
+        let h = harness(Arc::new(Host(Mutex::default(), false)));
+        assert!(h.query_by_label("Copy link").is_some());
+        assert!(h.query_by_label("Share layout").is_none());
+    }
+
     /// A link reaches the clipboard with the host's copy policy, a copy returns its saved name,
     /// and a rejection is kept for the menu to show.
     #[test]
@@ -350,6 +544,9 @@ mod tests {
                 Operation::Link(ref name) => host.link(kind, name, controls.inbox.reply(0)),
                 Operation::Copy(ref name) => host.copy(kind, name, controls.inbox.reply(0)),
                 Operation::Revoke(ref name) => host.revoke(kind, name, controls.inbox.reply(0)),
+                Operation::Share(ref name, access) => {
+                    host.share(kind, name, access, controls.inbox.reply(0))
+                }
             }
             let mut copied = None;
             let output = ctx.run_ui(Default::default(), |ui| copied = controls.poll(ui.ctx()));
