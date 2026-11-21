@@ -2,7 +2,7 @@ use super::{
     Button, COVERAGE_CELL, ExitButtons, HEIGHT, LABEL_INSET, Level, NODE_INSET, PADDING, PnlUnit,
     TradingLabelAlignment, TradingLineAction, TradingLineOptions, coverage_text, direction,
     exit_buttons_width, label_fill, line_left, line_width, menu_entry, offered_exits,
-    paint_coverage, paint_glyph, pnl_text,
+    paint_coverage, paint_glyph, pnl_text, quantity_text,
 };
 use crate::chart::coords::ChartMapping;
 use crate::chart::rendering::render_price_line;
@@ -74,7 +74,10 @@ pub(super) fn show_position(
         )
     };
     let exits = offered_exits(options.take_profit, options.stop_loss);
-    let quantity = layout(format!("{size}"), Color32::WHITE);
+    let quantity = layout(
+        quantity_text(options.formatter, &position.symbol, size),
+        Color32::WHITE,
+    );
     let text = look
         .and_then(|look| look.text.as_ref())
         .map(|text| layout(text.clone(), color));
