@@ -243,10 +243,10 @@ enum SectionUndo {
 /// cycle through ascending, descending and list order; sorting keeps symbols inside their section.
 /// Dragging the left edge of a quote column header resizes the column and a double click restores
 /// its width. Clicking a section collapses or expands its symbols independently; its state
-/// follows renames, moves and sorting. Unsorted rows are dragged to
-/// reorder, and rows are right-clicked to flag, rename or remove, and sections to move them with
-/// their symbols. The list menu stars lists, which it then shows first, clears the active list and
-/// undoes a clear or a section move; the more menu shows the descriptions given with
+/// follows renames, moves and sorting. Unsorted rows are dragged to reorder. Symbol rows are
+/// right-clicked to flag or remove them, and sections to rename or remove them or move them with
+/// their symbols. The list menu stars lists, which it then shows first, renames the active list,
+/// clears it and undoes a clear or a section move; the more menu shows the descriptions given with
 /// [`set_description`](Self::set_description) and hides the symbol marks. The host persists
 /// [`lists`](Self::lists), with the stars, descriptions and logos settings and column widths of
 /// each, and handles file intents.
@@ -814,145 +814,156 @@ impl WatchlistPanel {
         let (Some(menu), Some(more)) = (menu, more) else {
             return action;
         };
-        egui::Popup::menu(&menu).show(|ui| {
-            let mut menu_order: Vec<usize> = (0..lists.len()).collect();
-            menu_order.sort_by_key(|&index| !lists[index].favorite);
-            for index in menu_order {
-                ui.horizontal(|ui| {
-                    let list = &mut lists[index];
-                    if IconButton::new(if list.favorite {
-                        &icons::STAR_FILLED
-                    } else {
-                        &icons::STAR_EMPTY
-                    })
-                    .size(ButtonSize::SM)
-                    .tooltip(if list.favorite {
-                        "Remove from favorites"
-                    } else {
-                        "Add to favorites"
-                    })
-                    .show(ui)
-                    .clicked()
-                    {
-                        list.favorite = !list.favorite;
-                    }
-                    if ui
-                        .selectable_label(
-                            flag_filter.is_none() && index == *active,
-                            l10n::text(ui.ctx(), &list.name),
-                        )
+        // The name field takes clicks, so only a click outside closes the menu; its entries close it.
+        egui::Popup::menu(&menu)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                let mut menu_order: Vec<usize> = (0..lists.len()).collect();
+                menu_order.sort_by_key(|&index| !lists[index].favorite);
+                for index in menu_order {
+                    ui.horizontal(|ui| {
+                        let list = &mut lists[index];
+                        if IconButton::new(if list.favorite {
+                            &icons::STAR_FILLED
+                        } else {
+                            &icons::STAR_EMPTY
+                        })
+                        .size(ButtonSize::SM)
+                        .tooltip(if list.favorite {
+                            "Remove from favorites"
+                        } else {
+                            "Add to favorites"
+                        })
+                        .show(ui)
                         .clicked()
-                    {
-                        (*active, *flag_filter) = (index, None);
+                        {
+                            list.favorite = !list.favorite;
+                            ui.close();
+                        }
+                        if ui
+                            .selectable_label(
+                                flag_filter.is_none() && index == *active,
+                                l10n::text(ui.ctx(), &list.name),
+                            )
+                            .clicked()
+                        {
+                            (*active, *flag_filter) = (index, None);
+                            ui.close();
+                        }
+                    });
+                }
+                ui.separator();
+                ui.label(l10n::text(ui.ctx(), "Flagged symbols"));
+                ui.horizontal(|ui| {
+                    for choice in WatchlistFlag::ALL {
+                        let (swatch, response) =
+                            ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                        let translated_label = l10n::text(ui.ctx(), format!("{choice:?}"));
+                        response.widget_info(|| {
+                            egui::WidgetInfo::selected(
+                                egui::Role::RadioButton,
+                                response.enabled(),
+                                *flag_filter == Some(choice),
+                                &translated_label,
+                            )
+                        });
+                        ui.painter().circle_filled(
+                            swatch.center(),
+                            if *flag_filter == Some(choice) {
+                                8.0
+                            } else {
+                                6.0
+                            },
+                            choice.color(),
+                        );
+                        if response.on_hover_text(&translated_label).clicked() {
+                            *flag_filter = (*flag_filter != Some(choice)).then_some(choice);
+                            ui.close();
+                        }
                     }
                 });
-            }
-            ui.separator();
-            ui.label(l10n::text(ui.ctx(), "Flagged symbols"));
-            ui.horizontal(|ui| {
-                for choice in WatchlistFlag::ALL {
-                    let (swatch, response) =
-                        ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
-                    let translated_label = l10n::text(ui.ctx(), format!("{choice:?}"));
-                    response.widget_info(|| {
-                        egui::WidgetInfo::selected(
-                            egui::Role::RadioButton,
-                            response.enabled(),
-                            *flag_filter == Some(choice),
-                            &translated_label,
-                        )
-                    });
-                    ui.painter().circle_filled(
-                        swatch.center(),
-                        if *flag_filter == Some(choice) {
-                            8.0
-                        } else {
-                            6.0
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(l10n::text(ui.ctx(), "Name"));
+                    ui.text_edit_singleline(&mut lists[*active].name)
+                        .accessible_name(l10n::text(ui.ctx(), "Name"));
+                });
+                if ui.button(l10n::text(ui.ctx(), "New list")).clicked() {
+                    let name = (2..)
+                        .map(|n| format!("Watchlist {n}"))
+                        .find(|name| lists.iter().all(|list| list.name != *name))
+                        .expect("an unused name exists");
+                    lists.push(Watchlist::new(name));
+                    (*active, *flag_filter) = (lists.len() - 1, None);
+                    ui.close();
+                }
+                if ui.button(l10n::text(ui.ctx(), "Duplicate list")).clicked() {
+                    let copy =
+                        lists[*active].duplicate(lists.iter().map(|list| list.name.as_str()));
+                    lists.push(copy);
+                    (*active, *flag_filter) = (lists.len() - 1, None);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        flag_filter.is_none() && !lists[*active].items.is_empty(),
+                        egui::Button::new(l10n::text(ui.ctx(), "Clear list")),
+                    )
+                    .clicked()
+                {
+                    record(
+                        undo,
+                        lists,
+                        SectionUndo::Clear(
+                            collapsed_sections.get(*active).cloned().unwrap_or_default(),
+                        ),
+                        *active,
+                        |list| {
+                            list.items.clear();
+                            true
                         },
-                        choice.color(),
                     );
-                    if response.on_hover_text(&translated_label).clicked() {
-                        *flag_filter = (*flag_filter != Some(choice)).then_some(choice);
-                        ui.close();
+                    ui.close();
+                }
+                let undoable = undo.last().is_some_and(|edit| {
+                    lists
+                        .get(edit.list)
+                        .is_some_and(|list| list.items == edit.after)
+                });
+                if ui
+                    .add_enabled(undoable, egui::Button::new(l10n::text(ui.ctx(), "Undo")))
+                    .clicked()
+                    && let Some(edit) = undo.pop()
+                {
+                    lists[edit.list].items = edit.before;
+                    let states = section_states(collapsed_sections, edit.list);
+                    match edit.sections {
+                        SectionUndo::Clear(collapsed) => *states = collapsed,
+                        SectionUndo::Move { at, down } => {
+                            states.swap(at, if down { at + 1 } else { at - 1 });
+                        }
                     }
+                    (*active, *flag_filter) = (edit.list, None);
+                    ui.close();
                 }
-            });
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label(l10n::text(ui.ctx(), "Name"));
-                ui.text_edit_singleline(&mut lists[*active].name)
-                    .accessible_name(l10n::text(ui.ctx(), "Name"));
-            });
-            if ui.button(l10n::text(ui.ctx(), "New list")).clicked() {
-                let name = (2..)
-                    .map(|n| format!("Watchlist {n}"))
-                    .find(|name| lists.iter().all(|list| list.name != *name))
-                    .expect("an unused name exists");
-                lists.push(Watchlist::new(name));
-                (*active, *flag_filter) = (lists.len() - 1, None);
-            }
-            if ui.button(l10n::text(ui.ctx(), "Duplicate list")).clicked() {
-                let copy = lists[*active].duplicate(lists.iter().map(|list| list.name.as_str()));
-                lists.push(copy);
-                (*active, *flag_filter) = (lists.len() - 1, None);
-            }
-            if ui
-                .add_enabled(
-                    flag_filter.is_none() && !lists[*active].items.is_empty(),
-                    egui::Button::new(l10n::text(ui.ctx(), "Clear list")),
-                )
-                .clicked()
-            {
-                record(
-                    undo,
-                    lists,
-                    SectionUndo::Clear(
-                        collapsed_sections.get(*active).cloned().unwrap_or_default(),
-                    ),
-                    *active,
-                    |list| {
-                        list.items.clear();
-                        true
-                    },
-                );
-            }
-            let undoable = undo.last().is_some_and(|edit| {
-                lists
-                    .get(edit.list)
-                    .is_some_and(|list| list.items == edit.after)
-            });
-            if ui
-                .add_enabled(undoable, egui::Button::new(l10n::text(ui.ctx(), "Undo")))
-                .clicked()
-                && let Some(edit) = undo.pop()
-            {
-                lists[edit.list].items = edit.before;
-                let states = section_states(collapsed_sections, edit.list);
-                match edit.sections {
-                    SectionUndo::Clear(collapsed) => *states = collapsed,
-                    SectionUndo::Move { at, down } => {
-                        states.swap(at, if down { at + 1 } else { at - 1 });
+                if ui
+                    .add_enabled(
+                        lists.len() > 1,
+                        egui::Button::new(l10n::text(ui.ctx(), "Delete list")),
+                    )
+                    .clicked()
+                {
+                    if *active < collapsed_sections.len() {
+                        collapsed_sections.remove(*active);
                     }
+                    lists.remove(*active);
+                    *active = active.saturating_sub(1);
+                    // The recorded edits and the import note name lists by position.
+                    undo.clear();
+                    *import_note = None;
+                    ui.close();
                 }
-                (*active, *flag_filter) = (edit.list, None);
-            }
-            if ui
-                .add_enabled(
-                    lists.len() > 1,
-                    egui::Button::new(l10n::text(ui.ctx(), "Delete list")),
-                )
-                .clicked()
-            {
-                if *active < collapsed_sections.len() {
-                    collapsed_sections.remove(*active);
-                }
-                lists.remove(*active);
-                *active = active.saturating_sub(1);
-                // The recorded edits and the import note name lists by position.
-                undo.clear();
-                *import_note = None;
-            }
-        });
+            });
         egui::Popup::menu(&more).show(|ui| {
             if ui.button(l10n::text(ui.ctx(), "Add section")).clicked() {
                 lists[*active]
@@ -1468,29 +1479,33 @@ impl WatchlistPanel {
                             {
                                 states[at] = !states[at];
                             }
-                            response.context_menu(|ui| {
-                                ui.text_edit_singleline(title)
-                                    .accessible_name(l10n::text(ui.ctx(), "Section name"));
-                                for (down, label, last) in [
-                                    (false, "Move section up", sections.first()),
-                                    (true, "Move section down", sections.last()),
-                                ] {
-                                    if ui
-                                        .add_enabled(
-                                            last != Some(&index),
-                                            egui::Button::new(l10n::text(ui.ctx(), label)),
-                                        )
-                                        .clicked()
-                                    {
-                                        section_move = Some((index, down));
+                            // The name field takes clicks, so only a click outside closes the
+                            // menu; its entries close it.
+                            egui::Popup::context_menu(&response)
+                                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                                .show(|ui| {
+                                    ui.text_edit_singleline(title)
+                                        .accessible_name(l10n::text(ui.ctx(), "Section name"));
+                                    for (down, label, last) in [
+                                        (false, "Move section up", sections.first()),
+                                        (true, "Move section down", sections.last()),
+                                    ] {
+                                        if ui
+                                            .add_enabled(
+                                                last != Some(&index),
+                                                egui::Button::new(l10n::text(ui.ctx(), label)),
+                                            )
+                                            .clicked()
+                                        {
+                                            section_move = Some((index, down));
+                                            ui.close();
+                                        }
+                                    }
+                                    if ui.button(l10n::text(ui.ctx(), "Remove section")).clicked() {
+                                        removed = Some(index);
                                         ui.close();
                                     }
-                                }
-                                if ui.button(l10n::text(ui.ctx(), "Remove section")).clicked() {
-                                    removed = Some(index);
-                                    ui.close();
-                                }
-                            });
+                                });
                         }
                         WatchlistItem::Symbol { symbol, flag } => {
                             let is_selected = selected.as_deref() == Some(symbol.as_str());
@@ -2624,6 +2639,66 @@ mod tests {
         assert!(!h.state().lists()[2].favorite);
     }
 
+    /// A click into the list menu's name field keeps the menu open for typing, while its stars,
+    /// lists and list actions close it.
+    #[test]
+    fn list_menu_name_field_keeps_it_open_and_its_entries_close_it() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 600.0))
+            .build_ui_state(
+                |ui, panel: &mut WatchlistPanel| {
+                    panel.show(ui);
+                },
+                WatchlistPanel::new(vec![
+                    Watchlist::from_text("Main", "A"),
+                    Watchlist::from_text("Other", "B"),
+                ]),
+            );
+        // The header button carries the active list's name and opens the list menu.
+        let open = |h: &mut Harness<'_, WatchlistPanel>| {
+            let name = h.state().lists()[h.state().active].name.clone();
+            h.get_by_label(&name).click();
+            h.run();
+        };
+        let name_field_shown = |h: &Harness<'_, WatchlistPanel>| {
+            h.query_by_role_and_label(egui::Role::TextInput, "Name")
+                .is_some()
+        };
+        open(&mut h);
+        h.get_by_role_and_label(egui::Role::TextInput, "Name")
+            .click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_role_and_label(egui::Role::TextInput, "Name")
+            .type_text("First");
+        h.run();
+        assert!(
+            name_field_shown(&h),
+            "the click into the field keeps the menu open"
+        );
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(!name_field_shown(&h), "Escape closes the menu");
+        for entry in ["Add to favorites", "Other", "Duplicate list", "New list"] {
+            open(&mut h);
+            h.get_all_by_label(entry).next().unwrap().click();
+            h.run();
+            assert!(!name_field_shown(&h), "{entry} closes the menu");
+        }
+        let lists = h.state().lists();
+        assert_eq!(
+            lists
+                .iter()
+                .map(|list| list.name.as_str())
+                .collect::<Vec<_>>(),
+            ["First", "Other", "Other copy", "Watchlist 2"]
+        );
+        assert!(lists[0].favorite);
+        assert_eq!(h.state().active, 3);
+    }
+
     /// Equal section titles collapse separately, and rename, move, undo, heading drag and
     /// removal keep the collapse state with the section rather than its title or old position.
     #[test]
@@ -2663,8 +2738,36 @@ mod tests {
         h.get_all_by_label("New section").next().unwrap().click();
         h.run();
         assert_eq!(shown(&h), ["A", "C"]);
-        h.state_mut().lists[0].items[1] = WatchlistItem::Section("Renamed".into());
+        // A pointer click into the name field keeps the section menu open for typing.
+        h.get_all_by_label("New section")
+            .next()
+            .unwrap()
+            .click_secondary();
         h.run();
+        h.get_by_label("Section name").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Section name").type_text("Renamed");
+        h.run();
+        assert_eq!(
+            h.state().lists()[0].to_text(),
+            "A,###Renamed,B,###New section,C"
+        );
+        let outside = pos2(150.0, 550.0);
+        h.event(egui::Event::PointerMoved(outside));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: outside,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        h.run();
+        assert!(
+            h.query_by_label("Section name").is_none(),
+            "a click outside closes the menu"
+        );
         assert_eq!(shown(&h), ["A", "C"]);
         press(&mut h, "Renamed", "Move section down");
         assert_eq!(
