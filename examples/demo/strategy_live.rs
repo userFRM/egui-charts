@@ -136,6 +136,7 @@ impl DemoApp {
         settings: BacktestSettings,
     ) {
         if self.replay.is_some() {
+            self.notify("Stop replay to add a strategy alert");
             return;
         }
         // The demo's tester uses the default factory, so its names resolve here.
