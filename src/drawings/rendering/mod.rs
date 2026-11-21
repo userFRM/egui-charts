@@ -1659,6 +1659,7 @@ mod tests {
     /// Paints `drawing` over `bars`, bar `i` at x = 10 i and price `p` at y = 500 - p.
     fn paint_on(drawing: &Drawing, selected: bool, bars: &[Bar]) -> Vec<Shape> {
         let ctx = Context::default();
+        ctx.add_image_loader(std::sync::Arc::new(super::media::tests::Pictures));
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
                 price_formatter: None,
@@ -2061,8 +2062,13 @@ mod tests {
             })
             .collect();
         let mut inert = Vec::new();
-        for &tool in DrawingToolType::all() {
+        // An image is checked as its placeholder and again showing a loaded picture.
+        let tools = DrawingToolType::all().iter().map(|&tool| (tool, false));
+        for (tool, loaded) in tools.chain([(T::Image, true)]) {
             let mut drawing = Drawing::new(7, tool);
+            if loaded {
+                drawing.text = Some("test://square".into());
+            }
             drawing.points = [
                 (100., 100.),
                 (300., 300.),
@@ -2113,6 +2119,12 @@ mod tests {
                     == painted(&|d| d.color = [200, 100, 50, 255])
             {
                 inert.push((tool, "colour"));
+            }
+            if tool.supports_fill()
+                && painted(&|d| d.fill_color = Some([10, 20, 30, 200]))
+                    == painted(&|d| d.fill_color = Some([200, 100, 50, 200]))
+            {
+                inert.push((tool, "fill"));
             }
             // The colour controls also change a drawing whose text has a colour of its own.
             #[cfg(feature = "ui")]
