@@ -56,7 +56,7 @@ pub enum LayoutAction {
     CreateNew(String),
     /// Open the named layout.
     Open(String),
-    /// Delete the named layout.
+    /// Delete the named layout, once the user confirmed it in the menu.
     Delete(String),
     /// Rename the current layout from the first name to the second.
     Rename(String, String),
@@ -82,6 +82,16 @@ enum Request {
     /// Saving under the second name, then deleting the first; the document and its edit count.
     Rename(String, String, String, u64),
     Delete(String),
+    /// Reading a layout to name its charts before it is deleted.
+    Read(String),
+}
+
+/// A delete the user asked for, waiting for confirmation.
+#[derive(Debug)]
+struct Deleting {
+    name: String,
+    /// The symbols of the charts the stored layout shows, in slot order, once read from storage.
+    charts: Option<Vec<String>>,
 }
 
 /// Named layout menu. The host handles the returned intents, capturing a [`SavedLayout`] for
@@ -110,6 +120,8 @@ pub struct LayoutMenu {
     /// Whether the name field still waits for the keyboard focus it takes on opening.
     focus_name: bool,
     new_name: String,
+    /// The layout whose delete waits for the user's confirmation.
+    deleting: Option<Deleting>,
     storage: Option<Arc<dyn Storage>>,
     inbox: Arc<Inbox>,
     pending: Option<Request>,
@@ -145,6 +157,7 @@ impl std::fmt::Debug for LayoutMenu {
             .field("favorites_only", &self.favorites_only)
             .field("editing", &self.editing)
             .field("new_name", &self.new_name)
+            .field("deleting", &self.deleting)
             .field("failing", &self.failing)
             .field("edits", &self.edits)
             .field("saved_edits", &self.saved_edits)
@@ -176,6 +189,7 @@ impl LayoutMenu {
             editing: None,
             focus_name: false,
             new_name: String::new(),
+            deleting: None,
             storage: None,
             inbox: Arc::default(),
             pending: None,
@@ -251,6 +265,10 @@ impl LayoutMenu {
                 }
                 Request::Delete(name) => {
                     storage.delete(StoreKind::Layouts, name, self.inbox.reply(0));
+                }
+                // Informational: no revision is recorded and no refused write is settled.
+                Request::Read(name) => {
+                    storage.load(StoreKind::Layouts, name, self.inbox.reply(0));
                 }
             }
             self.pending = Some(request);
@@ -511,6 +529,40 @@ impl LayoutMenu {
                             }
                         }
                     }
+                    Request::Read(name) => {
+                        let answer = *answer
+                            .downcast::<Result<Option<String>, FeedError>>()
+                            .expect("layout read");
+                        match answer {
+                            Ok(Some(document)) => {
+                                if let Ok(layout) = SavedLayout::from_json(&document)
+                                    && let Some(deleting) =
+                                        self.deleting.as_mut().filter(|d| d.name == name)
+                                {
+                                    deleting.charts = Some(
+                                        layout
+                                            .charts
+                                            .iter()
+                                            .take(layout.mode.chart_count())
+                                            .map(|chart| chart.symbol.trim())
+                                            .filter(|symbol| !symbol.is_empty())
+                                            .map(str::to_owned)
+                                            .collect(),
+                                    );
+                                }
+                            }
+                            // Gone since it was listed, as an open finds it.
+                            Ok(None) => {
+                                self.layouts.retain(|layout| *layout != name);
+                                self.favorites.retain(|layout| *layout != name);
+                                if self.deleting.as_ref().is_some_and(|d| d.name == name) {
+                                    self.deleting = None;
+                                }
+                            }
+                            // The confirmation names the layout without its charts.
+                            Err(_) => {}
+                        }
+                    }
                     Request::Delete(name) => {
                         let answer = *answer
                             .downcast::<Result<(), FeedError>>()
@@ -639,7 +691,9 @@ impl LayoutMenu {
                 .any(|request| match request {
                     Request::Save(name, ..) => name == current,
                     Request::Rename(old, name, ..) => old == current || name == current,
-                    Request::List | Request::Open(_) | Request::Delete(_) => false,
+                    Request::List | Request::Open(_) | Request::Delete(_) | Request::Read(_) => {
+                        false
+                    }
                 })
     }
 
@@ -927,6 +981,13 @@ impl LayoutMenu {
         {
             self.share.show(ui, ShareKind::Layout, name);
         }
+        if self
+            .deleting
+            .as_ref()
+            .is_some_and(|d| !self.layouts.contains(&d.name))
+        {
+            self.deleting = None;
+        }
         if self.layouts.is_empty() {
             return action;
         }
@@ -939,6 +1000,31 @@ impl LayoutMenu {
             ui.toggle_value(&mut self.favorites_only, l10n::text(ui.ctx(), "Favorites"))
                 .on_hover_text(l10n::text(ui.ctx(), "Show only favorite layouts"));
         });
+        if let Some(deleting) = &self.deleting {
+            ui.label(l10n::format_text(
+                ui.ctx(),
+                "Delete {name}?",
+                &[("name", deleting.name.as_str())],
+            ));
+            if let Some(charts) = deleting.charts.as_ref().filter(|c| !c.is_empty()) {
+                ui.weak(l10n::format_text(
+                    ui.ctx(),
+                    "Charts: {charts}",
+                    &[("charts", charts.join(", "))],
+                ));
+            }
+            let (mut confirm, mut cancel) = (false, false);
+            ui.horizontal(|ui| {
+                confirm = ui.button(l10n::text(ui.ctx(), "Delete")).clicked();
+                cancel = ui.button(l10n::text(ui.ctx(), "Cancel")).clicked();
+            });
+            if confirm {
+                action = LayoutAction::Delete(deleting.name.clone());
+                ui.close();
+            } else if cancel {
+                self.deleting = None;
+            }
+        }
         let shown: Vec<&String> = self
             .layouts
             .iter()
@@ -951,6 +1037,7 @@ impl LayoutMenu {
             );
         }
         let mut starred = None;
+        let mut read = None;
         egui::ScrollArea::vertical()
             .max_height(ui.available_height().clamp(0.0, 240.0))
             .show(ui, |ui| {
@@ -995,8 +1082,12 @@ impl LayoutMenu {
                             .on_hover_text(l10n::text(ui.ctx(), "Delete layout"))
                             .clicked()
                         {
-                            action = LayoutAction::Delete(layout.clone());
-                            ui.close();
+                            // Deleted on the confirmation above the list.
+                            self.deleting = Some(Deleting {
+                                name: layout.clone(),
+                                charts: None,
+                            });
+                            read = Some(layout.clone());
                         }
                     });
                 }
@@ -1007,6 +1098,15 @@ impl LayoutMenu {
             } else {
                 self.favorites.push(name);
             }
+        }
+        if let Some(name) = read
+            && self.storage.is_some()
+        {
+            self.request(Request::Read(name));
+        }
+        if action != LayoutAction::None {
+            // Opening, saving or renaming drops a pending confirmation.
+            self.deleting = None;
         }
         action
     }
@@ -1426,6 +1526,82 @@ mod tests {
                 menu.save("A", &layout(Single));
                 menu.poll(&ctx);
                 assert_eq!(stored(&host, "A"), Some(Single));
+            }
+        }
+    }
+
+    #[test]
+    fn deleting_a_layout_asks_first_and_names_its_charts() {
+        use egui_kittest::kittest::Queryable;
+        let charts = ["AAPL", "MSFT", "XOM"].map(|symbol| {
+            let mut chart = crate::widget::test_frames::chart(&[1.0], &[1.0]);
+            chart.set_symbol(symbol);
+            chart.snapshot().unwrap()
+        });
+        let shown = SavedLayout {
+            mode: crate::widget::ChartLayoutMode::TwoHorizontal,
+            charts: charts.to_vec(),
+            sizing: None,
+            link_groups: None,
+        };
+        let empty = SavedLayout {
+            charts: Vec::new(),
+            ..shown.clone()
+        };
+        // With storage the third chart is a hidden slot of the two-chart layout; without it the
+        // menu names the layout only.
+        for (stored, charts_line) in [(true, Some("Charts: AAPL, MSFT")), (false, None)] {
+            let host = Arc::new(Host::default());
+            let mut menu = LayoutMenu::new();
+            if stored {
+                let mut documents = host.0.lock().unwrap();
+                documents.insert("A".into(), shown.to_json().unwrap());
+                documents.insert("B".into(), empty.to_json().unwrap());
+                drop(documents);
+                menu.set_storage(host.clone());
+            } else {
+                menu.layouts = vec!["A".into(), "B".into()];
+            }
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(320.0, 600.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, (menu, actions): &mut (LayoutMenu, Vec<LayoutAction>)| {
+                        menu.poll(ui.ctx());
+                        let action = menu.show_menu(ui);
+                        if action != LayoutAction::None {
+                            actions.push(action);
+                        }
+                    },
+                    (menu, Vec::new()),
+                );
+            h.run();
+            assert_eq!(h.state().0.layouts, ["A", "B"]);
+            h.query_all_by_label("×").next().unwrap().click();
+            h.run();
+            assert!(h.state().1.is_empty(), "one click must not delete");
+            assert_eq!(h.state().0.layouts, ["A", "B"]);
+            assert!(h.query_by_label("Delete A?").is_some());
+            assert_eq!(
+                charts_line.is_some(),
+                h.query_by_label("Charts: AAPL, MSFT").is_some()
+            );
+            assert!(h.query_by_label("Charts: AAPL, MSFT, XOM").is_none());
+            h.get_by_label("Cancel").click();
+            h.run();
+            assert!(h.state().1.is_empty());
+            assert!(h.query_by_label("Delete A?").is_none());
+            h.query_all_by_label("×").next().unwrap().click();
+            h.run();
+            h.get_by_label("Delete").click();
+            h.run();
+            assert_eq!(h.state().1, [LayoutAction::Delete("A".into())]);
+            if stored {
+                let (menu, _) = h.state_mut();
+                menu.delete("A");
+                h.run();
+                assert_eq!(h.state().0.layouts, ["B"]);
+                assert!(!host.0.lock().unwrap().contains_key("A"));
             }
         }
     }

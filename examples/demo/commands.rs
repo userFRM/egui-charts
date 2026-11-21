@@ -1829,5 +1829,84 @@ mod tests {
                 .layouts
                 .contains(&"Morning".to_owned())
         );
+
+        // Its delete asks first, naming the layout and the symbol of its chart.
+        click(&mut app, &ctx, "Named layouts");
+        click_lowest(&mut app, &ctx, "×");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        let output = frame(&mut app, &ctx, vec![]);
+        let texts: Vec<String> = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .filter_map(|(_, node)| node.value().map(str::to_owned))
+            .collect();
+        output.drop_without_applying_deltas();
+        assert!(
+            app.top_toolbar
+                .layout_menu
+                .layouts
+                .contains(&"Morning".to_owned())
+        );
+        assert!(
+            texts.iter().any(|text| text == "Delete Morning?"),
+            "{texts:?}"
+        );
+        let charts = format!("Charts: {}", app.chart.symbol());
+        assert!(texts.contains(&charts), "{texts:?}");
+        click_lowest(&mut app, &ctx, "Delete");
+        app.poll_storage(&ctx);
+        assert!(
+            !app.top_toolbar
+                .layout_menu
+                .layouts
+                .contains(&"Morning".to_owned())
+        );
+    }
+
+    /// Clicks the lowest control labelled `label`: menu rows sit below the toolbar and tab strip.
+    fn click_lowest(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
+        let output = frame(app, ctx, vec![]);
+        let pos = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .and_then(|update| {
+                update
+                    .nodes
+                    .iter()
+                    .filter(|(_, node)| {
+                        node.label() == Some(label) && node.role() != egui::accesskit::Role::Label
+                    })
+                    .filter_map(|(_, node)| node.bounds())
+                    .max_by(|a, b| a.y0.total_cmp(&b.y0))
+            })
+            .map(|rect| {
+                egui::pos2(
+                    (rect.x0 + rect.x1) as f32 * 0.5,
+                    (rect.y0 + rect.y1) as f32 * 0.5,
+                )
+            });
+        output.drop_without_applying_deltas();
+        let pos = pos.unwrap_or_else(|| panic!("missing control: {label}"));
+        for pressed in [true, false] {
+            frame(
+                app,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            )
+            .drop_without_applying_deltas();
+        }
     }
 }
