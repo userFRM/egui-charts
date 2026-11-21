@@ -230,17 +230,21 @@ impl PartialEq for AutoscaleProvider {
 /// How the alert levels of one bar series are drawn.
 ///
 /// Alerts are not bound to a series, so the host passes the alerts it resolves to a series to
-/// `chart::render_alert_levels` (requires `widget`) with these `labels` and `color`,
-/// and draws none while `visible` is unset.
+/// `chart::render_alert_levels` (requires `widget`) with these `labels` and the series' colour,
+/// `color` or, for `None`, the chart-wide alert colour, and draws none while `visible` is unset.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(from = "SavedSeriesAlerts")]
 #[non_exhaustive]
 pub struct SeriesAlerts {
     /// Draw the series' alert levels.
     pub visible: bool,
     /// Label each level with its alert.
     pub labels: bool,
-    /// Colour of the levels and labels.
-    pub color: Color32,
+    /// Colour of the levels and labels, whatever its value. `None`, the default, follows the
+    /// chart-wide alert colour. Layouts saved while the default orange stood for the chart-wide
+    /// colour load that orange as `None`.
+    #[serde(rename = "own_color", skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color32>,
 }
 
 impl Default for SeriesAlerts {
@@ -248,7 +252,32 @@ impl Default for SeriesAlerts {
         Self {
             visible: true,
             labels: true,
-            color: Color32::from_rgb(255, 152, 0),
+            color: None,
+        }
+    }
+}
+
+/// [`SeriesAlerts`] as saved. Layouts saved before `own_color` hold `color`, in which the
+/// default orange stood for the chart-wide colour.
+#[derive(Deserialize)]
+struct SavedSeriesAlerts {
+    visible: bool,
+    labels: bool,
+    #[serde(default)]
+    own_color: Option<Color32>,
+    #[serde(default)]
+    color: Option<Color32>,
+}
+
+impl From<SavedSeriesAlerts> for SeriesAlerts {
+    fn from(saved: SavedSeriesAlerts) -> Self {
+        let former_default = Color32::from_rgb(255, 152, 0);
+        Self {
+            visible: saved.visible,
+            labels: saved.labels,
+            color: saved
+                .own_color
+                .or(saved.color.filter(|color| *color != former_default)),
         }
     }
 }
