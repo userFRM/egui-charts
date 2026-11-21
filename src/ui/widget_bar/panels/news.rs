@@ -26,6 +26,23 @@ use super::controls::dropdown;
 /// Stories asked for at most.
 const LIMIT: usize = 50;
 
+// Escape can clear focus before rendering, so remember it after the host draws its widgets.
+#[derive(Default)]
+struct NewsFocus(egui::ViewportIdMap<bool>);
+
+impl egui::plugin::Plugin for NewsFocus {
+    fn debug_name(&self) -> &'static str {
+        "News focus"
+    }
+
+    fn on_end_pass(&mut self, ui: &mut Ui) {
+        self.0.insert(
+            ui.ctx().viewport_id(),
+            ui.memory(|memory| memory.focused().is_some()),
+        );
+    }
+}
+
 /// An action the host performs for the news panel.
 #[derive(Clone, Debug, PartialEq, Default)]
 #[non_exhaustive]
@@ -89,9 +106,9 @@ struct SeenNews {
 /// to its text, with actions to show the chart at its time and to open its link. Publication times
 /// show in the zone given to [`set_timezone`](Self::set_timezone), UTC until set. Call
 /// [`poll`](Self::poll) each frame, then [`show`](Self::show) while the panel is open.
-/// With the keyboard, Up and Down move between stories, Enter opens one and Escape returns to
-/// the list. Home and End reach the first and last headline; Page Up, Page Down and Space page
-/// through the headlines, with Shift+Space paging back.
+/// With the keyboard, Up and Down move between stories and Enter opens one. Escape returns to
+/// the list when a story control or nothing has focus. Home and End reach the first and last
+/// headline; Page Up, Page Down and Space page through them, with Shift+Space paging back.
 /// Named alerts keep the current filter, including its symbols, through storage. Call
 /// [`refresh`](Self::refresh) when the host learns of new stories, even while hidden, and drain
 /// [`take_notifications`](Self::take_notifications) after polling for host delivery. Historical
@@ -549,6 +566,12 @@ impl NewsPanel {
 
     /// Render the stories, or the open story, after [`poll`](Self::poll).
     pub fn show(&mut self, ui: &mut Ui) -> NewsAction {
+        let focus = ui.ctx().plugin_or_default::<NewsFocus>();
+        let had_focus = *focus
+            .lock()
+            .0
+            .entry(ui.ctx().viewport_id())
+            .or_insert_with(|| ui.memory(|memory| memory.focused().is_some()));
         let mut action = NewsAction::None;
         let theme = ui.active_theme();
         let title = if self.highlights {
@@ -561,6 +584,7 @@ impl NewsPanel {
             .as_ref()
             .and_then(|id| self.stories.iter().find(|story| story.id == *id))
         {
+            let mut controls = [None; 3];
             let mut back = false;
             PanelHeader::new(title).show(ui, |ui| {
                 let response = IconButton::new(&icons::CHEVRON_LEFT)
@@ -569,8 +593,8 @@ impl NewsPanel {
                 if std::mem::take(&mut self.focus_back) {
                     response.request_focus();
                 }
-                back = response.clicked()
-                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+                controls[0] = Some(response.id);
+                back = response.clicked();
             });
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
@@ -598,16 +622,32 @@ impl NewsPanel {
                         ui.add_space(theme.spacing.sm);
                     }
                     ui.horizontal_wrapped(|ui| {
-                        if Button::new("Show on chart").show(ui).clicked() {
+                        let response = Button::new("Show on chart").show(ui);
+                        controls[1] = Some(response.id);
+                        if response.clicked() {
                             action = NewsAction::ShowOnChart(story.time);
                         }
-                        if let Some(url) = &story.url
-                            && Button::new("Open story").show(ui).clicked()
-                        {
-                            action = NewsAction::OpenUrl(url.clone());
+                        if let Some(url) = &story.url {
+                            let response = Button::new("Open story").show(ui);
+                            controls[2] = Some(response.id);
+                            if response.clicked() {
+                                action = NewsAction::OpenUrl(url.clone());
+                            }
                         }
                     });
                 });
+            let story_focused = ui.memory(|memory| match memory.focused() {
+                Some(id) => controls.contains(&Some(id)),
+                None => {
+                    !had_focus
+                        || controls
+                            .into_iter()
+                            .flatten()
+                            .any(|id| memory.had_focus_last_frame(id))
+                }
+            });
+            back |= story_focused
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             if back {
                 self.refocus = Some(story.id.clone());
                 self.open = None;
@@ -1325,7 +1365,7 @@ mod tests {
     }
 
     /// Reading with the keyboard keeps focus on one story, including at either end of the list
-    /// and after returning from its text.
+    /// and after returning from its text, while another field keeps its own Escape handling.
     #[test]
     fn arrow_keys_move_between_stories_enter_opens_escape_returns() {
         let mut panel = NewsPanel::new();
@@ -1334,6 +1374,7 @@ mod tests {
             story.body = format!("Text of {title}");
             panel.stories.push(story);
         }
+        let mut outside = String::new();
         let mut h = Harness::builder()
             .with_context_setup(|ctx| {
                 egui_extras::install_image_loaders(ctx);
@@ -1342,8 +1383,11 @@ mod tests {
                 });
             })
             .build_ui_state(
-                |ui, panel: &mut NewsPanel| {
-                    panel.show(ui);
+                move |ui, panel: &mut NewsPanel| {
+                    egui::Panel::left("news").show(ui, |ui| {
+                        panel.show(ui);
+                    });
+                    ui.add(egui::TextEdit::singleline(&mut outside).hint_text("Outside news"));
                 },
                 panel,
             );
@@ -1405,6 +1449,19 @@ mod tests {
         h.run();
         h.get_by_label("Show on chart").focus();
         h.run();
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.state().open.is_none());
+
+        h.get_by_role_and_label(egui::Role::Button, "First").click();
+        h.run();
+        h.get_by_role(egui::Role::TextInput).focus();
+        h.run();
+        assert!(h.get_by_role(egui::Role::TextInput).is_focused());
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert_eq!(h.state().open.as_deref(), Some("First"));
+        assert!(!h.get_by_role(egui::Role::TextInput).is_focused());
         h.key_press(egui::Key::Escape);
         h.run();
         assert!(h.state().open.is_none());
