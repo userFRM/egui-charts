@@ -308,7 +308,10 @@ pub trait Strategy {
                         }
                         _ => index.to_string(),
                     },
-                    InputValue::Text(value) | InputValue::Symbol(value) => value,
+                    InputValue::TimeOfDay(time) => time.format("%H:%M").to_string(),
+                    InputValue::Text(value)
+                    | InputValue::Symbol(value)
+                    | InputValue::TimeZone(value) => value,
                     InputValue::Timeframe(value) => {
                         value.map_or_else(|| "Chart interval".into(), |tf| tf.to_string())
                     }
