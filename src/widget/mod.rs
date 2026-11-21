@@ -345,7 +345,12 @@ pub struct Chart {
     chained_study_limit: Option<usize>,
     /// Whether each study in `studies` contributes to the main price auto-scale.
     pub(crate) study_autoscale: Vec<bool>,
+    /// Host captions of the studies in `studies`, set with [`Chart::set_indicator_inputs`];
+    /// empty where the host set none.
     pub(crate) study_inputs: Vec<String>,
+    /// For each study in `studies`, the caption derived from its inputs, built on first read
+    /// and dropped whenever the study may have changed.
+    pub(crate) study_captions: Vec<std::sync::OnceLock<String>>,
     /// For each study in `studies`, the first bar it must be updated from on the next frame.
     pub(crate) pending_from: Vec<Option<usize>>,
     /// For each study in `studies`, whether it must be recomputed from the first bar while its

@@ -332,9 +332,7 @@ impl DemoApp {
         }
         if let Some(name) = id.strip_prefix("study:") {
             if let Some(study) = self.indicator_dialog.factory().create(name) {
-                let inputs = super::study_input_summary(study.as_ref());
-                let id = self.chart.add_indicator(study);
-                self.chart.set_indicator_inputs(id, inputs);
+                self.chart.add_indicator(study);
             }
             return;
         }

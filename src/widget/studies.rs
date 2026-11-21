@@ -2,7 +2,7 @@
 
 use super::{Chart, ChartElementId, SeriesId};
 use crate::model::Bar;
-use crate::studies::{Indicator, InputValue, RefusedStudy, StudyError, StudySource};
+use crate::studies::{Indicator, InputKind, InputValue, RefusedStudy, StudyError, StudySource};
 use web_time::Instant;
 
 impl Chart {
@@ -206,6 +206,7 @@ impl Chart {
         self.study_ids.push(id);
         self.study_autoscale.push(true);
         self.study_inputs.push(String::new());
+        self.study_captions.push(std::sync::OnceLock::new());
         self.pending_from.push(None);
         self.stale.push(false);
         self.next_refresh.push(f64::NEG_INFINITY);
@@ -228,7 +229,10 @@ impl Chart {
         id
     }
 
-    /// Set the input caption displayed beside a study in the legend.
+    /// Sets the caption the legends show after the name of study `id`, in place of the one the
+    /// chart derives from its inputs. A host caption does not follow later changes of the
+    /// study's inputs; an empty one returns the study to the derived caption. Returns `false`
+    /// for an id that is not a study of the chart.
     pub fn set_indicator_inputs(&mut self, id: SeriesId, inputs: impl Into<String>) -> bool {
         let Some(index) = self.study_ids.iter().position(|candidate| *candidate == id) else {
             return false;
@@ -238,8 +242,32 @@ impl Chart {
         true
     }
 
-    /// The host-supplied input caption of a study, if its id is still present.
+    /// The caption the legends show after the name of study `id` while
+    /// [`ChartConfig::show_indicator_inputs`](crate::config::ChartConfig::show_indicator_inputs)
+    /// is on: the host's from [`set_indicator_inputs`](Self::set_indicator_inputs), else one built
+    /// from the study's shown inputs. `None` if `id` is not a study of the chart.
     pub fn indicator_inputs(&self, id: SeriesId) -> Option<&str> {
+        let at = self
+            .study_ids
+            .iter()
+            .position(|candidate| *candidate == id)?;
+        Some(self.study_caption(at))
+    }
+
+    /// The caption the legends show for the study at `at`: the host's, else the derived one.
+    pub(crate) fn study_caption(&self, at: usize) -> &str {
+        match self.study_inputs[at].as_str() {
+            "" => self.study_captions[at]
+                .get_or_init(|| derived_caption(self.studies.indicators()[at].as_ref())),
+            host => host,
+        }
+    }
+
+    /// The caption the host set for study `id` with
+    /// [`set_indicator_inputs`](Self::set_indicator_inputs), empty if none. Copies and saved
+    /// layouts keep this one, so that a copy derives its own.
+    #[cfg(feature = "studies")]
+    pub(crate) fn host_indicator_inputs(&self, id: SeriesId) -> Option<&str> {
         self.study_ids
             .iter()
             .position(|candidate| *candidate == id)
@@ -301,6 +329,7 @@ impl Chart {
         self.study_ids.remove(at);
         self.study_autoscale.remove(at);
         self.study_inputs.remove(at);
+        self.study_captions.remove(at);
         self.pending_from.remove(at);
         self.stale.remove(at);
         self.next_refresh.remove(at);
@@ -467,6 +496,8 @@ impl Chart {
             let clock_changed = study.set_bar_clock(&clock);
             let events_changed = study.set_time_scale_events(events);
             if instrument_changed || symbol_changed || clock_changed || events_changed {
+                // The inputs a study offers can follow the chart's symbol and interval.
+                self.study_captions[at].take();
                 self.pending_from[at] = Some(0);
                 self.element_studies.dirty = true;
                 self.readout_revision = crate::model::next_revision();
@@ -634,6 +665,73 @@ fn held_events(
     frozen: usize,
 ) -> &[crate::model::TimeScaleEvent] {
     &events[..events.len().saturating_sub(frozen)]
+}
+
+/// The caption the legends show after a study's name when the host set none: what identifies it
+/// at a glance, in input order. Lengths and numbers, choices by their label, the price source,
+/// the interval and the symbol; not flags, colours, text, zero values, list sizes, painted
+/// widths, times of day, Style tab inputs, choices set to None or another study's output, which
+/// mean nothing without their labels. The volume study names its moving average itself.
+fn derived_caption(study: &dyn Indicator) -> String {
+    if study.is_volume() {
+        return String::new();
+    }
+    let price = |source: &StudySource| match source {
+        StudySource::Price(price) => Some(format!("{price:?}").to_lowercase()),
+        // The caption has no name for another study's output.
+        _ => None,
+    };
+    let source = study.source();
+    let inputs = study.inputs();
+    let mut caption: Vec<_> = inputs
+        .iter()
+        // List sizes, painted widths and minutes after midnight mean nothing alone; the study's
+        // source goes below.
+        .filter(|input| {
+            input.is_shown(&inputs)
+                && !input.style
+                && !matches!(input.id.as_str(), "band_count" | "event_count" | "width")
+                && !matches!(input.kind, InputKind::Length(0, 1439))
+                && (source.is_none() || input.id != "source")
+        })
+        .filter_map(|input| match (&input.kind, &input.value) {
+            (InputKind::Choice(choices), InputValue::Choice(index)) => choices
+                .get(*index)
+                .filter(|label| label.as_str() != "None")
+                .cloned(),
+            (_, InputValue::Length(value)) => (*value != 0).then(|| value.to_string()),
+            (_, InputValue::Integer(value)) => (*value != 0).then(|| value.to_string()),
+            // Single precision reads short and turns an open upper limit into infinity.
+            (_, InputValue::Number(value)) => {
+                let value = *value as f32;
+                (value != 0.0 && value.is_finite()).then(|| value.to_string())
+            }
+            (_, InputValue::Source(value)) => price(value),
+            (_, InputValue::Timeframe(Some(value))) => Some(value.to_string()),
+            (_, InputValue::Symbol(value)) if !value.is_empty() => Some(value.clone()),
+            _ => None,
+        })
+        .collect();
+    // An anchor or session choice identifies the study, which names its price only once edited.
+    // Flags, which the caption leaves out, can precede that choice.
+    let anchored = matches!(
+        inputs
+            .iter()
+            .map(|input| &input.kind)
+            .find(|kind| !matches!(kind, InputKind::Toggle)),
+        Some(InputKind::Choice(_))
+    );
+    let edited = inputs
+        .iter()
+        .any(|input| matches!(input.kind, InputKind::Source) && input.value != input.default);
+    if let Some(source) = source
+        .as_ref()
+        .filter(|_| !anchored || edited)
+        .and_then(price)
+    {
+        caption.insert(caption.len().min(1), source);
+    }
+    caption.join(" ")
 }
 
 /// Updates one study with its source column, keeping values indexed by the input bars.
@@ -1875,5 +1973,182 @@ mod tests {
         needs_error::<crate::widget::RestoreError>();
         #[cfg(feature = "drawings")]
         needs_error::<crate::widget::DrawingError>();
+    }
+
+    /// Without a host caption, the legends show one built from the study's inputs, which follows
+    /// every edit, undo and redo until the host sets its own (#3570).
+    #[test]
+    fn derived_caption_follows_settings_undo_and_redo() {
+        let mut chart = Chart::new(BarData::new());
+        let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+        // Without smoothing, its length and deviation are hidden.
+        assert_eq!(chart.indicator_inputs(rsi), Some("14 close"));
+        chart.user_action(|chart| {
+            let study = chart.indicator_mut(rsi).unwrap();
+            let settings = study.settings();
+            study
+                .apply_settings(&[("period".into(), InputValue::Length(5))], settings)
+                .unwrap();
+        });
+        assert_eq!(chart.indicator_inputs(rsi), Some("5 close"));
+        assert!(chart.undo());
+        assert_eq!(chart.indicator_inputs(rsi), Some("14 close"));
+        assert!(chart.redo());
+        assert_eq!(chart.indicator_inputs(rsi), Some("5 close"));
+        chart
+            .indicator_mut(rsi)
+            .unwrap()
+            .set_input("smoothing", InputValue::Choice(1))
+            .unwrap();
+        assert_eq!(chart.indicator_inputs(rsi), Some("5 close SMA 14"));
+        chart.set_indicator_inputs(rsi, "Mine");
+        chart
+            .indicator_mut(rsi)
+            .unwrap()
+            .set_input("period", InputValue::Length(7))
+            .unwrap();
+        assert_eq!(chart.indicator_inputs(rsi), Some("Mine"));
+        chart.set_indicator_inputs(rsi, "");
+        assert_eq!(chart.indicator_inputs(rsi), Some("7 close SMA 14"));
+    }
+
+    /// The derived caption names each input by its value and leaves out what means nothing
+    /// without its label (#3570).
+    #[test]
+    fn derived_captions_by_input_kind() {
+        use crate::model::Timeframe;
+        use crate::studies::{CustomIndicator, InputKind as Kind, InputValue as Value, StudyInput};
+        let input = |id: &str, value, kind| StudyInput::new(id, id, value, kind);
+        let one = |value, kind| vec![input("value", value, kind)];
+        let length =
+            |id: &str, value, min, max| input(id, Value::Length(value), Kind::Length(min, max));
+        let choice = |index, labels: [&str; 2]| {
+            let labels = labels.map(String::from).into();
+            input("mode", Value::Choice(index), Kind::Choice(labels))
+        };
+        let price = |price| Value::Source(StudySource::Price(price));
+        let close = input("source", price(PriceSource::Close), Kind::Source);
+        let rows = [
+            (vec![length("length", 20, 1, 500)], "20"),
+            (vec![length("offset", 0, 0, 500)], ""),
+            // Minutes after midnight.
+            (vec![length("start", 570, 0, 1439)], ""),
+            (vec![length("width", 3, 1, 10)], ""),
+            (vec![length("rows", 30, 1, 500).in_style_tab()], ""),
+            (one(Value::Number(2.5), Kind::Number(0.0, 10.0)), "2.5"),
+            (one(Value::Number(-1.5), Kind::Number(-10.0, 10.0)), "-1.5"),
+            // An open upper limit.
+            (
+                one(Value::Number(f64::MAX), Kind::Number(0.0, f64::MAX)),
+                "",
+            ),
+            (one(Value::Integer(-3), Kind::Integer(-10, 10)), "-3"),
+            (vec![choice(1, ["Fast", "Slow"])], "Slow"),
+            (vec![choice(0, ["None", "Slow"])], ""),
+            (
+                vec![input("source", price(PriceSource::HL2), Kind::Source)],
+                "hl2",
+            ),
+            (
+                one(Value::Timeframe(Some(Timeframe::Hour1)), Kind::Timeframe),
+                "1h",
+            ),
+            (one(Value::Timeframe(None), Kind::Timeframe), ""),
+            (one(Value::Symbol("OTHER".into()), Kind::Symbol), "OTHER"),
+            (one(Value::Symbol(String::new()), Kind::Symbol), ""),
+            (one(Value::Toggle(true), Kind::Toggle), ""),
+            (one(Value::Text("hi".into()), Kind::Text), ""),
+            (one(Value::Color(egui::Color32::RED), Kind::Color), ""),
+            // The price follows the first input.
+            (
+                vec![
+                    length("length", 20, 1, 500),
+                    choice(1, ["Fast", "Slow"]),
+                    close.clone(),
+                ],
+                "20 close Slow",
+            ),
+            // A study anchored by a choice names its price only once it is edited.
+            (
+                vec![
+                    choice(0, ["Session", "Week"]),
+                    length("length", 1, 1, 10),
+                    close,
+                ],
+                "Session 1",
+            ),
+        ];
+        let mut chart = Chart::new(BarData::new());
+        for (at, (inputs, expected)) in rows.into_iter().enumerate() {
+            let study = CustomIndicator::new("X", |_| Vec::new())
+                .with_inputs(inputs, |_, _, _, _| Vec::new())
+                .unwrap();
+            let id = chart.add_indicator(Box::new(study));
+            assert_eq!(chart.indicator_inputs(id), Some(expected), "row {at}");
+        }
+        let anchored = chart.indicators().last().unwrap().0;
+        chart
+            .indicator_mut(anchored)
+            .unwrap()
+            .set_input("source", price(PriceSource::HLC3))
+            .unwrap();
+        assert_eq!(chart.indicator_inputs(anchored), Some("Session hlc3 1"));
+        // Another study's output has no name in the caption.
+        let sma = chart.add_indicator(Box::new(SMA::new(7)));
+        let rsi = chart.add_indicator(Box::new(RSI::new(9)));
+        assert_eq!(chart.indicator_inputs(rsi), Some("9 close"));
+        chart
+            .set_indicator_source(rsi, StudySource::Study { id: sma.0, plot: 0 })
+            .unwrap();
+        assert_eq!(chart.indicator_inputs(rsi), Some("9"));
+        assert_eq!(chart.indicator_inputs(sma), Some("7 close"));
+    }
+
+    /// Built-in studies read as before the chart derived their captions, and no caption shows a
+    /// flag, an empty field, a list size or an open limit (#3570).
+    #[test]
+    fn derived_captions_of_built_in_studies() {
+        let factory = crate::studies::IndicatorFactory::new();
+        let mut chart = Chart::new(BarData::new());
+        let mut caption = |name: &str| {
+            let id = chart.add_indicator(factory.create(name).unwrap());
+            chart.indicator_inputs(id).unwrap().to_owned()
+        };
+        for (name, expected) in [
+            ("RSI", "14 close SMA 14"),
+            ("VWAP", "Session 1"),
+            ("Vol Profile Session", "24 70 Up / down Trading day"),
+            ("Time Weighted Average Price", "Session"),
+            ("Trend Strength Index", "14 close"),
+            ("Higher Interval Candles", "1D"),
+            ("Accelerator Oscillator", "hl2"),
+            // Its legend names its moving average instead.
+            ("Volume", ""),
+        ] {
+            assert_eq!(caption(name), expected, "{name}");
+        }
+        for name in factory.list() {
+            let caption = caption(&name);
+            assert_eq!(caption.trim(), caption, "{name}");
+            assert!(
+                !caption.contains("  ")
+                    && !caption.contains("true")
+                    && !caption.contains("false")
+                    && !caption.contains("00000")
+                    && !caption.split(' ').any(|item| item == "None"),
+                "{name}: {caption}"
+            );
+        }
+        let vwap = chart.add_indicator(factory.create("VWAP").unwrap());
+        assert_eq!(chart.indicator_inputs(vwap), Some("Session 1"));
+        chart
+            .indicator_mut(vwap)
+            .unwrap()
+            .set_input(
+                "source",
+                InputValue::Source(StudySource::Price(PriceSource::Close)),
+            )
+            .unwrap();
+        assert_eq!(chart.indicator_inputs(vwap), Some("Session close 1"));
     }
 }

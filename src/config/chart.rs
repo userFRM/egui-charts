@@ -422,7 +422,8 @@ pub struct ChartConfig {
     pub show_ohlc_change_percent: bool,
     /// Show volume in the legend independently of the histogram.
     pub show_legend_volume: bool,
-    /// Show host-supplied study inputs in the legend.
+    /// Show study inputs after their names in the legend: the host's caption, else one built
+    /// from the study's inputs.
     pub show_indicator_inputs: bool,
     /// Show the symbol's logo before the legend title: the legend badge, else the instrument's
     /// logo, else the symbol's initial on a neutral disc.
