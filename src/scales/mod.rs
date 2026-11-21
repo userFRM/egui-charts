@@ -22,6 +22,8 @@ pub use horizontal::{
 };
 #[cfg(any(feature = "widget", feature = "detectors"))]
 pub(crate) use price_formatter::decimals;
+#[cfg(feature = "ui")]
+pub(crate) use price_formatter::snap_price;
 pub use price_formatter::{
     CurrencyFormatter, CustomPriceFormatter, DefaultPriceFormatter, PercentageFormatter,
     PriceFormatter, PriceFormatterBuilder, ScientificFormatter, VolumeFormatter,
