@@ -614,9 +614,9 @@ impl ScreenerPanel {
                     Comparison::Between => number(&draft.value)
                         .zip(number(&draft.upper))
                         .map(|(a, b)| ScreenerCondition::Between(a.min(b), a.max(b))),
-                    Comparison::Is => (!ticked.is_empty()).then(|| ScreenerCondition::Is(ticked)),
+                    Comparison::Is => (!ticked.is_empty()).then_some(ScreenerCondition::Is(ticked)),
                     Comparison::IsNot => {
-                        (!ticked.is_empty()).then(|| ScreenerCondition::IsNot(ticked))
+                        (!ticked.is_empty()).then_some(ScreenerCondition::IsNot(ticked))
                     }
                 };
                 if Button::new("Add filter")
@@ -1116,7 +1116,7 @@ mod tests {
             "exchange",
             ScreenerCondition::IsNot(vec!["NYSE".into(), "NASDAQ".into()]),
         );
-        assert_eq!(last(&feed), [is_not.clone()]);
+        assert_eq!(last(&feed), std::slice::from_ref(&is_not));
         h.get_by_label("Exchange is not NYSE, NASDAQ  ×");
 
         click(&mut h, "Exchange");
