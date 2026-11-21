@@ -2054,6 +2054,14 @@ impl Indicator for ConfiguredStudy {
                 || {
                     if self.precision() == self.study.precision() {
                         self.study.format_value(value)
+                    } else if let Some(precision) = self.precision().filter(|_| {
+                        self.settings.precision.is_none()
+                            && self.value_format() == crate::scales::StudyFormat::Volume
+                            && value.is_finite()
+                    }) {
+                        // Instrument volume decimals describe the whole number; units keep two.
+                        crate::scales::VolumeFormatter { precision }
+                            .format_with_min_unit_decimals(value, 2)
                     } else {
                         self.value_format().format(value, self.precision())
                     }
@@ -2853,7 +2861,8 @@ mod tests {
 
     /// Automatic volume units follow the instrument, while a chosen precision wins. With
     /// three decimals, 0.375 stays fractional and 1234.5 / 1000 rounds to 1.234 in binary;
-    /// without metadata the same values keep their former 0 and 1.23K text.
+    /// without metadata the same values keep their former 0 and 1.23K text. At 0 volume
+    /// decimals the units keep two decimals: 1.23K.
     #[test]
     fn volume_units_follow_the_instrument_volume_decimals() {
         type Row = (Option<u8>, Option<usize>, Option<usize>, [&'static str; 2]);
@@ -2861,7 +2870,7 @@ mod tests {
             (None, None, None, ["0", "1.23K"]),
             (Some(3), None, Some(3), ["0.375", "1.234K"]),
             (Some(3), Some(1), Some(1), ["0.4", "1.2K"]),
-            (Some(0), None, Some(0), ["0", "1K"]),
+            (Some(0), None, Some(0), ["0", "1.23K"]),
         ];
         let mut wrong = Vec::new();
         for (decimals, chosen, precision, expected) in rows {
