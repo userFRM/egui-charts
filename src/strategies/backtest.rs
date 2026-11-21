@@ -989,6 +989,9 @@ impl Backtest {
             settings.initial_capital,
         );
         report.currency = self.account_currency().map(str::to_owned);
+        let mut instrument = crate::model::Instrument::new(&self.symbol);
+        instrument.tick_size = Some(settings.price_increment);
+        report.price_decimals = crate::scales::instrument_price_precision(&instrument);
         report.risk_free_rate = settings.risk_free_rate;
         let size = match settings.order_size {
             OrderSize::Fixed(value) => format!("Fixed units: {value}"),

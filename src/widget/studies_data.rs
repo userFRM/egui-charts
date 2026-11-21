@@ -223,6 +223,7 @@ impl StudyDataCache {
                     clock: series.clock.clone(),
                     instrument: series.instrument.as_ref(),
                     timeframe: key.timeframe.unwrap(),
+                    chart: None,
                 })
             })
             .collect()
@@ -2951,6 +2952,190 @@ pub(super) mod tests {
                     .map(|bar| study.values().value(0, bar))
                     .collect::<Vec<_>>(),
                 expected,
+            );
+        }
+    }
+
+    /// Guards #3925: a custom study reads an hourly history on a 30-minute chart as each chart
+    /// bar knew it, through `StudyData::closed_at`, and the chart's Wait for interval close,
+    /// offered on by default, decides whether the latest bar reads the developing hour. Rows: a
+    /// study with an interval input of its own that offers the input, a study reading another
+    /// symbol, which has it because the chart can calculate it on another interval, and that
+    /// study calculated on 1 hour bars of the chart's symbol, which date its history instead.
+    #[test]
+    fn custom_study_reads_closed_bars_of_a_longer_interval() {
+        use crate::studies::{CustomIndicator, IndicatorValue, InputKind, StudyInput};
+        type Requests = fn(&[StudyInput]) -> Vec<StudyDataRequest>;
+        type Row = (&'static str, StudyInput, Requests, bool, &'static str, bool);
+        let rows: [Row; 3] = [
+            (
+                "own interval",
+                StudyInput::new(
+                    "interval",
+                    "Interval",
+                    InputValue::Timeframe(Some(Timeframe::Hour1)),
+                    InputKind::Timeframe,
+                ),
+                |inputs| match &inputs[0].value {
+                    InputValue::Timeframe(timeframe) => vec![StudyDataRequest {
+                        symbol: String::new(),
+                        timeframe: *timeframe,
+                        metric: None,
+                    }],
+                    _ => Vec::new(),
+                },
+                true,
+                "MAIN",
+                false,
+            ),
+            (
+                "other symbol",
+                StudyInput::new(
+                    "symbol",
+                    "Symbol",
+                    InputValue::Symbol("OTHER".into()),
+                    InputKind::Symbol,
+                ),
+                |inputs| match &inputs[0].value {
+                    InputValue::Symbol(symbol) => vec![StudyDataRequest {
+                        symbol: symbol.clone(),
+                        timeframe: Some(Timeframe::Hour1),
+                        metric: None,
+                    }],
+                    _ => Vec::new(),
+                },
+                false,
+                "OTHER",
+                false,
+            ),
+            (
+                "other symbol on hourly bars",
+                StudyInput::new(
+                    "symbol",
+                    "Symbol",
+                    InputValue::Symbol("OTHER".into()),
+                    InputKind::Symbol,
+                ),
+                |inputs| match &inputs[0].value {
+                    InputValue::Symbol(symbol) => vec![StudyDataRequest {
+                        symbol: symbol.clone(),
+                        timeframe: Some(Timeframe::Hour1),
+                        metric: None,
+                    }],
+                    _ => Vec::new(),
+                },
+                false,
+                "OTHER",
+                true,
+            ),
+        ];
+        for (case, input, requests, offers_wait, symbol, on_hourly_bars) in rows {
+            let mut study = CustomIndicator::new(case, |_| Vec::new())
+                .with_inputs(vec![input], move |bars, inputs, _, histories| {
+                    let wanted = requests(inputs);
+                    let history = histories
+                        .iter()
+                        .find(|history| wanted.contains(&history.request));
+                    bars.iter()
+                        .enumerate()
+                        .map(|(at, bar)| {
+                            history
+                                .and_then(|history| {
+                                    let at = history.closed_at(bar.time, at + 1 == bars.len())?;
+                                    Some(history.bars[at].close)
+                                })
+                                .map_or(IndicatorValue::None, IndicatorValue::Single)
+                        })
+                        .collect()
+                })
+                .unwrap()
+                .with_data_requests(requests);
+            if offers_wait {
+                study = study.with_wait_for_close();
+            }
+            let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&[1.0; 6], 30)));
+            chart.set_symbol("MAIN");
+            chart.set_timeframe(Timeframe::Min30);
+            let id = chart.add_indicator(Box::new(study));
+            let hourly = |symbol: &str| StudyDataRequest {
+                symbol: symbol.into(),
+                timeframe: Some(Timeframe::Hour1),
+                metric: None,
+            };
+            let mut requested = vec![hourly(symbol)];
+            if on_hourly_bars {
+                chart
+                    .indicator_mut(id)
+                    .unwrap()
+                    .set_input(
+                        "calculation_timeframe",
+                        InputValue::Timeframe(Some(Timeframe::Hour1)),
+                    )
+                    .unwrap();
+                // The study runs on the chart symbol's hourly bars, requested first, and reads
+                // none of their closes.
+                requested.insert(0, hourly("MAIN"));
+                chart.set_study_data(hourly("MAIN"), bars(&[1.0; 3], 60), None);
+            }
+            assert_eq!(chart.study_data_requests(), requested, "{case}");
+            chart.set_study_data(hourly(symbol), bars(&[10.5, 20.5, 30.5], 60), None);
+            let ctx = egui::Context::default();
+            let values = |chart: &mut Chart, frames: std::ops::Range<u32>| {
+                for frame in frames {
+                    shapes(&ctx, chart, f64::from(frame), Vec::new());
+                }
+                let (_, study) = chart
+                    .indicators()
+                    .find(|(candidate, _)| *candidate == id)
+                    .unwrap();
+                (0..6)
+                    .map(|bar| study.values().value(0, bar))
+                    .collect::<Vec<_>>()
+            };
+            // Each hour reaches the chart bar that closes with it; the latest bar, 02:30, waits
+            // for the hour that opened at 02:00.
+            assert_eq!(
+                values(&mut chart, 0..10),
+                [
+                    None,
+                    Some(10.5),
+                    Some(10.5),
+                    Some(20.5),
+                    Some(20.5),
+                    Some(20.5)
+                ],
+                "{case}"
+            );
+            let (_, study) = chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap();
+            let wait = study
+                .inputs()
+                .into_iter()
+                .find(|input| input.id == "wait_for_close")
+                .map(|input| (input.value, input.default));
+            assert_eq!(
+                wait,
+                Some((InputValue::Toggle(true), InputValue::Toggle(true))),
+                "{case}"
+            );
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("wait_for_close", InputValue::Toggle(false))
+                .unwrap();
+            assert_eq!(
+                values(&mut chart, 10..20),
+                [
+                    None,
+                    Some(10.5),
+                    Some(10.5),
+                    Some(20.5),
+                    Some(20.5),
+                    Some(30.5)
+                ],
+                "{case}"
             );
         }
     }
