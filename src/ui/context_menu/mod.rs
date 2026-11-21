@@ -232,6 +232,8 @@ pub struct ChartContextMenu {
     /// Names of the watchlists the symbol can be added to; without any, the menu has no such
     /// entry.
     pub watchlists: Vec<String>,
+    /// The list the add-to-watchlist key uses. Its row shows the binding; `None` shows none.
+    pub active_watchlist: Option<usize>,
     /// The quantity of the order entries.
     pub order_quantity: f64,
     /// The order types the account accepts; entries for the others are left out.
@@ -272,6 +274,7 @@ impl ChartContextMenu {
             tick_size: None,
             price_decimals: None,
             watchlists: Vec::new(),
+            active_watchlist: None,
             order_quantity: 1.0,
             order_types: Capabilities {
                 limit: true,
@@ -403,13 +406,20 @@ impl ChartContextMenu {
                     .iter()
                     .enumerate()
                     .map(|(list, name)| {
-                        MenuEntry::Item(MenuItem::new(
-                            name.clone(),
-                            ContextMenuAction::AddToWatchlist {
-                                list,
-                                symbol: symbol.clone(),
-                            },
-                        ))
+                        MenuEntry::Item(
+                            MenuItem::new(
+                                name.clone(),
+                                ContextMenuAction::AddToWatchlist {
+                                    list,
+                                    symbol: symbol.clone(),
+                                },
+                            )
+                            .with_shortcut(
+                                (self.active_watchlist == Some(list))
+                                    .then(|| shortcuts.shortcut(KeyboardAction::AddToWatchlist))
+                                    .flatten(),
+                            ),
+                        )
                     })
                     .collect(),
             });
