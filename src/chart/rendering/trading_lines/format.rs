@@ -56,7 +56,9 @@ impl std::fmt::Debug for dyn TradingFormatter + '_ {
     }
 }
 
-/// `value` with thousands separators and `decimals` decimals, signed with `sign`.
+/// `value` with thousands separators and `decimals` decimals, or a dash when not finite. With
+/// `sign`, a value that shows a nonzero digit carries an explicit sign; one that rounds to zero
+/// is unsigned either way.
 pub(crate) fn grouped(value: f64, decimals: usize, sign: bool) -> String {
     if !value.is_finite() {
         return "-".to_owned();

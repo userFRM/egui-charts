@@ -511,6 +511,7 @@ mod tests {
             time: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
             speed: 2.0,
             scope: Default::default(),
+            charts: Vec::new(),
         };
         let rows = [
             (
@@ -838,6 +839,7 @@ mod tests {
             time: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
             speed,
             scope: Default::default(),
+            charts: Vec::new(),
         };
         let ctrl_k = |modifiers| ShortcutMap {
             bindings: vec![(

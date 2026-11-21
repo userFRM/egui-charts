@@ -11,7 +11,7 @@ use crate::model::{OrderSide, TimeInForce, TradingRules};
 use crate::theme::{Theme, ThemeExt, readable_color};
 use crate::ui::top_toolbar::buttons::rule_color;
 
-pub(super) use crate::chart::grouped;
+pub(crate) use crate::chart::grouped;
 pub(super) use crate::theme::trading_side_color as side_color;
 
 /// Height shared by the ticket's fields, menus and order-type row.
@@ -553,16 +553,39 @@ mod tests {
 
     #[test]
     fn figures_group_thousands_and_sign_only_what_they_show() {
-        for (value, sign, text) in [
-            (-123_456.0, false, "-123,456.00"),
-            (-24_932.084, true, "-24,932.08"),
-            (100_050.68, true, "+100,050.68"),
-            (1_234_567.891, false, "1,234,567.89"),
-            (-0.004, true, "0.00"),
-            (0.0, true, "0.00"),
-            (f64::NAN, false, "-"),
+        for (value, decimals, sign, text) in [
+            (-123_456.0, 2, false, "-123,456.00"),
+            (-24_932.084, 2, true, "-24,932.08"),
+            (100_050.68, 2, true, "+100,050.68"),
+            (1_234_567.891, 2, false, "1,234,567.89"),
+            (-0.004, 2, true, "0.00"),
+            (0.0, 2, true, "0.00"),
+            (f64::NAN, 2, false, "-"),
+            (43237.45, 2, false, "43,237.45"),
+            (43237.45, 2, true, "+43,237.45"),
+            (-1234567.0, 0, false, "-1,234,567"),
+            (-1234567.0, 0, true, "-1,234,567"),
+            (863.83, 2, false, "863.83"),
+            (863.83, 2, true, "+863.83"),
+            (100000.5, 1, false, "100,000.5"),
+            (100000.5, 1, true, "+100,000.5"),
+            (0.000123, 6, false, "0.000123"),
+            (0.000123, 6, true, "+0.000123"),
+            (-0.0, 2, false, "0.00"),
+            (-0.0, 2, true, "0.00"),
+            (-0.001, 2, false, "0.00"),
+            (-0.001, 2, true, "0.00"),
+            (0.001, 2, false, "0.00"),
+            (0.001, 2, true, "0.00"),
+            (f64::INFINITY, 2, false, "-"),
+            (f64::INFINITY, 2, true, "-"),
+            (f64::NAN, 2, true, "-"),
         ] {
-            assert_eq!(grouped(value, 2, sign), text, "{value}");
+            assert_eq!(
+                grouped(value, decimals, sign),
+                text,
+                "{value} {decimals} {sign}"
+            );
         }
     }
 }
