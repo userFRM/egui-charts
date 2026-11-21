@@ -626,7 +626,7 @@ fn continuation_keeps_the_range_and_refreshes_its_figures() {
 }
 
 /// Fill prices read at the run's price increment, or finer where exact, and quantities
-/// without binary rounding digits, in the list of trades and the trade markers alike.
+/// without binary rounding digits, in the list of trades, the trade markers and the summary.
 #[cfg(feature = "strategies")]
 #[test]
 fn trades_and_markers_show_fills_without_rounding_digits() {
@@ -685,6 +685,10 @@ fn trades_and_markers_show_fills_without_rounding_digits() {
     for cell in ["49.94007191", "100.12", "101.00"] {
         h.get_by_label(cell);
     }
+    // The summary's largest position writes the quantity as the list does.
+    h.state_mut().tab = Tab::Summary;
+    h.run();
+    assert!(h.query_all_by_label("49.94007191").count() > 0);
 }
 
 #[test]
