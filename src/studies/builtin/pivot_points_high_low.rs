@@ -2,7 +2,8 @@
 //!
 //! Marks swing highs and lows: a pivot high is a bar whose high is the highest of a window of
 //! `left` bars before it and `right` bars after it, a pivot low mirrors it with lows. Each
-//! pivot is labelled with its price.
+//! pivot is labelled with its price, at the instrument's price precision or the precision chosen
+//! in the study's settings, and with two decimals when neither is known.
 //!
 //! # Rule
 //!
@@ -116,6 +117,9 @@ pub struct PivotPointsHighLow {
     high_color: Color32,
     low_color: Color32,
     visible: bool,
+    /// The instrument's price decimals and those of the study's presentation settings.
+    precision: Option<usize>,
+    label_precision: Option<usize>,
 }
 
 impl PivotPointsHighLow {
@@ -131,6 +135,8 @@ impl PivotPointsHighLow {
             high_color: palette::WHITE,
             low_color: palette::WHITE,
             visible: true,
+            precision: None,
+            label_precision: None,
         }
     }
 
@@ -245,8 +251,24 @@ impl Indicator for PivotPointsHighLow {
         ))
     }
 
+    fn set_instrument(&mut self, instrument: Option<&crate::model::Instrument>) -> bool {
+        let precision = instrument
+            .and_then(crate::scales::instrument_price_precision)
+            .map(usize::from);
+        // Refresh the study copies drawn by price-based chart types when the decimals change.
+        std::mem::replace(&mut self.precision, precision) != precision
+    }
+
+    fn set_label_precision(&mut self, precision: Option<usize>) {
+        self.label_precision = precision;
+    }
+
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
-        Some(self.format_value(self.values.value(line, bar)?))
+        let value = self.values.value(line, bar)?;
+        Some(
+            crate::scales::StudyFormat::Price
+                .format(value, self.label_precision.or(self.precision)),
+        )
     }
 
     fn values(&self) -> &IndicatorValues {
