@@ -153,6 +153,7 @@ impl Chart {
             study_limit: None,
             chained_study_limit: None,
             study_inputs: Vec::new(),
+            study_captions: Vec::new(),
             study_autoscale: Vec::new(),
             pending_from: Vec::new(),
             stale: Vec::new(),

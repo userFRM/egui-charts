@@ -1634,7 +1634,7 @@ mod tests {
                 [&[293.0 / 24.0], &[101.0 / 24.0], &[749.0 / 48.0]],
             ),
             (
-                "VPT",
+                "PVT",
                 [
                     &[36919.0 / 12012.0],
                     &[20903.0 / 12012.0],
@@ -1996,7 +1996,7 @@ mod tests {
                 // Alternating open/close changes give this independent Wilder/SMA result.
                 assert!((loaded.plot_value(0, 10).unwrap() - 66.0).abs() < 1e-9);
             }
-            if matches!(name, "Force Index" | "VPT") {
+            if matches!(name, "Force Index" | "PVT") {
                 loaded
                     .set_input(
                         "source",
@@ -2868,5 +2868,37 @@ mod tests {
         );
         let study = chart.indicator_mut(id).unwrap();
         assert!(study.apply_settings(&edit.inputs, edit.settings).is_ok());
+    }
+
+    /// The Lower interval of a volume study on a five-minute chart reads Auto with the interval
+    /// it picks, one minute, rather than the chart interval it does not read.
+    #[test]
+    fn unset_lower_interval_names_the_interval_it_reads() {
+        use egui::accesskit::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        chart.set_timeframe(Timeframe::Min5);
+        let id = chart.add_indicator(Box::new(crate::studies::VolumeDelta::new()));
+        let mut dialog = IndicatorSettingsDialog::default();
+        assert!(dialog.open_for_chart(&chart, id));
+        let mut harness = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .with_size(egui::vec2(1440.0, 900.0))
+            .build_ui(|ui| {
+                dialog.show(ui.ctx(), &Theme::dark());
+            });
+        harness.run();
+        let combo = harness.get_by_role_and_label(Role::ComboBox, "Lower interval");
+        assert_eq!(
+            combo.accesskit_node().value().as_deref(),
+            Some("Auto (1min)")
+        );
+        combo.click();
+        harness.run();
+        assert!(harness.query_by_label("Auto (1min)").is_some());
+        assert!(harness.query_by_label("Chart interval").is_none());
     }
 }

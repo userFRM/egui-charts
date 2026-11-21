@@ -19,7 +19,7 @@ pub struct SavedStudy {
     pub id: usize,
     /// Its name, inputs, styles and visibility.
     pub study: StudyTemplate,
-    /// The caption after its title in the legend.
+    /// The host's caption after its title in the legend, empty where the chart derives one.
     pub caption: String,
     /// Whether it widens the automatic range of the price scale.
     pub autoscale: bool,
@@ -277,7 +277,10 @@ impl Chart {
             .map(|(index, (id, study))| SavedStudy {
                 id: id.0,
                 study: StudyTemplate::from_study(study),
-                caption: self.indicator_inputs(id).unwrap_or_default().to_owned(),
+                caption: self
+                    .host_indicator_inputs(id)
+                    .unwrap_or_default()
+                    .to_owned(),
                 autoscale: self.study_autoscale[index],
                 pane: pane_of(id),
             })
@@ -653,11 +656,12 @@ impl Chart {
             .collect();
         self.study_column_ids.extend(column_ids);
         for saved in snapshot.series.iter().flatten() {
-            let id = if saved.fed {
-                self.add_feed_series(saved.options.clone())
-            } else {
-                self.add_series(saved.options.clone())
-            };
+            // The restored drawings already count the restored series.
+            let id = self.add_series_keeping_layers(saved.options.clone());
+            if saved.fed {
+                self.price_series.last_mut().expect("added series").fed = self.feed_link.is_some();
+                self.fill_fed_series();
+            }
             self.set_series_visible(id, saved.visible);
             self.restore_annotations(id, &saved.annotations);
             self.restored_studies.insert(saved.id, id.0);
@@ -1755,7 +1759,7 @@ mod tests {
         chart.set_timeframe(Timeframe::Min5);
         chart.set_chart_type(ChartType::Line);
         let sma = chart.add_indicator(Box::new(SMA::new(7)));
-        chart.set_indicator_inputs(sma, "7 close");
+        chart.set_indicator_inputs(sma, "Fast average");
         chart.set_indicator_autoscale(sma, false);
         let rsi = chart.add_indicator(Box::new(RSI::new(9)));
         let macd = chart.add_indicator(Box::new(MACD::new(5, 13, 4)));
@@ -1828,7 +1832,7 @@ mod tests {
         let [(sma, ..), (rsi, ..), (macd, ..)] = studies.as_slice() else {
             unreachable!()
         };
-        assert_eq!(restored.indicator_inputs(*sma), Some("7 close"));
+        assert_eq!(restored.indicator_inputs(*sma), Some("Fast average"));
         assert!(!restored.study_autoscale[0]);
         assert_eq!(
             restored.indicator_mut(*rsi).unwrap().source(),
@@ -1888,6 +1892,16 @@ mod tests {
         assert_eq!(drawings[0].pane, Some(rsi.0));
         assert_eq!(drawings[0].chart_points[0].bar_idx, 3.0);
         assert!(!restored.can_undo());
+        // Host captions survive, while saved empty captions still follow the study's inputs.
+        assert_eq!(restored.indicator_inputs(*rsi), Some("9"));
+        restored.set_indicator_inputs(*sma, "");
+        assert_eq!(restored.indicator_inputs(*sma), Some("7 close"));
+        restored
+            .indicator_mut(*rsi)
+            .unwrap()
+            .set_input("period", crate::studies::InputValue::Length(4))
+            .unwrap();
+        assert_eq!(restored.indicator_inputs(*rsi), Some("4"));
 
         // An absent interval clears an existing interval, and malformed geometry is atomic.
         let mut snapshot = layout.charts[0].clone();
@@ -2725,5 +2739,51 @@ mod tests {
             assert_eq!((style.close_line.color, style.close_line.width), (up, 4.0));
             assert_eq!(style.close_to_low_fill.a(), 128);
         }
+    }
+
+    /// Layouts, templates and clipboard text saved under VPT retain their source and style,
+    /// and resave under PVT. The study and the clipboard text were saved on main before the
+    /// rename; the layout around the study is today's.
+    #[test]
+    fn price_volume_trend_saved_as_vpt_restores_as_pvt() {
+        use crate::model::PriceSource;
+        use crate::studies::{Indicator, IndicatorFactory, InputValue, StudySource, StudyTemplate};
+        let check = |study: &dyn Indicator| {
+            assert_eq!(study.name(), "PVT");
+            assert_eq!(study.registered_name(), "PVT");
+            assert_eq!(
+                study
+                    .inputs()
+                    .iter()
+                    .find(|input| input.id == "source")
+                    .map(|input| &input.value),
+                Some(&InputValue::Source(StudySource::Price(PriceSource::Open)))
+            );
+            assert_eq!(study.plot_style(0).color, egui::Color32::from_rgb(1, 2, 3));
+        };
+        let saved = r#"{"name":"VPT","inputs":[["source",{"Source":{"Price":"Open"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolumePriceTrend.html","plots":[{"color":[1,2,3,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let mut layout = crate::widget::test_frames::chart(&[100.0], &[101.0]);
+        layout.add_indicator(IndicatorFactory::new().create("PVT").unwrap());
+        let mut layout = serde_json::to_value(layout.snapshot().unwrap()).unwrap();
+        layout["studies"][0]["study"] = serde_json::from_str(saved).unwrap();
+        let layout: ChartSnapshot = serde_json::from_value(layout).unwrap();
+        let mut restored = crate::widget::test_frames::chart(&[100.0], &[101.0]);
+        restored.restore(&layout).unwrap();
+        check(restored.indicators().next().unwrap().1);
+        let template: StudyTemplate = serde_json::from_str(saved).unwrap();
+        check(template.create().unwrap().as_ref());
+        let clipboard = r#"egui-charts-study
+{"name":"VPT","inputs":[["source",{"Source":{"Price":"Open"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolumePriceTrend.html","plots":[{"color":[1,2,3,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"overlay":false,"scale":"Independent"}"#;
+        let mut pasted = crate::widget::test_frames::chart(&[100.0], &[101.0]);
+        let id = pasted
+            .paste_indicator(clipboard, &IndicatorFactory::new())
+            .unwrap();
+        check(
+            pasted
+                .indicators()
+                .find(|(study, _)| *study == id)
+                .unwrap()
+                .1,
+        );
     }
 }

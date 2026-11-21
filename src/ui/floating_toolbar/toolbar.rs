@@ -274,21 +274,23 @@ impl FloatingSelectionToolbar {
         let fill_slot = usize::from(drawing.tool_type.supports_color());
         self.set_colors(if drawing.tool_type.supports_color() {
             vec![ColorSlot {
-                // A pin, a table and text with a colour of its own paint their text separately.
-                label: if drawing.text_color.is_none()
-                    && matches!(
-                        drawing.tool_type,
-                        DrawingToolType::TextLabel
-                            | DrawingToolType::AnchoredText
-                            | DrawingToolType::Note
-                            | DrawingToolType::Callout
-                            | DrawingToolType::FlagNote
-                    ) {
-                    "Text color"
-                } else {
-                    "Line color"
+                // A flag mark and a pin paint their marker in it. Text always paints its text in
+                // the slot's colour; a note or callout does until its text has its own colour.
+                label: match drawing.tool_type {
+                    DrawingToolType::FlagNote | DrawingToolType::AnchoredNote => "Color",
+                    DrawingToolType::TextLabel | DrawingToolType::AnchoredText => "Text color",
+                    DrawingToolType::Note | DrawingToolType::Callout
+                        if drawing.text_color.is_none() =>
+                    {
+                        "Text color"
+                    }
+                    _ => "Line color",
                 },
-                color: drawing.color32(),
+                color: drawing
+                    .text_color_override()
+                    .map_or(drawing.color32(), |[r, g, b, a]| {
+                        Color32::from_rgba_unmultiplied(r, g, b, a)
+                    }),
             }]
         } else {
             Vec::new()
@@ -882,21 +884,30 @@ mod tests {
     #[test]
     fn colour_slot_names_what_the_colour_paints() {
         use crate::drawings::{Drawing, DrawingToolType as Tool};
-        for (tool, label, offers) in [
-            (Tool::TrendLine, Some("Line color"), (true, true)),
-            (Tool::TextLabel, Some("Text color"), (false, false)),
-            (Tool::Note, Some("Line color"), (false, false)),
-            (Tool::AnchoredNote, Some("Line color"), (false, false)),
-            (Tool::Table, Some("Line color"), (false, false)),
-            (Tool::ArrowMarkUp, Some("Line color"), (false, false)),
-            (Tool::ArrowMarker, Some("Line color"), (false, false)),
-            (Tool::Pitchfork, None, (true, false)),
-            (Tool::Tweet, Some("Fill color"), (false, true)),
-            (Tool::Sticker, None, (false, false)),
-            (Tool::GhostFeed, None, (false, false)),
+        let red = Some([242, 54, 69, 255]);
+        for (tool, text_color, label, offers) in [
+            (Tool::TrendLine, None, Some("Line color"), (true, true)),
+            (Tool::TextLabel, None, Some("Text color"), (false, false)),
+            (Tool::TextLabel, red, Some("Text color"), (false, false)),
+            (Tool::AnchoredText, red, Some("Text color"), (false, false)),
+            (Tool::Note, None, Some("Line color"), (false, false)),
+            (Tool::Callout, None, Some("Line color"), (true, true)),
+            (Tool::AnchoredNote, None, Some("Color"), (false, false)),
+            (Tool::FlagNote, None, Some("Color"), (false, false)),
+            (Tool::FlagNote, red, Some("Color"), (false, false)),
+            (Tool::Table, None, Some("Line color"), (false, false)),
+            (Tool::ArrowMarkUp, None, Some("Line color"), (false, false)),
+            (Tool::ArrowMarker, None, Some("Line color"), (false, false)),
+            (Tool::Pitchfork, None, None, (true, false)),
+            (Tool::Tweet, None, Some("Fill color"), (false, true)),
+            (Tool::Sticker, None, None, (false, false)),
+            (Tool::GhostFeed, None, None, (false, false)),
         ] {
             let mut chart = Chart::new(crate::model::BarData::new());
             let mut drawing = Drawing::new(7, tool);
+            if text_color.is_some() {
+                drawing.text_color = text_color;
+            }
             drawing.completed = true;
             drawing.points = vec![Pos2::new(100.0, 100.0)];
             chart.drawings_mut().drawings = vec![drawing];
@@ -910,7 +921,7 @@ mod tests {
             assert_eq!(
                 toolbar.color_slots.first().map(|slot| slot.label),
                 label,
-                "{tool:?}"
+                "{tool:?} {text_color:?}"
             );
             assert_eq!(
                 (toolbar.width.is_some(), toolbar.line_style.is_some()),
@@ -921,7 +932,8 @@ mod tests {
     }
 
     /// The first colour slot edits what it names. A price label's border follows its colour;
-    /// a post card's first slot fills the card, leaving its unused colour alone.
+    /// a post card's first slot fills the card, leaving its unused colour alone. Text with a
+    /// colour of its own takes the pick there.
     #[test]
     fn first_colour_slot_edits_what_it_names() {
         use crate::drawings::{Drawing, DrawingToolType};
@@ -930,6 +942,7 @@ mod tests {
             (DrawingToolType::PriceLabel, true),
             (DrawingToolType::PriceLabel, false),
             (DrawingToolType::Tweet, true),
+            (DrawingToolType::TextLabel, true),
         ] {
             let swatch = MAIN_COLORS[3];
             let ctx = egui::Context::default();
@@ -939,6 +952,9 @@ mod tests {
             // A border kept in the label's colour, as an older save holds it.
             if tool == DrawingToolType::PriceLabel {
                 label.border_color = Some(label.color);
+            }
+            if tool == DrawingToolType::TextLabel {
+                label.text_color = Some([242, 54, 69, 255]);
             }
             label.user_edit_enabled = user_edit;
             let original = label.color;
@@ -986,6 +1002,11 @@ mod tests {
             };
             if tool == DrawingToolType::Tweet {
                 assert_eq!((label.color, label.fill_color), (original, Some(green)));
+            } else if tool == DrawingToolType::TextLabel {
+                assert_eq!(
+                    (label.color, label.text_box_colors(&ctx).text),
+                    ([green[0], green[1], green[2], original[3]], swatch)
+                );
             } else {
                 assert_eq!((label.color, label.border_color), (green, Some(green)));
             }

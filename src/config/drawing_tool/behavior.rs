@@ -56,7 +56,7 @@ impl DrawingToolType {
                 | Self::FibonacciSpiral
                 | Self::FibonacciSpeedResistanceArcs
                 | Self::FibonacciWedge
-                // Projections fill their target zones from their own settings.
+                // Projections fill their sectors from their own settings.
                 | Self::ProjectionTool
                 // Forecasts colour their cards and badges from their own settings.
                 | Self::Forecast
@@ -99,6 +99,8 @@ impl DrawingToolType {
             Self::TrendLine
                 | Self::Ray
                 | Self::ExtendedLine
+                | Self::Curve
+                | Self::DoubleCurve
                 | Self::Rect
                 | Self::InfoLine
                 | Self::TrendAngle
@@ -211,7 +213,7 @@ impl DrawingToolType {
     }
 
     /// Whether the renderer draws the drawing's line style, so the Style tab and the floating
-    /// toolbar offer it. Pitchfork levels, the regression trend's lines and the projection's leg
+    /// toolbar offer it. Pitchfork levels, the regression trend's lines and the projection's sector
     /// and levels set their own.
     pub fn supports_line_style(&self) -> bool {
         self.draws_line()

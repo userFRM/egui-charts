@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{StrategyExit, StrategyTrade};
+use crate::model::{EquityRange, StrategyExit, StrategyTrade};
 use egui::{Role, Vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
@@ -157,7 +157,7 @@ fn equity_curve_fills_the_width_with_distinct_time_labels() {
         let color = egui::Color32::GREEN;
         let mut h = Harness::builder()
             .with_size(Vec2::new(width, 200.0))
-            .build_ui(|ui| plot::show(ui, &values, &[], color, 175.0));
+            .build_ui(|ui| plot::show(ui, &values, &[], color, 175.0, 1.0));
         h.run();
         let texts: Vec<_> = h
             .output()
@@ -193,6 +193,65 @@ fn equity_curve_fills_the_width_with_distinct_time_labels() {
 }
 
 #[test]
+fn summary_lists_open_profit_and_charts_switch_to_percent() {
+    let hour = |h| DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(h);
+    let mut report = StrategyReport::new("Held", "HELD", Timeframe::Hour1, 10_000.0);
+    report.trades = vec![StrategyTrade::new(OrderSide::Buy, 100.0, hour(1), 100.0)];
+    report.equity = vec![(hour(0), 10_000.0), (hour(1), 10_000.0), (hour(2), 9000.0)];
+    report.equity_ranges = vec![
+        EquityRange::new(10_000.0, 10_000.0, 0.0, 0.0),
+        EquityRange::new(7000.0, 10_000.0, 3000.0, 3000.0),
+        EquityRange::new(9000.0, 10_000.0, 1000.0, 0.0),
+    ];
+    let mut panel = StrategyReportPanel::default();
+    panel.set_report(Some(report), &[]);
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(1440.0, 1800.0))
+        .build_ui_state(
+            |ui, panel: &mut StrategyReportPanel| {
+                panel.show(ui);
+            },
+            panel,
+        );
+    h.run();
+    h.get_by_label("Open profit");
+    h.get_by_label("-1000.00");
+    let texts = |h: &Harness<'_, StrategyReportPanel>| -> Vec<String> {
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    };
+    // Independently worked middle labels for equity [10000,10000,9000], drawdown [0,-3000,-1000]
+    // and run-up [0,3000,3000]. Percent multiplies all three series by 100 / 10000.
+    let money = ["9500.00", "-1500.00", "1500.00"];
+    let percent = ["95.00", "-15.00", "15.00"];
+    let has = |shown: &[String], label: &str| shown.iter().any(|t| t == label);
+    let shown = texts(&h);
+    assert!(
+        money.iter().all(|l| has(&shown, l)) && !percent.iter().any(|l| has(&shown, l)),
+        "{shown:?}"
+    );
+    h.get_by_role_and_label(Role::CheckBox, "Percent of initial capital")
+        .click();
+    h.run();
+    let shown = texts(&h);
+    assert!(
+        percent.iter().all(|l| has(&shown, l)) && !money.iter().any(|l| has(&shown, l)),
+        "{shown:?}"
+    );
+    let replacement = h.state().report().unwrap().clone();
+    h.state_mut().set_report(Some(replacement), &[]);
+    h.run();
+    assert!(!h.state().percent);
+    assert!(money.iter().all(|l| has(&texts(&h), l)));
+}
+
+#[test]
 fn range_limits_summary_charts_and_trades() {
     use chrono::TimeZone;
     let day = |m, d| Utc.with_ymd_and_hms(2024, m, d, 0, 0, 0).unwrap();
@@ -202,6 +261,12 @@ fn range_limits_summary_charts_and_trades() {
         (day(2, 1), 1200.0),
         (day(3, 1), 900.0),
         (day(4, 1), 1000.0),
+    ];
+    report.equity_ranges = vec![
+        crate::model::EquityRange::new(1000.0, 1000.0, 0.0, 0.0),
+        crate::model::EquityRange::new(950.0, 1250.0, 50.0, 300.0),
+        crate::model::EquityRange::new(800.0, 1200.0, 400.0, 100.0),
+        crate::model::EquityRange::new(850.0, 1100.0, 100.0, 250.0),
     ];
     for (entry, exit, profit) in [
         (day(1, 10), day(1, 20), 200.0),
@@ -244,7 +309,10 @@ fn range_limits_summary_charts_and_trades() {
             );
         h.run();
         assert_eq!(row(&h, "Net return", 3), ["-10.00%", "-10.00%", "0.00%"]);
-        assert_eq!(row(&h, "Maximum drawdown %", 1), ["25.00%"]);
+        assert_eq!(
+            row(&h, "Maximum drawdown % (close-to-close)", 1),
+            ["25.00%"]
+        );
         assert_eq!(
             h.get_by_role_and_label(Role::TextInput, "From (UTC)")
                 .value()
@@ -264,6 +332,10 @@ fn range_limits_summary_charts_and_trades() {
             .type_text("2024-02-15");
         h.run();
         assert_eq!(row(&h, "Net return", 3), ["-33.33%", "-33.33%", "0.00%"]);
+        let data = h.state().0.data.as_ref().unwrap();
+        assert_eq!(data.initial_capital, 900.0);
+        assert_eq!(data.shown.intrabar_max_drawdown, Some(400.0));
+        assert_eq!(data.shown.intrabar_max_run_up, Some(300.0));
         // The trade entered before the range counts its bars from entry, as in the whole run.
         assert_eq!(
             row(&h, "Average bars in trades", 3),
@@ -286,6 +358,16 @@ fn range_limits_summary_charts_and_trades() {
             .unwrap();
         assert_eq!(points.len(), 2);
         assert!(points[1].x - points[0].x > 200.0);
+        h.get_by_role_and_label(Role::CheckBox, "Percent of initial capital")
+            .scroll_to_me();
+        h.run();
+        h.get_by_role_and_label(Role::CheckBox, "Percent of initial capital")
+            .click();
+        h.run();
+        // Equity 900..1000 has midpoint 950: 950 / the ranged capital 900 * 100.
+        assert!(h.output().shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "105.56")
+        }));
         h.get_by_role_and_label(Role::Tab, "List of trades").click();
         h.run();
         h.get_by_role_and_label(Role::Button, "1").click();
@@ -320,6 +402,13 @@ fn range_limits_summary_charts_and_trades() {
                 },
             ]
         );
+        h.get_by_role_and_label(Role::TextInput, "To (UTC)").click();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_role_and_label(Role::TextInput, "To (UTC)")
+            .type_text("2024-05-01");
+        h.run();
+        assert!(h.state().0.data.as_ref().unwrap().equity.is_empty());
+        assert!(!h.state().0.percent);
         h.get_by_role_and_label(Role::Button, "Whole run").click();
         h.run();
         assert_eq!(row(&h, "Net return", 3), ["-10.00%", "-10.00%", "0.00%"]);

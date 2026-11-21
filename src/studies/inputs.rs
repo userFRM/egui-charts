@@ -24,6 +24,12 @@ pub enum InputKind {
     Color,
     /// A calculation interval, or the chart interval.
     Timeframe,
+    /// An interval, or none for the one the study picks from the chart's, such as the interval
+    /// of the lower-interval candles a volume study reads. Holds the interval it picks on the
+    /// current chart, `None` where it reads none. Values are [`InputValue::Timeframe`]. A
+    /// [`ConfiguredStudy`](super::ConfiguredStudy) never calculates a study with such an input on
+    /// another interval than the chart's.
+    AutoTimeframe(Option<crate::model::Timeframe>),
     /// A host-resolved symbol, or the chart symbol.
     Symbol,
     /// Text on one line.
@@ -124,7 +130,9 @@ impl StudyInput {
             (InputKind::Toggle, InputValue::Toggle(_))
             | (InputKind::Source, InputValue::Source(_))
             | (InputKind::Color, InputValue::Color(_))
-            | (InputKind::Timeframe, InputValue::Timeframe(_)) => true,
+            | (InputKind::Timeframe | InputKind::AutoTimeframe(_), InputValue::Timeframe(_)) => {
+                true
+            }
             (InputKind::Symbol, InputValue::Symbol(value))
             | (InputKind::Text, InputValue::Text(value)) => {
                 value.trim() == value && !value.chars().any(char::is_control)

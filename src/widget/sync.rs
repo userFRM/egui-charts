@@ -310,6 +310,7 @@ impl Chart {
             return false;
         }
         scale.fit_logical_range(from, to, default_max);
+        self.history.clear_view_restore();
         self.tracking_mode_active = false;
         self.kinetic_scroll = super::state::KineticScrollState::new();
         true
@@ -339,6 +340,7 @@ impl Chart {
     /// These coordinates depend on the data and plot width. Use [`Self::apply_synced_time_range`]
     /// between independent charts.
     pub fn apply_synced_time_scale(&mut self, bar_spacing: f32, right_offset: f32) {
+        self.history.clear_view_restore();
         self.state.time_scale_mut().set_bar_spacing(bar_spacing);
         self.state.time_scale_mut().set_right_offset(right_offset);
     }

@@ -2868,6 +2868,7 @@ fn study_and_series_panes_offer_no_main_symbol_alerts_or_orders() {
         let ctx = Context::default();
         // TEST trades between 100 and 110; OTHER, in its own pane, between 400 and 410.
         let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+        chart.config_mut().navigation_buttons = crate::config::NavigationButtons::Never;
         chart.set_symbol("TEST");
         match pane {
             "study" => {

@@ -244,7 +244,7 @@ impl Drawing {
             DrawingToolType::Triangle => self.render_triangle(painter, color, stroke),
             DrawingToolType::Arc => self.render_arc(painter, color, stroke),
             DrawingToolType::Polyline => self.render_polyline(painter, color, stroke),
-            DrawingToolType::DoubleCurve => self.render_double_curve(painter),
+            DrawingToolType::DoubleCurve => self.render_double_curve(painter, rect),
 
             // Fibonacci (10 tools)
             DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension => {
@@ -309,7 +309,7 @@ impl Drawing {
             DrawingToolType::BarsPattern => self.render_bars_pattern(painter, view),
             // Candle colours and the neutral path are independent of the common drawing style.
             DrawingToolType::GhostFeed => return self.render_ghost_feed(painter, view),
-            DrawingToolType::ProjectionTool => self.render_projection_tool(painter, rect, view),
+            DrawingToolType::ProjectionTool => self.render_projection_tool(painter),
 
             // Volume (3 tools)
             DrawingToolType::AnchoredVWAP => self.render_anchored_vwap(painter, view),
@@ -351,7 +351,7 @@ impl Drawing {
             DrawingToolType::Pitchfan => self.render_pitchfork(painter, rect),
             DrawingToolType::Sector => self.render_sector(painter),
             DrawingToolType::Path => self.render_path(painter),
-            DrawingToolType::Curve => self.render_curve(painter),
+            DrawingToolType::Curve => self.render_curve(painter, rect),
             DrawingToolType::PriceNote => self.render_price_note(painter, view),
             DrawingToolType::Table => self.render_table(painter),
             DrawingToolType::Comment => self.render_comment(painter),
@@ -2111,6 +2111,21 @@ mod tests {
                     == painted(&|d| d.color = [200, 100, 50, 255])
             {
                 inert.push((tool, "colour"));
+            }
+            // The colour controls also change a drawing whose text has a colour of its own.
+            #[cfg(feature = "ui")]
+            {
+                let recolored = |color| {
+                    painted(&|d| {
+                        d.text_color = Some([0, 200, 0, 255]);
+                        d.recolor(color);
+                    })
+                };
+                if tool.supports_color()
+                    && recolored([10, 20, 30, 255]) == recolored([200, 100, 50, 255])
+                {
+                    inert.push((tool, "colour with a text colour"));
+                }
             }
             // The Text tab offers this size for text, trend angles and chart patterns;
             // the Style tab offers it for a price label.

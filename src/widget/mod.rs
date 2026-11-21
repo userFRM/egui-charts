@@ -345,7 +345,12 @@ pub struct Chart {
     chained_study_limit: Option<usize>,
     /// Whether each study in `studies` contributes to the main price auto-scale.
     pub(crate) study_autoscale: Vec<bool>,
+    /// Host captions of the studies in `studies`, set with [`Chart::set_indicator_inputs`];
+    /// empty where the host set none.
     pub(crate) study_inputs: Vec<String>,
+    /// For each study in `studies`, the caption derived from its inputs, built on first read
+    /// and dropped whenever the study may have changed.
+    pub(crate) study_captions: Vec<std::sync::OnceLock<String>>,
     /// For each study in `studies`, the first bar it must be updated from on the next frame.
     pub(crate) pending_from: Vec<Option<usize>>,
     /// For each study in `studies`, whether it must be recomputed from the first bar while its
@@ -392,11 +397,12 @@ pub struct Chart {
     /// Original column ids of restored studies, retained for snapshots from earlier restores.
     #[cfg(feature = "drawings")]
     study_column_ids: std::collections::HashMap<usize, usize>,
-    /// Right-click box zoom state
+    /// Box-zoom selection in progress
     pub(crate) box_zoom: BoxZoomState,
-    /// Whether zoom mode is currently active (controlled by zoom toolbar button)
+    /// Whether box-zoom mode is on: set by [`Chart::set_zoom_mode`], ended by a completed zoom
+    /// and by an active drawing tool or the eraser.
     pub(crate) zoom_mode_active: bool,
-    /// Whether zoom was just applied in the last frame (for auto-deactivation)
+    /// Whether a box zoom was completed in the last frame.
     pub(crate) zoom_just_applied: bool,
     /// Current symbol being displayed (for legend)
     pub(crate) symbol: String,
@@ -797,11 +803,18 @@ impl Chart {
 
     /// Activates or deactivates box-zoom mode.
     ///
-    /// When active, left-click drag draws a selection rectangle and zooms into
-    /// that region. The mode auto-deactivates after a successful zoom operation
-    /// (check with [`Chart::zoom_was_applied`]).
+    /// While active, a left-button drag on the plot draws a selection rectangle and zooms into
+    /// it. The mode applies to one selection: it ends once a zoom is applied (see
+    /// [`Chart::zoom_was_applied`]), while a selection of 20 points or less zooms nothing and
+    /// keeps it. A drawing tool or the eraser owns the plot's drags, so the next frame with
+    /// either active ends the mode. [`Chart::is_zoom_mode_active`] reports it.
     pub fn set_zoom_mode(&mut self, active: bool) {
         self.zoom_mode_active = active;
+    }
+
+    /// Returns whether box-zoom mode is on, for a toolbar's Zoom in button.
+    pub fn is_zoom_mode_active(&self) -> bool {
+        self.zoom_mode_active
     }
 
     /// Restore the view preceding the last box zoom. Drawing and chart edit history is unchanged.
@@ -811,10 +824,8 @@ impl Chart {
         self.state.pop_zoom_state()
     }
 
-    /// Returns `true` if a box-zoom was completed in the most recent frame.
-    ///
-    /// Use this to auto-deactivate zoom mode in your toolbar after the user
-    /// completes a zoom selection.
+    /// Returns `true` if a box zoom was completed in the most recent frame. Box-zoom mode has
+    /// ended by then, as [`Chart::is_zoom_mode_active`] reports.
     pub fn zoom_was_applied(&self) -> bool {
         self.zoom_just_applied
     }

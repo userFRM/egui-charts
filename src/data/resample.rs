@@ -88,6 +88,9 @@ pub fn resample(
 /// Intraday inputs must be stamped at their actual open, including a shortened final bar.
 /// Intraday target slots start at the first selected session window of each trading date;
 /// daily, weekly and monthly targets use that trading date, including overnight sessions.
+/// A target of two or more whole days, such as `3D`, holds that many trading dates of the selected
+/// hours, counted from 1970-01-01 as a [`BarClock`] with the session counts them, and carries the
+/// date of the first; a target clock with a session of its own counts that session's dates.
 /// Bars outside the selected hours and holidays are omitted. No bars are invented across gaps,
 /// and the last output includes all available inputs even while its period is forming.
 /// Daily and longer inputs already carry their trading date as a calendar label. Pass timeframes
@@ -183,7 +186,12 @@ pub(crate) fn resample_periods(
     use crate::model::{ExchangeSessionProvider, TimezoneId};
 
     let zone = instrument.time_zone.clone().unwrap_or_else(TimezoneId::utc);
-    let (source, target) = (from.into(), to.into());
+    let (mut source, mut target) = (from.into(), to.into());
+    if let Some(session) = &instrument.session {
+        // Bars of several days count the trading dates of the selected hours.
+        source = source.with_trading_dates_of(&zone, session, extended_hours, overnight_hours);
+        target = target.with_trading_dates_of(&zone, session, extended_hours, overnight_hours);
+    }
     let (from, to) = (source.timeframe()?, target.timeframe()?);
     if (instrument.session.is_none()
         && (instrument.time_zone.is_none() || to.duration_ms() < Timeframe::Day1.duration_ms()))
@@ -285,6 +293,87 @@ mod tests {
     fn bar(time: &str, [open, high, low, close, volume]: [f64; 5]) -> Bar {
         let time: DateTime<Utc> = time.parse().unwrap();
         Bar::new(time, open, high, low, close, volume)
+    }
+
+    /// Guards #3758: on an instrument with a session a bar of several whole days holds that many
+    /// trading dates of the selected hours, counted from 1970-01-01, and carries the date of the
+    /// first, and live updates join the same bars on the chart's clock.
+    #[test]
+    fn resamples_multi_day_intervals_by_trading_dates() {
+        use crate::model::{OverrideWindow, Session, SessionOverride, SessionWindow, TimezoneId};
+        use chrono::{NaiveDate, NaiveTime, TimeDelta, Weekday::*};
+        type Row = (&'static str, Session, &'static [u32], &'static [(u32, f64)]);
+        let at = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let nov = |day| NaiveDate::from_ymd_opt(2026, 11, day).unwrap();
+        let midnight = |day| nov(day).and_time(at(0, 0)).and_utc();
+        let weekdays = Session::new([SessionWindow::new(
+            [Mon, Tue, Wed, Thu, Fri],
+            at(9, 30),
+            at(16, 0),
+        )]);
+        let three_days: Timeframe = "3D".parse().unwrap();
+        // Monday 9 November 2026 is day 20766 after 1970-01-01 and weekday 14832 since then, both
+        // multiples of three, so a run starts there on every row. Volumes are 2^(day - 9).
+        #[rustfmt::skip]
+        let rows: [Row; 3] = [
+            ("weekdays", weekdays.clone(), &[9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 23, 24, 25, 26, 27],
+                &[(9, 7.0), (12, 152.0), (17, 1792.0), (20, 51200.0), (25, 458752.0)]),
+            // A holiday listed twice drops the 11th; the half day on the 20th still trades.
+            ("closures", weekdays.clone().with_holidays([nov(11), nov(11)]).with_overrides([
+                SessionOverride::new(nov(20)).with_windows([OverrideWindow::new(at(9, 30), at(13, 0))]),
+            ]), &[10, 12, 13, 16, 17, 18, 19, 20, 23, 24, 25, 26, 27],
+                &[(9, 10.0), (13, 400.0), (18, 3584.0), (23, 114688.0), (26, 393216.0)]),
+            // Open every day: the calendar periods of today.
+            ("every day", Session::new([]), &[10, 11, 12, 13, 14, 15, 16, 17],
+                &[(9, 6.0), (12, 56.0), (15, 448.0)]),
+        ];
+        for (name, session, days, expected) in rows {
+            let instrument = Instrument::new("DAYS")
+                .with_time_zone(TimezoneId::utc())
+                .with_session(session.clone());
+            let input: Vec<Bar> = (days.iter())
+                .map(|&day| {
+                    let volume = f64::from(1u32 << (day - 9));
+                    Bar::new(
+                        midnight(day) + TimeDelta::minutes(570),
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                        volume,
+                    )
+                })
+                .collect();
+            let bars =
+                resample_with_session(&input, Timeframe::Hour1, three_days, &instrument, false)
+                    .unwrap();
+            let got: Vec<_> = bars.iter().map(|bar| (bar.time, bar.volume)).collect();
+            let want: Vec<_> = (expected.iter())
+                .map(|&(day, volume)| (midnight(day), volume))
+                .collect();
+            assert_eq!(got, want, "{name}");
+            // The chart's clock places live updates and boundaries in the same bars.
+            let clock =
+                BarClock::new(three_days).with_session(TimezoneId::utc(), session.clone(), false);
+            for bar in &input {
+                let open = want
+                    .iter()
+                    .rev()
+                    .find(|(open, _)| *open <= bar.time)
+                    .unwrap()
+                    .0;
+                assert_eq!(clock.instant_open(bar.time), open, "{name} {}", bar.time);
+            }
+            for pair in want.windows(2) {
+                let (open, next) = (pair[0].0, pair[1].0);
+                assert_eq!(clock.next_open(open), Some(next), "{name} {open}");
+                assert_eq!(
+                    clock.bar_open(next - TimeDelta::milliseconds(1)),
+                    open,
+                    "{name} {next}"
+                );
+            }
+        }
     }
 
     #[cfg(feature = "timezones")]

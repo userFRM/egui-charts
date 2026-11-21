@@ -316,8 +316,7 @@ impl Drawing {
                 | DrawingToolType::Pitchfan
         );
         let custom_fork = fork && self.pitchfork.is_some();
-        let custom_projection =
-            self.tool_type == DrawingToolType::ProjectionTool && self.projection.is_some();
+        let custom_projection = self.tool_type == DrawingToolType::ProjectionTool;
         // Keep body fills of annotations and legacy forks; analysis labels keep their own fill.
         let fill = |color: &mut Color32| {
             if color.a() > 0
@@ -1352,6 +1351,10 @@ mod tests {
                         ColorMode::Solid(color) => (color, p.fill),
                         _ => (Color32::TRANSPARENT, p.fill),
                     },
+                    Shape::Mesh(mesh) => {
+                        fills.extend(mesh.vertices.iter().map(|v| v.color));
+                        continue;
+                    }
                     _ => continue,
                 };
                 strokes.push(stroke);

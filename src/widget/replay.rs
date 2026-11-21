@@ -1,6 +1,7 @@
 //! Retained history and a shared, exclusive replay cutoff.
 
 use super::events::same_bar;
+use super::layout::MAX_CHARTS;
 use super::series::PriceSeries;
 use super::{Chart, ChartLayout, SeriesId};
 use crate::data::ReplayDriver;
@@ -555,9 +556,9 @@ pub(super) fn completed<'a>(bars: &'a [Bar], clock: &BarClock, time: DateTime<Ut
 }
 
 /// When the bar of `clock` opening at `open` closes in bar replay: at its next open, or for a
-/// daily, weekly or monthly bar of a clock with an exchange session when its last trading window
-/// closes. A bar without a trading window closes at its next open. `ReplayController::cutoff`
-/// and `seek_cutoff` close bars here too.
+/// daily, multi-day, weekly or monthly bar of a clock with an exchange session when its last
+/// trading window closes. A bar without a trading window closes at its next open.
+/// `ReplayController::cutoff` and `seek_cutoff` close bars here too.
 pub(crate) fn bar_close(clock: &BarClock, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
     (clock.timeframe())
         .filter(|timeframe| {
@@ -708,10 +709,10 @@ impl ChartLayout {
         source: usize,
         time: Option<DateTime<Utc>>,
     ) {
-        if source >= charts.len().min(16) {
+        if source >= charts.len().min(MAX_CHARTS) {
             return;
         }
-        for (index, chart) in charts.iter_mut().take(16).enumerate() {
+        for (index, chart) in charts.iter_mut().take(MAX_CHARTS).enumerate() {
             if self.sync_group(index) == self.sync_group(source) {
                 chart.set_replay_time(time);
             }
