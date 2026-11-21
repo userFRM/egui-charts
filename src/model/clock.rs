@@ -513,7 +513,7 @@ pub(crate) struct Placement(Option<(BarClock, Range<DateTime<Utc>>, DateTime<Utc
 
 impl Placement {
     /// Whether there is no time-based placement to account for in a trade-bar checkpoint.
-    #[cfg(all(feature = "widget", feature = "studies"))]
+    #[cfg(feature = "widget")]
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_none()
     }
