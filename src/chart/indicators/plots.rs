@@ -204,7 +204,7 @@ pub(crate) fn paint_candles(
     let solid = study.solid_candles();
     let start = candles
         .partition_point(|c| c.bars.end <= coords.x_to_idx(context.rect.left()).saturating_sub(1));
-    for candle in &candles[start..] {
+    for (index, candle) in candles.iter().enumerate().skip(start) {
         if coords.idx_to_x(candle.bars.start) - bar_spacing * 0.5 > context.rect.right() {
             break;
         }
@@ -212,9 +212,7 @@ pub(crate) fn paint_candles(
         if !style.visible {
             continue;
         }
-        let color = study
-            .plot_color(candle.plot, candle.bars.start)
-            .unwrap_or(style.color);
+        let color = study.candle_color(index).unwrap_or(style.color);
         if let Some((body, wick)) =
             candle_geometry(candle, coords, bar_spacing, |p| price.price_to_y(p))
         {
