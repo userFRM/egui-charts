@@ -345,6 +345,16 @@ pub trait Indicator: Send + ConcreteStudy {
         false
     }
 
+    /// Whether plot `line` holds per-bar values. Return false for a plot that only styles the
+    /// study's [`zones`](Self::zones): their edges are lines whatever the plot type, and a plot
+    /// without values puts no tag on the price scale and draws no latest value line, so the
+    /// settings dialog offers such a plot only its visibility, colour, width and line pattern.
+    /// True by default.
+    fn plot_holds_values(&self, line: usize) -> bool {
+        let _ = line;
+        true
+    }
+
     /// Editable alternate colour and width states, separate from the output's main style.
     fn plot_variants(&self, _line: usize) -> Vec<super::PlotVariant> {
         Vec::new()
@@ -662,6 +672,17 @@ pub trait Indicator: Send + ConcreteStudy {
     /// that requests other histories, such as the chart symbol's bars of a stated interval or
     /// metrics, on the chart's interval.
     fn requests_allow_other_intervals(&self) -> bool {
+        false
+    }
+
+    /// Whether a [`ConfiguredStudy`](super::ConfiguredStudy) offers this study the Wait for
+    /// interval close input, on by default, for the histories it requests and reads with
+    /// [`StudyData::closed_at`](super::StudyData::closed_at), also when it has an interval
+    /// input of its own. The chart passes the setting with each history in
+    /// [`StudyData::chart`](super::StudyData::chart). A study the chart can calculate on
+    /// another interval is offered the input in any case. The default, `false`, offers it no
+    /// other way.
+    fn offers_wait_for_close(&self) -> bool {
         false
     }
 
