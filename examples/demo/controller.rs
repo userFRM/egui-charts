@@ -11638,7 +11638,13 @@ mod tests {
                     .drop_without_applying_deltas();
                 }
                 settle(&mut app, &ctx);
-                assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
+                // Adding a member keeps a completed once alert stopped.
+                let expected = match (watchlist, replay) {
+                    (true, false) => 3,
+                    (true, true) => 2,
+                    _ => 1,
+                };
+                assert_eq!(app.alerts.log().len(), expected);
                 if watchlist && !replay {
                     let feed = LiveFeed::new("STOCKB", app.live.now());
                     finish_feed(&feed);
@@ -11704,7 +11710,7 @@ mod tests {
                     .drop_without_applying_deltas();
                 }
                 settle(&mut app, &ctx);
-                assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
+                assert_eq!(app.alerts.log().len(), expected);
                 app.switch_timeframe(Timeframe::Min1);
                 let replacement = app
                     .chart
@@ -11725,7 +11731,7 @@ mod tests {
                 settle(&mut app, &ctx);
                 assert_eq!(
                     app.alerts.log().len(),
-                    if watchlist { 4 } else { 2 },
+                    expected + 1,
                     "an edited alert must use its newly selected study"
                 );
                 let reference = LiveFeed::new("FOREXA", app.live.now());
