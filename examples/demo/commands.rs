@@ -409,6 +409,7 @@ impl DemoApp {
             "interval" => Some(KeyboardAction::OpenIntervalSearch),
             "data-window" => Some(KeyboardAction::OpenDataWindow),
             "open-layout" => Some(KeyboardAction::OpenLayout),
+            "snapshot" => Some(KeyboardAction::Snapshot),
             _ => None,
         };
         if let Some(action) = shortcut {
@@ -433,7 +434,6 @@ impl DemoApp {
             "symbols" => TopToolbarAction::OpenSymbolSearch,
             "indicators" => TopToolbarAction::OpenIndicators,
             "settings" => TopToolbarAction::OpenSettings,
-            "snapshot" => TopToolbarAction::TakeScreenshot,
             "alert" => TopToolbarAction::CreateAlert,
             "compare" => TopToolbarAction::OpenCompare,
             "fullscreen" => TopToolbarAction::ToggleFullscreen,
@@ -1104,6 +1104,8 @@ mod tests {
                 if let Some(action) = action {
                     app.handle_top_toolbar(&ctx, action);
                 } else {
+                    // Without image publishing the shortcut downloads, as its menu hint shows.
+                    app.top_toolbar.state.can_publish_image = false;
                     app.handle_shortcut_action(&ctx, egui_charts::config::KeyboardAction::Snapshot);
                 }
                 let path = std::env::temp_dir().join(format!("demo-snapshot-{mode:?}.png"));
