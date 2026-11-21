@@ -181,8 +181,13 @@ supply another study's output as this source and checks its dependencies and cyc
 [`with_data_requests`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html#method.with_data_requests)
 declares histories from the current inputs, such as another symbol on another interval
 ([`StudyDataRequest`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyDataRequest.html)).
-Find each available history by its request and align its bars with
-[`StudyData::bar_at`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyData.html#method.bar_at).
+Find each available history by its request.
+[`StudyData::closed_at`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyData.html#method.closed_at)
+reads the bar of another interval each chart bar knew, and
+[`with_wait_for_close`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html#method.with_wait_for_close)
+offers Wait for interval close for it;
+[`StudyData::bar_at`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyData.html#method.bar_at)
+reads the bar containing a time.
 A study declaring histories, and any Source input other than `source`, accepts price fields only.
 
 ## Save and load drawings
