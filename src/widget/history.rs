@@ -1048,6 +1048,9 @@ impl Chart {
     /// A drawing being placed is cancelled when the step takes away the pane that draws it.
     /// Returns false while a user action or a drawing drag is in progress, or a layout divider
     /// is pressed or dragged; finish it first.
+    /// A step that changed the interval restores its view once the bars of that interval have
+    /// loaded; a view requested before then, by navigation or a call such as
+    /// [`Self::scroll_to_time`], replaces it.
     pub fn undo(&mut self) -> bool {
         self.step_chart_history(false)
     }
@@ -2346,6 +2349,150 @@ mod tests {
             frame(&ctx, &mut chart, 0.20, vec![]);
             assert_eq!(chart.get_time_scale_state(), expected, "drag: {drag}");
         }
+    }
+
+    /// A view requested after undo wins over the waiting interval view, whichever arrives
+    /// first: the request or the restored interval's bars.
+    #[test]
+    fn view_requests_end_a_waiting_view_restoration() {
+        use crate::widget::test_frames::frame;
+
+        type Request = fn(&mut Chart) -> bool;
+        enum Expected {
+            Centre(f32),
+            Left(f32),
+            Bars(usize),
+            Tracking,
+            View((f32, f32)),
+            Range(crate::model::LogicalRange),
+            Spacing(f32),
+        }
+        let rows: [(&str, Request); 9] = [
+            ("scroll_to_time", |chart| {
+                chart.scroll_to_time(chart.bars(SeriesId::MAIN)[50].time);
+                true
+            }),
+            ("go_to_local_time", |chart| {
+                chart.go_to_local_time(chrono::NaiveDate::from_ymd_opt(2024, 1, 3).unwrap(), None);
+                true
+            }),
+            ("set_start_idx", |chart| {
+                chart.set_start_idx(10);
+                true
+            }),
+            ("set_visible_bars", |chart| {
+                chart.set_visible_bars(20);
+                true
+            }),
+            ("enable_tracking_mode", |chart| {
+                chart.enable_tracking_mode();
+                true
+            }),
+            ("set_right_margin", |chart| {
+                chart.set_right_margin(12.0);
+                true
+            }),
+            ("set_chart_options", |chart| {
+                let mut options = chart.chart_options().clone();
+                options.time_scale.bar_spacing = 20.0;
+                chart.set_chart_options(options);
+                true
+            }),
+            ("zoom_back", Chart::zoom_back),
+            ("execute_box_zoom", |chart| {
+                let rect = chart.get_rendered_price_rect();
+                chart.execute_box_zoom(
+                    rect.min + egui::vec2(150.0, 60.0),
+                    rect.min + egui::vec2(450.0, 300.0),
+                    rect,
+                    rect.width(),
+                )
+            }),
+        ];
+        let mut failed = Vec::new();
+        for (name, request) in rows {
+            for bars_first in [false, true] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[10.0], &[20.0]);
+                chart.set_timeframe(Timeframe::Min1);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let pre_zoom = chart.get_time_scale_state();
+                let rect = chart.get_rendered_price_rect();
+                assert!(chart.execute_box_zoom(
+                    rect.min + egui::vec2(100.0, 50.0),
+                    rect.min + egui::vec2(300.0, 250.0),
+                    rect,
+                    rect.width(),
+                ));
+                chart.apply_synced_time_scale(8.0, -30.0);
+                frame(&ctx, &mut chart, 0.02, vec![]);
+                frame(&ctx, &mut chart, 0.04, vec![]);
+                chart.user_action(|chart| chart.set_timeframe(Timeframe::Min15));
+                chart.apply_synced_time_scale(4.0, 0.5);
+                assert!(chart.undo());
+                assert_ne!(pre_zoom, (8.0, -30.0));
+                let bars = chart.bars(SeriesId::MAIN).to_vec();
+                if bars_first {
+                    chart.set_data(SeriesId::MAIN, bars.clone());
+                }
+                assert!(request(&mut chart), "{name}, bars first: {bars_first}");
+                let expected = match name {
+                    // Bar 50 is 2024-01-03 22:13:20 UTC, the first bar of that day.
+                    "scroll_to_time" | "go_to_local_time" => Expected::Centre(50.0),
+                    "set_start_idx" => Expected::Left(10.0),
+                    "set_visible_bars" => Expected::Bars(20),
+                    "enable_tracking_mode" => Expected::Tracking,
+                    "set_right_margin" => Expected::View((8.0, 12.0)),
+                    "set_chart_options" => Expected::Spacing(20.0),
+                    "zoom_back" => Expected::View(pre_zoom),
+                    "execute_box_zoom" => Expected::Range(chart.visible_logical_range().unwrap()),
+                    _ => unreachable!(),
+                };
+                let matches = |chart: &Chart| {
+                    let range = chart.visible_logical_range().unwrap();
+                    match expected {
+                        Expected::Centre(index) => {
+                            ((range.left + range.right) / 2.0 - index).abs() < 0.01
+                        }
+                        Expected::Left(index) => (range.left - index).abs() < 0.01,
+                        Expected::Bars(count) => {
+                            chart.state.time_scale().visible_candles() == count
+                        }
+                        Expected::Tracking => {
+                            chart.is_tracking_mode_active()
+                                && chart.get_time_scale_state() == (8.0, 2.5)
+                        }
+                        Expected::View(view) => chart.get_time_scale_state() == view,
+                        Expected::Range(expected) => {
+                            (range.left - expected.left).abs() < 0.01
+                                && (range.right - expected.right).abs() < 0.01
+                        }
+                        Expected::Spacing(spacing) => chart.get_time_scale_state().0 == spacing,
+                    }
+                };
+                frame(&ctx, &mut chart, 0.06, vec![]);
+                frame(&ctx, &mut chart, 0.08, vec![]);
+                if !bars_first {
+                    if !matches(&chart) {
+                        failed.push(format!(
+                            "{name}, bars first: {bars_first}: {:?}, before the bars",
+                            chart.get_time_scale_state()
+                        ));
+                    }
+                    chart.set_data(SeriesId::MAIN, bars);
+                }
+                for i in 5..=8 {
+                    frame(&ctx, &mut chart, f64::from(i) * 0.02, vec![]);
+                }
+                if !matches(&chart) {
+                    failed.push(format!(
+                        "{name}, bars first: {bars_first}: {:?}",
+                        chart.get_time_scale_state()
+                    ));
+                }
+            }
+        }
+        assert!(failed.is_empty(), "{failed:#?}");
     }
 
     #[test]
