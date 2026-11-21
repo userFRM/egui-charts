@@ -1,7 +1,7 @@
 //! Inline editing for text annotations.
 
 use crate::drawings::manager::TextEditState;
-use crate::drawings::{DrawingManager, DrawingToolType};
+use crate::drawings::{DrawingManager, DrawingToolType, TableConfig};
 use crate::localization as l10n;
 use crate::model::PostLink;
 use egui::{Id, Key, Modifiers, Rect, Ui};
@@ -35,7 +35,7 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize, placed: bool) 
     if !drawing.tool_type.edits_text_inline() {
         return;
     }
-    manager.text_editor = Some(TextEditState {
+    manager.text_editor = Some(Box::new(TextEditState {
         id,
         draft: if drawing.tool_type == DrawingToolType::Table {
             drawing.table_text()
@@ -49,7 +49,8 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize, placed: bool) 
         placed,
         inline: edits_in_place(drawing.tool_type),
         fib_level: None,
-    });
+        table: drawing.table_config().into_owned(),
+    }));
     manager.select(id);
 }
 
@@ -109,7 +110,7 @@ pub(super) fn begin_fibonacci_edit(
         }
     }
     if let Some((id, index, draft)) = target {
-        manager.text_editor = Some(TextEditState {
+        manager.text_editor = Some(Box::new(TextEditState {
             id,
             draft,
             focus: true,
@@ -117,7 +118,8 @@ pub(super) fn begin_fibonacci_edit(
             placed: false,
             inline: true,
             fib_level: Some(index),
-        });
+            table: TableConfig::default(),
+        }));
         manager.select(id);
     }
 }
@@ -218,7 +220,7 @@ fn open_shape_edit(ui: &Ui, manager: &mut DrawingManager, id: usize, pos: egui::
         .painted_text(id, &field)
         .is_some_and(|(min, galley)| Rect::from_min_size(min, galley.size()).contains(pos))
     {
-        manager.text_editor = Some(TextEditState {
+        manager.text_editor = Some(Box::new(TextEditState {
             id,
             draft: text.unwrap_or_default(),
             focus: true,
@@ -226,7 +228,8 @@ fn open_shape_edit(ui: &Ui, manager: &mut DrawingManager, id: usize, pos: egui::
             placed: false,
             inline: true,
             fib_level: None,
-        });
+            table: TableConfig::default(),
+        }));
     }
 }
 
@@ -401,8 +404,8 @@ pub(super) fn show_editor(
     let width = 260.0_f32.min(pane.width());
     pos.x = pos.x.min(pane.right() - width).max(pane.left());
     let table = drawing.tool_type == DrawingToolType::Table;
-    // A table editor shows about six rows of cells above its buttons.
-    let height = if table { 240.0_f32 } else { 160.0 }.min(pane.height());
+    // Leave room for a default table and its cell style controls.
+    let height = if table { 320.0_f32 } else { 160.0 }.min(pane.height());
     pos.y = pos.y.min(pane.bottom() - height).max(pane.top());
     // A price note's typed text has a size of its own once set.
     let font_size = crate::styles::typography::font_size(
@@ -423,6 +426,7 @@ pub(super) fn show_editor(
         DrawingToolType::Idea => "Title on the first line, then the idea",
         _ => "",
     };
+    let box_colors = drawing.text_box_colors(ui.ctx());
     let mut outside = false;
     egui::Area::new(id)
         .order(egui::Order::Foreground)
@@ -446,7 +450,13 @@ pub(super) fn show_editor(
                     .max_height((height - 48.0).max(1.0))
                     .show(ui, |ui| {
                         if table {
-                            crate::drawings::Drawing::edit_table(ui, &mut editor.draft, field_id)
+                            crate::drawings::Drawing::edit_table(
+                                ui,
+                                &mut editor.draft,
+                                &mut editor.table,
+                                [box_colors.text, box_colors.fill],
+                                field_id,
+                            )
                         } else {
                             ui.add(
                                 egui::TextEdit::multiline(&mut editor.draft)
@@ -467,13 +477,19 @@ pub(super) fn show_editor(
                     "Ctrl/Cmd+Enter to save, Esc to cancel",
                 ));
             });
-            outside = frame > opened_frame && response.response.clicked_elsewhere();
+            // A click in a colour popup the table editor opened is outside its frame.
+            outside = frame > opened_frame
+                && response.response.clicked_elsewhere()
+                && !egui::Popup::is_any_open(ui.ctx());
         });
     if cancel || commit || outside {
         ui.memory_mut(|memory| memory.surrender_focus(id.with("field")));
         let address = editor.draft.trim();
         let unchanged = match &drawing.post {
             Some(post) => post.link.trim() == address,
+            None if table => {
+                drawing.same_table_cells(&editor.draft) && *drawing.table_config() == editor.table
+            }
             None => drawing.text.as_deref() == Some(editor.draft.as_str()),
         };
         if !cancel && !unchanged {
@@ -486,9 +502,14 @@ pub(super) fn show_editor(
                 )
                 && is_address(address))
             .then(|| PostLink::new(address));
+            let editor = *editor;
             let _ = manager.edit_drawing(editor.id, |drawing| {
                 drawing.text = post.is_none().then_some(editor.draft);
                 drawing.post = post;
+                if table {
+                    drawing.table =
+                        (editor.table != TableConfig::default()).then(|| Box::new(editor.table));
+                }
             });
         }
     } else {
@@ -1022,6 +1043,7 @@ mod tests {
     fn editor_bounds_and_inside_clicks() {
         use crate::drawings::{Drawing, DrawingManager};
         use egui::{Id, RawInput, Rect, vec2};
+        use egui_kittest::{Harness, kittest::Queryable};
         for dark in [false, true] {
             for (tool, width) in [
                 DrawingToolType::PriceNote,
@@ -1095,6 +1117,101 @@ mod tests {
                 );
                 assert!(!manager.can_undo());
             }
+
+            let pane = Rect::from_min_max(pos2(20.0, 20.0), pos2(620.0, 380.0));
+            let mut manager = DrawingManager::new();
+            let mut drawing = Drawing::new(7, DrawingToolType::Table);
+            drawing.points.push(pane.right_bottom() - vec2(10.0, 10.0));
+            manager.drawings.push(drawing);
+            super::begin_edit(&mut manager, 7, false);
+            let mut harness = Harness::builder()
+                .with_size(vec2(800.0, 600.0))
+                .with_theme(if dark {
+                    egui::Theme::Dark
+                } else {
+                    egui::Theme::Light
+                })
+                .build_ui_state(
+                    |ui, manager| {
+                        super::show_editor(ui, manager, Id::unique("chart"), pane, false);
+                    },
+                    manager,
+                );
+            harness.run();
+            let reset = harness
+                .get_by_role_and_label(egui::Role::Button, "Reset cell")
+                .rect();
+            let clip = harness
+                .output()
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Reset cell" => {
+                        Some(shape.clip_rect)
+                    }
+                    _ => None,
+                })
+                .expect("Reset cell is painted without scrolling");
+            assert!(
+                clip.contains_rect(reset),
+                "dark {dark}: {reset:?}, clip {clip:?}"
+            );
+        }
+    }
+
+    /// Normalising unchanged cells records no edit; a style-only draft commits once and undo
+    /// restores both the original settings and text.
+    #[test]
+    fn table_editor_drafts_commit_only_changed_cells_or_settings() {
+        use crate::drawings::{Drawing, DrawingManager, TableCellStyle, TableConfig};
+        use egui::{Id, RawInput, Rect};
+        for (text, edited) in [(None, false), (Some("a\tb\nc"), false), (None, true)] {
+            let ctx = Context::default();
+            let pane = Rect::from_min_max(pos2(20.0, 20.0), pos2(620.0, 380.0));
+            let mut manager = DrawingManager::new();
+            let mut drawing = Drawing::new(7, DrawingToolType::Table);
+            drawing.points = vec![pos2(60.0, 60.0)];
+            drawing.text = text.map(Into::into);
+            manager.drawings.push(drawing);
+            super::begin_edit(&mut manager, 7, false);
+            let settings = TableConfig {
+                cells: vec![vec![TableCellStyle {
+                    background: Some([255, 0, 0, 255]),
+                    ..Default::default()
+                }]],
+                ..Default::default()
+            };
+            let save = Event::Key {
+                key: Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            };
+            for (time, events) in [vec![], vec![], vec![], vec![save]].into_iter().enumerate() {
+                if edited && time == 3 {
+                    manager.text_editor.as_mut().unwrap().table = settings.clone();
+                }
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0))),
+                        time: Some(time as f64 * 0.1),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| super::show_editor(ui, &mut manager, Id::unique("chart"), pane, false),
+                )
+                .drop_without_applying_deltas();
+            }
+            assert!(manager.text_editor.is_none(), "{text:?}");
+            if edited {
+                assert_eq!(manager.drawings[0].table, Some(Box::new(settings)));
+                assert!(manager.can_undo());
+                assert!(manager.undo());
+            }
+            assert_eq!(manager.drawings[0].table, None);
+            assert_eq!(manager.drawings[0].text.as_deref(), text);
+            assert!(!manager.can_undo(), "{text:?}");
         }
     }
 
@@ -1620,19 +1737,29 @@ mod tests {
     }
 
     /// Pane-relative anchors survive pan and zoom, and scale with pane size rather than data. A
-    /// pin saved with one appears where it was shown, and then stays on its bar.
+    /// pin saved with one appears where it was shown, and then stays on its bar. A table anchored
+    /// to the screen keeps its place as anchored text does; taken off the screen, it stays where
+    /// it is shown and then follows its bar.
     #[test]
     fn anchored_annotations_keep_their_pane_position() {
-        use crate::drawings::{ChartPoint, Drawing};
-        for tool in [
-            DrawingToolType::AnchoredText,
-            DrawingToolType::AnchoredNote,
-            DrawingToolType::TextLabel,
+        use crate::drawings::{ChartPoint, Drawing, TableConfig};
+        for (tool, pinned) in [
+            (DrawingToolType::AnchoredText, true),
+            (DrawingToolType::AnchoredNote, false),
+            (DrawingToolType::TextLabel, false),
+            (DrawingToolType::Table, false),
+            (DrawingToolType::Table, true),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
             let mut drawing = Drawing::new(7, tool);
             drawing.chart_points.push(ChartPoint::new(50.0, 15.0));
+            if tool == DrawingToolType::Table && pinned {
+                drawing.table = Some(Box::new(TableConfig {
+                    screen_anchored: true,
+                    ..Default::default()
+                }));
+            }
             chart.drawings_mut().drawings.push(drawing);
             frame(&ctx, &mut chart, 0.0, vec![]);
             let original = chart.drawings().drawings[0].points[0];
@@ -1640,8 +1767,26 @@ mod tests {
             chart.set_start_idx(20);
             frame(&ctx, &mut chart, 0.1, vec![]);
             let moved = chart.drawings().drawings[0].points[0];
-            if tool != DrawingToolType::AnchoredText {
-                assert_ne!(moved, original);
+            if !pinned {
+                assert_ne!(moved, original, "{tool:?}");
+            } else if tool == DrawingToolType::Table {
+                assert_eq!(moved, original, "{tool:?}");
+                assert!(chart.drawings().drawings[0].screen_anchor.is_some());
+                chart
+                    .drawings_mut()
+                    .edit_drawing(7, |d| d.table = None)
+                    .unwrap();
+                frame(&ctx, &mut chart, 0.2, vec![]);
+                let table = &chart.drawings().drawings[0];
+                assert_eq!(table.screen_anchor, None);
+                assert!(
+                    table.points[0].distance(moved) < 0.5,
+                    "{:?}",
+                    table.points[0]
+                );
+                chart.set_start_idx(10);
+                frame(&ctx, &mut chart, 0.3, vec![]);
+                assert_ne!(chart.drawings().drawings[0].points[0], moved);
             } else {
                 assert_eq!(moved, original, "{tool:?}");
                 let mut fixed = Drawing::new(9, tool);

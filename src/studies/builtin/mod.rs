@@ -323,6 +323,8 @@ pub use market_breadth::{
 mod special_k;
 mod woodies_cci;
 pub use symbol_pair::{Correlation, CorrelationLog, Ratio, Spread, SymbolPair};
+#[cfg(feature = "ui")]
+pub(crate) use technical_ratings::rating as technical_rating;
 pub use technical_ratings::{RatingBasis, TechnicalRatings};
 // Time studies
 mod lower_interval;

@@ -133,7 +133,8 @@ impl Chart {
     /// twice or past its studies, or when a study cannot be built, with the error of
     /// [`StudyTemplate::create_with`]. Wrap the call in [`user_action`](Self::user_action) when
     /// it applies a user's choice, so that one undo restores the previous studies, symbol and
-    /// interval.
+    /// interval; there the added studies go under drawings as
+    /// [`add_indicator`](Self::add_indicator) describes.
     pub fn apply_study_template_set_with(
         &mut self,
         set: &StudyTemplateSet,
@@ -249,6 +250,8 @@ impl Chart {
         if keep != Keep::None {
             self.renumber_scales(&mut studies);
         }
+        #[cfg(feature = "drawings")]
+        let stack = self.pane_stack(SeriesId(self.next_series));
         let ids: Vec<_> = studies
             .into_iter()
             .map(|study| study.map(|study| self.insert_indicator(study)))
@@ -283,14 +286,16 @@ impl Chart {
             }
         }
         for id in set.price_pane.iter().filter_map(|&at| ids[at]) {
-            self.move_series_to_pane(id, self.main_series_pane());
+            self.move_series_keeping_layers(id, self.main_series_pane());
         }
         for pane in &set.panes {
             let pane: Vec<_> = pane.iter().filter_map(|&at| ids[at]).collect();
             if let Some((&first, rest)) = pane.split_first() {
-                self.move_indicator_to_pane(first, first);
-                for &id in rest {
-                    self.move_indicator_to_pane(id, first);
+                self.move_to_new_pane_keeping_layers(first);
+                if let Some(pane) = self.series_pane(first).filter(|pane| *pane != PaneId::MAIN) {
+                    for &id in rest {
+                        self.move_series_keeping_layers(id, pane);
+                    }
                 }
             }
         }
@@ -306,6 +311,10 @@ impl Chart {
             .collect();
         for id in unlisted {
             self.place_on_source(id);
+        }
+        #[cfg(feature = "drawings")]
+        if let Some(stack) = stack {
+            self.keep_stack(stack);
         }
         // Removing the volume study turns the volume setting off; applying one turns it on.
         let volume = self
