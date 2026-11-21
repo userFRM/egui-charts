@@ -132,7 +132,8 @@ impl DemoMarket {
     }
 }
 
-type QuoteSubscription = (Vec<String>, Events<(String, Quote)>);
+/// The symbols and sink of the active quote subscription.
+type QuoteStream = (Vec<String>, Events<(String, Quote)>);
 
 /// The watchlist's quote service: the chart symbol's quote from the live feed, with its regular
 /// and extended-hours prices, session volume and best bid and ask, and retained executions for
@@ -141,7 +142,7 @@ type QuoteSubscription = (Vec<String>, Events<(String, Quote)>);
 /// quote only wakes the UI, so it is pushed again only when a displayed value changes.
 pub(super) struct DemoQuotes {
     live: Mutex<Arc<LiveFeed>>,
-    stream: Mutex<Option<QuoteSubscription>>,
+    stream: Mutex<Option<QuoteStream>>,
     /// The last quote pushed per symbol, with times at display precision.
     last_pushed: Mutex<BTreeMap<String, Quote>>,
 }
@@ -466,6 +467,13 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
     }
     events.retain(|event| {
         (query.countries.is_empty() || query.countries.contains(&event.country))
+            && (query.symbols.is_empty()
+                || event.symbol.as_deref().is_some_and(|symbol| {
+                    query
+                        .symbols
+                        .iter()
+                        .any(|asked| asked.eq_ignore_ascii_case(symbol))
+                }))
             && query
                 .importance
                 .is_none_or(|least| event.importance >= Some(least))
