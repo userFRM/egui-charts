@@ -4,8 +4,10 @@
 //! tab-separated field.
 
 use crate::drawings::domain::{
-    Drawing, HandlePos, LineTextHorizontalAlign, LineTextVerticalAlign, TableCellStyle, TableConfig,
+    Drawing, FontWeight, HandlePos, LineTextHorizontalAlign, LineTextVerticalAlign, TableCellStyle,
+    TableConfig,
 };
+use crate::drawings::rendering::style::BOLD_OFFSET;
 use crate::drawings::validation::{MAX_TABLE_CELL, MIN_TABLE_CELL};
 use crate::localization as l10n;
 use crate::tokens::DESIGN_TOKENS;
@@ -410,9 +412,20 @@ impl Drawing {
                     Some(LineTextVerticalAlign::Top) => rect.top() + pad_y,
                     Some(LineTextVerticalAlign::Bottom) => rect.bottom() - pad_y - size.y,
                 };
+                let pos = Pos2::new(x, y);
+                let mut bounds = galley.mesh_bounds.translate(pos.to_vec2());
+                if self.font_weight == FontWeight::Bold {
+                    bounds.max.x += BOLD_OFFSET;
+                }
+                // Fitted cells share the pane's paint batch; overflow still clips to its cell.
+                let clip = if rect.contains_rect(bounds) {
+                    painter.clip_rect()
+                } else {
+                    rect
+                };
                 painter
-                    .with_clip_rect(rect)
-                    .galley(Pos2::new(x, y), galley, colors.text);
+                    .with_clip_rect(clip)
+                    .galley(pos, galley, colors.text);
             }
         }
 
@@ -430,6 +443,53 @@ mod tests {
 
     /// The drawing of a table as an earlier release saved it, before tables had settings.
     const SAVED_TABLE: &str = r#"{"label":null,"pane":null,"selectable":true,"saveable":true,"listed":true,"group":null,"folder":[],"custom_tool":null,"custom_settings":null,"tool_type":"Table","screen_anchor":null,"color":[219,219,219,255],"stroke_width":3.0,"text":null,"post":null,"line_style":"Solid","fill_color":null,"locked":false,"visible":true,"font_size":14.0,"font_weight":"Normal","italic":false,"text_color":null,"background":true,"border":true,"border_color":null,"text_wrap":false,"text_wrap_width":200.0,"text_follows_zoom":false,"text_zoom_spacing":null,"note_text_style":null,"extend_left":false,"extend_right":false,"arrow_start_style":"None","arrow_end_style":"None","timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"price_axis_label":true,"time_axis_label":true,"line_measurements":{"persistent":false,"price_change":false,"percent_change":false,"pip_change":false,"bar_count":false,"elapsed_time":false,"length":false,"inclination":false,"midpoint":false,"price_labels":false,"position":"Right","text_horizontal_align":"Center","text_vertical_align":"Bottom","text_orientation":"Vertical","across_panes":false},"position_size":null,"position_sizing":{"point_value":1.0,"lot_size":1.0,"quantity_step":0.0,"leverage":1.0},"position_readout":{"persistent":false,"condensed":false,"account_currency":null,"conversion_rate":null,"quantity_decimals":null},"position_target_color":null,"position_stop_color":null,"position_style":{"line_color":null,"line_width":1.0,"text_color":null,"font_size":12.0,"label_background":true,"label_color":null,"fill":true,"border":false,"border_color":[102,123,139,255]},"marker":{"show_text":true,"glyph":"🙂","show_glyph":false,"glyph_color":null},"fib_config":null,"volume_profile":null,"regression_trend":null,"vwap":null,"gann":null,"ghost_feed":null,"channel_midline":false,"anchor_price_style":null,"middle_line":{"color":null,"width":1.0,"line_style":"Dashed"},"theme_shade":true,"image":null,"closed":false,"pitchfork":null,"elliott_degree":"Minor","bars_pattern":null,"z_order":0}"#;
+
+    /// Fitted text batches with its grid; only overflowing cells need a separate clip.
+    #[test]
+    fn fitted_table_cells_batch_and_overflow_stays_clipped() {
+        let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        for narrow in [false, true] {
+            let ctx = Context::default();
+            let mut table = Drawing::new(7, crate::drawings::DrawingToolType::Table);
+            table.points.push(Pos2::new(10.0, 10.0));
+            table.text = Some("Alpha\tBeta".into());
+            if narrow {
+                table.table = Some(Box::new(TableConfig {
+                    column_widths: vec![Some(12.0); 2],
+                    ..Default::default()
+                }));
+            }
+            let mut output = ctx.run_ui(RawInput::default(), |_| {
+                table.render_table(&Painter::new(ctx.clone(), LayerId::background(), pane));
+            });
+            output.textures_delta.clear();
+            let clips: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    matches!(&shape.shape, Shape::Text(t) if !t.galley.is_empty())
+                        .then_some(shape.clip_rect)
+                })
+                .collect();
+            if narrow {
+                assert_eq!(
+                    clips,
+                    [
+                        Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(22.0, 32.0)),
+                        Rect::from_min_max(Pos2::new(22.0, 10.0), Pos2::new(34.0, 32.0)),
+                    ]
+                );
+            } else {
+                assert_eq!(clips, [pane; 2]);
+                assert_eq!(
+                    ctx.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point)
+                        .len(),
+                    1
+                );
+            }
+            output.drop_without_applying_deltas();
+        }
+    }
 
     /// Guards #984 and #1399: cells and empty tables use a neutral grid with equal
     /// 22 px rows, thin borders and padded, left-aligned text in every theme. The default light
