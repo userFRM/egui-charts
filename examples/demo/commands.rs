@@ -332,9 +332,7 @@ impl DemoApp {
         }
         if let Some(name) = id.strip_prefix("study:") {
             if let Some(study) = self.indicator_dialog.factory().create(name) {
-                let inputs = super::study_input_summary(study.as_ref());
-                let id = self.chart.add_indicator(study);
-                self.chart.set_indicator_inputs(id, inputs);
+                self.chart.add_indicator(study);
             }
             return;
         }
@@ -368,7 +366,12 @@ impl DemoApp {
                 Some(DrawingToolbarAction::HideAllDrawings)
             }
             "remove-drawings" => Some(DrawingToolbarAction::RemoveAllDrawings),
-            "lock-drawings" => Some(DrawingToolbarAction::LockAllDrawings),
+            "lock-drawings" => {
+                // The toolbar's lock button flips its state before it reports the click.
+                let state = &mut self.drawing_toolbar.state;
+                state.lock_all = !state.lock_all;
+                Some(DrawingToolbarAction::LockAllDrawings)
+            }
             "magnet" => Some(DrawingToolbarAction::ToggleMagnet),
             "remove-indicators" => Some(DrawingToolbarAction::RemoveAllIndicators),
             _ => None,

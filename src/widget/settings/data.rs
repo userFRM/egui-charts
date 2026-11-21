@@ -121,7 +121,8 @@ pub struct StatusLineOptions {
     pub quote_panel: bool,
     /// Display study names.
     pub show_indicator_titles: bool,
-    /// Display host-supplied study inputs.
+    /// Display study inputs after their names: the host's caption, else one built from the
+    /// study's inputs.
     pub show_indicator_inputs: bool,
     /// Display historical study output values.
     pub show_indicator_values: bool,

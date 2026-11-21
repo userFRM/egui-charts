@@ -839,11 +839,18 @@ pub trait Indicator: Send + ConcreteStudy {
     }
 
     /// Candle bodies and wicks, rendered in place of line plots when nonempty.
-    /// Each candle takes its plot's colour, or [`plot_color`](Self::plot_color) of that plot
-    /// at the candle's first source bar when that returns one. Source ranges and OHLCV remain
-    /// available to hosts for per-bar readouts.
+    /// Each candle takes its plot's colour, or [`candle_color`](Self::candle_color) when
+    /// that returns one. Source ranges and OHLCV remain available to hosts for per-bar readouts.
     fn candles(&self) -> &[super::StudyCandle] {
         &[]
+    }
+
+    /// Optional colour of the candle at `index` in [`candles`](Self::candles), overriding its
+    /// plot colour. Defaults to [`plot_color`](Self::plot_color) at its first source bar.
+    /// A study mapping candle geometry to other bars can retain that source colour here.
+    fn candle_color(&self, index: usize) -> Option<Color32> {
+        let candle = self.candles().get(index)?;
+        self.plot_color(candle.plot, candle.bars.start)
     }
 
     /// Whether each of [`candles`](Self::candles) is painted as a block filled in its plot
@@ -924,6 +931,15 @@ pub trait Indicator: Send + ConcreteStudy {
     /// Draw [`labels`](Self::labels) on the main price chart, even when the study has its
     /// own pane. Label prices use the main series' scale. Off by default.
     fn labels_on_price(&self) -> bool {
+        false
+    }
+
+    /// Keep the plots, their fills and the [`projections`](Self::projections) on the main price
+    /// chart when the study has its own pane, using the main series' price scale. Its pane then
+    /// shows the [`table`](Self::table) and legend alone, without a value axis. The price scale
+    /// fits the plots as it fits an overlay's. They are selected from the study's pane. On the
+    /// price pane the study uses its chosen scale as other overlays do. Off by default.
+    fn plots_on_price(&self) -> bool {
         false
     }
 

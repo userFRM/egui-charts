@@ -780,7 +780,7 @@ impl Chart {
                             self.drawings
                                 .drawings
                                 .iter()
-                                .any(|d| d.id == id && d.accepts_user_edits())
+                                .any(|d| d.id == id && self.drawings.accepts_user_edits(d))
                         })
                 });
         #[cfg(feature = "drawings")]
@@ -1310,7 +1310,8 @@ impl Chart {
             .zip(&self.study_autoscale)
             .enumerate()
             .filter(|(idx, (study, autoscale))| {
-                study_indices.contains(idx)
+                (study_indices.contains(idx)
+                    || (study.plots_on_price() && !study.is_overlay() && !self.indicators_hidden))
                     && !self.config.scale_price_chart_only
                     && **autoscale
                     && !study.is_volume()
@@ -2336,7 +2337,7 @@ impl Chart {
                     &price_map,
                     &coords,
                 );
-            } else {
+            } else if !study.plots_on_price() {
                 let mapping = rendering::study_mapping(study.as_ref(), &coords);
                 if let Some(color) = study.background() {
                     painter
@@ -2607,6 +2608,21 @@ impl Chart {
             .iter()
             .filter(|study| self.shows_study(study.as_ref()))
         {
+            // A study that keeps its plots on the price chart from a pane of its own.
+            if study.plots_on_price() && !study.is_overlay() {
+                let mapping = crate::chart::coords::ChartMapping {
+                    price: price_map,
+                    ..coords.clone()
+                };
+                rendering::IndicatorRenderer::render_study(
+                    &price_ctx,
+                    study.as_ref(),
+                    visible_data,
+                    mapping.start_idx,
+                    &mapping.price,
+                    &mapping,
+                );
+            }
             crate::chart::indicators::plots::paint_price_segments(
                 &clipped_painter,
                 study.as_ref(),
@@ -3790,7 +3806,9 @@ impl Chart {
                 legend.extended_hours = &extended_hours;
                 let background = |pos: Pos2| self.background_at(rect, pos);
                 legend.background = Some(&background);
-                let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
+                let inputs: Vec<_> = (0..self.study_ids.len())
+                    .map(|at| self.study_caption(at))
+                    .collect();
                 legend.study_inputs = &inputs;
                 legend.previous_close = previous_close;
                 legend.bar_index = selected;
