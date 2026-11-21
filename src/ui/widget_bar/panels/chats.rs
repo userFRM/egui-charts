@@ -1182,6 +1182,7 @@ mod tests {
                 .with_size(Vec2::new(320.0, 600.0))
                 .with_context_setup(|ctx| {
                     crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                    egui_extras::install_image_loaders(ctx);
                     ctx.all_styles_mut(|style| {
                         style.interaction.tooltip_delay = 0.0;
                         style.interaction.show_tooltips_only_when_still = false;
