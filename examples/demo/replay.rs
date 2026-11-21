@@ -6,8 +6,10 @@ use egui_charts::data::{MarketEvent, RecordingWriter, ReplayDriver, ReplayEvent}
 use egui_charts::model::{Bar, BarClock, Timeframe};
 use egui_charts::ui::floating_replay_control::ReplayControlAction;
 use egui_charts::ui::replay::{
-    ReplayAction, ReplayController, ReplayScope, ReplayStartAction, paint_start_line,
+    ReplayAction, ReplayController, ReplayScope, ReplayStartAction, ReplayTradingChoice,
+    paint_start_line,
 };
+use egui_charts::ui::strategy_report::StrategyReportAction;
 use egui_charts::ui::timeframe_toolbar::SessionType;
 use egui_charts::widget::{ChartLinkGroups, SeriesId};
 use std::collections::VecDeque;
@@ -17,6 +19,16 @@ use std::sync::Arc;
 /// Keep at most five minutes and 8 MiB of encoded events per symbol subscription, in chunks
 /// beginning with a book snapshot. Checkpoint before the next execution after a minute or 1 MiB.
 const CAPTURE_BYTES: usize = 8 * 1024 * 1024;
+
+/// A replay move held while the replay trading prompt asks about the account.
+pub(super) enum ReplayMove {
+    /// A step back or a jump to the start from the replay bar.
+    Control(ReplayControlAction),
+    /// A new start at this bar of [`DemoApp::replay_start_bars`].
+    StartAt(usize),
+    /// A new start at this time of the open recording.
+    Recording(DateTime<Utc>),
+}
 
 pub(super) struct Capture {
     chunks: VecDeque<(DateTime<Utc>, RecordingWriter<Vec<u8>>)>,
@@ -455,6 +467,7 @@ impl DemoApp {
             .with_symbol(self.state.symbol.clone());
         replay.handle_action(ReplayAction::EnterReplayMode);
         self.replay = Some(replay);
+        self.open_replay_account();
         self.replay_interval = Timeframe::Ticks(NonZeroU64::MIN);
         self.recording_files.opened = true;
         loaded.driver.seek(loaded.bars[0].time);
@@ -681,7 +694,7 @@ impl DemoApp {
             replay.update();
         }
         if let Some(time) = playback_time {
-            self.apply_replay_window(time, false);
+            self.apply_replay_window(time);
         } else {
             self.push_replay_window_to_chart();
         }
@@ -729,11 +742,96 @@ impl DemoApp {
         replay.handle_action(ReplayAction::EnterReplayMode);
         replay.handle_action(ReplayAction::SetSpeed(self.replay_control.state.speed));
         self.replay = Some(replay);
+        self.open_replay_account();
         self.state.replay_active = true;
         self.replay_control.set_symbol(&self.state.symbol);
         self.replay_control.show_control();
         self.configure_replay_intervals();
         self.push_replay_window_to_chart();
+    }
+
+    /// Starts the replay session's account from the settings of the replay bar's start menu,
+    /// in place of the one before, and connects it where the live account was connected.
+    fn open_replay_account(&mut self) {
+        use egui_charts::services::ReplayAccountSettings;
+        // The start menu keeps its settings valid; the default covers a value it let through.
+        let account = self
+            .replay_control
+            .replay_account()
+            .account()
+            .or_else(|| ReplayAccountSettings::default().account())
+            .expect("the default replay account is valid");
+        let account = Arc::new(account);
+        if self.trading.has_broker() {
+            self.trading.set_service(account.clone());
+        }
+        self.replay_paper = Some(account);
+    }
+
+    /// Opens the results of the replay session when its account holds a trade.
+    fn open_replay_results(&mut self) {
+        let (Some(account), Some(replay)) = (&self.replay_paper, &self.replay) else {
+            return;
+        };
+        let symbol = replay.state.symbol.clone().unwrap_or_default();
+        let report = account.report("Replay trading", symbol, self.replay_interval);
+        if !report.trades.is_empty() {
+            self.replay_results.open(report, replay.visible_bars());
+        }
+    }
+
+    /// Holds `held` and opens the replay trading prompt when the move would leave orders or
+    /// trades of the replay account behind: a move back to a bar at `target` before the
+    /// account's last change, or with `None` a new start while the account has any history.
+    pub(super) fn hold_replay_move(
+        &mut self,
+        held: ReplayMove,
+        target: Option<DateTime<Utc>>,
+    ) -> bool {
+        let Some(last) = self
+            .replay_paper
+            .as_ref()
+            .and_then(|account| account.last_change())
+        else {
+            return false;
+        };
+        if target.is_some_and(|target| target >= last) {
+            return false;
+        }
+        // The cursor stays where it was until the answer.
+        self.handle_replay_control(ReplayControlAction::Pause);
+        self.replay_move = Some(held);
+        self.replay_prompt.is_open = true;
+        true
+    }
+
+    /// The replay trading prompt and the results of a session, drawn after the replay bar.
+    pub(super) fn show_replay_trading(&mut self, ctx: &egui::Context) {
+        match self.replay_prompt.show(ctx) {
+            ReplayTradingChoice::Stay => self.replay_move = None,
+            choice @ (ReplayTradingChoice::NewAccount | ReplayTradingChoice::EndSession) => {
+                if choice == ReplayTradingChoice::EndSession {
+                    self.open_replay_results();
+                }
+                // Either answer leaves the old account behind, so the held move passes.
+                self.open_replay_account();
+                match self.replay_move.take() {
+                    Some(ReplayMove::Control(action)) => self.handle_replay_control(action),
+                    Some(ReplayMove::StartAt(index)) => self.start_replay_at(index),
+                    Some(ReplayMove::Recording(time)) => self.seek_recording(time),
+                    None => {}
+                }
+                ctx.request_repaint();
+            }
+            _ => {}
+        }
+        match self.replay_results.show(ctx) {
+            StrategyReportAction::ExportCsv(csv) => self.save_text("replay-trades.csv", &csv),
+            StrategyReportAction::ExportSummaryCsv { filename, content } => {
+                self.save_text(&filename, &content);
+            }
+            _ => {}
+        }
     }
 
     pub(super) fn configure_replay_intervals(&mut self) {
@@ -895,9 +993,15 @@ impl DemoApp {
         self.checkpoint_replay();
         self.replay_start.is_open = false;
         self.replay_selecting = false;
+        self.open_replay_results();
+        self.replay_prompt.is_open = false;
+        self.replay_move = None;
         if self.replay.take().is_some() {
             let market = self.chart.replay_driver().is_some();
-            self.paper.set_replay_time(None);
+            // The live account comes back as it was left.
+            if self.replay_paper.take().is_some() && self.trading.has_broker() {
+                self.trading.set_service(self.paper.clone());
+            }
             self.chart.set_replay_time(None);
             restore_conversion(&mut self.chart, &self.live);
             for extra in &mut self.extra_charts {
@@ -921,10 +1025,6 @@ impl DemoApp {
         self.replay_control.hide_control();
     }
 
-    pub(super) fn push_replay_window_to_chart(&mut self) {
-        self.push_replay_window(false);
-    }
-
     pub(super) fn push_market_replay_window(&mut self) {
         if let Some(driver) = self.chart.replay_driver() {
             if let Some(first) = self
@@ -935,13 +1035,13 @@ impl DemoApp {
             {
                 driver.seek(first.time);
             }
-            self.apply_replay_window(driver.time() + chrono::TimeDelta::nanoseconds(1), false);
+            self.apply_replay_window(driver.time() + chrono::TimeDelta::nanoseconds(1));
         }
     }
 
-    /// Applies the cursor to the charts and the paper account, which restarts when a replay
-    /// starts or the cutoff moves back. `kept` keeps it on a move back that undoes no fill.
-    fn push_replay_window(&mut self, kept: bool) {
+    /// Applies the cursor to the charts and the replay account. A move back that would leave
+    /// orders or trades of the account behind is held by [`Self::hold_replay_move`] first.
+    pub(super) fn push_replay_window_to_chart(&mut self) {
         let Some(replay) = self.replay.as_ref() else {
             return;
         };
@@ -949,28 +1049,25 @@ impl DemoApp {
         let Some(time) = replay.cutoff(&clock) else {
             return;
         };
-        self.apply_replay_window(time, kept);
+        self.apply_replay_window(time);
     }
 
-    fn apply_replay_window(&mut self, time: DateTime<Utc>, kept: bool) {
+    fn apply_replay_window(&mut self, time: DateTime<Utc>) {
+        let paper = self.active_paper().clone();
         let Some(replay) = self.replay.as_ref() else {
             return;
         };
         let previous = self.replay_applied.replace(time);
-        if previous.is_none_or(|previous| time < previous && !kept) {
-            self.paper.reset();
-            if self.trading.has_broker() {
-                self.trading.set_service(self.paper.clone());
-            }
-        }
+        // The account keeps its clock at a bar before its last change, which only a change of
+        // the update interval reaches: the cursor itself has not moved back.
         if let Some(previous) = previous.filter(|previous| *previous < time) {
             for bar in replay
                 .visible_bars()
                 .iter()
                 .filter(|bar| bar.time >= previous)
             {
-                self.paper.set_replay_time(Some(bar.time));
-                self.paper.set_price(self.chart.symbol(), bar.close);
+                paper.set_replay_time(Some(bar.time));
+                paper.set_price(self.chart.symbol(), bar.close);
             }
         }
         let source = self.layout_slot;
@@ -1008,8 +1105,8 @@ impl DemoApp {
             .set_replay_time(&mut charts, source, scope, Some(time));
         self.replay_slots = slots;
         if let Some(bar) = replay.visible_bars().last() {
-            self.paper.set_replay_time(Some(bar.time));
-            self.paper.set_price(self.chart.symbol(), bar.close);
+            paper.set_replay_time(Some(bar.time));
+            paper.set_price(self.chart.symbol(), bar.close);
         }
         if let Some(replay) = &mut self.replay {
             replay.state.scope = scope;
@@ -1126,8 +1223,7 @@ impl DemoApp {
         self.replay = Some(next);
         self.replay_interval = interval;
         self.replay_control.set_automatic_update_interval(false);
-        // One-trade updates move the cutoff back only to just after the last trade before it.
-        self.push_replay_window(matches!(interval, Timeframe::Ticks(count) if count.get() == 1));
+        self.push_replay_window_to_chart();
         self.chart.set_replay_source(bars, clock);
         if let Some(driver) = market_driver {
             if let Some(time) = self.chart.replay_time() {
@@ -1326,6 +1422,9 @@ impl DemoApp {
             }
             return;
         }
+        if self.hold_replay_move(ReplayMove::StartAt(index), None) {
+            return;
+        }
         let automatic = self.replay_control.uses_automatic_update_interval();
         let interval = self.replay.is_some().then_some(self.replay_interval);
         self.stop_replay();
@@ -1341,9 +1440,12 @@ impl DemoApp {
         }
     }
 
-    /// Restarts the open recording paused at `time`, kept within its executions, with a fresh
-    /// paper account as any replay start has.
+    /// Restarts the open recording paused at `time`, kept within its executions. As any new
+    /// start, it asks first while the replay account has history.
     fn seek_recording(&mut self, time: DateTime<Utc>) {
+        if self.hold_replay_move(ReplayMove::Recording(time), None) {
+            return;
+        }
         let clock = source_clock(&self.chart, self.replay_interval);
         let (Some(driver), Some(replay), Some(first)) = (
             self.chart.replay_driver().cloned(),
@@ -1752,8 +1854,232 @@ mod tests {
         assert!((restored.close - original.close).abs() < 1e-7);
     }
 
+    /// Runs one frame of `draw` at 1440 by 900 and returns the texts it paints with their rects.
+    fn painted(
+        app: &mut DemoApp,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        draw: fn(&mut DemoApp, &mut egui::Ui),
+    ) -> Vec<(String, egui::Rect)> {
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| draw(app, ui),
+        );
+        let texts = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((
+                    text.galley.text().to_owned(),
+                    text.galley.rect.translate(text.pos.to_vec2()),
+                )),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        texts
+    }
+
+    /// Clicks the painted text `label`, such as a button's, and returns the next frame's texts.
+    /// A dialog paints nothing in its first frame, so the second is read.
+    fn click_text(
+        app: &mut DemoApp,
+        ctx: &egui::Context,
+        label: &str,
+        draw: fn(&mut DemoApp, &mut egui::Ui),
+    ) -> Vec<(String, egui::Rect)> {
+        painted(app, ctx, vec![], draw);
+        let texts = painted(app, ctx, vec![], draw);
+        let pos = texts
+            .iter()
+            .find(|(text, _)| text == label)
+            .unwrap_or_else(|| panic!("{label} is not painted"))
+            .1
+            .center();
+        painted(app, ctx, vec![egui::Event::PointerMoved(pos)], draw);
+        for pressed in [true, false] {
+            let click = egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            painted(app, ctx, vec![click], draw);
+        }
+        painted(app, ctx, vec![], draw)
+    }
+
+    /// A whole demo frame.
+    fn demo(app: &mut DemoApp, ui: &mut egui::Ui) {
+        eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest());
+    }
+
+    /// The demo paused on three one-minute bars closing at 100, 80 and 110, with the paper
+    /// account connected, its panel open and market orders sent without the ticket.
+    fn paper_demo(ctx: &egui::Context) -> (Box<DemoApp>, String) {
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-10-27T12:05:14Z".parse().unwrap(),
+            true,
+        );
+        super::super::tests::settle(&mut app, ctx);
+        app.live.set_paused(true);
+        let start = chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap();
+        let bars = [100.0, 80.0, 110.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, price)| {
+                Bar::new(
+                    start + chrono::Duration::minutes(i as i64),
+                    price,
+                    price,
+                    price,
+                    price,
+                    1.0,
+                )
+            })
+            .collect();
+        app.chart.set_data(SeriesId::MAIN, bars);
+        let symbol = app.chart.symbol().to_owned();
+        app.paper.set_price(&symbol, 100.0);
+        app.connect_paper();
+        app.trading.display.instant_orders = true;
+        (app, symbol)
+    }
+
+    /// Three whole frames, which also load the trading rules of a newly connected account, so
+    /// that the next market order is placed at once. Returns the texts of the last.
+    fn frames(app: &mut DemoApp, ctx: &egui::Context) -> Vec<String> {
+        for _ in 0..2 {
+            painted(app, ctx, vec![], demo);
+        }
+        let texts = painted(app, ctx, vec![], demo);
+        texts.into_iter().map(|(text, _)| text).collect()
+    }
+
+    fn market_order(app: &mut DemoApp, ctx: &egui::Context, symbol: &str, side: OrderSide) {
+        app.trading.trade(symbol.to_owned(), side);
+        app.trading.poll(ctx, &mut app.toasts);
+    }
+
+    fn cursor(app: &DemoApp) -> usize {
+        app.replay.as_ref().expect("replay is on").state.curr_bar
+    }
+
+    /// A step back to a bar before the replay account's last fill waits for the answer of the
+    /// replay trading prompt: the cursor and the position stay until then, Escape drops the
+    /// step, and a new account takes it. A step back that passes no fill needs no answer.
     #[test]
-    fn paper_account_resets_on_replay_start_and_rewind_but_not_forward_steps() {
+    fn a_replay_step_back_past_a_fill_asks_before_the_account_changes() {
+        let has = |texts: &[String], text: &str| texts.iter().any(|painted| painted == text);
+        let ctx = egui::Context::default();
+        let (mut app, symbol) = paper_demo(&ctx);
+        app.start_replay();
+        app.handle_replay_control(ReplayControlAction::NextBar);
+        frames(&mut app, &ctx);
+        market_order(&mut app, &ctx, &symbol, OrderSide::Buy);
+        assert!(has(&frames(&mut app, &ctx), "Long"), "bought on bar 1");
+
+        // Forward and back to the bar of the fill: nothing is left behind.
+        app.handle_replay_control(ReplayControlAction::NextBar);
+        app.handle_replay_control(ReplayControlAction::PreviousBar);
+        let texts = frames(&mut app, &ctx);
+        assert_eq!(cursor(&app), 1);
+        assert!(!has(&texts, "Trade from here"), "no fill is passed");
+        assert!(has(&texts, "Long"), "the position stays");
+
+        // Back past the fill.
+        app.handle_replay_control(ReplayControlAction::PreviousBar);
+        let texts = frames(&mut app, &ctx);
+        assert!(
+            has(&texts, "Trade from here") && has(&texts, "End session"),
+            "the prompt asks first"
+        );
+        assert_eq!(cursor(&app), 1, "the cursor waits for the answer");
+        assert!(has(&texts, "Long"), "the account waits for the answer");
+
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        painted(&mut app, &ctx, vec![escape], demo);
+        let texts = frames(&mut app, &ctx);
+        assert!(!has(&texts, "Trade from here"), "Escape closes the prompt");
+        assert_eq!(cursor(&app), 1, "Escape drops the step");
+        assert!(has(&texts, "Long"), "Escape keeps the account");
+
+        app.handle_replay_control(ReplayControlAction::PreviousBar);
+        click_text(&mut app, &ctx, "Trade from here", demo);
+        let texts = frames(&mut app, &ctx);
+        assert!(!has(&texts, "Trade from here"));
+        assert_eq!(cursor(&app), 0, "the held step is taken");
+        assert!(
+            has(&texts, "No open positions"),
+            "a new account trades from the earlier bar"
+        );
+    }
+
+    /// Leaving replay, and ending the session from the prompt, show the results of the replay
+    /// account with its closed trade: bought at 100 and sold at 110 with 0.1% commission, the
+    /// trade nets 10 - 0.10 - 0.11 = 9.79. Ending the session from the prompt keeps replay on
+    /// and takes the held step.
+    #[test]
+    fn ending_a_replay_session_shows_its_results() {
+        for from_prompt in [false, true] {
+            let ctx = egui::Context::default();
+            let (mut app, symbol) = paper_demo(&ctx);
+            let settings =
+                egui_charts::services::ReplayAccountSettings::new("EUR", 50_000.0, 0.001);
+            assert!(app.replay_control.set_replay_account(settings));
+            app.start_replay();
+            frames(&mut app, &ctx);
+            market_order(&mut app, &ctx, &symbol, OrderSide::Buy);
+            app.handle_replay_control(ReplayControlAction::GoToEnd);
+            market_order(&mut app, &ctx, &symbol, OrderSide::Sell);
+            if from_prompt {
+                app.handle_replay_control(ReplayControlAction::PreviousBar);
+                click_text(&mut app, &ctx, "End session", demo);
+                assert_eq!(cursor(&app), 1, "the held step is taken");
+            } else {
+                app.handle_replay_control(ReplayControlAction::Stop);
+                assert!(app.replay.is_none());
+            }
+            let texts = frames(&mut app, &ctx);
+            assert!(
+                texts.iter().any(|text| text == "Replay trading results"),
+                "the results open (from the prompt: {from_prompt})"
+            );
+            click_text(&mut app, &ctx, "List of trades", demo);
+            let texts = frames(&mut app, &ctx);
+            let row = [
+                "Long",
+                "1",
+                "2024-01-01 00:00:00",
+                "100",
+                "2024-01-01 00:02:00",
+                "110",
+                "9.79 EUR",
+                "0.21 EUR",
+            ];
+            assert!(
+                texts.windows(row.len()).any(|texts| texts == row),
+                "the list holds the trade (from the prompt: {from_prompt}): {texts:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn replay_trades_its_own_account_and_keeps_the_live_one() {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new_at(
             &eframe::CreationContext::_new_kittest(ctx.clone()),
@@ -1845,28 +2171,44 @@ mod tests {
 
         position(&mut app);
         assert!(!empty(&mut app));
-        app.start_replay();
-        assert!(empty(&mut app), "a new replay must clear the live position");
-        for action in [
-            ReplayControlAction::PreviousBar,
-            ReplayControlAction::GoToStart,
-        ] {
-            position(&mut app);
-            app.handle_replay_control(ReplayControlAction::GoToEnd);
-            assert!(!empty(&mut app), "forward playback must keep the position");
-            app.handle_replay_control(action);
-            assert!(empty(&mut app), "rewinding must clear the future position");
-        }
-        position(&mut app);
-        app.stop_replay();
+        let live = app.paper.save();
+        let settings = egui_charts::services::ReplayAccountSettings::new("EUR", 50_000.0, 0.001);
+        assert!(app.replay_control.set_replay_account(settings));
         app.start_replay();
         assert!(
             empty(&mut app),
-            "restarting must clear the previous session"
+            "the replay account starts without the live position"
         );
+        position(&mut app);
+        let panel: fn(&mut DemoApp, &mut egui::Ui) = |app, ui| {
+            let symbol = app.chart.symbol().to_owned();
+            app.trading.show_account_panel(ui, &symbol);
+        };
+        // The balance is the capital less the commission: 50,000 - 100 x 0.001.
+        let balance = |app: &mut DemoApp| {
+            painted(app, &ctx, vec![], panel);
+            let texts = painted(app, &ctx, vec![], panel);
+            let at = texts
+                .iter()
+                .position(|(text, _)| text == "Account balance")
+                .expect("the panel shows the balance");
+            assert!(
+                texts.iter().any(|(text, _)| text == "EUR"),
+                "the replay account is in EUR"
+            );
+            texts[at - 1].0.clone()
+        };
+        assert_eq!(balance(&mut app), "49,999.90");
+        app.handle_replay_control(ReplayControlAction::GoToEnd);
+        app.trading.trade(symbol.clone(), OrderSide::Sell);
+        app.trading.poll(&ctx, &mut app.toasts);
+        // Sold at 110: 49,999.90 + 10 - 110 x 0.001.
+        assert_eq!(balance(&mut app), "50,009.79");
+        app.stop_replay();
+        assert_eq!(app.paper.save(), live, "replay left the live account alone");
+        assert!(!empty(&mut app), "the live position is shown again");
 
         // One-trade updates move the cutoff back only to just after the last trade: no fill is undone.
-        app.stop_replay();
         for _ in 0..4 {
             ctx.run_ui(egui::RawInput::default(), |ui| {
                 app.chart.show(ui);
