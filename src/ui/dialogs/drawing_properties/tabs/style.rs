@@ -519,6 +519,27 @@ impl StyleTab {
             if let Some(template) = &mut props.tool_settings
                 && matches!(
                     template.settings.tool_type,
+                    DrawingToolType::Pitchfork
+                        | DrawingToolType::SchiffPitchfork
+                        | DrawingToolType::ModifiedSchiffPitchfork
+                        | DrawingToolType::InsidePitchfork
+                )
+            {
+                // A fork saved without levels shows the ones it is drawn with.
+                let mut config = super::pitchfork_shown(&template.settings);
+                let label = ui.label(l10n::text(ui.ctx(), "Extend lines"));
+                if ui
+                    .checkbox(&mut config.extend_lines, "")
+                    .labelled_by(label.id)
+                    .changed()
+                {
+                    template.settings.pitchfork = Some(config);
+                }
+                ui.end_row();
+            }
+            if let Some(template) = &mut props.tool_settings
+                && matches!(
+                    template.settings.tool_type,
                     DrawingToolType::DateRange | DrawingToolType::DateAndPriceRange
                 )
             {
@@ -1069,8 +1090,8 @@ fn regression_rows(ui: &mut Ui, props: &mut DrawingProps, pickers: [&mut ColorPi
     }
 }
 
-/// The projection's leg row, which takes the drawing's colour and width, and its background
-/// switch with the colours of the zone's near and far halves. A palette colour keeps the
+/// The projection's outline row, which takes the drawing's colour and width, and its background
+/// switch with the colours at the sector's centre and arc. A palette colour keeps the
 /// opacity in use; the custom editor sets it.
 fn projection_rows(ui: &mut Ui, props: &mut DrawingProps, pickers: [&mut ColorPickerState; 3]) {
     let Some(template) = &props.tool_settings else {
@@ -1126,7 +1147,7 @@ fn projection_rows(ui: &mut Ui, props: &mut DrawingProps, pickers: [&mut ColorPi
     }
 }
 
-/// One line's row, for the regression trend's lines and the projection's leg: its switch named
+/// One line's row, for the regression trend's lines and the projection's outline: its switch named
 /// `name` in the label column, then its colour (a palette swatch keeps the opacity, the custom
 /// editor sets it), pattern and width.
 fn regression_line_row(

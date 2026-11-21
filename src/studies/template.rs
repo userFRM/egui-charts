@@ -996,6 +996,10 @@ impl StudyTemplate {
                     template.settings.help_url = declared.help_url;
                 }
             }
+            // An earlier key migrates only when it still resolves to the renamed built-in.
+            now if IndicatorFactory::renamed(&self.name) == Some(now) => {
+                template.name = now.to_owned();
+            }
             _ => changed = false,
         }
         // Profile inputs added since a save, set to draw what it drew.

@@ -282,7 +282,7 @@ impl Chart {
         Ok(())
     }
 
-    /// Replace a projection's levels, target zone backgrounds, coefficient labels and leg style
+    /// Replace a projection's levels, gradient colours, coefficient labels and outline style
     /// as one undoable edit. Unknown ids, locked drawings, other tools and invalid settings
     /// change nothing.
     pub fn set_projection_config(

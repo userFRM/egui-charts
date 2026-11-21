@@ -3,6 +3,8 @@
 //! Mirrors the "1D / 5D / 1M / 3M / 6M / YTD / 1Y / 5Y / All" buttons
 //! found on most financial charting platforms.
 
+use super::Timeframe;
+
 /// Preset date range for quick navigation.
 ///
 /// Each variant describes a lookback window from the current time.
@@ -62,6 +64,24 @@ impl DateRange {
             DateRange::Year1 => "1 year in 1-day intervals",
             DateRange::Year5 => "5 years in 1-week intervals",
             DateRange::All => "All data in 1-month intervals",
+        }
+    }
+
+    /// The interval this preset shows, as named by its [`tooltip`](Self::tooltip): 1 minute
+    /// for 1D, 5 minutes for 5D, 30 minutes for 1M, 1 hour for 3M, 2 hours for 6M, 1 day for
+    /// YTD and 1Y, 1 week for 5Y and 1 month for All. Hosts switch to it when their data source
+    /// offers it, then fit the range to the new bars.
+    pub fn timeframe(&self) -> Timeframe {
+        const HOUR2: Timeframe = Timeframe::Custom(std::num::NonZeroU64::new(7200).unwrap());
+        match self {
+            DateRange::Day1 => Timeframe::Min1,
+            DateRange::Day5 => Timeframe::Min5,
+            DateRange::Month1 => Timeframe::Min30,
+            DateRange::Month3 => Timeframe::Hour1,
+            DateRange::Month6 => HOUR2,
+            DateRange::YTD | DateRange::Year1 => Timeframe::Day1,
+            DateRange::Year5 => Timeframe::Week1,
+            DateRange::All => Timeframe::Month1,
         }
     }
 
@@ -141,5 +161,37 @@ impl DateRange {
 impl std::fmt::Display for DateRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.label())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presets_show_the_interval_their_tooltip_names() {
+        let presets = [
+            (DateRange::Day1, Timeframe::Min1, "1-minute"),
+            (DateRange::Day5, Timeframe::Min5, "5-minute"),
+            (DateRange::Month1, Timeframe::Min30, "30-minute"),
+            (DateRange::Month3, Timeframe::Hour1, "1-hour"),
+            (
+                DateRange::Month6,
+                Timeframe::Custom(std::num::NonZeroU64::new(7200).unwrap()),
+                "2-hour",
+            ),
+            (DateRange::YTD, Timeframe::Day1, "1-day"),
+            (DateRange::Year1, Timeframe::Day1, "1-day"),
+            (DateRange::Year5, Timeframe::Week1, "1-week"),
+            (DateRange::All, Timeframe::Month1, "1-month"),
+        ];
+        assert_eq!(
+            presets.map(|(range, _, _)| range).to_vec(),
+            DateRange::default_presets()
+        );
+        for (range, interval, words) in presets {
+            assert_eq!(range.timeframe(), interval, "{range:?}");
+            assert!(range.tooltip().contains(words), "{range:?}");
+        }
     }
 }

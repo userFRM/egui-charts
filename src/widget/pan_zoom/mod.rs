@@ -2469,13 +2469,21 @@ mod tests {
             (true, 0.1, false, 15.0),
             (true, 0.02, false, 2.0),
         ] {
-            for (touch_inertia, mouse_inertia) in
-                [(false, false), (true, false), (false, true), (true, true)]
-            {
+            // `None` keeps the default options: touch swipes coast and mouse drags stop.
+            for options in [
+                None,
+                Some((false, false)),
+                Some((true, false)),
+                Some((false, true)),
+                Some((true, true)),
+            ] {
+                let (touch_inertia, mouse_inertia) = options.unwrap_or((true, false));
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
-                chart.chart_options.kinetic_scroll.enabled = touch_inertia;
-                chart.chart_options.kinetic_scroll.mouse = mouse_inertia;
+                if options.is_some() {
+                    chart.chart_options.kinetic_scroll.enabled = touch_inertia;
+                    chart.chart_options.kinetic_scroll.mouse = mouse_inertia;
+                }
                 frame(&ctx, &mut chart, 0.0, vec![]);
                 let start = chart.last_rendered_price_rect.center();
                 let button = |pos, pressed| Event::PointerButton {
@@ -2499,6 +2507,7 @@ mod tests {
                     events
                 };
                 frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
+                let before = chart.state.time_scale().right_offset_precise();
                 let press = input(button(start, true), egui::TouchPhase::Start, start);
                 frame(&ctx, &mut chart, 0.04, press);
                 let mut end = start;
@@ -2520,12 +2529,12 @@ mod tests {
                 let release = input(button(end, false), egui::TouchPhase::End, end);
                 frame(&ctx, &mut chart, released, release);
                 let inertia = if touch { touch_inertia } else { mouse_inertia };
+                let coasts = inertia && (rest <= 0.05 || slide > 0.0);
                 // Only a rest of more than 50 ms ends the motion, whether or not frames were
                 // drawn, and a release that brings movement with it is no rest, however slow
                 // the frames.
                 assert_eq!(
-                    chart.kinetic_scroll.is_active,
-                    inertia && (rest <= 0.05 || slide > 0.0),
+                    chart.kinetic_scroll.is_active, coasts,
                     "touch={touch}, rest={rest}, frames={frames}, slide={slide}, touch \
                      inertia={touch_inertia}, mouse inertia={mouse_inertia}"
                 );
@@ -2543,6 +2552,18 @@ mod tests {
                     "touch={touch}, rest={rest}, slide={slide}: {}",
                     chart.kinetic_scroll.velocity
                 );
+
+                let released_at = chart.state.time_scale().right_offset_precise();
+                frame(&ctx, &mut chart, released + 0.01, vec![]);
+                let after = chart.state.time_scale().right_offset_precise();
+                // The pointer moved left, which raises the right offset; a coast keeps raising it.
+                assert!(released_at > before, "the drag scrolled");
+                assert_eq!(
+                    after > released_at,
+                    coasts,
+                    "touch={touch}, rest={rest}, options={options:?}"
+                );
+                assert!(after >= released_at);
 
                 let press = input(button(end, true), egui::TouchPhase::Start, end);
                 frame(&ctx, &mut chart, released + 0.02, press);

@@ -386,7 +386,7 @@ impl ChartMenus {
         if chart.series_pane(SeriesId::MAIN) != Some(pane) || !pointer_on_chart(ctx, chart, pos) {
             return None;
         }
-        self.load_order_context(chart, pos);
+        self.load_order_context(chart, pos, price);
         self.chart
             .order_requests(price)
             .into_iter()
@@ -394,9 +394,10 @@ impl ChartMenus {
             .map(|order| ChartContextAction::Chart(ContextMenuAction::Order(order)))
     }
 
-    /// Reads the symbol, its last price and tick size, and whether `pos` reads prices of the
-    /// chart symbol into the chart menu, for its alert and order rows.
-    fn load_order_context(&mut self, chart: &Chart, pos: egui::Pos2) {
+    /// Reads the symbol, its last price and tick size, the decimals used for `price`, and whether
+    /// `pos` reads prices of the chart symbol into the menu, for its alert and order rows.
+    fn load_order_context(&mut self, chart: &Chart, pos: egui::Pos2, price: f64) {
+        self.chart.price_decimals = chart.menu_price_decimals(SeriesId::MAIN, price);
         self.chart.set_symbol(chart.symbol.clone());
         self.chart.market_price =
             crate::model::last_with_value(chart.bars(SeriesId::MAIN)).map(|b| b.close);
@@ -515,7 +516,7 @@ impl ChartMenus {
                 }
                 RightClickTarget::Background { pos, price } => {
                     self.chart.set_indicator_cnt(chart.indicators().count());
-                    self.load_order_context(chart, pos);
+                    self.load_order_context(chart, pos, price);
                     let line = chart
                         .drawings()
                         .registry

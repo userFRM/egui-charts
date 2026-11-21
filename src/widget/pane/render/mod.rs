@@ -583,7 +583,7 @@ impl Chart {
                 config.show_values = self.config.show_indicator_last_val;
                 config.inputs = match study {
                     Some(idx) if self.config.show_indicator_inputs => {
-                        self.study_inputs[idx].clone()
+                        self.study_caption(idx).to_owned()
                     }
                     _ => String::new(),
                 };

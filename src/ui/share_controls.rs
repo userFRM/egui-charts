@@ -47,9 +47,8 @@ impl ShareControls {
         self.sharing = Some(sharing);
     }
 
-    /// Takes the host's answer, copying a link to the clipboard. Returns the document a saved
-    /// copy was made of and the copy's name.
-    pub(crate) fn poll(&mut self, ctx: &egui::Context) -> Option<(String, String)> {
+    /// Takes the host's answer, copying a link to the clipboard. Returns the saved copy's name.
+    pub(crate) fn poll(&mut self, ctx: &egui::Context) -> Option<String> {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
         let mut copied = None;
@@ -70,18 +69,16 @@ impl ShareControls {
                             Err(error) => Outcome::Failed(error),
                         },
                     ),
-                Operation::Copy(name) => {
-                    answer.downcast::<Result<String, FeedError>>().map_or_else(
-                        |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
-                        |answer| match *answer {
-                            Ok(copy) => {
-                                copied = Some((name.clone(), copy.clone()));
-                                Outcome::Copy(copy)
-                            }
-                            Err(error) => Outcome::Failed(error),
-                        },
-                    )
-                }
+                Operation::Copy(_) => answer.downcast::<Result<String, FeedError>>().map_or_else(
+                    |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
+                    |answer| match *answer {
+                        Ok(copy) => {
+                            copied = Some(copy.clone());
+                            Outcome::Copy(copy)
+                        }
+                        Err(error) => Outcome::Failed(error),
+                    },
+                ),
             };
             self.last = Some((operation, outcome));
         }
@@ -90,15 +87,17 @@ impl ShareControls {
 
     /// Shows the rows the service offers for the document `name`, then the progress or result of
     /// the last operation on it. Shows nothing when the service offers nothing for `kind`.
-    pub(crate) fn show(&mut self, ui: &mut Ui, kind: ShareKind, name: &str) {
+    /// Returns true when Save a copy was chosen, so the caller can keep the document as it was.
+    pub(crate) fn show(&mut self, ui: &mut Ui, kind: ShareKind, name: &str) -> bool {
         let Some(sharing) = self.sharing.clone() else {
-            return;
+            return false;
         };
         let offer = sharing.offers(kind);
         if !offer.link && !offer.copy {
-            return;
+            return false;
         }
         ui.separator();
+        let mut copy = false;
         let idle = self.pending.is_none();
         if offer.link
             && ui
@@ -119,6 +118,7 @@ impl ShareControls {
         {
             self.pending = Some(Operation::Copy(name.to_owned()));
             sharing.copy(kind, name, self.inbox.reply(0));
+            copy = true;
             ui.ctx().request_repaint();
         }
         let status = if let Some(pending) = &self.pending {
@@ -170,6 +170,7 @@ impl ShareControls {
                 ui.weak(text);
             }
         }
+        copy
     }
 }
 
@@ -197,8 +198,8 @@ mod tests {
         }
     }
 
-    /// A link reaches the clipboard with the host's copy policy, a copy names the document it
-    /// came from, and a rejection is kept for the menu to show.
+    /// A link reaches the clipboard with the host's copy policy, a copy returns its saved name,
+    /// and a rejection is kept for the menu to show.
     #[test]
     fn answers_become_clipboard_text_copies_and_errors() {
         let ctx = egui::Context::default();
@@ -238,7 +239,7 @@ mod tests {
             Operation::Copy("a".into()),
             ShareKind::Layout,
         );
-        assert_eq!((copied, text), (Some(("a".into(), "a copy".into())), None));
+        assert_eq!((copied, text), (Some("a copy".into()), None));
 
         let (_, text) = run(
             &mut controls,

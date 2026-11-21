@@ -1453,6 +1453,7 @@ mod tests {
                             .to_vec(),
                         show_background: true,
                         background_opacity: 75,
+                        extend_lines: true,
                     })
                 },
             ),

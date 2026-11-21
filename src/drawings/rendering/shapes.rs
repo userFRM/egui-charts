@@ -36,14 +36,19 @@ impl Drawing {
         painter.galley(min, galley, color);
     }
 
-    /// The first anchor is the center, the second fixes the radius, and the third fixes
-    /// the end ray. The sweep takes the short arc in (-180°, 180°], clockwise at 180°.
-    pub(super) fn sector_points(&self, clip: Rect, ppp: f32) -> Option<Vec<Pos2>> {
+    /// The centre, radius and start/end angles in radians on the first three anchors. The first
+    /// is the centre, the second fixes the radius and start, and the third the end, over the
+    /// short arc in (-180°, 180°], clockwise at 180°. `None` for missing or non-finite anchors,
+    /// a radius below 1e-6 or a third anchor on the centre.
+    pub(super) fn sector_arc(&self) -> Option<(Pos2, f32, [f64; 2])> {
         let [center, start, end, ..] = *self.points else {
             return None;
         };
+        if [center, start, end].iter().any(|p| !p.is_finite()) {
+            return None;
+        }
         let radius = center.distance(start);
-        if radius < 1e-6 || center.distance_sq(end) < 1e-12 {
+        if !radius.is_finite() || radius < 1e-6 || center.distance_sq(end) < 1e-12 {
             return None;
         }
         let from = (start - center).angle();
@@ -53,11 +58,21 @@ impl Drawing {
         } else if sweep <= -std::f32::consts::PI {
             sweep += std::f32::consts::TAU;
         }
+        Some((
+            center,
+            radius,
+            [f64::from(from), f64::from(from) + f64::from(sweep)],
+        ))
+    }
+
+    /// The sector's centre followed by its sampled arc, shared with projection and selection.
+    pub(super) fn sector_points(&self, clip: Rect, ppp: f32) -> Option<Vec<Pos2>> {
+        let (center, radius, range) = self.sector_arc()?;
         let mut points = vec![center];
         points.extend(ellipse_arc(
             center,
             egui::Vec2::splat(radius),
-            [f64::from(from), f64::from(from) + f64::from(sweep)],
+            range,
             clip,
             ppp,
         ));
@@ -118,13 +133,16 @@ impl Drawing {
     }
 
     /// Cubic Bezier curve with two independently editable control points.
-    pub(crate) fn render_double_curve(&self, painter: &egui::Painter) {
-        let Some(points) = self.double_curve_points(
-            painter.clip_rect().expand(self.stroke_width + 2.0),
-            painter.pixels_per_point(),
-        ) else {
+    pub(crate) fn render_double_curve(&self, painter: &egui::Painter, rect: Rect) {
+        let Some(controls) = self.double_curve_controls() else {
             return;
         };
+        let points = self.extended_curve(
+            controls,
+            rect,
+            painter.clip_rect().expand(self.stroke_width + 2.0),
+            painter.pixels_per_point(),
+        );
         self.paint_enclosed_fill(painter);
         painter.add(egui::Shape::line(
             points,
@@ -202,7 +220,7 @@ impl Drawing {
     }
 
     /// Render Curve - Bezier quadratic curve
-    pub(crate) fn render_curve(&self, painter: &egui::Painter) {
+    pub(crate) fn render_curve(&self, painter: &egui::Painter, rect: Rect) {
         if self.points.len() < 2 {
             return;
         }
@@ -220,10 +238,9 @@ impl Drawing {
         let stroke = Stroke::new(self.stroke_width, color);
 
         painter.add(Shape::line(
-            curve_points(
-                p0,
-                p1,
-                p2,
+            self.extended_curve(
+                quadratic_controls(p0, p1, p2),
+                rect,
                 painter.clip_rect().expand(stroke.width + 2.0),
                 painter.pixels_per_point(),
             ),
@@ -240,6 +257,41 @@ impl Drawing {
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 128),
             );
         }
+    }
+
+    /// Samples the curve, continuing extended ends along their nearest distinct control's
+    /// tangent to the pane edge. Left passes the first anchor and Right the last, in either
+    /// drawing direction. Non-finite controls give an empty path.
+    pub(super) fn extended_curve(
+        &self,
+        controls: [Pos2; 4],
+        rect: Rect,
+        clip: Rect,
+        ppp: f32,
+    ) -> Vec<Pos2> {
+        let mut points = bezier_points(controls, clip, ppp);
+        if points.is_empty() {
+            return points;
+        }
+        let [a, b, c, d] = controls;
+        let apart = |p: Pos2, end: Pos2| (end - p).abs().max_elem() > 1e-6;
+        if self.extend_left
+            && let Some(p) = [b, c, d].into_iter().find(|&p| apart(p, a))
+        {
+            let edge = super::lines::ray_end(p, a, rect);
+            if edge != a {
+                points.insert(0, edge);
+            }
+        }
+        if self.extend_right
+            && let Some(p) = [c, b, a].into_iter().find(|&p| apart(p, d))
+        {
+            let edge = super::lines::ray_end(p, d, rect);
+            if edge != d {
+                points.push(edge);
+            }
+        }
+        points
     }
 
     /// The curve's start, control and end points: the control point is the
@@ -329,11 +381,12 @@ impl Drawing {
 
 /// The quadratic Bezier curve from `a` to `c` pulled towards `b`.
 pub(super) fn curve_points(a: Pos2, b: Pos2, c: Pos2, clip: Rect, ppp: f32) -> Vec<Pos2> {
-    bezier_points(
-        [a, a + (b - a) * (2.0 / 3.0), c + (b - c) * (2.0 / 3.0), c],
-        clip,
-        ppp,
-    )
+    bezier_points(quadratic_controls(a, b, c), clip, ppp)
+}
+
+/// The cubic controls of the quadratic Bezier curve from `a` to `c` pulled towards `b`.
+pub(super) fn quadratic_controls(a: Pos2, b: Pos2, c: Pos2) -> [Pos2; 4] {
+    [a, a + (b - a) * (2.0 / 3.0), c + (b - c) * (2.0 / 3.0), c]
 }
 
 /// Cubic Bezier sampling with |B''| bounded by the larger endpoint second derivative.
@@ -455,12 +508,126 @@ mod tests {
     use super::*;
     use crate::drawings::domain::DrawingToolType;
 
+    /// Each extended end follows its nearest distinct control, and can be selected there.
+    #[test]
+    fn curves_extend_along_their_end_tangents() {
+        use crate::drawings::services::hit_test;
+        let pane = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(400.0, 300.0));
+        for (tool, anchors, left, right, first, last) in [
+            (
+                DrawingToolType::Curve,
+                vec![(100.0, 150.0), (200.0, 100.0), (300.0, 150.0)],
+                false,
+                false,
+                (100.0, 150.0),
+                (300.0, 150.0),
+            ),
+            (
+                DrawingToolType::Curve,
+                vec![(100.0, 150.0), (200.0, 100.0), (300.0, 150.0)],
+                true,
+                true,
+                (0.0, 200.0),
+                (400.0, 200.0),
+            ),
+            (
+                DrawingToolType::DoubleCurve,
+                vec![
+                    (100.0, 150.0),
+                    (150.0, 100.0),
+                    (250.0, 100.0),
+                    (300.0, 150.0),
+                ],
+                true,
+                true,
+                (0.0, 250.0),
+                (400.0, 250.0),
+            ),
+            (
+                DrawingToolType::DoubleCurve,
+                vec![
+                    (100.0, 150.0),
+                    (100.0, 150.0),
+                    (250.0, 100.0),
+                    (300.0, 150.0),
+                ],
+                true,
+                false,
+                (0.0, 183.33333),
+                (300.0, 150.0),
+            ),
+        ] {
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = anchors.into_iter().map(Pos2::from).collect();
+            drawing.completed = true;
+            drawing.extend_left = left;
+            drawing.extend_right = right;
+            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                let painter = ui.painter_at(pane);
+                match tool {
+                    DrawingToolType::Curve => drawing.render_curve(&painter, pane),
+                    _ => drawing.render_double_curve(&painter, pane),
+                }
+            });
+            let path = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    Shape::Path(path)
+                        if path.stroke.color
+                            == egui::epaint::ColorMode::Solid(drawing.color32()) =>
+                    {
+                        Some(path)
+                    }
+                    _ => None,
+                })
+                .unwrap()
+                .clone();
+            output.drop_without_applying_deltas();
+            assert!(
+                path.points[0].distance(first.into()) < 1e-3,
+                "{tool:?}: first {:?}",
+                path.points[0]
+            );
+            assert!(
+                path.points.last().unwrap().distance(last.into()) < 1e-3,
+                "{tool:?}: last"
+            );
+            if left {
+                assert_eq!(path.points[1], drawing.points[0]);
+            }
+            if right {
+                assert_eq!(
+                    path.points[path.points.len() - 2],
+                    *drawing.points.last().unwrap()
+                );
+                let click = if tool == DrawingToolType::Curve {
+                    egui::pos2(350.0, 175.0)
+                } else {
+                    egui::pos2(350.0, 200.0)
+                };
+                assert_eq!(
+                    hit_test(click, std::slice::from_ref(&drawing), "1m"),
+                    Some(drawing.id)
+                );
+                drawing.extend_left = false;
+                drawing.extend_right = false;
+                assert_eq!(hit_test(click, &[drawing], "1m"), None);
+            }
+        }
+    }
+
     #[test]
     fn shape_and_fan_geometry_uses_the_placed_controls() {
         let rect = egui::Rect::from_min_max(egui::pos2(-400.0, -400.0), egui::pos2(400.0, 400.0));
         for (tool, anchors, want) in [
             (
                 DrawingToolType::Sector,
+                vec![(100.0, 100.0), (200.0, 100.0), (100.0, 150.0)],
+                vec![(200.0, 100.0), (170.71068, 170.71068), (100.0, 200.0)],
+            ),
+            (
+                DrawingToolType::ProjectionTool,
                 vec![(100.0, 100.0), (200.0, 100.0), (100.0, 150.0)],
                 vec![(200.0, 100.0), (170.71068, 170.71068), (100.0, 200.0)],
             ),

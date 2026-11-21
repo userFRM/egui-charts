@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex};
 const LINK_CONTROLS_MIN_WIDTH: f32 = 352.0;
 /// Distance of the selectors from the chart's right edge, which ends the status line's first row.
 pub(super) const LINK_CONTROLS_INSET: f32 = 220.0;
+/// Most charts a layout serves: the slots of the largest preset, and of tabs.
+pub(super) const MAX_CHARTS: usize = 16;
 
 const LINK_MARKERS: [(&str, egui::Color32); 5] = [
     ("🔶", egui::Color32::from_rgb(240, 150, 0)),
@@ -408,7 +410,7 @@ impl ChartLayoutMode {
     /// Number of charts in a preset; tabs can show up to sixteen supplied charts.
     pub fn chart_count(&self) -> usize {
         if *self == Self::Tabs {
-            return 16;
+            return MAX_CHARTS;
         }
         self.tracks().chart_count()
     }
@@ -867,7 +869,7 @@ pub struct ChartLinkGroups {
 
 #[derive(Clone, Default)]
 struct LinkState {
-    groups: [ChartLinkGroups; 16],
+    groups: [ChartLinkGroups; MAX_CHARTS],
     pending: Vec<LinkChange>,
     /// The steps recorded on chart histories, renumbered by `swap_slots`. A clone shares the
     /// entries recorded before it, so a replacement layout keeps them in step.
@@ -883,7 +885,7 @@ pub(super) struct LinkChange {
 }
 
 impl LinkChange {
-    fn swap(&mut self, groups: &mut [ChartLinkGroups; 16]) {
+    fn swap(&mut self, groups: &mut [ChartLinkGroups; MAX_CHARTS]) {
         if let Some(symbol) = &mut self.symbol {
             std::mem::swap(symbol, &mut groups[self.index].symbol);
         }
@@ -1031,14 +1033,14 @@ pub struct ChartLayout {
     /// The slot whose corner menu is open. It stays shown when a click selects another chart, so
     /// a name being edited in it can still be committed.
     corner_menu: Option<usize>,
-    groups: [Option<String>; 16],
+    groups: [Option<String>; MAX_CHARTS],
     links: LinkState,
-    detached: [bool; 16],
-    previous: [Option<(String, Option<Timeframe>)>; 16],
-    previous_charts: [u64; 16],
-    previous_ranges: [Option<VisibleTimeRange>; 16],
-    previous_bars: [BarsKey; 16],
-    pending_ranges: [Option<PendingRange>; 16],
+    detached: [bool; MAX_CHARTS],
+    previous: [Option<(String, Option<Timeframe>)>; MAX_CHARTS],
+    previous_charts: [u64; MAX_CHARTS],
+    previous_ranges: [Option<VisibleTimeRange>; MAX_CHARTS],
+    previous_bars: [BarsKey; MAX_CHARTS],
+    pending_ranges: [Option<PendingRange>; MAX_CHARTS],
     #[cfg(feature = "drawings")]
     drawings: DrawingLinks,
     previous_preset: Option<(ChartLayoutMode, usize)>,
@@ -1240,7 +1242,7 @@ impl ChartLayout {
     }
 
     fn step_layout_edits(&mut self, charts: &mut [&mut Chart]) -> bool {
-        let mut stepped = [false; 16];
+        let mut stepped = [false; MAX_CHARTS];
         loop {
             let step = {
                 let mut steps = self.edits.steps.lock().unwrap();
@@ -1286,7 +1288,7 @@ impl ChartLayout {
 
     /// Selects a chart slot and focuses its canvas when shown; out-of-range indices are ignored.
     pub fn set_active(&mut self, index: usize) {
-        if index < 16 {
+        if index < MAX_CHARTS {
             self.active = index;
             self.focus_active = true;
         }
@@ -1353,7 +1355,7 @@ impl ChartLayout {
     }
 
     /// Memberships of all slots, including hidden charts, for host storage.
-    pub fn saved_link_groups(&self) -> [ChartLinkGroups; 16] {
+    pub fn saved_link_groups(&self) -> [ChartLinkGroups; MAX_CHARTS] {
         self.links.groups.clone()
     }
 
@@ -1644,7 +1646,7 @@ impl ChartLayout {
         let Some(range) = span.or(self.sync.sync_date_range.then_some(range)) else {
             return;
         };
-        for (index, chart) in charts.iter_mut().take(16).enumerate() {
+        for (index, chart) in charts.iter_mut().take(MAX_CHARTS).enumerate() {
             if index != self.active
                 && self.same_group(index, self.active)
                 && chart.apply_synced_time_range_from(range, source)
@@ -1665,11 +1667,11 @@ impl ChartLayout {
         date: chrono::NaiveDate,
         time: Option<chrono::NaiveTime>,
     ) {
-        if self.active >= charts.len().min(16) {
+        if self.active >= charts.len().min(MAX_CHARTS) {
             return;
         }
         let group = !self.sync.sync_time_axis && self.sync.sync_date_range;
-        for (index, chart) in charts.iter_mut().take(16).enumerate() {
+        for (index, chart) in charts.iter_mut().take(MAX_CHARTS).enumerate() {
             if index == self.active || (group && self.same_group(index, self.active)) {
                 chart.go_to_local_time(date, time);
             }
@@ -1733,7 +1735,7 @@ impl ChartLayout {
         charts: &mut [&mut Chart],
         mut render: impl FnMut(&mut Ui, usize, &mut Chart) -> Response,
     ) -> Response {
-        let total = charts.len().min(16);
+        let total = charts.len().min(MAX_CHARTS);
         let charts = &mut charts[..total];
         let count = total.min(self.mode.chart_count());
         if count == 0 {
@@ -2265,7 +2267,7 @@ impl ChartLayout {
             if !on {
                 continue;
             }
-            let mut done = [false; 16];
+            let mut done = [false; MAX_CHARTS];
             for from in std::iter::once(self.active).chain(0..count) {
                 if std::mem::replace(&mut done[from], true) {
                     continue;
@@ -2374,7 +2376,7 @@ impl ChartLayout {
     /// Uses the on-screen arrangement, omitting detached and hidden slots and tab controls.
     /// `count` is the number of charts the host owns, including the active one.
     pub fn visible_chart_rects(&self, rect: Rect, count: usize) -> Vec<(usize, Rect)> {
-        let count = count.min(16).min(self.mode.chart_count());
+        let count = count.min(MAX_CHARTS).min(self.mode.chart_count());
         self.rects(rect, count)
             .into_iter()
             .enumerate()

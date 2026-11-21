@@ -277,18 +277,12 @@ impl Trading {
                 .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
             // Under the lines, so that no mark covers an order's or a position's label.
             if display.show_executions {
-                let fills: Vec<_> = self
-                    .account_panel
-                    .fills
+                let fills = &self.account_panel.fills;
+                let marks: Vec<_> = fills
                     .executions
                     .iter()
-                    .filter(|fill| {
-                        self.account_panel
-                            .fills
-                            .orders
-                            .get(&fill.order)
-                            .is_some_and(|request| request.symbol == symbol)
-                    })
+                    .filter(|fill| fills.symbol(fill) == Some(symbol))
+                    .map(super::ExecutionMark::new)
                     .collect();
                 // `Trading::numbers` takes the ticket's decimals; prices here keep the market's.
                 let numbers = Numbers {
@@ -296,7 +290,7 @@ impl Trading {
                     decimals,
                     formatter: self.formatter.as_deref(),
                 };
-                executions::show(ui, chart, &fills, display.show_execution_labels, numbers);
+                executions::show(ui, chart, &marks, display, numbers);
             }
             render_trading_lines(
                 ui,
@@ -354,6 +348,8 @@ impl Trading {
 
     /// Draws the chart symbol's working orders, brackets, positions and execution marks,
     /// respecting [`display`](Self::display). Hovering a mark lists the fills of its bar.
+    /// [`render_executions`](super::render_executions) draws other fills, such as imported trades,
+    /// with the same marks.
     /// Asks the user to confirm a change made on a line or in the depth ladder before sending it.
     pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
         chart.trading_bid_ask = self.display.bid_ask_labels;
@@ -1913,6 +1909,11 @@ mod tests {
             !defaults.show_execution_labels,
             "settings saved before labels were on by default keep them off"
         );
+        assert!(
+            !defaults.show_execution_prices,
+            "older settings keep fill prices off"
+        );
+        assert!(!TradingSettings::default().show_execution_prices);
         assert!(TradingSettings::default().show_execution_labels);
         assert!(
             !defaults.compact_ticket,

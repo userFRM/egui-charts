@@ -1,7 +1,7 @@
 //! Copies of a chart's studies and settings to the other charts of a layout, undone and redone
 //! together.
 
-use super::ChartLayout;
+use super::{ChartLayout, MAX_CHARTS};
 use crate::chart::overlays::BubbleGrouping;
 use crate::config::ChartConfig;
 use crate::model::{Bar, ChartType, ChartTypeParams, FootprintIntensity, TradeProfileSettings};
@@ -153,7 +153,12 @@ impl CopiedStudies {
             .collect();
         let captions: Vec<_> = source
             .indicators()
-            .map(|(id, _)| source.indicator_inputs(id).unwrap_or_default().to_owned())
+            .map(|(id, _)| {
+                source
+                    .host_indicator_inputs(id)
+                    .unwrap_or_default()
+                    .to_owned()
+            })
             .collect();
         match copy {
             LayoutCopy::Study(id) => {
@@ -620,7 +625,7 @@ impl ChartLayout {
     }
 
     fn preset_charts(&self, charts: &[&mut Chart]) -> usize {
-        charts.len().min(16).min(self.mode.chart_count())
+        charts.len().min(MAX_CHARTS).min(self.mode.chart_count())
     }
 }
 
@@ -706,6 +711,12 @@ mod tests {
             "the source keeps its panes"
         );
         assert_eq!(charts[0].indicators().count(), 2, "and its studies");
+        charts[1]
+            .indicator_mut(rsi)
+            .unwrap()
+            .set_input("period", InputValue::Length(4))
+            .unwrap();
+        assert_eq!(charts[1].indicator_inputs(rsi), Some("4 close"));
 
         // An edit on another chart after the copy goes back with it, and its redo returns it.
         charts[2].user_action(|chart| chart.add_indicator(Box::new(SMA::new(9))));
