@@ -14,6 +14,8 @@ mod audio;
 mod commands;
 #[path = "formatting.rs"]
 mod formatting;
+#[path = "ideas.rs"]
+mod ideas;
 #[path = "images.rs"]
 mod images;
 #[path = "interval.rs"]
@@ -96,9 +98,9 @@ use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{
     CalendarAction, CalendarPanel, ChatsPanel, HotlistsAction, HotlistsPanel, NewsAction,
-    NewsPanel, NotificationsAction, NotificationsPanel, Product, ProductsAction, ProductsPanel,
-    ScreenerAction, ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel, WatchlistAction,
-    WatchlistPanel, WidgetBarSection, WidgetBarWidget,
+    NewsPanel, NotificationsPanel, Product, ProductsAction, ProductsPanel, ScreenerAction,
+    ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel, WatchlistAction, WatchlistPanel,
+    WidgetBarSection, WidgetBarWidget,
 };
 use egui_charts::ui::widget_bar::{DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
@@ -223,6 +225,7 @@ enum SidePanel {
     News,
     Notifications,
     Chats,
+    Ideas,
     Products,
 }
 
@@ -295,6 +298,7 @@ enum ScreenshotTarget {
     File(Option<std::path::PathBuf>),
     Clipboard,
     NewTab,
+    Post { copy_link: bool },
 }
 
 /// App state surfaced to the toolbars via `ChartAppState`.
@@ -471,6 +475,7 @@ pub struct DemoApp {
     notifications: NotificationsPanel,
     notification_host: Arc<feeds::DemoNotifications>,
     chats: ChatsPanel,
+    ideas: ideas::DemoIdeas,
     products: ProductsPanel,
 
     // Replay engine and its floating transport. `None` until first toggled.
@@ -832,6 +837,7 @@ impl DemoApp {
             notifications: NotificationsPanel::new(),
             notification_host,
             chats: ChatsPanel::new(),
+            ideas: ideas::DemoIdeas::new(),
             products: ProductsPanel::new(vec![
                 product(
                     "screener",
@@ -918,6 +924,8 @@ impl DemoApp {
         app.alerts.set_service(app.alert_host.clone());
         app.alerts.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.top_toolbar.state.can_trade = true;
+        app.top_toolbar.state.can_publish_ideas = true;
+        app.top_toolbar.state.can_publish_image = true;
         app.watchlist.set_selected(symbol);
         app.watchlist.set_service(app.quotes.clone());
         app.watchlist.set_mark("SAMPLE", SAMPLE_LOGO.into());
@@ -2383,14 +2391,25 @@ impl DemoApp {
             TopToolbarAction::OpenSettings => {
                 self.open_chart_settings_dialog();
             }
+            TopToolbarAction::Publish => {
+                self.open_panel =
+                    (self.open_panel != Some(SidePanel::Ideas)).then_some(SidePanel::Ideas);
+            }
             TopToolbarAction::TakeScreenshot
             | TopToolbarAction::CopyImage
-            | TopToolbarAction::OpenImage => {
+            | TopToolbarAction::OpenImage
+            | TopToolbarAction::PostImage
+            | TopToolbarAction::CopyImageLink => {
                 self.export_dialog.close();
                 self.toasts.clear();
                 let target = match action {
                     TopToolbarAction::CopyImage => ScreenshotTarget::Clipboard,
                     TopToolbarAction::OpenImage => ScreenshotTarget::NewTab,
+                    TopToolbarAction::PostImage | TopToolbarAction::CopyImageLink => {
+                        ScreenshotTarget::Post {
+                            copy_link: action == TopToolbarAction::CopyImageLink,
+                        }
+                    }
                     _ => ScreenshotTarget::File(None),
                 };
                 self.screenshot_requested = Some((target, {
@@ -2866,9 +2885,15 @@ impl DemoApp {
                     }
                 }
                 SidePanel::Notifications => {
-                    if let NotificationsAction::SelectSymbol(symbol) = self.notifications.show(ui) {
-                        self.open_catalog_symbol(&symbol);
-                    }
+                    let action = self.notifications.show(ui);
+                    self.handle_notification(action);
+                }
+                SidePanel::Ideas => {
+                    self.ideas
+                        .panel
+                        .set_context(&self.state.symbol, self.state.timeframe.as_str());
+                    let action = self.ideas.panel.show(ui);
+                    self.handle_ideas(ui.ctx(), action);
                 }
                 SidePanel::Chats => self.chats.show(ui),
                 SidePanel::Products => {
@@ -4489,6 +4514,7 @@ impl DemoApp {
             .and_then(|png| match target {
                 ScreenshotTarget::File(path) => self.save_screenshot(&png, path),
                 ScreenshotTarget::NewTab => open_image(ctx, &png),
+                ScreenshotTarget::Post { copy_link } => Ok(self.post_image(ctx, png, copy_link)),
                 ScreenshotTarget::Clipboard => {
                     let image = image::load_from_memory(&png)
                         .map_err(|error| error.to_string())?

@@ -921,11 +921,11 @@ Workspace,"News, calendar and social",Dividend and IPO calendars,incomplete,host
 Workspace,"News, calendar and social",Earnings calendar,incomplete,host,src/ui/widget_bar/panels/calendar.rs;terminal/src/panels.rs,3586
 Workspace,"News, calendar and social",Economic calendar,incomplete,host,src/ui/widget_bar/panels/calendar.rs;terminal/src/panels.rs,
 Workspace,"News, calendar and social",Filtered headline stream,incomplete,host,src/ui/widget_bar/panels/news.rs;src/data/market.rs;terminal/src/panels.rs,
-Workspace,"News, calendar and social",Ideas and community feed,unverified,host,src/ui/ideas.rs,
+Workspace,"News, calendar and social",Ideas and community feed,unverified,host,src/ui/ideas.rs;examples/demo/ideas.rs,3590
 Workspace,"News, calendar and social",News alerts,incomplete,host,src/services/notifications.rs;src/ui/widget_bar/panels/notifications.rs;terminal/src/panels.rs;examples/demo/marks.rs;examples/demo/layouts.rs;examples/demo/feeds.rs,1931;3586
-Workspace,"News, calendar and social",Private chats,incomplete,host,src/services/chats.rs;src/ui/widget_bar/panels/chats.rs;terminal/src/panels.rs,3590
-Workspace,"News, calendar and social","Profiles, following and social notifications",incomplete,host,src/services/profiles.rs;src/services/profile_directory.rs;src/services/notifications.rs;src/ui/profile/mod.rs;src/ui/widget_bar/panels/notifications.rs;terminal/src/panels.rs,3590
-Workspace,"News, calendar and social",Publish an idea from the chart,incomplete,host,src/ui/top_toolbar/toolbar.rs;src/ui/ideas.rs;src/widget/export.rs,3590
+Workspace,"News, calendar and social",Private chats,unverified,host,src/services/chats.rs;src/ui/widget_bar/panels/chats.rs;terminal/src/panels.rs;examples/demo/feeds.rs,3590
+Workspace,"News, calendar and social","Profiles, following and social notifications",unverified,host,src/services/profiles.rs;src/services/profile_directory.rs;src/services/notifications.rs;src/ui/profile/mod.rs;src/ui/widget_bar/panels/notifications.rs;terminal/src/panels.rs;examples/demo/ideas.rs,3590
+Workspace,"News, calendar and social",Publish an idea from the chart,unverified,host,src/ui/top_toolbar/toolbar.rs;src/ui/ideas.rs;src/widget/export.rs;src/ui/top_toolbar/actions.rs;src/ui/top_toolbar/state.rs;examples/demo/ideas.rs,3590
 Workspace,"News, calendar and social",Symbol news in the right panel,verified,host,src/ui/widget_bar/panels/news.rs;terminal/src/panels.rs,
 Workspace,Templates and layouts,Autosave,verified,library,src/ui/top_toolbar/components/layout_menu.rs;terminal/src/layouts.rs,3220
 Workspace,Templates and layouts,Chart settings templates,incomplete,library,src/ui/dialogs/chart_settings/mod.rs;src/widget/settings/apply.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs,2517;2141;2504
@@ -935,7 +935,7 @@ Workspace,Templates and layouts,Drawing serialisation for saved layouts,incomple
 Workspace,Templates and layouts,Drawing templates,verified,library,src/drawings/domain/template.rs;src/ui/dialogs/templates/dialog.rs;src/ui/dialogs/drawing_properties/dialog.rs;src/ui/dialogs/templates/store.rs;src/ui/dialogs/drawing_properties/actions.rs,3287;3224
 Workspace,Templates and layouts,Export chart data to CSV,verified,library,src/widget/export.rs;Cargo.toml;src/studies/builtin/order_flow.rs,1963;3243;2967
 Workspace,Templates and layouts,Export dialog image options,incomplete,library,src/ui/export.rs;src/widget/export.rs;src/widget/svg.rs;src/widget/layout.rs;src/ui/trading/view.rs;examples/demo/commands.rs;examples/demo/controller.rs,1934;2461
-Workspace,Templates and layouts,"Image sharing, hosted links and social posting",incomplete,host,src/ui/top_toolbar/toolbar.rs;src/widget/export.rs,3590
+Workspace,Templates and layouts,"Image sharing, hosted links and social posting",unverified,host,src/ui/top_toolbar/toolbar.rs;src/widget/export.rs;src/ui/top_toolbar/actions.rs;src/ui/top_toolbar/state.rs;examples/demo/ideas.rs,3590
 Workspace,Templates and layouts,Indicator templates,incomplete,library,src/studies/template.rs;src/ui/dialogs/templates/dialog.rs;src/ui/top_toolbar/toolbar.rs;src/widget/study_templates.rs;terminal/src/compare.rs;examples/demo/templates.rs;src/studies/settings.rs;src/studies/indicator_trait.rs,2333;2335;2337;2523;1485;2903;3087;3208
 Workspace,Templates and layouts,Multi-chart layouts,incomplete,library,src/widget/layout.rs;src/widget/history.rs;src/ui/top_toolbar/components/chart_grid_selector.rs;terminal/src/layouts.rs;examples/demo/layouts.rs;examples/demo/replay.rs,2036;2052;2077;2505;2527;2688;2689
 Workspace,Templates and layouts,Open a saved layout; layout list with favourites and delete,incomplete,library,src/ui/top_toolbar/components/layout_menu.rs;src/services/settings.rs;terminal/src/layouts.rs;src/widget/snapshot.rs,2182;2472;2476;3208;2934;3572
