@@ -1,9 +1,9 @@
 //! Chart export functionality for screenshots and saving charts
 //!
 //! This module provides widgets and traits for exporting charts to multiple formats:
-//! - PNG images
+//! - PNG and SVG images
 //! - CSV of the bar data and visible study plots
-//! - Clipboard copy
+//! - Clipboard copy of the image
 //!
 //! # Example
 //!
@@ -34,12 +34,31 @@ use crate::theme::ThemeExt;
 use crate::ui_kit::FormGrid;
 use crate::ui_kit::dialog::{DialogFooter, dialog_frame, title_row};
 use crate::ui_kit::ext::UiExt;
+use crate::widget::PixelDensity;
 use egui::{Context, Id, Key, Modifiers, RichText};
 use std::path::PathBuf;
 
 /// Id of the file path field, so a failed export can focus it.
 fn path_field() -> Id {
     Id::NULL.with("egui_charts::export_dialog::path")
+}
+
+/// Whether `format` is a raster image, which takes a pixel density.
+fn is_raster(format: ExportFormat) -> bool {
+    matches!(format, ExportFormat::Png | ExportFormat::Clipboard)
+}
+
+/// The largest width and height in points the size fields allow at `pixels_per_point`.
+fn max_size(pixels_per_point: u32) -> [u32; 2] {
+    [7680 / pixels_per_point, 4320 / pixels_per_point]
+}
+
+/// Scales `size` down to fit `max`, keeping its proportion and at least 100 per side.
+fn fit(size: [u32; 2], max: [u32; 2]) -> [u32; 2] {
+    let scale = (f64::from(max[0]) / f64::from(size[0]))
+        .min(f64::from(max[1]) / f64::from(size[1]))
+        .min(1.0);
+    [0, 1].map(|i| ((f64::from(size[i]) * scale).round() as u32).clamp(100, max[i]))
 }
 
 /// Export format options
@@ -82,6 +101,19 @@ impl ExportFormat {
     }
 }
 
+/// What an image export shows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum ExportScope {
+    /// The chart the export is for, from [`Chart::export_image`](crate::widget::Chart::export_image)
+    /// or its PNG and SVG forms.
+    #[default]
+    Chart,
+    /// The whole layout the host shows, from
+    /// [`Chart::export_layout_image`](crate::widget::Chart::export_layout_image) or its PNG and SVG
+    /// forms.
+    Layout,
+}
+
 /// Response from the export dialog
 ///
 /// Use this to handle user actions from the export dialog.
@@ -115,10 +147,15 @@ pub enum ExportResponse {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ExportConfig {
-    /// Export format (PNG, CSV or Clipboard)
+    /// Export format: PNG, SVG, CSV or Clipboard
     pub format: ExportFormat,
-    /// Size, header and background options for PNG and clipboard exports.
+    /// Size, header, background, overlay and density options for image exports (PNG, SVG and
+    /// clipboard).
     pub image: crate::widget::ImageExportOptions,
+    /// What an image export shows. The dialog asks for [`ExportScope::Layout`] only while the
+    /// host shows a layout ([`ExportDialog::set_layout_size`]) and for an image format; otherwise
+    /// it asks for [`ExportScope::Chart`].
+    pub scope: ExportScope,
 }
 
 impl Default for ExportConfig {
@@ -126,6 +163,7 @@ impl Default for ExportConfig {
         Self {
             format: ExportFormat::Png,
             image: Default::default(),
+            scope: ExportScope::Chart,
         }
     }
 }
@@ -133,9 +171,14 @@ impl Default for ExportConfig {
 /// Export dialog for configuring and executing chart exports
 ///
 /// The dialog offers:
-/// - Format selection (PNG, CSV, Clipboard)
-/// - Image dimensions, title, timestamp and transparent background
+/// - Format selection among the formats the host offers: PNG, SVG, CSV and Clipboard
+/// - Image size, with the chart's or layout's size and a proportion lock, pixel density, scope,
+///   title, timestamp, watermark, crosshair, overlays and transparent background
 /// - File save path entry
+///
+/// Call [`set_chart_size`](Self::set_chart_size) and [`set_layout_size`](Self::set_layout_size)
+/// before [`show`](Self::show), for example each frame, so the dialog can offer the current size
+/// and the layout scope.
 ///
 /// The dialog only collects the request; the host performs the export. Use
 /// [`with_formats`](Self::with_formats) to offer only the formats the host
@@ -173,6 +216,12 @@ pub struct ExportDialog {
     formats: Vec<ExportFormat>,
     save_path: String,
     export_status: ExportStatus,
+    /// Size in points of the chart the host shows, offered as the current size.
+    chart_size: Option<egui::Vec2>,
+    /// Size in points of the layout the host shows; a size offers the layout scope.
+    layout_size: Option<egui::Vec2>,
+    /// Width over height kept while one side is edited; `None` while the lock is off.
+    proportion: Option<f64>,
 }
 
 /// Internal status tracking for export operations
@@ -207,6 +256,9 @@ impl ExportDialog {
             ],
             save_path: String::new(),
             export_status: ExportStatus::Idle,
+            chart_size: None,
+            layout_size: None,
+            proportion: None,
         }
     }
 
@@ -221,6 +273,21 @@ impl ExportDialog {
             self.config.format = first;
         }
         self
+    }
+
+    /// Sets the size in points of the chart the export is for, which the dialog offers as the
+    /// current image size. `None`, the default, or a size that is not finite and positive offers
+    /// none.
+    pub fn set_chart_size(&mut self, size: Option<egui::Vec2>) {
+        self.chart_size = size.filter(|size| size.is_finite() && size.min_elem() > 0.0);
+    }
+
+    /// Sets the size in points of the layout the host shows around the chart. With a size the
+    /// dialog offers the layout scope and, with that scope, the layout's size as the current image
+    /// size. `None`, the default, or a size that is not finite and positive means the host shows
+    /// the chart alone: the dialog hides the scope and asks for [`ExportScope::Chart`].
+    pub fn set_layout_size(&mut self, size: Option<egui::Vec2>) {
+        self.layout_size = size.filter(|size| size.is_finite() && size.min_elem() > 0.0);
     }
 
     /// Opens the export dialog
@@ -268,7 +335,7 @@ impl ExportDialog {
         self.show_with(ctx, |_, _| {})
     }
 
-    /// Shows the dialog with host controls below its title, such as an image scope chooser.
+    /// Shows the dialog with host controls below its title.
     /// `content` receives the currently selected format; the host keeps its own control state.
     #[must_use = "Export dialog response should be handled"]
     pub fn show_with(
@@ -361,26 +428,143 @@ impl ExportDialog {
                 ui.end_row();
 
                 if !self.config.format.is_data_format() {
+                    let ppp = if is_raster(self.config.format) {
+                        self.config.image.pixel_density.pixels_per_point()
+                    } else {
+                        1
+                    };
+                    let max = max_size(ppp);
+                    let fitted = fit(self.config.image.size, max);
+                    let mut changed = fitted != self.config.image.size;
+                    self.config.image.size = fitted;
+                    if self.layout_size.is_some() {
+                        let label = ui.label(l10n::text(ui.ctx(), "Scope"));
+                        ui.horizontal(|ui| {
+                            changed |= ui
+                                .radio_value(
+                                    &mut self.config.scope,
+                                    ExportScope::Chart,
+                                    l10n::text(ui.ctx(), "This chart"),
+                                )
+                                .changed();
+                            changed |= ui
+                                .radio_value(
+                                    &mut self.config.scope,
+                                    ExportScope::Layout,
+                                    l10n::text(ui.ctx(), "Whole layout"),
+                                )
+                                .changed();
+                        })
+                        .response
+                        .labelled_by(label.id);
+                        ui.end_row();
+                    }
                     ui.label(l10n::text(ui.ctx(), "Image size"));
-                    let mut changed = false;
-                    ui.horizontal(|ui| {
-                        changed |= ui
+                    ui.horizontal_wrapped(|ui| {
+                        let size = &mut self.config.image.size;
+                        let width_changed = ui
                             .add(
-                                egui::DragValue::new(&mut self.config.image.size[0])
-                                    .range(100..=7680)
+                                egui::DragValue::new(&mut size[0])
+                                    .range(100..=max[0])
                                     .suffix(l10n::text(ui.ctx(), " px")),
                             )
                             .changed();
                         ui.label("×");
-                        changed |= ui
+                        let height_changed = ui
                             .add(
-                                egui::DragValue::new(&mut self.config.image.size[1])
-                                    .range(100..=4320)
+                                egui::DragValue::new(&mut size[1])
+                                    .range(100..=max[1])
                                     .suffix(l10n::text(ui.ctx(), " px")),
                             )
                             .changed();
+                        changed |= width_changed || height_changed;
+                        if let Some(ratio) = self.proportion {
+                            if width_changed {
+                                let height = (f64::from(size[0]) / ratio).round() as u32;
+                                size[1] = height.clamp(100, max[1]);
+                                if height != size[1] {
+                                    size[0] = (f64::from(size[1]) * ratio).round() as u32;
+                                    size[0] = size[0].clamp(100, max[0]);
+                                }
+                            } else if height_changed {
+                                let width = (f64::from(size[1]) * ratio).round() as u32;
+                                size[0] = width.clamp(100, max[0]);
+                                if width != size[0] {
+                                    size[1] = (f64::from(size[0]) / ratio).round() as u32;
+                                    size[1] = size[1].clamp(100, max[1]);
+                                }
+                            }
+                        }
+                        let current = if self.config.scope == ExportScope::Layout {
+                            self.layout_size.or(self.chart_size)
+                        } else {
+                            self.chart_size
+                        };
+                        if let Some(current) = current
+                            && ui.button(l10n::text(ui.ctx(), "Current size")).clicked()
+                        {
+                            *size = fit(
+                                [current.x, current.y]
+                                    .map(|s| (s.round().max(1.0) as u32).max(100)),
+                                max,
+                            );
+                            if self.proportion.is_some() {
+                                self.proportion = Some(f64::from(size[0]) / f64::from(size[1]));
+                            }
+                            changed = true;
+                        }
                     });
                     ui.end_row();
+                    ui.label("");
+                    let mut keep = self.proportion.is_some();
+                    if ui
+                        .checkbox(&mut keep, l10n::text(ui.ctx(), "Keep proportions"))
+                        .changed()
+                    {
+                        let [width, height] = self.config.image.size;
+                        self.proportion = keep.then(|| f64::from(width) / f64::from(height));
+                        changed = true;
+                    }
+                    ui.end_row();
+                    if is_raster(self.config.format) {
+                        let label = ui.label(l10n::text(ui.ctx(), "Pixel density"));
+                        ui.horizontal_wrapped(|ui| {
+                            for density in PixelDensity::ALL {
+                                if ui
+                                    .radio_value(
+                                        &mut self.config.image.pixel_density,
+                                        density,
+                                        format!("{}×", density.pixels_per_point()),
+                                    )
+                                    .changed()
+                                {
+                                    let ppp = density.pixels_per_point();
+                                    self.config.image.size =
+                                        fit(self.config.image.size, max_size(ppp));
+                                    changed = true;
+                                }
+                            }
+                            let ppp = self.config.image.pixel_density.pixels_per_point();
+                            if ppp > 1 {
+                                let [width, height] = self.config.image.size.map(|side| side * ppp);
+                                ui.label(
+                                    RichText::new(l10n::format_text(
+                                        ui.ctx(),
+                                        "{width} × {height} px",
+                                        &[
+                                            ("width", width.to_string()),
+                                            ("height", height.to_string()),
+                                        ],
+                                    ))
+                                    .size(theme.text.small)
+                                    .color(theme.ui.text_secondary),
+                                );
+                            }
+                        })
+                        .response
+                        .labelled_by(label.id);
+                        ui.end_row();
+                    }
                     ui.label(l10n::text(ui.ctx(), "Include"));
                     ui.vertical(|ui| {
                         changed |= ui
@@ -405,6 +589,12 @@ impl ExportDialog {
                             .checkbox(
                                 &mut self.config.image.include_crosshair,
                                 l10n::text(ui.ctx(), "Crosshair"),
+                            )
+                            .changed();
+                        changed |= ui
+                            .checkbox(
+                                &mut self.config.image.include_foreground,
+                                l10n::text(ui.ctx(), "Overlays"),
                             )
                             .changed();
                         changed |= ui
@@ -510,8 +700,12 @@ impl ExportDialog {
         let path = self.save_path.trim();
         if to_clipboard || !path.is_empty() {
             self.export_status = ExportStatus::Exporting;
+            let mut config = self.config.clone();
+            if self.layout_size.is_none() || config.format.is_data_format() {
+                config.scope = ExportScope::Chart;
+            }
             return ExportResponse::Export {
-                config: self.config.clone(),
+                config,
                 save_path: (!to_clipboard).then(|| PathBuf::from(path)),
             };
         }
@@ -663,6 +857,164 @@ mod tests {
     fn restricting_formats_selects_an_offered_format() {
         let dialog = ExportDialog::new().with_formats(&[ExportFormat::Clipboard]);
         assert_eq!(dialog.config.format, ExportFormat::Clipboard);
+    }
+
+    /// Guards #3596: image choices reach the request and survive reopening, and layout scope
+    /// is requested only while the host offers it and the format is an image.
+    #[test]
+    fn image_choices_reach_the_request_and_survive_reopening() {
+        use egui::accesskit::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+
+        let mut dialog = ExportDialog::new().with_formats(&[
+            ExportFormat::Png,
+            ExportFormat::Svg,
+            ExportFormat::Csv,
+            ExportFormat::Clipboard,
+        ]);
+        dialog.save_path = "chart.png".into();
+        dialog.set_chart_size(Some(egui::vec2(1203.4, 611.6)));
+        dialog.set_layout_size(Some(egui::vec2(1900.0, 1000.0)));
+        dialog.open();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(800.0, 900.0))
+            .with_context_setup(|ctx| {
+                crate::icons::install_loader(ctx);
+                crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+            })
+            .build_ui_state(
+                |ui, (dialog, request): &mut (ExportDialog, Option<ExportConfig>)| {
+                    if let ExportResponse::Export { config, .. } = dialog.show(ui.ctx()) {
+                        *request = Some(config);
+                    }
+                },
+                (dialog, None),
+            );
+        h.run_steps(2);
+        let click = |h: &mut Harness<'_, (ExportDialog, Option<ExportConfig>)>, label: &str| {
+            h.get_by_label(label).click();
+            h.run_steps(2);
+        };
+        let edit =
+            |h: &mut Harness<'_, (ExportDialog, Option<ExportConfig>)>, side: usize, value: f64| {
+                h.get_all_by_role(Role::SpinButton)
+                    .nth(side)
+                    .unwrap()
+                    .set_value_accesskit(value);
+                h.run_steps(2);
+            };
+        click(&mut h, "Overlays");
+        assert!(!h.state().0.config.image.include_foreground);
+        click(&mut h, "2×");
+        assert_eq!(h.state().0.config.image.pixel_density, PixelDensity::Two);
+        h.get_by_label("2880 × 1800 px");
+        click(&mut h, "Whole layout");
+        assert_eq!(h.state().0.config.scope, ExportScope::Layout);
+        click(&mut h, "Current size");
+        assert_eq!(h.state().0.config.image.size, [1900, 1000]);
+        click(&mut h, "Keep proportions");
+        edit(&mut h, 0, 951.0);
+        assert_eq!(h.state().0.config.image.size, [951, 501]);
+        edit(&mut h, 0, 950.0);
+        assert_eq!(h.state().0.config.image.size, [950, 500]);
+        edit(&mut h, 1, 300.0);
+        assert_eq!(h.state().0.config.image.size, [570, 300]);
+        edit(&mut h, 0, 100.0);
+        assert_eq!(h.state().0.config.image.size, [190, 100]);
+        click(&mut h, "This chart");
+        click(&mut h, "Current size");
+        assert_eq!(h.state().0.config.image.size, [1203, 612]);
+        edit(&mut h, 0, 601.0);
+        assert_eq!(h.state().0.config.image.size, [601, 306]);
+        click(&mut h, "Whole layout");
+        click(&mut h, "Cancel");
+        assert!(!h.state().0.is_open());
+        h.state_mut().0.open();
+        h.run_steps(2);
+        let dialog = &h.state().0;
+        assert!(!dialog.config.image.include_foreground);
+        assert_eq!(dialog.config.image.pixel_density, PixelDensity::Two);
+        assert_eq!(dialog.config.scope, ExportScope::Layout);
+        assert_eq!(dialog.config.image.size, [601, 306]);
+        assert!(dialog.proportion.is_some());
+        assert_eq!(
+            h.get_by_role_and_label(Role::CheckBox, "Overlays")
+                .accesskit_node()
+                .toggled(),
+            Some(egui::accesskit::Toggled::False)
+        );
+        assert_eq!(
+            h.get_by_role_and_label(Role::RadioButton, "2×")
+                .accesskit_node()
+                .toggled(),
+            Some(egui::accesskit::Toggled::True)
+        );
+        assert_eq!(
+            h.get_by_role_and_label(Role::RadioButton, "Whole layout")
+                .accesskit_node()
+                .toggled(),
+            Some(egui::accesskit::Toggled::True)
+        );
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        let config = h.state().1.as_ref().unwrap();
+        assert_eq!(config.scope, ExportScope::Layout);
+        assert_eq!(config.image.pixel_density, PixelDensity::Two);
+        assert!(!config.image.include_foreground);
+        assert_eq!(config.image.size, [601, 306]);
+
+        h.state_mut().0.mark_success();
+        h.state_mut().0.set_layout_size(None);
+        h.run_steps(2);
+        assert!(h.query_by_label("Whole layout").is_none());
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().1.as_ref().unwrap().scope, ExportScope::Chart);
+        assert_eq!(h.state().0.config.scope, ExportScope::Layout);
+        h.state_mut().0.mark_success();
+        h.state_mut()
+            .0
+            .set_layout_size(Some(egui::vec2(1900.0, 1000.0)));
+        h.run_steps(2);
+        click(&mut h, "CSV");
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().1.as_ref().unwrap().scope, ExportScope::Chart);
+        assert_eq!(h.state().0.config.scope, ExportScope::Layout);
+        h.state_mut().0.mark_success();
+        click(&mut h, "PNG");
+        click(&mut h, "Keep proportions");
+        edit(&mut h, 0, 3000.0);
+        edit(&mut h, 1, 2000.0);
+        click(&mut h, "3×");
+        assert_eq!(h.state().0.config.image.size, [2160, 1440]);
+        click(&mut h, "SVG");
+        assert!(h.query_by_label("2×").is_none());
+        h.get_by_label("Overlays");
+        assert_eq!(h.state().0.config.image.pixel_density, PixelDensity::Three);
+        click(&mut h, "Clipboard");
+        h.get_by_label("3×");
+        for size in [
+            egui::vec2(f32::NAN, 100.0),
+            egui::vec2(100.0, f32::INFINITY),
+            egui::vec2(0.0, 100.0),
+            egui::vec2(100.0, -1.0),
+        ] {
+            h.state_mut().0.set_chart_size(Some(size));
+            h.state_mut().0.set_layout_size(Some(size));
+            h.run_steps(2);
+            assert!(h.query_by_label("Current size").is_none());
+            assert!(h.query_by_label("Whole layout").is_none());
+        }
+        h.state_mut()
+            .0
+            .set_chart_size(Some(egui::vec2(80.4, 611.6)));
+        h.run_steps(2);
+        click(&mut h, "Current size");
+        assert_eq!(h.state().0.config.image.size, [100, 612]);
     }
 
     #[test]

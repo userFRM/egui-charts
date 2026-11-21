@@ -1,6 +1,6 @@
 //! Editing the drawing collection: add, delete, layer, group, file, edit, show, hide and lock.
 
-use super::{DrawingEventKind, DrawingManager, DrawingSyncAction, queue_sync, sync_id};
+use super::{DrawingEventKind, DrawingManager, DrawingSyncAction, sync_id};
 use crate::drawings::domain::{Drawing, DrawingToolType, FolderSync};
 use crate::drawings::services::{HistoryService, ZOrderService, in_z_order};
 use crate::model::PostContent;
@@ -82,7 +82,7 @@ impl DrawingManager {
             .filter(|&id| {
                 self.drawings
                     .iter()
-                    .any(|d| d.id == id && d.user_edit_enabled)
+                    .any(|d| d.id == id && self.accepts_user_edits(d))
             })
             .collect();
         self.delete_drawings(&ids);
@@ -243,12 +243,14 @@ impl DrawingManager {
     /// undo and queues deletion of stored records exactly as [`Self::clear_all`] does.
     /// Drawings whose user edits are off always stay.
     pub fn clear_all_with_locked(&mut self, include_locked: bool) {
+        let all_locked = self.locked;
         self.history.push_snapshot(
             self.drawings
                 .iter()
                 .enumerate()
                 .filter(|(_, drawing)| {
-                    drawing.user_edit_enabled && (include_locked || !drawing.locked)
+                    drawing.user_edit_enabled
+                        && (include_locked || (!drawing.locked && !all_locked))
                 })
                 .map(|(index, drawing)| (index, drawing.clone()))
                 .collect(),
@@ -257,7 +259,7 @@ impl DrawingManager {
         for drawing in self
             .drawings
             .iter()
-            .filter(|d| d.user_edit_enabled && (include_locked || !d.locked))
+            .filter(|d| d.user_edit_enabled && (include_locked || (!d.locked && !all_locked)))
         {
             if drawing.saveable {
                 self.notify(DrawingSyncAction::Delete(sync_id(drawing)));
@@ -268,7 +270,7 @@ impl DrawingManager {
             self.report(id, DrawingEventKind::Removed);
         }
         self.drawings
-            .retain(|d| !d.user_edit_enabled || (d.locked && !include_locked));
+            .retain(|d| !d.user_edit_enabled || ((d.locked || all_locked) && !include_locked));
         self.cancel_curr_drawing();
         self.selection.deselect_all();
     }
@@ -704,6 +706,76 @@ impl DrawingManager {
         Ok(())
     }
 
+    /// [`Self::drag_edit_drawing`] for the drawings of `ids` together, skipping ids of no drawing
+    /// and locked drawings: the gesture's first frame records each drawing's state, and
+    /// [`Self::end_drag_handle`] makes the whole gesture one undo step and queues one update per
+    /// drawing. A frame after which saving would refuse one of them, as [`Self::edit_drawing`]
+    /// describes, changes none of them and returns the reason; the gesture keeps its earlier frames.
+    /// An open gesture on drawings outside `ids` ends first.
+    #[cfg(feature = "ui")]
+    pub(crate) fn drag_edit_drawings(
+        &mut self,
+        ids: &[usize],
+        mut edit: impl FnMut(&mut Drawing),
+    ) -> Result<(), &'static str> {
+        if self
+            .drag_old_state
+            .iter()
+            .chain(&self.drag_group)
+            .any(|d| !ids.contains(&d.id))
+        {
+            self.end_drag_handle();
+        }
+        let before: Vec<_> = self
+            .drawings
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| ids.contains(&d.id) && !d.locked)
+            .map(|(index, d)| (index, d.clone()))
+            .collect();
+        if before.is_empty() {
+            return Ok(());
+        }
+        for (index, old) in &before {
+            let drawing = &mut self.drawings[*index];
+            edit(drawing);
+            if let Err(reason) =
+                crate::drawings::validation::validate_edit(old, drawing, self.mapped_bars.as_ref())
+            {
+                for (index, old) in &before {
+                    self.drawings[*index] = old.clone();
+                }
+                return Err(reason);
+            }
+        }
+        if let Some(reason) = before
+            .iter()
+            .find_map(|(index, old)| self.check_identity(*index, old).err())
+        {
+            for (index, old) in &before {
+                self.drawings[*index] = old.clone();
+            }
+            return Err(reason);
+        }
+        for (_, old) in &before {
+            if self.drag_old_state.is_none() {
+                self.drag_old_state = Some(old.clone());
+            } else if !self
+                .drag_old_state
+                .iter()
+                .chain(&self.drag_group)
+                .any(|d| d.id == old.id)
+            {
+                self.drag_group.push(old.clone());
+            }
+        }
+        self.painted
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p| !before.iter().any(|(_, d)| d.id == p.id));
+        Ok(())
+    }
+
     // === Coordinate updates ===
 
     /// Recomputes screen coordinates for all drawings (completed and in-progress)
@@ -851,39 +923,34 @@ impl DrawingManager {
         self.hidden
     }
 
-    /// Toggles the lock of every drawing whose user edits are on: unlocks them all if all are
-    /// locked, otherwise locks them all.
-    pub fn toggle_lock_all(&mut self) {
-        let all_locked = self
-            .drawings
-            .iter()
-            .filter(|d| d.user_edit_enabled)
-            .all(|d| d.locked);
-        let mut before = Vec::new();
-        for (index, drawing) in self
-            .drawings
-            .iter_mut()
-            .enumerate()
-            .filter(|(_, d)| d.user_edit_enabled && d.locked == all_locked)
-        {
-            before.push((index, drawing.clone()));
-            drawing.locked = !all_locked;
-            if self.sync_enabled
-                && drawing.saveable
-                && let Ok(mut sync) = self.pending_sync.lock()
-            {
-                queue_sync(
-                    &mut sync,
-                    DrawingSyncAction::UpdateDrawing(drawing.id),
-                    Some(&sync_id(drawing)),
-                );
-            }
-        }
-        for (_, drawing) in &before {
-            self.stamp(drawing.id);
-            self.report_change(drawing.id, Some(drawing), false);
-        }
-        self.history.push_snapshot(before);
+    // === Group lock ===
+
+    /// Locks or unlocks every drawing as a group without changing [`Drawing::locked`]. While
+    /// locked, the user cannot move, reshape, restyle or delete any drawing, including drawings
+    /// added or loaded while locked; [`Self::accepts_user_edits`] tells which drawings the user
+    /// can edit. Drawings can still be placed, selected, hidden and reordered, and a text
+    /// drawing just placed still takes its first text. [`Self::clear_all_with_locked`] with
+    /// `true` still removes every drawing whose user edits are on. Methods that take drawing
+    /// ids, such as [`Self::edit_drawing`], [`Self::delete_drawings`] and
+    /// [`Self::set_selected_locked`], follow each drawing's own lock only.
+    ///
+    /// This is not a drawing edit: it queues no save or sync and changes no edit timestamp.
+    /// [`Chart`](crate::widget::Chart) records the flag in undo history and keeps it across
+    /// drawing loads and symbol changes, but does not save it with a layout.
+    pub fn set_locked(&mut self, locked: bool) {
+        self.locked = locked;
+    }
+
+    /// Whether [`Self::set_locked`] locks every drawing.
+    pub fn is_locked(&self) -> bool {
+        self.locked
+    }
+
+    /// Whether the user can edit `drawing` now: it
+    /// [accepts user edits](Drawing::accepts_user_edits) and [`Self::set_locked`] does not
+    /// lock every drawing.
+    pub fn accepts_user_edits(&self, drawing: &Drawing) -> bool {
+        !self.locked && drawing.accepts_user_edits()
     }
 
     /// Adds a completed drawing with validated chart coordinates and properties as one undo
@@ -1320,7 +1387,14 @@ mod tests {
                 "Another drawing is stored under this id",
             ),
         ];
-        let paths: [(&str, Edit); 4] = [
+        let paths: Vec<(&str, Edit)> = vec![
+            #[cfg(feature = "ui")]
+            ("drag_edit_drawings", |m, setting| {
+                let ids: Vec<_> = m.drawings.iter().map(|d| d.id).collect();
+                let result = m.drag_edit_drawings(&ids, setting);
+                m.end_drag_handle();
+                result
+            }),
             ("edit_drawing", |m, setting| {
                 let id = m.drawings[1].id;
                 m.edit_drawing(id, setting)
@@ -1364,6 +1438,50 @@ mod tests {
                 assert_eq!(chart.save_drawings().unwrap().drawings.len(), 2, "{case}");
             }
         }
+    }
+
+    /// Several colour frames form one undo step, with one update each and locked drawings left.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn a_colour_drag_over_several_drawings_is_one_undo_step() {
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let manager = chart.drawings_mut();
+        for _ in 0..3 {
+            let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+            drawing.chart_points = vec![ChartPoint::new(1.0, 105.0), ChartPoint::new(2.0, 106.0)];
+            drawing.completed = true;
+            manager.add_drawing(drawing).unwrap();
+        }
+        manager.drawings[2].locked = true;
+        let original: Vec<_> = manager.drawings.iter().map(|d| d.color).collect();
+        manager.history.clear();
+        manager.pending_sync.lock().unwrap().clear();
+        for red in 0..3 {
+            manager
+                .drag_edit_drawings(&[0, 1, 2], |d| d.color = [red, 0, 0, 255])
+                .unwrap();
+        }
+        manager.end_drag_handle();
+        assert_eq!(
+            manager.drawings.iter().map(|d| d.color).collect::<Vec<_>>(),
+            [[2, 0, 0, 255], [2, 0, 0, 255], original[2]]
+        );
+        assert_eq!(
+            manager
+                .pending_sync
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|action| format!("{action:?}"))
+                .collect::<Vec<_>>(),
+            ["UpdateDrawing(0)", "UpdateDrawing(1)"]
+        );
+        assert!(manager.undo());
+        assert_eq!(
+            manager.drawings.iter().map(|d| d.color).collect::<Vec<_>>(),
+            original
+        );
+        assert!(!manager.can_undo());
     }
 
     /// A restored id already used by a drawing that has not been stored makes a new drawing,

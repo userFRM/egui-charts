@@ -76,12 +76,14 @@ pub(super) fn textures(delta: &TexturesDelta) -> HashMap<TextureId, Texture> {
     textures
 }
 
-/// Draws `primitives` over transparent black at one pixel per point, sampling at pixel centres
-/// and blending premultiplied colours in gamma space as egui's renderers do, and returns the
-/// premultiplied pixels row by row. Fails on host paint callbacks and on meshes with a texture
-/// that `delta` does not set, such as one the host binds itself, instead of leaving them out.
+/// Draws `primitives`, laid out in points, over transparent black at `pixels_per_point` pixels
+/// per point into `size` pixels, sampling at pixel centres and blending premultiplied colours in
+/// gamma space as egui's renderers do, and returns the premultiplied pixels row by row. Fails on
+/// host paint callbacks and on meshes with a texture that `delta` does not set, such as one the
+/// host binds itself, instead of leaving them out.
 pub(super) fn rasterize(
     size: [u32; 2],
+    pixels_per_point: f32,
     primitives: &[ClippedPrimitive],
     delta: &TexturesDelta,
 ) -> Result<Vec<Color32>, String> {
@@ -102,7 +104,8 @@ pub(super) fn rasterize(
                 mesh.texture_id
             ));
         };
-        // The scissor rectangle, rounded to pixels as egui's renderers round it.
+        // The scissor rectangle, scaled to pixels and rounded as egui's renderers do.
+        let clip_rect = *clip_rect * pixels_per_point;
         let clip_x = clip_rect.min.x.round().max(0.0) as usize..clip_rect.max.x.round() as usize;
         let clip_y = clip_rect.min.y.round().max(0.0) as usize..clip_rect.max.y.round() as usize;
         let clip = [
@@ -111,7 +114,14 @@ pub(super) fn rasterize(
         ];
         for triangle in mesh.indices.as_chunks::<3>().0 {
             if let [Some(a), Some(b), Some(c)] = triangle.map(|i| mesh.vertices.get(i as usize)) {
-                fill(&mut pixels, width, &clip, [a, b, c], texture);
+                fill(
+                    &mut pixels,
+                    width,
+                    &clip,
+                    [a, b, c],
+                    texture,
+                    pixels_per_point,
+                );
             }
         }
     }
@@ -130,9 +140,15 @@ fn fill(
     clip: &[std::ops::Range<usize>; 2],
     vertices: [&Vertex; 3],
     texture: &Texture,
+    pixels_per_point: f32,
 ) {
     let [mut a, mut b, c] = vertices;
-    let pos = |vertex: &Vertex| [f64::from(vertex.pos.x), f64::from(vertex.pos.y)];
+    let pos = |vertex: &Vertex| {
+        [
+            f64::from(vertex.pos.x * pixels_per_point),
+            f64::from(vertex.pos.y * pixels_per_point),
+        ]
+    };
     let mut area = edge(pos(a), pos(b), pos(c));
     if !area.is_finite() || area == 0.0 {
         return;
