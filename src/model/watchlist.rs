@@ -100,7 +100,7 @@ pub enum WatchlistItem {
     Symbol {
         /// Instrument identifier used by the host.
         symbol: String,
-        /// Optional user-assigned color flag.
+        /// The symbol's colour flag. `WatchlistPanel` keeps it equal in every list.
         flag: Option<WatchlistFlag>,
     },
     /// A section title grouping the symbols below it, up to the next section.
