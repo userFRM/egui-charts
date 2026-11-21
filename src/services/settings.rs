@@ -58,6 +58,8 @@ pub struct UserSettings {
     pub layout_autosave: bool,
     /// The names of the starred layouts.
     pub layout_favorites: Vec<String>,
+    /// The host's names of starred hotlists, in the order offered.
+    pub hotlist_favorites: Vec<String>,
     /// Factory names of the starred studies of the indicator dialog, in order.
     pub indicator_favorites: Vec<String>,
     /// The intervals starred in the interval menu, in order. An interval this release does not
