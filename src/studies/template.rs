@@ -1349,6 +1349,7 @@ mod tests {
             show_volume_profile: false,
             split_sessions: false,
             session: crate::model::ProfileSession::Chart,
+            regular_hours: None,
             profile_period: crate::model::TPOProfilePeriod::Session,
             custom_letters: None,
             composites: Vec::new(),
@@ -2202,6 +2203,22 @@ mod tests {
         // keeps its settings and inputs and takes the defaults of both.
         let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Session","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["adaptive_rows",{"Toggle":false}],["sessions",{"Choice":0}],["session_start",{"Length":0}],["session_end",{"Length":0}],["session_zone",{"Text":""}],["hours_only",{"Toggle":false}],["width",{"Number":30.0}],["extend_poc",{"Toggle":false}],["extend_vah",{"Toggle":false}],["extend_val",{"Toggle":false}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileSession.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
         let restored = saved.create().unwrap();
+        for (id, expected) in [
+            ("custom_sessions", InputValue::Choice(0)),
+            ("session_overlap", InputValue::Choice(0)),
+            ("clip_hours", InputValue::Toggle(false)),
+        ] {
+            assert_eq!(
+                restored
+                    .inputs()
+                    .iter()
+                    .find(|input| input.id == id)
+                    .unwrap()
+                    .value,
+                expected
+            );
+        }
+
         let mut expected = saved.settings.clone();
         expected.plots = (0..3)
             .map(|line| crate::studies::VolProfileSession::default().plot_style(line))

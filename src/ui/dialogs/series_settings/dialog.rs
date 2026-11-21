@@ -728,6 +728,158 @@ mod tests {
         }
     }
 
+    /// Custom windows use host labels, edit a draft, cap the list at five and apply as one history step.
+    #[test]
+    fn session_profile_custom_sessions_apply_on_ok_only_and_undo() {
+        use egui::accesskit::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        for accept in [false, true] {
+            let mut chart = crate::ChartBuilder::new().build();
+            chart.set_chart_type(ChartType::SessionVolumeProfile);
+            let seeded = chart.trade_profile_settings().clone();
+            let mut dialog = SeriesSettingsDialog::new();
+            dialog.open(SeriesId::MAIN, chart.series_settings());
+            let mut h = Harness::builder()
+                .with_size(Vec2::new(1440.0, 900.0))
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                    crate::localization::set_translator(ctx, |english| {
+                        matches!(
+                            english,
+                            "Session start"
+                                | "Session end"
+                                | "Session zone"
+                                | "Session {0} start"
+                                | "Session {0} end"
+                                | "Session {0} zone"
+                                | "Remove session {0}"
+                                | "Add session"
+                                | "Overlapping hours"
+                                | "Own profile"
+                                | "In both sessions"
+                                | "Clip to trading hours"
+                        )
+                        .then(|| format!("Translated: {english}"))
+                    });
+                })
+                .build_ui_state(
+                    |ui, (dialog, chart): &mut (SeriesSettingsDialog, crate::Chart)| {
+                        if let SeriesSettingsAction::Apply(_, settings) = dialog.show(ui.ctx()) {
+                            chart.user_action(|c| c.apply_series_settings(&settings));
+                        }
+                    },
+                    (dialog, chart),
+                );
+            h.run();
+            h.get_by_role_and_label(Role::ComboBox, "Session")
+                .scroll_to_me();
+            h.run();
+            h.get_by_role_and_label(Role::ComboBox, "Session").click();
+            h.run();
+            h.get_by_label("Custom").click();
+            h.run();
+            for label in ["Translated: Session start", "Translated: Session end"] {
+                assert!(
+                    h.get_all_by_role_and_label(Role::SpinButton, label)
+                        .next()
+                        .is_some()
+                );
+            }
+            h.get_by_role_and_label(Role::ComboBox, "Translated: Session zone");
+            h.get_by_label("Translated: Add session").scroll_to_me();
+            h.run();
+            h.get_by_label("Translated: Add session").click();
+            h.run();
+            assert!(
+                h.get_all_by_role_and_label(Role::SpinButton, "Translated: Session 2 end")
+                    .next()
+                    .is_some()
+            );
+            h.get_by_role_and_label(Role::ComboBox, "Translated: Session 2 zone");
+            h.get_all_by_role_and_label(Role::SpinButton, "Translated: Session 2 start")
+                .next()
+                .unwrap()
+                .scroll_to_me();
+            h.run();
+            for _ in 0..12 {
+                h.get_all_by_role_and_label(Role::SpinButton, "Translated: Session 2 start")
+                    .next()
+                    .unwrap()
+                    .increment_accesskit();
+                h.run();
+            }
+            h.get_by_role_and_label(Role::ComboBox, "Translated: Overlapping hours")
+                .scroll_to_me();
+            h.run();
+            h.get_by_role_and_label(Role::ComboBox, "Translated: Overlapping hours")
+                .click();
+            h.run();
+            h.get_by_label("Translated: Own profile");
+            h.get_by_label("Translated: In both sessions").click();
+            h.run();
+            h.get_by_label("Translated: Clip to trading hours")
+                .scroll_to_me();
+            h.run();
+            h.get_by_label("Translated: Clip to trading hours").click();
+            h.run();
+            h.get_by_label("Translated: Remove session 2")
+                .scroll_to_me();
+            h.run();
+            h.get_by_label("Translated: Remove session 2").click();
+            h.run();
+            h.get_by_label("Translated: Add session").click();
+            h.run();
+            assert_eq!(h.state().1.trade_profile_settings(), &seeded);
+            // Adding reaches five, then stops. Removing the extra three returns to two.
+            for _ in 0..3 {
+                h.get_by_label("Translated: Add session").scroll_to_me();
+                h.run();
+                h.get_by_label("Translated: Add session").click();
+                h.run();
+            }
+            h.get_by_label("Translated: Add session").scroll_to_me();
+            h.run();
+            assert!(
+                h.get_by_label("Translated: Add session")
+                    .accesskit_node()
+                    .is_disabled()
+            );
+            for n in (3..=5).rev() {
+                let label = format!("Translated: Remove session {n}");
+                h.get_by_label(&label).scroll_to_me();
+                h.run();
+                h.get_by_label(&label).click();
+                h.run();
+            }
+            h.get_by_label(if accept { "Ok" } else { "Cancel" }).click();
+            h.run();
+            let chart = &mut h.state_mut().1;
+            if accept {
+                let applied = chart.trade_profile_settings().clone();
+                let saved = serde_json::to_value(&applied.session).unwrap();
+                assert_eq!(
+                    saved,
+                    serde_json::json!({"Custom": {
+                        "sessions": [
+                            {"start":"00:00:00", "end":"00:00:00", "zone":null},
+                            {"start":"00:00:00", "end":"00:00:00", "zone":null}
+                        ], "overlap":"InBoth", "trading_hours_only":true
+                    }})
+                );
+                assert!(chart.undo());
+                assert_eq!(chart.trade_profile_settings(), &seeded);
+                assert!(chart.redo());
+                assert_eq!(chart.trade_profile_settings(), &applied);
+            } else {
+                assert_eq!(chart.trade_profile_settings(), &seeded);
+            }
+        }
+    }
+
     #[test]
     fn type_controls_leave_the_footer_inside_short_and_narrow_windows() {
         for dark in [false, true] {

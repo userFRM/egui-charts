@@ -168,6 +168,8 @@ pub struct TPOConfig {
     /// of those hours. The Time Price Opportunity study sets it; `split_sessions` splits the
     /// trading day only.
     pub(crate) session: ProfileSession,
+    /// Regular instrument hours used only when custom sessions request clipping.
+    pub(crate) regular_hours: Option<BarClock>,
     /// Length of each profile: a session, the default, or a week or month of sessions.
     pub profile_period: TPOProfilePeriod,
     /// Custom letters sequence; an empty string uses the default letters
@@ -227,6 +229,7 @@ impl Default for TPOConfig {
             show_volume_profile: false,
             split_sessions: false,
             session: ProfileSession::Chart,
+            regular_hours: None,
             profile_period: TPOProfilePeriod::Session,
             custom_letters: None,
             composites: Vec::new(),
@@ -361,14 +364,19 @@ impl TPOProfilePeriod {
     ) -> Option<(i32, u32)> {
         match self {
             Self::Session => None,
+            Self::Week | Self::Month => self.date_key(sessions.trading_date(time)),
+        }
+    }
+
+    /// Calendar period of a custom session's own trading date.
+    pub(crate) fn date_key(self, date: chrono::NaiveDate) -> Option<(i32, u32)> {
+        match self {
+            Self::Session => None,
             Self::Week => {
-                let week = sessions.trading_date(time).iso_week();
+                let week = date.iso_week();
                 Some((week.year(), week.week()))
             }
-            Self::Month => {
-                let date = sessions.trading_date(time);
-                Some((date.year(), date.month()))
-            }
+            Self::Month => Some((date.year(), date.month())),
         }
     }
 }
@@ -628,6 +636,17 @@ pub(crate) fn session_starts(
         .collect()
 }
 
+/// One profile's source bars before composites, with its period origin and overlap layer.
+#[derive(Clone, Debug)]
+pub(crate) struct ProfilePart {
+    pub(crate) bars: Range<usize>,
+    pub(crate) opens: bool,
+    pub(crate) open: Option<DateTime<Utc>>,
+    /// Custom windows use their own trading date, even before the chart calendar opens.
+    pub(crate) date: Option<chrono::NaiveDate>,
+    pub(crate) layer: usize,
+}
+
 /// The bars of each profile before composites, and whether it opens a session: from each start
 /// of [`session_starts`] to the next for [`ProfileSession::Chart`], otherwise the parts of each
 /// trading day that `config.session` keeps ([`ProfileSession::profiled`]). `config.splits` cut
@@ -636,8 +655,9 @@ pub(crate) fn profile_parts(
     bars: &[Bar],
     sessions: &crate::model::ExchangeSessionProvider,
     config: &TPOConfig,
-) -> Vec<(Range<usize>, bool)> {
-    let parts = if config.session == ProfileSession::Chart {
+    interval: Option<crate::model::Timeframe>,
+) -> Vec<ProfilePart> {
+    let ranges = if config.session == ProfileSession::Chart {
         let starts = session_starts(bars, sessions, config.split_hours(), &[]);
         let ends = starts.iter().skip(1).copied().chain([bars.len()]);
         starts
@@ -646,6 +666,8 @@ pub(crate) fn profile_parts(
             .zip(ends)
             .map(|(start, end)| start..end)
             .collect()
+    } else if matches!(config.session, ProfileSession::Custom(_)) {
+        Vec::new()
     } else {
         // Whole trading days, unusable bars included: a day of them must not join the day before.
         let breaks: Vec<_> = (sessions.session_breaks(bars).into_iter())
@@ -658,6 +680,40 @@ pub(crate) fn profile_parts(
             .flat_map(|(start, end)| config.session.profiled(bars, start..end, sessions, true))
             .collect::<Vec<_>>()
     };
+    let parts = if let ProfileSession::Custom(custom) = &config.session {
+        custom
+            .parts(
+                bars,
+                0..bars.len(),
+                interval.unwrap_or_default(),
+                config.regular_hours.as_ref(),
+                true,
+            )
+            .into_iter()
+            .map(|p| ProfilePart {
+                bars: p.bars,
+                opens: true,
+                open: Some(p.open),
+                date: Some(p.date),
+                layer: if custom.overlap == crate::model::SessionOverlap::InBoth {
+                    p.session
+                } else {
+                    0
+                },
+            })
+            .collect::<Vec<_>>()
+    } else {
+        ranges
+            .into_iter()
+            .map(|bars| ProfilePart {
+                bars,
+                opens: true,
+                open: None,
+                date: None,
+                layer: 0,
+            })
+            .collect()
+    };
     let mut cuts: Vec<_> = (config.splits.iter())
         .map(|split| bars.partition_point(|bar| bar.time < *split))
         .collect();
@@ -669,13 +725,19 @@ pub(crate) fn profile_parts(
             let inside = cuts
                 .iter()
                 .copied()
-                .filter(|&i| part.start < i && i < part.end);
-            let starts = std::iter::once(part.start).chain(inside.clone());
-            let ends = inside.chain([part.end]);
+                .filter(|&i| part.bars.start < i && i < part.bars.end);
+            let starts = std::iter::once(part.bars.start).chain(inside.clone());
+            let ends = inside.chain([part.bars.end]);
             starts
                 .zip(ends)
                 .enumerate()
-                .map(|(n, (start, end))| (start..end, n == 0))
+                .map(|(n, (start, end))| ProfilePart {
+                    bars: start..end,
+                    opens: n == 0,
+                    open: part.open,
+                    date: part.date,
+                    layer: part.layer,
+                })
                 .collect::<Vec<_>>()
         })
         .collect()
@@ -728,6 +790,29 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
         return Vec::new();
     }
 
+    let parts = profile_parts(bars, &clock.sessions(), config, clock.timeframe());
+    if parts.iter().all(|part| part.layer == 0) {
+        return profiles_for_parts(bars, config, clock, parts);
+    }
+    let mut layers = std::collections::BTreeMap::<usize, Vec<ProfilePart>>::new();
+    for part in parts {
+        layers.entry(part.layer).or_default().push(part);
+    }
+    let mut profiles: Vec<_> = layers
+        .into_values()
+        .flat_map(|parts| profiles_for_parts(bars, config, clock, parts))
+        .collect();
+    profiles.sort_by_key(|p| p.session_date);
+    profiles
+}
+
+/// Build and combine one layer, so a bar shared by sessions contributes to each independently.
+fn profiles_for_parts(
+    bars: &[Bar],
+    config: &TPOConfig,
+    clock: &BarClock,
+    parts: Vec<ProfilePart>,
+) -> Vec<TPOProfile> {
     let letters = config
         .custom_letters
         .as_deref()
@@ -737,7 +822,7 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
         .collect::<Vec<_>>();
 
     let mut profiles: Vec<TPOProfile> = Vec::new();
-    let mut opened: Vec<bool> = Vec::new();
+    let mut opened = Vec::new();
     let mut current_profile: Option<TPOProfile> = None;
     let mut session_open = bars[0].time;
     // The open period: its index, first bar time and row-range endpoints
@@ -746,9 +831,9 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
     let interval_minutes = clock.timeframe().map_or(0, |t| t.duration_ms() / 60_000);
     let period_minutes = i64::from(config.period_minutes.max(1)).max(interval_minutes);
     let sessions = clock.sessions();
-    let mut parts = profile_parts(bars, &sessions, config)
-        .into_iter()
-        .peekable();
+    let mut parts = parts.into_iter().peekable();
+    let mut part_open = None;
+    let mut part_date = None;
     // The end of the open profile's bars; bars from there to the next profile join none.
     let mut part_end = 0;
     // The pre-market, post-market and segment profiles count from the open of their own hours.
@@ -786,17 +871,23 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
         let mut is_new_session = current_profile.is_none();
         // A split starts a profile, while its periods keep counting from the session's open.
         let mut opens_session = is_new_session;
-        while let Some((part, opens)) = parts.next_if(|(part, _)| part.start <= i) {
-            part_end = part.end;
+        while let Some(part) = parts.next_if(|part| part.bars.start <= i) {
+            part_end = part.bars.end;
+            part_date = part.date;
             is_new_session = true;
-            opens_session |= opens;
+            opens_session |= part.opens;
+            if part.opens {
+                part_open = part.open;
+            }
         }
         // Bars outside the chosen hours join no profile.
         if i >= part_end {
             continue;
         }
         if opens_session {
-            session_open = sessions.session_open(bar.time, split).unwrap_or(bar.time);
+            session_open = part_open
+                .or_else(|| sessions.session_open(bar.time, split))
+                .unwrap_or(bar.time);
         }
         let elapsed = (bar.time - session_open).num_minutes().max(0);
         let bar_period = (elapsed / period_minutes) as usize;
@@ -822,7 +913,10 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
         if is_new_session {
             // Save the current profile
             profiles.extend(current_profile.take());
-            opened.push(opens_session && !split_between(&config.splits, previous, bar.time));
+            opened.push((
+                opens_session && !split_between(&config.splits, previous, bar.time),
+                part_date,
+            ));
 
             // Start new profile
             current_profile = Some(TPOProfile {
@@ -877,7 +971,8 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
         profiles.push(profile);
     }
 
-    let mut combined: Vec<TPOProfile> = Vec::with_capacity(profiles.len());
+    let mut combined: Vec<(TPOProfile, Option<chrono::NaiveDate>)> =
+        Vec::with_capacity(profiles.len());
     let composite = |profile: &TPOProfile| {
         let open = &profile.session_date;
         config
@@ -885,22 +980,32 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
             .iter()
             .position(|range| range.contains(open))
     };
-    let period = |profile: &TPOProfile| config.profile_period.key(&sessions, profile.session_date);
-    for (profile, opens) in profiles.into_iter().zip(opened) {
+    let period = |profile: &TPOProfile, date: Option<chrono::NaiveDate>| {
+        date.map_or_else(
+            || config.profile_period.key(&sessions, profile.session_date),
+            |date| config.profile_period.date_key(date),
+        )
+    };
+    for (profile, (opens, date)) in profiles.into_iter().zip(opened) {
         match combined.last_mut() {
-            Some(last)
+            Some((last, last_date))
                 if (composite(last).is_some() && composite(last) == composite(&profile))
-                    || (opens && period(last).is_some() && period(last) == period(&profile)) =>
+                    || (opens
+                        && period(last, *last_date).is_some()
+                        && period(last, *last_date) == period(&profile, date)) =>
             {
                 last.merge(profile)
             }
-            _ => combined.push(profile),
+            _ => combined.push((profile, date)),
         }
     }
-    for profile in &mut combined {
-        calculate_profile_stats(profile, config);
-    }
     combined
+        .into_iter()
+        .map(|(mut profile, _)| {
+            calculate_profile_stats(&mut profile, config);
+            profile
+        })
+        .collect()
 }
 
 /// Emit the union of a period's ranges once per row, then clear its endpoints.

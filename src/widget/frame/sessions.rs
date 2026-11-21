@@ -1,4 +1,5 @@
 use super::Chart;
+use std::borrow::Cow;
 
 impl Chart {
     /// The session break dividers in the chart's colour, width and pattern.
@@ -66,7 +67,10 @@ impl Chart {
     pub(crate) fn profile_hours<'a>(
         &self,
         selection: &'a crate::model::ProfileSession,
-    ) -> (crate::model::BarClock, &'a crate::model::ProfileSession) {
+    ) -> (
+        crate::model::BarClock,
+        Cow<'a, crate::model::ProfileSession>,
+    ) {
         use crate::model::{ProfileSession, Timeframe, TimezoneId};
         let mut clock = self.bar_clock();
         let instrument = self.instrument();
@@ -77,6 +81,15 @@ impl Chart {
             .and_then(|i| i.time_zone.clone())
             .unwrap_or_else(TimezoneId::utc);
         let hours = instrument.and_then(|i| i.session.as_ref());
+        if intraday && let ProfileSession::Custom(custom) = selection {
+            if hours.is_none() {
+                clock = clock.with_timezone(zone.clone());
+            }
+            return (
+                clock,
+                Cow::Owned(ProfileSession::Custom(custom.with_zone(&zone))),
+            );
+        }
         let by_time_of_day = !matches!(
             selection,
             ProfileSession::Regular | ProfileSession::Extended
@@ -90,7 +103,7 @@ impl Chart {
             } else {
                 &ProfileSession::Chart
             };
-            return (divided, kept);
+            return (divided, Cow::Borrowed(kept));
         }
         // Without instrument hours there is nothing to select among, so the chart's calendar stays.
         if let Some(zone) = instrument
@@ -99,7 +112,38 @@ impl Chart {
         {
             clock = clock.with_timezone(zone.clone());
         }
-        (clock, &ProfileSession::Chart)
+        (clock, Cow::Borrowed(&ProfileSession::Chart))
+    }
+
+    /// The instrument's regular hours on this interval, absent when it supplies no hours.
+    pub(crate) fn regular_hours_clock(&self) -> Option<crate::model::BarClock> {
+        let instrument = self.instrument()?;
+        let hours = instrument.session.as_ref()?;
+        let zone = instrument
+            .time_zone
+            .clone()
+            .unwrap_or_else(crate::model::TimezoneId::utc);
+        Some(
+            crate::model::BarClock::new(self.timeframe.unwrap_or_default()).with_session(
+                zone,
+                hours.clone(),
+                false,
+            ),
+        )
+    }
+
+    /// Resolve a TPO study's custom zones and the regular calendar it may clip to.
+    pub(crate) fn tpo_division(
+        &self,
+        config: &crate::model::TPOConfig,
+    ) -> (crate::model::BarClock, crate::model::TPOConfig) {
+        let (clock, session) = self.profile_hours(&config.session);
+        let config = crate::model::TPOConfig {
+            session: session.into_owned(),
+            regular_hours: self.regular_hours_clock(),
+            ..config.clone()
+        };
+        (clock, config)
     }
 }
 
@@ -880,7 +924,8 @@ mod tests {
             })
             .collect();
         // On the last day 100 holds 36 of 40 volume units, and four of eight TPOs.
-        // Its 0.25 row spans 99.875..100.125; the last row spans 159.875..160.125.
+        // 241 quarter-point ticks / 24 requested rows rounds up to 11 ticks per row. Keys
+        // floor(400/11)=36 through floor(640/11)=58 span 98.875..162.125, with POC 100.25.
         for (kind, mode, letters) in [
             (
                 ChartType::SessionVolumeProfile,
@@ -952,7 +997,12 @@ mod tests {
                     chart.set_start_idx(start);
                     draw(&mut chart, None);
                     let map = chart.get_chart_mapping();
-                    for price in [99.875, 160.125] {
+                    let edges = if kind == ChartType::SessionVolumeProfile {
+                        [98.875, 162.125]
+                    } else {
+                        [99.875, 161.875]
+                    };
+                    for price in edges {
                         assert!(
                             map.price
                                 .range()
@@ -963,9 +1013,9 @@ mod tests {
                     if count <= 8 {
                         let range = map.price.range();
                         // The span takes 82% of the pane, with 8% below and 10% above.
-                        // Executed rows span 99.875..160.125; TPO rows of 2 end at 161.875.
+                        // Grouped execution rows span 98.875..162.125; TPO rows of 2 end at 161.875.
                         let (low, high) = if kind == ChartType::SessionVolumeProfile {
-                            (99.875 - 60.25 / 0.82 * 0.08, 160.125 + 60.25 / 0.82 * 0.1)
+                            (98.875 - 63.25 / 0.82 * 0.08, 162.125 + 63.25 / 0.82 * 0.1)
                         } else {
                             (99.875 - 62.0 / 0.82 * 0.08, 161.875 + 62.0 / 0.82 * 0.1)
                         };
@@ -1019,9 +1069,14 @@ mod tests {
                     }]
                     .time,
                 );
+                let poc = if kind == ChartType::SessionVolumeProfile {
+                    "POC 100.25"
+                } else {
+                    "POC 100.00"
+                };
                 assert!(
                     painted.iter().any(|s| matches!(&s.shape, Shape::Text(t)
-                    if t.galley.text().starts_with(&session) && t.galley.text().contains("POC 100.00") && t.galley.text().contains("VAH")
+                    if t.galley.text().starts_with(&session) && t.galley.text().contains(poc) && t.galley.text().contains("VAH")
                         && t.galley.text().contains("VAL") && t.galley.text().contains("below"))),
                     "cropped {kind:?} retains its central levels"
                 );
