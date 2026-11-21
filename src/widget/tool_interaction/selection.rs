@@ -334,6 +334,8 @@ fn handle_cursor(manager: &DrawingManager, id: usize, handle: HandlePos) -> egui
         HandlePos::TopRight | HandlePos::BottomLeft => CursorIcon::ResizeNeSw,
         HandlePos::Top | HandlePos::Bottom => CursorIcon::ResizeVertical,
         HandlePos::Left | HandlePos::Right => CursorIcon::ResizeHorizontal,
+        HandlePos::Column(_) => CursorIcon::ResizeColumn,
+        HandlePos::Row(_) => CursorIcon::ResizeRow,
         HandlePos::Start | HandlePos::End | HandlePos::Point(_) => CursorIcon::ResizeNwSe,
     }
 }
@@ -2022,6 +2024,118 @@ mod tests {
                 if after_inside { vec![7] } else { vec![] },
                 "the release uses current geometry and pointer position"
             );
+        }
+    }
+
+    /// Guards #3581: on a selected table, a drag from a column's handle or from anywhere along
+    /// one of its grid lines sets that column's width, the bottom edge sets the last row's
+    /// height and the bottom-right corner scales every column and row, the text keeping its size.
+    /// Each drag is one undo step, and a saved table keeps the sizes. Unset columns are 70 wide
+    /// and rows 22 high, so the corner's drag from 210 by 88 to 315 by 176 scales columns by 1.5
+    /// and rows by 2.
+    #[test]
+    fn table_edges_size_columns_rows_and_the_table() {
+        use crate::widget::test_frames::{chart, frame};
+        use egui::{Modifiers, Vec2, pos2, vec2};
+        let near = |a: &[Option<f32>], b: &[Option<f32>]| {
+            a.len() == b.len()
+                && a.iter().zip(b).all(|(a, b)| match (a, b) {
+                    (Some(a), Some(b)) => (a - b).abs() < 1e-3,
+                    _ => a == b,
+                })
+        };
+        // The column and row edge the press is on, from the table's anchor, and how far from it.
+        type Case = (
+            &'static str,
+            (usize, usize),
+            Vec2,
+            Vec2,
+            Vec<Option<f32>>,
+            Vec<Option<f32>>,
+        );
+        let cases: [Case; 4] = [
+            (
+                "column 0 handle",
+                (1, 0),
+                Vec2::ZERO,
+                vec2(30.0, 0.0),
+                vec![Some(100.0)],
+                vec![],
+            ),
+            (
+                "column 1 grid line",
+                (2, 0),
+                vec2(0.0, 33.0),
+                vec2(20.0, 0.0),
+                vec![None, Some(90.0)],
+                vec![],
+            ),
+            (
+                "bottom edge",
+                (0, 4),
+                vec2(35.0, 0.0),
+                vec2(0.0, 10.0),
+                vec![],
+                vec![None, None, None, Some(32.0)],
+            ),
+            (
+                "corner",
+                (3, 4),
+                Vec2::ZERO,
+                vec2(105.0, 88.0),
+                vec![Some(105.0); 3],
+                vec![Some(44.0); 4],
+            ),
+        ];
+        for (case, (column, row), offset, delta, widths, heights) in cases {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            let mut table = Drawing::new(7, DrawingToolType::Table);
+            table.completed = true;
+            table.chart_points.push(ChartPoint::new(45.0, 15.0));
+            chart.drawings_mut().drawings.push(table);
+            chart.drawings_mut().select(7);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let anchor = chart.drawings().drawings[0].points[0];
+            let xs = [0.0, 70.0, 140.0, 210.0].map(|x| anchor.x + x);
+            let ys = [0.0, 22.0, 44.0, 66.0, 88.0].map(|y| anchor.y + y);
+            let press = pos2(xs[column], ys[row]) + offset;
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            let to = press + delta;
+            assert!(
+                chart.get_chart_mapping().rect.contains(to),
+                "{case}: drag stays in the pane"
+            );
+            for (time, events) in [
+                vec![Event::PointerMoved(press)],
+                vec![button(press, true)],
+                vec![Event::PointerMoved(press + delta.normalized() * 9.0)],
+                vec![Event::PointerMoved(to)],
+                vec![button(to, false)],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                frame(&ctx, &mut chart, 0.1 * (time + 1) as f64, events);
+            }
+            let sized = chart.drawings().drawings[0]
+                .table
+                .clone()
+                .unwrap_or_default();
+            assert!(near(&sized.column_widths, &widths), "{case}: {sized:?}");
+            assert!(near(&sized.row_heights, &heights), "{case}: {sized:?}");
+            let saved = chart.save_drawings().unwrap().to_json().unwrap();
+            assert!(chart.can_undo(), "{case}");
+            assert!(chart.undo());
+            assert_eq!(chart.drawings().drawings[0].table, None, "{case}");
+            assert!(!chart.can_undo(), "{case}: one step");
+            chart.load_drawings(&saved).unwrap();
+            assert_eq!(chart.drawings().drawings[0].table, Some(sized), "{case}");
         }
     }
 }
