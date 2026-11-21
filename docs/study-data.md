@@ -113,6 +113,10 @@ loads it back to the first bar of the span. Profiles still estimate volume from 
 a chart bar without finer inputs keeps its own estimate.
 Direct callers supply [`StudyData`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyData.html) to [`Indicator::update_data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.update_data) with sorted, unique bars;
 invalid prices, negative volume or unordered timestamps leave accepted values unchanged.
+Set `chart` to the calendar of the bars passed in, with the Wait for interval close setting, for
+studies that read
+[`StudyData::closed_at`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyData.html#method.closed_at);
+`None` takes each time given to it as a close.
 Pass `from = 0` whenever a requested history changes. A nonzero `from` reuses those histories
 and updates the changed chart bars; the chart supplies this invalidation automatically.
 An unavailable or stale interval leaves gaps. A doji at the previous intrabar's close takes that
