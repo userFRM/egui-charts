@@ -242,7 +242,14 @@ figures and all charts follow the date range, and so do margin marks, peaks and 
 margin points use the equity timestamps; host margin points use their own time span. Without
 usable margin points the margin chart takes no space. Curve positions and hover
 values retain submillisecond timestamps. Time labels along the axis follow its span. Hover a curve
-for timestamped values. The virtualized trade list uses entry-time order, keeps equal-time
+for timestamped values. On the equity chart the tooltip also names the last listed trade closed at
+or before the hovered point, with its number in the list of trades, its side and the net profit of
+the listed trades closed up to that point, added in exit order; with overlapping trades this can
+differ from the list's Cumulative profit, which adds in list order. **Trade run-up and drawdown**,
+beside the buy-and-hold comparison and off by default, marks each listed trade's MFE above and MAE
+below the equity before its entry, from entry to exit (to the chart's end while open), on the
+equity chart's scale. It needs the excursions of the list of trades and is hidden without them.
+The virtualized trade list uses entry-time order, keeps equal-time
 trades in input order, filters to the range's trades and shows fill prices, net profit,
 cumulative profit, fees, labels and excursions. Cumulative profit adds the net profit of the
 listed trades closed in the range, in list order up to and including the row. An open trade

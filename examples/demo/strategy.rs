@@ -865,6 +865,48 @@ mod tests {
                 for _ in 0..3 {
                     frame(&mut app, vec![]).drop_without_applying_deltas();
                 }
+                if width == 1440.0 {
+                    // The sample run has the chart's bars, so its trades carry excursions.
+                    ctx.enable_accesskit();
+                    let marks = |output: &FullOutput| {
+                        output.shapes.iter().any(|shape| {
+                            matches!(&shape.shape, Shape::Rect(rect)
+                            if rect.fill == theme.ui.success.gamma_multiply(0.35))
+                        })
+                    };
+                    for shown in [true, false] {
+                        let output = frame(&mut app, vec![]);
+                        let target_node = output
+                            .platform_output
+                            .accesskit_update
+                            .as_ref()
+                            .unwrap()
+                            .nodes
+                            .iter()
+                            .find(|(_, node)| {
+                                node.role() == egui::accesskit::Role::CheckBox
+                                    && node.label() == Some("Trade run-up and drawdown")
+                            })
+                            .expect("trade marks option")
+                            .0;
+                        output.drop_without_applying_deltas();
+                        frame(
+                            &mut app,
+                            vec![Event::AccessKitActionRequest(
+                                egui::accesskit::ActionRequest {
+                                    action: egui::accesskit::Action::Click,
+                                    target_tree: egui::accesskit::TreeId::ROOT,
+                                    target_node,
+                                    data: None,
+                                },
+                            )],
+                        )
+                        .drop_without_applying_deltas();
+                        let output = frame(&mut app, vec![]);
+                        assert_eq!(marks(&output), shown);
+                        output.drop_without_applying_deltas();
+                    }
+                }
                 let output = frame(&mut app, vec![]);
                 let forward = text_at(&output, "Forward test");
                 output.drop_without_applying_deltas();
