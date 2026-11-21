@@ -926,6 +926,8 @@ impl DemoApp {
             app.watchlist.set_active_list(active);
         }
         app.watchlist.set_service(app.quotes.clone());
+        app.watchlist
+            .set_sharing(Arc::new(feeds::ListSharing::default()));
         app.watchlist.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.alert_evaluator.set_storage(app.storage.clone());
         app.alert_dialog.set_storage(app.alert_host.clone());
@@ -8070,6 +8072,63 @@ mod tests {
         }
     }
 
+    /// The real More menu exposes shared state and removes it once the demo host revokes it.
+    #[test]
+    fn watchlist_sharing_can_be_stopped_from_more() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.open_panel = Some(SidePanel::Watchlist);
+        let size = egui::vec2(1440.0, 350.0);
+        let click = |app: &mut DemoApp, label: &str| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+            let point = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .filter_map(|(_, node)| {
+                    (node.label() == Some(label) && node.role() != egui::accesskit::Role::Label)
+                        .then(|| node.bounds())
+                        .flatten()
+                })
+                .min_by(|a, b| a.y0.total_cmp(&b.y0))
+                .map(|rect| {
+                    egui::pos2(
+                        ((rect.x0 + rect.x1) / 2.0) as f32,
+                        ((rect.y0 + rect.y1) / 2.0) as f32,
+                    )
+                })
+                .unwrap_or_else(|| panic!("missing {label}"));
+            output.drop_without_applying_deltas();
+            ui_click(&ctx, size, point, |ui| {
+                app.ui(ui, &mut eframe::Frame::_new_kittest())
+            });
+        };
+        click(&mut app, "More");
+        click(&mut app, "Copy link");
+        let shown = ui_frame(&ctx, size, vec![], |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        assert!(shown.iter().any(|(text, _)| text == "Shared by link"));
+        click(&mut app, "Stop sharing");
+        let shown = ui_frame(&ctx, size, vec![], |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        assert!(shown.iter().any(|(text, _)| text == "Sharing stopped"));
+        assert!(!shown.iter().any(|(text, _)| text == "Stop sharing"));
+    }
+
     /// The focused chart adds to the shown list, reports duplicates and restores that list.
     #[test]
     fn the_shown_watchlist_takes_alt_w_and_survives_a_restart() {
@@ -8122,7 +8181,8 @@ mod tests {
             if duplicate {
                 assert!(
                     app.toasts
-                        .toasts().iter()
+                        .toasts()
+                        .iter()
                         .any(|toast| toast.message == "STOCKC is already in that watchlist")
                 );
             }

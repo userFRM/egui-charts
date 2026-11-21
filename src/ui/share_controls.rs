@@ -13,6 +13,7 @@ use std::sync::Arc;
 enum Operation {
     Link(String),
     Copy(String),
+    Revoke(String),
 }
 
 /// What the last operation came to, for the document it was made on.
@@ -20,6 +21,7 @@ enum Operation {
 enum Outcome {
     Link(ShareLink),
     Copy(String),
+    Revoked,
     Failed(FeedError),
 }
 
@@ -69,6 +71,13 @@ impl ShareControls {
                             Err(error) => Outcome::Failed(error),
                         },
                     ),
+                Operation::Revoke(_) => answer.downcast::<Result<(), FeedError>>().map_or_else(
+                    |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
+                    |answer| match *answer {
+                        Ok(()) => Outcome::Revoked,
+                        Err(error) => Outcome::Failed(error),
+                    },
+                ),
                 Operation::Copy(_) => answer.downcast::<Result<String, FeedError>>().map_or_else(
                     |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
                     |answer| match *answer {
@@ -93,10 +102,18 @@ impl ShareControls {
             return false;
         };
         let offer = sharing.offers(kind);
-        if !offer.link && !offer.copy {
+        let shared = sharing.shared(kind, name);
+        // Keep the host's revoke answer visible after shared state disappears.
+        let revoked = self.last.as_ref().is_some_and(
+            |(operation, _)| matches!(operation, Operation::Revoke(document) if document == name),
+        );
+        if !offer.link && !offer.copy && !shared && !revoked {
             return false;
         }
         ui.separator();
+        if shared {
+            ui.weak(l10n::text(ui.ctx(), "Shared by link"));
+        }
         let mut copy = false;
         let idle = self.pending.is_none();
         if offer.link
@@ -121,21 +138,34 @@ impl ShareControls {
             copy = true;
             ui.ctx().request_repaint();
         }
+        if offer.revoke
+            && shared
+            && ui
+                .add_enabled(
+                    self.pending.is_none(),
+                    egui::Button::new(l10n::text(ui.ctx(), "Stop sharing")),
+                )
+                .clicked()
+        {
+            self.pending = Some(Operation::Revoke(name.to_owned()));
+            sharing.revoke(kind, name, self.inbox.reply(0));
+            ui.ctx().request_repaint();
+        }
         let status = if let Some(pending) = &self.pending {
             Some((
                 false,
                 l10n::text(
                     ui.ctx(),
-                    if matches!(pending, Operation::Link(_)) {
-                        "Getting the link…"
-                    } else {
-                        "Saving a copy…"
+                    match pending {
+                        Operation::Link(_) => "Getting the link…",
+                        Operation::Copy(_) => "Saving a copy…",
+                        Operation::Revoke(_) => "Stopping sharing…",
                     },
                 ),
             ))
         } else {
             self.last.as_ref().and_then(|(operation, outcome)| {
-                let (Operation::Link(shared) | Operation::Copy(shared)) = operation;
+                let (Operation::Link(shared) | Operation::Copy(shared) | Operation::Revoke(shared)) = operation;
                 (shared == name).then(|| match outcome {
                     Outcome::Link(link) => (
                         false,
@@ -152,11 +182,12 @@ impl ShareControls {
                         false,
                         l10n::format_text(ui.ctx(), "Saved as {0}", &[("0", copy.clone())]),
                     ),
+                    Outcome::Revoked => (false, l10n::text(ui.ctx(), "Sharing stopped")),
                     Outcome::Failed(error) => (
                         true,
                         l10n::format_text(
                             ui.ctx(),
-                            "Could not share: {0}",
+                            if matches!(operation, Operation::Revoke(_)) { "Could not stop sharing: {0}" } else { "Could not share: {0}" },
                             &[("0", error.to_string())],
                         ),
                     ),
@@ -198,6 +229,69 @@ mod tests {
         }
     }
 
+    /// Revoke carries the document identity, waits for the host and renders both answers.
+    #[test]
+    fn stop_sharing_reports_the_hosts_state_and_answer() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        use std::sync::Mutex;
+        #[derive(Default)]
+        struct Host(Mutex<(bool, Vec<(ShareKind, String, Reply<()>)>)>);
+        impl Sharing for Host {
+            fn offers(&self, _: ShareKind) -> ShareOffer {
+                let mut offer = ShareOffer::default();
+                offer.revoke = true;
+                offer
+            }
+            fn shared(&self, _: ShareKind, name: &str) -> bool {
+                name == "Shared" && !self.0.lock().unwrap().0
+            }
+            fn revoke(&self, kind: ShareKind, name: &str, reply: Reply<()>) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .1
+                    .push((kind, name.to_owned(), reply));
+            }
+        }
+        let host = Arc::new(Host::default());
+        let mut controls = ShareControls::default();
+        controls.set_service(host.clone());
+        let mut h = Harness::builder().allow_missing_glyphs().build_ui_state(
+            |ui, (controls, name): &mut (ShareControls, String)| {
+                controls.poll(ui.ctx());
+                controls.show(ui, ShareKind::Watchlist, name);
+            },
+            (controls, "Private".into()),
+        );
+        assert!(h.query_by_value("Shared by link").is_none());
+        assert!(h.query_by_label("Stop sharing").is_none());
+        h.state_mut().1 = "Shared".into();
+        h.run();
+        assert!(h.query_by_value("Shared by link").is_some());
+        h.get_by_label("Stop sharing").click();
+        h.run();
+        assert!(h.get_by_label("Stop sharing").is_disabled());
+        assert!(h.query_by_value("Stopping sharing…").is_some());
+        let (kind, name, reply) = host.0.lock().unwrap().1.pop().unwrap();
+        assert_eq!((kind, name.as_str()), (ShareKind::Watchlist, "Shared"));
+        reply.send(Err(FeedError::Other("locked".into())));
+        h.run();
+        assert!(h.query_by_value("Could not stop sharing: locked").is_some());
+        assert!(!h.get_by_label("Stop sharing").is_disabled());
+        h.get_by_label("Stop sharing").click();
+        h.run();
+        let (_, _, reply) = host.0.lock().unwrap().1.pop().unwrap();
+        host.0.lock().unwrap().0 = true;
+        reply.send(Ok(()));
+        h.run();
+        assert!(h.query_by_value("Sharing stopped").is_some());
+        assert!(h.query_by_value("Shared by link").is_none());
+        assert!(h.query_by_label("Stop sharing").is_none());
+    }
+
     /// A link reaches the clipboard with the host's copy policy, a copy returns its saved name,
     /// and a rejection is kept for the menu to show.
     #[test]
@@ -211,6 +305,7 @@ mod tests {
             match operation {
                 Operation::Link(ref name) => host.link(kind, name, controls.inbox.reply(0)),
                 Operation::Copy(ref name) => host.copy(kind, name, controls.inbox.reply(0)),
+                Operation::Revoke(ref name) => host.revoke(kind, name, controls.inbox.reply(0)),
             }
             let mut copied = None;
             let output = ctx.run_ui(Default::default(), |ui| copied = controls.poll(ui.ctx()));

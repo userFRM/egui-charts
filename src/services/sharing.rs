@@ -33,6 +33,13 @@ impl ShareLink {
 }
 
 /// The sharing operations a [`Sharing`] service offers for one [`ShareKind`].
+///
+/// ```
+/// use egui_charts::services::ShareOffer;
+/// let mut offer = ShareOffer::new(true, false);
+/// offer.revoke = true;
+/// assert!(offer.link && offer.revoke && !offer.copy);
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ShareOffer {
@@ -40,18 +47,24 @@ pub struct ShareOffer {
     pub link: bool,
     /// Whether [`Sharing::copy`] is available.
     pub copy: bool,
+    /// Whether menus offer [`Sharing::revoke`] on a document reported as shared.
+    pub revoke: bool,
 }
 
 impl ShareOffer {
     /// An offer of the operations the flags name.
     pub fn new(link: bool, copy: bool) -> Self {
-        Self { link, copy }
+        Self {
+            link,
+            copy,
+            revoke: false,
+        }
     }
 }
 
 /// Sharing a layout or watchlist, supplied by a host that has accounts and somewhere to keep
 /// shared documents. The library owns neither: it shows the controls the host offers and reports
-/// the host's answers. Without a service the layout menu and the watchlist panel offer no sharing.
+/// the host's answers. It shows shared state and can ask the host to stop sharing. Without a service the layout menu and the watchlist panel offer no sharing.
 ///
 /// Methods are called on the UI thread and return at once; answer through the [`Reply`] you were
 /// given, from any thread, runtime or browser task. Answer an error, such as
@@ -62,6 +75,20 @@ pub trait Sharing: MaybeSend + 'static {
     fn offers(&self, kind: ShareKind) -> ShareOffer {
         let _ = kind;
         ShareOffer::default()
+    }
+
+    /// Whether `name` of `kind` is currently shared by link. Menus read this every frame,
+    /// so answer from memory. The default reports no shared state.
+    fn shared(&self, kind: ShareKind, name: &str) -> bool {
+        let _ = (kind, name);
+        false
+    }
+
+    /// Revokes the link for `name` of `kind`. Answer success once [`shared`](Self::shared)
+    /// reports false, or an error for the menu to display. Unsupported by default.
+    fn revoke(&self, kind: ShareKind, name: &str, reply: Reply<()>) {
+        let _ = (kind, name);
+        reply.send(Err(crate::data::FeedError::NotSupported));
     }
 
     /// A view-only link to the document `name` of `kind`. The library copies the link to the
