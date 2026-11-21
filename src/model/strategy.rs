@@ -2578,6 +2578,9 @@ mod tests {
                     max_drawdown: None,
                     max_drawdown_fraction: None,
                     return_over_max_drawdown: None,
+                    open_profit: None,
+                    max_run_up: None,
+                    max_run_up_fraction: None,
                     account_size_required: None,
                     account_size_return: None,
                     ..margin_metrics
