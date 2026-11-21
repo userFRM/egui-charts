@@ -1178,10 +1178,19 @@ pub struct SymbolDrawing {
 impl SymbolDrawing {
     /// The name given to the drawing, otherwise its tool's.
     pub fn name(&self) -> &str {
+        self.given_name().unwrap_or(&self.tool)
+    }
+
+    /// [`Self::name`] as lists show it: the given name as saved, the tool's through `translate`.
+    pub(crate) fn shown_name(&self, translate: impl Fn(&str) -> String) -> String {
+        self.given_name()
+            .map_or_else(|| translate(&self.tool), str::to_owned)
+    }
+
+    fn given_name(&self) -> Option<&str> {
         self.label
             .as_deref()
             .filter(|label| !label.trim().is_empty())
-            .unwrap_or(&self.tool)
     }
 }
 
@@ -1202,7 +1211,8 @@ impl SymbolDrawings {
         self.sort_by_shown_names(sort, |name| name.to_owned());
     }
 
-    /// Orders the drawings as [`Self::sort`] does, by the names `shown` gives them.
+    /// Orders the drawings as [`Self::sort`] does, by the names the rows show, with `shown`
+    /// translating tool names.
     pub(crate) fn sort_by_shown_names(
         &mut self,
         sort: DrawingSort,
@@ -1215,7 +1225,7 @@ impl SymbolDrawings {
             };
             (
                 time,
-                shown(drawing.name()).to_lowercase(),
+                drawing.shown_name(&shown).to_lowercase(),
                 drawing.id.clone(),
             )
         });

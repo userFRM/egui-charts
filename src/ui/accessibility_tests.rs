@@ -763,3 +763,221 @@ fn dialogs_expose_titles_and_label_their_fields() {
         }
     }
 }
+
+/// Every accessible name and value and every painted text of the harness's last frame.
+fn shown<S>(harness: &Harness<'_, S>) -> Vec<String> {
+    let output = harness.output();
+    let nodes = output
+        .platform_output
+        .accesskit_update
+        .iter()
+        .flat_map(|update| &update.nodes)
+        .flat_map(|(_, node)| [node.label(), node.value()])
+        .flatten()
+        .map(str::to_owned);
+    let painted = output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        });
+    nodes.chain(painted).collect()
+}
+
+/// A harness for `state` whose translator marks every catalogue key it is given.
+fn translated<'a, S>(state: S, app: impl FnMut(&mut Ui, &mut S) + 'a) -> Harness<'a, S> {
+    let mut harness = Harness::builder()
+        .with_context_setup(|ctx| {
+            egui_extras::install_image_loaders(ctx);
+            crate::localization::set_translator(ctx, |english| Some(format!("T:{english}")));
+        })
+        .with_size(Vec2::new(1440.0, 900.0))
+        .build_ui_state(app, state);
+    harness.run();
+    harness
+}
+
+/// Clicks the node labelled `name` as saved or as translated, whichever the frame shows.
+fn click_either<S>(harness: &mut Harness<'_, S>, name: &str) {
+    let translated = format!("T:{name}");
+    let node = harness
+        .query_by_label(name)
+        .or_else(|| harness.query_by_label(&translated))
+        .unwrap_or_else(|| panic!("no {name} control"));
+    node.click();
+    harness.run();
+}
+
+/// Names users type are shown as saved under a translator; the library's own names, such as
+/// the tool name of an unlabelled drawing and the default layout and list names, are translated.
+#[test]
+fn user_names_show_as_saved_under_a_translator() {
+    use super::top_toolbar::components::{LayoutMenu, SettingsDialog};
+    use super::widget_bar::{WatchlistPanel, panels::object_tree::*};
+    use crate::model::{Watchlist, WatchlistItem};
+    type Surface = (
+        &'static str,
+        fn() -> Vec<String>,
+        &'static [&'static str],
+        &'static [&'static str],
+    );
+    let surfaces: &[Surface] = &[
+        (
+            "study template dialog",
+            || {
+                let mut dialog = super::dialogs::templates::TemplateDialog::<i32>::new(
+                    crate::services::StoreKind::StudyTemplates,
+                );
+                dialog.templates.save("Active", 1).unwrap();
+                dialog.open_catalog();
+                let harness = translated(dialog, |ui, dialog| {
+                    dialog.show(ui.ctx(), "Study templates");
+                });
+                shown(&harness)
+            },
+            &["Active"],
+            &[],
+        ),
+        (
+            "chart settings template list and button",
+            || {
+                let mut dialog = SettingsDialog::new();
+                dialog.open(Default::default());
+                dialog.templates.save("Active", Default::default()).unwrap();
+                let mut harness = translated(dialog, |ui, dialog| {
+                    dialog.show(ui.ctx(), &ui.ctx().active_theme());
+                });
+                let mut texts = shown(&harness);
+                harness.get_by_label("T:Template").click();
+                harness.run();
+                texts.extend(shown(&harness));
+                click_either(&mut harness, "Active");
+                texts.extend(shown(&harness));
+                texts
+            },
+            &["Active"],
+            &["Template"],
+        ),
+        (
+            "object tree",
+            || {
+                let tool = crate::drawings::DrawingToolType::TrendLine;
+                let mut rows = vec![
+                    SourceItem::drawing(1, tool, egui::Color32::RED).with_label("Active"),
+                    SourceItem::drawing(2, tool, egui::Color32::RED),
+                ];
+                let harness = translated(ObjectTreePanel::new(), move |ui, panel| {
+                    panel.show(ui, None, &mut rows);
+                });
+                shown(&harness)
+            },
+            &["Active"],
+            &["Trend Line"],
+        ),
+        (
+            "layout menu",
+            || {
+                let mut menu = LayoutMenu::new();
+                menu.layouts = vec!["Active".into(), "Unnamed".into()];
+                menu.curr_layout = Some("Active".into());
+                let mut harness = translated(menu, |ui, menu| {
+                    menu.show(ui);
+                });
+                let mut texts = shown(&harness);
+                harness.get_by_label("T:Named layouts").click();
+                harness.run();
+                texts.extend(shown(&harness));
+                *harness.state_mut() = LayoutMenu::new();
+                harness.run();
+                texts.extend(shown(&harness));
+                texts
+            },
+            &["Active"],
+            &["Unnamed"],
+        ),
+        (
+            "watchlist",
+            || {
+                let mut list = Watchlist::new("Active");
+                list.items = vec![
+                    WatchlistItem::Section("Support".into()),
+                    WatchlistItem::Section("New section".into()),
+                ];
+                let panel = WatchlistPanel::new(vec![list, Watchlist::new("Watchlist")]);
+                let mut harness = translated(panel, |ui, panel| {
+                    panel.show(ui);
+                });
+                let mut texts = shown(&harness);
+                click_either(&mut harness, "Active");
+                texts.extend(shown(&harness));
+                texts
+            },
+            &["Active", "SUPPORT"],
+            &["Watchlist", "NEW SECTION"],
+        ),
+        (
+            "alert dialog watchlist and presets",
+            || {
+                use crate::data::Reply;
+                use crate::services::{Storage, StoreKind};
+                /// A host holding one saved preset named "Active".
+                struct Presets;
+                impl Storage for Presets {
+                    fn list(&self, _: StoreKind, reply: Reply<Vec<String>>) {
+                        reply.send(Ok(Vec::new()));
+                    }
+                    fn load(&self, _: StoreKind, _: &str, reply: Reply<Option<String>>) {
+                        let document = r#"{"version":3,"presets":{"Active":{}}}"#;
+                        reply.send(Ok(Some(document.into())));
+                    }
+                    fn save(&self, _: StoreKind, _: &str, _: String, reply: Reply<()>) {
+                        reply.send(Ok(()));
+                    }
+                    fn delete(&self, _: StoreKind, _: &str, reply: Reply<()>) {
+                        reply.send(Ok(()));
+                    }
+                }
+                let mut dialog = super::dialogs::AlertDialog::new();
+                dialog.set_storage(std::sync::Arc::new(Presets));
+                dialog.open("SAMPLE".into(), 100.0);
+                dialog.watchlists = vec![
+                    ("saved".into(), "Active".into()),
+                    ("default".into(), "Watchlist".into()),
+                ];
+                dialog.alert.watchlist = Some("saved".into());
+                let mut harness = translated(dialog, |ui, dialog| {
+                    dialog.show(ui.ctx());
+                });
+                let mut texts = shown(&harness);
+                harness.state_mut().alert.watchlist = Some("default".into());
+                harness.run();
+                texts.extend(shown(&harness));
+                harness.get_by_label("T:Apply preset").click();
+                harness.run();
+                texts.extend(shown(&harness));
+                texts
+            },
+            &["Active"],
+            &["Watchlist"],
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for &(surface, show, saved, library) in surfaces {
+        let texts = show();
+        let has = |text: &str| texts.iter().any(|shown| shown == text);
+        for name in saved {
+            if !has(name) || has(&format!("T:{name}")) {
+                wrong.push(format!(
+                    "{surface} shows {name} other than as saved: {texts:?}"
+                ));
+            }
+        }
+        for name in library {
+            if !has(&format!("T:{name}")) || has(name) {
+                wrong.push(format!("{surface} leaves {name} untranslated: {texts:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
