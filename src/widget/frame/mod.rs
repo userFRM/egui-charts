@@ -780,7 +780,7 @@ impl Chart {
                             self.drawings
                                 .drawings
                                 .iter()
-                                .any(|d| d.id == id && d.accepts_user_edits())
+                                .any(|d| d.id == id && self.drawings.accepts_user_edits(d))
                         })
                 });
         #[cfg(feature = "drawings")]
