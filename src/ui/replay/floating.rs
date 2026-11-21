@@ -71,21 +71,6 @@ impl ReplaySpeed {
             Self::X10,
         ]
     }
-
-    /// From multiplier (find closest)
-    pub fn from_multiplier(mult: f32) -> Self {
-        Self::all()
-            .iter()
-            .min_by(|a, b| {
-                let diff_a = (a.multiplier() - mult).abs();
-                let diff_b = (b.multiplier() - mult).abs();
-                diff_a
-                    .partial_cmp(&diff_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .copied()
-            .unwrap_or(Self::X1)
-    }
 }
 
 /// Current replay state
@@ -270,7 +255,9 @@ impl FloatingReplayControl {
     /// Shows Automatic as the selected update interval. The host supplies its resolved interval
     /// through [`Self::set_update_intervals`] and follows chart interval changes while this is
     /// on. Manual selection emits [`ReplayControlAction::SetUpdateInterval`]; confirm it with
-    /// `false`. Defaults to `false`, preserving hosts that supply only a fixed source interval.
+    /// `false`, the default. Every nonempty interval list offers Automatic and emits
+    /// [`ReplayControlAction::SetAutomaticUpdateInterval`]; hosts must handle that action to
+    /// resolve the interval before confirming it here.
     pub fn set_automatic_update_interval(&mut self, automatic: bool) {
         self.automatic_update_interval = automatic;
     }
