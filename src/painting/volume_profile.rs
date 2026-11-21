@@ -196,7 +196,7 @@ pub(crate) fn paint_profile(
             0.0
         }
     };
-    let mut reach: Vec<f32> = if profile.walls.is_some() {
+    let reach: Vec<f32> = if profile.walls.is_some() {
         (0..profile.volume.len()).map(bar_width).collect()
     } else {
         Vec::new()
@@ -346,6 +346,7 @@ pub(crate) fn paint_profile(
         }
     }
 
+    let mut figures = Vec::new();
     if config.show_values && !drawing {
         let formatter = crate::scales::VolumeFormatter {
             precision: volume_decimals.map_or(2, usize::from),
@@ -387,24 +388,21 @@ pub(crate) fn paint_profile(
                 }
             };
             let galley = painter.layout_no_wrap(text, font.clone(), text_color);
+            let size = galley.size();
             let (a, b) = (y_at_row(row), y_at_row(row + 1));
-            if (a - b).abs() < galley.size().y {
+            // Beside its bar, else over the bar's end, 2 short of the span's far edge.
+            let offset = (bar_width(row) + 2.0).min(right - left - 2.0 - size.x);
+            if (a - b).abs() < size.y || offset < 2.0 {
                 continue;
             }
-            let width = bar_width(row);
             let x = if right_aligned {
-                row_right - width - 2.0 - galley.size().x
+                row_right - offset - size.x
             } else {
-                left + width + 2.0
+                left + offset
             };
-            if let Some(reach) = reach.get_mut(row) {
-                *reach = width + 2.0 + galley.size().x;
-            }
-            painter.galley(
-                Pos2::new(x, (a + b - galley.size().y) * 0.5),
-                galley,
-                text_color,
-            );
+            let min = Pos2::new(x, (a + b - size.y) * 0.5);
+            figures.push(Rect::from_min_size(min, size));
+            painter.galley(min, galley, text_color);
         }
     }
 
@@ -424,7 +422,7 @@ pub(crate) fn paint_profile(
             price_to_y,
             walls_visible,
             Some(&reach),
-            key,
+            [key, figures].concat(),
         );
     }
     // A study's span often starts at the pane's left edge, under the chart legend, so a study whose
@@ -441,11 +439,13 @@ pub(crate) fn paint_profile(
 
 /// Marks the call and put walls of a profile drawn at its expiration in their colours.
 /// Without `reach`, for exposure bars that grow both ways from the span's centre, a wall is a
-/// line across the span with its label above the line's start. Otherwise the label alone names
-/// it beside its row: centred on the strike, on the side away from the rows' base, past what
-/// `reach` gives for every row its height meets (how far from the base that row's bar and
-/// figures reach) and past each of `taken` at that height, so that it covers no figures, no key
-/// line and not the other wall's label.
+/// line across the span with its label above the line's start where the label fits the span.
+/// Otherwise the label alone names it, centred on the strike, at the first place that fits
+/// inside the span, 2 points short of its far end, and covers none of `taken` at that height
+/// (figures, key lines, the other wall's label): past what `reach` gives for every row its height
+/// meets (how far from the base that row's bar reaches) and past `taken` there, else over the
+/// rows' bars 4 points from their base, else past one of `taken` there. Where none fits, the
+/// label is left out.
 fn paint_option_walls(
     painter: &egui::Painter,
     profile: &VolumeProfile,
@@ -472,19 +472,24 @@ fn paint_option_walls(
             continue;
         }
         let text = crate::localization::text(painter.ctx(), label);
-        let Some(reach) = reach else {
-            painter.hline(span.start..=span.end, y, Stroke::new(1.0, color));
-            let (x, align) = if right_aligned {
-                (span.end - 2.0, egui::Align2::RIGHT_BOTTOM)
-            } else {
-                (span.start + 2.0, egui::Align2::LEFT_BOTTOM)
-            };
-            painter.text(Pos2::new(x, y - 2.0), align, text, font.clone(), color);
-            continue;
-        };
         let galley = painter.layout_no_wrap(text, font.clone(), color);
         let size = galley.size();
+        let room = span.end - span.start;
+        let Some(reach) = reach else {
+            painter.hline(span.start..=span.end, y, Stroke::new(1.0, color));
+            if size.x + 4.0 <= room {
+                let (x, align) = if right_aligned {
+                    (span.end - 2.0, egui::Align2::RIGHT_BOTTOM)
+                } else {
+                    (span.start + 2.0, egui::Align2::LEFT_BOTTOM)
+                };
+                let rect = align.anchor_size(Pos2::new(x, y - 2.0), size);
+                painter.galley(rect.min, galley, color);
+            }
+            continue;
+        };
         let band = egui::Rangef::new(y - size.y * 0.5, y + size.y * 0.5);
+        // Offsets from the rows' base: where a rectangle ends, and the label at an offset.
         let beyond = |rect: &Rect| {
             if right_aligned {
                 span.end - rect.left()
@@ -492,6 +497,19 @@ fn paint_option_walls(
                 rect.right() - span.start
             }
         };
+        let at = |offset: f32| {
+            let x = if right_aligned {
+                span.end - offset - size.x
+            } else {
+                span.start + offset
+            };
+            Rect::from_min_size(Pos2::new(x, band.min), size)
+        };
+        let near: Vec<Rect> = taken
+            .iter()
+            .copied()
+            .filter(|rect| band.intersects(rect.y_range()))
+            .collect();
         let far = reach
             .iter()
             .enumerate()
@@ -500,21 +518,21 @@ fn paint_option_walls(
                 band.intersects(egui::Rangef::new(a.min(b), a.max(b)))
             })
             .map(|(_, &reach)| reach)
-            .chain(
-                taken
-                    .iter()
-                    .filter(|rect| band.intersects(rect.y_range()))
-                    .map(beyond),
-            )
+            .chain(near.iter().map(beyond))
             .fold(0.0, f32::max);
-        let x = if right_aligned {
-            span.end - far - 4.0 - size.x
-        } else {
-            span.start + far + 4.0
+        let mut past: Vec<f32> = near.iter().map(|rect| beyond(rect) + 4.0).collect();
+        past.sort_by(f32::total_cmp);
+        let Some(rect) = [far + 4.0, 4.0]
+            .into_iter()
+            .chain(past)
+            .filter(|&offset| offset + size.x <= room - 2.0)
+            .map(at)
+            .find(|rect| !near.iter().any(|other| other.intersects(*rect)))
+        else {
+            continue;
         };
-        let min = Pos2::new(x, band.min);
-        taken.push(Rect::from_min_size(min, size));
-        painter.galley(min, galley, color);
+        taken.push(rect);
+        painter.galley(rect.min, galley, color);
     }
 }
 

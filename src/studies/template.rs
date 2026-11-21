@@ -1074,6 +1074,24 @@ impl StudyTemplate {
                 changed = true;
             }
         }
+        // An options profile drew puts divided by calls in its puts colour before they had one
+        // of their own.
+        if study == "Options Volume Profile" && declares("ratio_color") && !has("ratio_color") {
+            let puts = template
+                .inputs
+                .iter()
+                .find_map(|(id, value)| (id == "put_color").then_some(value))
+                .or_else(|| {
+                    own.iter()
+                        .find(|input| input.id == "put_color")
+                        .map(|input| &input.default)
+                })
+                .cloned();
+            if let Some(puts) = puts {
+                template.inputs.push(("ratio_color".to_owned(), puts));
+                changed = true;
+            }
+        }
         // A single candlestick pattern study saved while it drew the bullish, bearish and
         // neutral lines of All Candlestick Patterns, and took the trend rule whatever its rule
         // reads, keeps the style of its side's line and drops a rule it now ignores.
