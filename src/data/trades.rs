@@ -167,7 +167,7 @@ pub(crate) struct OrderSizes {
 }
 
 impl OrderSizes {
-    #[cfg(all(feature = "widget", feature = "studies"))]
+    #[cfg(feature = "widget")]
     pub(crate) fn checkpoint_empty(&self) -> bool {
         self.at.is_none() && self.sizes.is_empty()
     }
