@@ -36,7 +36,7 @@ pub use panels::products::{Product, ProductsAction, ProductsPanel};
 pub use panels::screener::{ScreenerAction, ScreenerPanel};
 pub use panels::symbol_details::SymbolDetailsPanel;
 pub use panels::time_and_sales::{TimeAndSalesConfig, TimeAndSalesPanel, TradeSizeFilter};
-pub use panels::watchlist::{WatchlistAction, WatchlistPanel};
+pub use panels::watchlist::{WatchlistAction, WatchlistGrouping, WatchlistPanel};
 pub use state::RightToolbarState;
 pub use tabs::{RightPanelAction, RightPanelTab, RightPanelTabs, RightPanelTabsConfig};
 pub use toolbar::{

@@ -1272,6 +1272,17 @@ impl DemoApp {
 
     // --- selection / context helpers --------------------------------------
 
+    fn chart_time_zones(&self) -> Vec<egui_charts::model::TimezoneId> {
+        let mut zones = default_time_zones();
+        // On own data the zone of the profile is offered too, to return to it.
+        if let Some(own) = &self.own_data
+            && !zones.contains(&own.profile.time_zone)
+        {
+            zones.insert(0, own.profile.time_zone.clone());
+        }
+        zones
+    }
+
     /// The chart settings as the dialog shows them, with the settings the demo keeps itself.
     fn chart_settings_state(&self) -> ChartSettingsState {
         let mut state = ChartSettingsState::from_chart(&self.chart);
@@ -1305,7 +1316,11 @@ impl DemoApp {
     fn open_indicator_settings(&mut self, id: SeriesId) {
         if id == SeriesId::MAIN {
             self.open_chart_settings_dialog();
-        } else if !self.indicator_settings.open_for_chart(&self.chart, id)
+            return;
+        }
+        self.indicator_settings
+            .set_time_zones(self.chart_time_zones());
+        if !self.indicator_settings.open_for_chart(&self.chart, id)
             && self.chart.series().any(|(series, _)| series == id)
         {
             self.open_comparison_settings(id);
@@ -3499,14 +3514,8 @@ impl DemoApp {
             }
             TimeframeToolbarAction::OpenDatePicker => self.date_picker.open_for_chart(&self.chart),
             TimeframeToolbarAction::OpenTimezoneMenu => {
-                // On own data the zone of the profile is offered too, to return to it.
-                let mut zones = default_time_zones();
-                if let Some(own) = &self.own_data
-                    && !zones.contains(&own.profile.time_zone)
-                {
-                    zones.insert(0, own.profile.time_zone.clone());
-                }
-                self.timeframe_toolbar.set_time_zones(zones);
+                self.timeframe_toolbar
+                    .set_time_zones(self.chart_time_zones());
                 self.timeframe_toolbar.state.timezone_menu_open = true;
             }
             TimeframeToolbarAction::OpenSessionMenu => {
@@ -4361,6 +4370,16 @@ impl DemoApp {
                 self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::OpenLayout)
             }
             A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
+            A::NextWatchlistSymbol | A::PreviousWatchlistSymbol => {
+                let step = if action == A::NextWatchlistSymbol {
+                    self.watchlist.select_next_symbol()
+                } else {
+                    self.watchlist.select_previous_symbol()
+                };
+                if let WatchlistAction::SelectSymbol(symbol) = step {
+                    self.open_catalog_symbol(&symbol);
+                }
+            }
             A::ToggleSession if DemoSymbol::has_hours(&self.state.symbol) => {
                 let session = if self.timeframe_toolbar.state.session_type == SessionType::RTH {
                     SessionType::ETH
@@ -4711,6 +4730,126 @@ mod tests {
     use egui_charts::model::DateRange;
     use egui_charts::model::{AlertSource, LineStyle};
     use egui_charts::ui::dialogs::DrawingProps;
+
+    /// Study settings use the own-data chart's zones and apply the edited session clock.
+    #[test]
+    fn study_settings_edit_session_time_and_offer_the_own_data_zone() {
+        use egui::accesskit::{Action, ActionData, ActionRequest, Node, NodeId, Role, TreeId};
+        use egui_charts::model::TimezoneId;
+        use egui_charts::studies::{Indicator, InputValue, TradingSessions};
+        use owndata::feed::tests::{Server, pages, profile};
+
+        fn draw(
+            ctx: &egui::Context,
+            app: &mut DemoApp,
+            events: Vec<egui::Event>,
+        ) -> Vec<(NodeId, Node)> {
+            ctx.enable_accesskit();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_dialogs(ui.ctx()),
+            );
+            let nodes = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .clone();
+            output.drop_without_applying_deltas();
+            nodes
+        }
+
+        fn control<'a>(nodes: &'a [(NodeId, Node)], label: &str) -> &'a (NodeId, Node) {
+            nodes
+                .iter()
+                .find(|(_, node)| {
+                    !matches!(node.role(), Role::Label | Role::TextRun)
+                        && (node.label() == Some(label)
+                            || node.labelled_by().iter().any(|id| {
+                                nodes.iter().any(|(other, label_node)| {
+                                    other == id
+                                        && label_node.label().or(label_node.value()) == Some(label)
+                                })
+                            }))
+                })
+                .unwrap_or_else(|| panic!("missing control: {label}"))
+        }
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        let server = Server::start(pages(vec!["[]".to_owned()]));
+        let mut own = profile(&server.origin);
+        own.time_zone = TimezoneId::fixed_offset(19_800).unwrap();
+        assert!(!default_time_zones().contains(&own.time_zone));
+        app.connect_own_data(own, Vec::new());
+        assert!(app.own_data.is_some());
+        let mut study = TradingSessions::new();
+        study
+            .set_input("start [0]", InputValue::Length(570))
+            .unwrap();
+        let id = app.chart.add_indicator(Box::new(study));
+        app.open_indicator_settings(id);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        let nodes = draw(&ctx, &mut app, vec![]);
+        let hours = control(&nodes, "First session start hours");
+        assert_eq!(hours.1.value(), Some("09"));
+        assert_eq!(
+            control(&nodes, "First session start minutes").1.value(),
+            Some("30")
+        );
+        draw(
+            &ctx,
+            &mut app,
+            vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: hours.0,
+                data: Some(ActionData::NumericValue(10.0)),
+            })],
+        );
+        let nodes = draw(&ctx, &mut app, vec![]);
+        assert_eq!(
+            control(&nodes, "First session start hours").1.value(),
+            Some("10")
+        );
+        for label in ["First session time zone", "+05:30", "Apply"] {
+            let nodes = draw(&ctx, &mut app, vec![]);
+            let bounds = control(&nodes, label).1.bounds().unwrap();
+            let at = egui::pos2(
+                ((bounds.x0 + bounds.x1) / 2.0) as f32,
+                ((bounds.y0 + bounds.y1) / 2.0) as f32,
+            );
+            ui_click(&ctx, egui::vec2(1440.0, 900.0), at, |ui| {
+                app.show_dialogs(ui.ctx());
+            });
+        }
+        assert!(!app.indicator_settings.is_open());
+        let inputs = app.chart.indicator_mut(id).unwrap().inputs();
+        for (input, expected) in [
+            (
+                "start [0]",
+                InputValue::TimeOfDay(chrono::NaiveTime::from_hms_opt(10, 30, 0).unwrap()),
+            ),
+            ("zone [0]", InputValue::TimeZone("+05:30".to_owned())),
+        ] {
+            assert_eq!(
+                inputs.iter().find(|i| i.id == input).map(|i| &i.value),
+                Some(&expected),
+                "{input}"
+            );
+        }
+    }
 
     /// The menu actions reach the other chart, which lacks nothing, without a prompt; a chart
     /// without bars is named first, and the copy waits for the answer.
@@ -6382,6 +6521,96 @@ mod tests {
         fn flush(&mut self) {}
     }
 
+    /// The selection toolbar opens the same drawing alert editor as the drawing menu.
+    #[test]
+    fn selection_toolbar_add_alert_opens_the_dialog_for_the_drawing() {
+        use eframe::App as _;
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-04T17:30:00Z".parse().unwrap(),
+            false,
+        );
+        app.live.set_paused(true);
+        settle(&mut app, &ctx);
+        ctx.enable_accesskit();
+        let id = app
+            .chart
+            .drawings()
+            .drawings
+            .iter()
+            .map(|d| d.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let n = app.bars.len();
+        let price = app.bars.last().unwrap().close;
+        let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+        drawing.completed = true;
+        drawing.chart_points = vec![
+            ChartPoint::new((n - 20) as f32, price),
+            ChartPoint::new((n - 5) as f32, price),
+        ];
+        let source = drawing.alert_source(0);
+        app.chart.drawings_mut().drawings.push(drawing);
+        app.chart.drawings_mut().select(id);
+        let draw = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+        };
+        draw(&mut app, vec![]).drop_without_applying_deltas();
+        let output = draw(&mut app, vec![]);
+        let pos = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find_map(|(_, node)| {
+                if node.label() != Some("Add alert") || node.role() == egui::accesskit::Role::Label
+                {
+                    return None;
+                }
+                let rect = node.bounds()?;
+                Some(egui::pos2(
+                    (rect.x0 + rect.x1) as f32 / 2.0,
+                    (rect.y0 + rect.y1) as f32 / 2.0,
+                ))
+            })
+            .expect("missing control: Add alert");
+        output.drop_without_applying_deltas();
+        for pressed in [true, false] {
+            draw(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        pressed,
+                        button: egui::PointerButton::Primary,
+                        modifiers: Default::default(),
+                    },
+                ],
+            )
+            .drop_without_applying_deltas();
+        }
+        assert!(app.alert_dialog.is_open);
+        assert!(
+            matches!(&app.alert_dialog.alert.condition, AlertCondition::Compare { other, .. } if *other == source)
+        );
+    }
+
     #[test]
     fn depth_menu_requires_a_declaration_and_restores_its_view() {
         use eframe::App;
@@ -7954,6 +8183,112 @@ mod tests {
                 _ => assert!(app.settings_dialog.is_open),
             }
         }
+    }
+
+    #[test]
+    fn watchlist_shortcuts_follow_the_filtered_order_and_replay_keeps_its_keys() {
+        use eframe::App;
+        use egui::{Event, Key, Modifiers};
+        use egui_charts::model::{Watchlist, WatchlistFlag, WatchlistItem};
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        let mut list = Watchlist::from_text("List", "STOCKC,###Section,STOCKB,TOKENA,STOCKA");
+        for item in &mut list.items {
+            if let WatchlistItem::Symbol { symbol, flag } = item
+                && symbol != "TOKENA"
+            {
+                *flag = Some(WatchlistFlag::Red);
+            }
+        }
+        app.watchlist = WatchlistPanel::new(vec![list]);
+        app.watchlist.set_flag_filter(Some(WatchlistFlag::Red));
+        app.open_panel = Some(SidePanel::Watchlist);
+        settle(&mut app, &ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        let texts = ui_frame(&ctx, size, vec![], |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        let header = texts.iter().find(|(text, _)| text == "Symbol").unwrap().1;
+        ui_click(&ctx, size, header.center(), |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        let chart = app.chart.get_chart_mapping().rect.center();
+        ui_click(&ctx, size, chart, |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        settle(&mut app, &ctx);
+        let chart_focus = ctx.memory(|memory| memory.focused()).unwrap();
+        let press = |app: &mut DemoApp, key, modifiers| {
+            ui_frame(
+                &ctx,
+                size,
+                vec![
+                    Event::ModifiersChanged(modifiers),
+                    Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    },
+                    Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers,
+                    },
+                ],
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+        };
+        for (key, modifiers, symbol) in [
+            (Key::ArrowDown, Modifiers::NONE, "STOCKA"),
+            (Key::ArrowDown, Modifiers::NONE, "STOCKB"),
+            (Key::ArrowUp, Modifiers::NONE, "STOCKA"),
+            (Key::ArrowUp, Modifiers::NONE, "STOCKC"),
+            (Key::ArrowDown, Modifiers::NONE, "STOCKA"),
+            (Key::Space, Modifiers::NONE, "STOCKB"),
+            (Key::Space, Modifiers::SHIFT, "STOCKA"),
+        ] {
+            press(&mut app, key, modifiers);
+            assert_eq!(app.chart.symbol(), symbol, "{key:?} / {modifiers:?}");
+            assert_eq!(app.state.symbol, symbol);
+            assert_eq!(app.live.instrument().symbol, symbol);
+            settle(&mut app, &ctx);
+            assert_eq!(
+                ctx.memory(|memory| memory.focused()),
+                Some(chart_focus),
+                "{key:?} changed keyboard focus"
+            );
+        }
+
+        app.start_replay();
+        app.handle_replay_control(ReplayControlAction::Pause);
+        settle(&mut app, &ctx);
+        let before = app.replay.as_ref().unwrap().state.curr_bar;
+        for (key, modifiers, offset, playing) in [
+            (Key::ArrowRight, Modifiers::NONE, 1, false),
+            (Key::ArrowLeft, Modifiers::NONE, 0, false),
+            (Key::Space, Modifiers::NONE, 0, true),
+            (Key::Space, Modifiers::SHIFT, 0, false),
+        ] {
+            press(&mut app, key, modifiers);
+            assert_eq!(app.chart.symbol(), "STOCKA");
+            let replay = app.replay.as_ref().unwrap();
+            if key != Key::Space {
+                assert_eq!(replay.state.curr_bar, before + offset);
+            }
+            assert_eq!(replay.state.is_playing(), playing);
+        }
+        press(&mut app, Key::ArrowDown, Modifiers::NONE);
+        assert_eq!(app.chart.symbol(), "STOCKB");
+        assert!(
+            app.replay.is_none(),
+            "a symbol change exits replay as a row click does"
+        );
     }
 
     #[test]
@@ -10980,6 +11315,81 @@ mod tests {
         assert!(near(span.to, "2026-11-11T05:00:00Z"), "{span:?}");
     }
 
+    /// The demo's interval menu lists every range preset and applies the chosen size in ticks.
+    #[test]
+    fn interval_menu_selects_a_range_preset() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+        );
+        let trigger = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find_map(|(_, node)| {
+                // Without saved favorites the menu trigger is named for the current interval.
+                if node.role() == egui::accesskit::Role::Button && node.label() == Some("1 minute")
+                {
+                    node.bounds()
+                } else {
+                    None
+                }
+            })
+            .expect("Chart interval trigger");
+        let point = egui::pos2(
+            ((trigger.x0 + trigger.x1) / 2.0) as f32,
+            ((trigger.y0 + trigger.y1) / 2.0) as f32,
+        );
+        output.drop_without_applying_deltas();
+        ui_click(&ctx, size, point, |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest());
+        });
+        let rows = ui_frame(&ctx, size, Vec::new(), |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest());
+        });
+        for label in [
+            "1 range tick",
+            "10 range ticks",
+            "100 range ticks",
+            "1000 range ticks",
+        ] {
+            assert_eq!(
+                rows.iter().filter(|(text, _)| text == label).count(),
+                1,
+                "{label} must be listed in the demo interval menu"
+            );
+        }
+        let point = rows
+            .iter()
+            .find(|(text, _)| text == "100 range ticks")
+            .unwrap()
+            .1
+            .center();
+        ui_click(&ctx, size, point, |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest());
+        });
+        assert_eq!(app.chart.timeframe(), Some("100r".parse().unwrap()));
+        assert_eq!(app.chart.chart_type(), ChartType::Range);
+        let tick_size = app.chart.instrument().unwrap().tick_size.unwrap();
+        assert!((app.chart.chart_type_params().range_size - 100.0 * tick_size).abs() < 1e-10);
+    }
+
     /// Selecting seconds must rebuild the same executions, including the current partial minute.
     #[test]
     fn interval_switch_rebuilds_the_same_executions() {
@@ -11432,7 +11842,13 @@ mod tests {
                     .drop_without_applying_deltas();
                 }
                 settle(&mut app, &ctx);
-                assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
+                // Adding a member keeps a completed once alert stopped.
+                let expected = match (watchlist, replay) {
+                    (true, false) => 3,
+                    (true, true) => 2,
+                    _ => 1,
+                };
+                assert_eq!(app.alerts.log().len(), expected);
                 if watchlist && !replay {
                     let feed = LiveFeed::new("STOCKB", app.live.now());
                     finish_feed(&feed);
@@ -11498,7 +11914,7 @@ mod tests {
                     .drop_without_applying_deltas();
                 }
                 settle(&mut app, &ctx);
-                assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
+                assert_eq!(app.alerts.log().len(), expected);
                 app.switch_timeframe(Timeframe::Min1);
                 let replacement = app
                     .chart
@@ -11519,7 +11935,7 @@ mod tests {
                 settle(&mut app, &ctx);
                 assert_eq!(
                     app.alerts.log().len(),
-                    if watchlist { 4 } else { 2 },
+                    expected + 1,
                     "an edited alert must use its newly selected study"
                 );
                 let reference = LiveFeed::new("FOREXA", app.live.now());
