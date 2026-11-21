@@ -894,7 +894,11 @@ impl NewsPanel {
                 let named = ready && !self.name.query().trim().is_empty();
                 save = Button::new("Save").enabled(named).show(ui).clicked();
                 rename = Button::new("Rename")
-                    .enabled(named && views.current.is_some())
+                    .enabled(
+                        named
+                            && views.current.is_some()
+                            && !views.views.contains_key(self.name.query().trim()),
+                    )
                     .show(ui)
                     .clicked();
                 delete = Button::new("Delete")
@@ -1086,7 +1090,10 @@ fn meta(story: &NewsStory, zone: &TimezoneId) -> String {
 mod tests {
     use super::*;
     use crate::data::{HistoryPage, HistoryRequest, Reply};
-    use egui_kittest::{Harness, kittest::Queryable};
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
     use serde_json::json;
     use std::sync::Mutex;
 
@@ -1275,6 +1282,12 @@ mod tests {
         h.run_steps(3);
         assert_eq!(latest(), (vec!["fx".to_owned()], vec!["US".to_owned()]));
         assert_eq!(stored()["current"], "Rates");
+
+        let before = stored();
+        *h.state_mut().name.query_mut() = "Energy".into();
+        h.run_steps(3);
+        assert!(h.get_by_label("Rename").accesskit_node().is_disabled());
+        assert_eq!(stored(), before);
 
         press(&mut h, "Rates EU", "Rename");
         let views = stored();
