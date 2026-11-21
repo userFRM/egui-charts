@@ -1983,12 +1983,17 @@ mod tests {
         )]));
         panel.poll(&ctx);
         let shown = texts(&ctx, &mut panel);
+        let dates = |shown: &[String]| {
+            ["Earnings", "Ex-dividend"].map(|label| {
+                let row = shown.iter().position(|text| text == label);
+                row.and_then(|row| shown.get(row + 1))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+        };
+        assert_eq!(dates(&shown), ["Jan 28, 2027", "Feb 9, 2027"]);
         for text in [
             "Upcoming events",
-            "Earnings",
-            "Jan 28, 2027",
-            "Ex-dividend",
-            "Feb 9, 2027",
             "News",
             "Jan 5, 14:30 UTC · Wire",
             "Jan 6, 09:00 UTC",
@@ -2014,9 +2019,11 @@ mod tests {
         // 21:00 UTC is the next morning at UTC+10.
         panel.set_timezone(TimezoneId::fixed_offset(10 * 3600).unwrap());
         let shown = texts(&ctx, &mut panel);
-        for text in ["Jan 29, 2027", "Jan 6, 00:30 GMT+10 · Wire"] {
-            assert!(shown.contains(&text.into()), "{text}: {shown:?}");
-        }
+        assert_eq!(dates(&shown), ["Jan 29, 2027", "Feb 9, 2027"]);
+        assert!(
+            shown.contains(&"Jan 6, 00:30 GMT+10 · Wire".into()),
+            "{shown:?}"
+        );
 
         let mut h = Harness::builder()
             .allow_missing_glyphs()
