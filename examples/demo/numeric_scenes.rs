@@ -20,10 +20,15 @@ pub(super) fn volatility_smile() -> Chart {
     };
     let mut chart = Chart::new(BarData::from_bars(smile(30.0)));
     chart.set_chart_type(ChartType::Line);
-    chart.set_horizontal_scale(Some(Arc::new(PriceHorizontalScale::new(0))));
+    let mut strikes = PriceHorizontalScale::new(0);
+    strikes.value_name = Some("Strike");
+    chart.set_horizontal_scale(Some(Arc::new(strikes)));
     chart.set_symbol("30-day IV, %");
     chart.config_mut().show_volume = false;
     chart.config_mut().show_legend_volume = false;
+    let mut options = chart.chart_options().clone();
+    options.tooltip.show_volume = false;
+    chart.set_chart_options(options);
     chart.set_visible_bars(60);
     let later = chart.add_series(SeriesOptions {
         name: "90-day IV, %".into(),
@@ -47,6 +52,9 @@ pub(super) fn yield_curve() -> Chart {
     chart.set_symbol("Yield, %");
     chart.config_mut().show_volume = false;
     chart.config_mut().show_legend_volume = false;
+    let mut options = chart.chart_options().clone();
+    options.tooltip.show_volume = false;
+    chart.set_chart_options(options);
     for (name, color, earlier) in [
         ("Today", egui::Color32::from_rgb(41, 98, 255), false),
         ("A year ago", egui::Color32::from_rgb(242, 54, 69), true),

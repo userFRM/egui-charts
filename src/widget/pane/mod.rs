@@ -733,6 +733,12 @@ impl Chart {
                 #[cfg(feature = "studies")]
                 let stored = upgraded.as_ref().unwrap_or(stored);
                 let (name, stored) = stored;
+                // Match a renamed built-in while preserving a host study's earlier name.
+                #[cfg(feature = "studies")]
+                let name = match crate::studies::IndicatorFactory::renamed(name) {
+                    Some(now) if study.name() == now => now,
+                    _ => name.as_str(),
+                };
                 study.name() == name
                     && stored.iter().all(|(id, value)| {
                         inputs

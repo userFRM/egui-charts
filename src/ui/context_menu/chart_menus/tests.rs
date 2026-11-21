@@ -2782,8 +2782,10 @@ fn pointer_button_opens_price_actions_in_each_pane_and_keeps_the_original_price(
                 };
                 assert!(action_price.is_finite());
                 if pane != "empty" {
+                    // Lines keep the click; alert and order prices use the menu's two decimals.
+                    let tolerance = if pick == "line" { 1e-4 } else { 0.005 + 1e-9 };
                     assert!(
-                        (action_price - price).abs() < 1e-4,
+                        (action_price - price).abs() < tolerance,
                         "{pane}: {action_price} != {price}"
                     );
                 }
@@ -3111,37 +3113,49 @@ fn limit_order_keys_return_the_menu_limit_row_at_the_pointer() {
 /// Guards #3427: the chart and series menus write the clicked price, and the order rows their
 /// price, as the chart's price scale writes prices: at the instrument's precision, with the
 /// chart's thousands separator or the host's price formatter, and as a price on a percentage
-/// scale, where the rows still copy, alert and order prices.
+/// scale, where the rows still copy, alert and order prices. Guards #3737: alert rows act on
+/// their written price, on the tick or at the menu's decimals, and Alt+A takes the same price.
 #[test]
-fn menu_rows_write_prices_as_the_price_scale_does() {
+fn menu_rows_write_and_act_on_prices_as_the_price_scale_does() {
     use crate::model::Instrument;
     use crate::scales::{CustomPriceFormatter, PriceScaleMode};
     type Setup = fn(&mut Chart);
-    // (bar low, bar high, tick size, setup, clicked price, its text, the order price's text)
-    type Row = (f64, f64, f64, Setup, f64, &'static str, &'static str);
-    let rows: [Row; 4] = [
+    // (bar low, bar high, tick size, setup, click, click text, action text, alert price)
+    type Row = (
+        f64,
+        f64,
+        Option<f64>,
+        Setup,
+        f64,
+        &'static str,
+        &'static str,
+        f64,
+    );
+    let rows: [Row; 7] = [
         (
             1.084,
             1.085,
-            0.00001,
+            Some(0.00001),
             |_| {},
             1.084537,
             "1.08454",
             "1.08454",
+            1.08454,
         ),
         (
             1230.0,
             1240.0,
-            0.25,
+            Some(0.25),
             |chart| chart.config_mut().thousands_sep = Some('\''),
             1234.6,
             "1'234.60",
             "1'234.50",
+            1234.5,
         ),
         (
             1.084,
             1.085,
-            0.00001,
+            Some(0.00001),
             |chart| {
                 chart.set_price_formatter(Some(std::sync::Arc::new(CustomPriceFormatter::new(
                     |price| format!("<{price:.6}>"),
@@ -3150,22 +3164,59 @@ fn menu_rows_write_prices_as_the_price_scale_does() {
             1.084537,
             "<1.084537>",
             "<1.084540>",
+            1.08454,
         ),
         (
             1.084,
             1.085,
-            0.00001,
+            Some(0.00001),
             |chart| chart.price_scale_mut().options_mut().mode = PriceScaleMode::Percentage,
             1.084537,
             "1.08454",
             "1.08454",
+            1.08454,
+        ),
+        (
+            1.084,
+            1.085,
+            None,
+            |chart| chart.set_instrument(Some(Instrument::new("EURUSD").with_price_decimals(3))),
+            1.084437,
+            "1.084",
+            "1.084",
+            1.084,
+        ),
+        (
+            100.0,
+            110.0,
+            None,
+            |_| {},
+            104.5671,
+            "104.57",
+            "104.57",
+            104.57,
+        ),
+        // Exactly halfway: the action rounds away from zero before its text is written.
+        (
+            0.11,
+            0.14,
+            None,
+            |chart| chart.price_scale_mut().set_price_precision(Some(2)),
+            0.125,
+            "0.12",
+            "0.13",
+            0.13,
         ),
     ];
     let ctx = Context::default();
-    for (low, high, tick, setup, click, text, order) in rows {
+    for (low, high, tick, setup, click, text, order, alert) in rows {
         let mut chart = crate::widget::test_frames::chart(&[low], &[high]);
         chart.symbol = "EURUSD".into();
-        chart.set_instrument(Some(Instrument::new("EURUSD").with_tick_size(tick)));
+        let mut instrument = Instrument::new("EURUSD");
+        if let Some(tick) = tick {
+            instrument = instrument.with_tick_size(tick);
+        }
+        chart.set_instrument(Some(instrument));
         setup(&mut chart);
         let mut menus = ChartMenus::default();
         let frame = |chart: &mut Chart, menus: &mut ChartMenus, show_chart: bool| {
@@ -3191,7 +3242,7 @@ fn menu_rows_write_prices_as_the_price_scale_does() {
                 RightClickTarget::Background { pos, price: click },
                 vec![
                     format!("Copy price {text}"),
-                    format!("Add alert on EURUSD at {text}…"),
+                    format!("Add alert on EURUSD at {order}…"),
                     format!("Draw horizontal line at {text}"),
                     format!("Buy 1 EURUSD @ {order} limit"),
                     format!("Sell 1 EURUSD @ {order} stop"),
@@ -3224,6 +3275,40 @@ fn menu_rows_write_prices_as_the_price_scale_does() {
             for row in expected {
                 assert!(labels.contains(&row), "{row:?} in {labels:?}");
             }
+            if matches!(target, RightClickTarget::Background { .. }) {
+                let price =
+                    menus
+                        .build_menu_items(&ctx, &chart, menus.context.unwrap())
+                        .into_iter()
+                        .find_map(|entry| match entry {
+                            MenuEntry::Item(MenuItem {
+                                action:
+                                    ChartContextAction::Chart(ContextMenuAction::AddAlert {
+                                        price, ..
+                                    }),
+                                ..
+                            }) => Some(price),
+                            _ => None,
+                        })
+                        .unwrap();
+                assert_eq!(price, alert, "{text}");
+            }
         }
+        // The shortcut reader must agree with the actual menu at this pointer.
+        let (_, at) = chart.pointer_price(pos).unwrap();
+        chart.right_click = Some(RightClickTarget::Background { pos, price: at });
+        frame(&mut chart, &mut menus, false);
+        let price = menus
+            .build_menu_items(&ctx, &chart, menus.context.unwrap())
+            .into_iter()
+            .find_map(|entry| match entry {
+                MenuEntry::Item(MenuItem {
+                    action: ChartContextAction::Chart(ContextMenuAction::AddAlert { price, .. }),
+                    ..
+                }) => Some(price),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(chart.alert_price_at(pos), Some(price));
     }
 }
