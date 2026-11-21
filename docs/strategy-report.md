@@ -479,8 +479,9 @@ one saved before it existed, all eight figures show N/A. Margin calls count fini
 quantities in `margin_calls`; liquidated quantity is their sum and largest liquidation their
 largest value. These are instrument units. Average margin used is the mean of finite `margin`
 values, including flat marks and the initial zero. Largest margin used is the largest finite
-`peak_margin` value. Account size required adds maximum drawdown between equity marks to the
-largest margin used; it does not yet include intrabar drawdown. Return on account size is net
+`peak_margin` value. Account size required adds intrabar maximum drawdown to the largest margin
+used, or maximum drawdown between equity marks when the report has no usable equity ranges, as in
+a host report without them or one saved before they existed. Return on account size is net
 profit of all trades divided by that required size; margin efficiency divides it by average
 margin used. Each quotient is unavailable unless its divisor is positive. Non-finite results
 are unavailable. Summary CSV writes these eight figures after the buy-and-hold figures, with

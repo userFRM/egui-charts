@@ -384,8 +384,9 @@ pub struct StrategyPerformance {
     /// Largest finite [`StrategyReport::peak_margin`] value. `None` without margin data or a
     /// finite peak.
     pub largest_margin: Option<f64>,
-    /// `largest_margin + max_drawdown`: capital to fund the largest margin and survive the
-    /// largest drawdown between equity marks. `None` when either is unavailable.
+    /// `largest_margin + intrabar_max_drawdown`: capital to fund the largest margin and survive
+    /// the largest intrabar drawdown. Uses `max_drawdown` when the report has no usable
+    /// [`StrategyReport::equity_ranges`]. `None` without margin or drawdown.
     pub account_size_required: Option<f64>,
     /// `all.net_profit / account_size_required`. `None` unless the required size is positive.
     pub account_size_return: Option<f64>,
@@ -1003,7 +1004,7 @@ impl StrategyReport {
             .and_then(finite);
         p.account_size_required = p
             .largest_margin
-            .zip(p.max_drawdown)
+            .zip(p.intrabar_max_drawdown.or(p.max_drawdown))
             .and_then(|(margin, drawdown)| finite(margin + drawdown));
         p.account_size_return = p
             .account_size_required
@@ -2538,6 +2539,10 @@ mod tests {
             intrabar_max_drawdown_initial_capital_fraction: None,
             ..expected_d()
         };
+        // Largest margin 10000 plus the intrabar fall of 3000, not the close drawdown of 1000.
+        let mut intrabar_margin = fixture_intrabar();
+        intrabar_margin.margin = curve(&[0.0, 9_000.0, 9_000.0], TimeDelta::hours(1));
+        intrabar_margin.peak_margin = curve(&[0.0, 10_000.0, 9_000.0], TimeDelta::hours(1));
         let mut missing = fixture_intrabar();
         missing.equity_ranges.truncate(2);
         let mut unbracketed = fixture_intrabar();
@@ -2587,6 +2592,20 @@ mod tests {
                 },
             ),
             ("D", fixture_intrabar(), expected_d()),
+            (
+                "D with margin data",
+                intrabar_margin,
+                StrategyPerformance {
+                    margin_calls: Some(0),
+                    liquidated_quantity: Some(0.0),
+                    average_margin: Some(6_000.0),
+                    largest_margin: Some(10_000.0),
+                    account_size_required: Some(13_000.0),
+                    account_size_return: Some(0.0),
+                    margin_efficiency: Some(0.0),
+                    ..expected_d()
+                },
+            ),
             ("D with one range missing", missing, no_intrabar.clone()),
             (
                 "D with a low above its close",
