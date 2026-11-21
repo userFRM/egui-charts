@@ -17,6 +17,7 @@ use crate::model::{
 };
 use crate::services::revisions::{Revisions, Settled, Written};
 use crate::services::{ConflictChoice, Storage, StoreKind};
+use crate::ui::timeframe_toolbar::state::has_overnight_windows;
 use crate::ui_kit::FormGrid;
 use crate::ui_kit::dialog::{DialogFooter, dialog_header};
 use crate::ui_kit::modal::Modal;
@@ -805,6 +806,47 @@ impl AlertDialog {
                 .response
                 .accessible_name(l10n::text(ui.ctx(), "Watchlist"));
             ui.end_row();
+            let list = self.alert.watchlist.is_some();
+            if !self.alert.condition.is_event()
+                && let Some(inputs) = &mut self.alert.inputs
+            {
+                // Overnight hours count only beside extended hours, as in a history request.
+                let saved = (
+                    inputs.extended_hours,
+                    inputs.extended_hours && inputs.overnight_hours,
+                );
+                let overnight = list
+                    || saved.1
+                    || has_overnight_windows(
+                        inputs
+                            .calendar
+                            .as_ref()
+                            .and_then(|calendar| calendar.session.as_ref()),
+                    );
+                let choices = [
+                    ((false, false), "Regular hours"),
+                    ((true, false), "Extended hours"),
+                    ((true, true), "Extended and overnight hours"),
+                ];
+                let mut hours = saved;
+                let label = ui.label(l10n::text(ui.ctx(), "Session"));
+                egui::ComboBox::from_id_salt("alert_session")
+                    .selected_text(l10n::text(
+                        ui.ctx(),
+                        choices[usize::from(saved.0) + usize::from(saved.1)].1,
+                    ))
+                    .show_ui(ui, |ui| {
+                        for (value, label) in &choices[..if overnight { 3 } else { 2 }] {
+                            ui.selectable_value(&mut hours, *value, l10n::text(ui.ctx(), label));
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
+                ui.end_row();
+                if hours != saved {
+                    (inputs.extended_hours, inputs.overnight_hours) = hours;
+                }
+            }
             ui.label(l10n::text(ui.ctx(), "Frequency"));
             egui::ComboBox::from_id_salt("alert_frequency")
                 .selected_text(l10n::text(ui.ctx(), self.alert.frequency.to_string()))
@@ -2052,6 +2094,60 @@ mod tests {
         assert_eq!(
             h.get_by_label("Notifications").value().as_deref(),
             Some("Weekdays")
+        );
+    }
+
+    /// The row writes the session into the inputs the chart prepared and offers overnight hours
+    /// where the symbol or list can have them.
+    #[test]
+    fn the_session_choice_reaches_the_inputs() {
+        use crate::model::{AlertCalendar, AlertInputs, Session, SessionWindow};
+        use chrono::{NaiveTime, Weekday::*};
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut dialog = AlertDialog::new();
+        dialog.edit(Alert::new("SAMPLE", AlertCondition::Above(100.0)));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(560.0, 900.0))
+            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+        h.run();
+        assert!(
+            h.query_by_label("Session").is_none(),
+            "no inputs to hold it"
+        );
+        let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        let weekdays = [Mon, Tue, Wed, Thu, Fri];
+        let session = Session::new([SessionWindow::new(weekdays, at(9), at(16))])
+            .with_extended_windows([SessionWindow::new(weekdays, at(4), at(9))]);
+        h.state_mut().alert.inputs = Some(Box::new(AlertInputs {
+            calendar: Some(AlertCalendar::new("SAMPLE", None, Some(session))),
+            ..Default::default()
+        }));
+        h.run();
+        let choose = |h: &mut Harness<'_, AlertDialog>, label: &str| {
+            h.get_by_label("Session").click();
+            h.run();
+            h.get_by_label(label).click();
+            h.run();
+            let inputs = h.state().alert.inputs.as_ref().unwrap();
+            (inputs.extended_hours, inputs.overnight_hours)
+        };
+        assert_eq!(choose(&mut h, "Extended hours"), (true, false));
+        // Without overnight windows the symbol has no overnight hours to offer.
+        h.get_by_label("Session").click();
+        h.run();
+        assert!(h.query_by_label("Extended and overnight hours").is_none());
+        h.get_by_label("Session").click();
+        h.run();
+        // A watchlist may hold symbols that trade overnight.
+        h.state_mut().alert.watchlist = Some("tech".into());
+        h.run();
+        assert_eq!(choose(&mut h, "Extended and overnight hours"), (true, true));
+        assert_eq!(choose(&mut h, "Regular hours"), (false, false));
+        h.state_mut().alert.condition = AlertCondition::CustomEvents("host".into());
+        h.run();
+        assert!(
+            h.query_by_label("Session").is_none(),
+            "host events read no bars"
         );
     }
 
