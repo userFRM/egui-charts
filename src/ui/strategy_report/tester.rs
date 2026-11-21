@@ -936,6 +936,7 @@ impl StrategyTester {
                                 .iter()
                                 .map(|input| input.is_shown(&self.inputs))
                                 .collect();
+                            let zones = crate::ui::timeframe_toolbar::default_time_zones();
                             crate::ui_kit::FormGrid::new("strategy_inputs").show(ui, |ui| {
                                 for (input, _) in self
                                     .inputs
@@ -943,7 +944,7 @@ impl StrategyTester {
                                     .zip(shown)
                                     .filter(|(_, shown)| *shown)
                                 {
-                                    edited |= super::inputs::show_input(ui, input, &[]);
+                                    edited |= super::inputs::show_input(ui, input, &[], &zones);
                                 }
                             });
                             if ui.button(l10n::text(ui.ctx(), "Reset inputs")).clicked() {

@@ -47,6 +47,15 @@ impl egui::cache::ComputerMut<(DrawingToolType, [Color32; 3]), Shades> for Theme
     fn compute(&mut self, (tool, [text, chart, panel]): (DrawingToolType, [Color32; 3])) -> Shades {
         let mut shades = Vec::new();
         let mut drawings = vec![Drawing::new(0, tool)];
+        // Saved squares keep the shades of their former fan colours.
+        if matches!(
+            tool,
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed
+        ) {
+            let mut old = Drawing::new(0, tool);
+            old.gann = None;
+            drawings.push(old);
+        }
         // Drawings saved before the current default keep their former colour's shade.
         if let Some(former) = Drawing::former_default_color(tool) {
             let mut old = Drawing::new(0, tool);
@@ -146,7 +155,8 @@ impl Drawing {
     /// takes the active theme's panel colour with its text and border in the drawing colour, and
     /// a solid label takes the drawing colour with white or black text, whichever reads on it.
     /// Text without a background takes the drawing colour. A pin's popup leaves the drawing colour
-    /// to the pin: its text and border are the theme's.
+    /// to the pin: its text and border are the theme's. A table's text takes the theme's text
+    /// colour.
     pub(crate) fn text_box_colors(&self, ctx: &egui::Context) -> TextBoxColors {
         let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
         let pin = self.tool_type == DrawingToolType::AnchoredNote;
@@ -171,7 +181,9 @@ impl Drawing {
         TextBoxColors {
             text: match self.text_color {
                 Some(color) => rgba(color),
-                None if pin => ctx.active_theme().ui.text,
+                None if pin || self.tool_type == DrawingToolType::Table => {
+                    ctx.active_theme().ui.text
+                }
                 None => text,
             },
             fill,
@@ -334,7 +346,6 @@ impl Drawing {
                         | DrawingToolType::PriceLabel
                         | DrawingToolType::FlagNote
                         | DrawingToolType::PriceNote
-                        | DrawingToolType::Table
                         | DrawingToolType::Comment
                         | DrawingToolType::Signpost
                         | DrawingToolType::Tweet
@@ -411,7 +422,11 @@ impl Drawing {
                 stroke
             }
             Shape::Circle(c) => {
-                if dash.is_none() || c.stroke.is_empty() {
+                // Anchor outlines stay solid, just like the forecast's card frames.
+                if dash.is_none()
+                    || c.stroke.is_empty()
+                    || self.tool_type == DrawingToolType::Forecast
+                {
                     return;
                 }
                 path = ellipse_arc(
