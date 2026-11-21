@@ -176,6 +176,7 @@ pub struct AlertsPanel {
     log_selected: Option<usize>,
     /// The alert whose removal the Delete key asks to confirm.
     removing: Option<AlertId>,
+    restore_row_focus: bool,
     /// The alert and the symbol the Log tab narrows to.
     log_alert: Option<AlertId>,
     log_symbol: Option<String>,
@@ -258,6 +259,7 @@ impl AlertsPanel {
             selected: None,
             log_selected: None,
             removing: None,
+            restore_row_focus: false,
             log_alert: None,
             log_symbol: None,
             clearing: false,
@@ -1373,10 +1375,14 @@ impl AlertsPanel {
                 .map(|(index, _)| index)
                 .collect();
             let mut reveal = false;
-            if let Some(focused) = ui
-                .memory(|m| m.focused())
-                .filter(|f| order.iter().any(|index| rows.with(index) == *f))
-            {
+            if let Some((focused, index)) = ui.memory(|m| {
+                let focused = m.focused()?;
+                order
+                    .iter()
+                    .find(|index| rows.with(index) == focused)
+                    .map(|index| (focused, *index))
+            }) {
+                self.log_selected = Some(index);
                 ui.memory_mut(|m| m.set_focus_lock_filter(focused, arrows));
                 let step = ui.input_mut(|i| {
                     let down = i.consume_key(Modifiers::NONE, Key::ArrowDown)
@@ -1518,16 +1524,31 @@ impl AlertsPanel {
             let mut duplicate = None;
             let mut presentation = None;
             let rows = ui.scope_id().with("alert_rows");
+            if self.restore_row_focus {
+                // A closing modal blocks the rows for one more frame.
+                if ui.memory(|m| m.allows_interaction(ui.layer_id())) {
+                    if let Some(id) = &self.selected {
+                        ui.memory_mut(|m| m.request_focus(rows.with(&id.0)));
+                    }
+                    self.restore_row_focus = false;
+                } else {
+                    ui.ctx().request_repaint();
+                }
+            }
             let order: Vec<_> = self
                 .sorted()
                 .iter()
                 .filter_map(|alert| alert.id.clone())
                 .collect();
             let mut reveal = false;
-            if let Some(focused) = ui
-                .memory(|m| m.focused())
-                .filter(|f| order.iter().any(|id| rows.with(&id.0) == *f))
-            {
+            if let Some((focused, id)) = ui.memory(|m| {
+                let focused = m.focused()?;
+                order
+                    .iter()
+                    .find(|id| rows.with(&id.0) == focused)
+                    .map(|id| (focused, id.clone()))
+            }) {
+                self.selected = Some(id);
                 ui.memory_mut(|m| m.set_focus_lock_filter(focused, arrows));
                 let (step, edit, delete) = ui.input_mut(|i| {
                     let down = i.consume_key(Modifiers::NONE, Key::ArrowDown)
@@ -1878,8 +1899,9 @@ impl AlertsPanel {
                 self.pending += 1;
                 service.remove(id, self.inbox.reply(0));
             }
-            if !open {
-                self.removing = None;
+            if !open && self.removing.take().is_some() {
+                self.restore_row_focus = true;
+                ui.ctx().request_repaint();
             }
         }
         action
@@ -3214,6 +3236,27 @@ mod tests {
         h.get_by_role_and_label(Role::ListBoxOption, "AAPL: First")
             .click();
         h.run();
+        for _ in 0..20 {
+            h.key_press(Key::Tab);
+            h.run();
+            if h.get_by_role_and_label(Role::ListBoxOption, "AAPL: Second")
+                .accesskit_node()
+                .is_focused()
+            {
+                break;
+            }
+        }
+        let second = h.get_by_role_and_label(Role::ListBoxOption, "AAPL: Second");
+        assert!(second.accesskit_node().is_focused());
+        assert_eq!(second.accesskit_node().is_selected(), Some(true));
+        h.key_press(Key::Enter);
+        h.run();
+        assert_eq!(
+            h.state_mut().1.pop(),
+            Some(AlertPanelAction::EditAlert(Box::new(alerts[1].clone())))
+        );
+        h.key_press(Key::ArrowUp);
+        h.run();
         h.key_press(Key::ArrowDown);
         h.run();
         h.key_press(Key::Enter);
@@ -3233,6 +3276,15 @@ mod tests {
         h.get_by_label("Cancel").click();
         h.run();
         assert_eq!(engine.alerts().len(), 3);
+        h.key_press(Key::ArrowDown);
+        h.run();
+        assert_eq!(
+            h.get_by_role_and_label(Role::ListBoxOption, "AAPL: Third")
+                .accesskit_node()
+                .is_selected(),
+            Some(true),
+            "Cancel restores keyboard browsing"
+        );
         h.get_by_label("Log").click();
         h.run();
         h.get_all_by_role(Role::ListBoxOption)
@@ -3240,6 +3292,21 @@ mod tests {
             .unwrap()
             .click();
         h.run();
+        h.key_press(Key::Tab);
+        h.run();
+        let second = h.get_all_by_role(Role::ListBoxOption).nth(1).unwrap();
+        assert!(second.accesskit_node().is_focused());
+        assert_eq!(second.accesskit_node().is_selected(), Some(true));
+        h.key_press(Key::ArrowUp);
+        h.run();
+        assert_eq!(
+            h.get_all_by_role(Role::ListBoxOption)
+                .next()
+                .unwrap()
+                .accesskit_node()
+                .is_selected(),
+            Some(true)
+        );
         for (key, selected) in [(Key::ArrowDown, 1), (Key::Space, 2), (Key::ArrowUp, 1)] {
             h.key_press(key);
             h.run();
