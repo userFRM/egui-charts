@@ -1692,15 +1692,7 @@ impl DemoApp {
 
     fn write_export(&mut self, save_path: Option<std::path::PathBuf>, extension: &str, out: &[u8]) {
         let from_dialog = save_path.is_some();
-        let path = save_path.unwrap_or_else(|| {
-            // A symbol of a visitor's own data must not carry a path into the file name.
-            let stem = owndata::store::file_stem(&self.state.symbol);
-            let filename = format!("{stem}_export.{extension}");
-            #[cfg(not(target_arch = "wasm32"))]
-            return std::env::temp_dir().join(filename);
-            #[cfg(target_arch = "wasm32")]
-            std::path::PathBuf::from(filename)
-        });
+        let path = save_path.unwrap_or_else(|| default_export_path(&self.state.symbol, extension));
         #[cfg(not(target_arch = "wasm32"))]
         let result = std::fs::write(&path, out).map_err(|e| e.to_string());
         #[cfg(target_arch = "wasm32")]
@@ -4515,13 +4507,7 @@ impl DemoApp {
         png: &[u8],
         path: Option<std::path::PathBuf>,
     ) -> Result<String, String> {
-        let path = path.unwrap_or_else(|| {
-            let filename = format!("{}_chart.png", self.state.symbol);
-            #[cfg(not(target_arch = "wasm32"))]
-            return std::env::temp_dir().join(filename);
-            #[cfg(target_arch = "wasm32")]
-            std::path::PathBuf::from(filename)
-        });
+        let path = path.unwrap_or_else(|| default_export_path(&self.state.symbol, "png"));
         #[cfg(not(target_arch = "wasm32"))]
         let result = std::fs::write(&path, png).map_err(|error| error.to_string());
         #[cfg(target_arch = "wasm32")]
@@ -4533,6 +4519,19 @@ impl DemoApp {
 // ---------------------------------------------------------------------------
 // Free helpers.
 // ---------------------------------------------------------------------------
+
+/// Default export destination, named from a path-safe symbol and the local time to the second,
+/// such as `SAMPLE_2026-11-20_06-50-12.png`. Native hosts save in the temporary directory;
+/// browsers download the file. A visitor's symbol must not carry a path into the file name.
+fn default_export_path(symbol: &str, extension: &str) -> std::path::PathBuf {
+    let stem = owndata::store::file_stem(symbol);
+    let time = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let filename = format!("{stem}_{time}.{extension}");
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::env::temp_dir().join(filename);
+    #[cfg(target_arch = "wasm32")]
+    std::path::PathBuf::from(filename)
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn open_image(ctx: &egui::Context, png: &[u8]) -> Result<String, String> {
@@ -8424,6 +8423,48 @@ mod tests {
                 }
             }
             output.drop_without_applying_deltas();
+        }
+
+        // Every download of a symbol is kept: the default name carries the capture time.
+        use chrono::Timelike;
+        fn paths_time(path: &std::path::Path) -> chrono::NaiveDateTime {
+            let name = path.file_name().unwrap().to_str().unwrap();
+            let stamp = name
+                .strip_prefix("BTC_USD_")
+                .and_then(|name| name.strip_suffix(".png"));
+            chrono::NaiveDateTime::parse_from_str(stamp.unwrap(), "%Y-%m-%d_%H-%M-%S").unwrap()
+        }
+        let now = || chrono::Local::now().naive_local();
+        app.state.symbol = "BTC/USD".into();
+        let mut paths: Vec<std::path::PathBuf> = Vec::new();
+        for _ in 0..2 {
+            // The second download is a second after the first.
+            while paths.len() == 1 && now().with_nanosecond(0).unwrap() <= paths_time(&paths[0]) {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let before = now().with_nanosecond(0).unwrap();
+            app.handle_top_toolbar(&ctx, TopToolbarAction::TakeScreenshot);
+            app.screenshot_requested.as_mut().unwrap().1.size = [200, 120];
+            app.handle_screenshot(&ctx);
+            let after = now();
+            let message = &app.toasts.toasts().last().unwrap().message;
+            let path = std::path::PathBuf::from(
+                message
+                    .strip_prefix("Export successful: ")
+                    .unwrap_or_else(|| panic!("{message}")),
+            );
+            assert_eq!(path.parent(), Some(std::env::temp_dir().as_path()));
+            assert!(
+                (before..=after).contains(&paths_time(&path)),
+                "{}",
+                path.display()
+            );
+            assert!(std::fs::read(&path).unwrap().starts_with(b"\x89PNG"));
+            paths.push(path);
+        }
+        assert_ne!(paths[0], paths[1]);
+        for path in paths {
+            std::fs::remove_file(path).unwrap();
         }
     }
 
