@@ -9,6 +9,8 @@ pub use book_profile::{BookProfile, OrderBookView, render_book_profile};
 mod footprint;
 #[cfg(feature = "studies")]
 pub(crate) use footprint::render_footprint_annotations;
+#[cfg(feature = "ui")]
+pub(crate) use footprint::step_color;
 pub use footprint::{
     FootprintColor, FootprintConfig, FootprintIntensity, FootprintMode, pullback_range,
     render_footprint, render_footprint_statistics, render_footprint_statistics_rows,

@@ -432,6 +432,7 @@ impl DrawingProps {
                     volume_profile => |d: &Drawing| d.volume_profile.unwrap_or_default(),
                     regression_trend => |d: &Drawing| d.regression_trend.unwrap_or_default(),
                     vwap => |d: &Drawing| d.vwap.unwrap_or_default(),
+                    table => |d: &Drawing| d.table.clone().unwrap_or_default(),
                 );
                 if settings.custom_settings != target.custom_settings {
                     merge_edits(
@@ -1354,6 +1355,32 @@ mod tests {
                 assert_eq!(drawing.position_readout.conversion_rate, Some(expected.1));
             }
         }
+        // Anchoring one of two selected tables to the screen anchors both, each keeping its own
+        // column widths.
+        chart.drawings_mut().drawings = [vec![Some(90.0)], vec![None, Some(50.0)]]
+            .into_iter()
+            .enumerate()
+            .map(|(id, column_widths)| {
+                let mut table = Drawing::new(id + 1, DrawingToolType::Table);
+                table.table = Some(Box::new(crate::drawings::TableConfig {
+                    column_widths,
+                    ..Default::default()
+                }));
+                table
+            })
+            .collect();
+        chart.drawings_mut().select_drawings([1, 2]);
+        let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+        let settings = &mut props.tool_settings.as_mut().unwrap().settings;
+        settings.table.as_mut().unwrap().screen_anchored = true;
+        let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+        let tables: Vec<_> = edits.iter().map(|d| d.table.clone().unwrap()).collect();
+        assert!(
+            tables.iter().all(|table| table.screen_anchored),
+            "{tables:?}"
+        );
+        assert_eq!(tables[0].column_widths, [Some(90.0)]);
+        assert_eq!(tables[1].column_widths, [None, Some(50.0)]);
         // An image's opacity is independent of its frame and of the other selected pictures.
         for opacity in [None, Some(128)] {
             let mut chart = Chart::new(crate::model::BarData::new());
