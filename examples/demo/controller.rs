@@ -1795,6 +1795,18 @@ impl eframe::App for DemoApp {
         let alerts = &self.settings_state.alerts;
         self.alerts
             .set_sound(alerts.play_sound.then(|| alerts.sound.clone()));
+        self.alerts.set_price(
+            self.chart.symbol(),
+            self.chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .rev()
+                .find(|bar| !bar.is_whitespace())
+                .map(|bar| bar.close),
+            self.chart
+                .instrument()
+                .and_then(|instrument| instrument.tick_size),
+        );
         self.alerts.poll(&ctx, &mut self.toasts);
         self.monitor_alerts(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
@@ -3308,7 +3320,6 @@ impl DemoApp {
 
     fn show_alerts_panel(&mut self, ui: &mut egui::Ui) {
         self.list_alert_sources();
-        self.alerts.set_symbol(&self.state.symbol);
         match self.alerts.show(ui) {
             AlertPanelAction::CreateAlert => self.open_alert(None),
             AlertPanelAction::EditAlert(mut alert)
@@ -4346,6 +4357,12 @@ impl DemoApp {
                     self.interval_entry = Some(text);
                     self.interval_focus = true;
                 }
+                ShortcutRequest::PasteImage(picture) => {
+                    if let Err(error) = self.images.paste(ctx, &mut self.chart, &picture) {
+                        self.toasts
+                            .error(format!("Could not paste the picture: {error}"));
+                    }
+                }
                 ShortcutRequest::Action(action) => self.handle_shortcut_action(ctx, action),
                 _ => {}
             }
@@ -4398,11 +4415,9 @@ impl DemoApp {
                     if ctx
                         .layer_id_at(pos)
                         .is_some_and(|layer| layer.order == egui::Order::Background)
+                        && let Some(price) = self.chart.alert_price_at(pos)
                     {
-                        let price = mapping.y_to_price(pos.y);
-                        if price.is_finite() {
-                            self.quick_price_alert(self.chart.symbol().to_owned(), price);
-                        }
+                        self.quick_price_alert(self.chart.symbol().to_owned(), price);
                     }
                 } else {
                     self.open_alert(None);
@@ -7361,6 +7376,86 @@ mod tests {
         assert_eq!(widths(&app), [1.0, 1.0]);
     }
 
+    /// A picture pasted over the price pane becomes one selected image drawing whose pixels
+    /// load, and a picture wider than the texture limit is refused with its reason.
+    #[test]
+    fn pasted_picture_becomes_a_selected_image_drawing() {
+        use eframe::App;
+        use egui::load::ImagePoll;
+        use egui_charts::drawings::DrawingToolType;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        settle(&mut app, &ctx);
+        let pos = app.chart.get_rendered_price_rect().center();
+        let limit = ctx.input(|i| i.max_texture_side);
+        let color = egui::Color32::from_rgba_unmultiplied(255, 0, 0, 128);
+        for (size, refusal) in [
+            ([64, 32], None),
+            (
+                [limit + 1, 1],
+                Some("Picture dimensions exceed the texture limits"),
+            ),
+            ([0, 1], Some("Picture dimensions exceed the texture limits")),
+            ([64, 32], Some("Could not encode picture")),
+        ] {
+            let mut picture = egui::ColorImage::filled(size, color);
+            if refusal == Some("Could not encode picture") {
+                picture.pixels.clear();
+            }
+            let picture = std::sync::Arc::new(picture);
+            app.toasts.clear();
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events: vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PasteImage(picture),
+                    ],
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+            .drop_without_applying_deltas();
+            // The refused picture leaves the placed one alone.
+            let images: Vec<_> = (app.chart.drawings().drawings.iter())
+                .filter(|drawing| drawing.tool_type == DrawingToolType::Image)
+                .collect();
+            assert_eq!(images.len(), 1, "{size:?}");
+            let refusals: Vec<_> = (app.toasts.toasts().iter())
+                .filter(|toast| toast.message.starts_with("Could not paste the picture"))
+                .map(|toast| toast.message.as_str())
+                .collect();
+            if let Some(reason) = refusal {
+                assert_eq!(refusals, [format!("Could not paste the picture: {reason}")]);
+                continue;
+            }
+            assert!(refusals.is_empty(), "{refusals:?}");
+            assert!(app.chart.drawings().is_selected(images[0].id));
+            // 64 x 32 pixels fit the 240 x 180 limit unscaled.
+            assert_eq!(images[0].image.and_then(|c| c.size), Some([64.0, 32.0]));
+            let uri = images[0].text.clone().expect("picture address");
+            // The loader may decode on another thread.
+            let started = std::time::Instant::now();
+            let loaded = loop {
+                match ctx.try_load_image(&uri, egui::SizeHint::default()) {
+                    Ok(ImagePoll::Pending { .. }) if started.elapsed().as_secs() < 10 => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    poll => break poll,
+                }
+            };
+            let Ok(ImagePoll::Ready { image }) = loaded else {
+                panic!("picture did not load: {:?}", loaded.err());
+            };
+            assert_eq!(image.size, [64, 32]);
+            assert!(image.pixels.iter().all(|&p| p == color));
+        }
+    }
+
     /// Native clipboard events paste the selected drawings without a session cache,
     /// and the pasted group is one undoable addition.
     #[test]
@@ -9205,7 +9300,13 @@ mod tests {
         let map = app.chart.get_chart_mapping();
         let point = egui::pos2(map.rect.center().x, map.rect.center().y);
         let range = map.price.range();
-        let expected = (range.min + range.max) / 2.0;
+        let expected = app.chart.alert_price_at(point).unwrap();
+        let tick = app
+            .chart
+            .instrument()
+            .and_then(|instrument| instrument.tick_size)
+            .unwrap_or(0.01);
+        assert!((expected - (range.min + range.max) / 2.0).abs() <= tick / 2.0 + 1e-9);
         frame(
             &mut app,
             vec![
