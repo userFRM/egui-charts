@@ -25,7 +25,7 @@ use std::collections::HashSet;
 pub enum SeriesContextMenuAction {
     /// No action
     None,
-    /// Add a price alert
+    /// Add a price alert at [`ChartMenus::series_alert_price`](crate::ui::context_menu::ChartMenus::series_alert_price).
     AddAlert,
     /// Add an indicator
     AddIndicator,
@@ -62,6 +62,8 @@ pub struct SeriesContextMenu {
     pub symbol: String,
     /// Price at click position
     pub click_price: f64,
+    /// Price named by the alert row, rounded by `ChartMenus`.
+    pub(crate) alert_price: f64,
     /// Last action taken
     pub last_action: SeriesContextMenuAction,
     /// Skip close detection on first frame
@@ -86,6 +88,7 @@ impl SeriesContextMenu {
             series_id: None,
             symbol: String::new(),
             click_price: 0.0,
+            alert_price: 0.0,
             last_action: SeriesContextMenuAction::None,
             just_opened: false,
             hidden: HashSet::new(),
@@ -105,6 +108,7 @@ impl SeriesContextMenu {
     pub fn set_context(&mut self, symbol: impl Into<String>, price: f64) {
         self.symbol = symbol.into();
         self.click_price = price;
+        self.alert_price = price;
     }
 
     /// Close the context menu
@@ -136,12 +140,13 @@ impl SeriesContextMenu {
         let mut items = Vec::new();
         // An alert needs an instrument.
         if has_symbol && !self.hidden.contains(&Control::Alerts) {
+            let alert_price_str = price_text(self.alert_price);
             items.push(MenuEntry::Item(
                 MenuItem::new(
                     l10n::format_text(
                         ctx,
                         "Add alert on {name} at {price}…",
-                        &[("name", symbol.as_str()), ("price", price_str.as_str())],
+                        &[("name", symbol.as_str()), ("price", alert_price_str.as_str())],
                     ),
                     SeriesContextMenuAction::AddAlert,
                 )

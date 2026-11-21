@@ -4084,8 +4084,7 @@ impl DemoApp {
                 self.indicator_dialog.open_for_chart(&self.chart, None);
             }
             SeriesContextMenuAction::AddAlert => {
-                // The row names the price of the click.
-                let price = self.menus.series_click_price();
+                let price = self.menus.series_alert_price();
                 self.open_alert(price.is_finite().then_some(price));
             }
             _ => {}
@@ -11150,7 +11149,7 @@ mod tests {
         assert!(clock.ends_with(" America/New_York"), "{clock}");
     }
 
-    /// The series menu opens an alert at the clicked price, and copies the price its row names.
+    /// The series menu opens an alert and copies a price at the values their rows name.
     #[test]
     fn series_menu_alert_starts_at_the_clicked_price() {
         for row_prefix in ["Add alert on STOCKA at ", "Copy price "] {
@@ -11210,7 +11209,7 @@ mod tests {
             for _ in 0..3 {
                 frame(&mut app, vec![]);
             }
-            // A candle whose body lies clear of the last close, clicked at the middle of its body.
+            // Click off the tick grid inside a candle whose body lies clear of the last close.
             let mapping = app.chart.get_chart_mapping();
             let plot = app.chart.get_rendered_price_rect();
             let bars = app.chart.bars(SeriesId::MAIN);
@@ -11223,7 +11222,7 @@ mod tests {
                     let (low, high) = (bar.open.min(bar.close), bar.open.max(bar.close));
                     let pos = egui::pos2(
                         mapping.idx_to_x(index),
-                        mapping.price_to_y((low + high) / 2.0),
+                        mapping.price_to_y((low + high) / 2.0) + 3.0,
                     );
                     ((last < low || last > high)
                         && mapping.price_to_y(low) - mapping.price_to_y(high) >= 8.0
@@ -11255,7 +11254,15 @@ mod tests {
             let AlertCondition::Crossing(price) = app.alert_dialog.alert.condition else {
                 panic!("{:?}", app.alert_dialog.alert.condition);
             };
-            assert_eq!(price, app.menus.series_click_price());
+            let expected: f64 = row
+                .0
+                .strip_prefix(row_prefix)
+                .unwrap()
+                .strip_suffix('…')
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert_eq!(price, expected);
             assert!((low..=high).contains(&price), "{price} in {low}..{high}");
         }
     }

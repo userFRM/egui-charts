@@ -3256,7 +3256,7 @@ fn menu_rows_write_and_act_on_prices_as_the_price_scale_does() {
                     price: click,
                 },
                 vec![
-                    format!("Add alert on EURUSD at {text}…"),
+                    format!("Add alert on EURUSD at {order}…"),
                     format!("Copy price {text}"),
                 ],
             ),
@@ -3292,6 +3292,9 @@ fn menu_rows_write_and_act_on_prices_as_the_price_scale_does() {
                         })
                         .unwrap();
                 assert_eq!(price, alert, "{text}");
+            } else {
+                assert_eq!(menus.series_alert_price(), alert, "{text}");
+                assert_eq!(menus.series_click_price(), click, "{text}");
             }
         }
         // The shortcut reader must agree with the actual menu at this pointer.
