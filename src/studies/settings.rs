@@ -2865,9 +2865,13 @@ mod tests {
     /// Automatic volume units follow the instrument, while a chosen precision wins. With
     /// three decimals, 0.375 stays fractional and 1234.5 / 1000 rounds to 1.234 in binary;
     /// without metadata the same values keep their former 0 and 1.23K text. At 0 volume
-    /// decimals the units keep two decimals: 1.23K.
+    /// decimals the units keep two decimals: 1.23K. Order flow studies in volume units follow
+    /// the same rule: 1,234.5678 / 1,000 = 1.2345678 reads 1.235K at three volume decimals and
+    /// 1.23K at 0 or without them.
     #[test]
     fn volume_units_follow_the_instrument_volume_decimals() {
+        use crate::data::OrderFlowKind;
+        use crate::studies::OrderFlowStudy;
         type Row = (Option<u8>, Option<usize>, Option<usize>, [&'static str; 2]);
         let rows: [Row; 4] = [
             (None, None, None, ["0", "1.23K"]),
@@ -2903,6 +2907,46 @@ mod tests {
                 if got != want {
                     wrong.push(format!(
                         "{name}, {decimals:?}, {chosen:?}: got {got:?}, want {want:?}"
+                    ));
+                }
+            }
+        }
+        for (decimals, expected) in [(None, "1.23K"), (Some(0), "1.23K"), (Some(3), "1.235K")] {
+            for study in [
+                OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
+                    min: 0.0,
+                    max: f64::MAX,
+                }),
+                OrderFlowStudy::new(OrderFlowKind::SizeDelta {
+                    ranges: [[0.0, 10.0]; 3],
+                }),
+                OrderFlowStudy::new(OrderFlowKind::BookSize {
+                    levels: 10,
+                    distance: 0.0,
+                }),
+                OrderFlowStudy::new(OrderFlowKind::FlowSum { bars: 2 }),
+                OrderFlowStudy::execution_delta(false),
+                OrderFlowStudy::execution_delta(true),
+                OrderFlowStudy::new(OrderFlowKind::TradeRate {
+                    volume: true,
+                    seconds: 60,
+                    instant: 5,
+                }),
+            ] {
+                let name = study.name().to_owned();
+                let mut study = ConfiguredStudy::new(Box::new(study));
+                let mut instrument = Instrument::new("COIN");
+                instrument.volume_decimals = decimals;
+                study.set_instrument(Some(&instrument));
+                let value = 1234.5678;
+                let mut got = vec![study.format_plot_value(0, value)];
+                // Trade Rate writes only its volume line in volume units.
+                if study.value_format() == crate::scales::StudyFormat::Volume {
+                    got.push(study.format_value(value));
+                }
+                if got.iter().any(|text| text != expected) {
+                    wrong.push(format!(
+                        "{name}, {decimals:?}: got {got:?}, want {expected}"
                     ));
                 }
             }

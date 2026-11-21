@@ -388,12 +388,15 @@ impl Indicator for OrderFlowStudy {
         }
     }
     fn format_value(&self, value: f64) -> String {
+        use crate::scales::StudyFormat;
         let format = self.value_format();
         let precision = self
             .precision()
-            .or((format == crate::scales::StudyFormat::Volume && self.delta.is_none()).then_some(2))
-            .filter(|_| format != crate::scales::StudyFormat::Volume || value.abs() < 1_000.0);
-        format.format(value, precision)
+            .or((format == StudyFormat::Volume && self.delta.is_none()).then_some(2));
+        match precision {
+            Some(precision) if format == StudyFormat::Volume => volume_text(value, precision),
+            _ => format.format(value, precision),
+        }
     }
     fn format_plot_value(&self, line: usize, value: f64) -> String {
         use crate::scales::StudyFormat;
@@ -410,10 +413,7 @@ impl Indicator for OrderFlowStudy {
         if line == 0 {
             match self.kind {
                 OrderFlowKind::TradeRate { volume: true, .. } => {
-                    return StudyFormat::Volume.format(
-                        value,
-                        (value.abs() < 1_000.0).then_some(self.volume_precision.unwrap_or(2)),
-                    );
+                    return volume_text(value, self.volume_precision.unwrap_or(2));
                 }
                 OrderFlowKind::TradeRate { volume: false, .. }
                 | OrderFlowKind::AggressorRate { .. } => {
@@ -991,6 +991,21 @@ impl Indicator for OrderFlowStudy {
     }
 }
 
+/// `value` in volume units at `precision` decimals, with K, M and B values at no fewer than two,
+/// as studies write volumes with instrument volume decimals.
+fn volume_text(value: f64, precision: usize) -> String {
+    use crate::scales::{StudyFormat, VolumeFormatter};
+    if value.is_finite() {
+        // Capped as `StudyFormat` caps study decimals.
+        VolumeFormatter {
+            precision: precision.min(12),
+        }
+        .format_with_min_unit_decimals(value, 2)
+    } else {
+        StudyFormat::Volume.format(value, None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1216,7 +1231,6 @@ mod tests {
                 "18.125",
             ),
             (OrderFlowKind::FlowSum { bars: 2 }, 18.125, "18", "18.125"),
-            (OrderFlowKind::FlowSum { bars: 2 }, 4554.0, "4.55K", "4.55K"),
             (
                 OrderFlowKind::BookBalance {
                     near_levels: 5,

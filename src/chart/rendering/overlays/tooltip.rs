@@ -6,14 +6,14 @@
 //! - Magnifier: Circular zoom lens for detailed data inspection
 
 use super::super::{ChartMapping, RenderContext, StyleColors};
-use crate::chart::rendering::axes::semibold;
+use crate::chart::rendering::axes::{semibold, volume_text};
 use crate::config::{TooltipMode, TooltipOptions};
 use crate::localization as l10n;
 use crate::model::{Bar, Instrument, percent_change};
 use crate::scales::price_decimals;
 use crate::scales::{
-    DefaultPriceFormatter, HorizontalScale, PriceFormatter, PriceMap, VolumeFormatter,
-    group_thousands, instrument_price_precision,
+    DefaultPriceFormatter, HorizontalScale, PriceFormatter, PriceMap, group_thousands,
+    instrument_price_precision,
 };
 use crate::styles::typography::font_size;
 use crate::theme::ThemeExt;
@@ -262,17 +262,13 @@ pub fn render_floating_tooltip(
         rows.push(("Change", format!("{absolute} ({percent})")));
     }
     if options.show_volume {
-        let volume = VolumeFormatter {
-            precision: instrument
-                .and_then(|instrument| instrument.volume_decimals)
-                .map_or(2, usize::from),
-        }
-        .format_with_min_unit_decimals(candle.volume, 2);
         rows.push((
             "Vol",
-            formatters
-                .volume
-                .map_or(volume, |formatter| formatter.format(candle.volume)),
+            volume_text(
+                candle.volume,
+                instrument.and_then(|instrument| instrument.volume_decimals),
+                formatters.volume,
+            ),
         ));
     }
 
@@ -501,16 +497,10 @@ pub fn render_tracking_tooltip(
     }
 
     if options.show_volume {
-        let volume = formatters.volume.map_or_else(
-            || {
-                VolumeFormatter {
-                    precision: instrument
-                        .and_then(|instrument| instrument.volume_decimals)
-                        .map_or(2, usize::from),
-                }
-                .format_with_min_unit_decimals(candle.volume, 2)
-            },
-            |formatter| formatter.format(candle.volume),
+        let volume = volume_text(
+            candle.volume,
+            instrument.and_then(|instrument| instrument.volume_decimals),
+            formatters.volume,
         );
         parts.push(l10n::format_text(
             painter.ctx(),

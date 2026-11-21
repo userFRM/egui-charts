@@ -1243,6 +1243,62 @@ fn heikin_ashi_readouts_describe_the_drawn_candle() {
     assert_eq!(chart.indicator_value_at(average, 50), Some((0, 149.25)));
 }
 
+/// Without volume decimals the floating readout, the tracking bar and, in builds without
+/// studies, the volume tag write a bar's volume as the legend does: no decimals below a
+/// thousand, so 999 reads 999 and 0.375 reads 0, not 999.00 and 0.38.
+#[test]
+fn volume_readouts_write_the_legend_text_without_volume_decimals() {
+    use crate::config::TooltipMode;
+    for (volume, text) in [(999.0, "999"), (0.375, "0")] {
+        for mode in [TooltipMode::Floating, TooltipMode::Tracking] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[110.0]);
+            let mut bars = chart.state.data().bars.clone();
+            bars.last_mut().unwrap().volume = volume;
+            chart.set_data(crate::widget::SeriesId::MAIN, bars);
+            // With studies a volume study replaces the legend's volume field and the tag.
+            chart.config.show_volume = cfg!(not(feature = "studies"));
+            chart.chart_options.tooltip.mode = mode;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let price = chart.last_rendered_price_rect;
+            let pos = Pos2::new(map.idx_to_x(99), price.center().y);
+            let texts: Vec<_> = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)])
+                .into_iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(shape) => Some((shape.galley.text().to_owned(), shape.pos.x)),
+                    _ => None,
+                })
+                .collect();
+            let legend = format!("Vol {text}");
+            assert!(
+                texts.iter().any(|(shown, _)| *shown == legend),
+                "{volume} {mode:?}: {texts:?}"
+            );
+            let readout = match mode {
+                // The card paints each label, then its value.
+                TooltipMode::Floating => texts
+                    .windows(2)
+                    .any(|pair| pair[0].0 == "Vol" && pair[1].0 == text),
+                // The bar joins its parts with three spaces.
+                _ => texts.iter().any(|(shown, _)| {
+                    shown
+                        .split("   ")
+                        .any(|part| part.strip_prefix("Vol: ") == Some(text))
+                }),
+            };
+            assert!(readout, "{volume} {mode:?}: {texts:?}");
+            #[cfg(not(feature = "studies"))]
+            assert!(
+                texts
+                    .iter()
+                    .any(|(shown, x)| shown == text && *x >= price.right()),
+                "{volume} {mode:?} tag: {texts:?}"
+            );
+        }
+    }
+}
+
 /// Default options track a touch held for its delay, keep its values until the next tap and
 /// leave mouse hover unchanged; `OnTouchEnd` exits on release. Short taps, cancelled contacts
 /// and a pan started before the delay cannot latch a readout.
