@@ -1443,7 +1443,7 @@ mod tests {
                 && query.countries == [country]));
         }
         let time = Utc::now();
-        let stories: Vec<_> = [
+        let mut stories: Vec<_> = [
             ("a1", &["AAA"][..]),
             ("a2", &["AAA"][..]),
             ("b1", &["BBB"][..]),
@@ -1456,6 +1456,10 @@ mod tests {
             story
         })
         .collect();
+        let mut historical =
+            NewsStory::new("history", time - chrono::Duration::hours(1), "History");
+        historical.symbols = vec!["AAA".into()];
+        stories.push(historical);
         for (_, reply) in requests {
             reply.send(Ok(stories.clone()));
         }
@@ -1572,13 +1576,8 @@ mod tests {
         h.run_steps(3);
         let mut story = NewsStory::new("b2", Utc::now(), "Paused story");
         story.symbols = vec!["BBB".into()];
-        for (query, reply) in std::mem::take(&mut *feed.0.lock().unwrap()) {
-            // The visible list may still ask for BBB; only AAA's alert is pending.
-            if query.symbols == ["AAA"] {
-                reply.send(Ok(vec![story.clone()]));
-            } else {
-                reply.send(Ok(vec![]));
-            }
+        for (_, reply) in std::mem::take(&mut *feed.0.lock().unwrap()) {
+            reply.send(Ok(vec![story.clone()]));
         }
         h.run_steps(3);
         assert!(h.state_mut().take_notifications().is_empty());
