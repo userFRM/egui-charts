@@ -57,7 +57,7 @@ pub struct Notification {
     pub body: String,
     /// The symbol the entry is about, which the panel offers to open.
     pub symbol: Option<String>,
-    /// The profile or chat room a social entry is about, which the panel offers to open.
+    /// The profile, chat room or post a social entry is about, which the panel offers to open.
     pub target: Option<NotificationTarget>,
 }
 
@@ -69,6 +69,9 @@ pub enum NotificationTarget {
     Profile(ProfileId),
     /// A chat room, by the identifier [`Chats`](super::Chats) uses.
     Room(String),
+    /// An idea or short post, by the host's identifier: the feed entry identifier the ideas
+    /// panel opens and the link [`Posts`](super::Posts) resolves.
+    Post(String),
 }
 
 impl Notification {
