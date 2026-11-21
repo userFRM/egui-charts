@@ -265,7 +265,16 @@ impl ZigZag {
                         .map(|&bar| data[bar].volume)
                         .filter(|volume| volume.is_finite())
                         .sum();
-                    lines.push(StudyFormat::Volume.format(volume, volume_precision));
+                    lines.push(match (self.label_precision, self.volume_decimals) {
+                        // Volume decimals stand below a thousand; K, M and B values keep two.
+                        (None, Some(decimals)) if volume.is_finite() => {
+                            crate::scales::VolumeFormatter {
+                                precision: decimals.min(12),
+                            }
+                            .format_with_min_unit_decimals(volume, 2)
+                        }
+                        _ => StudyFormat::Volume.format(volume, volume_precision),
+                    });
                 }
             }
             if !lines.is_empty() {

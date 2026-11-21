@@ -429,7 +429,7 @@ pub(crate) struct ExpiryParts {
     pub rows: Vec<Vec<f64>>,
 }
 
-/// The call and put walls of an options profile drawn at its expiration, marked across its span.
+/// The call and put walls of an options profile drawn at its expiration, named beside their rows.
 #[cfg(any(feature = "studies", feature = "widget"))]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct OptionWalls {

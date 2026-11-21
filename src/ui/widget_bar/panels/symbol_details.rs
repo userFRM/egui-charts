@@ -949,6 +949,7 @@ impl SymbolDetailsPanel {
                         let (session, color) = match extended.session {
                             ExtendedSession::PreMarket => ("Pre-market", theme.ui.warning),
                             ExtendedSession::PostMarket => ("Post-market", theme.ui.info),
+                            ExtendedSession::Overnight => ("Overnight", theme.ui.accent),
                         };
                         ui.horizontal(|ui| {
                             ui.label(
@@ -969,7 +970,14 @@ impl SymbolDetailsPanel {
                     && shown("Volume")
                 {
                     ui.add_space(theme.spacing.md);
-                    let decimals = instrument.volume_decimals.map(usize::from);
+                    // Volume decimals stand below a thousand; K, M and B values keep two.
+                    let volume_text = |value: f64| match instrument.volume_decimals {
+                        Some(decimals) if value.is_finite() => crate::scales::VolumeFormatter {
+                            precision: usize::from(decimals).min(12),
+                        }
+                        .format_with_min_unit_decimals(value, 2),
+                        _ => StudyFormat::Volume.format(value, None),
+                    };
                     for (left, right, size, color) in [
                         (
                             "Volume".to_owned(),
@@ -978,8 +986,8 @@ impl SymbolDetailsPanel {
                             theme.ui.text_secondary,
                         ),
                         (
-                            StudyFormat::Volume.format(volume, decimals),
-                            StudyFormat::Volume.format(average, decimals),
+                            volume_text(volume),
+                            volume_text(average),
                             theme.text.label,
                             theme.ui.text,
                         ),
@@ -1723,20 +1731,31 @@ mod tests {
         panel.set_instrument(&Instrument::new("QQQ").with_price_decimals(2));
         panel.set_timezone("Europe/Berlin".parse().unwrap());
         let quote = Quote::new(704.47, 725.20, "2026-10-22T19:59:00Z".parse().unwrap());
-        panel.set_quote(quote.with_extended(crate::model::ExtendedHoursQuote {
-            session: ExtendedSession::PreMarket,
-            last: 703.65,
-            // Summer time ends in Berlin on October 25.
-            time: "2026-10-26T12:30:00Z".parse().unwrap(),
-        }));
-        let shown = texts(&ctx, &mut panel);
-        for text in [
-            "704.47-20.73-2.86%",
-            "Last update at 21:59 GMT+2",
-            "703.65-0.82-0.12%",
-            "Last update at 13:30 GMT+1",
+        for (session, label) in [
+            (ExtendedSession::PreMarket, "Pre-market"),
+            (ExtendedSession::PostMarket, "Post-market"),
+            (ExtendedSession::Overnight, "Overnight"),
         ] {
-            assert!(shown.contains(&text.into()), "{text}: {shown:?}");
+            panel.set_quote(
+                quote
+                    .clone()
+                    .with_extended(crate::model::ExtendedHoursQuote {
+                        session,
+                        last: 703.65,
+                        // Summer time ends in Berlin on October 25.
+                        time: "2026-10-26T12:30:00Z".parse().unwrap(),
+                    }),
+            );
+            let shown = texts(&ctx, &mut panel);
+            for text in [
+                label,
+                "704.47-20.73-2.86%",
+                "Last update at 21:59 GMT+2",
+                "703.65-0.82-0.12%",
+                "Last update at 13:30 GMT+1",
+            ] {
+                assert!(shown.contains(&text.into()), "{text}: {shown:?}");
+            }
         }
         for (offset, label) in [(0, "UTC"), (-5 * 3600, "GMT-5"), (-12600, "GMT-3:30")] {
             assert_eq!(zone_label(offset), label);

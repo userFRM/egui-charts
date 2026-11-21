@@ -1230,6 +1230,105 @@ mod tests {
         }
     }
 
+    /// The More menu applies interval visibility to the selection as one undo step.
+    #[test]
+    fn interval_entries_reach_every_selected_drawing() {
+        use crate::drawings::TimeframeVisibility;
+        use crate::model::Timeframe;
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(crate::model::BarData::new());
+        chart.set_timeframe(Timeframe::Hour1);
+        let filters = [
+            TimeframeVisibility::all(),
+            TimeframeVisibility::specific(&["4h"]),
+        ];
+        for (index, filter) in filters.iter().enumerate() {
+            let mut line = Drawing::new(index + 1, DrawingToolType::TrendLine);
+            line.completed = true;
+            line.points = vec![Pos2::new(100.0, 100.0), Pos2::new(300.0, 200.0)];
+            line.chart_points = vec![ChartPoint::new(1.0, 105.0), ChartPoint::new(2.0, 106.0)];
+            line.timeframe_visibility = filter.clone();
+            chart.drawings_mut().drawings.push(line);
+        }
+        chart.drawings_mut().select_drawings([1, 2]);
+        let mut toolbar = FloatingSelectionToolbar::new();
+        let frame = |chart: &mut Chart, toolbar: &mut FloatingSelectionToolbar, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    toolbar.show_and_apply(ui, chart);
+                },
+            );
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        let text_position = |shapes: &[egui::epaint::ClippedShape], label: &str| {
+            shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing menu row: {label}"))
+        };
+        for _ in 0..2 {
+            frame(&mut chart, &mut toolbar, vec![]);
+        }
+        toolbar.menu.open(Pos2::new(200.0, 200.0), 1);
+        frame(&mut chart, &mut toolbar, vec![]);
+        let shapes = frame(&mut chart, &mut toolbar, vec![]);
+        let pos = text_position(&shapes, "Intervals visibility");
+        frame(
+            &mut chart,
+            &mut toolbar,
+            vec![egui::Event::PointerMoved(pos)],
+        );
+        let shapes = frame(&mut chart, &mut toolbar, vec![]);
+        let pos = text_position(&shapes, "Show on current interval");
+        frame(
+            &mut chart,
+            &mut toolbar,
+            vec![egui::Event::PointerMoved(pos)],
+        );
+        for pressed in [true, false] {
+            frame(
+                &mut chart,
+                &mut toolbar,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }],
+            );
+        }
+        for drawing in &chart.drawings().drawings {
+            for (interval, shown) in [
+                (Timeframe::Min30, false),
+                (Timeframe::Hour1, true),
+                (Timeframe::Hour4, false),
+            ] {
+                assert_eq!(
+                    drawing.is_visible_on_timeframe(&interval.as_str()),
+                    shown,
+                    "drawing {}, {interval:?}",
+                    drawing.id
+                );
+            }
+        }
+        assert!(chart.undo());
+        for (drawing, filter) in chart.drawings().drawings.iter().zip(filters) {
+            assert_eq!(drawing.timeframe_visibility, filter);
+        }
+    }
+
     /// Alert availability comes from the drawing and chart, and honours the shared control.
     #[test]
     fn add_alert_follows_drawing_levels_and_the_alerts_control() {
