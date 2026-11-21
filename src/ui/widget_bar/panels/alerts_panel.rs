@@ -171,6 +171,8 @@ pub struct AlertsPanel {
     generation: u64,
     alerts: Vec<Alert>,
     log: VecDeque<AlertTrigger>,
+    /// Keeps row ids stable when the bounded log drops its oldest entries.
+    log_offset: usize,
     /// Selected alert and log entry; the log index follows eviction of the oldest entry.
     selected: Option<AlertId>,
     log_selected: Option<usize>,
@@ -256,6 +258,7 @@ impl AlertsPanel {
             generation: 0,
             alerts: Vec::new(),
             log: VecDeque::new(),
+            log_offset: 0,
             selected: None,
             log_selected: None,
             removing: None,
@@ -535,6 +538,7 @@ impl AlertsPanel {
         self.listener = None;
         self.service = Some(service);
         self.alerts.clear();
+        self.log_offset += self.log.len();
         self.log.clear();
         self.selected = None;
         self.log_selected = None;
@@ -1046,6 +1050,7 @@ impl AlertsPanel {
         self.log.push_back(trigger);
         if self.log.len() > LOG_BOUND {
             self.log.pop_front();
+            self.log_offset += 1;
             self.log_selected = self.log_selected.and_then(|index| index.checked_sub(1));
         }
     }
@@ -1379,7 +1384,7 @@ impl AlertsPanel {
                 let focused = m.focused()?;
                 order
                     .iter()
-                    .find(|index| rows.with(index) == focused)
+                    .find(|&&index| rows.with(self.log_offset + index) == focused)
                     .map(|index| (focused, *index))
             }) {
                 self.log_selected = Some(index);
@@ -1396,8 +1401,8 @@ impl AlertsPanel {
                         .map_or(0, |at| at.saturating_add_signed(step).min(order.len() - 1));
                     self.log_selected = Some(order[next]);
                     ui.memory_mut(|m| {
-                        m.request_focus(rows.with(order[next]));
-                        m.set_focus_lock_filter(rows.with(order[next]), arrows);
+                        m.request_focus(rows.with(self.log_offset + order[next]));
+                        m.set_focus_lock_filter(rows.with(self.log_offset + order[next]), arrows);
                     });
                     reveal = true;
                 }
@@ -1425,7 +1430,7 @@ impl AlertsPanel {
                         let selected = self.log_selected == Some(index);
                         let row = ui.scope_builder(
                             egui::UiBuilder::new()
-                                .scope_id(rows.with(index))
+                                .scope_id(rows.with(self.log_offset + index))
                                 .sense(Sense::click()),
                             |ui| {
                                 ui.style_mut().interaction.selectable_labels = false;
@@ -1494,6 +1499,7 @@ impl AlertsPanel {
                 .show(ui.ctx(), &mut self.clearing)
                 .is_confirmed()
             {
+                self.log_offset += self.log.len();
                 self.log.retain(|trigger| !shown(trigger));
                 self.log_selected = None;
                 // Otherwise the engine would restore the entries after a restart.
@@ -3179,6 +3185,69 @@ mod tests {
         h.get_by_role(Role::Menu).get_by_label("Remove").click();
         h.run();
         assert_eq!(engine.alerts().len(), 1);
+    }
+
+    #[test]
+    fn a_focused_log_row_keeps_its_trigger_when_the_log_evicts_entries() {
+        use egui::{Key, accesskit::Role};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+
+        let trigger = |name: &str, symbol: &str| {
+            let mut trigger = AlertTrigger::new(
+                AlertId("shared".into()),
+                symbol,
+                "2026-11-20T12:00:00Z".parse().unwrap(),
+            );
+            trigger.name = name.into();
+            trigger
+        };
+        let mut panel = AlertsPanel::default();
+        for _ in 0..LOG_BOUND - 3 {
+            panel.log_trigger(trigger("Hidden", "MSFT"));
+        }
+        for name in ["Older", "Kept", "Newer"] {
+            panel.log_trigger(trigger(name, "AAPL"));
+        }
+        panel.show_log = true;
+        panel.log_symbol = Some("AAPL".into());
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(400.0, 800.0))
+            .build_ui_state(
+                |ui, panel: &mut AlertsPanel| {
+                    panel.show(ui);
+                },
+                panel,
+            );
+        h.run();
+        let kept = "Kept · AAPL · 2026-11-20 12:00:00 +00:00";
+        h.get_by_role_and_label(Role::ListBoxOption, kept).click();
+        h.run();
+        assert_eq!(
+            h.get_by_role_and_label(Role::ListBoxOption, kept)
+                .accesskit_node()
+                .is_selected(),
+            Some(true)
+        );
+        for name in ["Latest", "Newest"] {
+            h.state_mut().log_trigger(trigger(name, "AAPL"));
+            h.run();
+            assert_eq!(h.state().log().len(), LOG_BOUND);
+            let row = h.get_by_role_and_label(Role::ListBoxOption, kept);
+            assert_eq!(row.accesskit_node().is_selected(), Some(true));
+            assert!(row.accesskit_node().is_focused());
+        }
+        h.key_press(Key::ArrowDown);
+        h.run();
+        let older = h.get_by_role_and_label(
+            Role::ListBoxOption,
+            "Older · AAPL · 2026-11-20 12:00:00 +00:00",
+        );
+        assert!(older.accesskit_node().is_focused());
+        assert_eq!(older.accesskit_node().is_selected(), Some(true));
     }
 
     #[cfg(feature = "alert-engine")]
