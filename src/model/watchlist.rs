@@ -185,7 +185,7 @@ pub struct Watchlist {
     pub host_column_widths: BTreeMap<String, f32>,
 }
 
-/// The logos setting of a list saved without one.
+/// Logos and tickers stay shown in lists saved before those settings existed.
 fn shown() -> bool {
     true
 }

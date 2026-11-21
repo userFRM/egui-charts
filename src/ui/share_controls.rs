@@ -1,4 +1,4 @@
-//! The copy-link and save-a-copy rows of the layout menu and the watchlist panel, driven by the
+//! Sharing state and operations in the layout menu and the watchlist panel, driven by the
 //! host's [`Sharing`] service.
 
 use crate::data::FeedError;
@@ -95,7 +95,7 @@ impl ShareControls {
     }
 
     /// Shows the rows the service offers for the document `name`, then the progress or result of
-    /// the last operation on it. Shows nothing when the service offers nothing for `kind`.
+    /// the last operation on it. Shows nothing without offers, shared state or a revoke result.
     /// Returns true when Save a copy was chosen, so the caller can keep the document as it was.
     pub(crate) fn show(&mut self, ui: &mut Ui, kind: ShareKind, name: &str) -> bool {
         let Some(sharing) = self.sharing.clone() else {

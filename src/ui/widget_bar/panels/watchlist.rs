@@ -375,8 +375,9 @@ impl WatchlistPanel {
     }
 
     /// Shows these columns after the symbol, in order; the default is
-    /// [`WatchlistColumn::DEFAULT`]. A quote without a column's figure shows a dash, apart from a
-    /// symbol without a quote, which shows nothing.
+    /// [`WatchlistColumn::DEFAULT`]. Lists with their own [`Watchlist::columns`] choice use it
+    /// instead. A quote without a column's figure shows a dash, apart from a symbol without a
+    /// quote, which shows nothing.
     pub fn set_columns(&mut self, columns: impl IntoIterator<Item = WatchlistColumn>) {
         self.columns = columns
             .into_iter()
@@ -482,8 +483,8 @@ impl WatchlistPanel {
         self.marks.insert(symbol.to_owned(), mark);
     }
 
-    /// Shows `description`, such as `Instrument::description`, under `symbol` in the lists that
-    /// show descriptions.
+    /// Supplies `description`, such as `Instrument::description`, below the ticker in lists
+    /// showing descriptions, or in its place in lists hiding tickers.
     pub fn set_description(&mut self, symbol: &str, description: impl Into<String>) {
         self.descriptions
             .insert(symbol.to_owned(), description.into());
@@ -582,7 +583,7 @@ impl WatchlistPanel {
         self.listener = None;
     }
 
-    /// Offers copy-link and save-a-copy on the active list, as `sharing` reports them for
+    /// Offers sharing operations and shared state on the active list, as `sharing` reports them for
     /// [`ShareKind::Watchlist`]. A saved copy holds the list as it was when Save a copy was
     /// chosen, whatever its name or place when the host answers, and is added under the name
     /// the host answers; like a duplicate, it is not starred. [`poll`](Self::poll) receives the
@@ -3339,8 +3340,8 @@ mod tests {
     }
 
     /// A list copy keeps sections, symbol order and flags under a fresh name, the flag view lists a
-    /// symbol once however many lists flag it and its edits reach each of them, and the new columns
-    /// read the quote's volume and extended-hours price.
+    /// symbol once however many lists flag it, and quote columns read the volume and
+    /// extended-hours price.
     #[test]
     fn duplicates_flag_views_and_quote_columns_follow_the_lists_and_quotes() {
         let flagged = |name: &str, flag| WatchlistItem::Symbol {
