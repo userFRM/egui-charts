@@ -107,7 +107,9 @@ pub enum ProfileDisplay {
     /// Total volume, with the point of control and value area highlighted.
     #[default]
     Total,
-    /// Up-bar and down-bar volume in adjacent segments.
+    /// Up-bar and down-bar volume in adjacent segments. A bar that closes at or above its open
+    /// is an up bar, except in a fixed range or anchored volume profile drawing estimated from a
+    /// single chart bar, where it is up only when it closes above its open.
     UpDown,
     /// Absolute up minus down volume, coloured by its sign.
     Delta,
@@ -137,7 +139,7 @@ pub struct VolumeProfileConfig {
     value_area: f64,
     /// Volume displayed in each row. Totals still determine POC and value area.
     pub display: ProfileDisplay,
-    /// Colour of rising bars, including an unchanged close, in split and delta modes.
+    /// Colour of up volume in split and delta modes, as [`ProfileDisplay::UpDown`] counts it.
     pub up_color: [u8; 4],
     /// Colour of falling bars in split and delta modes.
     pub down_color: [u8; 4],
@@ -937,7 +939,8 @@ impl VolumeProfile {
     pub fn volume(&self) -> &[f64] {
         &self.volume
     }
-    /// Up-bar volume per row (unchanged closes count as up), or calls for options.
+    /// Up-bar volume per row (unchanged closes count as up, except in a profile drawing over one
+    /// chart bar), or calls for options.
     pub fn up(&self) -> &[f64] {
         &self.up
     }
