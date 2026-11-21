@@ -8081,7 +8081,7 @@ mod tests {
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
         app.open_panel = Some(SidePanel::Watchlist);
-        let size = egui::vec2(1440.0, 350.0);
+        let size = egui::vec2(1440.0, 900.0);
         let click = |app: &mut DemoApp, label: &str| {
             let output = ctx.run_ui(
                 egui::RawInput {
