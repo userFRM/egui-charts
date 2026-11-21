@@ -18,6 +18,7 @@ pub use dom::DepthPanel;
 pub use executions::{ExecutionMark, ExecutionMarkStyle, render_executions};
 pub use format::TradingFormatter;
 pub use ticket::{Bracket, BracketMode, Kind as OrderKind, OrderPreset, PresetLevel, PresetSizing};
+pub(crate) use widgets::grouped;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
