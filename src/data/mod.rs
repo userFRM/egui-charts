@@ -72,8 +72,6 @@ mod targets;
 mod volume_profile;
 pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
 pub use financials::{CompanyFinancials, FinancialPage, FinancialRow};
-#[cfg(feature = "widget")]
-pub(crate) use footprint::FootprintState;
 #[cfg(any(feature = "widget", feature = "studies"))]
 pub use footprint::FootprintView;
 #[cfg(any(feature = "studies", feature = "detectors"))]
@@ -81,6 +79,8 @@ pub(crate) use footprint::meets_threshold;
 #[cfg(any(feature = "studies", feature = "widget"))]
 pub(crate) use footprint::side_delta;
 pub use footprint::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
+#[cfg(feature = "widget")]
+pub(crate) use footprint::{FootprintState, PackedFootprintState};
 pub use footprint_view::{FootprintBarView, FootprintBars, FootprintRows, FootprintSource};
 pub use market::{
     CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
@@ -113,6 +113,8 @@ pub use inbox::{
     aggregate_trades_with_tick_size,
 };
 pub use order_flow::{BarBook, OrderFlowBars, OrderFlowFootprints, OrderFlowInput, OrderFlowKind};
+#[cfg(feature = "widget")]
+pub(crate) use order_flow::{FootprintGuard, PackedFootprintInput};
 #[cfg(all(feature = "widget", feature = "studies"))]
 pub(crate) use order_flow::{PackedTradeRate, RateGuard};
 pub use orders::{
