@@ -155,7 +155,8 @@ impl Drawing {
     /// takes the active theme's panel colour with its text and border in the drawing colour, and
     /// a solid label takes the drawing colour with white or black text, whichever reads on it.
     /// Text without a background takes the drawing colour. A pin's popup leaves the drawing colour
-    /// to the pin: its text and border are the theme's.
+    /// to the pin: its text and border are the theme's. A table's text takes the theme's text
+    /// colour.
     pub(crate) fn text_box_colors(&self, ctx: &egui::Context) -> TextBoxColors {
         let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
         let pin = self.tool_type == DrawingToolType::AnchoredNote;
@@ -180,7 +181,9 @@ impl Drawing {
         TextBoxColors {
             text: match self.text_color {
                 Some(color) => rgba(color),
-                None if pin => ctx.active_theme().ui.text,
+                None if pin || self.tool_type == DrawingToolType::Table => {
+                    ctx.active_theme().ui.text
+                }
                 None => text,
             },
             fill,
@@ -343,7 +346,6 @@ impl Drawing {
                         | DrawingToolType::PriceLabel
                         | DrawingToolType::FlagNote
                         | DrawingToolType::PriceNote
-                        | DrawingToolType::Table
                         | DrawingToolType::Comment
                         | DrawingToolType::Signpost
                         | DrawingToolType::Tweet
@@ -354,6 +356,7 @@ impl Drawing {
                 *color = configured;
             }
         };
+        // The Gann fan dashes each line in its renderer.
         let dash = if custom_projection
             || custom_fork
             || matches!(
@@ -370,6 +373,7 @@ impl Drawing {
                     | DrawingToolType::FibonacciSpeedResistanceArcs
                     | DrawingToolType::FibonacciWedge
                     | DrawingToolType::AnchoredVWAP
+                    | DrawingToolType::GannFan
             ) {
             None
         } else {

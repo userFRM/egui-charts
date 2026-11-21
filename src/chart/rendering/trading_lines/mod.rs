@@ -128,8 +128,11 @@ pub struct TradingLines {
 /// let mut look = TradingLineAppearance::default();
 /// look.color = Some(egui::Color32::from_rgb(156, 39, 176));
 /// look.line_style = Some(LineStyle::Dashed);
+/// look.line_width = Some(2.0);
+/// look.line_length = Some(0.5);
 /// look.text = Some("Plan".into());
 /// look.hover_text = Some("Planned entry".into());
+/// look.cancel_hover_text = Some("Remove plan".into());
 /// let looks = [(OrderId::new("plan-1"), look)];
 /// let mut options = TradingLineOptions::new("USD", 0.25);
 /// options.order_appearance = &looks;
@@ -141,10 +144,22 @@ pub struct TradingLineAppearance {
     pub color: Option<Color32>,
     /// The line's pattern, replacing solid or the projected order's dashed pattern.
     pub line_style: Option<LineStyle>,
+    /// The width of the line, replacing [`TradingLineOptions::line_width`].
+    pub line_width: Option<f32>,
+    /// How far the line reaches from the pane's right edge, replacing
+    /// [`TradingLineOptions::line_length`].
+    pub line_length: Option<f32>,
     /// The description replacing an order's type or following a position's quantity.
     pub text: Option<String>,
     /// The text shown while the pointer hovers over the label.
     pub hover_text: Option<String>,
+    /// The hover text of an order's cancel button, replacing "Cancel". Its take profit and
+    /// stop loss keep theirs.
+    pub cancel_hover_text: Option<String>,
+    /// The hover text of a position's close button, replacing "Close position".
+    pub close_hover_text: Option<String>,
+    /// The hover text of a position's reverse button, replacing "Reverse position".
+    pub reverse_hover_text: Option<String>,
 }
 
 /// What [`render_trading_lines`] draws and offers.
@@ -157,6 +172,14 @@ pub struct TradingLineOptions<'a> {
     pub show_positions: bool,
     /// Extend lines to the left edge instead of starting at their labels.
     pub extend_lines: bool,
+    /// Width in points of order, bracket and position lines. 1 by default. A negative or
+    /// non-finite width draws 1; zero draws the labels and tags without lines.
+    pub line_width: f32,
+    /// How far lines reach left from the pane's right edge, as a share of the pane width from
+    /// 0 to 1, while [`extend_lines`](Self::extend_lines) is off. A line always reaches its
+    /// label, so 0, the default, starts each line at its label. Shares outside 0 to 1 are
+    /// clamped, and a non-finite share counts as 0.
+    pub line_length: f32,
     /// Horizontal placement of order and position labels.
     pub label_alignment: TradingLabelAlignment,
     /// Treat the orders as projected, not yet placed: their entry lines are dashed and they offer
@@ -206,8 +229,9 @@ pub struct TradingLineOptions<'a> {
 }
 
 impl<'a> TradingLineOptions<'a> {
-    /// Orders and positions with their labels at the right edge, offering no buttons, drags or
-    /// menus, with no profit or loss, no coverage marks, no last price and a
+    /// Orders and positions with 1-point lines starting at their labels at the right edge,
+    /// offering no buttons, drags or menus, with no profit or loss, no coverage marks, no last
+    /// price and a
     /// [`point_value`](Self::point_value) of one. `currency` names the account's currency and
     /// `tick_size` rounds dragged prices. Assign the other fields to offer more.
     ///
@@ -216,12 +240,15 @@ impl<'a> TradingLineOptions<'a> {
     ///
     /// let mut options = TradingLineOptions::new("USD", 0.25);
     /// options.modify = true;
+    /// options.line_width = 2.0;
     /// ```
     pub fn new(currency: &'a str, tick_size: f64) -> Self {
         Self {
             show_orders: true,
             show_positions: true,
             extend_lines: false,
+            line_width: 1.0,
+            line_length: 0.0,
             label_alignment: TradingLabelAlignment::Right,
             submit: false,
             modify: false,
@@ -544,7 +571,11 @@ pub fn render_trading_lines<'a>(
                     None => body,
                 }
             };
-            let line = PriceLine::new(price, color).with_style(
+            let width = line_width(
+                look.and_then(|look| look.line_width)
+                    .unwrap_or(options.line_width),
+            );
+            let line = PriceLine::new(price, color).with_width(width).with_style(
                 look.and_then(|look| look.line_style).unwrap_or(
                     if appearance == Level::Entry && options.submit {
                         LineStyle::Dashed
@@ -580,6 +611,10 @@ pub fn render_trading_lines<'a>(
                 body: &body,
                 body_color: color,
                 hover_text: look.and_then(|look| look.hover_text.as_deref()),
+                cancel_hover_text: look.and_then(|look| look.cancel_hover_text.as_deref()),
+                line_length: look
+                    .and_then(|look| look.line_length)
+                    .unwrap_or(options.line_length),
                 quantity,
                 coverage: (options.coverage
                     && level == Level::Entry
@@ -1021,7 +1056,9 @@ impl ExitButtons<'_> {
                 continue;
             }
             // The exit being dragged: its line and a label like a bracket's.
-            let line = PriceLine::new(price, exit_color).with_style(LineStyle::Solid);
+            let line = PriceLine::new(price, exit_color)
+                .with_width(line_width(options.line_width))
+                .with_style(LineStyle::Solid);
             render_price_line(
                 &painter,
                 mapping.rect,
@@ -1079,6 +1116,8 @@ struct Label<'a> {
     body: &'a dyn Fn(f64) -> String,
     body_color: Color32,
     hover_text: Option<&'a str>,
+    cancel_hover_text: Option<&'a str>,
+    line_length: f32,
     quantity: f64,
     /// The coverage mark after the quantity, if shown.
     coverage: Option<(f64, f64)>,
@@ -1137,19 +1176,18 @@ impl Label<'_> {
         let inset = LABEL_INSET.min((mapping.rect.width() - group - 8.0).max(8.0));
         let mut x = options.label_alignment.left(mapping.rect, group, inset) + exits_width;
         let rect = Rect::from_min_size(pos2(x, y - HEIGHT / 2.0), vec2(total, HEIGHT));
+        let line_left = line_left(
+            mapping.rect,
+            rect.left(),
+            options.extend_lines,
+            self.line_length,
+        );
 
         let mut dragged = None;
         let mut value = staged.unwrap_or(line.price);
         let grab = ui.interact(
             Rect::from_min_max(
-                pos2(
-                    if options.extend_lines {
-                        mapping.rect.left()
-                    } else {
-                        rect.left()
-                    },
-                    rect.top(),
-                ),
+                pos2(line_left, rect.top()),
                 pos2(rect.max.x - HEIGHT * self.buttons.len() as f32, rect.max.y),
             )
             .intersect(mapping.rect),
@@ -1207,11 +1245,7 @@ impl Label<'_> {
             mapping.rect,
             &mapping.price,
             &line,
-            if options.extend_lines {
-                mapping.rect.left()
-            } else {
-                rect.left()
-            },
+            line_left,
             false,
             f32::INFINITY,
         );
@@ -1297,7 +1331,10 @@ impl Label<'_> {
                     key.with(("button", index)),
                     Sense::click(),
                 )
-                .on_hover_text(l10n::text(ui.ctx(), "Cancel"));
+                .on_hover_text(
+                    self.cancel_hover_text
+                        .map_or_else(|| l10n::text(ui.ctx(), "Cancel"), str::to_owned),
+                );
             if response.hovered() {
                 clipped.rect_filled(cell.shrink(1.0), 1.0, line.color.gamma_multiply(0.2));
             }
@@ -1314,11 +1351,7 @@ impl Label<'_> {
             x: group_left,
             y,
             entry: value,
-            line_left: if options.extend_lines {
-                mapping.rect.left()
-            } else {
-                rect.left()
-            },
+            line_left,
             preview_right: rect.right(),
             pnl: self.exit_pnl,
         }
@@ -1359,6 +1392,29 @@ impl Label<'_> {
         }
         (dragged, pressed, released, chosen)
     }
+}
+
+/// A line width a host set, or 1 when it is negative or not finite.
+fn line_width(width: f32) -> f32 {
+    if width.is_finite() && width >= 0.0 {
+        width
+    } else {
+        1.0
+    }
+}
+
+/// Where a line starts: the pane's left edge with extended lines, otherwise its label's left
+/// edge or, further left, `length` of the pane width from its right edge.
+fn line_left(pane: Rect, label_left: f32, extend: bool, length: f32) -> f32 {
+    if extend {
+        return pane.left();
+    }
+    let share = if length.is_finite() {
+        length.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    label_left.min(pane.right() - share * pane.width())
 }
 
 /// The body of a label in `color`: the colour's tint over the chart, opaque so that the line and
@@ -1573,138 +1629,272 @@ mod tests {
     /// An individual appearance changes its line and label, while neighbours and exits keep theirs.
     #[test]
     fn own_looks_replace_the_defaults_of_their_line_only() {
-        for theme in [Theme::light(), Theme::dark()] {
-            let ctx = egui::Context::default();
-            crate::theme::apply_to_egui(&ctx, &theme);
-            ctx.all_styles_mut(|style| {
-                style.interaction.tooltip_delay = 0.0;
-                style.interaction.show_tooltips_only_when_still = false;
-            });
-            let mut chart = crate::widget::test_frames::chart(&[90.0], &[115.0]);
-            let mut a = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(95.0));
-            a.take_profit = Some(97.0);
-            let orders = [
-                Order::new(OrderId::new("A"), a, OrderStatus::Working),
-                Order::new(
-                    OrderId::new("B"),
-                    OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(100.0)),
-                    OrderStatus::Working,
-                ),
-            ];
-            let position = Position::new("SYM", 2.0, 105.0);
-            let purple = Color32::from_rgb(156, 39, 176);
-            let cyan = Color32::from_rgb(0, 151, 167);
-            let plan = TradingLineAppearance {
-                color: Some(purple),
-                line_style: Some(LineStyle::Dashed),
-                text: Some("Plan".into()),
-                hover_text: Some("Planned entry".into()),
-            };
-            let hedge = TradingLineAppearance {
-                color: Some(cyan),
-                line_style: Some(LineStyle::Dotted),
-                text: Some("Hedge".into()),
-                hover_text: Some("Hedge position".into()),
-            };
-            let looks = [(OrderId::new("A"), plan)];
-            let positions = [("SYM".to_owned(), hedge)];
-            let mut options = TradingLineOptions::new("USD", 0.01);
-            options.order_appearance = &looks;
-            options.position_appearance = &positions;
-            let mut at = [Pos2::ZERO; 2];
-            for frame in 0..8 {
-                let events = match frame {
-                    3 | 4 => vec![egui::Event::PointerMoved(at[0])],
-                    5 => vec![egui::Event::PointerGone],
-                    6 | 7 => vec![egui::Event::PointerMoved(at[1])],
-                    _ => vec![],
+        let pane = Rect::from_min_max(pos2(10.0, 0.0), pos2(210.0, 100.0));
+        for (length, expected) in [
+            (0.0, 160.0),
+            (0.1, 160.0),
+            (0.5, 110.0),
+            (1.0, 10.0),
+            (2.0, 10.0),
+            (-1.0, 160.0),
+            (f32::NAN, 160.0),
+            (f32::INFINITY, 160.0),
+            (f32::NEG_INFINITY, 160.0),
+        ] {
+            assert_eq!(line_left(pane, 160.0, false, length), expected);
+            assert_eq!(line_left(pane, 160.0, true, length), 10.0);
+        }
+        for (width, expected) in [
+            (0.0, 0.0),
+            (2.0, 2.0),
+            (-1.0, 1.0),
+            (f32::NAN, 1.0),
+            (f32::INFINITY, 1.0),
+            (f32::NEG_INFINITY, 1.0),
+        ] {
+            assert_eq!(line_width(width), expected);
+        }
+        for (row_width, row_length) in [(1.0, 0.0), (2.0, 0.5)] {
+            for theme in [Theme::light(), Theme::dark()] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.all_styles_mut(|style| {
+                    style.interaction.tooltip_delay = 0.0;
+                    style.interaction.show_tooltips_only_when_still = false;
+                });
+                let mut chart = crate::widget::test_frames::chart(&[90.0], &[115.0]);
+                let mut a = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(95.0));
+                a.take_profit = Some(97.0);
+                let orders = [
+                    Order::new(OrderId::new("A"), a, OrderStatus::Working),
+                    Order::new(
+                        OrderId::new("B"),
+                        OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(100.0)),
+                        OrderStatus::Working,
+                    ),
+                ];
+                let position = Position::new("SYM", 2.0, 105.0);
+                let purple = Color32::from_rgb(156, 39, 176);
+                let cyan = Color32::from_rgb(0, 151, 167);
+                let plan = TradingLineAppearance {
+                    color: Some(purple),
+                    line_style: Some(LineStyle::Dashed),
+                    line_width: Some(3.0),
+                    line_length: Some(0.9),
+                    cancel_hover_text: Some("Remove plan".into()),
+                    text: Some("Plan".into()),
+                    hover_text: Some("Planned entry".into()),
+                    ..Default::default()
                 };
-                let mut ys = [0.0; 3];
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        chart.show(ui);
-                        let mapping = chart.get_chart_mapping();
-                        ys = [95.0, 100.0, 105.0].map(|price| mapping.price_to_y(price));
-                        let lines =
-                            render_trading_lines(ui, &mapping, &orders, [&position], &options);
-                        if frame == 2 {
-                            let buy = crate::theme::trading_side_color(&theme, OrderSide::Buy);
-                            assert_eq!(
-                                lines.tags,
-                                [
-                                    (105.0, cyan),
-                                    (95.0, purple),
-                                    (97.0, theme.ui.take_profit),
-                                    (100.0, buy)
-                                ]
+                let hedge = TradingLineAppearance {
+                    color: Some(cyan),
+                    line_style: Some(LineStyle::Dotted),
+                    line_width: Some(4.0),
+                    close_hover_text: Some("Exit hedge".into()),
+                    reverse_hover_text: Some("Flip hedge".into()),
+                    text: Some("Hedge".into()),
+                    hover_text: Some("Hedge position".into()),
+                    ..Default::default()
+                };
+                let looks = [(OrderId::new("A"), plan)];
+                let positions = [("SYM".to_owned(), hedge)];
+                let mut options = TradingLineOptions::new("USD", 0.01);
+                options.order_appearance = &looks;
+                options.position_appearance = &positions;
+                options.line_width = row_width;
+                options.line_length = row_length;
+                options.close = true;
+                options.reverse = true;
+                let mut at = [Pos2::ZERO; 6];
+                for frame in 0..20 {
+                    let events = match frame {
+                        3 | 4 => vec![egui::Event::PointerMoved(at[0])],
+                        5 | 8 | 11 | 14 | 17 => vec![egui::Event::PointerGone],
+                        6 | 7 => vec![egui::Event::PointerMoved(at[1])],
+                        9 | 10 => vec![egui::Event::PointerMoved(at[2])],
+                        12 | 13 => vec![egui::Event::PointerMoved(at[3])],
+                        15 | 16 => vec![egui::Event::PointerMoved(at[4])],
+                        18 | 19 => vec![egui::Event::PointerMoved(at[5])],
+                        _ => vec![],
+                    };
+                    let mut ys = [0.0; 4];
+                    let mut pane = Rect::NOTHING;
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                            let mapping = chart.get_chart_mapping();
+                            pane = mapping.rect;
+                            ys = [95.0, 100.0, 105.0, 97.0].map(|price| mapping.price_to_y(price));
+                            let lines =
+                                render_trading_lines(ui, &mapping, &orders, [&position], &options);
+                            if frame == 2 {
+                                let buy = crate::theme::trading_side_color(&theme, OrderSide::Buy);
+                                assert_eq!(
+                                    lines.tags,
+                                    [
+                                        (105.0, cyan),
+                                        (95.0, purple),
+                                        (97.0, theme.ui.take_profit),
+                                        (100.0, buy)
+                                    ]
+                                );
+                            }
+                        },
+                    );
+                    let text = |name: &str| {
+                        output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == name => Some(text),
+                            _ => None,
+                        })
+                    };
+                    if frame == 2 {
+                        at[0] = text("Plan")
+                            .expect("order caption")
+                            .visual_bounding_rect()
+                            .center();
+                        at[1] = text("Hedge")
+                            .expect("position caption")
+                            .visual_bounding_rect()
+                            .center();
+                        let limit = text("Limit").expect("default caption");
+                        assert!((limit.visual_bounding_rect().center().y - ys[1]).abs() < 2.0);
+                        let buy = crate::theme::trading_side_color(&theme, OrderSide::Buy);
+                        let label = |color, y: f32| {
+                            output
+                                .shapes
+                                .iter()
+                                .find_map(|shape| match &shape.shape {
+                                    egui::Shape::Rect(rect)
+                                        if rect.stroke.color == color
+                                            && rect.stroke.width == 1.0
+                                            && (rect.rect.center().y - y).abs() < 0.1 =>
+                                    {
+                                        Some(rect.rect)
+                                    }
+                                    _ => None,
+                                })
+                                .expect("line label")
+                        };
+                        for (i, color, width, length) in [
+                            (0, purple, 3.0, 0.9),
+                            (1, buy, row_width, row_length),
+                            (3, theme.ui.take_profit, row_width, row_length),
+                        ] {
+                            let segments: Vec<_> = output
+                                .shapes
+                                .iter()
+                                .filter_map(|shape| match &shape.shape {
+                                    egui::Shape::LineSegment { points, stroke }
+                                        if stroke.color == color
+                                            && (points[0].y - ys[i]).abs() < 0.1
+                                            && (points[1].y - ys[i]).abs() < 0.1 =>
+                                    {
+                                        Some((points, stroke))
+                                    }
+                                    _ => None,
+                                })
+                                .collect();
+                            if i == 0 {
+                                assert!(segments.len() > 1, "dashed order line");
+                            } else {
+                                assert_eq!(segments.len(), 1, "default solid line");
+                            }
+                            assert!(
+                                segments.iter().all(|(_, stroke)| stroke.width == width),
+                                "line width at {}",
+                                ys[i]
+                            );
+                            let start = segments
+                                .iter()
+                                .map(|(points, _)| points[0].x)
+                                .fold(f32::INFINITY, f32::min);
+                            let expected = if length == 0.0 {
+                                label(color, ys[i]).left()
+                            } else {
+                                pane.right() - length * pane.width()
+                            };
+                            assert!(
+                                (start - expected).abs() < 0.5,
+                                "line start {start}, expected {expected}"
                             );
                         }
-                    },
-                );
-                let text = |name: &str| {
-                    output.shapes.iter().find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == name => Some(text),
-                        _ => None,
-                    })
-                };
-                if frame == 2 {
-                    at[0] = text("Plan")
-                        .expect("order caption")
-                        .visual_bounding_rect()
-                        .center();
-                    at[1] = text("Hedge")
-                        .expect("position caption")
-                        .visual_bounding_rect()
-                        .center();
-                    let limit = text("Limit").expect("default caption");
-                    assert!((limit.visual_bounding_rect().center().y - ys[1]).abs() < 2.0);
-                    for (i, color) in [
-                        purple,
-                        crate::theme::trading_side_color(&theme, OrderSide::Buy),
-                        cyan,
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    {
-                        let segments = output.shapes.iter().filter(|shape| matches!(&shape.shape,
-                            egui::Shape::LineSegment { points, stroke } if stroke.color == color
-                                && (points[0].y - ys[i]).abs() < 0.1 && (points[1].y - ys[i]).abs() < 0.1)).count();
-                        match i {
-                            0 => assert!(segments > 1, "dashed order line"),
-                            1 => assert_eq!(segments, 1, "default solid line"),
-                            2 => assert!(
-                                output.shapes.iter().any(|shape| matches!(&shape.shape,
-                                egui::Shape::Mesh(mesh) if mesh.indices.len() > 6
-                                    && mesh.vertices.iter().all(|vertex| vertex.color == cyan
-                                        && (vertex.pos.y - ys[2]).abs() <= 1.0))),
-                                "dotted position line"
-                            ),
-                            _ => unreachable!(),
-                        }
-                        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-                            egui::Shape::Rect(rect) if rect.stroke.color == color && rect.stroke.width == 1.0
-                                && (rect.rect.center().y - ys[i]).abs() < 0.1)));
-                    }
-                    assert!(
-                        output
+                        let dots = output
                             .shapes
                             .iter()
-                            .any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect)
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Mesh(mesh)
+                                    if mesh.indices.len() > 6
+                                        && mesh.vertices.iter().all(|vertex| {
+                                            vertex.color == cyan
+                                                && (vertex.pos.y - ys[2]).abs() <= 4.0 / 2.0 + 1.0
+                                        }) =>
+                                {
+                                    Some(mesh)
+                                }
+                                _ => None,
+                            })
+                            .expect("dotted position line");
+                        let top = dots
+                            .vertices
+                            .iter()
+                            .map(|vertex| vertex.pos.y)
+                            .fold(f32::INFINITY, f32::min);
+                        let bottom = dots
+                            .vertices
+                            .iter()
+                            .map(|vertex| vertex.pos.y)
+                            .fold(f32::NEG_INFINITY, f32::max);
+                        assert!(bottom - top >= 3.5, "position line width");
+                        if row_length == 0.5 {
+                            let start = dots
+                                .vertices
+                                .iter()
+                                .map(|vertex| vertex.pos.x)
+                                .fold(f32::INFINITY, f32::min);
+                            assert!(
+                                (start - (pane.right() - 0.5 * pane.width())).abs() < 2.0,
+                                "position line start"
+                            );
+                        }
+                        let plan = label(purple, ys[0]);
+                        let default = label(buy, ys[1]);
+                        let hedge = label(cyan, ys[2]);
+                        at[2] = pos2(plan.right() - HEIGHT / 2.0, ys[0]);
+                        at[3] = pos2(default.right() - HEIGHT / 2.0, ys[1]);
+                        at[4] = pos2(hedge.right() - HEIGHT / 2.0, ys[2]);
+                        at[5] = pos2(hedge.left() - 1.6 * HEIGHT + HEIGHT / 2.0, ys[2]);
+                        assert!(
+                            output
+                                .shapes
+                                .iter()
+                                .any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect)
                         if rect.fill == cyan && (rect.rect.center().y - ys[2]).abs() < 0.1))
-                    );
+                        );
+                    }
+                    if frame == 4 {
+                        assert!(text("Planned entry").is_some());
+                    }
+                    if frame == 7 {
+                        assert!(text("Hedge position").is_some());
+                    }
+                    for (hover_frame, expected, replaced) in [
+                        (10, "Remove plan", "Cancel"),
+                        (13, "Cancel", "Remove plan"),
+                        (16, "Exit hedge", "Close position"),
+                        (19, "Flip hedge", "Reverse position"),
+                    ] {
+                        if frame == hover_frame {
+                            assert!(text(expected).is_some(), "{expected}");
+                            assert!(text(replaced).is_none(), "{replaced}");
+                        }
+                    }
+                    output.drop_without_applying_deltas();
                 }
-                if frame == 4 {
-                    assert!(text("Planned entry").is_some());
-                }
-                if frame == 7 {
-                    assert!(text("Hedge position").is_some());
-                }
-                output.drop_without_applying_deltas();
             }
         }
     }
@@ -2068,6 +2258,8 @@ mod tests {
                     show_orders: true,
                     show_positions: true,
                     extend_lines: true,
+                    line_width: 1.0,
+                    line_length: 0.0,
                     label_alignment: TradingLabelAlignment::Right,
                     submit,
                     modify: false,

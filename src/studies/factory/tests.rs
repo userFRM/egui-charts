@@ -656,23 +656,24 @@ fn per_bar_states_offer_the_colours_they_draw() {
     }
 }
 
-/// No catalogue study configured as the chart configures it lists two inputs under one
-/// label, so every field of its Inputs tab says which value it sets.
+/// No catalogue study configured as the chart configures it lists two inputs under one id or
+/// one label, so an edit by id reaches one input and every field of its Inputs tab says which
+/// value it sets.
 #[test]
-fn configured_studies_label_every_input_once() {
+fn configured_studies_list_every_input_id_and_label_once() {
     use crate::studies::ConfiguredStudy;
 
     let factory = IndicatorFactory::new();
     let mut repeated: Vec<(String, String)> = Vec::new();
     for name in factory.list() {
-        let labels: Vec<_> = ConfiguredStudy::new(factory.create(&name).unwrap())
-            .inputs()
-            .into_iter()
-            .map(|input| input.label)
-            .collect();
-        for (index, label) in labels.iter().enumerate() {
-            if labels[..index].contains(label) {
-                repeated.push((name.clone(), label.clone()));
+        let inputs = ConfiguredStudy::new(factory.create(&name).unwrap()).inputs();
+        for (index, input) in inputs.iter().enumerate() {
+            let earlier = &inputs[..index];
+            if earlier.iter().any(|other| other.id == input.id) {
+                repeated.push((name.clone(), format!("id {}", input.id)));
+            }
+            if earlier.iter().any(|other| other.label == input.label) {
+                repeated.push((name.clone(), format!("label {}", input.label)));
             }
         }
     }
