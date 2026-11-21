@@ -70,6 +70,8 @@ struct Action {
     indicators_hidden: Option<bool>,
     #[cfg(feature = "drawings")]
     drawings_hidden: Option<bool>,
+    #[cfg(feature = "drawings")]
+    drawings_locked: Option<bool>,
     event_visibility: Option<crate::model::EventVisibility>,
     options: Option<ChartOptions>,
     date_format: Option<Option<String>>,
@@ -82,6 +84,8 @@ struct Action {
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
     hours: Option<(bool, bool)>,
+    /// Back adjustment and settlement as close, the futures data choices of the chart settings.
+    futures_data: Option<(bool, bool)>,
     /// The pane separator colour, `None` inside while the separators follow the theme.
     pane_separator_color: Option<Option<egui::Color32>>,
     /// Execution profile merges and splits, including the symbol and calendar they belong to.
@@ -107,8 +111,10 @@ impl Action {
 
     fn keeps_all_but_the_view(&self) -> bool {
         #[cfg(feature = "drawings")]
-        let drawings_changed =
-            self.drawings.can_undo() || self.unshown.is_some() || self.drawings_hidden.is_some();
+        let drawings_changed = self.drawings.can_undo()
+            || self.unshown.is_some()
+            || self.drawings_hidden.is_some()
+            || self.drawings_locked.is_some();
         #[cfg(not(feature = "drawings"))]
         let drawings_changed = false;
         #[cfg(feature = "studies")]
@@ -135,6 +141,7 @@ impl Action {
             && self.chart_type.is_none()
             && self.interval.is_none()
             && self.hours.is_none()
+            && self.futures_data.is_none()
             && self.pane_separator_color.is_none()
             && self.studies.is_empty()
             && !drawings_changed
@@ -550,6 +557,8 @@ impl Chart {
                 indicators_hidden: Some(self.indicators_hidden),
                 #[cfg(feature = "drawings")]
                 drawings_hidden: Some(self.drawings.is_hidden()),
+                #[cfg(feature = "drawings")]
+                drawings_locked: Some(self.drawings.is_locked()),
                 event_visibility: Some(self.event_visibility.clone()),
                 options: Some(self.chart_options.clone()),
                 date_format: Some(self.date_format.clone()),
@@ -565,6 +574,7 @@ impl Chart {
                 chart_type: Some((self.chart_type, self.chart_type_params.clone())),
                 interval: Some(self.timeframe),
                 hours: Some((self.extended_hours, self.overnight_hours)),
+                futures_data: Some((self.back_adjust_futures, self.settlement_as_close)),
                 pane_separator_color: Some(self.pane_options.separator_color),
                 #[cfg(feature = "studies")]
                 trade_profiles: Some(self.trade_profiles.clone()),
@@ -672,6 +682,10 @@ impl Chart {
         if action.drawings_hidden == Some(self.drawings.is_hidden()) {
             action.drawings_hidden = None;
         }
+        #[cfg(feature = "drawings")]
+        if action.drawings_locked == Some(self.drawings.is_locked()) {
+            action.drawings_locked = None;
+        }
         if action.main_series_visible == Some(self.main_series_visible) {
             action.main_series_visible = None;
         }
@@ -692,6 +706,9 @@ impl Chart {
         }
         if action.hours == Some((self.extended_hours, self.overnight_hours)) {
             action.hours = None;
+        }
+        if action.futures_data == Some((self.back_adjust_futures, self.settlement_as_close)) {
+            action.futures_data = None;
         }
         if action.pane_separator_color == Some(self.pane_options.separator_color) {
             action.pane_separator_color = None;
@@ -1031,6 +1048,9 @@ impl Chart {
     /// A drawing being placed is cancelled when the step takes away the pane that draws it.
     /// Returns false while a user action or a drawing drag is in progress, or a layout divider
     /// is pressed or dragged; finish it first.
+    /// A step that changed the interval restores its view once the bars of that interval have
+    /// loaded; a view requested before then, by navigation or a call such as
+    /// [`Self::scroll_to_time`], replaces it.
     pub fn undo(&mut self) -> bool {
         self.step_chart_history(false)
     }
@@ -1044,8 +1064,13 @@ impl Chart {
     }
 
     /// Drain a notification that undo/redo changed chart state. Hosts that own the data must
-    /// reload it if [`Self::timeframe`], [`Self::bar_clock`], [`Self::extended_hours`] or
-    /// [`Self::overnight_hours`] changed, and synchronize their UI.
+    /// reload it if [`Self::timeframe`], [`Self::bar_clock`], [`Self::extended_hours`],
+    /// [`Self::overnight_hours`] or a futures data choice changed, and synchronize their UI.
+    /// The futures data choices are
+    /// [`ChartSettingsState::back_adjust_futures`](crate::widget::settings::ChartSettingsState::back_adjust_futures)
+    /// and [`settlement_as_close`](crate::widget::settings::ChartSettingsState::settlement_as_close),
+    /// which [`ChartSettingsState::from_chart`](crate::widget::settings::ChartSettingsState::from_chart)
+    /// reads from the chart.
     /// Added series that the step removed or brought back are reported by
     /// [`drain_events`](Self::drain_events) as [`ChartEvent::SeriesRemoved`] and
     /// [`ChartEvent::SeriesAdded`]. Studies added, removed, hidden, shown or given other inputs
@@ -1206,6 +1231,12 @@ impl Chart {
             self.set_overnight_hours(hours.1);
             *hours = current;
         }
+        // The chart only records these choices: its host reloads the history they ask for.
+        if let Some(choices) = &mut action.futures_data {
+            let current = (self.back_adjust_futures, self.settlement_as_close);
+            (self.back_adjust_futures, self.settlement_as_close) = *choices;
+            *choices = current;
+        }
         if let Some(color) = &mut action.pane_separator_color {
             std::mem::swap(&mut self.pane_options.separator_color, color);
         }
@@ -1240,6 +1271,12 @@ impl Chart {
             let current = self.drawings.is_hidden();
             self.drawings.set_hidden(*hidden);
             *hidden = current;
+        }
+        #[cfg(feature = "drawings")]
+        if let Some(locked) = &mut action.drawings_locked {
+            let current = self.drawings.is_locked();
+            self.drawings.set_locked(*locked);
+            *locked = current;
         }
         if let Some(visible) = &mut action.main_series_visible {
             let current = self.main_series_visible;
@@ -2314,6 +2351,150 @@ mod tests {
         }
     }
 
+    /// A view requested after undo wins over the waiting interval view, whichever arrives
+    /// first: the request or the restored interval's bars.
+    #[test]
+    fn view_requests_end_a_waiting_view_restoration() {
+        use crate::widget::test_frames::frame;
+
+        type Request = fn(&mut Chart) -> bool;
+        enum Expected {
+            Centre(f32),
+            Left(f32),
+            Bars(usize),
+            Tracking,
+            View((f32, f32)),
+            Range(crate::model::LogicalRange),
+            Spacing(f32),
+        }
+        let rows: [(&str, Request); 9] = [
+            ("scroll_to_time", |chart| {
+                chart.scroll_to_time(chart.bars(SeriesId::MAIN)[50].time);
+                true
+            }),
+            ("go_to_local_time", |chart| {
+                chart.go_to_local_time(chrono::NaiveDate::from_ymd_opt(2024, 1, 3).unwrap(), None);
+                true
+            }),
+            ("set_start_idx", |chart| {
+                chart.set_start_idx(10);
+                true
+            }),
+            ("set_visible_bars", |chart| {
+                chart.set_visible_bars(20);
+                true
+            }),
+            ("enable_tracking_mode", |chart| {
+                chart.enable_tracking_mode();
+                true
+            }),
+            ("set_right_margin", |chart| {
+                chart.set_right_margin(12.0);
+                true
+            }),
+            ("set_chart_options", |chart| {
+                let mut options = chart.chart_options().clone();
+                options.time_scale.bar_spacing = 20.0;
+                chart.set_chart_options(options);
+                true
+            }),
+            ("zoom_back", Chart::zoom_back),
+            ("execute_box_zoom", |chart| {
+                let rect = chart.get_rendered_price_rect();
+                chart.execute_box_zoom(
+                    rect.min + egui::vec2(150.0, 60.0),
+                    rect.min + egui::vec2(450.0, 300.0),
+                    rect,
+                    rect.width(),
+                )
+            }),
+        ];
+        let mut failed = Vec::new();
+        for (name, request) in rows {
+            for bars_first in [false, true] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[10.0], &[20.0]);
+                chart.set_timeframe(Timeframe::Min1);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let pre_zoom = chart.get_time_scale_state();
+                let rect = chart.get_rendered_price_rect();
+                assert!(chart.execute_box_zoom(
+                    rect.min + egui::vec2(100.0, 50.0),
+                    rect.min + egui::vec2(300.0, 250.0),
+                    rect,
+                    rect.width(),
+                ));
+                chart.apply_synced_time_scale(8.0, -30.0);
+                frame(&ctx, &mut chart, 0.02, vec![]);
+                frame(&ctx, &mut chart, 0.04, vec![]);
+                chart.user_action(|chart| chart.set_timeframe(Timeframe::Min15));
+                chart.apply_synced_time_scale(4.0, 0.5);
+                assert!(chart.undo());
+                assert_ne!(pre_zoom, (8.0, -30.0));
+                let bars = chart.bars(SeriesId::MAIN).to_vec();
+                if bars_first {
+                    chart.set_data(SeriesId::MAIN, bars.clone());
+                }
+                assert!(request(&mut chart), "{name}, bars first: {bars_first}");
+                let expected = match name {
+                    // Bar 50 is 2024-01-03 22:13:20 UTC, the first bar of that day.
+                    "scroll_to_time" | "go_to_local_time" => Expected::Centre(50.0),
+                    "set_start_idx" => Expected::Left(10.0),
+                    "set_visible_bars" => Expected::Bars(20),
+                    "enable_tracking_mode" => Expected::Tracking,
+                    "set_right_margin" => Expected::View((8.0, 12.0)),
+                    "set_chart_options" => Expected::Spacing(20.0),
+                    "zoom_back" => Expected::View(pre_zoom),
+                    "execute_box_zoom" => Expected::Range(chart.visible_logical_range().unwrap()),
+                    _ => unreachable!(),
+                };
+                let matches = |chart: &Chart| {
+                    let range = chart.visible_logical_range().unwrap();
+                    match expected {
+                        Expected::Centre(index) => {
+                            ((range.left + range.right) / 2.0 - index).abs() < 0.01
+                        }
+                        Expected::Left(index) => (range.left - index).abs() < 0.01,
+                        Expected::Bars(count) => {
+                            chart.state.time_scale().visible_candles() == count
+                        }
+                        Expected::Tracking => {
+                            chart.is_tracking_mode_active()
+                                && chart.get_time_scale_state() == (8.0, 2.5)
+                        }
+                        Expected::View(view) => chart.get_time_scale_state() == view,
+                        Expected::Range(expected) => {
+                            (range.left - expected.left).abs() < 0.01
+                                && (range.right - expected.right).abs() < 0.01
+                        }
+                        Expected::Spacing(spacing) => chart.get_time_scale_state().0 == spacing,
+                    }
+                };
+                frame(&ctx, &mut chart, 0.06, vec![]);
+                frame(&ctx, &mut chart, 0.08, vec![]);
+                if !bars_first {
+                    if !matches(&chart) {
+                        failed.push(format!(
+                            "{name}, bars first: {bars_first}: {:?}, before the bars",
+                            chart.get_time_scale_state()
+                        ));
+                    }
+                    chart.set_data(SeriesId::MAIN, bars);
+                }
+                for i in 5..=8 {
+                    frame(&ctx, &mut chart, f64::from(i) * 0.02, vec![]);
+                }
+                if !matches(&chart) {
+                    failed.push(format!(
+                        "{name}, bars first: {bars_first}: {:?}",
+                        chart.get_time_scale_state()
+                    ));
+                }
+            }
+        }
+        assert!(failed.is_empty(), "{failed:#?}");
+    }
+
     #[test]
     fn undoing_an_interval_change_restores_the_view() {
         let mut chart = chart(&[10.0], &[20.0]);
@@ -2539,6 +2720,53 @@ mod tests {
         assert!(chart.redo());
         assert_eq!(chart.series_settings().alerts, main_alerts);
         assert_eq!(chart.series_style(other).unwrap().alerts, other_alerts);
+    }
+
+    /// Undo and redo take the futures data choices of the chart settings with the hours of the
+    /// same edit, and an edit of one futures choice alone is one step that the host is told of.
+    /// A new chart holds back adjustment off, settlement as close on and regular hours.
+    #[test]
+    fn futures_data_choices_undo_and_redo_with_their_settings_edit() {
+        use crate::widget::settings::ChartSettingsState;
+        /// Back adjustment, settlement as close, extended hours and overnight hours.
+        type Choices = (bool, bool, bool, bool);
+        let read = |chart: &Chart| -> Choices {
+            let settings = ChartSettingsState::from_chart(chart);
+            (
+                settings.back_adjust_futures,
+                settings.settlement_as_close,
+                chart.extended_hours(),
+                chart.overnight_hours(),
+            )
+        };
+        let new_chart: Choices = (false, true, false, false);
+        let rows: [(&str, Choices); 4] = [
+            ("back adjustment alone", (true, true, false, false)),
+            ("settlement as close alone", (false, false, false, false)),
+            ("both with extended hours", (true, false, true, false)),
+            (
+                "settlement as close with overnight hours",
+                (false, false, true, true),
+            ),
+        ];
+        for (name, edited) in rows {
+            let mut chart = chart(&[100.0], &[110.0]);
+            assert_eq!(read(&chart), new_chart, "{name}: new chart");
+            let mut settings = ChartSettingsState::from_chart(&chart);
+            settings.back_adjust_futures = edited.0;
+            settings.settlement_as_close = edited.1;
+            settings.extended_hours = Some(edited.2);
+            settings.overnight_hours = Some(edited.3);
+            chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+            assert_eq!(read(&chart), edited, "{name}: applied");
+            assert!(chart.undo(), "{name}: undo");
+            assert_eq!(read(&chart), new_chart, "{name}: undone");
+            assert!(chart.take_history_changed(), "{name}: undo tells the host");
+            assert!(!chart.can_undo(), "{name}: one step");
+            assert!(chart.redo(), "{name}: redo");
+            assert_eq!(read(&chart), edited, "{name}: redone");
+            assert!(chart.take_history_changed(), "{name}: redo tells the host");
+        }
     }
 
     /// A series the host adds after an action, outside history, is no part of it: undoing and

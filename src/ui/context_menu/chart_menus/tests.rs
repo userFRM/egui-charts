@@ -78,10 +78,10 @@ fn stop_limit_orders_keep_their_requests_and_host_text_through_menu_rows() {
 #[test]
 fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
     let mut menu = ChartContextMenu::new();
-    let submenu = |menu: &ChartContextMenu| {
+    let submenu = |menu: &ChartContextMenu, shortcuts: &crate::widget::ShortcutMap| {
         menu.build_menu_items(
             &Context::default(),
-            &crate::widget::ShortcutMap::default(),
+            shortcuts,
             &crate::ui::context_menu::format_price,
         )
         .into_iter()
@@ -91,7 +91,7 @@ fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
                 entries
                     .into_iter()
                     .filter_map(|entry| match entry {
-                        MenuEntry::Item(item) => Some(item.action),
+                        MenuEntry::Item(item) => Some((item.action, item.shortcut)),
                         _ => None,
                     })
                     .collect::<Vec<_>>(),
@@ -99,19 +99,72 @@ fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
             _ => None,
         })
     };
+    let mut shortcuts = crate::widget::ShortcutMap::default();
     menu.watchlists = vec!["Tech".into(), "Energy".into()];
-    assert_eq!(submenu(&menu), None, "no symbol");
+    assert_eq!(submenu(&menu, &shortcuts), None, "no symbol");
     menu.symbol = "AAPL".into();
     let add = |list| ContextMenuAction::AddToWatchlist {
         list,
         symbol: "AAPL".into(),
     };
     assert_eq!(
-        submenu(&menu),
-        Some(("Add AAPL to watchlist".into(), vec![add(0), add(1)]))
+        submenu(&menu, &shortcuts),
+        Some((
+            "Add AAPL to watchlist".into(),
+            vec![(add(0), None), (add(1), None)]
+        ))
+    );
+    menu.active_watchlist = Some(1);
+    assert_eq!(
+        submenu(&menu, &shortcuts),
+        Some((
+            "Add AAPL to watchlist".into(),
+            vec![
+                (add(0), None),
+                (
+                    add(1),
+                    Some(egui::KeyboardShortcut::new(
+                        egui::Modifiers::ALT,
+                        egui::Key::W
+                    ))
+                )
+            ]
+        ))
+    );
+    shortcuts
+        .bindings
+        .retain(|(_, action)| *action != KeyboardAction::AddToWatchlist);
+    for binding in [
+        None,
+        Some(egui::KeyboardShortcut::new(
+            egui::Modifiers::ALT,
+            egui::Key::G,
+        )),
+    ] {
+        if let Some(binding) = binding {
+            shortcuts.bindings.retain(|(key, _)| *key != binding);
+            shortcuts
+                .bindings
+                .push((binding, KeyboardAction::AddToWatchlist));
+        }
+        assert_eq!(
+            submenu(&menu, &shortcuts),
+            Some((
+                "Add AAPL to watchlist".into(),
+                vec![(add(0), None), (add(1), binding)]
+            ))
+        );
+    }
+    menu.active_watchlist = None;
+    assert_eq!(
+        submenu(&menu, &shortcuts),
+        Some((
+            "Add AAPL to watchlist".into(),
+            vec![(add(0), None), (add(1), None)]
+        ))
     );
     menu.watchlists.clear();
-    assert_eq!(submenu(&menu), None, "no lists");
+    assert_eq!(submenu(&menu, &shortcuts), None, "no lists");
 }
 
 /// Each named control removes its row while leaving unrelated entries available; removing
@@ -411,7 +464,10 @@ fn hidden_alerts_and_settings_leave_the_drawing_menu_and_chart() {
         let ctx = Context::default();
         chart.drawings_mut().select(7);
         let mut toolbar = crate::ui::floating_toolbar::FloatingSelectionToolbar::new();
-        toolbar.set_alert_available(!menus.drawing.hidden.contains(&Control::Alerts));
+        toolbar.set_control_visible(
+            Control::Alerts,
+            !menus.drawing.hidden.contains(&Control::Alerts),
+        );
         let mut frame = |events| {
             ctx.run_ui(
                 RawInput {
@@ -1700,8 +1756,7 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
                     .clone()
             };
             config.tick_size = 1.0;
-            let (clock, session) = chart.profile_hours(&config.session);
-            config.session = session.clone();
+            let (clock, config) = chart.tpo_division(&config);
             to_tpo_profiles(chart.bars(SeriesId::MAIN), &config, &clock)
                 .iter()
                 .map(|p| {
@@ -3256,7 +3311,7 @@ fn menu_rows_write_and_act_on_prices_as_the_price_scale_does() {
                     price: click,
                 },
                 vec![
-                    format!("Add alert on EURUSD at {text}…"),
+                    format!("Add alert on EURUSD at {order}…"),
                     format!("Copy price {text}"),
                 ],
             ),
@@ -3292,6 +3347,9 @@ fn menu_rows_write_and_act_on_prices_as_the_price_scale_does() {
                         })
                         .unwrap();
                 assert_eq!(price, alert, "{text}");
+            } else {
+                assert_eq!(menus.series_alert_price(), alert, "{text}");
+                assert_eq!(menus.series_click_price(), click, "{text}");
             }
         }
         // The shortcut reader must agree with the actual menu at this pointer.
@@ -3310,5 +3368,29 @@ fn menu_rows_write_and_act_on_prices_as_the_price_scale_does() {
             })
             .unwrap();
         assert_eq!(chart.alert_price_at(pos), Some(price));
+    }
+
+    // Standalone menus also accept prices through their public field after set_context.
+    let mut standalone = SeriesContextMenu::new();
+    standalone.set_context("EURUSD", 100.0);
+    standalone.click_price = 101.1;
+    standalone.open(Pos2::new(100.0, 100.0), SeriesId::MAIN);
+    let mut labels = Vec::new();
+    for _ in 0..2 {
+        let output = ctx.run_ui(RawInput::default(), |ui| {
+            standalone.show(ui.ctx(), &Theme::dark());
+        });
+        labels = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        output.drop_without_applying_deltas();
+    }
+    for expected in ["Add alert on EURUSD at 101.10…", "Copy price 101.10"] {
+        assert!(labels.iter().any(|label| label == expected), "{labels:?}");
     }
 }

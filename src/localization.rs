@@ -80,6 +80,19 @@ pub(crate) fn format_text_or_english(
     }
 }
 
+/// `name` as the user saved it, or translated when it is the library's own `default` name.
+///
+/// Names users type are not catalogue keys: a list named "Active" stays "Active" under a
+/// translator that maps that word.
+#[cfg(feature = "ui")]
+pub(crate) fn saved_name(ctx: &Context, name: &str, default: &str) -> String {
+    if name == default {
+        text(ctx, name)
+    } else {
+        name.to_owned()
+    }
+}
+
 /// The host's translation of `english`, or `None` to keep the English text.
 pub(crate) fn lookup(ctx: &Context, english: &str) -> Option<String> {
     let translator = ctx.data(|data| data.get_temp::<Translator>(translator_id()));

@@ -19,6 +19,18 @@ const FILL: Color32 = Color32::from_rgb(41, 98, 255);
 pub(super) const IMPORT: Color32 = Color32::from_rgb(156, 39, 176);
 const STOP: Color32 = Color32::from_rgb(242, 54, 69);
 
+/// Resolve the stable identity shared by a synthetic news badge and its full story.
+pub(super) fn news_story(id: &str) -> Option<egui_charts::data::NewsStory> {
+    let (symbol, time) = id.strip_prefix("demo-news-")?.split_once('-')?;
+    let time = DateTime::from_timestamp_millis(time.parse().ok()?)?;
+    let mut query = egui_charts::data::NewsQuery::new(1);
+    query.symbols = vec![symbol.into()];
+    let mut story = super::feeds::news(&query, time).into_iter().next()?;
+    story.id = id.into();
+    story.time = time;
+    Some(story)
+}
+
 impl DemoApp {
     /// Annotates the bars on show with the time-axis events and, when the API samples are on, a
     /// fill and a stop marked at their prices, the fill also as a fill mark, marks of the live
@@ -266,6 +278,13 @@ impl DemoMarks {
                 format!("Synthetic {} event", kind.label()),
             );
             event.details = "Demonstration data supplied by the host.".into();
+            if kind == EventKind::News {
+                event.id = format!("demo-news-{}-{}", spec.symbol, time.timestamp_millis());
+                if let Some(story) = news_story(&event.id) {
+                    event.title = story.headline;
+                    event.details = story.body;
+                }
+            }
             page.events.push(event);
             if kind == EventKind::News
                 && let Some(notifications) = &self.notifications
@@ -336,12 +355,13 @@ mod tests {
         request.symbol = "TOKENA".into();
         let other = source.annotations(&request);
         assert!(!other.events.is_empty());
-        assert!(
-            other
-                .events
-                .iter()
-                .all(|event| event.id.starts_with("demo-event-TOKENA-"))
-        );
+        assert!(other.events.iter().all(|event| event.id.starts_with(
+            if event.kind == EventKind::News {
+                "demo-news-TOKENA-"
+            } else {
+                "demo-event-TOKENA-"
+            }
+        )));
         request.symbol = "SAMPLE".into();
         assert_eq!(source.annotations(&request).events, older.events);
         assert_eq!(

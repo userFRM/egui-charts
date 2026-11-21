@@ -203,17 +203,20 @@ impl DrawingProps {
             .iter()
             .find(|d| d.id == id.0)
             .ok_or("Drawing was removed")?;
-        if !target.accepts_user_edits()
+        if !chart.drawings().accepts_user_edits(target)
             && (self.save_as_default
                 || !chart.drawings().is_selected(id.0)
                 || !chart.drawings().drawings.iter().any(|drawing| {
-                    drawing.accepts_user_edits() && chart.drawings().is_selected(drawing.id)
+                    chart.drawings().accepts_user_edits(drawing)
+                        && chart.drawings().is_selected(drawing.id)
                 }))
         {
-            return Err(if target.user_edit_enabled {
-                "Unlock the drawing before editing its properties"
-            } else {
+            return Err(if !target.user_edit_enabled {
                 "This drawing cannot be edited"
+            } else if chart.drawings().is_locked() {
+                "Unlock all drawings before editing its properties"
+            } else {
+                "Unlock the drawing before editing its properties"
             });
         }
         let adds_position_stop = matches!(
@@ -259,7 +262,7 @@ impl DrawingProps {
             .drawings
             .iter()
             .filter(|drawing| {
-                drawing.accepts_user_edits()
+                chart.drawings().accepts_user_edits(drawing)
                     && if selected {
                         chart.drawings().is_selected(drawing.id)
                     } else {
@@ -429,6 +432,7 @@ impl DrawingProps {
                     volume_profile => |d: &Drawing| d.volume_profile.unwrap_or_default(),
                     regression_trend => |d: &Drawing| d.regression_trend.unwrap_or_default(),
                     vwap => |d: &Drawing| d.vwap.unwrap_or_default(),
+                    table => |d: &Drawing| d.table.clone().unwrap_or_default(),
                 );
                 if settings.custom_settings != target.custom_settings {
                     merge_edits(
@@ -577,6 +581,9 @@ impl DrawingProps {
                     .any(|l| l.width.is_some_and(|w| !(w > 0.0 && w <= MAX_STROKE_WIDTH)))
                 {
                     return Err("Gann widths must be above 0 and at most 100");
+                }
+                if !FONT_SIZES.contains(&c.label_size) {
+                    return Err("Gann label size must be between 1 and 256");
                 }
             }
             if settings.ghost_feed.is_some_and(|c| !c.is_valid()) {
@@ -761,6 +768,17 @@ mod tests {
             .drawings_mut()
             .edit_drawing(7, |d| d.user_edit_enabled = true)
             .unwrap();
+        chart.drawings_mut().set_locked(true);
+        assert_eq!(
+            DrawingProps {
+                font_size: 40.0,
+                ..props.clone()
+            }
+            .apply_to_chart(DrawingId(7), &mut chart),
+            Err("Unlock all drawings before editing its properties")
+        );
+        assert_eq!(chart.drawings().drawings[0].font_size, 24.0);
+        chart.drawings_mut().set_locked(false);
         // A size the drawings file would refuse cannot be applied.
         assert!(
             DrawingProps {
@@ -1340,6 +1358,32 @@ mod tests {
                 assert_eq!(drawing.position_readout.conversion_rate, Some(expected.1));
             }
         }
+        // Anchoring one of two selected tables to the screen anchors both, each keeping its own
+        // column widths.
+        chart.drawings_mut().drawings = [vec![Some(90.0)], vec![None, Some(50.0)]]
+            .into_iter()
+            .enumerate()
+            .map(|(id, column_widths)| {
+                let mut table = Drawing::new(id + 1, DrawingToolType::Table);
+                table.table = Some(Box::new(crate::drawings::TableConfig {
+                    column_widths,
+                    ..Default::default()
+                }));
+                table
+            })
+            .collect();
+        chart.drawings_mut().select_drawings([1, 2]);
+        let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+        let settings = &mut props.tool_settings.as_mut().unwrap().settings;
+        settings.table.as_mut().unwrap().screen_anchored = true;
+        let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+        let tables: Vec<_> = edits.iter().map(|d| d.table.clone().unwrap()).collect();
+        assert!(
+            tables.iter().all(|table| table.screen_anchored),
+            "{tables:?}"
+        );
+        assert_eq!(tables[0].column_widths, [Some(90.0)]);
+        assert_eq!(tables[1].column_widths, [None, Some(50.0)]);
         // An image's opacity is independent of its frame and of the other selected pictures.
         for opacity in [None, Some(128)] {
             let mut chart = Chart::new(crate::model::BarData::new());
@@ -1471,7 +1515,7 @@ mod tests {
                     config.show_arcs = !config.show_arcs;
                 },
                 |d| {
-                    let mut config = GannConfig::for_tool(DrawingToolType::GannSquare);
+                    let mut config = GannConfig::saved_default(DrawingToolType::GannSquare);
                     config.show_arcs = !config.show_arcs;
                     d.gann = Some(config);
                 },
@@ -1592,6 +1636,7 @@ mod tests {
                         failure_background: fill,
                         failure_text: None,
                         transparency: 0,
+                        ..ForecastStyle::default()
                     });
                 },
             ),

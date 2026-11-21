@@ -13,7 +13,8 @@ use super::{
     ElliottDegree, FibonacciConfig, FontWeight, ForecastStyle, GANN_SQUARE_UNITS, GannConfig,
     GhostFeedConfig, ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle,
     PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
-    ProjectionConfig, RangeSettings, RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    ProjectionConfig, RangeSettings, RegressionTrendConfig, TableConfig, TimeframeVisibility,
+    VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -204,9 +205,9 @@ pub struct Drawing {
     #[serde(skip)]
     pub completed: bool,
     /// Optional annotation content, preserved with the drawing. Tables use one row per line
-    /// and tab-separated cells. Images use an image URI resolved by the host's egui image
-    /// loaders. Posts and ideas use the first line as author or title and the rest as body,
-    /// when they have no [`post`](Self::post).
+    /// and tab-separated cells, styled by [`table`](Self::table). Images use an image URI
+    /// resolved by the host's egui image loaders. Posts and ideas use the first line as author or
+    /// title and the rest as body, when they have no [`post`](Self::post).
     pub text: Option<String>,
     /// The post or idea a post or idea drawing shows: its link and the content the host
     /// resolved it to through [`Posts`](crate::services::Posts). The content is saved with the
@@ -347,8 +348,9 @@ pub struct Drawing {
     #[serde(default)]
     pub vwap: Option<VwapConfig>,
 
-    /// Levels, fan lines, arcs and background of the Gann tools; `None` draws
-    /// [`GannConfig::for_tool`].
+    /// Levels, fan lines, arcs, background and labels of the Gann tools. New drawings store
+    /// [`GannConfig::drawing_default`]; `None` keeps saved boxes' left and bottom labels and
+    /// squares' 10 point labels, ten arcs and grey hidden fan lines.
     #[serde(default)]
     pub gann: Option<GannConfig>,
     /// Average range and noise, in ticks, and colours of the candles a Ghost Feed projects. New
@@ -380,6 +382,12 @@ pub struct Drawing {
     /// Frame size and opacity of the image tool; `None` uses the defaults.
     #[serde(default)]
     pub image: Option<ImageConfig>,
+    /// Column widths, row heights, cell styles and the Anchor to screen switch of a table, by
+    /// the rows and columns of its [`text`](Self::text). `None`, as on tables saved before these
+    /// settings, fits each column to its text and each row to one line, with no cell styles, on
+    /// the table's bar and price. Other tools ignore it. Boxed so their drawing copies stay small.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<Box<TableConfig>>,
     /// Clockwise rotation of an icon, emoji or sticker about its centre, in degrees; 0 is upright.
     /// Its handles, selection frame and hit area rotate with it. Other tools ignore this field.
     /// Drawings saved before this setting load upright.
@@ -411,10 +419,11 @@ pub struct Drawing {
     /// colour with a flat fill and no coefficients. Other tools ignore it.
     #[serde(default)]
     pub projection: Option<ProjectionConfig>,
-    /// Card and badge colours and the background transparency of the forecast tool. New
+    /// Card, badge and anchor colours and the background transparency of the forecast tool. New
     /// forecasts start from [`ForecastStyle::default`]; `None`, as on forecasts saved before
     /// these settings, draws the theme's colours without borders, with the fill colour, when
-    /// set, as the background of every card and badge. Other tools ignore it.
+    /// set, as the background of its cards and decided badges, and the default pending badge
+    /// and anchor dots. Other tools ignore it.
     #[serde(default)]
     pub forecast: Option<ForecastStyle>,
 
@@ -680,6 +689,8 @@ impl Drawing {
 
     /// Whether the user can edit this drawing now: it is not [locked](Self::locked) and
     /// [user edits](Self::user_edit_enabled) are on.
+    /// Lock all drawings is not part of it: see
+    /// [`DrawingManager::accepts_user_edits`](crate::drawings::DrawingManager::accepts_user_edits).
     pub fn accepts_user_edits(&self) -> bool {
         self.user_edit_enabled && !self.locked
     }
@@ -848,9 +859,17 @@ impl Drawing {
             middle_line: MiddleLineStyle::default(),
             theme_shade: tool_type != DrawingToolType::ProjectionTool,
             image: None,
+            table: None,
             glyph_angle: 0.0,
             closed: false,
-            gann: None,
+            gann: matches!(
+                tool_type,
+                DrawingToolType::GannBox
+                    | DrawingToolType::GannSquare
+                    | DrawingToolType::GannFixed
+                    | DrawingToolType::GannFan
+            )
+            .then(|| GannConfig::drawing_default(tool_type)),
             ghost_feed: (tool_type == DrawingToolType::GhostFeed)
                 .then(GhostFeedConfig::drawing_default),
             bars_pattern: (tool_type == DrawingToolType::BarsPattern).then(|| BarsPatternConfig {
@@ -932,6 +951,25 @@ impl Drawing {
         match &self.projection {
             Some(config) => std::borrow::Cow::Borrowed(config),
             None => std::borrow::Cow::Owned(ProjectionConfig::legacy(self)),
+        }
+    }
+
+    /// Whether the drawing keeps its place in its pane while the chart scrolls and zooms:
+    /// anchored text, and a table anchored to the screen.
+    pub(crate) fn pins_to_pane(&self) -> bool {
+        self.tool_type == DrawingToolType::AnchoredText
+            || (self.tool_type == DrawingToolType::Table
+                && self
+                    .table
+                    .as_ref()
+                    .is_some_and(|table| table.screen_anchored))
+    }
+
+    /// The table settings in use: its own, or the defaults.
+    pub(crate) fn table_config(&self) -> std::borrow::Cow<'_, TableConfig> {
+        match &self.table {
+            Some(config) => std::borrow::Cow::Borrowed(config),
+            None => std::borrow::Cow::Owned(TableConfig::default()),
         }
     }
 
@@ -1053,7 +1091,9 @@ impl Drawing {
             }
         }
         if matches!(tool, T::GannBox | T::GannSquare | T::GannFixed | T::GannFan) {
-            let config = self.gann.get_or_insert_with(|| GannConfig::for_tool(tool));
+            let config = self
+                .gann
+                .get_or_insert_with(|| GannConfig::saved_default(tool));
             for (list, levels) in [
                 (3, &mut config.price_levels),
                 (4, &mut config.time_levels),
@@ -1131,16 +1171,18 @@ impl Drawing {
         }
     }
 
-    /// Rebuilds anchored text coordinates relative to the pane. Call after
-    /// `update_screen_coords`; other tools retain their chart coordinates. A text without a pane
-    /// position, such as an older drawing or one just moved, takes one the first time its point
-    /// is drawn inside `pane`, and stays on its bar and price until then. Resizing preserves the
-    /// width and height fractions.
+    /// Rebuilds the pane position of anchored text and of a table anchored to the screen. Call
+    /// after `update_screen_coords`; other tools retain their chart coordinates. A text or table
+    /// without a pane position, such as an older drawing or one just moved, takes one the first
+    /// time its point is drawn inside `pane`, and stays on its bar and price until then. Resizing
+    /// preserves the width and height fractions. A table not anchored to the screen drops the
+    /// pane position it still holds.
     pub fn update_pane_coords(&mut self, pane: egui::Rect) {
-        if self.tool_type != DrawingToolType::AnchoredText
-            || !pane.is_finite()
-            || pane.width() <= 0.0
-            || pane.height() <= 0.0
+        // A table taken off the screen keeps the bar and price it was last drawn at.
+        if self.tool_type == DrawingToolType::Table && !self.pins_to_pane() {
+            self.screen_anchor = None;
+        }
+        if !self.pins_to_pane() || !pane.is_finite() || pane.width() <= 0.0 || pane.height() <= 0.0
         {
             return;
         }
@@ -1559,8 +1601,8 @@ impl Serialize for Drawing {
 }
 
 impl<'de> Deserialize<'de> for Drawing {
-    /// A saved `gann` object takes the fields it leaves out from [`GannConfig::for_tool`] of the
-    /// drawing's tool, which a drawing without one draws. Range settings it leaves out take
+    /// Missing Gann settings take the drawing's former defaults. Saved squares store them on
+    /// load so editing their Inputs also keeps their former lists. Missing range settings take
     /// the drawing's font size for the readouts.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         GannConfig::forget_left_out();
@@ -1571,6 +1613,11 @@ impl<'de> Deserialize<'de> for Drawing {
         drawing.range_settings.fill_left_out(drawing.font_size);
         if let Some(gann) = &mut drawing.gann {
             gann.fill_left_out(drawing.tool_type);
+        } else if matches!(
+            drawing.tool_type,
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed
+        ) {
+            drawing.gann = Some(GannConfig::saved_default(drawing.tool_type));
         }
         Ok(drawing)
     }

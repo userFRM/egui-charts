@@ -22,7 +22,8 @@ use std::collections::HashSet;
 pub(crate) const DRAWING_MENU_OFFSET: f32 = 6.0;
 
 /// The panes of `chart` other than the one drawing `drawing_id`, the price pane last, by their
-/// stable ids and titles. Empty for a drawing that does not accept user edits.
+/// stable ids and titles. Empty for a drawing the user cannot edit, as while every drawing
+/// is locked.
 pub(crate) fn move_targets(
     ctx: Option<&Context>,
     chart: &Chart,
@@ -32,7 +33,7 @@ pub(crate) fn move_targets(
         .drawings()
         .drawings
         .iter()
-        .any(|d| d.id == drawing_id && !d.accepts_user_edits())
+        .any(|d| d.id == drawing_id && !chart.drawings().accepts_user_edits(d))
     {
         return Vec::new();
     }
@@ -77,8 +78,9 @@ pub enum DrawingContextMenuAction {
     Copy,
     /// Move the drawing to this pane, for example with [`Chart::move_drawing_to_pane`].
     MoveTo(PaneId),
-    /// Set the drawing's interval filter. Applied by `ChartMenus` and the floating toolbar
-    /// as one undoable chart action; standalone menus call [`Self::apply_interval_visibility`].
+    /// Set the interval filter of the selected drawings, or of the drawing the menu opened on
+    /// when it is not selected. Applied by `ChartMenus` and the floating toolbar as one undoable
+    /// chart action; standalone menus call [`Self::apply_interval_visibility`].
     Intervals(IntervalRange),
     /// Lock the selected drawings, or unlock them when the drawing the menu opened on is
     /// locked, for example with
@@ -186,7 +188,8 @@ impl DrawingContextMenu {
             .drawings
             .iter()
             .find(|d| d.id == drawing_id);
-        self.user_edit_enabled = drawing.is_none_or(|d| d.user_edit_enabled);
+        self.user_edit_enabled =
+            drawing.is_none_or(|d| d.user_edit_enabled) && !chart.drawings().is_locked();
         if let Some(drawing) = drawing {
             self.set_context(
                 chart.drawings().registry.tool_name(drawing),
@@ -494,24 +497,39 @@ impl DrawingContextMenuAction {
         })
     }
 
-    /// Apply an interval command to `id`, recording undo and saved-state updates. Returns
-    /// whether this is an interval command; other actions remain the caller's responsibility.
-    /// With no chart interval, only the all-intervals command changes the filter.
+    /// Apply an interval command, recording undo and saved-state updates. When drawing `id` is
+    /// selected, the command sets the interval filter of every selected drawing, locked ones and
+    /// those whose user edits are off included, as Hide shows or hides them all; otherwise it
+    /// sets the filter of `id` alone. The drawings that change form one undo step; without one,
+    /// nothing is recorded. Returns whether this is an interval command; other actions remain
+    /// the caller's responsibility. With no chart interval, only the all-intervals command
+    /// changes the filter.
     pub fn apply_interval_visibility(&self, chart: &mut Chart, id: usize) -> bool {
         let Self::Intervals(range) = self else {
             return false;
         };
-        if let Some(filter) = interval_filter(*range, chart.timeframe())
-            && chart
-                .drawings()
-                .drawings
-                .iter()
-                .any(|d| d.id == id && d.timeframe_visibility != filter)
-        {
+        let Some(filter) = interval_filter(*range, chart.timeframe()) else {
+            return true;
+        };
+        let drawings = chart.drawings();
+        let selection = drawings.is_selected(id);
+        let ids: Vec<_> = drawings
+            .drawings
+            .iter()
+            .filter(|d| {
+                (if selection {
+                    drawings.is_selected(d.id)
+                } else {
+                    d.id == id
+                }) && d.timeframe_visibility != filter
+            })
+            .map(|d| d.id)
+            .collect();
+        if !ids.is_empty() {
             let _ = chart.user_action(|chart| {
                 chart
                     .drawings_mut()
-                    .edit_drawing(id, |d| d.timeframe_visibility = filter)
+                    .edit_drawings(&ids, |d| d.timeframe_visibility = filter.clone())
             });
         }
         true
@@ -633,7 +651,14 @@ mod tests {
         chart.drawings_mut().drawings.push(drawing);
         let pane = chart.add_pane();
         let mut menu = DrawingContextMenu::new();
-        for (locked, user_edit) in [(false, true), (true, true), (false, false), (false, true)] {
+        for (locked, user_edit, all_locked) in [
+            (false, true, false),
+            (true, true, false),
+            (false, false, false),
+            (false, true, true),
+            (false, true, false),
+        ] {
+            chart.drawings_mut().set_locked(all_locked);
             chart.drawings_mut().drawings[0].locked = locked;
             chart.drawings_mut().drawings[0].user_edit_enabled = user_edit;
             menu.open_on(&Context::default(), &chart, Pos2::ZERO, 7);
@@ -641,7 +666,7 @@ mod tests {
                 menu.build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default());
             assert!(items.iter().any(|entry| {
                 matches!(entry, MenuEntry::Item(item)
-                    if item.action == DrawingContextMenuAction::Lock && item.enabled == user_edit)
+                    if item.action == DrawingContextMenuAction::Lock && item.enabled == (user_edit && !all_locked))
             }));
             let enabled = items
                 .iter()
@@ -652,10 +677,14 @@ mod tests {
                     _ => None,
                 })
                 .expect("Delete row");
-            assert_eq!(enabled, !locked && user_edit, "locked {locked}");
+            assert_eq!(
+                enabled,
+                !locked && user_edit && !all_locked,
+                "locked {locked}"
+            );
             assert_eq!(
                 menu.panes.iter().any(|(id, _)| *id == pane),
-                !locked && user_edit,
+                !locked && user_edit && !all_locked,
                 "Move to, locked {locked}"
             );
         }
@@ -673,7 +702,11 @@ mod tests {
             crate::drawings::ChartPoint::new(1.0, 110.0),
         ];
         drawing.completed = true;
+        let mut second = drawing.clone();
+        second.id = 8;
+        second.locked = true;
         chart.drawings_mut().drawings.push(drawing);
+        chart.drawings_mut().drawings.push(second);
         let mut mounted = crate::ui::context_menu::ChartMenus::default();
         let frame =
             |chart: &mut Chart, mounted: &mut crate::ui::context_menu::ChartMenus, events| {
@@ -705,56 +738,66 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("missing menu row: {label}"))
         };
+        let pick =
+            |chart: &mut Chart, mounted: &mut crate::ui::context_menu::ChartMenus, label: &str| {
+                chart.right_click = Some(crate::widget::RightClickTarget::Drawing {
+                    drawing_id: 7,
+                    pos: Pos2::new(100.0, 100.0),
+                });
+                frame(chart, mounted, vec![]);
+                let shapes = frame(chart, mounted, vec![]);
+                let pos = text_position(&shapes, "Intervals visibility");
+                frame(chart, mounted, vec![egui::Event::PointerMoved(pos)]);
+                let shapes = frame(chart, mounted, vec![]);
+                let pos = text_position(&shapes, label);
+                frame(chart, mounted, vec![egui::Event::PointerMoved(pos)]);
+                for pressed in [true, false] {
+                    frame(
+                        chart,
+                        mounted,
+                        vec![egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        }],
+                    );
+                }
+            };
         for (range, shown) in [
             (IntervalRange::Only, [false, true, false]),
             (IntervalRange::AndAbove, [false, true, true]),
             (IntervalRange::AndBelow, [true, true, false]),
             (IntervalRange::All, [true, true, true]),
         ] {
+            chart.drawings_mut().drawings[1].timeframe_visibility =
+                TimeframeVisibility::specific(&["1D"]);
+            chart.drawings_mut().select_drawings([7, 8]);
             let before = chart.drawings().drawings[0].timeframe_visibility.clone();
-            chart.right_click = Some(crate::widget::RightClickTarget::Drawing {
-                drawing_id: 7,
-                pos: Pos2::new(100.0, 100.0),
-            });
-            frame(&mut chart, &mut mounted, vec![]);
-            let shapes = frame(&mut chart, &mut mounted, vec![]);
-            let pos = text_position(&shapes, "Intervals visibility");
-            frame(
-                &mut chart,
-                &mut mounted,
-                vec![egui::Event::PointerMoved(pos)],
-            );
-            let shapes = frame(&mut chart, &mut mounted, vec![]);
+            let before8 = chart.drawings().drawings[1].timeframe_visibility.clone();
             let label = match range {
                 IntervalRange::Only => "Show on current interval",
                 IntervalRange::AndAbove => "Show on higher intervals",
                 IntervalRange::AndBelow => "Show on lower intervals",
                 IntervalRange::All => "Show on all intervals",
             };
-            let pos = text_position(&shapes, label);
-            frame(
-                &mut chart,
-                &mut mounted,
-                vec![egui::Event::PointerMoved(pos)],
-            );
-            for pressed in [true, false] {
-                frame(
-                    &mut chart,
-                    &mut mounted,
-                    vec![egui::Event::PointerButton {
-                        pos,
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: Default::default(),
-                    }],
-                );
-            }
+            pick(&mut chart, &mut mounted, label);
             let saved = chart.drawings().drawings[0].clone();
+            assert_eq!(
+                chart.drawings().drawings[1].timeframe_visibility,
+                saved.timeframe_visibility,
+                "{range:?}: the locked selected drawing takes the filter"
+            );
             assert!(chart.undo());
             assert_eq!(chart.drawings().drawings[0].timeframe_visibility, before);
+            assert_eq!(chart.drawings().drawings[1].timeframe_visibility, before8);
             assert!(chart.redo());
             assert_eq!(
                 chart.drawings().drawings[0].timeframe_visibility,
+                saved.timeframe_visibility
+            );
+            assert_eq!(
+                chart.drawings().drawings[1].timeframe_visibility,
                 saved.timeframe_visibility
             );
             let template = crate::drawings::DrawingTemplate::from_drawing(&saved);
@@ -789,6 +832,25 @@ mod tests {
             }
             chart.set_timeframe(Timeframe::Hour1);
         }
+        for drawing in &mut chart.drawings_mut().drawings {
+            drawing.timeframe_visibility = TimeframeVisibility::specific(&["1D"]);
+        }
+        chart.drawings_mut().select_drawings([8]);
+        pick(&mut chart, &mut mounted, "Show on all intervals");
+        assert!(
+            chart.drawings().drawings[0]
+                .timeframe_visibility
+                .show_on_all
+        );
+        assert_eq!(
+            chart.drawings().drawings[1].timeframe_visibility,
+            TimeframeVisibility::specific(&["1D"])
+        );
+        assert!(chart.undo());
+        assert_eq!(
+            chart.drawings().drawings[0].timeframe_visibility,
+            TimeframeVisibility::specific(&["1D"])
+        );
         // At a unit's boundary, a relative preset can cover the current interval alone.
         for (count, range) in [
             (1, IntervalRange::AndBelow),

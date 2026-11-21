@@ -679,6 +679,9 @@ pub trait Indicator: Send + ConcreteStudy {
     }
 
     /// Current editable inputs. A host study can supply the same schema as built-ins.
+    /// The chart adds inputs of its own after these under the ids `plot_offset`,
+    /// `calculation_symbol`, `calculation_timeframe` and `wait_for_close`; where it adds one, an
+    /// edit by that id reaches the chart's input, so give the study's inputs other ids.
     fn inputs(&self) -> Vec<super::StudyInput> {
         Vec::new()
     }
@@ -931,6 +934,15 @@ pub trait Indicator: Send + ConcreteStudy {
     /// Draw [`labels`](Self::labels) on the main price chart, even when the study has its
     /// own pane. Label prices use the main series' scale. Off by default.
     fn labels_on_price(&self) -> bool {
+        false
+    }
+
+    /// Keep the plots, their fills and the [`projections`](Self::projections) on the main price
+    /// chart when the study has its own pane, using the main series' price scale. Its pane then
+    /// shows the [`table`](Self::table) and legend alone, without a value axis. The price scale
+    /// fits the plots as it fits an overlay's. They are selected from the study's pane. On the
+    /// price pane the study uses its chosen scale as other overlays do. Off by default.
+    fn plots_on_price(&self) -> bool {
         false
     }
 

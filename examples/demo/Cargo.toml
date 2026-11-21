@@ -6,6 +6,9 @@ publish = false
 
 [workspace]
 
+[dev-dependencies]
+egui_kittest = { version = "0.37.0", default-features = false }
+
 [[bin]]
 name = "egui-charts-demo"
 path = "main.rs"

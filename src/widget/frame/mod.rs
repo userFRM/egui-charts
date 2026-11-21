@@ -352,13 +352,16 @@ impl Chart {
                     breaks.push(event.time);
                 }
                 if self.event_visibility.shows(event.kind) {
-                    events.push((
-                        key,
-                        crate::model::Marker::event(event.time, event.kind.label())
-                            .with_shape(crate::model::MarkerShape::Circle)
-                            .with_id(&event.id)
-                            .with_tooltip(format!("{}\n{}", event.title, event.details)),
-                    ));
+                    let mut marker = crate::model::Marker::event(event.time, event.kind.label())
+                        .with_shape(crate::model::MarkerShape::Circle)
+                        .with_id(&event.id)
+                        .with_tooltip(format!("{}\n{}", event.title, event.details));
+                    if event.kind == crate::model::EventKind::News {
+                        marker = marker
+                            .with_shape(crate::model::MarkerShape::Diamond)
+                            .with_color(ui.active_theme().ui.accent);
+                    }
+                    events.push((key, marker));
                 }
             }
             rendering::render_event_breaks(ui, &breaks, self.state.shown(), &coords);
@@ -780,7 +783,7 @@ impl Chart {
                             self.drawings
                                 .drawings
                                 .iter()
-                                .any(|d| d.id == id && d.accepts_user_edits())
+                                .any(|d| d.id == id && self.drawings.accepts_user_edits(d))
                         })
                 });
         #[cfg(feature = "drawings")]
@@ -969,10 +972,11 @@ impl Chart {
         // Right-click is reserved for context menu, zoom uses left-click when mode is active
         self.zoom_just_applied = self.handle_box_zoom(
             ui,
-            &response,
+            &time_response,
             chart_rect,
             chart_width,
             self.zoom_mode_active,
+            owns_drag,
         );
         if self.time_scale_view() != view_before_input {
             // Pointer navigation replaces an undo still waiting for its bars or axis width.
@@ -983,8 +987,13 @@ impl Chart {
             self.zoom_mode_active = false;
         }
 
-        // Set zoom-in cursor when zoom mode is active
-        if self.zoom_mode_active && response.hovered() {
+        // The zoom-in cursor over the plots, where a press starts a selection, and while one runs.
+        let selection_plot = ui
+            .input(|i| i.pointer.hover_pos())
+            .is_some_and(|pos| self.box_zoom_plot(pos, chart_rect).is_some());
+        if self.zoom_mode_active
+            && (self.box_zoom.active || (time_response.hovered() && selection_plot))
+        {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ZoomIn);
         }
         // Axes that a drag would zoom show its direction, keeping the axis where it began.
@@ -1167,10 +1176,12 @@ impl Chart {
                             <= price_rect.right()
                 });
                 // Sessions left of the view only draw their extensions.
-                let shown = profiles.partition_point(|profile| {
+                let left_of_view = |profile: &crate::studies::TradeProfile| {
                     let end = bars.partition_point(|b| b.time < profile.range.end);
                     mapping.idx_to_x(end - 1) < price_rect.left()
-                });
+                };
+                profiles.sort_by_key(|p| !left_of_view(p));
+                let shown = profiles.iter().take_while(|p| left_of_view(p)).count();
                 Some((flow.price_step(), flow.tick_size(), profiles, shown))
             });
         // Rows of the chart type's footprint, from all the bars the chart holds and never from
@@ -1308,7 +1319,8 @@ impl Chart {
             .zip(&self.study_autoscale)
             .enumerate()
             .filter(|(idx, (study, autoscale))| {
-                study_indices.contains(idx)
+                (study_indices.contains(idx)
+                    || (study.plots_on_price() && !study.is_overlay() && !self.indicators_hidden))
                     && !self.config.scale_price_chart_only
                     && **autoscale
                     && !study.is_volume()
@@ -2299,11 +2311,7 @@ impl Chart {
                 .tpo()
                 .filter(|_| !self.chart_type.is_time_independent())
             {
-                let (clock, session) = self.profile_hours(&config.session);
-                let config = crate::model::TPOConfig {
-                    session: session.clone(),
-                    ..config.clone()
-                };
+                let (clock, config) = self.tpo_division(config);
                 rendering::candles::tpo::render_live_tpo(
                     &clipped_painter,
                     price_rect,
@@ -2338,7 +2346,7 @@ impl Chart {
                     &price_map,
                     &coords,
                 );
-            } else {
+            } else if !study.plots_on_price() {
                 let mapping = rendering::study_mapping(study.as_ref(), &coords);
                 if let Some(color) = study.background() {
                     painter
@@ -2609,6 +2617,21 @@ impl Chart {
             .iter()
             .filter(|study| self.shows_study(study.as_ref()))
         {
+            // A study that keeps its plots on the price chart from a pane of its own.
+            if study.plots_on_price() && !study.is_overlay() {
+                let mapping = crate::chart::coords::ChartMapping {
+                    price: price_map,
+                    ..coords.clone()
+                };
+                rendering::IndicatorRenderer::render_study(
+                    &price_ctx,
+                    study.as_ref(),
+                    visible_data,
+                    mapping.start_idx,
+                    &mapping.price,
+                    &mapping,
+                );
+            }
             crate::chart::indicators::plots::paint_price_segments(
                 &clipped_painter,
                 study.as_ref(),
@@ -3622,12 +3645,14 @@ impl Chart {
         // the menu closes.
         #[cfg(feature = "drawings")]
         let eraser_mode = self.drawings.eraser_mode;
-        // A handle or body drag runs without an active tool and keeps the readout off the drawing.
+        // A handle or body drag runs without an active tool and keeps the readout off the drawing,
+        // as a box-zoom selection keeps it off the bars it selects.
         #[cfg(feature = "drawings")]
-        let drawing_interaction_active =
-            self.drawings.active_tool.is_some() || self.drawings.dragging_handle.is_some();
+        let drawing_interaction_active = self.box_zoom.active
+            || self.drawings.active_tool.is_some()
+            || self.drawings.dragging_handle.is_some();
         #[cfg(not(feature = "drawings"))]
-        let drawing_interaction_active = false;
+        let drawing_interaction_active = self.box_zoom.active;
         let menu_open = self.menu_open || response.secondary_clicked();
         self.menu_open = menu_open;
         let mut crosshair_tags = [None; 2];
@@ -3902,14 +3927,17 @@ impl Chart {
                 if self.trade_profile_settings().poc
                     && let Some(poc) = profile.volume.poc()
                 {
-                    labels.push(("POC", poc as f64 * step));
+                    labels.push(("POC", (poc as f64 + 0.5) * step - tick * 0.5));
                 }
                 if let Some((low, high)) = self
                     .trade_profile_settings()
                     .value_area
                     .and_then(|s| profile.volume.value_area(s))
                 {
-                    labels.extend([("VAH", high as f64 * step), ("VAL", low as f64 * step)]);
+                    labels.extend([
+                        ("VAH", (high as f64 + 1.0) * step - tick * 0.5),
+                        ("VAL", low as f64 * step - tick * 0.5),
+                    ]);
                 }
                 let bars = &self.state.data().bars;
                 let first = bars.partition_point(|b| b.time < profile.range.start);
@@ -4510,8 +4538,10 @@ impl Chart {
             );
         }
 
-        // Draw box zoom rect
-        crate::widget::pan_zoom::render_box_zoom(&painter, &self.box_zoom);
+        // Over the other panes, which are painted after this frame, the panes draw it.
+        if shared_time_axis.is_none() {
+            crate::widget::pan_zoom::render_box_zoom(&painter, &self.box_zoom);
+        }
 
         if let Some((nav, buttons)) = navigation {
             self.paint_navigation(ui, nav, buttons);

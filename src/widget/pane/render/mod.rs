@@ -828,7 +828,7 @@ impl Chart {
                                     return Vec::new();
                                 };
                                 let study = studies.indicators()[idx].as_ref();
-                                if !self.shows_study(study) {
+                                if !self.shows_study(study) || study.plots_on_price() {
                                     return Vec::new();
                                 }
                                 let map = if matches!(
@@ -1271,6 +1271,7 @@ impl Chart {
                             drawing.is_none()
                                 && pane_response.hovered()
                                 && !pane_response.dragged()
+                                && !self.zoom_mode_active
                                 && !eraser_mode
                                 && !drawing_tool_active
                         }) {
@@ -1701,6 +1702,8 @@ impl Chart {
                 }
             }
         }
+        // Over every pane, wherever the selection began.
+        crate::widget::pan_zoom::render_box_zoom(ui.painter(), &self.box_zoom);
         let drawn: Vec<_> = panes
             .iter()
             .zip(&rects)
