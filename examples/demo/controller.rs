@@ -4389,6 +4389,16 @@ impl DemoApp {
                 self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::OpenLayout)
             }
             A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
+            A::NextWatchlistSymbol | A::PreviousWatchlistSymbol => {
+                let step = if action == A::NextWatchlistSymbol {
+                    self.watchlist.select_next_symbol()
+                } else {
+                    self.watchlist.select_previous_symbol()
+                };
+                if let WatchlistAction::SelectSymbol(symbol) = step {
+                    self.open_catalog_symbol(&symbol);
+                }
+            }
             A::ToggleSession if DemoSymbol::has_hours(&self.state.symbol) => {
                 let session = if self.timeframe_toolbar.state.session_type == SessionType::RTH {
                     SessionType::ETH
@@ -8318,6 +8328,112 @@ mod tests {
                 _ => assert!(app.settings_dialog.is_open),
             }
         }
+    }
+
+    #[test]
+    fn watchlist_shortcuts_follow_the_filtered_order_and_replay_keeps_its_keys() {
+        use eframe::App;
+        use egui::{Event, Key, Modifiers};
+        use egui_charts::model::{Watchlist, WatchlistFlag, WatchlistItem};
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        let mut list = Watchlist::from_text("List", "STOCKC,###Section,STOCKB,TOKENA,STOCKA");
+        for item in &mut list.items {
+            if let WatchlistItem::Symbol { symbol, flag } = item
+                && symbol != "TOKENA"
+            {
+                *flag = Some(WatchlistFlag::Red);
+            }
+        }
+        app.watchlist = WatchlistPanel::new(vec![list]);
+        app.watchlist.set_flag_filter(Some(WatchlistFlag::Red));
+        app.open_panel = Some(SidePanel::Watchlist);
+        settle(&mut app, &ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        let texts = ui_frame(&ctx, size, vec![], |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        let header = texts.iter().find(|(text, _)| text == "Symbol").unwrap().1;
+        ui_click(&ctx, size, header.center(), |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        let chart = app.chart.get_chart_mapping().rect.center();
+        ui_click(&ctx, size, chart, |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        settle(&mut app, &ctx);
+        let chart_focus = ctx.memory(|memory| memory.focused()).unwrap();
+        let press = |app: &mut DemoApp, key, modifiers| {
+            ui_frame(
+                &ctx,
+                size,
+                vec![
+                    Event::ModifiersChanged(modifiers),
+                    Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    },
+                    Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers,
+                    },
+                ],
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+        };
+        for (key, modifiers, symbol) in [
+            (Key::ArrowDown, Modifiers::NONE, "STOCKA"),
+            (Key::ArrowDown, Modifiers::NONE, "STOCKB"),
+            (Key::ArrowUp, Modifiers::NONE, "STOCKA"),
+            (Key::ArrowUp, Modifiers::NONE, "STOCKC"),
+            (Key::ArrowDown, Modifiers::NONE, "STOCKA"),
+            (Key::Space, Modifiers::NONE, "STOCKB"),
+            (Key::Space, Modifiers::SHIFT, "STOCKA"),
+        ] {
+            press(&mut app, key, modifiers);
+            assert_eq!(app.chart.symbol(), symbol, "{key:?} / {modifiers:?}");
+            assert_eq!(app.state.symbol, symbol);
+            assert_eq!(app.live.instrument().symbol, symbol);
+            settle(&mut app, &ctx);
+            assert_eq!(
+                ctx.memory(|memory| memory.focused()),
+                Some(chart_focus),
+                "{key:?} changed keyboard focus"
+            );
+        }
+
+        app.start_replay();
+        app.handle_replay_control(ReplayControlAction::Pause);
+        settle(&mut app, &ctx);
+        let before = app.replay.as_ref().unwrap().state.curr_bar;
+        for (key, modifiers, offset, playing) in [
+            (Key::ArrowRight, Modifiers::NONE, 1, false),
+            (Key::ArrowLeft, Modifiers::NONE, 0, false),
+            (Key::Space, Modifiers::NONE, 0, true),
+            (Key::Space, Modifiers::SHIFT, 0, false),
+        ] {
+            press(&mut app, key, modifiers);
+            assert_eq!(app.chart.symbol(), "STOCKA");
+            let replay = app.replay.as_ref().unwrap();
+            if key != Key::Space {
+                assert_eq!(replay.state.curr_bar, before + offset);
+            }
+            assert_eq!(replay.state.is_playing(), playing);
+        }
+        press(&mut app, Key::ArrowDown, Modifiers::NONE);
+        assert_eq!(app.chart.symbol(), "STOCKB");
+        assert!(
+            app.replay.is_none(),
+            "a symbol change exits replay as a row click does"
+        );
     }
 
     #[test]
