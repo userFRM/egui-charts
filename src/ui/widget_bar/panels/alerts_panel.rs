@@ -2659,14 +2659,7 @@ mod tests {
                 Some(95.0),
                 "95",
             ),
-            (
-                "Moving up",
-                Some(99.0),
-                None,
-                None,
-                Some(99.0),
-                "99.00",
-            ),
+            ("Moving up", Some(99.0), None, None, Some(99.0), "99.00"),
             ("Moving up", None, None, None, None, ""),
             (
                 "Moving up",
