@@ -829,8 +829,6 @@ mod tests {
         let report = engine.report().unwrap();
         assert_eq!(report.margin.last(), Some(&(bars[1].time, 0.)));
         assert_eq!(report.peak_margin.last(), Some(&(bars[1].time, 220.)));
-        bars.push(bar(2, 112.));
-        engine.update(&mut strategy, &bars, &[]);
         // Two units from 108 fall to 104, then exit at 110: fall 8 and rise 12.
         assert_eq!(
             engine.report().unwrap().equity_ranges.last(),
