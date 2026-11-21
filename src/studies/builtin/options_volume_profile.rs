@@ -293,15 +293,18 @@ impl OptionsVolumeProfile {
     /// on a tie; a side whose figures are all zero has none, and volume or open interest drawn in
     /// place of a saved measure that waits for its data has none. Split, net and calls plus puts
     /// bars take their own colour inputs, calls blue and puts red by default, and puts divided
-    /// by calls the puts colour. Values, off by default, writes the calls × puts figures of each
-    /// volume or open interest row beside it, or the row's ratio of puts to calls. The profile
-    /// takes the right or the left 30% of the plot, its widest row from 1% to 30% of the plot's
-    /// width, 27% by default. Layout can instead place each upcoming expiration beside its
-    /// date on the time scale, on the chosen side, separately or grouped by week or month.
-    /// Maximum expirations counts from the nearest, 10 by default. Each group shares the
-    /// strike window and row height, marks its own walls, and labels its latest date on the
-    /// time scale while Expiration labels is on. Groups mapping to one bar are combined;
-    /// without chart bars no dated profiles are drawn.
+    /// by calls the puts colour. Every row takes its display's colours at one opacity; the
+    /// profile marks no point of control or value area. Values, off by default, writes the
+    /// calls × puts figures of each volume or open interest row beside it, with at most two
+    /// decimals and no trailing zeros, abbreviated with K, M or B from a thousand, or the row's
+    /// ratio of puts to calls. The profile takes the right or the left 30% of the plot, its
+    /// widest row from 1% to 30% of the plot's width, 27% by default. Layout can instead place
+    /// each upcoming expiration beside its date on the time scale, on the chosen side,
+    /// separately or grouped by week or month. Maximum expirations counts from the nearest, 10
+    /// by default. Each group shares the strike window and row height, names its own walls
+    /// beside their rows, past their bars and figures, and labels its latest date on the time
+    /// scale while Expiration labels is on. Groups mapping to one bar are combined; without
+    /// chart bars no dated profiles are drawn.
     /// Under Through date, Maximum expirations keeps the first N listed expiries on or after the
     /// current day; 0 keeps every listed expiry up to the date. Strikes around price draws the
     /// strikes at the underlying price the expected move uses and the N nearest below and above
@@ -2744,28 +2747,34 @@ mod tests {
     /// A live chain listing one expiry, tomorrow, with call and put volume 10 and 5 at 100, 0 and
     /// 7 at 105, and 4 and 8 at 110.
     fn chain_with_a_strike_without_calls() -> (OptionChain, Vec<NaiveDate>) {
+        chain_with_volumes(&[
+            (100.0, [10.0, 5.0]),
+            (105.0, [0.0, 7.0]),
+            (110.0, [4.0, 8.0]),
+        ])
+    }
+
+    /// A live chain listing one expiry, tomorrow, with the given call and put volume at each
+    /// strike.
+    fn chain_with_volumes(strikes: &[(f64, [f64; 2])]) -> (OptionChain, Vec<NaiveDate>) {
         let expiry = Utc::now().date_naive().succ_opt().unwrap();
         let feed = ChainFeed::default();
         let query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
         let chain = OptionChain::new(&feed, query, || {}).unwrap();
-        let rows = [
-            (100.0, [10.0, 5.0]),
-            (105.0, [0.0, 7.0]),
-            (110.0, [4.0, 8.0]),
-        ]
-        .into_iter()
-        .flat_map(|(strike, volumes)| {
-            [OptionKind::Call, OptionKind::Put]
-                .into_iter()
-                .zip(volumes)
-                .map(move |(kind, volume)| {
-                    let symbol = format!("{strike}-{kind:?}");
-                    let mut row = OptionQuote::new(symbol, expiry, strike, kind, Utc::now());
-                    row.volume = Some(volume);
-                    row
-                })
-        })
-        .collect();
+        let rows = strikes
+            .iter()
+            .flat_map(|&(strike, volumes)| {
+                [OptionKind::Call, OptionKind::Put]
+                    .into_iter()
+                    .zip(volumes)
+                    .map(move |(kind, volume)| {
+                        let symbol = format!("{strike}-{kind:?}");
+                        let mut row = OptionQuote::new(symbol, expiry, strike, kind, Utc::now());
+                        row.volume = Some(volume);
+                        row
+                    })
+            })
+            .collect();
         feed.0.lock().unwrap().as_ref().unwrap().push(rows).unwrap();
         (chain, vec![expiry])
     }
@@ -3943,6 +3952,120 @@ mod tests {
         assert!(!study.legend_visible(3));
     }
 
+    /// Each Sides display paints every strike in its own colours at one opacity, with no line
+    /// across the profile, and with Values on, the walls are named beside their rows, clear of
+    /// every figure, at either placement.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn options_rows_keep_their_colours_and_walls_clear_their_figures() {
+        use InputValue::{Choice, Toggle};
+        use egui::{Rect, Shape};
+        let (chain, dates) = chain_with_volumes(&[
+            (100.0, [20.0, 10.0]),
+            (105.0, [1_499.0, 40.0]),
+            (110.0, [5.0, 1_234_567.0]),
+        ]);
+        // The row at 110 holds 1,234,572 of 1,236,141, more than the 70% value area.
+        let tone = |[r, g, b, a]: [u8; 4]| {
+            Color32::from_rgba_unmultiplied(r, g, b, a).gamma_multiply(0.35)
+        };
+        let blue = tone([41, 98, 255, 180]);
+        let red = tone([239, 83, 80, 180]);
+        let teal = tone([38, 166, 154, 180]);
+        let [r, g, b, _] = EXPIRY_COLORS[0].to_srgba_unmultiplied();
+        let expiry = tone([r, g, b, 180]);
+        for (sides, fills) in [
+            (0, vec![blue, red]),
+            (1, vec![teal, red]),
+            (2, vec![blue]),
+            (3, vec![expiry]),
+            (4, vec![red]),
+        ] {
+            for left in [false, true] {
+                for strikes in [[Some(105.0), Some(110.0)], [Some(110.0); 2]] {
+                    let case = format!("sides {sides}, left {left}, walls {strikes:?}");
+                    let mut study =
+                        OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.clone())
+                            .unwrap();
+                    for (id, value) in [
+                        ("volume_sides", Choice(sides)),
+                        ("placement", Choice(usize::from(left))),
+                        ("show_values", Toggle(true)),
+                    ] {
+                        study.set_input(id, value).unwrap();
+                    }
+                    study.calculate(&[Bar::new(Utc::now(), 100.0, 101.0, 99.0, 100.0, 1.0)]);
+                    let plot = study.volume_profiles(0..1).remove(0);
+                    let wall_colors = [3, 4].map(|line| study.plot_style(line).color);
+                    let mut profile = (*plot.profile).clone();
+                    profile.walls = Some(OptionWalls {
+                        strikes,
+                        colors: wall_colors.map(|color| color.to_srgba_unmultiplied()),
+                    });
+                    let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
+                        crate::painting::volume_profile::paint_profile(
+                            ui.painter(),
+                            &profile,
+                            plot.config,
+                            plot.color,
+                            100.0..400.0,
+                            crate::painting::volume_profile::ProfileStyle::Study {
+                                right_aligned: plot.right_aligned,
+                                strip: false,
+                                walls_visible: [true; 2],
+                                width: plot.width,
+                                volume_decimals: None,
+                            },
+                            &|price| (1200.0 - 10.0 * price) as f32,
+                        );
+                    });
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    let rows: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            Shape::Rect(row) if row.fill.a() < 255 => Some(row.fill),
+                            _ => None,
+                        })
+                        .collect();
+                    assert!(!rows.is_empty(), "{case}");
+                    assert!(
+                        rows.iter().all(|fill| fills.contains(fill)),
+                        "{case}: {rows:?}"
+                    );
+                    assert!(
+                        !shapes.iter().any(|shape| matches!(
+                            &shape.shape,
+                            Shape::LineSegment { .. } | Shape::Path(_)
+                        )),
+                        "{case}: no line across the profile"
+                    );
+                    let (walls, figures): (Vec<_>, Vec<_>) = shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            Shape::Text(text) => Some((
+                                wall_colors.contains(&text.fallback_color),
+                                Rect::from_min_size(text.pos, text.galley.size()),
+                            )),
+                            _ => None,
+                        })
+                        .partition(|(wall, _)| *wall);
+                    assert_eq!(walls.len(), 2, "{case}");
+                    for (_, wall) in &walls {
+                        assert!(
+                            figures.iter().all(|(_, figure)| !wall.intersects(*figure)),
+                            "{case}: wall {wall:?} clears {figures:?}"
+                        );
+                    }
+                    assert!(
+                        !walls[0].1.intersects(walls[1].1),
+                        "{case}: walls clear each other"
+                    );
+                }
+            }
+        }
+    }
+
     /// An options profile's rows start at the right or the left edge of the plot, the widest
     /// taking the chosen share of the strip of 30% of the plot, with calls and puts side by side,
     /// their difference or their sum, by expiration in segments that add up to the row and are
@@ -4050,8 +4173,9 @@ mod tests {
         let coords = crate::chart::coords::ChartMapping::new(rect, 30.0, 0, 9, 0.0, map);
         let span = crate::chart::rendering::volume_profile::profile_span(&plot, &coords);
         assert_eq!(span, coords.idx_to_x(2) - 15.0..coords.idx_to_x(4) + 15.0);
-        // Calls × puts from the lowest strike up, or puts divided by calls, which a strike
-        // without calls lacks; nothing beside gamma exposure. Rows are 50 tall.
+        // Calls × puts as whole counts or with K and M from the lowest strike up, or puts
+        // divided by calls, which a strike without calls lacks; nothing beside gamma exposure.
+        // Rows are 50 tall.
         let map = PriceMap::new(
             PriceTransform::default(),
             PriceRange::new(95.0, 115.0),
@@ -4061,12 +4185,23 @@ mod tests {
         );
         let coords = crate::chart::coords::ChartMapping::new(rect, 30.0, 0, 1, 0.0, map);
         let (strikes, listed) = chain_with_a_strike_without_calls();
+        let (counts, count_dates) = chain_with_volumes(&[
+            (100.0, [20.0, 10.0]),
+            (105.0, [1_499.0, 40.0]),
+            (110.0, [5.0, 1_234_567.0]),
+        ]);
         for (chain, dates, edit, written) in [
+            (
+                counts,
+                count_dates,
+                ("volume_sides", Choice(0)),
+                vec!["20 × 10", "1.5K × 40", "5 × 1.23M"],
+            ),
             (
                 strikes.clone(),
                 listed.clone(),
                 ("volume_sides", Choice(0)),
-                vec!["10.00 × 5.00", "0.00 × 7.00", "4.00 × 8.00"],
+                vec!["10 × 5", "0 × 7", "4 × 8"],
             ),
             (
                 strikes,
@@ -4311,43 +4446,62 @@ mod tests {
                 // Calls with no puts have a zero ratio row, but still a call wall.
                 let mut displayed = study.clone();
                 displayed.set_input("volume_sides", Choice(sides)).unwrap();
-                let plot = displayed.volume_profiles(0..60).remove(0);
-                let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
-                    crate::painting::volume_profile::paint_profile(
-                        ui.painter(),
-                        &plot.profile,
-                        plot.config,
-                        plot.color,
-                        100.0..200.0,
-                        crate::painting::volume_profile::ProfileStyle::Study {
-                            right_aligned: left,
-                            strip: false,
-                            walls_visible: [true; 2],
-                            width: 0.9,
-                            volume_decimals: None,
-                        },
-                        &|price| price as f32,
+                for plot in displayed.volume_profiles(0..60) {
+                    let mut output =
+                        egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                            crate::painting::volume_profile::paint_profile(
+                                ui.painter(),
+                                &plot.profile,
+                                plot.config,
+                                plot.color,
+                                100.0..200.0,
+                                crate::painting::volume_profile::ProfileStyle::Study {
+                                    right_aligned: left,
+                                    strip: false,
+                                    walls_visible: [true; 2],
+                                    width: 0.9,
+                                    volume_decimals: None,
+                                },
+                                &|price| price as f32,
+                            );
+                        });
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    let label = shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == "Call wall" => {
+                                Some(text)
+                            }
+                            _ => None,
+                        })
+                        .expect("the profile's own wall is labelled");
+                    let label_end = if left {
+                        label.pos.x + label.galley.size().x
+                    } else {
+                        label.pos.x
+                    };
+                    // The widest bar reaches 90; the zero ratio has none. The label clears it by 4.
+                    let expected = match (left, sides) {
+                        (true, 0) => 106.0,
+                        (false, 0) => 194.0,
+                        (true, _) => 196.0,
+                        (false, _) => 104.0,
+                    };
+                    assert!((label_end - expected).abs() < 1e-3);
+                    assert_eq!(
+                        label.fallback_color,
+                        study.plot_style(3).color,
+                        "labelled in the call wall colour"
                     );
-                });
-                let shapes = std::mem::take(&mut output.shapes);
-                output.drop_without_applying_deltas();
-                let label = shapes
-                    .iter()
-                    .find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == "Call wall" => Some(text),
-                        _ => None,
-                    })
-                    .expect("the profile's own wall is labelled");
-                let label_end = if left {
-                    label.pos.x + label.galley.size().x
-                } else {
-                    label.pos.x
-                };
-                assert!((label_end - if left { 198.0 } else { 102.0 }).abs() < 1e-3);
-                assert!(shapes.iter().any(|shape| matches!(&shape.shape,
-                    egui::Shape::LineSegment { points, stroke }
-                    if points == &[egui::pos2(100.0, 100.0), egui::pos2(200.0, 100.0)]
-                        && stroke.color == study.plot_style(3).color)));
+                    assert!(!shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.text() == "Put wall")));
+                    assert!(
+                        !shapes
+                            .iter()
+                            .any(|shape| matches!(&shape.shape, egui::Shape::LineSegment { .. }))
+                    );
+                }
             }
             #[cfg(feature = "widget")]
             {
