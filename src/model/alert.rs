@@ -82,9 +82,19 @@ pub struct Alert {
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
     /// Most recent firing time, including firings while the application was closed.
-    /// Hosts retain it on every trigger, even for alerts that remain active.
+    /// Hosts retain it on every trigger, even for alerts that remain active. `AlertEngine`
+    /// counts it as a restored alert's last firing.
     #[serde(default)]
     pub last_triggered_at: Option<DateTime<Utc>>,
+    /// Most recent firing time of each member of [`watchlist`](Self::watchlist) that fired, by
+    /// symbol; empty for an alert on one symbol. Hosts keep it with the alert, as they keep
+    /// `last_triggered_at`. `AlertEngine` fills it, and after a restart does not fire a member
+    /// again in the bar or minute of its time: with frequency [`Once`](AlertFrequency::Once)
+    /// a member it holds never fires again, and the alert becomes
+    /// [`Triggered`](AlertStatus::Triggered) once it holds every member of the list. The engine
+    /// clears it when a save changes what the alert watches or its status.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub member_triggered_at: BTreeMap<String, DateTime<Utc>>,
     /// Draw the threshold across the pane in addition to its marker. Enabled by default.
     #[serde(default = "alert_display_enabled")]
     pub extend_line: bool,
@@ -393,6 +403,7 @@ impl Alert {
             id: None,
             created_at: None,
             last_triggered_at: None,
+            member_triggered_at: BTreeMap::new(),
             extend_line: true,
             blink_on_trigger: true,
             symbol: symbol.into(),
@@ -425,6 +436,8 @@ impl Alert {
         let mut copy = self.clone();
         copy.created_at = other.created_at;
         copy.last_triggered_at = other.last_triggered_at;
+        copy.member_triggered_at
+            .clone_from(&other.member_triggered_at);
         copy.extend_line = other.extend_line;
         copy.blink_on_trigger = other.blink_on_trigger;
         copy.delivery.clone_from(&other.delivery);
@@ -1302,7 +1315,8 @@ impl NotificationSchedule {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum AlertFrequency {
-    /// Fires once; the host then reports the alert with status `Triggered`.
+    /// Fires once; the host then reports the alert with status `Triggered`. On a watchlist it
+    /// fires once for each member and becomes `Triggered` when every member has fired.
     #[default]
     Once,
     /// Stays active and fires on every new occurrence; how often a lasting condition fires again
@@ -1974,6 +1988,7 @@ mod tests {
                 id: None,
                 created_at: None,
                 last_triggered_at: None,
+                member_triggered_at: BTreeMap::new(),
                 extend_line: true,
                 blink_on_trigger: true,
                 name: String::new(),

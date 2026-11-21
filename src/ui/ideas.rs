@@ -28,6 +28,19 @@ pub enum IdeaKind {
     ShortPost,
 }
 
+/// Which way an idea expects the price to move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum IdeaDirection {
+    /// No call on the direction.
+    #[default]
+    Neutral,
+    /// The price should rise.
+    Long,
+    /// The price should fall.
+    Short,
+}
+
 /// An entry of the host's feed.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -110,6 +123,14 @@ pub struct IdeaDraft {
     pub interval: String,
     /// Whether to attach an image of the chart; the host takes it with the chart's image export.
     pub attach_chart: bool,
+    /// Which way the idea expects the price to move; neutral until the user picks one.
+    pub direction: IdeaDirection,
+    /// The tags the user typed, comma separated in the composer: trimmed, without empty ones,
+    /// each once in the order typed. Empty by default.
+    pub tags: Vec<String>,
+    /// Whether the idea is publicly discoverable; when false, the host shares it only with
+    /// people who have its link. True by default.
+    pub public: bool,
 }
 
 /// What the user asked of the host.
@@ -158,6 +179,7 @@ enum Publish {
 #[derive(Debug)]
 pub struct IdeasPanel {
     draft: IdeaDraft,
+    tags: String,
     publish: Publish,
     ideas: Vec<Idea>,
     next: Option<String>,
@@ -183,7 +205,11 @@ impl IdeasPanel {
                 symbol: String::new(),
                 interval: String::new(),
                 attach_chart: true,
+                direction: IdeaDirection::Neutral,
+                tags: Vec::new(),
+                public: true,
             },
+            tags: String::new(),
             publish: Publish::Idle,
             ideas: Vec::new(),
             next: None,
@@ -201,6 +227,11 @@ impl IdeasPanel {
     /// Shows the feed, or hides it when `available` is false.
     pub fn set_browsing(&mut self, available: bool) {
         self.can_browse = available;
+    }
+
+    /// Shows the entries of `kind` in the feed, as the tabs above it do.
+    pub fn set_feed_kind(&mut self, kind: IdeaKind) {
+        self.filter = kind;
     }
 
     /// Sets the instrument and interval the draft is about, normally those of the chart.
@@ -224,10 +255,14 @@ impl IdeasPanel {
         self.next = page.next;
     }
 
-    /// Records that the host published the draft as `id`, which clears the draft.
+    /// Records that the host published the draft as `id`, which clears its title, text, tags
+    /// and direction.
     pub fn publish_succeeded(&mut self, id: impl Into<String>, link: Option<String>) {
         self.draft.title.clear();
         self.draft.body.clear();
+        self.tags.clear();
+        self.draft.tags.clear();
+        self.draft.direction = IdeaDirection::Neutral;
         self.publish = Publish::Done {
             id: id.into(),
             link,
@@ -282,12 +317,42 @@ impl IdeasPanel {
         ui.label(
             RichText::new(format!("{} {}", self.draft.symbol, self.draft.interval)).color(weak),
         );
+        ui.horizontal(|ui| {
+            for (direction, label) in [
+                (IdeaDirection::Long, "Long"),
+                (IdeaDirection::Short, "Short"),
+                (IdeaDirection::Neutral, "Neutral"),
+            ] {
+                ui.selectable_value(
+                    &mut self.draft.direction,
+                    direction,
+                    l10n::text(ui.ctx(), label),
+                );
+            }
+        });
+        if ui
+            .add(
+                TextEdit::singleline(&mut self.tags)
+                    .hint_text(l10n::text(ui.ctx(), "Tags, separated by commas"))
+                    .desired_width(f32::INFINITY),
+            )
+            .changed()
+        {
+            self.draft.tags = parse_tags(&self.tags);
+        }
+        ui.horizontal(|ui| {
+            for (public, label) in [(true, "Public"), (false, "Private")] {
+                ui.selectable_value(&mut self.draft.public, public, l10n::text(ui.ctx(), label));
+            }
+        });
         ui.checkbox(
             &mut self.draft.attach_chart,
             l10n::text(ui.ctx(), "Attach chart image"),
         );
         let pending = self.publish == Publish::Pending;
-        let ready = !self.draft.body.trim().is_empty() && !self.draft.symbol.is_empty();
+        let ready = !self.draft.title.trim().is_empty()
+            && !self.draft.body.trim().is_empty()
+            && !self.draft.symbol.is_empty();
         let mut action = IdeasAction::None;
         if Button::new("Publish")
             .enabled(ready && !pending)
@@ -384,15 +449,122 @@ impl IdeasPanel {
     }
 }
 
+/// The tags of a comma-separated list: trimmed, without empty ones, each once in the order typed.
+fn parse_tags(text: &str) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    for tag in text.split(',').map(str::trim).filter(|tag| !tag.is_empty()) {
+        if !tags.iter().any(|kept| kept == tag) {
+            tags.push(tag.to_owned());
+        }
+    }
+    tags
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::{Event, Modifiers, PointerButton, RawInput, Rect, Shape};
+
+    fn click(panel: &mut IdeasPanel, label: &str, typed: Option<&str>) -> IdeasAction {
+        let ctx = egui::Context::default();
+        let mut action = IdeasAction::None;
+        let mut step = |events| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    action = panel.show(ui);
+                },
+            )
+        };
+        let output = step(vec![]);
+        let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+            Shape::Text(text) if text.galley.text() == label => {
+                Some(Rect::from_min_size(text.pos, text.galley.size()).center())
+            }
+            _ => None,
+        });
+        output.drop_without_applying_deltas();
+        let pos = pos.expect(label);
+        step(vec![Event::PointerMoved(pos)]).drop_without_applying_deltas();
+        for pressed in [true, false] {
+            step(vec![Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            }])
+            .drop_without_applying_deltas();
+        }
+        if let Some(text) = typed {
+            step(vec![Event::Text(text.into())]).drop_without_applying_deltas();
+        }
+        action
+    }
+
+    /// Whitespace is not a title or a description, and a disabled Publish keeps the draft idle.
+    #[test]
+    fn publish_waits_for_a_title_and_a_text() {
+        for (title, body, ready) in [
+            ("", "Above the range", false),
+            ("  ", "Above the range", false),
+            ("Breakout", " ", false),
+            ("Breakout", "Above the range", true),
+        ] {
+            let mut panel = IdeasPanel::new();
+            panel.set_publishing(true);
+            panel.set_context("AAPL", "1D");
+            panel.draft.title = title.into();
+            panel.draft.body = body.into();
+            let expected = panel.draft().clone();
+            assert_eq!(expected.direction, IdeaDirection::Neutral);
+            assert!(expected.tags.is_empty());
+            assert!(expected.public);
+            let action = click(&mut panel, "Publish", None);
+            if ready {
+                assert_eq!(action, IdeasAction::Publish(expected));
+            } else {
+                assert_eq!(action, IdeasAction::None, "title={title:?}, body={body:?}");
+                assert_eq!(panel.publish, Publish::Idle);
+            }
+        }
+    }
+
+    /// The visible controls reach the host draft, with tags trimmed and deduplicated exactly.
+    #[test]
+    fn the_composer_sends_direction_tags_and_visibility() {
+        let mut panel = IdeasPanel::new();
+        panel.set_publishing(true);
+        panel.set_context("AAPL", "1D");
+        panel.draft.title = "Breakout".into();
+        panel.draft.body = "Above the range".into();
+        click(&mut panel, "Short", None);
+        click(&mut panel, "Private", None);
+        click(
+            &mut panel,
+            "Tags, separated by commas",
+            Some(" btc, breakout,, BTC ,btc"),
+        );
+        let mut expected = panel.draft().clone();
+        expected.direction = IdeaDirection::Short;
+        expected.tags = vec!["btc".into(), "breakout".into(), "BTC".into()];
+        expected.public = false;
+        assert_eq!(
+            click(&mut panel, "Publish", None),
+            IdeasAction::Publish(expected)
+        );
+    }
 
     /// Placement carries the entry's identifier and all its content, including the picture.
     #[test]
     fn place_on_chart_reports_the_entry_as_a_resolved_link() {
         use chrono::TimeZone;
-        use egui::{Context, Event, Modifiers, PointerButton, RawInput, Rect, Shape};
         let time = Utc.with_ymd_and_hms(2026, 10, 30, 9, 30, 0).unwrap();
         let mut panel = IdeasPanel::new();
         panel.set_browsing(true);
@@ -413,45 +585,7 @@ mod tests {
             },
             true,
         );
-        let ctx = Context::default();
-        let mut action = IdeasAction::None;
-        let mut step = |events| {
-            ctx.run_ui(
-                RawInput {
-                    screen_rect: Some(Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(800.0, 600.0),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ui| {
-                    action = panel.show(ui);
-                },
-            )
-        };
-        let output = step(vec![]);
-        let pos = output
-            .shapes
-            .iter()
-            .find_map(|shape| match &shape.shape {
-                Shape::Text(text) if text.galley.text() == "Place on chart" => {
-                    Some(Rect::from_min_size(text.pos, text.galley.size()).center())
-                }
-                _ => None,
-            })
-            .unwrap();
-        output.drop_without_applying_deltas();
-        step(vec![Event::PointerMoved(pos)]).drop_without_applying_deltas();
-        for pressed in [true, false] {
-            step(vec![Event::PointerButton {
-                pos,
-                button: PointerButton::Primary,
-                pressed,
-                modifiers: Modifiers::NONE,
-            }])
-            .drop_without_applying_deltas();
-        }
+        let action = click(&mut panel, "Place on chart", None);
         let mut content = PostContent::new("Ada", time, "Above the range");
         content.title = "Breakout".into();
         content.picture = Some("https://example.invalid/42.png".into());
@@ -467,7 +601,14 @@ mod tests {
         panel.set_context("AAPL", "1D");
         panel.draft.title = "Breakout".into();
         panel.draft.body = "Above the range".into();
+        panel.draft.direction = IdeaDirection::Long;
+        panel.tags = "btc".into();
+        panel.draft.tags = vec!["btc".into()];
+        panel.draft.public = false;
+        let draft = panel.draft().clone();
         panel.publish_failed("offline");
+        assert_eq!(panel.draft(), &draft);
+        assert_eq!(panel.tags, "btc");
         assert_eq!(panel.draft().title, "Breakout");
         assert_eq!(panel.draft().body, "Above the range");
         panel.publish_succeeded("42", Some("https://example.invalid/42".into()));
@@ -476,6 +617,12 @@ mod tests {
             ("", "")
         );
         assert_eq!(panel.draft().symbol, "AAPL");
+        assert_eq!(panel.draft().interval, "1D");
+        assert!(panel.draft().attach_chart);
+        assert!(panel.tags.is_empty());
+        assert!(panel.draft().tags.is_empty());
+        assert_eq!(panel.draft().direction, IdeaDirection::Neutral);
+        assert!(!panel.draft().public);
     }
 
     #[test]
