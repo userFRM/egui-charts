@@ -102,7 +102,7 @@ impl SeriesSettingsDialog {
         let mut action = SeriesSettingsAction::None;
 
         // Main content: sidebar + content area
-        let sidebar_width = DESIGN_TOKENS.sizing.dialog.series_sidebar_width;
+        let sidebar_width = DESIGN_TOKENS.sizing.dialog.series_sidebar_width.max(200.0);
         let active_tab = self.active_tab;
         let active_tab_mut = &mut self.active_tab;
         let settings = &mut self.settings;
@@ -185,6 +185,54 @@ impl SeriesSettingsDialog {
 mod tests {
     use super::*;
     use crate::model::ChartType;
+
+    #[test]
+    fn the_sidebar_paints_the_full_scales_and_lines_label() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let mut dialog = SeriesSettingsDialog::new();
+            dialog.open(SeriesId::MAIN, SeriesSettings::default());
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &theme);
+                })
+                .with_size(Vec2::new(1440.0, 900.0))
+                .build_ui_state(
+                    |ui, dialog: &mut SeriesSettingsDialog| {
+                        dialog.show(ui.ctx());
+                    },
+                    dialog,
+                );
+            h.run();
+            for selected in [false, true] {
+                if selected {
+                    h.get_by_role_and_label(Role::Tab, "Scales and lines")
+                        .click();
+                    h.run();
+                }
+                let label = h
+                    .output()
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "Scales and lines" => {
+                            Some((shape.clip_rect, text))
+                        }
+                        _ => None,
+                    })
+                    .expect("tab label is painted");
+                assert!(!label.1.galley.elided, "selected: {selected}");
+                assert!(label.0.contains_rect(egui::Rect::from_min_size(
+                    label.1.pos,
+                    label.1.galley.size()
+                )));
+            }
+        }
+    }
 
     #[test]
     fn accepting_preserves_candle_colours_and_reset_uses_the_active_theme() {
