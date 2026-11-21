@@ -22,10 +22,10 @@ fn level_color(config: &GannConfig, level: &GannLevel) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, a)
 }
 
-/// The band colour of `level` at the configuration's background opacity.
-fn band_color(config: &GannConfig, level: &GannLevel) -> Color32 {
+/// The band colour of `level` at `opacity`.
+fn band_color(config: &GannConfig, level: &GannLevel, opacity: u8) -> Color32 {
     let [r, g, b, _] = config.one_color.unwrap_or(level.color);
-    Color32::from_rgba_unmultiplied(r, g, b, config.background_opacity)
+    Color32::from_rgba_unmultiplied(r, g, b, opacity)
 }
 
 /// Text and fill of a label drawn on a box: the axis colours, or with one colour that colour
@@ -257,13 +257,32 @@ impl Drawing {
             LazyLock::new(|| GannConfig::for_tool(DrawingToolType::GannBox));
         static SQUARE: LazyLock<GannConfig> =
             LazyLock::new(|| GannConfig::saved_default(DrawingToolType::GannSquare));
+        static FIXED: LazyLock<GannConfig> =
+            LazyLock::new(|| GannConfig::saved_default(DrawingToolType::GannFixed));
         static FAN: LazyLock<GannConfig> =
             LazyLock::new(|| GannConfig::for_tool(DrawingToolType::GannFan));
         self.gann.as_ref().unwrap_or_else(|| match self.tool_type {
-            DrawingToolType::GannSquare | DrawingToolType::GannFixed => &SQUARE,
+            DrawingToolType::GannSquare => &SQUARE,
+            DrawingToolType::GannFixed => &FIXED,
             DrawingToolType::GannFan => &FAN,
             _ => &BOX,
         })
+    }
+
+    /// Extra room beyond the ordinary paint margin for a square's larger label.
+    pub(super) fn gann_label_room(&self) -> f32 {
+        if !matches!(
+            self.tool_type,
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed
+        ) {
+            return 0.0;
+        }
+        let config = self.gann_config();
+        if !config.show_labels {
+            return 0.0;
+        }
+        super::PAINT_MARGIN
+            * (typography::font_size(config.label_size) / typography::XS - 1.0).max(0.0)
     }
 
     /// Render Gann Fan: its visible lines from the first anchor to the chart's edge, the bands
@@ -295,7 +314,7 @@ impl Drawing {
             for pair in sorted.windows(2) {
                 painter.add(egui::Shape::convex_polygon(
                     vec![start, pair[0].1, pair[1].1],
-                    band_color(config, &pair[1].0),
+                    band_color(config, &pair[1].0, config.background_opacity),
                     Stroke::NONE,
                 ));
             }
@@ -304,7 +323,23 @@ impl Drawing {
         let (text, fill) = boxed_label_colors(config, painter.ctx());
         let mut labels = Vec::<Rect>::new();
         for (level, fan_end) in &lines {
-            painter.line_segment([start, *fan_end], self.gann_stroke(config, level));
+            let stroke = self.gann_stroke(config, level);
+            match level.line_style.unwrap_or(self.line_style).dash_pattern() {
+                Some((dash, gap)) => {
+                    if let Some(clip) = crate::painting::dashed_line::finite_clip(painter) {
+                        painter.extend(crate::painting::dashed_line::dashed_polyline_shapes(
+                            &[start, *fan_end],
+                            stroke,
+                            dash,
+                            gap,
+                            clip,
+                        ));
+                    }
+                }
+                None => {
+                    painter.line_segment([start, *fan_end], stroke);
+                }
+            }
 
             // Draw label at chart edge with background
             if config.show_labels && fan_end.y >= chart_rect.min.y && fan_end.y <= chart_rect.max.y
@@ -340,7 +375,7 @@ impl Drawing {
 
     /// Render a Gann square or fixed square: the rings between its arcs, its price and time
     /// levels, fan lines and arcs, over five units per side counted from the first anchor, or
-    /// from the opposite corner when reversed, and its range and ratio.
+    /// from the opposite corner when reversed, and its optional range and ratio label.
     pub(crate) fn render_gann_square(&self, painter: &egui::Painter, view: &ChartView) {
         let &[start, second, ..] = self.points.as_slice() else {
             return;
@@ -420,7 +455,12 @@ impl Drawing {
             let mut rings = edges.chunks_exact(angles.len());
             let mut inner = rings.next().unwrap_or_default();
             for (outer, arc) in rings.zip(&arcs[1..]) {
-                super::fibonacci::add_band(&mut mesh, inner, outer, band_color(config, arc));
+                super::fibonacci::add_band(
+                    &mut mesh,
+                    inner,
+                    outer,
+                    band_color(config, arc, config.background_opacity),
+                );
                 inner = outer;
             }
             painter.add(egui::Shape::mesh(mesh));
@@ -460,6 +500,9 @@ impl Drawing {
             }
         }
 
+        if !config.show_labels {
+            return;
+        }
         let [a, b, ..] = self.chart_points.as_slice() else {
             return;
         };
@@ -493,19 +536,32 @@ impl Drawing {
                 ));
             }
             let (text, fill) = boxed_label_colors(config, painter.ctx());
-            super::measurements::boxed_label(
-                painter,
-                egui::Align2::LEFT_TOP,
-                Pos2::new(rect.max.x + DESIGN_TOKENS.rounding.lg, rect.min.y),
-                label,
-                text,
-                fill,
-            );
+            let format = egui::TextFormat {
+                italics: config.label_italic,
+                ..egui::TextFormat::simple(
+                    egui::FontId::proportional(typography::font_size(config.label_size)),
+                    text,
+                )
+            };
+            let galley = painter.layout_job(egui::text::LayoutJob::simple_format(label, format));
+            let pos = Pos2::new(rect.max.x + DESIGN_TOKENS.rounding.lg, rect.min.y);
+            let frame =
+                egui::Align2::LEFT_TOP.anchor_size(pos, galley.size() + egui::vec2(8.0, 2.0));
+            painter.rect_filled(frame, DESIGN_TOKENS.rounding.sm, fill);
+            let min = frame.center() - galley.size() / 2.0;
+            painter.galley(min, galley.clone(), text);
+            if config.label_bold {
+                painter.galley(
+                    min + egui::vec2(super::style::BOLD_OFFSET, 0.0),
+                    galley,
+                    text,
+                );
+            }
         }
     }
 
     /// Render Gann Box: price and time levels counted from the first anchor, or from the second
-    /// when reversed, the bands between them and, when switched on, their value labels and the
+    /// when reversed, independent price and time bands, labels on the enabled sides, and optional
     /// rays from the corners.
     pub(crate) fn render_gann_box(&self, painter: &egui::Painter) {
         let &[p1, p2, ..] = self.points.as_slice() else {
@@ -527,9 +583,17 @@ impl Drawing {
                         Pos2::new(rect.max.x, y(pair[1].value)),
                     ),
                     0.0,
-                    band_color(config, &pair[1]),
+                    band_color(config, &pair[1], config.background_opacity),
                 );
             }
+        }
+        let show_time = config
+            .show_time_background
+            .unwrap_or(config.show_background);
+        let time_opacity = config
+            .time_background_opacity
+            .unwrap_or(config.background_opacity);
+        if show_time && time_opacity > 0 {
             for pair in times.windows(2) {
                 painter.rect_filled(
                     Rect::from_two_pos(
@@ -537,7 +601,7 @@ impl Drawing {
                         Pos2::new(x(pair[1].value), rect.max.y),
                     ),
                     0.0,
-                    band_color(config, &pair[1]),
+                    band_color(config, &pair[1], time_opacity),
                 );
             }
         }
@@ -572,18 +636,38 @@ impl Drawing {
         }
 
         let gap = DESIGN_TOKENS.spacing.xs;
-        let price_labels = prices.iter().map(|level| {
-            let pos = Pos2::new(rect.min.x - gap, y(level.value));
-            (level, pos, egui::Align2::RIGHT_CENTER)
+        let left = prices.iter().filter(|_| config.labels_left).map(|level| {
+            (
+                level,
+                Pos2::new(rect.min.x - gap, y(level.value)),
+                egui::Align2::RIGHT_CENTER,
+            )
         });
-        let time_labels = times.iter().map(|level| {
-            let pos = Pos2::new(x(level.value), rect.max.y + gap);
-            (level, pos, egui::Align2::CENTER_TOP)
+        let bottom = times.iter().filter(|_| config.labels_bottom).map(|level| {
+            (
+                level,
+                Pos2::new(x(level.value), rect.max.y + gap),
+                egui::Align2::CENTER_TOP,
+            )
+        });
+        let right = prices.iter().filter(|_| config.labels_right).map(|level| {
+            (
+                level,
+                Pos2::new(rect.max.x + gap, y(level.value)),
+                egui::Align2::LEFT_CENTER,
+            )
+        });
+        let top = times.iter().filter(|_| config.labels_top).map(|level| {
+            (
+                level,
+                Pos2::new(x(level.value), rect.min.y - gap),
+                egui::Align2::CENTER_BOTTOM,
+            )
         });
         // A label gives way only to labels of its own kind, so the price and time labels at the
-        // bottom left corner both show.
+        // corners both show.
         let mut placed = Vec::<(egui::Align2, Rect)>::new();
-        for (level, pos, align) in price_labels.chain(time_labels) {
+        for (level, pos, align) in left.chain(bottom).chain(right).chain(top) {
             let color = level_color(config, level);
             let galley = painter.layout_no_wrap(
                 level_label(level.value),
@@ -1018,6 +1102,10 @@ mod tests {
         for (tool, [(b0, p0), (b1, p1)], instrument, logarithmic, want) in cases {
             let price_to_y: &dyn Fn(f64) -> f32 = if logarithmic { &log } else { &linear };
             let mut drawing = Drawing::new(0, tool);
+            drawing.gann = Some(GannConfig {
+                show_labels: true,
+                ..GannConfig::for_tool(tool)
+            });
             drawing.chart_points = vec![ChartPoint::new(b0, p0), ChartPoint::new(b1, p1)];
             drawing.update_screen_coords(|b| b * 10.0, price_to_y);
             let units = if tool == DrawingToolType::GannFixed {
@@ -1113,6 +1201,14 @@ mod tests {
         drawing
     }
 
+    fn placed(manager: &mut crate::drawings::DrawingManager, tool: DrawingToolType) -> Drawing {
+        let x_to_bar = |x: f32| x / 10.0;
+        let y_to_price = |y: f32| 300.0 - f64::from(y);
+        manager.start_drawing_with_coords(tool, Pos2::new(0.0, 200.0), x_to_bar, y_to_price);
+        manager.add_point_with_coords(Pos2::new(40.0, 160.0), x_to_bar, y_to_price);
+        manager.drawings.pop().unwrap()
+    }
+
     /// The stroked lines among `shapes`, segments and arcs alike, as their ends, width and colour.
     fn strokes(shapes: &[egui::Shape]) -> Vec<([Pos2; 2], f32, Color32)> {
         shapes
@@ -1131,6 +1227,267 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// A newly placed box labels all four sides, which stay on their sides when reversed.
+    /// y(0.5) = 180 and x(0.25) = 10.
+    /// Price and time bands span (0,160)-(40,200) and (0,160)-(20,200), respectively.
+    #[test]
+    fn gann_box_labels_sides_and_band_fills_follow_their_settings() {
+        const GREY: [u8; 4] = [128, 128, 128, 255];
+        for (sides, show, reverse) in [
+            (None, true, false),
+            (Some([true, false, false, true]), true, false),
+            (Some([false, true, false, false]), true, false),
+            (Some([false, false, true, false]), true, false),
+            (Some([true; 4]), true, false),
+            (Some([true; 4]), false, false),
+            (Some([false; 4]), true, false),
+            (Some([true; 4]), true, true),
+        ] {
+            let mut drawing = placed(&mut Default::default(), DrawingToolType::GannBox);
+            let c = drawing.gann.get_or_insert_with(GannConfig::default);
+            c.price_levels = vec![GannLevel::new(0.5, GREY)];
+            c.time_levels = vec![GannLevel::new(0.25, GREY)];
+            c.show_background = false;
+            c.show_labels = show;
+            c.reverse = reverse;
+            if let Some(sides) = sides {
+                [c.labels_left, c.labels_right, c.labels_top, c.labels_bottom] = sides;
+            }
+            let sides = sides.unwrap_or([true; 4]);
+            let shapes = painted(&drawing);
+            let labels: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::Text(t) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                labels.len(),
+                if show {
+                    sides.into_iter().filter(|s| *s).count()
+                } else {
+                    0
+                }
+            );
+            for (side, enabled) in sides.into_iter().enumerate() {
+                let found = labels.iter().find(|text| {
+                    let bounds = text.visual_bounding_rect();
+                    match side {
+                        0 => bounds.right() <= 0.0,
+                        1 => bounds.left() >= 40.0,
+                        2 => bounds.bottom() <= 160.0,
+                        _ => bounds.top() >= 200.0,
+                    }
+                });
+                assert_eq!(found.is_some(), enabled && show, "side {side}, {sides:?}");
+                if let Some(text) = found {
+                    let bounds = text.visual_bounding_rect();
+                    assert_eq!(text.galley.text(), if side < 2 { "0.5" } else { "0.25" });
+                    let (got, want) = if side < 2 {
+                        (bounds.center().y, 180.0)
+                    } else {
+                        (bounds.center().x, if reverse { 30.0 } else { 10.0 })
+                    };
+                    assert!((got - want).abs() <= 1.0, "{side}: {got} != {want}");
+                }
+            }
+        }
+        for (price, time, opacity, expected) in [
+            (true, None, None, vec![(40.0, 51), (20.0, 51)]),
+            (true, Some(true), Some(102), vec![(40.0, 51), (20.0, 102)]),
+            (false, Some(true), Some(102), vec![(20.0, 102)]),
+            (true, Some(false), None, vec![(40.0, 51)]),
+            (true, None, Some(0), vec![(40.0, 51)]),
+        ] {
+            let drawing = anchored(DrawingToolType::GannBox, |c| {
+                c.price_levels = [0.0, 1.0].map(|v| GannLevel::new(v, GREY)).to_vec();
+                c.time_levels = [0.0, 0.5].map(|v| GannLevel::new(v, GREY)).to_vec();
+                c.show_labels = false;
+                c.show_background = price;
+                c.background_opacity = 51;
+                c.show_time_background = time;
+                c.time_background_opacity = opacity;
+            });
+            let shapes = painted(&drawing);
+            let fills: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::Rect(r) if r.fill.a() > 0 => Some((r.rect, r.fill)),
+                    _ => None,
+                })
+                .collect();
+            let want: Vec<_> = expected
+                .into_iter()
+                .map(|(x, a)| {
+                    (
+                        Rect::from_min_max(Pos2::new(0.0, 160.0), Pos2::new(x, 200.0)),
+                        Color32::from_rgba_unmultiplied(128, 128, 128, a),
+                    )
+                })
+                .collect();
+            assert_eq!(fills, want, "{price}, {time:?}, {opacity:?}");
+        }
+    }
+
+    /// New squares use 12 point labels and restored squares keep 10; each square's label switch,
+    /// typography and paint bounds reach the painted text.
+    #[test]
+    fn gann_square_labels_follow_their_switch_and_text_style() {
+        use DrawingToolType::{GannFixed, GannSquare};
+        type Row = (
+            DrawingToolType,
+            Option<fn(&mut GannConfig)>,
+            usize,
+            f32,
+            bool,
+        );
+        let rows: [Row; 10] = [
+            (GannSquare, Some(|_| {}), 1, 12.0, false),
+            (GannFixed, Some(|_| {}), 0, 12.0, false),
+            (GannSquare, None, 1, 10.0, false),
+            (GannSquare, Some(|c| c.show_labels = false), 0, 12.0, false),
+            (GannFixed, None, 0, 10.0, false),
+            (GannFixed, Some(|c| c.show_labels = true), 1, 12.0, false),
+            (
+                GannSquare,
+                Some(|c| {
+                    c.label_size = 20.0;
+                    c.label_italic = true;
+                }),
+                1,
+                20.0,
+                true,
+            ),
+            (GannSquare, Some(|c| c.label_bold = true), 2, 12.0, false),
+            (GannSquare, Some(|c| c.label_size = 96.0), 1, 96.0, false),
+            (
+                GannFixed,
+                Some(|c| {
+                    c.show_labels = true;
+                    c.label_size = 96.0;
+                }),
+                1,
+                96.0,
+                false,
+            ),
+        ];
+        for (tool, edit, count, size, italic) in rows {
+            let mut drawing = placed(&mut Default::default(), tool);
+            if let Some(edit) = edit {
+                edit(
+                    drawing
+                        .gann
+                        .get_or_insert_with(|| GannConfig::for_tool(tool)),
+                );
+            } else {
+                drawing.gann = None;
+            }
+            let shapes = painted(&drawing);
+            let labels: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::Text(t) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(labels.len(), count, "{tool:?}, {size}");
+            if count == 0 {
+                assert!(
+                    !shapes
+                        .iter()
+                        .any(|s| matches!(s, egui::Shape::Rect(r) if r.fill.a() > 0))
+                );
+            }
+            for label in &labels {
+                assert!(label.galley.text().contains("bars"));
+                let format = &label.galley.job.sections[0].format;
+                assert_eq!(format.font_id.size, size);
+                assert_eq!(format.italics, italic);
+                assert!(
+                    drawing
+                        .paint_bounds()
+                        .unwrap()
+                        .contains_rect(label.visual_bounding_rect()),
+                    "{tool:?}, {size}"
+                );
+            }
+            if count == 2 {
+                assert_eq!(labels[0].galley.text(), labels[1].galley.text());
+                assert!(
+                    (labels[1].pos
+                        - labels[0].pos
+                        - egui::vec2(super::super::style::BOLD_OFFSET, 0.0))
+                    .length()
+                        < 1e-5
+                );
+            }
+        }
+    }
+
+    /// At width 2, an 8-on/4-off dash runs (5.657,-5.657) along 1x1 or (7.155,-3.578)
+    /// along 1x2. The pane clips them at x = 200 and 400, about 24 and 38 dashes.
+    #[test]
+    fn gann_fan_lines_take_their_own_line_style() {
+        use crate::model::LineStyle::{Dashed, Solid};
+        const A: [u8; 4] = [255, 0, 0, 255];
+        const B: [u8; 4] = [0, 0, 255, 255];
+        for (drawing_style, own, full) in [
+            (Solid, Some(Dashed), [false, true]),
+            (Dashed, Some(Solid), [true, false]),
+            (Dashed, None, [false, false]),
+        ] {
+            let mut drawing = anchored(DrawingToolType::GannFan, |c| {
+                c.show_labels = false;
+                c.show_background = false;
+                c.fan_ratios = vec![
+                    GannLevel {
+                        line_style: own,
+                        ..GannLevel::new(1.0, A)
+                    },
+                    GannLevel::new(0.5, B),
+                ];
+            });
+            drawing.line_style = drawing_style;
+            let lines = strokes(&painted(&drawing));
+            for (i, (color, slope, count, first)) in [
+                (A, 1.0, 23..=25, (5.656854, 194.34315)),
+                (B, 0.5, 37..=39, (7.155418, 196.42229)),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let color = Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
+                let segments: Vec<_> = lines.iter().filter(|l| l.2 == color).collect();
+                assert!(segments.iter().all(|l| l.1 == 2.0));
+                if full[i] {
+                    assert_eq!(segments.len(), 1, "{drawing_style:?}, {own:?}, line {i}");
+                    assert_eq!(
+                        segments[0].0,
+                        [
+                            Pos2::new(0.0, 200.0),
+                            Pos2::new(800.0, 200.0 - 800.0 * slope)
+                        ]
+                    );
+                } else {
+                    assert!(
+                        count.contains(&segments.len()),
+                        "{drawing_style:?}, {own:?}, line {i}: {}",
+                        segments.len()
+                    );
+                    assert_eq!(segments[0].0[0], Pos2::new(0.0, 200.0));
+                    assert!(segments[0].0[1].distance(Pos2::new(first.0, first.1)) < 0.001);
+                    assert!(
+                        segments
+                            .iter()
+                            .flat_map(|l| l.0)
+                            .all(|p| (p.y - (200.0 - slope * p.x)).abs() < 0.01)
+                    );
+                }
+            }
+        }
     }
 
     /// One line of each tool at 5 px, its ends by hand: the box's 0.5 price level at
@@ -1208,7 +1565,10 @@ mod tests {
             OneColour,
         }
         type Row = (DrawingToolType, fn(&mut GannConfig), Want);
-        let one = |c: &mut GannConfig| c.one_color = Some([200, 0, 200, 255]);
+        let one = |c: &mut GannConfig| {
+            c.one_color = Some([200, 0, 200, 255]);
+            c.show_labels = true;
+        };
         let rows: [Row; 8] = [
             (
                 DrawingToolType::GannBox,
@@ -1349,8 +1709,8 @@ mod tests {
     /// A saved `gann` object without fields draws what no `gann` draws, for every Gann tool: the
     /// fan's nine lines, and the square's six levels at whole units rather than the box's seven
     /// fractions. An object saved before levels had a width and the tools their label, reverse
-    /// and one colour switches draws its settings as then: labels shown, counted from the first
-    /// anchor, in the level colours at the drawing's width.
+    /// and one colour switches draws its settings as then: labels as the tool restored them,
+    /// counted from the first anchor, in the level colours at the drawing's width.
     #[test]
     fn an_empty_gann_object_draws_the_tool_defaults() {
         use crate::drawings::ChartPoint;
@@ -1386,6 +1746,15 @@ mod tests {
             show_labels: true,
             reverse: false,
             one_color: None,
+            labels_left: true,
+            labels_right: false,
+            labels_top: false,
+            labels_bottom: true,
+            show_time_background: None,
+            time_background_opacity: None,
+            label_size: 10.0,
+            label_bold: false,
+            label_italic: false,
         };
         for tool in [
             DrawingToolType::GannBox,
@@ -1395,7 +1764,17 @@ mod tests {
         ] {
             let mut drawing = Drawing::new(0, tool);
             drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(4.0, 140.0)];
-            for (saved, gann) in [("{}", None), (SAVED, Some(then.clone()))] {
+            for (saved, gann) in [
+                ("null", None),
+                ("{}", None),
+                (
+                    SAVED,
+                    Some(GannConfig {
+                        show_labels: tool != DrawingToolType::GannFixed,
+                        ..then.clone()
+                    }),
+                ),
+            ] {
                 let mut file = serde_json::to_value(&drawing).unwrap();
                 file["gann"] = serde_json::from_str(saved).unwrap();
                 let mut loaded: Drawing = serde_json::from_value(file).unwrap();
@@ -1404,7 +1783,35 @@ mod tests {
                 for d in [&mut drawing, &mut loaded] {
                     d.update_screen_coords(|b| b * 10.0, |p| 300.0 - p as f32);
                 }
+                let config = loaded.gann_config();
+                assert_eq!(
+                    [
+                        config.labels_left,
+                        config.labels_right,
+                        config.labels_top,
+                        config.labels_bottom
+                    ],
+                    [true, false, false, true],
+                );
+                assert_eq!(config.label_size, 10.0);
                 assert_eq!(painted(&loaded), painted(&drawing), "{tool:?} {saved}");
+
+                let template = crate::drawings::DrawingTemplate::from_drawing(&loaded);
+                let mut fresh = placed(&mut Default::default(), tool);
+                template.apply_to(&mut fresh).unwrap();
+                assert_eq!(
+                    painted(&fresh),
+                    painted(&loaded),
+                    "template {tool:?} {saved}"
+                );
+                let mut manager = crate::drawings::DrawingManager::new();
+                manager.tool_defaults.insert(tool, template);
+                let fresh = placed(&mut manager, tool);
+                assert_eq!(
+                    painted(&fresh),
+                    painted(&loaded),
+                    "default {tool:?} {saved}"
+                );
             }
         }
 

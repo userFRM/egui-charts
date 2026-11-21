@@ -1,4 +1,4 @@
-//! Host replay wiring: source history, start selection, checkpoints and layout groups.
+//! Host replay wiring: source history, start selection, checkpoints and layout scope.
 
 use super::{DemoApp, live::LiveFeed};
 use chrono::{DateTime, Utc};
@@ -6,7 +6,8 @@ use egui_charts::data::{MarketEvent, RecordingWriter, ReplayDriver, ReplayEvent}
 use egui_charts::model::{Bar, BarClock, Timeframe};
 use egui_charts::ui::floating_replay_control::ReplayControlAction;
 use egui_charts::ui::replay::{
-    ReplayAction, ReplayController, ReplayStartAction, ReplayTradingChoice, paint_start_line,
+    ReplayAction, ReplayChart, ReplayController, ReplayScope, ReplayStartAction,
+    ReplayToolbarAction, ReplayTradingChoice, paint_start_line,
 };
 use egui_charts::ui::strategy_report::StrategyReportAction;
 use egui_charts::ui::timeframe_toolbar::SessionType;
@@ -23,6 +24,8 @@ const CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 pub(super) enum ReplayMove {
     /// A step back or a jump to the start from the replay bar.
     Control(ReplayControlAction),
+    /// A move back or a finished replay's restart from the standalone toolbar.
+    Toolbar(ReplayToolbarAction),
     /// A new start at this bar of [`DemoApp::replay_start_bars`].
     StartAt(usize),
     /// A new start at this time of the open recording.
@@ -110,7 +113,7 @@ const RECORDING_MAGIC: &[u8; 8] = b"EGCDEMO1";
 pub(super) struct RecordingFiles {
     selected: Option<std::sync::mpsc::Receiver<Result<Option<Vec<u8>>, String>>>,
     parsing: Option<RecordingImport>,
-    opened: bool,
+    pub(super) opened: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -676,7 +679,7 @@ impl DemoApp {
                 .and_then(|()| driver.advance(elapsed))
             {
                 replay.handle_action(ReplayAction::Pause);
-                self.notify(&error.to_string());
+                self.notify(error.to_string());
                 return;
             }
             playback_time = Some(driver.time() + chrono::TimeDelta::nanoseconds(1));
@@ -721,7 +724,7 @@ impl DemoApp {
         self.chart.drawings_mut().set_active_tool(None);
         self.chart.drain_events().for_each(drop);
         if self.replay.is_none() {
-            self.replay_interval = self.state.timeframe;
+            self.replay_interval = self.replayed_interval();
             self.configure_replay_intervals();
         }
         self.replay_control.set_symbol(&self.state.symbol);
@@ -816,6 +819,7 @@ impl DemoApp {
                 self.open_replay_account();
                 match self.replay_move.take() {
                     Some(ReplayMove::Control(action)) => self.handle_replay_control(action),
+                    Some(ReplayMove::Toolbar(action)) => self.handle_replay_toolbar(action),
                     Some(ReplayMove::StartAt(index)) => self.start_replay_at(index),
                     Some(ReplayMove::Recording(time)) => self.seek_recording(time),
                     None => {}
@@ -839,18 +843,31 @@ impl DemoApp {
             .set_update_intervals(self.replay_interval, intervals);
     }
 
-    /// The update intervals the replay bar offers, from coarse to fine: the chart interval, one
-    /// minute and one trade where they apply, and always the active one.
+    /// The update intervals the replay bar offers, from coarse to fine: the interval every
+    /// replayed chart can step by, one day, minute, second and one trade where they fit it, and
+    /// always the active one.
     fn replay_update_intervals(&self) -> Vec<Timeframe> {
         if self.recording_files.opened {
             return vec![self.replay_interval];
         }
-        let mut intervals = vec![self.state.timeframe];
-        if self.state.timeframe.duration_ms() > Timeframe::Min1.duration_ms() {
+        let base = self.replayed_interval();
+        let mut intervals = vec![base];
+        if matches!(
+            base,
+            Timeframe::Week1 | Timeframe::Month1 | Timeframe::Weeks(_) | Timeframe::Months(_)
+        ) {
+            intervals.push(Timeframe::Day1);
+        }
+        if divides(Timeframe::Min1, base) {
             intervals.push(Timeframe::Min1);
         }
+        if (Timeframe::Sec1.duration_ms() + 1..Timeframe::Day1.duration_ms())
+            .contains(&base.duration_ms())
+        {
+            intervals.push(Timeframe::Sec1);
+        }
         // The feed holds its recent trades, so replay can also advance one trade at a time.
-        if !self.state.timeframe.is_trade_based() {
+        if !base.is_trade_based() {
             intervals.push(Timeframe::Ticks(NonZeroU64::MIN));
         }
         if !intervals.contains(&self.replay_interval) {
@@ -865,15 +882,83 @@ impl DemoApp {
         intervals
     }
 
-    /// Carries the replay over a change of the chart interval. An update interval that is finer
-    /// than the new chart interval and divides it stays, with its source rebuilt for the new
-    /// chart; any other is replaced by the chart interval. Without history of the new interval
-    /// at the cursor, replay moves to the first bar of that history and says so.
+    /// The interval every replayed chart can step by: the chart interval, or with All charts the
+    /// common step of the different intervals, as [`common_replay_interval`] finds it.
+    fn replayed_interval(&self) -> Timeframe {
+        let mut interval = self.state.timeframe;
+        for other in self
+            .extra_charts
+            .iter()
+            .filter(|_| self.replay_scope == ReplayScope::AllCharts)
+            .filter_map(|extra| extra.chart.timeframe())
+        {
+            // Equal intervals keep their own step, a week included.
+            if other != interval {
+                interval = common_replay_interval(interval, other);
+            }
+        }
+        interval
+    }
+
+    /// Chooses a common time step for every replayed chart. Calendar charts use daily updates;
+    /// fixed intervals use their greatest common divisor, never an approximate month length.
+    fn automatic_replay_interval(&self) -> Timeframe {
+        let interval = self.replayed_interval();
+        if matches!(
+            interval,
+            Timeframe::Week1 | Timeframe::Month1 | Timeframe::Weeks(_) | Timeframe::Months(_)
+        ) {
+            Timeframe::Day1
+        } else {
+            interval
+        }
+    }
+
+    pub(super) fn set_automatic_replay_interval(&mut self) {
+        if self.recording_files.opened {
+            return;
+        }
+        let interval = self.automatic_replay_interval();
+        self.set_replay_interval(interval);
+        if self.replay_interval == interval {
+            self.replay_control.set_automatic_update_interval(true);
+        }
+    }
+
+    /// Replays the charts of `scope`, keeping a fixed update interval that fits them all or else
+    /// taking their common one.
+    pub(super) fn set_replay_scope(&mut self, scope: ReplayScope) {
+        if self.recording_files.opened {
+            return;
+        }
+        self.replay_scope = scope;
+        let base = self.replayed_interval();
+        let step = self.replay_interval;
+        if self.replay_control.uses_automatic_update_interval() {
+            self.set_automatic_replay_interval();
+        } else if self.replay.is_none() {
+            // The bar is open to pick a start, which begins at a step every chart can use.
+            self.replay_interval = base;
+        } else if step != base && step != Timeframe::Ticks(NonZeroU64::MIN) && !divides(step, base)
+        {
+            self.set_replay_interval(base);
+        }
+        self.push_replay_window_to_chart();
+        self.configure_replay_intervals();
+    }
+
+    /// Carries the replay over a change of the chart interval. An update interval that divides
+    /// the interval every replayed chart can step by stays, with its source rebuilt for the new
+    /// chart; any other is replaced by that interval. Without history of the new interval at the
+    /// cursor, replay moves to the first bar of that history and says so.
     pub(super) fn follow_replay_timeframe(&mut self) {
         let timeframe = self.state.timeframe;
         if self.replay.is_none() {
-            // The bar may be open to pick a start, which begins at the chart interval.
-            self.replay_interval = timeframe;
+            // The bar may be open to pick a start, which begins at a step every chart can use.
+            self.replay_interval = self.replayed_interval();
+        }
+        if self.replay_control.uses_automatic_update_interval() && !self.recording_files.opened {
+            self.replay_interval = self.automatic_replay_interval();
         }
         // A recording and a trade-by-trade replay play their executions on any chart interval.
         let candles = !self.recording_files.opened && self.chart.replay_driver().is_none();
@@ -887,12 +972,19 @@ impl DemoApp {
                 return;
             }
             let symbol = self.state.symbol.clone();
+            let base = self.replayed_interval();
+            // A finer step that fits every replayed chart stays; otherwise their common step.
+            let interval = if divides(self.replay_interval, base) {
+                self.replay_interval
+            } else {
+                base
+            };
             let mut step = None;
-            if divides(self.replay_interval, timeframe) {
-                let (bars, clock) = replay_source(&self.live, self.replay_interval, &self.chart);
+            if divides(interval, timeframe) {
+                let (bars, clock) = replay_source(&self.live, interval, &self.chart);
                 let mut next = ReplayController::new(bars.clone(), Vec::new()).with_symbol(&symbol);
                 if next.seek_cutoff(cutoff, &clock) && self.chart.set_replay_source(bars, clock) {
-                    step = Some((self.replay_interval, next));
+                    step = Some((interval, next));
                 }
             }
             let (interval, mut next) = if let Some(step) = step {
@@ -937,7 +1029,27 @@ impl DemoApp {
         if self.recording_files.opened {
             return;
         }
-        if let Some(session) = self.replay.as_ref().and_then(|replay| replay.session()) {
+        if let Some(mut session) = self.replay.as_ref().and_then(|replay| replay.session()) {
+            // The chart the replay runs on first, then the other charts it covers in slot order.
+            session.charts = vec![ReplayChart::new(
+                self.layout_slot,
+                self.state.symbol.clone(),
+                self.state.timeframe,
+            )];
+            if session.scope == ReplayScope::AllCharts {
+                for (index, extra) in self.extra_charts.iter().enumerate() {
+                    let slot = if index >= self.layout_slot {
+                        index + 1
+                    } else {
+                        index
+                    };
+                    if let Some(interval) = extra.chart.timeframe() {
+                        session
+                            .charts
+                            .push(ReplayChart::new(slot, extra.chart.symbol(), interval));
+                    }
+                }
+            }
             self.replay_session = Some((session, self.replay_interval));
         }
     }
@@ -1024,14 +1136,14 @@ impl DemoApp {
             }
         }
         let source = self.layout_slot;
+        // A recording stays on its own chart, independently of the layout replay choice.
+        let scope = if self.recording_files.opened {
+            ReplayScope::ThisChart
+        } else {
+            self.replay_scope
+        };
         let slots: Vec<_> = (0..self.extra_charts.len() + 1)
-            .filter(|&slot| {
-                if self.recording_files.opened {
-                    slot == source
-                } else {
-                    self.layout.sync_group(slot) == self.layout.sync_group(source)
-                }
-            })
+            .filter(|&slot| scope == ReplayScope::AllCharts || slot == source)
             .collect();
         for (index, extra) in self.extra_charts.iter_mut().enumerate() {
             let slot = if index >= source { index + 1 } else { index };
@@ -1051,25 +1163,18 @@ impl DemoApp {
         let mut charts: Vec<_> = self
             .extra_charts
             .iter_mut()
-            .map(|extra| &mut extra.chart)
+            .map(|extra| &mut *extra.chart)
             .collect();
         charts.insert(source, &mut self.chart);
-        for &slot in &self.replay_slots {
-            if !slots.contains(&slot)
-                && let Some(chart) = charts.get_mut(slot)
-            {
-                chart.set_replay_time(None);
-            }
-        }
-        if self.recording_files.opened {
-            charts[source].set_replay_time(Some(time));
-        } else {
-            self.layout.set_replay_time(&mut charts, source, Some(time));
-        }
+        self.layout
+            .set_replay_time(&mut charts, source, scope, Some(time));
         self.replay_slots = slots;
         if let Some(bar) = replay.visible_bars().last() {
             paper.set_replay_time(Some(bar.time));
             paper.set_price(self.chart.symbol(), bar.close);
+        }
+        if let Some(replay) = &mut self.replay {
+            replay.state.scope = scope;
         }
         self.checkpoint_replay();
     }
@@ -1182,6 +1287,7 @@ impl DemoApp {
         }
         self.replay = Some(next);
         self.replay_interval = interval;
+        self.replay_control.set_automatic_update_interval(false);
         self.push_replay_window_to_chart();
         self.chart.set_replay_source(bars, clock);
         if let Some(driver) = market_driver {
@@ -1277,11 +1383,12 @@ impl DemoApp {
             ReplayStartAction::SelectBar => self.select_replay_start(),
             ReplayStartAction::SelectDate => {
                 let first = self.replay_start_bars().first().map(|bar| bar.time);
-                self.replay_start.open(first);
+                self.replay_start.open_for_chart(&self.chart, first);
             }
             ReplayStartAction::Resume => {
                 if let Some((session, interval)) = self.replay_session.clone() {
                     self.replay_selecting = false;
+                    self.restore_replayed_charts(&session.charts);
                     if session.symbol != self.state.symbol {
                         self.switch_symbol(&session.symbol);
                     }
@@ -1299,6 +1406,7 @@ impl DemoApp {
                         );
                         return;
                     }
+                    self.replay_scope = replay.state.scope;
                     self.start_replay();
                     self.replay = Some(replay);
                     self.replay_interval = interval;
@@ -1324,6 +1432,32 @@ impl DemoApp {
                 }
                 self.start_replay_at(index);
             }
+        }
+    }
+
+    /// Puts each chart a saved replay covered and the layout shows back on its symbol and
+    /// interval, the chart the replay ran on last so that it ends active. Without that chart the
+    /// replay runs on the active one, as for a session saved without charts.
+    fn restore_replayed_charts(&mut self, charts: &[ReplayChart]) {
+        let active = self.layout_slot;
+        let shown = self
+            .layout
+            .mode
+            .chart_count()
+            .min(self.extra_charts.len() + 1);
+        for chart in charts.iter().skip(1).chain(charts.first()) {
+            if chart.slot < shown {
+                self.activate_chart_slot(chart.slot);
+                if chart.symbol != self.state.symbol {
+                    self.switch_symbol(&chart.symbol);
+                }
+                if chart.interval != self.state.timeframe {
+                    self.switch_timeframe(chart.interval);
+                }
+            }
+        }
+        if charts.first().is_none_or(|source| source.slot >= shown) {
+            self.activate_chart_slot(active);
         }
     }
 
@@ -1384,6 +1518,7 @@ impl DemoApp {
         if self.hold_replay_move(ReplayMove::StartAt(index), None) {
             return;
         }
+        let automatic = self.replay_control.uses_automatic_update_interval();
         let interval = self.replay.is_some().then_some(self.replay_interval);
         self.stop_replay();
         self.start_replay();
@@ -1391,8 +1526,13 @@ impl DemoApp {
             replay.handle_action(ReplayAction::JumpToBar(index));
         }
         self.push_replay_window_to_chart();
-        if let Some(interval) = interval {
+        if automatic {
+            self.set_automatic_replay_interval();
+        } else if let Some(interval) = interval {
             self.set_replay_interval(interval);
+        } else if self.replayed_interval() != self.replay_interval {
+            // A new replay steps by an interval every replayed chart can use.
+            self.set_replay_interval(self.replayed_interval());
         }
     }
 
@@ -1465,6 +1605,43 @@ fn replay_source(
     (bars, clock)
 }
 
+/// A fixed common step of two chart intervals, capped at a day for calendar charts.
+fn common_replay_interval(a: Timeframe, b: Timeframe) -> Timeframe {
+    if a.is_trade_based() || b.is_trade_based() {
+        return Timeframe::Ticks(NonZeroU64::MIN);
+    }
+    let normalize = |interval| match interval {
+        Timeframe::Week1 | Timeframe::Month1 | Timeframe::Weeks(_) | Timeframe::Months(_) => {
+            Timeframe::Day1
+        }
+        _ => interval,
+    };
+    let (a, b) = (normalize(a), normalize(b));
+    let mut left = a.duration_ms();
+    let mut right = b.duration_ms();
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    // Keep the source interval's identity when it is already the common step.
+    if left == a.duration_ms() {
+        return a;
+    }
+    if left == b.duration_ms() {
+        return b;
+    }
+    // A fixed duration must not become a calendar week or month of the same nominal length.
+    Timeframe::all()
+        .into_iter()
+        .find(|interval| interval.duration_ms() == left && left < Timeframe::Day1.duration_ms())
+        .unwrap_or_else(|| {
+            if left % 1000 == 0 {
+                Timeframe::Custom(NonZeroU64::new((left / 1000) as u64).unwrap())
+            } else {
+                Timeframe::Ticks(NonZeroU64::MIN)
+            }
+        })
+}
+
 /// Whether replay can step by `update` on a chart of `chart` bars: a finer time interval, of a
 /// day at most, that divides it. Trade-based intervals have no duration and never do.
 fn divides(update: Timeframe, chart: Timeframe) -> bool {
@@ -1494,11 +1671,82 @@ fn source_clock(chart: &egui_charts::Chart, interval: Timeframe) -> BarClock {
     }
 }
 
+pub(super) fn book_snapshot(
+    market: &super::market::Market,
+    orders: Option<&super::orders::Orders>,
+    time: DateTime<Utc>,
+) -> MarketEvent {
+    match orders {
+        Some(orders) => {
+            let (sequence, orders) = orders.snapshot();
+            MarketEvent::OrderSnapshot { sequence, orders }
+        }
+        None => {
+            let (sequence, book) = market.snapshot(time);
+            MarketEvent::DepthSnapshot { sequence, book }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use egui_charts::model::{Bar, OrderSide};
     use egui_charts::ui::floating_replay_control::ReplayControlAction;
+
+    fn replay_test_ui(app: &mut DemoApp, ui: &mut egui::Ui) {
+        app.show_top_toolbar(ui, app.theme.ui.panel_bg);
+        app.reserve_replay_strip(ui, app.theme.ui.panel_bg);
+        app.show_replay_control(ui.ctx());
+        app.show_replay_trading(ui.ctx());
+    }
+
+    fn replay_ui_texts(app: &mut DemoApp, ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            texts = super::super::tests::ui_frame(ctx, egui::vec2(1440.0, 900.0), vec![], |ui| {
+                replay_test_ui(app, ui);
+            });
+        }
+        texts
+    }
+
+    fn click_replay_ui(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
+        let shown = replay_ui_texts(app, ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ui| replay_test_ui(app, ui),
+        );
+        let point = shown
+            .iter()
+            .find(|(text, _)| text == label)
+            .map(|(_, rect)| rect.center())
+            .or_else(|| {
+                output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()?
+                    .nodes
+                    .iter()
+                    .find_map(|(_, node)| {
+                        if node.label() != Some(label) {
+                            return None;
+                        }
+                        let rect = node.bounds()?;
+                        Some(egui::pos2(
+                            (rect.x0 + rect.x1) as f32 / 2.0,
+                            (rect.y0 + rect.y1) as f32 / 2.0,
+                        ))
+                    })
+            })
+            .unwrap_or_else(|| panic!("missing replay control: {label}"));
+        output.drop_without_applying_deltas();
+        super::super::tests::ui_click(ctx, size, point, |ui| replay_test_ui(app, ui));
+    }
 
     /// Local files must round-trip their price basis and book events, and reject bad input before replacement.
     #[test]
@@ -1886,6 +2134,16 @@ mod tests {
     fn market_order(app: &mut DemoApp, ctx: &egui::Context, symbol: &str, side: OrderSide) {
         app.trading.trade(symbol.to_owned(), side);
         app.trading.poll(ctx, &mut app.toasts);
+    }
+
+    /// The symbol of the chart in `slot`, the active one included.
+    fn symbol_at(app: &DemoApp, slot: usize) -> String {
+        let chart = match slot.cmp(&app.layout_slot) {
+            std::cmp::Ordering::Equal => &app.chart,
+            std::cmp::Ordering::Less => &app.extra_charts[slot].chart,
+            std::cmp::Ordering::Greater => &app.extra_charts[slot - 1].chart,
+        };
+        chart.symbol().to_owned()
     }
 
     fn cursor(app: &DemoApp) -> usize {
@@ -2321,7 +2579,10 @@ mod tests {
 
         app.switch_timeframe(Timeframe::Min1);
         assert_eq!(app.replay_interval, Timeframe::Min1);
-        assert_eq!(app.replay_update_intervals(), [Timeframe::Min1, trade]);
+        assert_eq!(
+            app.replay_update_intervals(),
+            [Timeframe::Min1, Timeframe::Sec1, trade]
+        );
         assert_eq!(app.chart.replay_time(), Some(cutoff), "the cursor stays");
         let shown = app.chart.bars(SeriesId::MAIN).len();
         assert!(shown > 1);
@@ -2350,6 +2611,495 @@ mod tests {
         assert_eq!(stepped.time, forming.time);
         assert_eq!(stepped.volume, forming.volume + hours[at + 1].volume);
         assert_eq!(stepped.close, hours[at + 1].close);
+    }
+
+    #[test]
+    fn replay_scope_menu_controls_the_layout_and_saved_session() {
+        use super::super::tests::{settle, ui_click};
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        // Every chart of the layout replays at one hour.
+        app.switch_timeframe(Timeframe::Hour1);
+        settle(&mut app, &ctx);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::Four);
+        settle(&mut app, &ctx);
+        app.activate_chart_slot(1);
+        app.layout.set_sync_group(2, Some("Other".into()));
+        app.layout.set_sync_group(3, Some("Other".into()));
+        let size = egui::vec2(1440.0, 900.0);
+        let texts = |app: &mut DemoApp| replay_ui_texts(app, &ctx);
+        let click = |app: &mut DemoApp, label: &str| click_replay_ui(app, &ctx, label);
+        let assert_scope = |app: &DemoApp, scope| {
+            assert!(app.chart.replay_time().is_some());
+            let expected = if scope == ReplayScope::AllCharts {
+                vec![0, 1, 2, 3]
+            } else {
+                vec![app.layout_slot]
+            };
+            assert_eq!(app.replay_slots, expected);
+            for extra in &app.extra_charts {
+                assert_eq!(
+                    extra.chart.replay_time(),
+                    (scope == ReplayScope::AllCharts).then(|| app.chart.replay_time().unwrap())
+                );
+            }
+            assert_eq!(app.replay.as_ref().unwrap().state.scope, scope);
+            assert_eq!(app.replay_session.as_ref().unwrap().0.scope, scope);
+        };
+        app.toggle_replay();
+        click(&mut app, "Replay start");
+        click(&mut app, "This chart");
+        ui_click(&ctx, size, egui::pos2(1400.0, 400.0), |ui| {
+            replay_test_ui(&mut app, ui)
+        });
+        let start = app.chart.bars(SeriesId::MAIN)[10].time;
+        app.handle_replay_bar_click(&ctx, start);
+        assert_scope(&app, ReplayScope::ThisChart);
+
+        for scope in [ReplayScope::AllCharts, ReplayScope::ThisChart] {
+            click(&mut app, "Replay start");
+            click(
+                &mut app,
+                if scope == ReplayScope::AllCharts {
+                    "All charts"
+                } else {
+                    "This chart"
+                },
+            );
+            assert_scope(&app, scope);
+            // A new start and replacement source controllers keep the menu's choice.
+            click(&mut app, "First available bar");
+            assert_scope(&app, scope);
+            app.set_replay_interval(app.state.timeframe);
+            assert_scope(&app, scope);
+            let cutoff = app.chart.replay_time();
+            app.stop_replay();
+            // After the session the source chart moves to one day, slot 2 to another symbol, and
+            // slot 3 becomes active.
+            let replayed = symbol_at(&app, 2);
+            let other = if replayed == "STOCKB" {
+                "STOCKC"
+            } else {
+                "STOCKB"
+            };
+            app.switch_timeframe(Timeframe::Day1);
+            app.activate_chart_slot(2);
+            app.switch_symbol(other);
+            app.activate_chart_slot(3);
+            app.toggle_replay();
+            click(&mut app, "Replay start");
+            // Choose the opposite scope before Resume to prove it adopts the saved one.
+            click(
+                &mut app,
+                if scope == ReplayScope::AllCharts {
+                    "This chart"
+                } else {
+                    "All charts"
+                },
+            );
+            click(&mut app, "Resume saved session");
+            assert_eq!(
+                (app.layout_slot, app.state.timeframe),
+                (1, Timeframe::Hour1)
+            );
+            // All charts puts slot 2 back on its replayed symbol; This chart leaves it.
+            let expected = if scope == ReplayScope::AllCharts {
+                replayed.as_str()
+            } else {
+                other
+            };
+            assert_eq!(symbol_at(&app, 2), expected);
+            assert_scope(&app, scope);
+            assert_eq!(app.chart.replay_time(), cutoff);
+        }
+
+        for recording in [true, false] {
+            app.recording_files.opened = recording;
+            if !recording {
+                app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::Single);
+            }
+            click(&mut app, "Replay start");
+            let shown = texts(&mut app);
+            assert!(
+                !shown.iter().any(|(text, _)| matches!(
+                    text.as_str(),
+                    "CHARTS" | "This chart" | "All charts"
+                ))
+            );
+            ui_click(&ctx, size, egui::pos2(1400.0, 400.0), |ui| {
+                replay_test_ui(&mut app, ui)
+            });
+        }
+    }
+
+    #[test]
+    fn replay_toolbar_menu_drives_the_layout() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        app.switch_timeframe(Timeframe::Min1);
+        super::super::tests::settle(&mut app, &ctx);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::Four);
+        super::super::tests::settle(&mut app, &ctx);
+        app.connect_paper();
+        app.trading.display.instant_orders = true;
+        app.start_replay_at(10);
+        let click = |app: &mut DemoApp, label: &str| click_replay_ui(app, &ctx, label);
+        click(&mut app, "Menu");
+        click(&mut app, "Replay toolbar");
+        // Close the host menu before using the docked toolbar.
+        super::super::tests::ui_click(
+            &ctx,
+            egui::vec2(1440.0, 900.0),
+            egui::pos2(1400.0, 400.0),
+            |ui| replay_test_ui(&mut app, ui),
+        );
+        let before = app.chart.replay_time().unwrap();
+        let at = app.replay.as_ref().unwrap().state.curr_bar;
+        click(&mut app, "Step forward");
+        assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, at + 1);
+        assert_eq!(
+            app.chart.replay_time(),
+            Some(before + chrono::TimeDelta::minutes(1))
+        );
+        assert!(
+            app.extra_charts
+                .iter()
+                .all(|extra| extra.chart.replay_time() == app.chart.replay_time())
+        );
+        // Both controls show 1x; the toolbar's speed selector is above the floating bar.
+        click(&mut app, "1x");
+        click(&mut app, "50x");
+        assert_eq!(app.replay.as_ref().unwrap().state.speed.multiplier(), 50.0);
+        assert_eq!(
+            replay_ui_texts(&mut app, &ctx)
+                .iter()
+                .filter(|(text, _)| text == "50x")
+                .count(),
+            2
+        );
+        // Backward toolbar actions use the same account safeguard as the replay bar.
+        let symbol = app.state.symbol.clone();
+        for _ in 0..2 {
+            market_order(&mut app, &ctx, &symbol, OrderSide::Buy);
+        }
+        assert!(app.replay_paper.as_ref().unwrap().last_change().is_some());
+        let cutoff = app.chart.replay_time();
+        click(&mut app, "Step backward");
+        assert_eq!(app.chart.replay_time(), cutoff);
+        assert!(app.replay_prompt.is_open);
+        click(&mut app, "Trade from here");
+        assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, at);
+        assert_eq!(app.chart.replay_time(), Some(before));
+        click(&mut app, "Stop");
+        assert!(app.replay.is_none());
+        assert!(app.replay_slots.is_empty());
+        assert!(app.chart.replay_time().is_none());
+        assert!(
+            app.extra_charts
+                .iter()
+                .all(|extra| extra.chart.replay_time().is_none())
+        );
+        assert!(
+            !replay_ui_texts(&mut app, &ctx)
+                .iter()
+                .any(|(text, _)| text == "50x")
+        );
+    }
+
+    /// The bar offers daily and second updates where supported, with Automatic on every time
+    /// chart. A daily update grows a weekly bar from completed daily bars only.
+    #[test]
+    fn replay_update_choices_and_weekly_daily_steps() {
+        use super::super::tests::{ui_click, ui_frame};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        super::super::tests::settle(&mut app, &ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        let frame = |app: &mut DemoApp, events| {
+            ui_frame(&ctx, size, events, |ui| app.show_replay_control(ui.ctx()))
+        };
+        let texts = |app: &mut DemoApp| {
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = frame(app, vec![]);
+            }
+            texts
+        };
+        let click = |app: &mut DemoApp, label: &str| {
+            let point = texts(app)
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap_or_else(|| panic!("missing replay control: {label}"))
+                .1
+                .center();
+            ui_click(&ctx, size, point, |ui| app.show_replay_control(ui.ctx()));
+        };
+        let key = |pressed, key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut offered = Vec::new();
+        for timeframe in [
+            Timeframe::Min1,
+            Timeframe::Hour1,
+            Timeframe::Day1,
+            Timeframe::Week1,
+            Timeframe::Month1,
+        ] {
+            app.stop_replay();
+            app.switch_timeframe(timeframe);
+            super::super::tests::settle(&mut app, &ctx);
+            app.start_replay_at(10);
+            click(&mut app, &format!("{timeframe} updates"));
+            let shown = texts(&mut app);
+            let has = |label| shown.iter().any(|(text, _)| text == label);
+            offered.push((has("Automatic"), has("1D updates"), has("1s updates")));
+            frame(
+                &mut app,
+                vec![key(true, egui::Key::Escape), key(false, egui::Key::Escape)],
+            );
+        }
+        assert_eq!(
+            offered,
+            [
+                (true, false, true),
+                (true, false, true),
+                (true, true, false),
+                (true, true, false),
+                (true, true, false)
+            ]
+        );
+
+        app.stop_replay();
+        app.switch_timeframe(Timeframe::Week1);
+        super::super::tests::settle(&mut app, &ctx);
+        app.start_replay_at(2);
+        assert_eq!(
+            app.replay_session.as_ref().unwrap().0.scope,
+            ReplayScope::AllCharts
+        );
+        let days = replay_source(&app.live, Timeframe::Day1, &app.chart).0;
+        click(&mut app, "1W updates");
+        click(&mut app, "1D updates");
+        assert_eq!(app.replay_interval, Timeframe::Day1);
+        let step = |app: &mut DemoApp| {
+            // Return focus from the selector to the chart before its transport shortcut.
+            if let Some(id) = ctx.memory(|memory| memory.focused()) {
+                ctx.memory_mut(|memory| memory.surrender_focus(id));
+            }
+            frame(
+                app,
+                vec![
+                    key(true, egui::Key::ArrowRight),
+                    key(false, egui::Key::ArrowRight),
+                ],
+            );
+        };
+        step(&mut app);
+        let first = app.replay.as_ref().unwrap().state.curr_bar;
+        step(&mut app);
+        assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, first + 1);
+        let shown = app.chart.bars(SeriesId::MAIN).last().unwrap();
+        let (a, b) = (&days[first], &days[first + 1]);
+        assert_eq!(
+            (shown.open, shown.high, shown.low, shown.close, shown.volume),
+            (
+                a.open,
+                a.high.max(b.high),
+                a.low.min(b.low),
+                b.close,
+                a.volume + b.volume
+            )
+        );
+
+        click(&mut app, "1D updates");
+        click(&mut app, "Automatic");
+        assert!(app.replay_control.uses_automatic_update_interval());
+        // Automatic follows both changes; a fixed hourly step would have stayed hourly.
+        app.switch_timeframe(Timeframe::Hour1);
+        super::super::tests::settle(&mut app, &ctx);
+        assert_eq!(app.replay_interval, Timeframe::Hour1);
+        app.switch_timeframe(Timeframe::Day1);
+        super::super::tests::settle(&mut app, &ctx);
+        assert_eq!(app.replay_interval, Timeframe::Day1);
+
+        // Recent execution history supplies genuine one-second updates near the live edge.
+        app.stop_replay();
+        app.switch_timeframe(Timeframe::Min1);
+        super::super::tests::settle(&mut app, &ctx);
+        app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - 3);
+        click(&mut app, "Automatic");
+        click(&mut app, "1s updates");
+        assert_eq!(app.replay_interval, Timeframe::Sec1);
+        let before = app.chart.replay_time().unwrap();
+        step(&mut app);
+        assert_eq!(
+            app.chart.replay_time(),
+            Some(before + chrono::TimeDelta::seconds(1))
+        );
+
+        // Hand values: gcd(2,17)=1 minute, gcd(4,6)=2 minutes; calendar periods use a day.
+        for (a, b, expected) in [
+            ("2min", "17min", Timeframe::Min1),
+            ("4min", "6min", "2min".parse().unwrap()),
+            ("1W", "1M", Timeframe::Day1),
+            ("25h", "1h", Timeframe::Hour1),
+            ("25h", "25h", "25h".parse().unwrap()),
+            ("14d", "21d", "7d".parse().unwrap()),
+            ("30d", "30d", "30d".parse().unwrap()),
+            ("100ms", "250ms", Timeframe::Ticks(NonZeroU64::MIN)),
+        ] {
+            assert_eq!(
+                common_replay_interval(a.parse().unwrap(), b.parse().unwrap()),
+                expected
+            );
+        }
+    }
+
+    /// With All charts the update list offers only steps that every replayed chart can use, and
+    /// a new replay, a change of scope and a change of the chart interval keep such a step. One
+    /// step with each offered interval moves a 5-minute chart by at most one of its bars.
+    #[test]
+    fn all_charts_offer_only_steps_every_replayed_chart_can_use() {
+        use super::super::tests::settle;
+        let trade = Timeframe::Ticks(NonZeroU64::MIN);
+        let five = Timeframe::Min5;
+        let minutes = |text: &str| -> Timeframe { text.parse().unwrap() };
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        settle(&mut app, &ctx);
+        assert_eq!(app.replay_scope, ReplayScope::AllCharts);
+        // The active chart in slot 0 shows `active` and the chart in slot 1 `other`.
+        let charts = |app: &mut DemoApp, active, other| {
+            app.stop_replay();
+            app.activate_chart_slot(1);
+            app.switch_timeframe(other);
+            app.activate_chart_slot(0);
+            app.switch_timeframe(active);
+            settle(app, &ctx);
+        };
+        // Hand values: the greatest common divisor of the intervals, one minute for 2 and 17.
+        for (active, other, expected) in [
+            (
+                Timeframe::Day1,
+                five,
+                vec![five, Timeframe::Min1, Timeframe::Sec1, trade],
+            ),
+            (
+                five,
+                Timeframe::Day1,
+                vec![five, Timeframe::Min1, Timeframe::Sec1, trade],
+            ),
+            (
+                minutes("2min"),
+                minutes("17min"),
+                vec![Timeframe::Min1, Timeframe::Sec1, trade],
+            ),
+            (
+                minutes("17min"),
+                minutes("2min"),
+                vec![Timeframe::Min1, Timeframe::Sec1, trade],
+            ),
+        ] {
+            charts(&mut app, active, other);
+            app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - 2);
+            assert_eq!(
+                app.replay_update_intervals(),
+                expected,
+                "{active} beside {other}"
+            );
+            assert_eq!(app.replay_interval, expected[0], "{active} beside {other}");
+        }
+
+        // A daily chart beside a 5-minute one, alone, then with it again, then at 7 minutes.
+        charts(&mut app, Timeframe::Day1, five);
+        app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - 2);
+        let steps = |app: &DemoApp| (app.replay_interval, app.replay_update_intervals());
+        app.handle_replay_control(ReplayControlAction::SetScope(ReplayScope::ThisChart));
+        let alone = steps(&app);
+        app.stop_replay();
+        app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - 2);
+        let restarted = steps(&app);
+        app.handle_replay_control(ReplayControlAction::SetScope(ReplayScope::AllCharts));
+        let together = steps(&app);
+        app.switch_timeframe(minutes("7min"));
+        assert_eq!(
+            [alone, restarted, together, steps(&app)],
+            [
+                (five, vec![Timeframe::Day1, five, Timeframe::Min1, trade]),
+                (
+                    Timeframe::Day1,
+                    vec![Timeframe::Day1, Timeframe::Min1, trade]
+                ),
+                (five, vec![five, Timeframe::Min1, Timeframe::Sec1, trade]),
+                (
+                    Timeframe::Min1,
+                    vec![Timeframe::Min1, Timeframe::Sec1, trade]
+                ),
+            ]
+        );
+
+        // Near the live edge, where the feed holds one-second bars and recorded trades. The daily
+        // chart reloads before the sample advances, as a reload starts a new recording.
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-10-27T12:05:14Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        app.switch_timeframe(Timeframe::Day1);
+        settle(&mut app, &ctx);
+        app.advance_sample_to(app.live.now() + chrono::TimeDelta::seconds(900));
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        app.activate_chart_slot(1);
+        app.switch_timeframe(five);
+        app.activate_chart_slot(0);
+        settle(&mut app, &ctx);
+        app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - 1);
+        assert_eq!(app.replay_interval, five);
+        // The cutoff at 12:05, the close of the 12:00 bar.
+        let clock = source_clock(&app.chart, five);
+        let time = "2026-10-27T12:05:00Z".parse().unwrap();
+        assert!(app.replay.as_mut().unwrap().seek_cutoff(time, &clock));
+        app.push_replay_window_to_chart();
+        let offered = app.replay_update_intervals();
+        assert_eq!(offered, [five, Timeframe::Min1, Timeframe::Sec1, trade]);
+        let shown = |app: &DemoApp| app.extra_charts[0].chart.replay_time().unwrap();
+        for step in offered {
+            app.handle_replay_control(ReplayControlAction::SetUpdateInterval(step));
+            assert_eq!(app.replay_interval, step);
+            let before = shown(&app);
+            app.handle_replay_control(ReplayControlAction::NextBar);
+            let after = shown(&app);
+            assert!(
+                before < after && after - before <= chrono::TimeDelta::minutes(5),
+                "{step} updates moved the 5-minute chart from {before} to {after}"
+            );
+        }
     }
 
     /// A chart interval whose history starts after the replay cursor moves the replay to its
@@ -2471,22 +3221,5 @@ mod tests {
         app.stop_replay();
         assert!(!app.recording_files.opened && app.chart.replay_driver().is_none());
         assert_eq!(app.bars, app.chart.bars(SeriesId::MAIN));
-    }
-}
-
-pub(super) fn book_snapshot(
-    market: &super::market::Market,
-    orders: Option<&super::orders::Orders>,
-    time: DateTime<Utc>,
-) -> MarketEvent {
-    match orders {
-        Some(orders) => {
-            let (sequence, orders) = orders.snapshot();
-            MarketEvent::OrderSnapshot { sequence, orders }
-        }
-        None => {
-            let (sequence, book) = market.snapshot(time);
-            MarketEvent::DepthSnapshot { sequence, book }
-        }
     }
 }

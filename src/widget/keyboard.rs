@@ -1035,6 +1035,7 @@ mod tests {
                 Some(A::OpenDataWindow),
             ),
             (Key::E, alt_shift, None, Some(A::ToggleSession)),
+            (Key::W, Modifiers::ALT, None, Some(A::AddToWatchlist)),
             (
                 Key::ArrowDown,
                 Modifiers::NONE,

@@ -72,8 +72,6 @@ mod targets;
 mod volume_profile;
 pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
 pub use financials::{CompanyFinancials, FinancialPage, FinancialRow};
-#[cfg(feature = "widget")]
-pub(crate) use footprint::FootprintState;
 #[cfg(any(feature = "widget", feature = "studies"))]
 pub use footprint::FootprintView;
 #[cfg(any(feature = "studies", feature = "detectors"))]
@@ -81,6 +79,8 @@ pub(crate) use footprint::meets_threshold;
 #[cfg(any(feature = "studies", feature = "widget"))]
 pub(crate) use footprint::side_delta;
 pub use footprint::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
+#[cfg(feature = "widget")]
+pub(crate) use footprint::{FootprintState, PackedFootprintState};
 pub use footprint_view::{FootprintBarView, FootprintBars, FootprintRows, FootprintSource};
 pub use market::{
     CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
@@ -114,6 +114,8 @@ pub use inbox::{
     aggregate_trades_with_tick_size,
 };
 pub use order_flow::{BarBook, OrderFlowBars, OrderFlowFootprints, OrderFlowInput, OrderFlowKind};
+#[cfg(feature = "widget")]
+pub(crate) use order_flow::{FootprintGuard, PackedFootprintInput};
 #[cfg(all(feature = "widget", feature = "studies"))]
 pub(crate) use order_flow::{PackedTradeRate, RateGuard};
 pub use orders::{
@@ -405,16 +407,17 @@ pub trait Datafeed: MaybeSend + 'static {
         reply.send(Err(FeedError::NotSupported));
     }
 
-    /// Up to `query.limit` stories, newest first, for the news and highlights panels. Answer
-    /// [`FeedError::NotSupported`] (the default) to have the panels say the feed has none.
+    /// Up to `query.limit` stories, newest first, for the news, highlights and symbol details
+    /// panels. Answer [`FeedError::NotSupported`] (the default) to have the news and highlights
+    /// panels say the feed has none.
     fn news(&self, query: NewsQuery, reply: Reply<Vec<NewsStory>>) {
         let _ = query;
         reply.send(Err(FeedError::NotSupported));
     }
 
     /// The events of one calendar that pass `query`'s filters, in time order, for the calendar
-    /// panel. Answer [`FeedError::NotSupported`] (the default) to have the panel say the feed has
-    /// none.
+    /// panel and the symbol details' Upcoming events. Answer [`FeedError::NotSupported`] (the
+    /// default) to have the calendar panel say the feed has none.
     fn calendar(&self, query: CalendarQuery, reply: Reply<Vec<CalendarEvent>>) {
         let _ = query;
         reply.send(Err(FeedError::NotSupported));

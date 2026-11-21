@@ -380,12 +380,7 @@ impl TimeAndSalesPanel {
                             format_price(last.price, self.config.price_decimals),
                             color,
                         ),
-                        (
-                            2,
-                            StudyFormat::Volume
-                                .format(row.size, self.config.size_decimals.map(usize::from)),
-                            color,
-                        ),
+                        (2, size_text(row.size, self.config.size_decimals), color),
                         (3, row.fills.len().to_string(), theme.ui.text_secondary),
                     ]
                     .into_iter()
@@ -443,8 +438,7 @@ impl TimeAndSalesPanel {
                     .filter(|trade| trade.aggressor_order_id == id),
             )
         };
-        let size =
-            |size| StudyFormat::Volume.format(size, self.config.size_decimals.map(usize::from));
+        let size = |size| size_text(size, self.config.size_decimals);
         let total = orders
             .iter()
             .fold(0.0_f64, |size, order| (size + order.size).min(f64::MAX));
@@ -494,6 +488,18 @@ impl TimeAndSalesPanel {
                 "Incomplete: some fills do not name their resting order",
             ));
         }
+    }
+}
+
+/// A size at the size decimals, as the chart writes volumes: K, M and B values keep two
+/// decimals when the size decimals are fewer.
+fn size_text(size: f64, decimals: Option<u8>) -> String {
+    match decimals {
+        Some(decimals) if size.is_finite() => crate::scales::VolumeFormatter {
+            precision: usize::from(decimals).min(12),
+        }
+        .format_with_min_unit_decimals(size, 2),
+        _ => StudyFormat::Volume.format(size, None),
     }
 }
 

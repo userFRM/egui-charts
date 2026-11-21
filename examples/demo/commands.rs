@@ -133,11 +133,13 @@ const ROW_KEYS: &[(&str, KeyboardAction)] = &[
 
 /// The quick search rows. A row whose action has a key shows the first one bound in `shortcuts`,
 /// and each saved indicator template of `templates` (id and name) has a row of its own,
-/// as does each study `factory` lists.
+/// as does each study `factory` lists. Each drawing tool row has a star, filled for the tools
+/// in `favorites`.
 pub(super) fn quick_search_commands(
     shortcuts: &ShortcutMap,
     templates: &[(String, String)],
     factory: &IndicatorFactory,
+    favorites: &[DrawingToolType],
 ) -> Vec<Command> {
     let keyed = |command: Command, action: Option<KeyboardAction>| match action
         .and_then(|action| shortcuts.shortcut(action))
@@ -220,7 +222,8 @@ pub(super) fn quick_search_commands(
                 commands.push(keyed(
                     Command::new(format!("tool:{}", tool.data_name()), tool.as_str())
                         .category("Drawing tools")
-                        .keywords([*category]),
+                        .keywords([*category])
+                        .starred(favorites.contains(&tool)),
                     Some(KeyboardAction::DrawingTool(tool)),
                 ));
             }
@@ -234,6 +237,15 @@ pub(super) fn quick_search_commands(
             .keywords([factory.category(&name).unwrap_or_default()])
     }));
     commands
+}
+
+/// The drawing tool whose quick search id is `tool:<name>`.
+fn search_tool(id: &str) -> Option<DrawingToolType> {
+    let name = id.strip_prefix("tool:")?;
+    DrawingToolType::all()
+        .iter()
+        .copied()
+        .find(|tool| tool.data_name() == name)
 }
 
 impl DemoApp {
@@ -281,12 +293,26 @@ impl DemoApp {
 
     /// Opens quick search with the chart's current key bindings and saved templates.
     pub(super) fn open_quick_search(&mut self) {
+        let recent = self.quick_search.recent().to_vec();
         self.quick_search = CommandPaletteHandler::new(quick_search_commands(
             self.chart.shortcuts(),
             &self.top_toolbar.indicator_templates,
             self.indicator_dialog.factory(),
+            &self.drawing_toolbar.state.favorites,
         ));
+        self.quick_search.set_recent(recent);
         self.quick_search.open();
+    }
+
+    /// Shows quick search and applies its star presses to the drawing favourites.
+    pub(super) fn show_quick_search(&mut self, ctx: &egui::Context) -> Option<String> {
+        let id = self.quick_search.show(ctx);
+        for star in self.quick_search.take_star_toggles() {
+            if let Some(tool) = search_tool(&star) {
+                self.drawing_toolbar.toggle_favorite(tool);
+            }
+        }
+        id
     }
 
     pub(super) fn execute_search_command(&mut self, ctx: &egui::Context, id: &str) {
@@ -314,12 +340,9 @@ impl DemoApp {
             }
             return;
         }
-        if let Some(name) = id.strip_prefix("tool:") {
-            if let Some(tool) = DrawingToolType::all()
-                .iter()
-                .find(|tool| tool.data_name() == name)
-            {
-                self.chart.drawings_mut().set_active_tool(Some(*tool));
+        if id.starts_with("tool:") {
+            if let Some(tool) = search_tool(id) {
+                self.chart.drawings_mut().set_active_tool(Some(tool));
             }
             return;
         }
@@ -337,13 +360,15 @@ impl DemoApp {
             return;
         }
         if let Some(scene) = match id {
-            "smile" => Some(SampleScene::Numeric(
+            "smile" => Some(Box::new(SampleScene::Numeric(
                 super::numeric_scenes::volatility_smile(),
-            )),
-            "yield" => Some(SampleScene::Numeric(super::numeric_scenes::yield_curve())),
-            "primitives" => Some(SampleScene::Extensions(
+            ))),
+            "yield" => Some(Box::new(SampleScene::Numeric(
+                super::numeric_scenes::yield_curve(),
+            ))),
+            "primitives" => Some(Box::new(SampleScene::Extensions(
                 super::primitive_scene::PrimitiveScene::new(),
-            )),
+            ))),
             _ => None,
         } {
             self.sample_scene = Some(scene);
@@ -629,7 +654,7 @@ impl DemoApp {
             self.sample_scene = None;
             self.execute_search_command(ui.ctx(), command);
         }
-        let Some(scene) = &mut self.sample_scene else {
+        let Some(scene) = self.sample_scene.as_deref_mut() else {
             return false;
         };
         let mut search = false;
@@ -658,7 +683,7 @@ impl DemoApp {
         if search {
             self.open_quick_search();
         }
-        if let Some(id) = self.quick_search.show(ui.ctx()) {
+        if let Some(id) = self.show_quick_search(ui.ctx()) {
             self.sample_scene = None;
             self.execute_search_command(ui.ctx(), &id);
         }
@@ -718,21 +743,69 @@ mod tests {
     use super::*;
     use egui::{Event, RawInput};
     use egui_charts::model::ChartType;
-    use egui_charts::widget::{Chart, ChartLayoutMode, ImageExportOptions};
+    use egui_charts::widget::{Chart, ChartLayoutMode};
+
+    fn export_frame(
+        app: &mut DemoApp,
+        ctx: &egui::Context,
+        events: Vec<Event>,
+    ) -> egui::FullOutput {
+        ctx.enable_accesskit();
+        ctx.run_ui(
+            RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.4, 800.4),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                app.show_chart(ui, app.theme.chart.bg);
+                app.show_dialogs(ui.ctx());
+            },
+        )
+    }
+
+    fn set_export_field(
+        app: &mut DemoApp,
+        ctx: &egui::Context,
+        role: egui::accesskit::Role,
+        index: usize,
+        value: egui::accesskit::ActionData,
+    ) {
+        let output = export_frame(app, ctx, vec![]);
+        let target_node = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.role() == role)
+            .nth(index)
+            .unwrap()
+            .0;
+        output.drop_without_applying_deltas();
+        export_frame(
+            app,
+            ctx,
+            vec![Event::AccessKitActionRequest(
+                egui::accesskit::ActionRequest {
+                    action: egui::accesskit::Action::SetValue,
+                    target_tree: egui::accesskit::TreeId::ROOT,
+                    target_node,
+                    data: Some(value),
+                },
+            )],
+        )
+        .drop_without_applying_deltas();
+    }
 
     fn choose_scope(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
         let mut point = None;
         for _ in 0..3 {
-            let output = ctx.run_ui(
-                RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1440.0, 900.0),
-                    )),
-                    ..Default::default()
-                },
-                |ui| app.show_dialogs(ui.ctx()),
-            );
+            let output = export_frame(app, ctx, vec![]);
             point = output.shapes.iter().find_map(|shape| match &shape.shape {
                 egui::Shape::Text(text) if text.galley.text() == label => {
                     Some(text.pos + text.galley.size() / 2.0)
@@ -742,26 +815,24 @@ mod tests {
             output.drop_without_applying_deltas();
         }
         let point = point.expect("image scope must be selectable in the export dialog");
-        ctx.run_ui(
-            RawInput {
-                events: vec![
-                    Event::PointerMoved(point),
-                    Event::PointerButton {
-                        pos: point,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                    Event::PointerButton {
-                        pos: point,
-                        button: egui::PointerButton::Primary,
-                        pressed: false,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-                ..Default::default()
-            },
-            |ui| app.show_dialogs(ui.ctx()),
+        export_frame(
+            app,
+            ctx,
+            vec![
+                Event::PointerMoved(point),
+                Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
         )
         .drop_without_applying_deltas();
     }
@@ -785,7 +856,7 @@ mod tests {
                 let mut charts: Vec<_> = app
                     .extra_charts
                     .iter_mut()
-                    .map(|slot| &mut slot.chart)
+                    .map(|slot| &mut *slot.chart)
                     .collect();
                 charts.insert(app.layout_slot, &mut app.chart);
                 for (slot, chart) in charts.into_iter().enumerate().take(count) {
@@ -808,60 +879,296 @@ mod tests {
                 }
             }
             app.execute_search_command(&ctx, "export");
-            choose_scope(&mut app, &ctx, "Visible arrangement");
+            choose_scope(&mut app, &ctx, "Whole layout");
+            choose_scope(&mut app, &ctx, "Current size");
+            choose_scope(&mut app, &ctx, "Clipboard");
+            choose_scope(&mut app, &ctx, "Export");
+            let (_, options, ..) = app.screenshot_requested.as_ref().unwrap();
+            assert_eq!(options.size, [1280, 800]);
+            let output = ctx.run_ui(Default::default(), |ui| app.handle_screenshot(ui.ctx()));
+            let image = output
+                .platform_output
+                .commands
+                .iter()
+                .find_map(|command| {
+                    if let egui::OutputCommand::CopyImage(image) = command {
+                        Some(image)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            for (slot, color) in colors.iter().enumerate().take(count) {
+                let (column, row) = (slot % 2, slot / 2);
+                assert_eq!(
+                    &image.pixels[(150 + row * 400) * image.width() + 5 + column * 640]
+                        .to_srgba_unmultiplied()[..3],
+                    color
+                );
+            }
+            output.drop_without_applying_deltas();
+            choose_scope(&mut app, &ctx, "This chart");
+            choose_scope(&mut app, &ctx, "Current size");
+            choose_scope(&mut app, &ctx, "Export");
+            let (_, options, ..) = app.screenshot_requested.take().unwrap();
+            // Stacked slots leave a two-point gap: (800.4 - 2) / 2 rounds to 399.
+            assert_eq!(options.size, [640, if count == 2 { 800 } else { 399 }]);
+            app.export_dialog.mark_success();
+            choose_scope(&mut app, &ctx, "Whole layout");
+            choose_scope(&mut app, &ctx, "PNG");
+            for (index, side) in [640.0, 400.0].into_iter().enumerate() {
+                set_export_field(
+                    &mut app,
+                    &ctx,
+                    egui::accesskit::Role::SpinButton,
+                    index,
+                    egui::accesskit::ActionData::NumericValue(side),
+                );
+            }
+            choose_scope(&mut app, &ctx, "Export timestamp");
             let before = app.chart.get_time_scale_state();
             for transparent in [false, true] {
-                let mut options = ImageExportOptions::default();
-                options.size = [640, 400];
-                options.include_timestamp = false;
-                options.transparent_background = transparent;
-                let svg_path = std::env::temp_dir()
-                    .join(format!("demo-arrangement-{count}-{transparent}.svg"));
-                app.export_svg(&ctx, &options, Some(svg_path.clone()));
-                let svg = std::fs::read_to_string(&svg_path).unwrap();
-                for slot in 1..=count {
-                    assert!(svg.contains(&format!("SLOT{slot}")), "missing slot {slot}");
-                }
-                for chrome in ["Export chart", "Image scope", "Samples"] {
-                    assert!(!svg.contains(chrome));
-                }
-                let png_path = std::env::temp_dir()
-                    .join(format!("demo-arrangement-{count}-{transparent}.png"));
-                app.run_export(
-                    &ctx,
-                    egui_charts::ui::export::ExportConfig {
-                        format: super::super::ExportFormat::Png,
-                        image: options,
-                    },
-                    Some(png_path.clone()),
-                );
-                app.handle_screenshot(&ctx);
-                let image = image::open(&png_path).unwrap().into_rgba8();
-                assert_eq!(image.dimensions(), (640, 400));
-                for (slot, color) in colors.iter().enumerate().take(count) {
-                    let (column, row) = (slot % 2, slot / 2);
-                    let pixel = image
-                        .get_pixel(5 + column as u32 * 320, 150 + row as u32 * 200)
-                        .0;
-                    if transparent {
-                        assert_eq!(pixel[3], 0);
+                for format in ["SVG", "PNG"] {
+                    choose_scope(&mut app, &ctx, format);
+                    let path = std::env::temp_dir().join(format!(
+                        "demo-arrangement-{count}-{active}-{transparent}.{format}"
+                    ));
+                    set_export_field(
+                        &mut app,
+                        &ctx,
+                        egui::accesskit::Role::TextInput,
+                        0,
+                        egui::accesskit::ActionData::Value(
+                            path.to_string_lossy().into_owned().into(),
+                        ),
+                    );
+                    choose_scope(&mut app, &ctx, "Export");
+                    app.handle_screenshot(&ctx);
+                    if format == "SVG" {
+                        let svg = std::fs::read_to_string(&path).unwrap();
+                        for slot in 1..=count {
+                            assert!(svg.contains(&format!("SLOT{slot}")), "missing slot {slot}");
+                        }
+                        for chrome in ["Export chart", "Scope", "Samples"] {
+                            assert!(!svg.contains(chrome));
+                        }
                     } else {
-                        assert_eq!(&pixel[..3], color);
+                        let image = image::open(&path).unwrap().into_rgba8();
+                        assert_eq!(image.dimensions(), (640, 400));
+                        for (slot, color) in colors.iter().enumerate().take(count) {
+                            let (column, row) = (slot % 2, slot / 2);
+                            let pixel = image
+                                .get_pixel(5 + column as u32 * 320, 150 + row as u32 * 200)
+                                .0;
+                            if transparent {
+                                assert_eq!(pixel[3], 0);
+                            } else {
+                                assert_eq!(&pixel[..3], color);
+                            }
+                        }
                     }
+                    std::fs::remove_file(path).unwrap();
                 }
-                std::fs::remove_file(svg_path).unwrap();
-                std::fs::remove_file(png_path).unwrap();
+                if !transparent {
+                    choose_scope(&mut app, &ctx, "Transparent background");
+                }
             }
             assert_eq!(app.chart.get_time_scale_state(), before);
-            choose_scope(&mut app, &ctx, "Active chart");
-            let path = std::env::temp_dir().join(format!("demo-active-{count}.svg"));
-            app.export_svg(&ctx, &ImageExportOptions::default(), Some(path.clone()));
+            choose_scope(&mut app, &ctx, "This chart");
+            choose_scope(&mut app, &ctx, "SVG");
+            let path = std::env::temp_dir().join(format!("demo-active-{count}-{active}.svg"));
+            set_export_field(
+                &mut app,
+                &ctx,
+                egui::accesskit::Role::TextInput,
+                0,
+                egui::accesskit::ActionData::Value(path.to_string_lossy().into_owned().into()),
+            );
+            choose_scope(&mut app, &ctx, "Export");
             let svg = std::fs::read_to_string(&path).unwrap();
             assert!(svg.contains(&format!("SLOT{}", active + 1)));
             for slot in (1..=count).filter(|slot| *slot != active + 1) {
                 assert!(!svg.contains(&format!("SLOT{slot}")));
             }
             std::fs::remove_file(path).unwrap();
+
+            use egui_charts::chart::primitives::{Primitive, PrimitivePass, PrimitiveView};
+            struct Overlay;
+            const OVERLAY: egui::Color32 = egui::Color32::from_rgb(217, 31, 173);
+            impl Primitive for Overlay {
+                fn draw(
+                    &self,
+                    painter: &egui::Painter,
+                    view: &PrimitiveView<'_>,
+                    pass: PrimitivePass,
+                ) {
+                    if pass == PrimitivePass::Above {
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(
+                                view.mapping.rect.center(),
+                                egui::vec2(20.0, 20.0),
+                            ),
+                            0.0,
+                            OVERLAY,
+                        );
+                    }
+                }
+            }
+            app.chart
+                .attach_primitive(egui_charts::widget::SeriesId::MAIN, Overlay)
+                .unwrap();
+            choose_scope(&mut app, &ctx, "Clipboard");
+            choose_scope(&mut app, &ctx, "2×");
+            for overlays in [true, false] {
+                if !overlays {
+                    choose_scope(&mut app, &ctx, "Overlays");
+                }
+                choose_scope(&mut app, &ctx, "Export");
+                let output = ctx.run_ui(Default::default(), |ui| app.handle_screenshot(ui.ctx()));
+                let image = output
+                    .platform_output
+                    .commands
+                    .iter()
+                    .find_map(|command| {
+                        if let egui::OutputCommand::CopyImage(image) = command {
+                            Some(image)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap();
+                assert_eq!(image.size, [1280, 800]);
+                assert_eq!(image.pixels.contains(&OVERLAY), overlays);
+                output.drop_without_applying_deltas();
+            }
+            app.financials = Some((
+                app.chart.symbol().to_owned(),
+                egui_charts::ui::financials::FinancialsPanel::new("Financials", None),
+            ));
+            let output = export_frame(&mut app, &ctx, vec![]);
+            let offered = ["Whole layout", "Current size"].map(|label| {
+                (label, output.shapes.iter().any(|shape|
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)))
+            });
+            output.drop_without_applying_deltas();
+            for (label, visible) in offered {
+                assert!(
+                    !visible,
+                    "{label} must not reuse the hidden chart's geometry"
+                );
+            }
+            app.financials = None;
+            app.ensure_chart_slots(ChartLayoutMode::Single);
+            let output = export_frame(&mut app, &ctx, vec![]);
+            assert!(!output.shapes.iter().any(|shape|
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Whole layout")));
+            output.drop_without_applying_deltas();
+            choose_scope(&mut app, &ctx, "Current size");
+            choose_scope(&mut app, &ctx, "Export");
+            let (_, options, ..) = app.screenshot_requested.take().unwrap();
+            assert_eq!(options.size, [1280, 800]);
+        }
+    }
+
+    #[test]
+    fn toolbar_snapshots_capture_the_visible_layout_for_every_target() {
+        use super::super::{ScreenshotTarget, TopToolbarAction};
+        for mode in [ChartLayoutMode::TwoHorizontal, ChartLayoutMode::Single] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            app.ensure_chart_slots(mode);
+            let colors = [[30, 50, 70], [60, 80, 100]];
+            let mut charts: Vec<_> = app
+                .extra_charts
+                .iter_mut()
+                .map(|slot| &mut slot.chart)
+                .collect();
+            charts.insert(app.layout_slot, &mut app.chart);
+            for (slot, chart) in charts.into_iter().enumerate() {
+                let mut theme = app.theme.clone();
+                let [r, g, b] = colors[slot];
+                theme.chart.bg = egui::Color32::from_rgb(r, g, b);
+                chart.set_theme_override(Some(theme));
+                chart.config_mut().show_grid = false;
+                chart.config_mut().show_volume = false;
+            }
+            export_frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+            let mut expected = None;
+            for action in [
+                Some(TopToolbarAction::TakeScreenshot),
+                Some(TopToolbarAction::CopyImage),
+                Some(TopToolbarAction::OpenImage),
+                None,
+            ] {
+                if let Some(action) = action {
+                    app.handle_top_toolbar(&ctx, action);
+                } else {
+                    app.handle_shortcut_action(&ctx, egui_charts::config::KeyboardAction::Snapshot);
+                }
+                let path = std::env::temp_dir().join(format!("demo-snapshot-{mode:?}.png"));
+                let (target, options, ..) = app.screenshot_requested.as_mut().unwrap();
+                if matches!(target, ScreenshotTarget::File(_)) {
+                    *target = ScreenshotTarget::File(Some(path.clone()));
+                }
+                options.size = [640, 400];
+                options.include_timestamp = false;
+                let options = options.clone();
+                let output = ctx.run_ui(Default::default(), |ui| app.handle_screenshot(ui.ctx()));
+                let image = if path.exists() {
+                    let png = std::fs::read(&path).unwrap();
+                    std::fs::remove_file(&path).unwrap();
+                    if mode == ChartLayoutMode::Single {
+                        assert_eq!(
+                            png,
+                            app.trading.export_png(&app.chart, &ctx, &options).unwrap()
+                        );
+                    }
+                    image::load_from_memory(&png).unwrap().into_rgba8()
+                } else {
+                    output
+                        .platform_output
+                        .commands
+                        .iter()
+                        .find_map(|command| match command {
+                            egui::OutputCommand::CopyImage(image) => Some(
+                                image::RgbaImage::from_raw(
+                                    image.width() as u32,
+                                    image.height() as u32,
+                                    image
+                                        .pixels
+                                        .iter()
+                                        .flat_map(egui::Color32::to_srgba_unmultiplied)
+                                        .collect(),
+                                )
+                                .unwrap(),
+                            ),
+                            egui::OutputCommand::OpenUrl(url) => {
+                                let image = image::open(&url.url).unwrap().into_rgba8();
+                                std::fs::remove_file(&url.url).unwrap();
+                                Some(image)
+                            }
+                            _ => None,
+                        })
+                        .expect("snapshot must reach its target")
+                };
+                assert_eq!(image.dimensions(), (640, 400));
+                assert_eq!(&image.get_pixel(5, 150).0[..3], &colors[0]);
+                assert_eq!(
+                    &image.get_pixel(325, 150).0[..3],
+                    &colors[usize::from(mode == ChartLayoutMode::TwoHorizontal)]
+                );
+                if mode == ChartLayoutMode::Single {
+                    let png = app.trading.export_png(&app.chart, &ctx, &options).unwrap();
+                    assert_eq!(image, image::load_from_memory(&png).unwrap().into_rgba8());
+                }
+                if let Some(expected) = &expected {
+                    assert_eq!(&image, expected);
+                } else {
+                    expected = Some(image.clone());
+                }
+                output.drop_without_applying_deltas();
+            }
         }
     }
 
@@ -932,6 +1239,66 @@ mod tests {
             )
             .drop_without_applying_deltas();
         }
+    }
+
+    #[test]
+    fn quick_search_stars_drawing_tools_and_lists_recent_entries() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        assert!(!app.drawing_toolbar.is_favorite(&DrawingToolType::TrendLine));
+        app.open_quick_search();
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![egui::Event::Text("Trend Line".into())])
+            .drop_without_applying_deltas();
+        click(&mut app, &ctx, "Favourite Trend Line");
+        assert!(app.drawing_toolbar.is_favorite(&DrawingToolType::TrendLine));
+        assert!(app.quick_search.is_open());
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(
+            app.chart.drawings().active_tool(),
+            Some(DrawingToolType::TrendLine)
+        );
+        assert!(!app.quick_search.is_open());
+        app.open_quick_search();
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        let output = frame(&mut app, &ctx, vec![]);
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Recent")));
+        let nodes = &output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes;
+        assert!(
+            nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Trend Line")
+                    && node.role() == egui::accesskit::Role::Button)
+        );
+        let star = &nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some("Favourite Trend Line"))
+            .unwrap()
+            .1;
+        assert_eq!(star.toggled(), Some(egui::accesskit::Toggled::True));
+        output.drop_without_applying_deltas();
+        click(&mut app, &ctx, "Favourite Trend Line");
+        assert!(!app.drawing_toolbar.is_favorite(&DrawingToolType::TrendLine));
+        assert!(app.quick_search.is_open());
     }
 
     #[test]
@@ -1307,7 +1674,7 @@ mod tests {
         shortcuts
             .bindings
             .retain(|(_, action)| *action != KeyboardAction::Snapshot);
-        let commands = quick_search_commands(&shortcuts, &[], &IndicatorFactory::new());
+        let commands = quick_search_commands(&shortcuts, &[], &IndicatorFactory::new(), &[]);
         let shortcut = |id: &str| commands.iter().find(|row| row.id == id).unwrap().shortcut;
         assert_eq!(shortcut("undo"), Some(edited));
         assert_eq!(shortcut("snapshot"), None);
@@ -1419,5 +1786,60 @@ mod tests {
             f64::from(app.chart.visible_logical_range().unwrap().right)
                 >= app.chart.time_to_index(horizon).unwrap()
         );
+    }
+
+    /// The sample overlays reach the public fill renderer with their own size and font, and
+    /// switching them off removes the imported fill too.
+    #[test]
+    fn samples_mark_their_fill_in_its_own_style() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        super::super::tests::settle(&mut app, &ctx);
+        let draw = |app: &mut DemoApp| {
+            let (mut triangles, mut font) = (Vec::new(), None);
+            for _ in 0..3 {
+                let output = frame(app, &ctx, vec![]);
+                triangles = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Path(path)
+                            if path.closed
+                                && path.points.len() == 3
+                                && path.fill == super::super::marks::IMPORT =>
+                        {
+                            Some([path.points[0], path.points[1], path.points[2]])
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                font = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Buy 3" => {
+                        Some(text.galley.job.sections[0].format.font_id.clone())
+                    }
+                    _ => None,
+                });
+                output.drop_without_applying_deltas();
+            }
+            (triangles, font)
+        };
+        assert!(draw(&mut app).0.is_empty());
+        app.execute_search_command(&ctx, "samples");
+        assert!(
+            app.chart
+                .markers(egui_charts::widget::SeriesId::MAIN)
+                .iter()
+                .any(|marker| marker.text.as_deref() == Some("Fill")),
+            "the samples must supply their fill before it can be rendered"
+        );
+        let (triangles, font) = draw(&mut app);
+        assert_eq!(triangles.len(), 1, "one imported sample fill");
+        let [tip, right, left] = triangles[0];
+        assert!((right.x - left.x - 10.0).abs() < 0.01);
+        assert!(((right.y - tip.y).abs() - 12.0).abs() < 0.01);
+        assert_eq!(font, Some(egui::FontId::monospace(11.0)));
+        app.execute_search_command(&ctx, "samples");
+        assert!(draw(&mut app).0.is_empty());
     }
 }

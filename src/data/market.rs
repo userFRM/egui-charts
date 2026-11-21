@@ -16,6 +16,9 @@ pub struct NewsQuery {
     /// Only stories from these providers, in the identifiers the feed uses, or from every
     /// provider when empty.
     pub providers: Vec<String>,
+    /// Only stories about these countries, in the codes the feed uses, such as `"US"`, or about
+    /// every country when empty.
+    pub countries: Vec<String>,
     /// Short summaries of what moves the market or the symbol, instead of headlines.
     pub highlights: bool,
     /// Stories wanted at most.
@@ -23,9 +26,10 @@ pub struct NewsQuery {
 }
 
 impl NewsQuery {
-    /// Up to `limit` headlines about the whole market, of every topic and provider. Assign
-    /// [`symbols`](Self::symbols), [`topics`](Self::topics) and [`providers`](Self::providers) to
-    /// narrow it, and [`highlights`](Self::highlights) for summaries instead of headlines.
+    /// Up to `limit` headlines about the whole market, of every topic, provider and country.
+    /// Assign [`symbols`](Self::symbols), [`topics`](Self::topics),
+    /// [`providers`](Self::providers) and [`countries`](Self::countries) to narrow it, and
+    /// [`highlights`](Self::highlights) for summaries instead of headlines.
     ///
     /// ```
     /// use egui_charts::data::NewsQuery;
@@ -33,12 +37,14 @@ impl NewsQuery {
     /// let mut query = NewsQuery::new(50);
     /// query.symbols.push("AAPL".into());
     /// assert!(query.topics.is_empty());
+    /// assert!(query.countries.is_empty());
     /// ```
     pub fn new(limit: usize) -> Self {
         Self {
             symbols: Vec::new(),
             topics: Vec::new(),
             providers: Vec::new(),
+            countries: Vec::new(),
             highlights: false,
             limit,
         }
@@ -120,13 +126,21 @@ pub struct CalendarQuery {
     pub to: DateTime<Utc>,
     /// Only events of these countries, in the codes the feed uses, or of every country when empty.
     pub countries: Vec<String>,
+    /// Only economic events of these categories, in the values the feed uses, such as
+    /// `"Inflation"`, or of every category when empty. Set for economic events only.
+    pub categories: Vec<String>,
     /// Only events at least this important, when set. Set for economic events only.
     pub importance: Option<Importance>,
+    /// Only events of these symbols, in the identifiers the chart uses, or of every symbol when
+    /// empty. Set for earnings, dividends and IPOs, whose events carry a
+    /// [`symbol`](CalendarEvent::symbol).
+    pub symbols: Vec<String>,
 }
 
 impl CalendarQuery {
     /// The events of the `kind` calendar from `from` until before `to`, of every country and
-    /// importance. Assign [`countries`](Self::countries) and, for economic events,
+    /// importance. Assign [`countries`](Self::countries), [`symbols`](Self::symbols) and, for
+    /// economic events, [`categories`](Self::categories) and
     /// [`importance`](Self::importance) to narrow it.
     ///
     /// ```
@@ -139,6 +153,8 @@ impl CalendarQuery {
     /// );
     /// query.importance = Some(Importance::High);
     /// assert!(query.countries.is_empty());
+    /// assert!(query.categories.is_empty());
+    /// assert!(query.symbols.is_empty());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn new(kind: CalendarKind, from: DateTime<Utc>, to: DateTime<Utc>) -> Self {
@@ -147,7 +163,9 @@ impl CalendarQuery {
             from,
             to,
             countries: Vec::new(),
+            categories: Vec::new(),
             importance: None,
+            symbols: Vec::new(),
         }
     }
 }
@@ -157,6 +175,8 @@ impl CalendarQuery {
 /// `actual`, `forecast` and `prior` are the reported figure, the consensus and the previous
 /// figure: the release for an economic event, the earnings per share for earnings, the amount
 /// per share for a dividend and the offer price for an IPO. Leave unknown figures `None`.
+/// Company calendars also accept the optional figures below; columns absent from the entire
+/// answer are hidden. All figures and dates are formatted by the host.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct CalendarEvent {
@@ -175,12 +195,35 @@ pub struct CalendarEvent {
     pub symbol: Option<String>,
     /// Importance assigned by the host, when applicable.
     pub importance: Option<Importance>,
+    /// The economic event's category, in the values the feed uses, such as `"Inflation"`, shown
+    /// above its description, when known.
+    pub category: Option<String>,
+    /// What the release measures, shown when the user opens the event, when known.
+    pub description: Option<String>,
     /// Published figure, formatted by the host, when available.
     pub actual: Option<String>,
     /// Expected figure, formatted by the host, when available.
     pub forecast: Option<String>,
     /// Previous figure, formatted by the host, when available.
     pub prior: Option<String>,
+    /// Reported revenue, for earnings.
+    pub revenue: Option<String>,
+    /// Expected revenue, for earnings.
+    pub revenue_forecast: Option<String>,
+    /// Company capitalization, for earnings or an IPO.
+    pub market_cap: Option<String>,
+    /// Reported earnings compared with the estimate, for earnings.
+    pub surprise: Option<String>,
+    /// Dividend payout relative to the share price, for dividends.
+    pub dividend_yield: Option<String>,
+    /// Scheduled payment date, for dividends.
+    pub payment_date: Option<String>,
+    /// Planned capital raise, for an IPO.
+    pub deal_amount: Option<String>,
+    /// Number of shares offered, for an IPO.
+    pub shares_offered: Option<String>,
+    /// Listing venue, for an IPO.
+    pub exchange: Option<String>,
 }
 
 impl CalendarEvent {
@@ -199,9 +242,20 @@ impl CalendarEvent {
             title: title.into(),
             symbol: None,
             importance: None,
+            category: None,
+            description: None,
             actual: None,
             forecast: None,
             prior: None,
+            revenue: None,
+            revenue_forecast: None,
+            market_cap: None,
+            surprise: None,
+            dividend_yield: None,
+            payment_date: None,
+            deal_amount: None,
+            shares_offered: None,
+            exchange: None,
         }
     }
 }

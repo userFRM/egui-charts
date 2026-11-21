@@ -1,6 +1,63 @@
 use crate::widget::test_frames::{candle_ys, chart, frame, shapes};
 use egui::{Pos2, Rect, Shape};
 
+#[test]
+fn news_badge_has_a_distinct_icon_and_colour() {
+    use crate::model::{EventKind, TimeScaleEvent};
+    use crate::widget::SeriesId;
+    for dark in [false, true] {
+        let ctx = egui::Context::default();
+        ctx.set_visuals(if dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        });
+        let mut chart = chart(&[100.0], &[110.0]);
+        let kinds = [EventKind::News, EventKind::Economic, EventKind::Earnings];
+        let events = kinds
+            .iter()
+            .enumerate()
+            .map(|(index, kind)| {
+                TimeScaleEvent::new(
+                    kind.label(),
+                    chart.bars(SeriesId::MAIN)[90 + index * 2].time,
+                    *kind,
+                    kind.label(),
+                )
+            })
+            .collect();
+        chart.set_time_scale_events(events);
+        let mut visibility = chart.event_visibility().clone();
+        visibility.show_earnings = true;
+        visibility.show_economic_events = true;
+        chart.set_event_visibility(visibility);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let badges: Vec<_> = kinds
+            .iter()
+            .map(|kind| {
+                painted
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.text() == kind.label() => Some((
+                            text.pos + text.galley.size() * 0.5,
+                            text.galley.job.sections[0].format.color,
+                        )),
+                        _ => None,
+                    })
+                    .expect("event badge")
+            })
+            .collect();
+        assert_ne!(badges[0].1, badges[1].1);
+        assert_ne!(badges[0].1, badges[2].1);
+        assert!(painted.iter().any(|shape| matches!(shape, Shape::Path(path)
+            if path.closed && path.points.len() == 4 && path.visual_bounding_rect().contains(badges[0].0))));
+        for (centre, _) in &badges[1..] {
+            assert!(painted.iter().any(|shape| matches!(shape, Shape::Circle(circle) if circle.center.distance(*centre) < 1.0)));
+        }
+    }
+}
+
 /// Each chart of a layout carries the replay mark exactly while it replays itself.
 #[test]
 fn legend_marks_a_chart_only_while_it_replays() {
@@ -2190,8 +2247,11 @@ fn drawings_keep_their_place_when_the_series_and_studies_change() {
     }
 
     const UPPER: Color32 = Color32::from_rgb(230, 120, 0);
+    const NEW: Color32 = Color32::from_rgb(20, 160, 60);
     const INTO: &str = "main series into a study pane";
     const BACK: &str = "main series back";
+    const ADD: &str = "add study";
+    const TEMPLATE: &str = "apply template";
     for (case, backward, layers) in [
         // Over the candles and SMA(2), under SMA(3).
         ("add series", 1, [Some(2), Some(3)]),
@@ -2199,6 +2259,9 @@ fn drawings_keep_their_place_when_the_series_and_studies_change() {
         (INTO, 2, [Some(1), Some(2)]),
         // Under RSI and the candles, in the RSI pane.
         (BACK, 2, [Some(0), Some(2)]),
+        // Over every item, with the count that removing a study drawn over it leaves (#3897).
+        (ADD, 0, [Some(3), Some(4)]),
+        (TEMPLATE, 0, [Some(3), Some(4)]),
     ] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0, 100.0], &[110.0, 104.0]);
@@ -2222,11 +2285,33 @@ fn drawings_keep_their_place_when_the_series_and_studies_change() {
         for _ in 0..backward {
             assert!(chart.reorder_drawing(id, VisualOrder::SendBackward));
         }
+        let joins = case == ADD || case == TEMPLATE;
+        if joins {
+            chart
+                .drawings_mut()
+                .edit_drawing(id, |d| d.series_layer = Some(3))
+                .unwrap();
+        }
+        // SMA(4) is 107 on every bar, along SMA(2).
+        let template = {
+            let mut set = chart.study_template_set();
+            set.price_pane.push(set.studies.len());
+            set.studies.push(crate::studies::StudyTemplate::from_study(
+                &SMA::new(4).with_color(NEW),
+            ));
+            set
+        };
         for step in 0..3 {
             match step {
                 0 => chart.user_action(|chart| match case {
                     INTO => assert!(chart.move_series_to_pane(SeriesId::MAIN, pane)),
                     BACK => assert!(chart.move_series_to_pane(SeriesId::MAIN, PaneId::MAIN)),
+                    ADD => {
+                        chart.add_indicator(Box::new(SMA::new(4).with_color(NEW)));
+                    }
+                    TEMPLATE => {
+                        chart.apply_chosen_study_template_set(&template).unwrap();
+                    }
                     _ => {
                         chart.add_series(SeriesOptions::default());
                     }
@@ -2262,7 +2347,11 @@ fn drawings_keep_their_place_when_the_series_and_studies_change() {
             // The studies sharing the rectangle's pane, and whether it is drawn over each.
             let price_pane = chart.series_pane(SeriesId::MAIN) == Some(PaneId::MAIN);
             let sides = if price_pane {
-                vec![(sma_color, case != INTO), (UPPER, case == BACK)]
+                let mut sides = vec![(sma_color, case != INTO), (UPPER, case == BACK || joins)];
+                if joins && step != 1 {
+                    sides.push((NEW, true));
+                }
+                sides
             } else {
                 vec![(rsi_color, case == INTO)]
             };
@@ -2378,7 +2467,185 @@ fn drawings_keep_their_place_when_the_series_and_studies_change() {
             assert!(line_at(&painted, colors[0]).1 < rect);
         }
     }
+    // A study placed on its source study's pane goes under a drawing over every item there, with
+    // the count that removing a study drawn over it leaves (#3897).
+    let ctx = egui::Context::default();
+    let mut chart = crate::widget::test_frames::chart(&[100.0, 100.0], &[110.0, 104.0]);
+    chart.config.show_volume = false;
+    chart.set_visible_bars(20);
+    let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+    let id = add_rect(&mut chart, Some(rsi.0), [80.0, 20.0], FILL);
+    chart
+        .drawings_mut()
+        .edit_drawing(id, |d| d.series_layer = Some(1))
+        .unwrap();
+    for step in 0..3 {
+        match step {
+            0 => chart.user_action(|chart| {
+                use crate::studies::{Indicator, InputValue, StudySource};
+                let mut study: Box<dyn Indicator> = Box::new(crate::studies::ConfiguredStudy::new(
+                    Box::new(SMA::new(2).with_color(NEW)),
+                ));
+                let source = StudySource::Study { id: rsi.0, plot: 0 };
+                study
+                    .set_input("source", InputValue::Source(source))
+                    .unwrap();
+                let added = chart.add_indicator(study);
+                assert_eq!(chart.series_pane(added), chart.series_pane(rsi));
+            }),
+            1 => assert!(chart.undo()),
+            _ => assert!(chart.redo()),
+        }
+        frame(&ctx, &mut chart, f64::from(step), vec![]);
+        let painted = shapes(&ctx, &mut chart, f64::from(step) + 0.1, vec![]);
+        // A point of the study on RSI over bar 95, or of RSI after the undo.
+        let x = chart.get_chart_mapping().idx_to_x(95);
+        let color = if step == 1 {
+            color_of(&chart, rsi)
+        } else {
+            NEW
+        };
+        let on = painted
+            .iter()
+            .flat_map(|shape| match shape {
+                Shape::LineSegment { points, stroke } if stroke.color == color => points.to_vec(),
+                Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(color) => {
+                    path.points.clone()
+                }
+                _ => Vec::new(),
+            })
+            .min_by(|a, b| (a.x - x).abs().total_cmp(&(b.x - x).abs()))
+            .unwrap();
+        let painted = shapes(
+            &ctx,
+            &mut chart,
+            f64::from(step) + 0.2,
+            vec![Event::PointerMoved(on)],
+        );
+        let rect = rect_at(&painted, FILL);
+        let layer = chart
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.id == id)
+            .unwrap()
+            .series_layer;
+        let actual = (
+            layer,
+            line_at(&painted, color).1 < rect,
+            chart.drawings().hit_test(on),
+        );
+        let expected = (Some(if step == 1 { 1 } else { 2 }), true, Some(id));
+        if actual != expected {
+            failures.push(format!(
+                "study on its source, step {step}: {actual:?}, expected {expected:?}"
+            ));
+        }
+    }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// A new study's temporary price-pane placement does not edit that pane's drawings.
+#[cfg(all(feature = "drawings", feature = "studies"))]
+#[test]
+fn chained_studies_only_restack_the_pane_they_join() {
+    use crate::studies::{
+        ConfiguredStudy, Indicator, InputValue, RSI, SMA, StudySource, StudyTemplate,
+        StudyTemplateSet,
+    };
+    use crate::widget::{Chart, ChartEvent, SeriesId};
+    use egui::Color32;
+
+    const FILL: Color32 = Color32::from_rgb(200, 0, 200);
+    let mut failures = Vec::new();
+    for (name, action, template_pane) in [
+        ("add in action", true, None),
+        ("host add", false, None),
+        ("unlisted template in action", true, Some(false)),
+        ("listed template in action", true, Some(true)),
+        ("host unlisted template", false, Some(false)),
+        ("host listed template", false, Some(true)),
+    ] {
+        for layer in [1, 2] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0, 100.0], &[110.0, 104.0]);
+            chart.config.show_volume = false;
+            chart.set_visible_bars(20);
+            let rsi = if template_pane.is_none() {
+                chart.add_indicator(Box::new(RSI::new(14)))
+            } else {
+                SeriesId(0) // Templates refer to their source by its position in the set.
+            };
+            let id = add_rect(&mut chart, None, [109.0, 101.0], FILL);
+            chart
+                .drawings_mut()
+                .edit_drawing(id, |d| d.series_layer = Some(layer))
+                .unwrap();
+            chart.drain_events().for_each(drop);
+            chart.drawings().pending_sync.lock().unwrap().clear();
+
+            let add = |chart: &mut Chart| {
+                let mut study = ConfiguredStudy::new(Box::new(SMA::new(2)));
+                study
+                    .set_input(
+                        "source",
+                        InputValue::Source(StudySource::Study { id: rsi.0, plot: 0 }),
+                    )
+                    .unwrap();
+                if let Some(listed) = template_pane {
+                    let set = StudyTemplateSet {
+                        studies: vec![
+                            StudyTemplate::from_study(&RSI::new(14)),
+                            StudyTemplate::from_study(&study),
+                        ],
+                        panes: if listed { vec![vec![0, 1]] } else { vec![] },
+                        ..StudyTemplateSet::default()
+                    };
+                    chart.apply_study_template_set(&set).unwrap();
+                } else {
+                    let added = chart.add_indicator(Box::new(study));
+                    assert_eq!(chart.series_pane(added), chart.series_pane(rsi));
+                }
+            };
+            if action {
+                chart.user_action(add);
+            } else {
+                add(&mut chart);
+            }
+            let events: Vec<_> = chart
+                .drain_events()
+                .filter(|event| matches!(event, ChartEvent::Drawing { .. }))
+                .collect();
+            let saves = chart.drawings().pending_sync.lock().unwrap().clone();
+            let actual = chart.drawings().drawings[0].series_layer;
+            if actual != Some(layer) || !events.is_empty() || !saves.is_empty() {
+                failures.push(format!(
+                    "{name}, layer {layer}: count {actual:?}, events {events:?}, saves {saves:?}"
+                ));
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let rect = rect_at(&painted, FILL);
+            let candles: Vec<_> = painted
+                .iter()
+                .enumerate()
+                .filter_map(|(at, shape)| {
+                    matches!(shape, Shape::Rect(r) if r.fill == chart.config().bullish_color
+                        && chart.get_rendered_price_rect().contains_rect(r.rect))
+                    .then_some(at)
+                })
+                .collect();
+            assert!(!candles.is_empty());
+            assert!(candles.iter().all(|&at| at < rect), "{name}, layer {layer}");
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[cfg(all(feature = "drawings", feature = "studies"))]
+fn color_of(chart: &crate::widget::Chart, id: crate::widget::SeriesId) -> egui::Color32 {
+    let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
+    study.plot_style(0).color
 }
 
 /// Drawings cross series and studies one item at a time, keep that place through undo and
@@ -2683,10 +2950,18 @@ fn footprint_and_session_profile_write_the_instrument_volume_decimals() {
     use crate::studies::{InputValue, VolProfileSession};
     // Decimals, the bid-by-ask cell, a profile row value and the bar volume of the statistics,
     // 0.375 + 123.456; without decimals they read `0.375 × 123`, `913.58` and `124`. The trade
-    // count of the statistics stays `2`.
-    for (decimals, cell, row, volume) in [
-        (0, "0 × 123", "914", "124"),
-        (3, "0.375 × 123.456", "913.578", "123.831"),
+    // count of the statistics stays `2`. At a spacing too narrow for 1237566, the statistics of
+    // a bar of 618,783 by 618,783 write it as 1.2M at 0 decimals, as without them.
+    let sizes = [0.375, 123.456];
+    for (decimals, sizes, spacing, expected) in [
+        (0, sizes, 150.0, &["0 × 123", "914", "124", "2"][..]),
+        (
+            3,
+            sizes,
+            150.0,
+            &["0.375 × 123.456", "913.578", "123.831", "2"],
+        ),
+        (0, [618_783.0; 2], 30.0, &["1.2M", "2"]),
     ] {
         let bars = (0..10)
             .map(|minute| {
@@ -2705,10 +2980,10 @@ fn footprint_and_session_profile_write_the_instrument_volume_decimals() {
             crate::studies::Indicator::set_input(&mut profile, id, value).unwrap();
         }
         chart.add_indicator(Box::new(profile));
-        chart.apply_synced_time_scale(150.0, 1.0);
+        chart.apply_synced_time_scale(spacing, 1.0);
         let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
         for bar in chart.bars(crate::widget::SeriesId::MAIN).to_vec() {
-            for (size, side) in [(0.375, OrderSide::Sell), (123.456, OrderSide::Buy)] {
+            for (size, side) in sizes.into_iter().zip([OrderSide::Sell, OrderSide::Buy]) {
                 flow.push(&Tick::new(bar.time, 105.0, size, Some(side)))
                     .unwrap();
             }
@@ -2741,7 +3016,7 @@ fn footprint_and_session_profile_write_the_instrument_volume_decimals() {
                 })
                 .collect::<Vec<_>>();
         }
-        for expected in [cell, row, volume, "2"] {
+        for &expected in expected {
             assert!(
                 texts.iter().any(|text| text == expected),
                 "volume decimals {decimals}: {expected} not in {texts:?}"

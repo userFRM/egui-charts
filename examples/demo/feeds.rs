@@ -2,7 +2,7 @@
 //! stable, distinct content. A host answers these from its own data vendors.
 
 use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, TimeZone, Utc, Weekday};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use egui_charts::data::{
@@ -13,7 +13,7 @@ use egui_charts::data::{
 use egui_charts::model::{Bar, PostContent, Quote};
 use egui_charts::services::{
     ChatCapabilities, ChatEvent, ChatMessage, Chats, Events, Notification, NotificationTarget,
-    Notifications, Posts, Quotes,
+    Notifications, Posts, Quotes, ShareKind, ShareLink, ShareOffer, Sharing,
 };
 
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
@@ -132,6 +132,9 @@ impl DemoMarket {
     }
 }
 
+/// The symbols and sink of the active quote subscription.
+type QuoteStream = (Vec<String>, Events<(String, Quote)>);
+
 /// The watchlist's quote service: the chart symbol's quote from the live feed, with its regular
 /// and extended-hours prices, session volume and best bid and ask, and retained executions for
 /// other catalog symbols. The quotes follow the feed's simulation clock, which the pause freezes.
@@ -139,7 +142,7 @@ impl DemoMarket {
 /// quote only wakes the UI, so it is pushed again only when a displayed value changes.
 pub(super) struct DemoQuotes {
     live: Mutex<Arc<LiveFeed>>,
-    stream: Mutex<Option<(Vec<String>, Events<(String, Quote)>)>>,
+    stream: Mutex<Option<QuoteStream>>,
     /// The last quote pushed per symbol, with times at display precision.
     last_pushed: Mutex<BTreeMap<String, Quote>>,
 }
@@ -297,7 +300,22 @@ const HIGHLIGHTS: &[(&str, &str)] = &[
 /// Up to `query.limit` synthetic stories, newest first, published on the hour before `now`.
 pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
     let mut stories = stories(&query.symbols, query.highlights, now);
-    stories.sort_by(|a, b| b.time.cmp(&a.time));
+    stories.retain(|story| {
+        (query.countries.is_empty()
+            || story.symbols.iter().any(|symbol| {
+                let spec = DemoSymbol::find(symbol);
+                let country = match spec.exchange {
+                    "Forex" => "GB",
+                    "Crypto" if spec.symbol == "TOKENA" => "EU",
+                    "Crypto" => "JP",
+                    _ => "US",
+                };
+                query.countries.iter().any(|selected| selected == country)
+            }))
+            && (query.topics.is_empty() || query.topics.iter().any(|topic| topic == "Markets"))
+            && (query.providers.is_empty() || query.providers.contains(&story.source))
+    });
+    stories.sort_by_key(|story| std::cmp::Reverse(story.time));
     stories.truncate(query.limit);
     stories
 }
@@ -330,7 +348,7 @@ fn stories(symbols: &[String], highlights: bool, now: DateTime<Utc>) -> Vec<News
                         text.replace("{name}", spec.company_name)
                             .replace("{symbol}", spec.symbol)
                     };
-                    let age = TimeDelta::hours(i as i64 * 7 + (spec.seed % 5) as i64 + 1);
+                    let age = TimeDelta::hours(i as i64 * 7);
                     let mut story =
                         NewsStory::new(format!("{}-{i}", spec.symbol), hour - age, fill(headline));
                     story.source = "Demo Wire".into();
@@ -365,8 +383,16 @@ impl Posts for DemoPosts {
     }
 }
 
-/// The countries the demo calendar knows.
+/// The countries the demo's calendars and news know.
 pub(super) const COUNTRIES: [&str; 4] = ["US", "EU", "GB", "JP"];
+
+pub(super) const CATEGORIES: [&str; 5] = [
+    "Inflation",
+    "Employment",
+    "Activity",
+    "Consumption",
+    "Monetary policy",
+];
 
 /// Economic releases: country, release, importance, UTC hour, and the base value in percent.
 const RELEASES: &[(&str, &str, Importance, u32, f64)] = &[
@@ -416,6 +442,26 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
                             CalendarEvent::new(id("eco", i), query.kind, at(hour), title);
                         let drift = ((n * 7 + i) % 5) as f64 / 10.0 - 0.2;
                         event.country = country.into();
+                        let (category, description) = match title {
+                            "CPI (YoY)" => ("Inflation", "Annual change in consumer prices."),
+                            "Initial jobless claims (K)" => (
+                                "Employment",
+                                "New applications for unemployment benefits, in thousands.",
+                            ),
+                            "Retail sales (MoM)" => {
+                                ("Consumption", "Monthly change in retail spending.")
+                            }
+                            "Interest rate decision" => (
+                                "Monetary policy",
+                                "The central bank's policy interest rate.",
+                            ),
+                            _ => (
+                                "Activity",
+                                "A survey or release tracking industrial activity.",
+                            ),
+                        };
+                        event.category = Some(category.into());
+                        event.description = Some(description.into());
                         event.importance = Some(importance);
                         event.forecast = Some(format!("{base:.1}"));
                         event.prior = Some(format!("{:.1}", base - drift / 2.0));
@@ -440,21 +486,35 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
                     event.country = "US".into();
                     event.symbol = Some(spec.symbol.into());
                     if dividends {
+                        event.dividend_yield = Some("3.2%".into());
+                        event.payment_date = Some(
+                            (event.time + TimeDelta::days(14))
+                                .format("%Y-%m-%d")
+                                .to_string(),
+                        );
                         event.actual = Some(format!("{:.2}", eps / 4.0));
                         event.prior = Some(format!("{:.2}", eps / 4.2));
                     } else {
+                        event.revenue = (event.time < now).then(|| "12.0B".into());
+                        event.revenue_forecast = Some("11.8B".into());
+                        event.market_cap = Some("120.0B".into());
+                        event.surprise = (event.time < now).then(|| "+3.0%".into());
                         event.forecast = Some(format!("{eps:.2}"));
                         event.prior = Some(format!("{:.2}", eps * 0.94));
                         event.actual = (event.time < now).then(|| format!("{:.2}", eps * 1.03));
                     }
                     events.push(event);
                 }
-                CalendarKind::Ipos if n % 2 == 0 => {
+                CalendarKind::Ipos if n.is_multiple_of(2) => {
                     let (symbol, name, price) = OFFERINGS[n / 2 % OFFERINGS.len()];
                     let mut event = CalendarEvent::new(id("ipo", 0), query.kind, at(14), name);
                     event.country = "US".into();
                     event.symbol = Some(symbol.into());
                     event.forecast = Some(format!("{price:.2}"));
+                    event.deal_amount = Some("500M".into());
+                    event.shares_offered = Some("25M".into());
+                    event.market_cap = Some("1.2B".into());
+                    event.exchange = Some("XNAS".into());
                     events.push(event);
                 }
                 _ => {}
@@ -464,10 +524,23 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
     }
     events.retain(|event| {
         (query.countries.is_empty() || query.countries.contains(&event.country))
+            && (query.categories.is_empty()
+                || event
+                    .category
+                    .as_ref()
+                    .is_some_and(|category| query.categories.contains(category)))
+            && (query.symbols.is_empty()
+                || event.symbol.as_deref().is_some_and(|symbol| {
+                    query
+                        .symbols
+                        .iter()
+                        .any(|asked| asked.eq_ignore_ascii_case(symbol))
+                }))
             && query
                 .importance
                 .is_none_or(|least| event.importance >= Some(least))
             && event.time >= query.from
+            && event.time < query.to
     });
     events.sort_by_key(|event| event.time);
     events
@@ -677,7 +750,7 @@ impl DemoNotifications {
         self.publish(entry);
     }
 
-    fn publish(&self, entry: Notification) {
+    pub(super) fn publish(&self, entry: Notification) {
         let mut state = self.0.lock().unwrap();
         if state.0.contains(&entry) {
             return;
@@ -1047,6 +1120,35 @@ pub(super) fn seasonality(bars: &[Bar]) -> Seasonality {
     Seasonality::new(years as u32, summaries)
 }
 
+/// Demo watchlist sharing, with placeholder links kept in memory until revoked.
+#[derive(Default)]
+pub(super) struct ListSharing(Mutex<(usize, HashSet<String>)>);
+
+impl Sharing for ListSharing {
+    fn offers(&self, kind: ShareKind) -> ShareOffer {
+        let mut offer = ShareOffer::new(kind == ShareKind::Watchlist, false);
+        offer.revoke = offer.link;
+        offer
+    }
+    fn shared(&self, kind: ShareKind, name: &str) -> bool {
+        kind == ShareKind::Watchlist && self.0.lock().unwrap().1.contains(name)
+    }
+    fn link(&self, _: ShareKind, name: &str, reply: Reply<ShareLink>) {
+        let mut state = self.0.lock().unwrap();
+        state.0 += 1;
+        state.1.insert(name.to_owned());
+        // There is no demo server; this reserved domain does not resolve.
+        reply.send(Ok(ShareLink::new(
+            format!("https://demo.invalid/watchlist/{}", state.0),
+            false,
+        )));
+    }
+    fn revoke(&self, _: ShareKind, name: &str, reply: Reply<()>) {
+        self.0.lock().unwrap().1.remove(name);
+        reply.send(Ok(()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1234,7 +1336,7 @@ mod tests {
         let mut shifted = daily.clone();
         shifted.time = "2026-11-02T05:00:00Z".parse().unwrap();
         assert_eq!(
-            crate::sampledata::calendar_history(&[daily.clone()], &[], clock.clone()),
+            crate::sampledata::calendar_history(std::slice::from_ref(&daily), &[], clock.clone()),
             vec![shifted]
         );
         let mut sunday = daily;
