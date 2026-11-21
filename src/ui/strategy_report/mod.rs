@@ -736,16 +736,16 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
                                 },
                             )
                             .to_string(),
-                            t.quantity.to_string(),
+                            StrategyReport::quantity_text(t.quantity),
                             time(t.entry_time),
-                            t.entry_price.to_string(),
+                            data.report.price_text(t.entry_price),
                             t.exit.as_ref().map_or_else(
                                 || l10n::text(&ctx, "Open").to_string(),
                                 |e| time(e.time),
                             ),
                             t.exit
                                 .as_ref()
-                                .map_or_else(|| "N/A".into(), |e| e.price.to_string()),
+                                .map_or_else(|| "N/A".into(), |e| data.report.price_text(e.price)),
                             money(t.exit.as_ref().map(|e| e.profit), &data.report),
                             data.cumulative[ordinal]
                                 .map_or_else(String::new, |total| money(Some(total), &data.report)),

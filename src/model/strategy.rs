@@ -107,6 +107,13 @@ pub struct StrategyReport {
     /// Display only.
     #[serde(default)]
     pub properties: Vec<(String, String)>,
+    /// Decimals of the prices in the list of trades and in the trade markers of
+    /// [`Self::signals`], such as 2 for a price increment of 0.01. Each price shows at least
+    /// these, up to 12, and more where it has them, such as 0.00001234; `None` shows each price
+    /// with its own decimals. A backtest sets it from its price increment; for a host's own run,
+    /// set it from `scales::instrument_price_precision`. Display only.
+    #[serde(default)]
+    pub price_decimals: Option<u8>,
     /// Every trade, closed or open, in any order.
     #[serde(default)]
     pub trades: Vec<StrategyTrade>,
@@ -817,9 +824,10 @@ impl StrategyReport {
                     category: "Strategy trades".into(),
                     label: Some(label.clone()),
                     tooltip: Some(format!(
-                        "{} · {label} · {} units @ {price}{}",
+                        "{} · {label} · {} units @ {}{}",
                         self.name,
-                        trade.quantity,
+                        Self::quantity_text(trade.quantity),
+                        self.price_text(price),
                         trade
                             .label
                             .as_ref()
@@ -831,8 +839,22 @@ impl StrategyReport {
         signals
     }
 
-    /// A report with no trades, no equity, no equity ranges, no properties, no currency, a
-    /// risk-free rate of 0 and figures available.
+    /// `price` as the list of trades and the trade markers write it: with at least
+    /// [`price_decimals`](Self::price_decimals), up to 12, and more where the price has them.
+    pub(crate) fn price_text(&self, price: f64) -> String {
+        let least = self
+            .price_decimals
+            .map_or(0, |decimals| usize::from(decimals.min(12)));
+        fill_text(price, least, usize::MAX)
+    }
+
+    /// `quantity` with its own decimals, up to eight, as the account tables write quantities.
+    pub(crate) fn quantity_text(quantity: f64) -> String {
+        fill_text(quantity, 0, 8)
+    }
+
+    /// A report with no trades, no equity, no equity ranges, no properties, no currency, no
+    /// price decimals, a risk-free rate of 0 and figures available.
     pub fn new(
         name: impl Into<String>,
         symbol: impl Into<String>,
@@ -847,6 +869,7 @@ impl StrategyReport {
             currency: None,
             risk_free_rate: 0.0,
             properties: Vec::new(),
+            price_decimals: None,
             trades: Vec::new(),
             equity: Vec::new(),
             equity_ranges: Vec::new(),
@@ -969,6 +992,7 @@ impl StrategyReport {
             currency,
             risk_free_rate,
             properties,
+            price_decimals,
             unavailable,
             trades,
             equity: _,
@@ -1014,6 +1038,7 @@ impl StrategyReport {
             currency: currency.clone(),
             risk_free_rate: *risk_free_rate,
             properties: properties.clone(),
+            price_decimals: *price_decimals,
             unavailable: unavailable.clone(),
             trades,
             equity,
@@ -1622,6 +1647,18 @@ impl StrategyReport {
         }
         String::from_utf8(csv.into_inner().expect(IN_MEMORY)).expect("every field is a String")
     }
+}
+
+/// `value` with `least` decimals or its own, whichever is more, up to `most`. Its own decimals
+/// are those of its shortest form at 15 significant digits, which drops binary rounding digits.
+fn fill_text(value: f64, least: usize, most: usize) -> String {
+    let rounded = format!("{value:.14e}").parse::<f64>().unwrap_or(value);
+    let own = rounded
+        .to_string()
+        .split_once('.')
+        .map_or(0, |(_, fraction)| fraction.len());
+    // Adding zero turns a negative zero positive.
+    format!("{:.*}", own.max(least).min(most), rounded + 0.0)
 }
 
 fn valid_bar(b: &Bar) -> bool {

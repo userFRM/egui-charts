@@ -91,7 +91,7 @@ fn report_replacement_selection_export_and_clear() {
         h.run();
         h.get_by_label("0.00001234");
         h.get_by_label("1970-01-01 00:00:00.250");
-        assert!(h.get_by_label("98.92959251407622").rect().height() < 28.0);
+        assert!(h.get_by_label("98.9295925140762").rect().height() < 28.0);
         h.get_by_role_and_label(Role::Button, "1").click();
         h.run();
         assert_eq!(
@@ -535,6 +535,68 @@ fn continuation_keeps_the_range_and_refreshes_its_figures() {
     assert_eq!(panel.range_text, ["1970-01-01", "1970-01-05"]);
     assert_eq!(panel.tab, Tab::Summary);
     assert!(panel.selected.is_none());
+}
+
+/// Fill prices read at the run's price increment, or finer where exact, and quantities
+/// without binary rounding digits, in the list of trades and the trade markers alike.
+#[cfg(feature = "strategies")]
+#[test]
+fn trades_and_markers_show_fills_without_rounding_digits() {
+    use crate::model::OrderType;
+    use crate::strategies::{Backtest, OrderSize, Slippage, Strategy, StrategyContext};
+    struct InThenOut;
+    impl Strategy for InThenOut {
+        fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+            match context.bars().len() {
+                1 => context.entry("In", OrderSide::Buy, None, OrderType::Market),
+                2 => context.exit("Out", None, None, None),
+                _ => {}
+            }
+        }
+    }
+    let minute = |m| DateTime::UNIX_EPOCH + TimeDelta::minutes(m);
+    let bars: Vec<_> = [100.0, 100.1, 101.02]
+        .into_iter()
+        .enumerate()
+        .map(|(i, price)| Bar::new(minute(i as i64), price, price, price, price, 1.0))
+        .collect();
+    let mut engine = Backtest::new("Digits", "TEST", Timeframe::Min1, 10_000.0);
+    engine.settings.slippage = Slippage::Increments(2);
+    engine.settings.order_size = OrderSize::EquityFraction(0.5);
+    let report = engine.run(&mut InThenOut, &bars, &[]);
+    // 100.1 + 2 * 0.01, 101.02 - 2 * 0.01 and 10_000 * 0.5 / 100.12, as binary arithmetic gives them.
+    let trade = &report.trades[0];
+    assert_eq!(trade.entry_price, 100.11999999999999);
+    assert_eq!(trade.exit.as_ref().unwrap().price, 101.0);
+    assert_eq!(trade.quantity, 49.94007191370356);
+    let tooltips: Vec<_> = report
+        .signals()
+        .into_iter()
+        .filter_map(|s| s.tooltip)
+        .collect();
+    assert!(
+        tooltips[0].contains("49.94007191 units @ 100.12"),
+        "{tooltips:?}"
+    );
+    assert!(
+        tooltips[1].contains("49.94007191 units @ 101.00"),
+        "{tooltips:?}"
+    );
+    let mut panel = StrategyReportPanel::default();
+    panel.set_report(Some(report), &bars);
+    panel.tab = Tab::Trades;
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(1440.0, 600.0))
+        .build_ui_state(
+            |ui, panel: &mut StrategyReportPanel| {
+                panel.show(ui);
+            },
+            panel,
+        );
+    h.run();
+    for cell in ["49.94007191", "100.12", "101.00"] {
+        h.get_by_label(cell);
+    }
 }
 
 #[test]
