@@ -224,8 +224,9 @@ pub struct AlertNotice {
     /// "AAPL: Crossing up 100 at 2026-01-01T10:00:00+00:00, price 101.5", without the price when
     /// the trigger has none.
     pub body: String,
-    /// The webhook's `Content-Type`: `application/json` when the body is a JSON object or array,
-    /// otherwise `text/plain; charset=utf-8`.
+    /// The webhook's `Content-Type`: `application/json` when the body is a valid JSON text,
+    /// including an object, array, number, string, boolean or `null`, with surrounding whitespace
+    /// allowed; otherwise `text/plain; charset=utf-8`.
     pub content_type: &'static str,
 }
 
@@ -273,8 +274,7 @@ impl AlertNotice {
         } else {
             message.clone()
         };
-        let json = serde_json::from_str::<serde_json::Value>(&body)
-            .is_ok_and(|value| value.is_object() || value.is_array());
+        let json = serde_json::from_str::<serde_json::Value>(&body).is_ok();
         Some(Self {
             subject,
             push_title,
@@ -342,7 +342,15 @@ mod tests {
                 " [1, 2] \n",
                 J,
             ),
-            ("", "42", None, S, S, "42", T),
+            ("", "42", None, S, S, "42", J),
+            ("", r#""text""#, None, S, S, r#""text""#, J),
+            ("", "true", None, S, S, "true", J),
+            ("", "false", None, S, S, "false", J),
+            ("", "null", None, S, S, "null", J),
+            ("", " null \n", None, S, S, " null \n", J),
+            ("", "plain", None, S, S, "plain", T),
+            ("", "42 43", None, S, S, "42 43", T),
+            ("", r#""text"#, None, S, S, r#""text"#, T),
             ("", r#"{"close": NaN}"#, None, S, S, r#"{"close": NaN}"#, T),
             ("", "Closed at 101.5", None, S, S, "Closed at 101.5", T),
         ];

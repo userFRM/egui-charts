@@ -91,6 +91,12 @@ instead of trades and equity. Each trade records the rate its profit converted a
 trade the latest rate, in [`StrategyTrade::exchange_rate`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyTrade.html#structfield.exchange_rate);
 its excursions convert at it. The buy-and-hold benchmark stays unconverted.
 
+A strategy naming a [`calculation_timeframe`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#method.calculation_timeframe) reads the instrument's own bars of that interval from
+[`Backtest::calculation_bars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.calculation_bars), placed on [`Backtest::bar_clock`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.bar_clock). The tester asks its host for these bars;
+pass the same instrument calendar to [`StrategyTester::set_bar_clock`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyTester.html#method.set_bar_clock). Each chart bar reads the last calculation
+bar closed by its close. Without supplied calculation bars, Technical Ratings places no orders
+on another Indicator timeframe. Its default remains the chart interval, which needs no extra history.
+
 Long and short exposure fund separately. [`long_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.long_funding) and [`short_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.short_funding)
 are the fractions of absolute position market value that equity must cover, one over leverage
 when unset. Zero disables that side's checks and values above one are accepted. An entry is
@@ -258,10 +264,12 @@ chart bar at or before its last host bar also ends continuation and marks it sta
 newer host history is needed. Chart bars that close later within the host history are
 already part of the run.
 
-Runs with finer fill bars or currency conversion request the finer bars or exchange rates
-for each new chart bar with [`StrategyTesterAction::RequestHistory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyTesterAction.html#variant.RequestHistory) and stay stale while
-waiting. Answer through `set_history` or `set_history_with_rates`; continuation uses the
-reply's finer bars and rates with the chart history captured when requested. A failed
+Runs with finer fill bars, currency conversion or another calculation interval request the finer
+bars, exchange rates or calculation bars for each new chart bar with [`StrategyTesterAction::RequestHistory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyTesterAction.html#variant.RequestHistory) and stay stale while
+waiting. Answer through `set_history`, `set_history_with_rates` or `set_history_with_calculation`;
+continuation uses the reply's finer bars, rates and calculation bars with the chart history
+captured when requested. A calculation reply starts with the bar containing the requested start,
+so it can update the last held interval bar. A failed
 request ends continuation and preserves the last report as stale. The host supplies these
 data; the library fetches no market history or rates. End dates still bound the run.
 Optimisation results do not continue. Form edits, symbol or interval changes, Run and
