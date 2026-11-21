@@ -11938,9 +11938,12 @@ mod tests {
         for watchlist in [false, true] {
             for replay in [false, true] {
                 let ctx = egui::Context::default();
-                let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                let mut app = DemoApp::new_at(
+                    &eframe::CreationContext::_new_kittest(ctx.clone()),
+                    chrono::Utc::now(),
+                    true,
+                );
                 settle(&mut app, &ctx);
-                app.live.set_paused(true);
                 app.switch_symbol("STOCKA");
                 app.switch_timeframe(Timeframe::Hour1);
                 let mut list = Watchlist::new("Test list");
