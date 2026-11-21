@@ -117,6 +117,21 @@ at its open. For example, capital 1,000 and 15 long units entered at 100 with le
 equity `15p - 500` and margin `7.5p` at positive price `p`; a decline crosses at `p = 200/3`,
 leaving equity 500 before exit costs, even if the bar later recovers.
 
+A report records the margin a run uses.
+[`StrategyReport::margin`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.margin)
+holds the position's absolute market value times its side's funding fraction in the account
+currency at each equity mark,
+zero while flat or with a fraction of zero.
+[`StrategyReport::peak_margin`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.peak_margin)
+holds the largest such value at any observed price point of each bar, including before each fill.
+[`StrategyReport::margin_calls`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.margin_calls)
+records each filled call's time and closed quantity, independently of labels and FIFO lot splits.
+Margin marks and peaks use the same dated exchange rates as the funding checks. A run missing
+required rates withholds its trades, equity, both margin series and margin calls together.
+In the whole-position example above, the entry uses 750, one call closes all 15 units and the bar
+closes flat. With `long_funding = Some(0.5)`, the call closes 4 units at 60 and its close at 70
+leaves 11 units using 385.
+
 The report properties *Long margin calls* and *Short margin calls* name each side's rule:
 `Four times the shortfall at price points`, `Whole position at the margin crossing`, or `Off`
 when that side requires no funding. The tester shows the rule below each funding field.
@@ -216,13 +231,16 @@ placement, data loading and CSV storage. Chart entry/exit markers use the signal
 The assembled terminal and its demo mounting remain separate integration work.
 
 The Summary tab shows the selected range and its trade figures in All, Long and Short columns,
-followed by open profit, drawdown, run-up, ratio, growth and buy-and-hold figures for that range. Charts of equity,
-drawdown from peak and run-up from trough default to account units; **Percent of initial capital**
-switches all three to percentages of the selected range's initial capital, with equity starting at 100. The
-optional fee-free buy-and-hold comparison uses the same equity scale. Drawdown and run-up follow
-usable intrabar ranges, falling back to closes when ranges are unavailable. Replacing the report
-resets the switch to account units; the switch requires positive finite initial capital.
-The intrabar figures and all three charts follow the date range. Curve positions and hover
+followed by open profit, drawdown, run-up, ratio, growth, buy-and-hold and margin figures for that
+range. Charts of equity, drawdown from peak, run-up from trough and, for reports with margin data,
+margin used default to account units; **Percent of initial capital** switches every chart to
+percentages of the selected range's initial capital, with equity starting at 100. The optional
+fee-free buy-and-hold comparison uses the same equity scale. Drawdown and run-up follow usable
+intrabar ranges, falling back to closes when ranges are unavailable. Replacing the report resets
+the switch to account units; the switch requires positive finite initial capital. The intrabar
+figures and all charts follow the date range, and so do margin marks, peaks and calls. Engine
+margin points use the equity timestamps; host margin points use their own time span. Without
+usable margin points the margin chart takes no space. Curve positions and hover
 values retain submillisecond timestamps. Time labels along the axis follow its span. Hover a curve
 for timestamped values. The virtualized trade list uses entry-time order, keeps equal-time
 trades in input order, filters to the range's trades and shows fill prices, net profit,
@@ -455,6 +473,23 @@ net profit 60 divided by drawdown 100 gives 0.6. Buy-and-hold profit multiplies 
 return by positive finite initial capital. Outperformance subtracts that profit from the
 strategy's closed-trade net profit, excluding open trades. A 25% return on 1,000 makes 250,
 so net profit 60 outperforms it by -190.
+
+Margin figures need margin data: when `margin` is empty, as in a host report without it or
+one saved before it existed, all eight figures show N/A. Margin calls count finite positive
+quantities in `margin_calls`; liquidated quantity is their sum and largest liquidation their
+largest value. These are instrument units. Average margin used is the mean of finite `margin`
+values, including flat marks and the initial zero. Largest margin used is the largest finite
+`peak_margin` value. Account size required adds intrabar maximum drawdown to the largest margin
+used, or maximum drawdown between equity marks when the report has no usable equity ranges, as in
+a host report without them or one saved before they existed. Return on account size is net
+profit of all trades divided by that required size; margin efficiency divides it by average
+margin used. Each quotient is unavailable unless its divisor is positive. Non-finite results
+are unavailable. Summary CSV writes these eight figures after the buy-and-hold figures, with
+an empty `side` and `quantity` for instrument units.
+
+For the whole-position example, marks 0, 0, 750 and 0 give one call of 15 units, average margin
+187.5, largest margin 750, account size 750 + 500 = 1,250, return -40%, and margin efficiency
+-500 / 187.5, about -2.67. A run with zero funding uses zero margin and has no calls.
 
 [`StrategyReport::comparison(source)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.comparison) takes the complete source bars of this run's symbol
 and interval, with timestamps denoting bar opens. The host must supply exactly the run's
