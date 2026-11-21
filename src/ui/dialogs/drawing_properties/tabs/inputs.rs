@@ -56,6 +56,7 @@ impl InputsTab {
                 | Tool::ElliottTriangle
                 | Tool::ElliottDoubleCombo
                 | Tool::ElliottTripleCombo
+                | Tool::Table
         )
     }
 
@@ -737,8 +738,76 @@ impl InputsTab {
                     ui.end_row();
                 });
             }
+            Tool::Table => table(ui, drawing),
             _ => {}
         }
+    }
+}
+
+/// The Anchor to screen switch of a table, its size, and the width of each column and the
+/// height of each row, as the chart paints them. A new table size scales every column or every
+/// row.
+fn table(ui: &mut Ui, drawing: &mut Drawing) {
+    /// A size of `cells` columns or rows, from 1 point each, so that a size a host set below
+    /// what a drag sets shows unchanged.
+    fn size(value: &mut f32, cells: usize) -> egui::DragValue<'_> {
+        let cells = cells as f32;
+        egui::DragValue::new(value)
+            .range(cells..=cells * crate::drawings::validation::MAX_TABLE_CELL)
+            .max_decimals(1)
+            .suffix(" px")
+    }
+    let mut config = drawing.table_config().into_owned();
+    let layout = drawing.table_layout(ui.painter(), egui::Pos2::ZERO);
+    let sizes =
+        |edges: &[f32]| -> Vec<f32> { edges.windows(2).map(|pair| pair[1] - pair[0]).collect() };
+    let (widths, heights) = (sizes(&layout.xs), sizes(&layout.ys));
+    FormGrid::new("table_inputs").show(ui, |ui| {
+        let label = ui.label(l10n::text(ui.ctx(), "Position"));
+        ui.checkbox(
+            &mut config.screen_anchored,
+            l10n::text(ui.ctx(), "Anchor to screen"),
+        )
+        .labelled_by(label.id);
+        ui.end_row();
+        let (width, height) = (widths.iter().sum::<f32>(), heights.iter().sum::<f32>());
+        let (mut new_width, mut new_height) = (width, height);
+        let label = ui.label(l10n::text(ui.ctx(), "Table size"));
+        ui.label_inputs_by(label.id, |ui| {
+            ui.add(size(&mut new_width, widths.len()));
+            ui.add(size(&mut new_height, heights.len()));
+        });
+        ui.end_row();
+        if new_width != width {
+            config.scale(&widths, &heights, egui::vec2(new_width / width, 1.0));
+        }
+        if new_height != height {
+            config.scale(&widths, &heights, egui::vec2(1.0, new_height / height));
+        }
+        for (name, painted, rows) in [
+            ("Column widths", &widths, false),
+            ("Row heights", &heights, true),
+        ] {
+            let label = ui.label(l10n::text(ui.ctx(), name));
+            ui.label_inputs_by(label.id, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for (index, &painted) in painted.iter().enumerate() {
+                        let mut value = painted;
+                        if ui.add(size(&mut value, 1)).changed() {
+                            if rows {
+                                config.set_row_height(index, value);
+                            } else {
+                                config.set_column_width(index, value);
+                            }
+                        }
+                    }
+                });
+            });
+            ui.end_row();
+        }
+    });
+    if config != *drawing.table_config() {
+        drawing.table = Some(Box::new(config));
     }
 }
 
@@ -987,9 +1056,9 @@ fn vwap_fill(
     });
 }
 
-fn background(ui: &mut Ui, show: &mut bool, opacity: &mut u8) {
+fn background(ui: &mut Ui, label: &str, show: &mut bool, opacity: &mut u8) {
     ui.horizontal(|ui| {
-        ui.checkbox(show, l10n::text(ui.ctx(), "Background"));
+        ui.checkbox(show, l10n::text(ui.ctx(), label));
         let mut percent = f32::from(*opacity) * 100.0 / 255.0;
         if ui
             .add_enabled(
@@ -1232,6 +1301,7 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<Vec<ColorPick
     }
     background(
         ui,
+        "Background",
         &mut config.show_background,
         &mut config.background_opacity,
     );
@@ -1430,6 +1500,7 @@ fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
     );
     background(
         ui,
+        "Background",
         &mut config.show_background,
         &mut config.background_opacity,
     );
@@ -1481,6 +1552,7 @@ fn gann_row(
     level: &mut GannLevel,
     range: std::ops::RangeInclusive<f32>,
     inherited_width: f32,
+    inherited_style: Option<LineStyle>,
 ) -> LevelRow<'_> {
     LevelRow {
         visible: &mut level.visible,
@@ -1489,7 +1561,7 @@ fn gann_row(
         text: None,
         color: &mut level.color,
         line_style: None,
-        style_override: None,
+        style_override: inherited_style.map(|style| (&mut level.line_style, style)),
         width: Some((&mut level.width, inherited_width)),
         range,
     }
@@ -1506,7 +1578,7 @@ fn gann(
     let original = config.clone();
     let square = matches!(tool, Tool::GannSquare | Tool::GannFixed);
     let max = if square { GANN_SQUARE_UNITS } else { 1.0 };
-    let (width, color) = (drawing.stroke_width, drawing.color);
+    let (width, color, style) = (drawing.stroke_width, drawing.color, drawing.line_style);
     let new = |value| GannLevel::new(value, color);
     if tool == Tool::GannFan {
         ui.strong(l10n::text(ui.ctx(), "Fan lines"));
@@ -1516,7 +1588,7 @@ fn gann(
             &mut config.fan_ratios,
             grid_pickers(pickers, 0),
             new(1.0),
-            |level| gann_row(level, 0.01..=100.0, width),
+            |level| gann_row(level, 0.01..=100.0, width, Some(style)),
         );
     } else {
         if square {
@@ -1530,7 +1602,7 @@ fn gann(
                 &mut config.price_levels,
                 grid_pickers(pickers, 0),
                 new(max / 2.0),
-                |level| gann_row(level, 0.0..=max, width),
+                |level| gann_row(level, 0.0..=max, width, None),
             );
             ui.strong(l10n::text(ui.ctx(), "Time levels"));
             level_grid(
@@ -1539,7 +1611,7 @@ fn gann(
                 &mut config.time_levels,
                 grid_pickers(pickers, 1),
                 new(max / 2.0),
-                |level| gann_row(level, 0.0..=max, width),
+                |level| gann_row(level, 0.0..=max, width, None),
             );
         }
         if square {
@@ -1572,7 +1644,7 @@ fn gann(
                     &mut config.fan_ratios,
                     grid_pickers(pickers, 2),
                     new(1.0),
-                    |level| gann_row(level, 0.01..=100.0, width),
+                    |level| gann_row(level, 0.01..=100.0, width, None),
                 );
             }
             ui.checkbox(&mut config.show_arcs, l10n::text(ui.ctx(), "Show arcs"));
@@ -1584,7 +1656,7 @@ fn gann(
                     &mut config.arc_ratios,
                     grid_pickers(pickers, 3),
                     new(1.0),
-                    |level| gann_row(level, 0.01..=GANN_MAX_ARC, width),
+                    |level| gann_row(level, 0.01..=GANN_MAX_ARC, width, None),
                 );
             }
         } else {
@@ -1592,9 +1664,7 @@ fn gann(
         }
     }
     ui.horizontal_wrapped(|ui| {
-        if matches!(tool, Tool::GannBox | Tool::GannFan) {
-            ui.checkbox(&mut config.show_labels, l10n::text(ui.ctx(), "Labels"));
-        }
+        ui.checkbox(&mut config.show_labels, l10n::text(ui.ctx(), "Labels"));
         if tool != Tool::GannFan {
             ui.checkbox(&mut config.reverse, l10n::text(ui.ctx(), "Reverse"));
         }
@@ -1612,11 +1682,67 @@ fn gann(
             level_color(ui, one_color, &mut picker[0]);
         }
     });
-    background(
-        ui,
-        &mut config.show_background,
-        &mut config.background_opacity,
-    );
+    if config.show_labels {
+        if tool == Tool::GannBox {
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut config.labels_left, l10n::text(ui.ctx(), "Left labels"));
+                ui.checkbox(
+                    &mut config.labels_right,
+                    l10n::text(ui.ctx(), "Right labels"),
+                );
+                ui.checkbox(&mut config.labels_top, l10n::text(ui.ctx(), "Top labels"));
+                ui.checkbox(
+                    &mut config.labels_bottom,
+                    l10n::text(ui.ctx(), "Bottom labels"),
+                );
+            });
+        } else if square {
+            ui.horizontal_wrapped(|ui| {
+                let label = ui.label(l10n::text(ui.ctx(), "Font size"));
+                ui.add(
+                    egui::DragValue::new(&mut config.label_size)
+                        .range(1.0..=256.0)
+                        .suffix(" px"),
+                )
+                .labelled_by(label.id);
+                ui.checkbox(&mut config.label_bold, l10n::text(ui.ctx(), "Bold"));
+                ui.checkbox(&mut config.label_italic, l10n::text(ui.ctx(), "Italic"));
+            });
+        }
+    }
+    if tool == Tool::GannBox {
+        let price_before = (config.show_background, config.background_opacity);
+        let mut time = (
+            config
+                .show_time_background
+                .unwrap_or(config.show_background),
+            config
+                .time_background_opacity
+                .unwrap_or(config.background_opacity),
+        );
+        let time_before = time;
+        background(
+            ui,
+            "Price background",
+            &mut config.show_background,
+            &mut config.background_opacity,
+        );
+        background(ui, "Time background", &mut time.0, &mut time.1);
+        // Editing either row pins the time bands so the other row keeps what it showed.
+        if time != time_before
+            || (config.show_background, config.background_opacity) != price_before
+        {
+            config.show_time_background = Some(time.0);
+            config.time_background_opacity = Some(time.1);
+        }
+    } else {
+        background(
+            ui,
+            "Background",
+            &mut config.show_background,
+            &mut config.background_opacity,
+        );
+    }
     if square {
         price_per_bar(ui, coordinates);
     }
@@ -1798,6 +1924,58 @@ mod tests {
                 }],
             );
         }
+    }
+
+    /// Table widths scale from painted sizes, while editing one column leaves its peers and
+    /// fitted rows alone.
+    #[test]
+    fn table_inputs_anchor_and_size_columns_without_setting_row_heights() {
+        use egui::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{By, Queryable},
+        };
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .build_ui_state(
+                |ui, drawing| {
+                    super::InputsTab::show(
+                        ui,
+                        drawing,
+                        &mut Vec::new(),
+                        &mut Default::default(),
+                        None,
+                        None,
+                    );
+                },
+                Drawing::new(7, Tool::Table),
+            );
+        harness.run();
+        assert_eq!(
+            harness.state().table,
+            None,
+            "opening keeps fitted sizes unset"
+        );
+        harness.get(By::new().role(Role::CheckBox)).click();
+        harness.run();
+        harness
+            .get(By::new().role(Role::SpinButton).value("210 px"))
+            .set_value_accesskit(315.0);
+        harness.run();
+        assert_eq!(
+            harness.state().table.as_ref().unwrap().column_widths,
+            [Some(105.0); 3]
+        );
+        harness
+            .get_all(By::new().role(Role::SpinButton).value("105 px"))
+            .nth(1)
+            .unwrap()
+            .set_value_accesskit(90.0);
+        harness.run();
+        let config = harness.state().table.as_ref().unwrap();
+        assert!(config.screen_anchored);
+        assert_eq!(config.column_widths, [Some(105.0), Some(90.0), Some(105.0)]);
+        assert!(config.row_heights.is_empty());
     }
 
     /// Over 10 bars a ratio of 1.5 is 15 price units from the first anchor's 100: above it for a
@@ -2193,9 +2371,8 @@ mod tests {
         }
     }
 
-    /// The width of the first line of each list a Gann tool offers, Labels on the box and the fan,
-    /// Reverse on the box and the squares and Use one colour, which starts from the drawing's line
-    /// colour, preview without history; Cancel restores the drawing and Ok records one undo step.
+    /// Gann line widths and patterns, label sides and typography, independent bands, Reverse and
+    /// Use one colour preview without history; Cancel restores them and Ok records one undo step.
     #[test]
     fn gann_controls_preview_cancel_and_commit() {
         use egui::Role;
@@ -2218,7 +2395,7 @@ mod tests {
                     time_levels: one.clone(),
                     fan_ratios: one.clone(),
                     arc_ratios: one,
-                    ..GannConfig::for_tool(tool)
+                    ..drawing.gann.clone().unwrap()
                 };
                 drawing.gann = Some(original.clone());
                 let mut expected = original.clone();
@@ -2238,10 +2415,8 @@ mod tests {
                 }
                 let mut switches = vec!["Use one colour"];
                 expected.one_color = Some(drawing.color);
-                if matches!(tool, Tool::GannBox | Tool::GannFan) {
-                    expected.show_labels = false;
-                    switches.push("Labels");
-                }
+                expected.show_labels = !original.show_labels;
+                switches.push("Labels");
                 if tool != Tool::GannFan {
                     expected.reverse = true;
                     switches.push("Reverse");
@@ -2266,6 +2441,54 @@ mod tests {
                     h.get_by_role_and_label(Role::SpinButton, label)
                         .set_value_accesskit(5.0);
                     h.run();
+                }
+                if tool == Tool::GannBox {
+                    h.get_by_role_and_label(Role::CheckBox, "Price background")
+                        .click();
+                    h.run();
+                    let preview = h.state().0.drawings().drawings[0].gann.as_ref().unwrap();
+                    assert!(!preview.show_background);
+                    assert_eq!(preview.show_time_background, Some(true));
+                    expected.show_background = false;
+                    for label in [
+                        "Right labels",
+                        "Top labels",
+                        "Left labels",
+                        "Bottom labels",
+                        "Time background",
+                    ] {
+                        h.get_by_role_and_label(Role::CheckBox, label).click();
+                        h.run();
+                    }
+                    expected.labels_left = false;
+                    expected.labels_right = false;
+                    expected.labels_top = false;
+                    expected.labels_bottom = false;
+                    expected.show_time_background = Some(false);
+                    expected.time_background_opacity = Some(original.background_opacity);
+                } else if tool == Tool::GannFan {
+                    h.get_by_role_and_label(Role::ComboBox, "Fan line 1 line style")
+                        .click();
+                    h.run();
+                    h.get_by_label("Dashed").click();
+                    h.run();
+                    expected.fan_ratios[0].line_style = Some(LineStyle::Dashed);
+                } else {
+                    if tool == Tool::GannFixed {
+                        h.get_by_role_and_label(Role::CheckBox, "Labels").click();
+                        h.run();
+                        switches.retain(|label| *label != "Labels");
+                    }
+                    h.get_by_role_and_label(Role::SpinButton, "Font size")
+                        .set_value_accesskit(20.0);
+                    h.run();
+                    for label in ["Bold", "Italic"] {
+                        h.get_by_role_and_label(Role::CheckBox, label).click();
+                        h.run();
+                    }
+                    expected.label_size = 20.0;
+                    expected.label_bold = true;
+                    expected.label_italic = true;
                 }
                 for label in switches {
                     h.get_by_role_and_label(Role::CheckBox, label).click();

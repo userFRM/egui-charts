@@ -216,6 +216,7 @@ pub enum ChartContextAction {
 pub struct ChartMenus {
     chart: ChartContextMenu,
     series: SeriesContextMenu,
+    series_alert_price: f64,
     study: StudyContextMenu,
     drawing: DrawingContextMenu,
     axes: crate::ui::context_menu::axis::AxisMenus,
@@ -234,9 +235,15 @@ pub struct ChartMenus {
 }
 
 impl ChartMenus {
-    /// The price of the series menu's last right-click, which stays after a pick.
+    /// The raw price of the series menu's last right-click, which stays after a pick.
     pub fn series_click_price(&self) -> f64 {
         self.series.click_price
+    }
+
+    /// The price named by the series menu's alert row, rounded to the instrument's tick or
+    /// the menu's decimals, which stays after a pick.
+    pub fn series_alert_price(&self) -> f64 {
+        self.series_alert_price
     }
 
     /// Shows or hides named menu entries: Alerts, Trading, Settings, ObjectTree, Indicators,
@@ -515,6 +522,13 @@ impl ChartMenus {
                     ..
                 } => {
                     self.series.set_context(chart.symbol.clone(), price);
+                    let tick = chart
+                        .instrument()
+                        .and_then(|instrument| instrument.tick_size);
+                    let decimals = chart
+                        .menu_price_decimals(SeriesId::MAIN, price)
+                        .unwrap_or_else(|| super::standalone_decimals(price));
+                    self.series_alert_price = crate::scales::snap_price(price, tick, decimals);
                     self.series.open(pos, id);
                 }
                 RightClickTarget::Drawing { drawing_id, pos } => {
@@ -656,7 +670,8 @@ impl ChartMenus {
                 &mut store,
             ),
             RightClickTarget::Element { .. } => rows::split(
-                self.series.build_menu_items(ctx, shortcuts, &price_text),
+                self.series
+                    .build_menu_items(ctx, shortcuts, self.series_alert_price, &price_text),
                 &SeriesContextMenuAction::row_id,
                 &ChartContextAction::Series,
                 &mut store,

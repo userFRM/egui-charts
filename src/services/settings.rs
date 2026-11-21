@@ -510,6 +510,7 @@ mod tests {
             symbol: "AAA".into(),
             time: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
             speed: 2.0,
+            scope: Default::default(),
         };
         let rows = [
             (
@@ -836,6 +837,7 @@ mod tests {
             symbol: "AAA".into(),
             time: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
             speed,
+            scope: Default::default(),
         };
         let ctrl_k = |modifiers| ShortcutMap {
             bindings: vec![(
