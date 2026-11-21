@@ -596,7 +596,7 @@ pub(crate) struct CustomPart {
 
 impl CustomProfileSessions {
     /// Fill unset zones with the instrument's exchange zone.
-    #[cfg(feature = "studies")]
+    #[cfg(any(feature = "widget", feature = "studies"))]
     pub(crate) fn with_zone(&self, zone: &super::TimezoneId) -> Self {
         let mut resolved = self.clone();
         for session in &mut resolved.sessions {
@@ -749,7 +749,7 @@ impl ProfileSession {
     /// for regular or extended hours without `hours`, for pre-market or post-market without
     /// extended windows, and for segments without extended or overnight windows. Custom sessions
     /// also return `None`: [`CustomProfileSessions::parts`] divides them on separate clocks.
-    #[cfg(feature = "studies")]
+    #[cfg(any(feature = "widget", feature = "studies"))]
     pub(crate) fn session_clock(
         &self,
         clock: &super::BarClock,

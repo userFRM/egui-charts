@@ -1,5 +1,4 @@
 use super::Chart;
-#[cfg(feature = "studies")]
 use std::borrow::Cow;
 
 impl Chart {
@@ -65,7 +64,6 @@ impl Chart {
     /// extended hours still divide daily bars by their trading dates. The other choices on daily
     /// bars, and a choice without the instrument hours it reads, keep the chart's calendar, in
     /// the instrument's zone when it has no hours.
-    #[cfg(feature = "studies")]
     pub(crate) fn profile_hours<'a>(
         &self,
         selection: &'a crate::model::ProfileSession,
@@ -118,7 +116,6 @@ impl Chart {
     }
 
     /// The instrument's regular hours on this interval, absent when it supplies no hours.
-    #[cfg(feature = "studies")]
     pub(crate) fn regular_hours_clock(&self) -> Option<crate::model::BarClock> {
         let instrument = self.instrument()?;
         let hours = instrument.session.as_ref()?;
@@ -136,7 +133,6 @@ impl Chart {
     }
 
     /// Resolve a TPO study's custom zones and the regular calendar it may clip to.
-    #[cfg(feature = "studies")]
     pub(crate) fn tpo_division(
         &self,
         config: &crate::model::TPOConfig,
