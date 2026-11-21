@@ -1,6 +1,7 @@
 //! Saved levels, fan lines, arcs and background of the Gann tools.
 
 use super::DrawingToolType;
+use crate::model::LineStyle;
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::f32::consts::SQRT_2;
@@ -49,6 +50,9 @@ pub struct GannLevel {
     /// Stroke width in points. `None` takes the drawing's width, as drawings saved before levels
     /// had a width do.
     pub width: Option<f32>,
+    /// Pattern of a Gann fan line. `None` takes the drawing's style, as older saves do.
+    /// Other Gann tools keep the drawing's style for their levels, fan lines and arcs.
+    pub line_style: Option<LineStyle>,
 }
 
 impl GannLevel {
@@ -59,6 +63,7 @@ impl GannLevel {
             visible: true,
             color,
             width: None,
+            line_style: None,
         }
     }
 }
@@ -74,6 +79,8 @@ enum SavedGannLevel {
         color: [u8; 4],
         #[serde(default)]
         width: Option<f32>,
+        #[serde(default)]
+        line_style: Option<LineStyle>,
     },
     Value(f32),
 }
@@ -86,11 +93,13 @@ impl From<SavedGannLevel> for GannLevel {
                 visible,
                 color,
                 width,
+                line_style,
             } => Self {
                 value,
                 visible,
                 color,
                 width,
+                line_style,
             },
             // The drawing colour is not known here, so older values take the neutral level colour.
             SavedGannLevel::Value(value) => Self::new(value, GREY),
@@ -135,8 +144,10 @@ pub struct GannConfig {
     pub background_opacity: u8,
     /// Whether a Gann box draws rays from its corners to the level points on its far edges.
     pub show_angles: bool,
-    /// Whether a Gann box writes each level's value beside and below it, and a Gann fan each
-    /// line's ratio at the pane's edge. Gann squares draw no level labels.
+    /// Whether labels are drawn: a box's level values on the enabled sides, a fan's ratios
+    /// at the pane edge, or a square's price range, bar count and price per bar beside it.
+    /// On by default except for the fixed square, including saves without this field.
+    #[serde(default = "left_out_show_labels")]
     pub show_labels: bool,
     /// Whether a Gann box, Gann square or fixed Gann square is mirrored inside its anchors: its
     /// levels, fan lines and arcs are counted from the corner opposite the first anchor, and
@@ -144,15 +155,36 @@ pub struct GannConfig {
     pub reverse: bool,
     /// A colour as RGBA that every line, band and label of the tool takes instead of the level
     /// colours, which are kept for when it is cleared. Labels drawn on a box, the fan's ratios
-    /// and a square's range readout, take it as the box's fill under white or black text,
+    /// and a square's label, take it as the box's fill under white or black text,
     /// whichever reads on it. `None` draws the level colours.
     pub one_color: Option<[u8; 4]>,
+    /// Whether a Gann box labels its price levels on its left side.
+    pub labels_left: bool,
+    /// Whether a Gann box labels its price levels on its right side.
+    pub labels_right: bool,
+    /// Whether a Gann box labels its time levels above it.
+    pub labels_top: bool,
+    /// Whether a Gann box labels its time levels below it.
+    pub labels_bottom: bool,
+    /// Whether a Gann box tints bands between time levels. `None` follows
+    /// [`show_background`](Self::show_background), preserving older saves. Price bands
+    /// always follow `show_background`.
+    pub show_time_background: Option<bool>,
+    /// Time band opacity from 0 to 255. `None` follows
+    /// [`background_opacity`](Self::background_opacity).
+    pub time_background_opacity: Option<u8>,
+    /// Label size in points for a Gann square or fixed square, from 1 to 256.
+    pub label_size: f32,
+    /// Whether a square's label is bold.
+    pub label_bold: bool,
+    /// Whether a square's label is italic.
+    pub label_italic: bool,
 }
 
 thread_local! {
     /// The fields whose default differs between the Gann tools that the last [`GannConfig`] read
-    /// on this thread left out: its price levels, time levels and fan lines.
-    static LEFT_OUT: Cell<[bool; 3]> = const { Cell::new([false; 3]) };
+    /// on this thread left out: its price levels, time levels, fan lines and labels switch.
+    static LEFT_OUT: Cell<[bool; 4]> = const { Cell::new([false; 4]) };
 }
 
 /// Notes that the configuration being read left out `field`, and gives its [`Default`] value.
@@ -175,6 +207,10 @@ fn left_out_time_levels() -> Vec<GannLevel> {
 
 fn left_out_fan_ratios() -> Vec<GannLevel> {
     left_out(2, |config| config.fan_ratios)
+}
+
+fn left_out_show_labels() -> bool {
+    left_out(3, |config| config.show_labels)
 }
 
 fn levels(entries: &[(f32, [u8; 4])]) -> Vec<GannLevel> {
@@ -239,11 +275,36 @@ impl Default for GannConfig {
             show_labels: true,
             reverse: false,
             one_color: None,
+            labels_left: true,
+            labels_right: false,
+            labels_top: false,
+            labels_bottom: true,
+            show_time_background: None,
+            time_background_opacity: None,
+            label_size: 10.0,
+            label_bold: false,
+            label_italic: false,
         }
     }
 }
 
 impl GannConfig {
+    /// Settings a new Gann drawing starts with: a box labels all four sides, and a square or
+    /// fixed square uses a 12 point regular, upright label. The fixed square's label stays off.
+    /// Saved drawings without settings keep their former defaults instead.
+    pub fn drawing_default(tool: DrawingToolType) -> Self {
+        let mut config = Self::for_tool(tool);
+        match tool {
+            DrawingToolType::GannBox => {
+                config.labels_right = true;
+                config.labels_top = true;
+            }
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed => config.label_size = 12.0,
+            _ => {}
+        }
+        config
+    }
+
     /// The levels, fan lines and arcs a new Gann box, square, fixed square or fan starts from.
     /// Start a configuration from the drawing's own tool here rather than from
     /// [`GannConfig::default`], which is the Gann box's. A Gann square or fixed square adds an
@@ -276,7 +337,8 @@ impl GannConfig {
         config
     }
 
-    /// Defaults for drawings and templates saved before squares stored their new lists.
+    /// Defaults for saved drawings and templates: boxes keep left and bottom labels, squares
+    /// keep 10 point labels, ten arcs and grey hidden fan lines, and fixed labels stay off.
     pub(crate) fn saved_default(tool: DrawingToolType) -> Self {
         match tool {
             DrawingToolType::GannSquare | DrawingToolType::GannFixed => {
@@ -291,6 +353,7 @@ impl GannConfig {
                 Self {
                     price_levels: units.clone(),
                     time_levels: units,
+                    show_labels: tool != DrawingToolType::GannFixed,
                     ..Self::default()
                 }
             }
@@ -315,13 +378,14 @@ impl GannConfig {
     /// Forgets the fields an earlier configuration read on this thread left out, before a
     /// drawing that may hold one is read.
     pub(crate) fn forget_left_out() {
-        LEFT_OUT.with(|left_out| left_out.set([false; 3]));
+        LEFT_OUT.with(|left_out| left_out.set([false; 4]));
     }
 
     /// Takes missing fields from the saved defaults of `tool`, preserving its former lists.
     pub(crate) fn fill_left_out(&mut self, tool: DrawingToolType) {
-        let [price_levels, time_levels, fan_ratios] = LEFT_OUT.with(|l| l.replace([false; 3]));
-        if !(price_levels || time_levels || fan_ratios) {
+        let [price_levels, time_levels, fan_ratios, show_labels] =
+            LEFT_OUT.with(|l| l.replace([false; 4]));
+        if !(price_levels || time_levels || fan_ratios || show_labels) {
             return;
         }
         let defaults = Self::saved_default(tool);
@@ -333,6 +397,9 @@ impl GannConfig {
         }
         if fan_ratios {
             self.fan_ratios = defaults.fan_ratios;
+        }
+        if show_labels {
+            self.show_labels = defaults.show_labels;
         }
     }
 }
@@ -389,7 +456,13 @@ mod tests {
             assert_eq!(arc.color, colour);
             assert!(arc.visible);
         }
-        assert_eq!(GannConfig::for_tool(DrawingToolType::GannFixed), square);
+        assert_eq!(
+            GannConfig::for_tool(DrawingToolType::GannFixed),
+            GannConfig {
+                show_labels: false,
+                ..square
+            }
+        );
         let fan = GannConfig::for_tool(DrawingToolType::GannFan);
         assert_eq!(fan.fan_ratios.iter().filter(|l| l.visible).count(), 9);
     }
