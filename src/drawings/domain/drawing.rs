@@ -348,8 +348,9 @@ pub struct Drawing {
     #[serde(default)]
     pub vwap: Option<VwapConfig>,
 
-    /// Levels, fan lines, arcs and background of the Gann tools. New squares store
-    /// [`GannConfig::for_tool`]; `None` keeps the former ten arcs and grey hidden fan lines.
+    /// Levels, fan lines, arcs, background and labels of the Gann tools. New drawings store
+    /// [`GannConfig::drawing_default`]; `None` keeps saved boxes' left and bottom labels and
+    /// squares' 10 point labels, ten arcs and grey hidden fan lines.
     #[serde(default)]
     pub gann: Option<GannConfig>,
     /// Average range and noise, in ticks, and colours of the candles a Ghost Feed projects. New
@@ -863,9 +864,12 @@ impl Drawing {
             closed: false,
             gann: matches!(
                 tool_type,
-                DrawingToolType::GannSquare | DrawingToolType::GannFixed
+                DrawingToolType::GannBox
+                    | DrawingToolType::GannSquare
+                    | DrawingToolType::GannFixed
+                    | DrawingToolType::GannFan
             )
-            .then(|| GannConfig::for_tool(tool_type)),
+            .then(|| GannConfig::drawing_default(tool_type)),
             ghost_feed: (tool_type == DrawingToolType::GhostFeed)
                 .then(GhostFeedConfig::drawing_default),
             bars_pattern: (tool_type == DrawingToolType::BarsPattern).then(|| BarsPatternConfig {
