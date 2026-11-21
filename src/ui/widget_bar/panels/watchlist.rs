@@ -40,7 +40,9 @@ const MARK_SIZE: f32 = 18.0;
 /// column.
 const MIN_COLUMN_WIDTH: f32 = 32.0;
 
-use crate::model::{SkippedEntries, Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
+use crate::model::{
+    SkippedEntries, Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem, valid_symbol,
+};
 
 /// The header label of `column`.
 fn column_label(column: WatchlistColumn) -> &'static str {
@@ -250,11 +252,12 @@ enum SectionUndo {
 /// clears it and undoes a clear or a section move; the more menu shows the descriptions given with
 /// [`set_description`](Self::set_description) and hides the symbol marks. The host persists
 /// [`lists`](Self::lists), with the stars, descriptions and logos settings and column widths of
-/// each, and handles file intents.
+/// each, and [`unlisted_flags`](Self::unlisted_flags), and handles file intents.
 /// The wide view groups rows by section, exchange, instrument type, sector or currency from
 /// [`set_instrument`](Self::set_instrument), shows optional summary rows, and shows the host's
 /// numeric columns added with [`add_column`](Self::add_column).
-/// Each symbol has the same flag in every list; removing it from a flag view clears its flag.
+/// Each symbol has one flag in every list, kept while no list holds it, so it stays in its flag
+/// view until its flag is removed; removing it from a flag view removes its flag.
 pub struct WatchlistPanel {
     lists: Vec<Watchlist>,
     active: usize,
@@ -277,6 +280,9 @@ pub struct WatchlistPanel {
     wide: bool,
     /// Shows the symbols flagged this way in any list instead of the active list.
     flag_filter: Option<WatchlistFlag>,
+    /// Every flagged symbol and its flag, also those no list holds, in the order they took the
+    /// flag. List entries carry the same flags.
+    flags: Vec<(String, WatchlistFlag)>,
     selected: Option<String>,
     service: Option<Arc<dyn Quotes>>,
     inbox: Arc<Inbox>,
@@ -323,6 +329,7 @@ impl std::fmt::Debug for WatchlistPanel {
                     .collect::<Vec<_>>(),
             )
             .field("flag_filter", &self.flag_filter)
+            .field("flags", &self.flags)
             .field("selected", &self.selected)
             .field("generation", &self.generation)
             .field("subscribed", &self.subscribed)
@@ -348,7 +355,10 @@ impl WatchlistPanel {
         if lists.is_empty() {
             lists.push(Watchlist::new(DEFAULT_LIST));
         }
-        share_flags(&mut lists);
+        let flags = first_flags(&lists);
+        for list in &mut lists {
+            adopt_flags(&mut list.items, &flags);
+        }
         Self {
             lists,
             active: 0,
@@ -365,6 +375,7 @@ impl WatchlistPanel {
             host_columns: Vec::new(),
             wide: false,
             flag_filter: None,
+            flags,
             selected: None,
             service: None,
             inbox: Arc::default(),
@@ -396,8 +407,9 @@ impl WatchlistPanel {
         self.flag_filter
     }
 
-    /// Shows the symbols flagged `flag` in any list, each once, instead of the active list; `None`
-    /// returns to the active list. The view follows flag changes in the lists.
+    /// Shows the symbols flagged `flag`, each once, instead of the active list: those of every
+    /// list, then those no list holds; `None` returns to the active list. The view follows flag
+    /// changes, and while it is shown [`add_symbol`](Self::add_symbol) flags the symbol.
     pub fn set_flag_filter(&mut self, flag: Option<WatchlistFlag>) {
         self.flag_filter = flag;
     }
@@ -434,7 +446,8 @@ impl WatchlistPanel {
     }
 
     /// The symbols the panel shows, which need quotes: those of the active list, or with a
-    /// [flag filter](Self::set_flag_filter) the flagged ones of every list, each once.
+    /// [flag filter](Self::set_flag_filter) the symbols flagged that way, each once: those of
+    /// every list, then those no list holds.
     pub fn symbols(&self) -> impl Iterator<Item = &str> {
         let symbols: Vec<&str> = match self.flag_filter {
             Some(flag) => flagged_symbols(&self.lists, flag)
@@ -443,6 +456,11 @@ impl WatchlistPanel {
                     WatchlistItem::Symbol { symbol, .. } => Some(symbol.as_str()),
                     WatchlistItem::Section(_) => None,
                 })
+                .chain(
+                    unlisted(&self.lists, &self.flags)
+                        .filter(|(_, at)| *at == flag)
+                        .map(|(symbol, _)| symbol.as_str()),
+                )
                 .collect(),
             None => self.lists[self.active].symbols().collect(),
         };
@@ -606,7 +624,7 @@ impl WatchlistPanel {
             && let Some(mut copy) = self.copy_source.take()
         {
             (copy.name, copy.favorite) = (name, false);
-            adopt_flags(&mut copy.items, &self.lists);
+            adopt_flags(&mut copy.items, &self.flags);
             self.lists.push(copy);
         }
         let Some(service) = &self.service else {
@@ -678,7 +696,7 @@ impl WatchlistPanel {
     /// Selects the next or previous shown symbol, wrapping at the ends.
     fn step(&mut self, forward: bool) -> WatchlistAction {
         let items = match self.flag_filter {
-            Some(flag) => flag_view(&self.lists, flag),
+            Some(flag) => flag_view(&self.lists, &self.flags, flag),
             None => self.lists[self.active].items.clone(),
         };
         let group = |symbol: &str| group_key(&self.groups, self.grouping, symbol);
@@ -726,33 +744,69 @@ impl WatchlistPanel {
         WatchlistAction::SelectSymbol(symbol)
     }
 
-    /// Appends `symbol` to the active list as [`Watchlist::add_symbol`] does, such as the symbol
-    /// picked after [`WatchlistAction::AddSymbol`]. Returns false when the list is unchanged.
+    /// Adds `symbol` to the shown list, such as the symbol picked after
+    /// [`WatchlistAction::AddSymbol`] or the chart symbol for
+    /// [`KeyboardAction::AddToWatchlist`](crate::config::KeyboardAction::AddToWatchlist): appends
+    /// it to the active list as [`Watchlist::add_symbol`] does or, while a
+    /// [flag filter](Self::set_flag_filter) is set, gives it the filter's flag in every list that
+    /// holds it, without adding it to a list. Returns false when nothing changed: an invalid
+    /// symbol, one the active list holds, or under a filter one that already has that flag.
     pub fn add_symbol(&mut self, symbol: &str) -> bool {
-        self.add_symbol_to(self.active, symbol)
+        let Some(flag) = self.flag_filter else {
+            return self.add_symbol_to(self.active, symbol);
+        };
+        let symbol = symbol.trim();
+        valid_symbol(symbol) && set_flag(&mut self.lists, &mut self.flags, symbol, Some(flag))
     }
 
     /// Appends `symbol` to the list at `list` in [`lists`](Self::lists) as [`Watchlist::add_symbol`]
     /// does, such as for [`ContextMenuAction::AddToWatchlist`](crate::ui::context_menu::ContextMenuAction::AddToWatchlist).
-    /// Returns false when there is no such list or it is unchanged.
+    /// The added entry takes the symbol's flag, also while a flag filter is set. Returns false
+    /// when there is no such list or it is unchanged.
     pub fn add_symbol_to(&mut self, list: usize, symbol: &str) -> bool {
-        let added = self
-            .lists
-            .get_mut(list)
-            .is_some_and(|list| list.add_symbol(symbol));
-        if added {
-            share_flags(&mut self.lists);
+        let Some(entries) = self.lists.get_mut(list) else {
+            return false;
+        };
+        if !entries.add_symbol(symbol) {
+            return false;
         }
-        added
+        adopt_flags(&mut entries.items, &self.flags);
+        true
+    }
+
+    /// The flags of symbols no list holds, such as a flagged symbol removed from its last list or
+    /// one added while a flag view was shown, in the order the flag views show them. Save them
+    /// with [`lists`](Self::lists), as
+    /// [`UserSettings::unlisted_flags`](crate::services::UserSettings::unlisted_flags) does, and
+    /// restore them with [`set_unlisted_flags`](Self::set_unlisted_flags).
+    pub fn unlisted_flags(&self) -> Vec<(String, WatchlistFlag)> {
+        unlisted(&self.lists, &self.flags).cloned().collect()
+    }
+
+    /// Restores the flags of symbols no list holds, as [`unlisted_flags`](Self::unlisted_flags)
+    /// gave them, after [`new`](Self::new), replacing the panel's unlisted flags. Entries whose
+    /// symbol a list holds keep that list's flag and are left out, as are invalid symbols and a
+    /// repeated symbol after its first entry.
+    pub fn set_unlisted_flags(&mut self, flags: impl IntoIterator<Item = (String, WatchlistFlag)>) {
+        let listed: HashSet<&str> = self.lists.iter().flat_map(Watchlist::symbols).collect();
+        self.flags
+            .retain(|(symbol, _)| listed.contains(symbol.as_str()));
+        let mut seen = HashSet::new();
+        for (symbol, flag) in flags {
+            let symbol = symbol.trim();
+            if valid_symbol(symbol) && !listed.contains(symbol) && seen.insert(symbol.to_owned()) {
+                self.flags.push((symbol.to_owned(), flag));
+            }
+        }
     }
 
     /// Adds a list read with [`Watchlist::read_text`] and shows it, turning any flag filter off.
     /// When the text held entries the list leaves out, the panel says how many above the list
     /// until the user dismisses it or imports again.
     pub fn import(&mut self, name: impl Into<String>, text: &str) {
-        let (list, skipped) = Watchlist::read_text(name, text);
+        let (mut list, skipped) = Watchlist::read_text(name, text);
+        adopt_flags(&mut list.items, &self.flags);
         self.lists.push(list);
-        share_flags(&mut self.lists);
         (self.active, self.flag_filter) = (self.lists.len() - 1, None);
         self.import_note = (skipped != SkippedEntries::default()).then_some((self.active, skipped));
     }
@@ -793,6 +847,7 @@ impl WatchlistPanel {
             groups,
             host_columns,
             flag_filter,
+            flags,
             selected,
             undo,
             import_note,
@@ -933,8 +988,11 @@ impl WatchlistPanel {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.label(l10n::text(ui.ctx(), "Name"));
-                    ui.text_edit_singleline(&mut lists[*active].name)
-                        .accessible_name(l10n::text(ui.ctx(), "Name"));
+                    ui.add_enabled(
+                        flag_filter.is_none(),
+                        egui::TextEdit::singleline(&mut lists[*active].name),
+                    )
+                    .accessible_name(l10n::text(ui.ctx(), "Name"));
                 });
                 if ui.button(l10n::text(ui.ctx(), "New list")).clicked() {
                     let name = (2..)
@@ -945,7 +1003,13 @@ impl WatchlistPanel {
                     (*active, *flag_filter) = (lists.len() - 1, None);
                     ui.close();
                 }
-                if ui.button(l10n::text(ui.ctx(), "Duplicate list")).clicked() {
+                if ui
+                    .add_enabled(
+                        flag_filter.is_none(),
+                        egui::Button::new(l10n::text(ui.ctx(), "Duplicate list")),
+                    )
+                    .clicked()
+                {
                     let copy =
                         lists[*active].duplicate(lists.iter().map(|list| list.name.as_str()));
                     lists.push(copy);
@@ -983,7 +1047,7 @@ impl WatchlistPanel {
                     .clicked()
                     && let Some(mut edit) = undo.pop()
                 {
-                    adopt_flags(&mut edit.before, lists);
+                    adopt_flags(&mut edit.before, flags);
                     lists[edit.list].items = edit.before;
                     let states = section_states(collapsed_sections, edit.list);
                     match edit.sections {
@@ -997,7 +1061,7 @@ impl WatchlistPanel {
                 }
                 if ui
                     .add_enabled(
-                        lists.len() > 1,
+                        flag_filter.is_none() && lists.len() > 1,
                         egui::Button::new(l10n::text(ui.ctx(), "Delete list")),
                     )
                     .clicked()
@@ -1066,7 +1130,13 @@ impl WatchlistPanel {
                     action = WatchlistAction::Import;
                     ui.close();
                 }
-                if ui.button(l10n::text(ui.ctx(), "Export list…")).clicked() {
+                if ui
+                    .add_enabled(
+                        flag_filter.is_none(),
+                        egui::Button::new(l10n::text(ui.ctx(), "Export list…")),
+                    )
+                    .clicked()
+                {
                     action = WatchlistAction::Export {
                         name: lists[*active].name.clone(),
                         text: lists[*active].to_text(),
@@ -1359,7 +1429,7 @@ impl WatchlistPanel {
         // applied to their lists after drawing.
         let mut flagged = flag_filter.map(|flag| {
             let mut view = Watchlist::new("");
-            view.items = flag_view(lists, flag);
+            view.items = flag_view(lists, flags, flag);
             view
         });
         // The flag view shows these settings of the active list.
@@ -1877,7 +1947,7 @@ impl WatchlistPanel {
                 .insert(index, WatchlistItem::Section("New section".to_owned()));
         }
         if let Some((symbol, flag)) = flag_edit {
-            set_flag(lists, &symbol, flag);
+            set_flag(lists, flags, &symbol, flag);
         }
         if let Some((index, down)) = section_move
             && let Some(at) = sections.iter().position(|&section| section == index)
@@ -2046,27 +2116,52 @@ fn chosen_columns(list: &Watchlist, fallback: &[WatchlistColumn]) -> Vec<Watchli
         .collect()
 }
 
-/// Reconcile loaded lists: the first flagged entry of a symbol supplies every entry's flag.
-fn share_flags(lists: &mut [Watchlist]) {
-    let mut flags = HashMap::new();
-    for item in lists.iter().flat_map(|list| &list.items) {
-        if let WatchlistItem::Symbol {
-            symbol,
-            flag: Some(flag),
-        } = item
-        {
-            flags.entry(symbol.clone()).or_insert(*flag);
-        }
-    }
-    for item in lists.iter_mut().flat_map(|list| &mut list.items) {
+/// The flag of each symbol in loaded lists: its first flagged entry, in list order, then row order.
+fn first_flags(lists: &[Watchlist]) -> Vec<(String, WatchlistFlag)> {
+    let mut seen = HashSet::new();
+    lists
+        .iter()
+        .flat_map(|list| &list.items)
+        .filter_map(|item| match item {
+            WatchlistItem::Symbol {
+                symbol,
+                flag: Some(flag),
+            } if seen.insert(symbol.as_str()) => Some((symbol.clone(), *flag)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Entries that come in, such as added, imported, copied or restored ones, take the symbol's
+/// current flag, or none.
+fn adopt_flags(items: &mut [WatchlistItem], flags: &[(String, WatchlistFlag)]) {
+    let flags: HashMap<&str, WatchlistFlag> = flags
+        .iter()
+        .map(|(symbol, flag)| (symbol.as_str(), *flag))
+        .collect();
+    for item in items {
         if let WatchlistItem::Symbol { symbol, flag } = item {
             *flag = flags.get(symbol.as_str()).copied();
         }
     }
 }
 
-/// Change a symbol's flag everywhere it occurs.
-fn set_flag(lists: &mut [Watchlist], symbol: &str, flag: Option<WatchlistFlag>) {
+/// Change a symbol's flag in the registry and everywhere it is listed; a new flag puts the symbol
+/// last in its flag view's unlisted part. Returns false when the flag was already `flag`.
+fn set_flag(
+    lists: &mut [Watchlist],
+    flags: &mut Vec<(String, WatchlistFlag)>,
+    symbol: &str,
+    flag: Option<WatchlistFlag>,
+) -> bool {
+    let current = flags.iter().position(|(at, _)| at == symbol);
+    if current.map(|at| flags[at].1) == flag {
+        return false;
+    }
+    if let Some(at) = current {
+        flags.remove(at);
+    }
+    flags.extend(flag.map(|flag| (symbol.to_owned(), flag)));
     for item in lists.iter_mut().flat_map(|list| &mut list.items) {
         if let WatchlistItem::Symbol {
             symbol: at,
@@ -2077,32 +2172,38 @@ fn set_flag(lists: &mut [Watchlist], symbol: &str, flag: Option<WatchlistFlag>) 
             *entry = flag;
         }
     }
+    true
 }
 
-/// Restored snapshots take current flags, including a removed flag, for symbols still listed.
-fn adopt_flags(items: &mut [WatchlistItem], lists: &[Watchlist]) {
-    let current: HashMap<&str, Option<WatchlistFlag>> = lists
+/// The registry entries of symbols no list holds, in registry order.
+fn unlisted<'a>(
+    lists: &'a [Watchlist],
+    flags: &'a [(String, WatchlistFlag)],
+) -> impl Iterator<Item = &'a (String, WatchlistFlag)> {
+    let listed: HashSet<&str> = lists.iter().flat_map(Watchlist::symbols).collect();
+    flags
         .iter()
-        .flat_map(|list| &list.items)
-        .filter_map(|item| match item {
-            WatchlistItem::Symbol { symbol, flag } => Some((symbol.as_str(), *flag)),
-            WatchlistItem::Section(_) => None,
-        })
-        .collect();
-    for item in items {
-        if let WatchlistItem::Symbol { symbol, flag } = item
-            && let Some(shared) = current.get(symbol.as_str())
-        {
-            *flag = *shared;
-        }
-    }
+        .filter(move |(symbol, _)| !listed.contains(symbol.as_str()))
 }
 
-/// Copies of the items the `flag` view shows: each symbol flagged `flag`, once.
-fn flag_view(lists: &[Watchlist], flag: WatchlistFlag) -> Vec<WatchlistItem> {
+/// Copies of the items the `flag` view shows: each listed symbol flagged `flag`, once, then the
+/// unlisted ones.
+fn flag_view(
+    lists: &[Watchlist],
+    flags: &[(String, WatchlistFlag)],
+    flag: WatchlistFlag,
+) -> Vec<WatchlistItem> {
     flagged_symbols(lists, flag)
         .into_iter()
         .map(|(list, item)| lists[list].items[item].clone())
+        .chain(
+            unlisted(lists, flags)
+                .filter(|(_, at)| *at == flag)
+                .map(|(symbol, flag)| WatchlistItem::Symbol {
+                    symbol: symbol.clone(),
+                    flag: Some(*flag),
+                }),
+        )
         .collect()
 }
 
@@ -2523,7 +2624,8 @@ mod tests {
 
     /// Stars, the descriptions and logos settings and column widths survive the settings document,
     /// a list saved before they existed reads with stars and descriptions off and logos on, and
-    /// the width of a column a newer release added is left out while the rest reads.
+    /// the width of a column a newer release added is left out while the rest reads, as is an
+    /// unlisted symbol's flag a newer release added.
     #[test]
     fn list_settings_survive_the_settings_document() {
         use crate::services::UserSettings;
@@ -2564,6 +2666,11 @@ mod tests {
         assert_eq!(
             UserSettings::from_json(newer).unwrap().watchlists,
             [expected]
+        );
+        let flags = r#"{"version":1,"unlisted_flags":[["TSLA","Red"],["XOM","Teal"]]}"#;
+        assert_eq!(
+            UserSettings::from_json(flags).unwrap().unlisted_flags,
+            [("TSLA".to_owned(), WatchlistFlag::Red)]
         );
     }
 
@@ -2779,7 +2886,13 @@ mod tests {
         *h.state_mut() = panel;
         h.run();
         press(&mut h, "More", "Save a copy");
-        set_flag(&mut h.state_mut().lists, "B", Some(WatchlistFlag::Red));
+        let panel = h.state_mut();
+        set_flag(
+            &mut panel.lists,
+            &mut panel.flags,
+            "B",
+            Some(WatchlistFlag::Red),
+        );
         h.state_mut().lists[1].name = "Renamed".into();
         h.state_mut().lists[1].add_symbol("C");
         host.0
@@ -3296,6 +3409,135 @@ mod tests {
         assert_eq!(flags(&h, "AAPL"), [None; 3]);
         assert_eq!(flags(&h, "MSFT"), [Some(Red)]);
         assert_eq!(flags(&h, "NVDA"), [Some(Green); 2]);
+    }
+
+    /// While a flag view is shown, adding a symbol flags it instead of appending it to the hidden
+    /// list, and the flag of a symbol no list holds survives the settings document.
+    #[test]
+    fn adding_in_a_flag_view_flags_the_symbol_and_keeps_it_saved() {
+        use crate::services::UserSettings;
+        use WatchlistFlag::Red;
+        let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "AAPL,MSFT")]);
+        panel.set_flag_filter(Some(Red));
+        assert!(panel.add_symbol(" TSLA "));
+        assert_eq!(panel.symbols().collect::<Vec<_>>(), ["TSLA"]);
+        assert_eq!(panel.lists()[0].to_text(), "AAPL,MSFT");
+        assert_eq!(panel.unlisted_flags(), [("TSLA".to_owned(), Red)]);
+        let settings = UserSettings {
+            watchlists: panel.lists().to_vec(),
+            unlisted_flags: panel.unlisted_flags(),
+            ..Default::default()
+        };
+        let read = UserSettings::from_json(&settings.to_json()).unwrap();
+        let mut restored = WatchlistPanel::new(read.watchlists);
+        restored.set_unlisted_flags(read.unlisted_flags);
+        restored.set_flag_filter(Some(Red));
+        assert_eq!(restored.symbols().collect::<Vec<_>>(), ["TSLA"]);
+        assert!(!panel.add_symbol("TSLA") && !panel.add_symbol("A,B"));
+        assert!(panel.add_symbol("AAPL"));
+        assert_eq!(panel.symbols().collect::<Vec<_>>(), ["AAPL", "TSLA"]);
+        assert_eq!(
+            panel.lists()[0].items[0],
+            WatchlistItem::Symbol {
+                symbol: "AAPL".into(),
+                flag: Some(Red)
+            }
+        );
+        assert!(panel.add_symbol_to(0, "TSLA"));
+        assert_eq!(panel.symbols().collect::<Vec<_>>(), ["AAPL", "TSLA"]);
+        assert!(panel.unlisted_flags().is_empty());
+    }
+
+    /// Remove from list, Clear list and Delete list keep the flag of a symbol they take out of
+    /// every list, so it stays in its flag view until Remove flag.
+    #[test]
+    fn a_flagged_symbol_keeps_its_flag_when_it_leaves_its_lists() {
+        use WatchlistFlag::Red;
+        use egui_kittest::{Harness, kittest::Queryable};
+        for route in ["Remove from list", "Clear list", "Delete list"] {
+            let mut main = Watchlist::from_text("Main", "MSFT,NVDA");
+            main.items[0] = WatchlistItem::Symbol {
+                symbol: "MSFT".into(),
+                flag: Some(Red),
+            };
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(vec2(300.0, 600.0))
+                .build_ui_state(
+                    |ui, panel: &mut WatchlistPanel| {
+                        panel.show(ui);
+                    },
+                    WatchlistPanel::new(vec![main, Watchlist::from_text("Other", "AAPL")]),
+                );
+            if route == "Remove from list" {
+                h.get_by_role_and_label(egui::Role::ListBoxOption, "MSFT")
+                    .click_secondary();
+            } else {
+                h.get_by_label("Main").click();
+            }
+            h.run();
+            h.get_by_label(route).click();
+            h.run();
+            h.state_mut().set_flag_filter(Some(Red));
+            h.run();
+            assert_eq!(h.state().symbols().collect::<Vec<_>>(), ["MSFT"], "{route}");
+            assert_eq!(
+                h.state().unlisted_flags(),
+                [("MSFT".to_owned(), Red)],
+                "{route}"
+            );
+            h.get_by_role_and_label(egui::Role::ListBoxOption, "MSFT")
+                .click_secondary();
+            h.run();
+            h.get_by_label("Remove flag").click();
+            h.run();
+            assert_eq!(h.state().symbols().count(), 0, "{route}");
+            assert!(h.state().unlisted_flags().is_empty(), "{route}");
+        }
+    }
+
+    /// A flag view's list menu and More menu do not rename, duplicate, delete or export the list it
+    /// hides.
+    #[test]
+    fn a_flag_view_offers_no_edit_of_the_hidden_list() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let mut panel = WatchlistPanel::new(vec![
+            Watchlist::from_text("Main", "A"),
+            Watchlist::from_text("Other", "B"),
+        ]);
+        panel.set_flag_filter(Some(WatchlistFlag::Red));
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 600.0))
+            .build_ui_state(
+                |ui, panel: &mut WatchlistPanel| {
+                    panel.show(ui);
+                },
+                panel,
+            );
+        h.get_by_label("Red flagged").click();
+        h.run();
+        assert!(
+            h.get_by_role_and_label(egui::Role::TextInput, "Name")
+                .accesskit_node()
+                .is_disabled()
+        );
+        for item in ["Duplicate list", "Delete list"] {
+            assert!(
+                h.get_by_label(item).accesskit_node().is_disabled(),
+                "{item}"
+            );
+        }
+        h.get_by_label("More").click();
+        h.run();
+        assert!(
+            h.get_by_label("Export list…")
+                .accesskit_node()
+                .is_disabled()
+        );
     }
 
     /// A symbol's menu inserts an expanded section above it without shifting later collapse states.

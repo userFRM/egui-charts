@@ -100,7 +100,8 @@ pub enum WatchlistItem {
     Symbol {
         /// Instrument identifier used by the host.
         symbol: String,
-        /// The symbol's colour flag. `WatchlistPanel` keeps it equal in every list.
+        /// The symbol's colour flag. `WatchlistPanel` keeps it equal in every list, and keeps it
+        /// while no list holds the symbol.
         flag: Option<WatchlistFlag>,
     },
     /// A section title grouping the symbols below it, up to the next section.
@@ -118,7 +119,7 @@ fn trimmed(entry: &str) -> &str {
 
 /// Whether `symbol`, already trimmed, can be a list symbol: not empty, without separators or
 /// other control characters, and not a section title.
-fn valid_symbol(symbol: &str) -> bool {
+pub(crate) fn valid_symbol(symbol: &str) -> bool {
     !symbol.is_empty()
         && !symbol.contains(SEPARATORS)
         && !symbol.chars().any(char::is_control)

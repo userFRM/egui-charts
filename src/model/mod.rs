@@ -152,6 +152,7 @@ pub use trading::{
     TakeProfitLevel, TimeInForce, TradingRules,
 };
 
+pub(crate) use watchlist::valid_symbol;
 pub use watchlist::{SkippedEntries, Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
 
 #[cfg(test)]
