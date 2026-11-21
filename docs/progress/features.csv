@@ -208,7 +208,7 @@ Chart,Keyboard shortcuts,Left/Right arrows move the chart or selected drawings,v
 Chart,Keyboard shortcuts,Maximize chart,incomplete,library,src/config/keyboard.rs;src/widget/layout.rs;src/widget/keyboard.rs,3572
 Chart,Keyboard shortcuts,Next and previous chart,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/layout.rs,3572
 Chart,Keyboard shortcuts,Open indicators,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;terminal/src/commands.rs,2798;2800
-Chart,Keyboard shortcuts,Quick search,incomplete,library,src/config/keyboard.rs;src/ui_kit/command_palette/palette.rs;src/ui_kit/command_palette/fuzzy.rs;terminal/src/commands.rs;examples/demo/commands.rs,
+Chart,Keyboard shortcuts,Quick search,incomplete,library,src/config/keyboard.rs;src/ui_kit/command_palette/palette.rs;src/ui_kit/command_palette/fuzzy.rs;terminal/src/commands.rs;examples/demo/commands.rs;src/ui_kit/command_palette/command.rs,3597
 Chart,Keyboard shortcuts,Reset chart,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/time_scale.rs,
 Chart,Keyboard shortcuts,Save layout,verified,library,src/config/keyboard.rs;terminal/src/layouts.rs,
 Chart,Keyboard shortcuts,Scale toggles,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/layout.rs,2810;2798;2799
@@ -966,7 +966,7 @@ Workspace,Toolbars and panels,Numeric horizontal scale samples,verified,library,
 Workspace,Toolbars and panels,Object tree panel,incomplete,library,src/ui/widget_bar/panels/object_tree/chart_actions.rs;src/ui/widget_bar/panels/object_tree/folders.rs;src/ui/widget_bar/panels/object_tree/panel.rs;terminal/src/drawings.rs;src/ui/widget_bar/panels/object_tree/context_menu.rs;src/ui/widget_bar/panels/object_tree/item_row.rs;examples/demo/controller.rs;examples/demo/comparison.rs;src/widget/layout/drawings.rs;examples/demo/layouts.rs;src/ui/widget_bar/panels/object_tree/state.rs;src/widget/layout.rs;src/widget/history.rs,1916;2313;2314;2527;3326;3552;3743
 Workspace,Toolbars and panels,Order-flow panels and layouts offered only for symbols whose feed supplies their data,missing,host,,1757
 Workspace,Toolbars and panels,Primitive and custom renderer sample,verified,library,examples/demo/primitive_scene.rs;examples/demo/commands.rs,1936
-Workspace,Toolbars and panels,Quick search / command palette,incomplete,library,src/ui/top_toolbar/toolbar.rs;src/ui_kit/command_palette/palette.rs;terminal/src/commands.rs,3597
+Workspace,Toolbars and panels,Quick search / command palette,incomplete,library,src/ui/top_toolbar/toolbar.rs;src/ui_kit/command_palette/palette.rs;terminal/src/commands.rs;examples/demo/commands.rs;src/ui_kit/command_palette/command.rs,3597
 Workspace,Toolbars and panels,Right widget bar icon strip,verified,library,src/ui/widget_bar/toolbar.rs;src/theme/presets.rs;terminal/src/panels.rs;examples/demo/controller.rs,2013;1928
 Workspace,Toolbars and panels,Sample study editor,verified,library,src/ui/study_editor.rs;examples/demo/study_editor.rs;examples/demo/storage.rs;examples/demo/commands.rs;examples/demo/controller.rs;examples/demo/layouts.rs;examples/demo/templates.rs,1937;3248
 Workspace,Toolbars and panels,Selected drawing toolbar,incomplete,library,src/ui/floating_toolbar/toolbar.rs;src/widget/tool_interaction/mod.rs;src/drawings/rendering/measurements.rs;src/ui/context_menu/drawing.rs;terminal/src/drawings.rs;examples/demo/controller.rs;src/config/drawing_tool/behavior.rs;src/drawings/manager/paint.rs;src/drawings/manager/edit.rs,2324;2603;3153;3260;3350;3437;3677;3761;3762;3479;3785;3819
