@@ -257,6 +257,11 @@ impl IndicatorPane {
         y_min: f64,
         y_max: f64,
     ) {
+        // Drawn on the price chart instead.
+        if indicator.plots_on_price() {
+            return;
+        }
+
         if indicator.is_volume()
             && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
         {
@@ -315,6 +320,11 @@ impl IndicatorPane {
         y_max: f64,
         coords: &IndicatorCoordParams,
     ) {
+        // Drawn on the price chart instead.
+        if indicator.plots_on_price() {
+            return;
+        }
+
         let mut mapping = coords.to_mapping(rect, y_min, y_max);
         if let Some(map) = self.price_map {
             mapping.price = map;
