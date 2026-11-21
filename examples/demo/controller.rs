@@ -898,8 +898,6 @@ impl DemoApp {
             annotation_editor: false,
             annotation_series: SeriesId::MAIN,
         });
-        app.drawing_toolbar
-            .set_control_visible(egui_charts::ui::Control::Trading, false);
         app.settings_dialog
             .templates
             .set_storage(app.storage.clone());
@@ -1357,7 +1355,7 @@ impl DemoApp {
     // --- dialog wiring -----------------------------------------------------
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
-        if let Some(id) = self.quick_search.show(ctx) {
+        if let Some(id) = self.show_quick_search(ctx) {
             self.execute_search_command(ctx, &id);
         }
         // The metrics of the study dialog are those of the synthetic feed.
@@ -2531,6 +2529,10 @@ impl DemoApp {
             });
         self.drawing_toolbar.state.hide_indicators = self.chart.indicators_hidden();
         self.drawing_toolbar.state.hide_drawings = self.chart.drawings().is_hidden();
+        // The trading rows show while a broker is connected; their checks follow the Trading tab.
+        self.drawing_toolbar
+            .set_control_visible(egui_charts::ui::Control::Trading, self.trading.has_broker());
+        self.trading.sync_hide_menu(&mut self.drawing_toolbar.state);
         self.drawing_toolbar.state.lock_all = self.chart.drawings().is_locked();
         if self.drawing_toolbar.state.preferences.hidden {
             let action = self.drawing_toolbar.show_with_action(ui);
@@ -2572,7 +2574,12 @@ impl DemoApp {
             },
             &mut self.drawing_toolbar.state,
         );
+        self.trading
+            .apply_hide_action(&action, &self.drawing_toolbar.state);
         match action {
+            DrawingToolbarAction::HideAllPoss
+            | DrawingToolbarAction::HideAllOrders
+            | DrawingToolbarAction::HideAllExecutions => return,
             DrawingToolbarAction::SetToolbarVisible(visible) => {
                 self.drawing_toolbar.state.preferences.hidden = !visible;
                 return;
@@ -2747,8 +2754,6 @@ impl DemoApp {
             | DrawingToolbarAction::ManageTemplates
             | DrawingToolbarAction::SaveTemplate { .. }
             | DrawingToolbarAction::LoadTemplate { .. }
-            | DrawingToolbarAction::HideAllPoss
-            | DrawingToolbarAction::HideAllOrders
             | DrawingToolbarAction::RemoveAllIndicators
             | DrawingToolbarAction::RemoveAllStudies
             | DrawingToolbarAction::HideAllIndicators
@@ -4056,6 +4061,13 @@ impl DemoApp {
                     context.target
                 ));
             }
+            ChartContextAction::Series(SeriesContextMenuAction::CopyPrice) => self
+                .handle_context_action(
+                    ctx,
+                    ChartContextAction::Chart(ContextMenuAction::CopyPrice(
+                        self.menus.series_click_price(),
+                    )),
+                ),
             ChartContextAction::Chart(ContextMenuAction::CopyPrice(price)) => {
                 use egui_charts::scales::PriceFormatter;
                 let decimals = self
@@ -4170,7 +4182,10 @@ impl DemoApp {
             SeriesContextMenuAction::AddIndicator => {
                 self.indicator_dialog.open_for_chart(&self.chart, None);
             }
-            SeriesContextMenuAction::AddAlert => self.open_alert(None),
+            SeriesContextMenuAction::AddAlert => {
+                let price = self.menus.series_alert_price();
+                self.open_alert(price.is_finite().then_some(price));
+            }
             _ => {}
         }
     }
@@ -5582,6 +5597,135 @@ mod tests {
                 toggle(&mut app, &restored_ctx);
             }
         }
+    }
+
+    /// The real Hide menu follows the broker and settings, and each row changes only its layer.
+    #[test]
+    fn hide_menu_rows_toggle_trading_layers() {
+        use egui_charts::model::{OrderId, OrderRequest, OrderSide, OrderType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        let size = egui::vec2(1440.0, 900.0);
+        let menu = |app: &mut DemoApp| {
+            app.drawing_toolbar.state.expanded_category = Some("Hide".into());
+            egui::Popup::open_id(&ctx, egui::Id::unique(("drawing_toolbar_flyout", "Hide")));
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = ui_frame(&ctx, size, vec![], |ui| {
+                    app.show_drawing_toolbar(ui, app.theme.chart.bg)
+                });
+            }
+            texts
+        };
+        let choose = |app: &mut DemoApp, label: &str| {
+            let texts = menu(app);
+            let point = texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .expect("hide menu row")
+                .1
+                .center();
+            ui_click(&ctx, size, point, |ui| {
+                app.show_drawing_toolbar(ui, app.theme.chart.bg)
+            });
+        };
+        let texts = menu(&mut app);
+        for name in ["Hide positions", "Hide orders", "Hide executions"] {
+            assert!(!texts.iter().any(|(text, _)| text == name));
+        }
+        egui::Popup::close_all(&ctx);
+        let symbol = app.chart.symbol().to_owned();
+        let last = app.chart.bars(SeriesId::MAIN).last().unwrap().close;
+        let limit = last * 0.99;
+        app.chart
+            .price_scale_mut()
+            .set_range(last * 0.97, last * 1.03);
+        app.paper.set_price(&symbol, last);
+        app.trading.set_service(app.paper.clone());
+        app.trading.poll(&ctx, &mut app.toasts);
+        ui_frame(&ctx, size, vec![], |ui| {
+            app.chart.show(ui);
+            app.trading.show(ui, &mut app.chart);
+        });
+        app.trading.poll(&ctx, &mut app.toasts);
+        app.trading.display.instant_orders = true;
+        app.trading.trade(symbol.clone(), OrderSide::Buy);
+        app.trading.poll(&ctx, &mut app.toasts);
+        let mut request = OrderRequest::new(&symbol, OrderSide::Buy, 1.0, OrderType::Limit(limit));
+        request.time_in_force = egui_charts::model::TimeInForce::GoodTillCancelled;
+        let (answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
+        egui_charts::services::Broker::place(&*app.paper, request, reply);
+        answer.take().expect("limit reply").expect("working limit");
+        app.trading.poll(&ctx, &mut app.toasts);
+        // Settle the pane mapping before checking the rendered labels.
+        for _ in 0..3 {
+            ui_frame(&ctx, size, vec![], |ui| {
+                app.chart.show(ui);
+                app.trading.show(ui, &mut app.chart);
+            });
+        }
+        for (label, expected) in [
+            (None, (true, true, true)),
+            (Some("Hide positions"), (false, true, true)),
+            (Some("Hide orders"), (false, false, true)),
+            (Some("Hide executions"), (false, false, false)),
+            (Some("Hide positions"), (true, false, false)),
+            (Some("Hide orders"), (true, true, false)),
+            (Some("Hide executions"), (true, true, true)),
+            (Some("Hide all"), (false, false, false)),
+            (Some("Hide all"), (true, true, true)),
+        ] {
+            if let Some(label) = label {
+                choose(&mut app, label);
+            }
+            let texts = ui_frame(&ctx, size, vec![], |ui| {
+                app.chart.show(ui);
+                app.trading.show(ui, &mut app.chart);
+            });
+            let display = &app.trading.display;
+            assert_eq!(
+                (
+                    display.show_positions,
+                    display.show_orders,
+                    display.show_executions
+                ),
+                expected,
+                "{label:?}"
+            );
+            let mapping = app.chart.get_chart_mapping();
+            let has_label = |caption: &str, price| {
+                texts.iter().any(|(text, rect)| {
+                    text == caption
+                        && mapping.rect.contains(rect.center())
+                        && (rect.center().y - mapping.price_to_y(price)).abs() < 2.0
+                })
+            };
+            assert_eq!(has_label("1", last), expected.0, "position: {label:?}");
+            assert_eq!(has_label("Limit", limit), expected.1, "order: {label:?}");
+            assert_eq!(
+                texts.iter().any(|(text, _)| text == "Buy 1"),
+                expected.2,
+                "execution: {label:?}"
+            );
+            if label == Some("Hide all") {
+                assert_eq!(app.chart.drawings().is_hidden(), !expected.0);
+            }
+        }
+        let mut state = app.chart_settings_state();
+        state.trading.show_orders = false;
+        app.apply_chart_settings(state);
+        menu(&mut app);
+        assert!(app.drawing_toolbar.state.hide_orders);
+        app.trading.disconnect();
+        let texts = menu(&mut app);
+        assert!(!texts.iter().any(|(text, _)| text == "Hide orders"));
+        assert!(!app.trading.display.show_orders);
+        app.trading.set_service(app.paper.clone());
+        menu(&mut app);
+        assert!(app.drawing_toolbar.state.hide_orders);
     }
 
     /// The toolbar's real flyout toggles studies in both directions, including after undo.
@@ -11914,6 +12058,124 @@ mod tests {
         let time = app.chart.format_time(now);
         assert!(time.ends_with(&clock[..5]), "{clock} against {time}");
         assert!(clock.ends_with(" America/New_York"), "{clock}");
+    }
+
+    /// The series menu opens an alert and copies a price at the values their rows name.
+    #[test]
+    fn series_menu_alert_starts_at_the_clicked_price() {
+        for row_prefix in ["Add alert on STOCKA at ", "Copy price "] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                "2026-11-10T19:29:50Z".parse().unwrap(),
+                true,
+            );
+            app.switch_symbol("STOCKA");
+            settle(&mut app, &ctx);
+            let frame = |app: &mut DemoApp, events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest()),
+                );
+                let texts: Vec<(String, egui::Pos2)> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            text.pos + text.galley.size() / 2.0,
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                let commands = output.platform_output.commands.clone();
+                output.drop_without_applying_deltas();
+                (texts, commands)
+            };
+            let click = |app: &mut DemoApp, button, pos| {
+                let mut commands = frame(app, vec![egui::Event::PointerMoved(pos)]).1;
+                for pressed in [true, false] {
+                    commands.extend(
+                        frame(
+                            app,
+                            vec![egui::Event::PointerButton {
+                                pos,
+                                button,
+                                pressed,
+                                modifiers: Default::default(),
+                            }],
+                        )
+                        .1,
+                    );
+                }
+                commands
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            // Click off the tick grid inside a candle whose body lies clear of the last close.
+            let mapping = app.chart.get_chart_mapping();
+            let plot = app.chart.get_rendered_price_rect();
+            let bars = app.chart.bars(SeriesId::MAIN);
+            let last = bars.last().expect("the demo has bars").close;
+            let (pos, low, high) = bars
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, bar)| {
+                    let (low, high) = (bar.open.min(bar.close), bar.open.max(bar.close));
+                    let pos = egui::pos2(
+                        mapping.idx_to_x(index),
+                        mapping.price_to_y((low + high) / 2.0) + 3.0,
+                    );
+                    ((last < low || last > high)
+                        && mapping.price_to_y(low) - mapping.price_to_y(high) >= 8.0
+                        && plot.shrink(40.0).contains(pos))
+                    .then_some((pos, low, high))
+                })
+                .expect("a visible candle away from the last close");
+            click(&mut app, egui::PointerButton::Secondary, pos);
+            let texts = frame(&mut app, vec![]).0;
+            let row = texts
+                .iter()
+                .find(|(text, _)| text.starts_with(row_prefix))
+                .unwrap_or_else(|| panic!("the series menu offers {row_prefix}: {texts:?}"));
+            let mut commands = click(&mut app, egui::PointerButton::Primary, row.1);
+            commands.extend(frame(&mut app, vec![]).1);
+            if row_prefix == "Copy price " {
+                let expected = row.0.strip_prefix(row_prefix).unwrap();
+                assert!(
+                    commands.iter().any(|command| matches!(command,
+                    egui::OutputCommand::CopyText(text) if text == expected)),
+                    "the series row copies {expected}: {commands:?}"
+                );
+                continue;
+            }
+            assert!(
+                app.alert_dialog.is_open,
+                "the series row opens the alert dialog"
+            );
+            let AlertCondition::Crossing(price) = app.alert_dialog.alert.condition else {
+                panic!("{:?}", app.alert_dialog.alert.condition);
+            };
+            let expected: f64 = row
+                .0
+                .strip_prefix(row_prefix)
+                .unwrap()
+                .strip_suffix('…')
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert_eq!(price, expected);
+            assert!((low..=high).contains(&price), "{price} in {low}..{high}");
+        }
     }
 
     /// The demo published every subscribed quote once per frame, and the first push after a drain
