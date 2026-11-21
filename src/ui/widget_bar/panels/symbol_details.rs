@@ -6,21 +6,26 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Offset, Utc};
+use chrono::{DateTime, Offset, TimeDelta, Utc};
 use egui::text::LayoutJob;
 use egui::{Align, Color32, Label, Layout, RichText, Sense, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
 use super::market_details::{MarketDetail, MarketDetailRequest, PeriodReturn, Seasonality};
+use super::news::NewsAction;
 use super::price_decimals;
 use super::{HEADER_HEIGHT, grouped, signed, weighted};
 use crate::data::inbox::Inbox;
-use crate::data::{CompanyFinancials, Datafeed, FeedError, SymbolDetails};
+use crate::data::{
+    CalendarEvent, CalendarKind, CalendarQuery, CompanyFinancials, Datafeed, FeedError, NewsQuery,
+    NewsStory, SymbolDetails,
+};
 use crate::icons::icons;
-use crate::model::{ExtendedSession, Instrument, Quote, TimezoneId};
+use crate::model::{Bar, ExtendedSession, Instrument, Quote, Timeframe, TimezoneId};
 use crate::scales::StudyFormat;
 use crate::services::revisions::{Revisions, Settled, Written};
 use crate::services::{ConflictChoice, Storage, StoreKind};
+use crate::studies::{Indicator, TechnicalRatings, technical_rating};
 use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;
 use crate::ui_kit::status_message::{MessageKind, status_message};
@@ -29,13 +34,20 @@ use crate::ui_kit::status_message::{MessageKind, status_message};
 const PRICE_SIZE: f32 = 26.0;
 /// Text size of the extended-hours price.
 const EXTENDED_PRICE_SIZE: f32 = 18.0;
+/// Headlines the News section shows.
+const HEADLINES: usize = 3;
+/// Days ahead the Upcoming events section looks for the next earnings and dividend.
+const EVENT_DAYS: i64 = 366;
 /// The sections the layout menu shows or hides, in panel order.
-const SECTIONS: [&str; 6] = [
+const SECTIONS: [&str; 9] = [
     "Volume",
     "Key statistics",
     "Profile",
     "Performance",
     "Seasonality",
+    "Technicals",
+    "Upcoming events",
+    "News",
     "Notes",
 ];
 const MONTHS: [&str; 12] = [
@@ -84,11 +96,26 @@ struct Notes {
     retry_at: Option<f64>,
 }
 
+/// The Technical Ratings study on the shown symbol's bars, and what it last rated.
+struct Technicals {
+    study: TechnicalRatings,
+    timeframe: Timeframe,
+    /// How many bars were rated, the first and the last bar.
+    len: usize,
+    first: Bar,
+    last: Bar,
+    /// The moving-average, oscillator and summary scores of the latest bar with values.
+    scores: [Option<f64>; 3],
+}
+
 /// What an inbox answer is for.
 #[derive(Debug)]
 enum Request {
     Details(String),
     Financials(String),
+    /// The calendar of one kind for a symbol.
+    Events(String, CalendarKind),
+    News(String),
     Load(String),
     Save(String, String),
 }
@@ -108,7 +135,14 @@ enum Request {
 /// feed for [`Datafeed::symbol_details`] and shows the statistics, on a card, and the profile it
 /// answers; an empty section, or a feed that does not support the request, shows nothing. It also
 /// asks for [`Datafeed::financials`] and holds a nonempty answer in
-/// [`financials`](Self::financials). Notes
+/// [`financials`](Self::financials). It also asks [`Datafeed::calendar`] for the symbol's earnings
+/// and dividends of the next year, with the symbol in
+/// [`CalendarQuery::symbols`], and shows the next of each
+/// under Upcoming events, keeping only events without a symbol or of the shown one, and asks
+/// [`Datafeed::news`] for its three newest headlines, shown under News; opening one is reported by
+/// [`take_news_action`](Self::take_news_action). A feed that does not support a request, or
+/// answers nothing, shows nothing for it. Pass the chart's bars each frame to
+/// [`set_bars`](Self::set_bars) for the Technicals section. Notes
 /// are kept in memory per symbol, and with a storage service attached they are read from and
 /// written to one [`StoreKind::SymbolNotes`] document per symbol as they are edited, one write per
 /// document at a time, a failed write being tried again a second later. With a host that keeps
@@ -136,6 +170,13 @@ pub struct SymbolDetailsPanel {
     financials: Option<CompanyFinancials>,
     returns: Option<MarketDetail<Vec<PeriodReturn>>>,
     seasonality: Option<MarketDetail<Seasonality>>,
+    /// `None` until bars of the shown symbol arrive.
+    technicals: Option<Technicals>,
+    /// The next earnings and the next ex-dividend event of the shown symbol.
+    events: [Option<CalendarEvent>; 2],
+    /// The shown symbol's newest headlines, newest first.
+    headlines: Vec<NewsStory>,
+    news_action: NewsAction,
     error: Option<String>,
     notes: HashMap<String, Notes>,
     feed: Option<Arc<dyn Datafeed>>,
@@ -161,6 +202,10 @@ impl Default for SymbolDetailsPanel {
             financials: None,
             returns: None,
             seasonality: None,
+            technicals: None,
+            events: [None, None],
+            headlines: Vec::new(),
+            news_action: NewsAction::None,
             error: None,
             notes: HashMap::new(),
             feed: None,
@@ -187,6 +232,13 @@ impl std::fmt::Debug for SymbolDetailsPanel {
             .field("financials", &self.financials)
             .field("returns", &self.returns)
             .field("seasonality", &self.seasonality)
+            .field(
+                "technicals",
+                &self.technicals.as_ref().map(|t| (t.timeframe, t.len)),
+            )
+            .field("events", &self.events)
+            .field("headlines", &self.headlines)
+            .field("news_action", &self.news_action)
             .field("error", &self.error)
             .field("next", &self.next)
             .field("financials_requested", &self.financials_requested)
@@ -201,9 +253,11 @@ impl SymbolDetailsPanel {
         Self::default()
     }
 
-    /// Ask `feed` for the details and financials of each symbol from now on, starting with the
-    /// shown one.
+    /// Ask `feed` for the details, financials, upcoming events and headlines of each symbol from
+    /// now on, starting with the shown one. Replies from the previous feed are ignored.
     pub fn set_feed(&mut self, feed: Arc<dyn Datafeed>) {
+        self.requests
+            .retain(|_, request| matches!(request, Request::Load(_) | Request::Save(..)));
         self.feed = Some(feed);
         if let Some(symbol) = self.symbol().map(str::to_owned) {
             self.request_details(symbol);
@@ -216,7 +270,7 @@ impl SymbolDetailsPanel {
         self.revisions = Revisions::new(StoreKind::SymbolNotes);
         self.notes.clear();
         self.requests
-            .retain(|_, request| matches!(request, Request::Details(_) | Request::Financials(_)));
+            .retain(|_, request| !matches!(request, Request::Load(_) | Request::Save(..)));
         if let Some(symbol) = self.symbol().map(str::to_owned) {
             self.load_notes(symbol);
         }
@@ -235,6 +289,9 @@ impl SymbolDetailsPanel {
             self.financials = None;
             self.returns = None;
             self.seasonality = None;
+            self.technicals = None;
+            self.events = [None, None];
+            self.headlines.clear();
             self.error = None;
             self.request_details(instrument.symbol.clone());
             // Notes not read yet and not being read, such as after a failed read, are read again.
@@ -324,6 +381,65 @@ impl SymbolDetailsPanel {
         }
     }
 
+    /// Rates `bars`, the shown symbol's bars on `timeframe`, oldest first, with the
+    /// [`TechnicalRatings`] study for the Technicals section, which shows the summary,
+    /// moving-average and oscillator ratings of the latest bar with a finite high, low and close,
+    /// as the study's last values on the same bars. Call it each frame with the chart's bars,
+    /// such as `Chart::bars(SeriesId::MAIN)` and `Chart::timeframe`: an unchanged slice costs
+    /// nothing, a changed or added last bar rates from the last rated bar on, and another
+    /// interval, another first bar or fewer bars rate them all again. Bars changed in place
+    /// between the first and last rated ones, keeping their times, are rated again after a call
+    /// without bars. Without bars, and for a new symbol until its bars arrive, the section is hidden.
+    pub fn set_bars(&mut self, timeframe: Timeframe, bars: &[Bar]) {
+        let (Some(first), Some(last)) = (bars.first(), bars.last()) else {
+            self.technicals = None;
+            return;
+        };
+        match &mut self.technicals {
+            Some(rated)
+                if rated.timeframe == timeframe
+                    && same_bar(first, &rated.first)
+                    && bars.len() >= rated.len
+                    && bars[rated.len - 1].time == rated.last.time =>
+            {
+                if bars.len() == rated.len && same_bar(last, &rated.last) {
+                    return;
+                }
+                rated.study.update(bars, rated.len - 1);
+            }
+            _ => {
+                let mut study = TechnicalRatings::new();
+                study.set_timeframe(timeframe);
+                study.calculate(bars);
+                self.technicals = Some(Technicals {
+                    study,
+                    timeframe,
+                    len: 0,
+                    first: first.clone(),
+                    last: last.clone(),
+                    scores: [None; 3],
+                });
+            }
+        }
+        let rated = self.technicals.as_mut().expect("rated above");
+        rated.len = bars.len();
+        rated.last = last.clone();
+        let values = rated.study.values();
+        rated.scores = (0..values.len())
+            .rev()
+            .find(|&bar| values.value(5, bar).is_some())
+            .map_or([None; 3], |bar| {
+                std::array::from_fn(|line| values.value(line, bar))
+            });
+    }
+
+    /// What the user chose in the News section since the last call, [`NewsAction::None`]
+    /// without a choice: a headline with a link gives [`NewsAction::OpenUrl`], one without
+    /// [`NewsAction::ShowOnChart`] at its publication time.
+    pub fn take_news_action(&mut self) -> NewsAction {
+        std::mem::take(&mut self.news_action)
+    }
+
     /// The shown symbol, if any.
     pub fn symbol(&self) -> Option<&str> {
         self.instrument
@@ -344,6 +460,17 @@ impl SymbolDetailsPanel {
             feed.symbol_details(&symbol, self.inbox.reply(key));
             let key = self.key(Request::Financials(symbol.clone()));
             feed.financials(&symbol, self.inbox.reply(key));
+            let now = Utc::now();
+            for kind in [CalendarKind::Earnings, CalendarKind::Dividends] {
+                let mut query = CalendarQuery::new(kind, now, now + TimeDelta::days(EVENT_DAYS));
+                query.symbols.push(symbol.clone());
+                let key = self.key(Request::Events(symbol.clone(), kind));
+                feed.calendar(query, self.inbox.reply(key));
+            }
+            let mut query = NewsQuery::new(HEADLINES);
+            query.symbols.push(symbol.clone());
+            let key = self.key(Request::News(symbol));
+            feed.news(query, self.inbox.reply(key));
         }
     }
 
@@ -451,6 +578,62 @@ impl SymbolDetailsPanel {
                                 self.error = Some(l10n::format_text(
                                     ctx,
                                     "Financials unavailable: {error}",
+                                    &[("error", error.to_string().as_str())],
+                                ))
+                            }
+                        }
+                    }
+                    Request::Events(symbol, kind) => {
+                        let result = *answer
+                            .downcast::<Result<Vec<CalendarEvent>, FeedError>>()
+                            .expect("calendar events");
+                        if !current(&symbol) {
+                            continue;
+                        }
+                        self.events[usize::from(kind == CalendarKind::Dividends)] = None;
+                        match result {
+                            // A feed that ignores the query's symbols still shows only this one.
+                            Ok(events) => {
+                                self.events[usize::from(kind == CalendarKind::Dividends)] = events
+                                    .into_iter()
+                                    .filter(|event| {
+                                        event.kind == kind
+                                            && event
+                                                .symbol
+                                                .as_deref()
+                                                .is_none_or(|of| of.eq_ignore_ascii_case(&symbol))
+                                    })
+                                    .min_by_key(|event| event.time);
+                            }
+                            Err(FeedError::NotSupported) => {}
+                            Err(error) => {
+                                self.error = Some(l10n::format_text(
+                                    ctx,
+                                    "Events unavailable: {error}",
+                                    &[("error", error.to_string().as_str())],
+                                ))
+                            }
+                        }
+                    }
+                    Request::News(symbol) => {
+                        let result = *answer
+                            .downcast::<Result<Vec<NewsStory>, FeedError>>()
+                            .expect("news");
+                        if !current(&symbol) {
+                            continue;
+                        }
+                        self.headlines.clear();
+                        match result {
+                            Ok(mut stories) => {
+                                stories.sort_by_key(|story| std::cmp::Reverse(story.time));
+                                stories.truncate(HEADLINES);
+                                self.headlines = stories;
+                            }
+                            Err(FeedError::NotSupported) => {}
+                            Err(error) => {
+                                self.error = Some(l10n::format_text(
+                                    ctx,
+                                    "News unavailable: {error}",
                                     &[("error", error.to_string().as_str())],
                                 ))
                             }
@@ -613,6 +796,10 @@ impl SymbolDetailsPanel {
             details,
             returns,
             seasonality,
+            technicals,
+            events,
+            headlines,
+            news_action,
             error,
             notes,
             revisions,
@@ -944,6 +1131,110 @@ impl SymbolDetailsPanel {
                         },
                     );
                 }
+                if let Some(technicals) = technicals.as_ref().filter(|_| shown("Technicals")) {
+                    ui.add_space(theme.spacing.md);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(l10n::text(ui.ctx(), "Technicals")).strong());
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(l10n::text(ui.ctx(), technicals.timeframe.as_str()))
+                                    .size(theme.text.small)
+                                    .color(theme.ui.text_secondary),
+                            );
+                        });
+                    });
+                    for (label, line) in
+                        [("Summary", 2), ("Moving averages", 0), ("Oscillators", 1)]
+                    {
+                        let word = technicals.scores[line].map_or("N/A", technical_rating);
+                        let color = match word {
+                            "Strong Buy" | "Buy" => theme.chart.candle_up,
+                            "Sell" | "Strong Sell" => theme.chart.candle_down,
+                            "Neutral" => theme.ui.text,
+                            _ => theme.ui.text_secondary,
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(l10n::text(ui.ctx(), label))
+                                    .color(theme.ui.text_secondary),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                let text = RichText::new(l10n::text(ui.ctx(), word)).color(color);
+                                ui.label(if word.starts_with("Strong") {
+                                    text.strong()
+                                } else {
+                                    text
+                                });
+                            });
+                        });
+                    }
+                }
+                if events.iter().any(Option::is_some) && shown("Upcoming events") {
+                    ui.add_space(theme.spacing.md);
+                    ui.label(RichText::new(l10n::text(ui.ctx(), "Upcoming events")).strong());
+                    for (label, event) in [("Earnings", &events[0]), ("Ex-dividend", &events[1])] {
+                        let Some(event) = event else {
+                            continue;
+                        };
+                        // The date only: a feed's earnings times are indicative.
+                        let date = event.time.with_timezone(&*timezone).format("%b %-d, %Y");
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(l10n::text(ui.ctx(), label))
+                                    .color(theme.ui.text_secondary),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(l10n::text(ui.ctx(), date.to_string()));
+                            });
+                        });
+                    }
+                }
+                if !headlines.is_empty() && shown("News") {
+                    ui.add_space(theme.spacing.md);
+                    ui.label(RichText::new(l10n::text(ui.ctx(), "News")).strong());
+                    for story in headlines.iter() {
+                        let response = ui
+                            .scope_builder(egui::UiBuilder::new().sense(Sense::click()), |ui| {
+                                ui.style_mut().interaction.selectable_labels = false;
+                                ui.label(
+                                    RichText::new(l10n::text(
+                                        ui.ctx(),
+                                        story_meta(story, timezone),
+                                    ))
+                                    .size(theme.text.small)
+                                    .color(theme.ui.text_secondary),
+                                );
+                                ui.add(
+                                    Label::new(
+                                        RichText::new(l10n::text(ui.ctx(), &story.headline))
+                                            .strong(),
+                                    )
+                                    .wrap(),
+                                );
+                            })
+                            .response;
+                        let translated_headline = l10n::text(ui.ctx(), &story.headline);
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::Role::Button,
+                                true,
+                                &translated_headline,
+                            )
+                        });
+                        let hover =
+                            l10n::text(ui.ctx(), story.url.as_deref().unwrap_or("Show on chart"));
+                        if response
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text(hover)
+                            .clicked()
+                        {
+                            *news_action = story
+                                .url
+                                .clone()
+                                .map_or(NewsAction::ShowOnChart(story.time), NewsAction::OpenUrl);
+                        }
+                    }
+                }
                 if shown("Notes") {
                     ui.add_space(theme.spacing.md);
                     ui.label(RichText::new(l10n::text(ui.ctx(), "Notes")).strong());
@@ -1064,6 +1355,21 @@ pub(super) fn zone_label(offset_seconds: i32) -> String {
     }
 }
 
+/// A story's publication time in `timezone`, with its offset, and its source when known.
+fn story_meta(story: &NewsStory, timezone: &TimezoneId) -> String {
+    let local = story.time.with_timezone(timezone);
+    let time = format!(
+        "{} {}",
+        local.format("%b %-d, %H:%M"),
+        zone_label(local.offset().fix().local_minus_utc())
+    );
+    if story.source.is_empty() {
+        time
+    } else {
+        format!("{time} · {}", story.source)
+    }
+}
+
 /// A small external-link glyph opening `url` in a new tab.
 fn external_link(ui: &mut Ui, url: &str) {
     let theme = ui.active_theme();
@@ -1106,6 +1412,14 @@ fn external_link(ui: &mut Ui, url: &str) {
     if response.clicked() {
         ui.ctx().open_url(egui::OpenUrl::new_tab(url));
     }
+}
+
+/// Whether the ratings read `a` and `b` alike: the same time and prices and volume, bit for bit,
+/// so a bar with NaN prices matches itself.
+fn same_bar(a: &Bar, b: &Bar) -> bool {
+    a.time == b.time
+        && [a.open, a.high, a.low, a.close, a.volume].map(f64::to_bits)
+            == [b.open, b.high, b.low, b.close, b.volume].map(f64::to_bits)
 }
 
 /// A bar split at `volume / (volume + average)`: the session volume in the accent colour, the
@@ -1216,6 +1530,49 @@ mod tests {
         fn delete(&self, _: StoreKind, _: &str, reply: Reply<()>) {
             reply.send(Ok(()));
         }
+    }
+
+    /// Keeps calendar and news requests for the test to answer.
+    #[derive(Default)]
+    struct Market {
+        calendar: Mutex<Vec<(CalendarQuery, Reply<Vec<CalendarEvent>>)>>,
+        news: Mutex<Vec<(NewsQuery, Reply<Vec<NewsStory>>)>>,
+    }
+
+    impl Datafeed for Market {
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            reply.send(Ok(HistoryPage::default()));
+        }
+
+        fn calendar(&self, query: CalendarQuery, reply: Reply<Vec<CalendarEvent>>) {
+            self.calendar.lock().unwrap().push((query, reply));
+        }
+
+        fn news(&self, query: NewsQuery, reply: Reply<Vec<NewsStory>>) {
+            self.news.lock().unwrap().push((query, reply));
+        }
+    }
+
+    /// Hourly bars from 2026-01-01 closing at `closes`, each opening at the previous close.
+    fn bars(closes: &[f64]) -> Vec<Bar> {
+        let start: DateTime<Utc> = "2026-01-01T00:00:00Z".parse().unwrap();
+        let mut open = closes[0];
+        closes
+            .iter()
+            .enumerate()
+            .map(|(i, &close)| {
+                let bar = Bar::new(
+                    start + TimeDelta::hours(i as i64),
+                    open,
+                    open.max(close) + 0.5,
+                    open.min(close) - 0.5,
+                    close,
+                    1000.0 + (i % 7) as f64 * 100.0,
+                );
+                open = close;
+                bar
+            })
+            .collect()
     }
 
     fn texts(ctx: &egui::Context, panel: &mut SymbolDetailsPanel) -> Vec<String> {
@@ -1451,5 +1808,321 @@ mod tests {
             2,
             "a new symbol asks again"
         );
+    }
+
+    /// The Technicals rows read the study's ratings of the latest bar with values, whether the
+    /// bars were rated whole or from the last rated bar on. A regression shows another line in a
+    /// row, keeps the rating of a changed last bar or of fewer bars, rates the bar without values
+    /// at the end, or keeps the previous symbol's rating.
+    #[test]
+    fn technicals_show_the_study_ratings_of_the_latest_bar_with_values() {
+        let ctx = egui::Context::default();
+        let trend = bars(
+            &(0..300)
+                .map(|i| {
+                    if i < 285 {
+                        100.0 + 0.3 * i as f64
+                    } else {
+                        185.5 - 2.0 * (i as f64 - 284.0)
+                    }
+                })
+                .collect::<Vec<_>>(),
+        );
+        let wave = bars(
+            &(0..300)
+                .map(|i| 101.0 + 0.2 * i as f64 + 6.0 * (i as f64 / 7.0).sin())
+                .collect::<Vec<_>>(),
+        );
+        // A fresh study's words for the last of `bars`, in the order of the rows.
+        let words = |bars: &[Bar]| {
+            let mut study = TechnicalRatings::new();
+            study.calculate(bars);
+            let last = bars.len() - 1;
+            [2, 0, 1].map(|line| {
+                let score = study.values().value(line, last);
+                score.map_or("N/A", technical_rating)
+            })
+        };
+        let rows = |panel: &mut SymbolDetailsPanel| {
+            let shown = texts(&ctx, panel);
+            ["Summary", "Moving averages", "Oscillators"].map(|label| {
+                let row = shown.iter().position(|text| text == label);
+                row.and_then(|row| shown.get(row + 1))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+        };
+        // The fixtures give each row its own word, and other words after each change below.
+        let [summary, averages, oscillators] = words(&trend[..250]);
+        assert!(summary != averages && averages != oscillators && summary != oscillators);
+        assert_ne!(words(&trend[..250]), words(&trend));
+        assert_ne!(words(&wave[..299]), words(&wave));
+
+        let mut panel = SymbolDetailsPanel::new();
+        panel.set_instrument(&Instrument::new("AAA"));
+        assert!(!texts(&ctx, &mut panel).contains(&"Technicals".into()));
+        panel.set_bars(Timeframe::Hour1, &trend[..250]);
+        let shown = texts(&ctx, &mut panel);
+        assert!(shown.contains(&"Technicals".into()), "{shown:?}");
+        assert!(
+            shown.contains(&Timeframe::Hour1.as_str().into()),
+            "{shown:?}"
+        );
+        assert_eq!(rows(&mut panel), words(&trend[..250]));
+        panel.set_bars(Timeframe::Hour1, &trend);
+        assert_eq!(rows(&mut panel), words(&trend));
+        panel.set_bars(Timeframe::Hour1, &[]);
+        assert!(!texts(&ctx, &mut panel).contains(&"Technicals".into()));
+        let mut tail = wave[..299].to_vec();
+        tail.push(Bar::whitespace(wave[299].time));
+        panel.set_bars(Timeframe::Hour1, &tail);
+        assert_eq!(rows(&mut panel), words(&wave[..299]));
+        // A live change of the last bar.
+        panel.set_bars(Timeframe::Hour1, &wave);
+        assert_eq!(rows(&mut panel), words(&wave));
+        panel.set_bars(Timeframe::Hour1, &trend);
+        panel.set_instrument(&Instrument::new("BBB"));
+        assert!(!texts(&ctx, &mut panel).contains(&"Technicals".into()));
+        // The chart names the new symbol before replacing its history on the same bar times.
+        panel.set_bars(Timeframe::Hour1, &trend);
+        panel.set_bars(Timeframe::Hour1, &wave);
+        assert_eq!(rows(&mut panel), words(&wave));
+    }
+
+    /// The panel asks for the shown symbol's earnings, dividends and headlines with the symbol in
+    /// the query, and shows its next earnings and ex-dividend dates in the panel's time zone and
+    /// its three newest headlines, an opened one being reported to the host. A regression asks
+    /// without the symbol, shows an earlier symbol's answer, another symbol's or a later event or
+    /// older headlines, drops the answers when storage is attached, or reports a feed without
+    /// calendar and news.
+    #[test]
+    fn events_and_headlines_ask_for_the_symbol_and_hide_without_support() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let ctx = egui::Context::default();
+        let at = |time: &str| time.parse::<DateTime<Utc>>().unwrap();
+        let event = |kind, time: &str, symbol: Option<&str>| {
+            let mut event = CalendarEvent::new(time, kind, at(time), "Report");
+            event.symbol = symbol.map(str::to_owned);
+            event
+        };
+        let story = |time: &str, headline: &str, source: &str, url: Option<&str>| {
+            let mut story = NewsStory::new(time, at(time), headline);
+            story.source = source.into();
+            story.url = url.map(str::to_owned);
+            story
+        };
+        let market = Arc::new(Market::default());
+        let mut panel = SymbolDetailsPanel::new();
+        panel.set_feed(market.clone());
+        panel.set_instrument(&Instrument::new("OLD"));
+        panel.set_instrument(&Instrument::new("AAA"));
+        panel.set_storage(Arc::new(Store::default()));
+        let calendar = std::mem::take(&mut *market.calendar.lock().unwrap());
+        let news = std::mem::take(&mut *market.news.lock().unwrap());
+        let symbols = |symbol: &str| vec![symbol.to_owned()];
+        let asked: Vec<_> = calendar
+            .iter()
+            .map(|(query, _)| (query.kind, query.symbols.clone()))
+            .collect();
+        assert_eq!(
+            asked,
+            [
+                (CalendarKind::Earnings, symbols("OLD")),
+                (CalendarKind::Dividends, symbols("OLD")),
+                (CalendarKind::Earnings, symbols("AAA")),
+                (CalendarKind::Dividends, symbols("AAA")),
+            ]
+        );
+        let asked: Vec<_> = news
+            .iter()
+            .map(|(query, _)| (query.symbols.clone(), query.limit))
+            .collect();
+        assert_eq!(asked, [(symbols("OLD"), 3), (symbols("AAA"), 3)]);
+        let Ok(
+            [
+                (_, old_earnings),
+                (_, old_dividends),
+                (_, earnings),
+                (_, dividends),
+            ],
+        ) = <[_; 4]>::try_from(calendar)
+        else {
+            unreachable!()
+        };
+        let Ok([(_, old_news), (_, news)]) = <[_; 2]>::try_from(news) else {
+            unreachable!()
+        };
+        // A feed may answer events of other symbols, and stories in any order and beyond the limit.
+        earnings.send(Ok(vec![
+            event(CalendarKind::Earnings, "2027-01-10T21:00:00Z", Some("ZZZ")),
+            event(CalendarKind::Earnings, "2027-02-03T21:00:00Z", Some("AAA")),
+            event(CalendarKind::Earnings, "2027-01-28T21:00:00Z", Some("aaa")),
+        ]));
+        dividends.send(Ok(vec![event(
+            CalendarKind::Dividends,
+            "2027-02-09T13:30:00Z",
+            None,
+        )]));
+        let url = "https://example.com/third";
+        news.send(Ok(vec![
+            story("2027-01-05T14:30:00Z", "Third headline", "Wire", Some(url)),
+            story("2027-01-06T09:00:00Z", "Newest headline", "", None),
+            story("2027-01-04T08:00:00Z", "Oldest headline", "", None),
+            story("2027-01-05T18:15:00Z", "Second headline", "", None),
+        ]));
+        // The earlier symbol's answers arrive last.
+        let old = event(CalendarKind::Earnings, "2027-01-20T21:00:00Z", Some("OLD"));
+        old_earnings.send(Ok(vec![old]));
+        let old = event(CalendarKind::Dividends, "2027-01-21T13:30:00Z", Some("OLD"));
+        old_dividends.send(Ok(vec![old]));
+        old_news.send(Ok(vec![story(
+            "2027-01-07T00:00:00Z",
+            "Old headline",
+            "",
+            None,
+        )]));
+        panel.poll(&ctx);
+        let shown = texts(&ctx, &mut panel);
+        let dates = |shown: &[String]| {
+            ["Earnings", "Ex-dividend"].map(|label| {
+                let row = shown.iter().position(|text| text == label);
+                row.and_then(|row| shown.get(row + 1))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+        };
+        assert_eq!(dates(&shown), ["Jan 28, 2027", "Feb 9, 2027"]);
+        for text in [
+            "Upcoming events",
+            "News",
+            "Jan 5, 14:30 UTC · Wire",
+            "Jan 6, 09:00 UTC",
+        ] {
+            assert!(shown.contains(&text.into()), "{text}: {shown:?}");
+        }
+        for text in [
+            "Jan 10, 2027",
+            "Feb 3, 2027",
+            "Jan 20, 2027",
+            "Jan 21, 2027",
+        ] {
+            assert!(!shown.contains(&text.into()), "{text}: {shown:?}");
+        }
+        let headlines: Vec<_> = shown
+            .iter()
+            .filter(|text| text.ends_with("headline"))
+            .collect();
+        assert_eq!(
+            headlines,
+            ["Newest headline", "Second headline", "Third headline"]
+        );
+        // 21:00 UTC is the next morning at UTC+10.
+        panel.set_timezone(TimezoneId::fixed_offset(10 * 3600).unwrap());
+        let shown = texts(&ctx, &mut panel);
+        assert_eq!(dates(&shown), ["Jan 29, 2027", "Feb 9, 2027"]);
+        assert!(
+            shown.contains(&"Jan 6, 00:30 GMT+10 · Wire".into()),
+            "{shown:?}"
+        );
+
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 800.0))
+            .build_ui_state(|ui, panel: &mut SymbolDetailsPanel| panel.show(ui), panel);
+        h.get_by_role_and_label(egui::Role::Button, "Third headline")
+            .click();
+        h.run();
+        assert_eq!(
+            h.state_mut().take_news_action(),
+            NewsAction::OpenUrl(url.into())
+        );
+        h.get_by_role_and_label(egui::Role::Button, "Newest headline")
+            .click();
+        h.run();
+        assert_eq!(
+            h.state_mut().take_news_action(),
+            NewsAction::ShowOnChart(at("2027-01-06T09:00:00Z"))
+        );
+        assert_eq!(h.state_mut().take_news_action(), NewsAction::None);
+
+        // Replacing a supported feed with one without calendar and news hides its old answers.
+        let panel = h.state_mut();
+        panel.set_feed(market.clone());
+        let pending_calendar = std::mem::take(&mut *market.calendar.lock().unwrap());
+        let pending_news = std::mem::take(&mut *market.news.lock().unwrap());
+        panel.set_feed(Arc::new(Feed::default()));
+        // Answers from the previous feed arrive after the replacement's unsupported answers.
+        for (query, reply) in pending_calendar {
+            reply.send(Ok(vec![event(
+                query.kind,
+                "2027-01-28T21:00:00Z",
+                Some("AAA"),
+            )]));
+        }
+        for (_, reply) in pending_news {
+            reply.send(Ok(vec![story(
+                "2027-01-07T00:00:00Z",
+                "Previous feed headline",
+                "",
+                None,
+            )]));
+        }
+        panel.poll(&ctx);
+        let shown = texts(&ctx, panel);
+        assert!(!shown.contains(&"Upcoming events".into()), "{shown:?}");
+        assert!(!shown.contains(&"News".into()), "{shown:?}");
+        assert_eq!(panel.error, None);
+    }
+
+    /// The layout menu hides the Technicals, Upcoming events and News sections like the others,
+    /// and they stay hidden for the next symbol until shown again. A regression leaves a section
+    /// out of the menu, draws it while hidden, or shows it again for another symbol.
+    #[test]
+    fn layout_menu_hides_the_new_sections_across_symbols() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        const NEW: [&str; 3] = ["Technicals", "Upcoming events", "News"];
+        let market = Arc::new(Market::default());
+        // Answers the shown symbol's requests with one event and one headline, and gives it bars.
+        let answer = |panel: &mut SymbolDetailsPanel| {
+            for (query, reply) in std::mem::take(&mut *market.calendar.lock().unwrap()) {
+                let event = CalendarEvent::new("event", query.kind, query.from, "Report");
+                reply.send(Ok(vec![event]));
+            }
+            for (_, reply) in std::mem::take(&mut *market.news.lock().unwrap()) {
+                reply.send(Ok(vec![NewsStory::new("story", Utc::now(), "Headline")]));
+            }
+            panel.poll(&egui::Context::default());
+            panel.set_bars(Timeframe::Hour1, &bars(&[100.0, 101.0]));
+        };
+        let shown = |panel: &mut SymbolDetailsPanel| {
+            let painted = texts(&egui::Context::default(), panel);
+            NEW.map(|title| painted.contains(&title.into()))
+        };
+        let mut panel = SymbolDetailsPanel::new();
+        panel.set_feed(market.clone());
+        panel.set_instrument(&Instrument::new("AAA"));
+        answer(&mut panel);
+        assert_eq!(shown(&mut panel), [true; 3]);
+
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 800.0))
+            .build_ui_state(|ui, panel: &mut SymbolDetailsPanel| panel.show(ui), panel);
+        h.get_by_label("Layout").click();
+        h.run();
+        let toggle = |h: &mut Harness<'_, SymbolDetailsPanel>| {
+            for title in NEW {
+                h.get_by_role_and_label(egui::Role::CheckBox, title).click();
+                h.run();
+            }
+        };
+        toggle(&mut h);
+        assert_eq!(shown(h.state_mut()), [false; 3]);
+        h.state_mut().set_instrument(&Instrument::new("BBB"));
+        answer(h.state_mut());
+        h.run();
+        assert_eq!(shown(h.state_mut()), [false; 3]);
+        toggle(&mut h);
+        assert_eq!(shown(h.state_mut()), [true; 3]);
     }
 }

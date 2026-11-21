@@ -12,7 +12,8 @@ use egui_charts::widget::{Chart, ChartLayout, ChartLayoutMode, SavedLayout, Seri
 use std::sync::Arc;
 
 pub(super) struct DemoChart {
-    pub chart: Chart,
+    /// Boxed, so slots and parked workspaces move charts without copying them on the stack.
+    pub chart: Box<Chart>,
     pub live: Arc<LiveFeed>,
     pub comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
     pub spreads: Vec<super::comparison::Spread>,
@@ -26,12 +27,12 @@ pub(super) struct LayoutTab {
 }
 
 struct Workspace {
-    chart: Chart,
+    chart: Box<Chart>,
     live: Arc<LiveFeed>,
     comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
     spreads: Vec<super::comparison::Spread>,
     extra: Vec<DemoChart>,
-    layout: ChartLayout,
+    layout: Box<ChartLayout>,
     slot: usize,
 }
 
@@ -125,17 +126,19 @@ impl DemoApp {
         live.set_symbol(source.symbol());
         let (session, adjusted) = feed.view(source.extended_hours());
         live.set_view(session, adjusted);
-        let mut chart = egui_charts::ChartBuilder::new()
-            .with_feed(live.clone())
-            .with_symbol(source.symbol())
-            .with_timeframe(source.timeframe().unwrap_or(Timeframe::Min1))
-            .with_theme(self.theme.clone())
-            .with_config(source.config().clone())
-            .with_chart_options(source.chart_options().clone())
-            .with_chart_type(source.chart_type())
-            .with_drawing_registry(source.drawings().registry.clone())
-            .with_visible_candles(0)
-            .build();
+        let mut chart = Box::new(
+            egui_charts::ChartBuilder::new()
+                .with_feed(live.clone())
+                .with_symbol(source.symbol())
+                .with_timeframe(source.timeframe().unwrap_or(Timeframe::Min1))
+                .with_theme(self.theme.clone())
+                .with_config(source.config().clone())
+                .with_chart_options(source.chart_options().clone())
+                .with_chart_type(source.chart_type())
+                .with_drawing_registry(source.drawings().registry.clone())
+                .with_visible_candles(0)
+                .build(),
+        );
         self.formatting.apply(&mut chart);
         chart.set_main_series_visible(source.is_main_series_visible());
         chart.set_signal_source(Some(if self.api_samples {
@@ -391,7 +394,7 @@ impl DemoApp {
     /// Sets the active tab's workspace aside in the tab's own slot, where an inactive tab keeps
     /// its workspace, and shows `chart` alone. Theme and number format changes therefore keep
     /// reaching the charts set aside. Nothing is saved or stopped here.
-    pub(super) fn park_workspace(&mut self, chart: Chart) {
+    pub(super) fn park_workspace(&mut self, chart: Box<Chart>) {
         let workspace = Workspace {
             chart: std::mem::replace(&mut self.chart, chart),
             live: self.live.clone(),
@@ -439,7 +442,7 @@ impl DemoApp {
         let layout = if duplicate {
             self.layout.clone()
         } else {
-            ChartLayout::default()
+            Box::default()
         };
         let extra = if duplicate {
             self.extra_charts
@@ -610,13 +613,17 @@ impl DemoApp {
         };
         self.extra_charts
             .get_mut(index)
-            .map(|c| (&mut c.chart, factory))
+            .map(|c| (&mut *c.chart, factory))
     }
 
     /// Gives the object tree the layout's drawings by symbol, while it lists them.
     pub(super) fn refresh_symbol_drawings(&mut self) {
         let inventory = if self.object_tree.state().showing_symbol_drawings {
-            let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+            let mut charts: Vec<_> = self
+                .extra_charts
+                .iter_mut()
+                .map(|c| &mut *c.chart)
+                .collect();
             charts.insert(self.layout_slot, &mut self.chart);
             charts.truncate(self.layout.mode.chart_count());
             self.layout.drawing_inventory(&charts)
@@ -629,7 +636,11 @@ impl DemoApp {
     /// Handles the object tree's actions on the layout's drawings by symbol. Returns whether
     /// `action` was one.
     pub(super) fn handle_symbol_drawings(&mut self, action: &ObjectTreeAction) -> bool {
-        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        let mut charts: Vec<_> = self
+            .extra_charts
+            .iter_mut()
+            .map(|c| &mut *c.chart)
+            .collect();
         charts.insert(self.layout_slot, &mut self.chart);
         charts.truncate(self.layout.mode.chart_count());
         match action {
@@ -858,7 +869,7 @@ impl DemoApp {
         settings.alerts = self.settings_state.alerts.clone();
         settings.trading = self.trading.display.clone();
         settings.adjust_for_dividends = self.timeframe_toolbar.state.adjust_for_dividends;
-        self.settings_state = settings;
+        *self.settings_state = settings;
         true
     }
 
@@ -903,7 +914,7 @@ impl DemoApp {
         self.object_tree.state_mut().drawing_sort = settings
             .drawing_sort
             .iter()
-            .map(|(symbol, sort)| (DemoSymbol::current(symbol), sort.clone()))
+            .map(|(symbol, sort)| (DemoSymbol::current(symbol), *sort))
             .collect();
         self.update_theme(ctx);
         // Switching stops a replay the demo restored from its own storage.
@@ -975,7 +986,7 @@ impl DemoApp {
         }
         let edits = std::iter::once(&self.chart)
             .chain(self.extra_charts.iter().map(|c| &c.chart))
-            .map(Chart::edit_count)
+            .map(|chart| chart.edit_count())
             .fold(self.grid_edits, u64::wrapping_add);
         if self.top_toolbar.layout_menu.autosave_due(ctx, edits) {
             self.save_layout();
@@ -1611,10 +1622,10 @@ mod tests {
             }
         };
         app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() / 2);
-        assert_eq!(app.replay_slots, [2]);
+        assert_eq!(app.replay_slots, [0, 1, 2, 3]);
         app.handle_layout_action(LayoutAction::SelectGrid(ChartLayoutMode::Single));
         assert!(app.replay.is_some(), "the replayed chart stays on screen");
-        assert_eq!(app.replay_slots, [0]);
+        assert_eq!(app.replay_slots, [2, 1, 0, 3]);
         assert_eq!((app.layout_slot, app.layout.active()), (0, 0));
         assert_eq!(app.chart.symbol(), "TOKENB");
         assert_eq!(app.state.symbol, "TOKENB");
