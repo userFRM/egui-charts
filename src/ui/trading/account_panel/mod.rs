@@ -11,6 +11,8 @@ use egui::Color32;
 
 use history::Paging;
 
+pub(super) use crate::chart::quantity_decimals;
+
 use super::Trading;
 use crate::model::{
     BalanceChange, ClosedPosition, Execution, JournalEntry, Order, OrderId, OrderRequest,
@@ -492,11 +494,6 @@ impl AccountPanel {
         self.paging.clear();
         self.editing = None;
     }
-}
-
-/// Decimals that show `quantity` without rounding, up to 8.
-pub(super) fn quantity_decimals(quantity: f64) -> usize {
-    crate::scales::decimals(quantity).min(8)
 }
 
 /// The rows in view as comma-separated values, with the shown columns' titles as the header.

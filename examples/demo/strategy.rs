@@ -305,6 +305,12 @@ impl DemoApp {
                             }
                         }
                     }
+                    StrategyTesterAction::AddAlert {
+                        strategy,
+                        inputs,
+                        settings,
+                        ..
+                    } => self.add_strategy_alert(&strategy, inputs, settings),
                     _ => {}
                 }
             }
