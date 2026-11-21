@@ -264,6 +264,8 @@ mod tests {
         let attached = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Chart attached")));
         output.drop_without_applying_deltas();
         assert!(attached);
+        // The Short posts tab publishes a short post; the Ideas tab publishes an idea.
+        app.ideas.panel.set_feed_kind(IdeaKind::Idea);
         app.publish_idea(&ctx, &app.ideas.panel.draft().clone());
         assert_eq!(app.ideas.feed[0].kind, IdeaKind::Idea);
         let id = app.ideas.feed[0].id.clone();

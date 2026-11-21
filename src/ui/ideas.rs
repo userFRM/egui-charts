@@ -1050,11 +1050,10 @@ mod tests {
         use chrono::TimeZone;
         let time = Utc.with_ymd_and_hms(2026, 10, 30, 9, 30, 0).unwrap();
         let entry = || Idea::new("1", IdeaKind::Idea, "Above the range", "Ada", time);
-        let page = |view, items| {
-            let mut page = IdeaPage::default();
-            page.items = items;
-            page.view = view;
-            page
+        let page = |view, items| IdeaPage {
+            items,
+            next: None,
+            view,
         };
         let fresh = || {
             let mut panel = IdeasPanel::new();
@@ -1180,8 +1179,10 @@ mod tests {
             panel.set_publishing(publishing);
             panel.set_browsing(browsing);
             panel.set_context("AAPL", "1D");
-            let mut page = IdeaPage::default();
-            page.items = vec![Idea::new("1", IdeaKind::Idea, "Text", "Ada", Utc::now())];
+            let page = IdeaPage {
+                items: vec![Idea::new("1", IdeaKind::Idea, "Text", "Ada", Utc::now())],
+                ..IdeaPage::default()
+            };
             panel.add_page(page, true);
             let texts = texts(&mut panel);
             assert_eq!(texts.iter().any(|t| t == "Publish"), publishing);
