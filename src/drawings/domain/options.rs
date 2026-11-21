@@ -16,7 +16,8 @@ use std::cell::Cell;
 ///
 /// Different tool types expose different handle layouts. Two-point tools use
 /// `Start` and `End`; rectangles use four corner and four edge handles;
-/// multi-point tools use indexed `Point(i)` handles; icons, emoji and stickers add `Rotate`.
+/// multi-point tools use indexed `Point(i)` handles; icons, emoji and stickers add `Rotate`;
+/// tables add `Column` and `Row` edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum HandlePos {
@@ -44,6 +45,12 @@ pub enum HandlePos {
     Right,
     /// Rotation handle beyond the top edge of an icon, emoji or sticker.
     Rotate,
+    /// The right edge of a table's column, by index from the left; dragging it sets the
+    /// column's width.
+    Column(usize),
+    /// The bottom edge of a table's row, by index from the top; dragging it sets the row's
+    /// height.
+    Row(usize),
     /// Indexed anchor point for multi-point drawings (e.g., `Point(2)` is the
     /// third point in an XABCD pattern).
     Point(usize),
@@ -1493,9 +1500,11 @@ pub struct RangeSettings {
     pub border_width: Option<f32>,
     /// Pattern of the box edges; `None` takes the drawing's line style.
     pub border_style: Option<crate::model::LineStyle>,
-    /// Whether a date range's time edges run up to the top of the pane.
+    /// Whether the time edges of a date range or a date and price range run up to the top of
+    /// the pane.
     pub extend_top: bool,
-    /// Whether a date range's time edges run down to the bottom of the pane.
+    /// Whether the time edges of a date range or a date and price range run down to the bottom
+    /// of the pane.
     pub extend_bottom: bool,
 }
 

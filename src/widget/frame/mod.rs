@@ -1308,7 +1308,8 @@ impl Chart {
             .zip(&self.study_autoscale)
             .enumerate()
             .filter(|(idx, (study, autoscale))| {
-                study_indices.contains(idx)
+                (study_indices.contains(idx)
+                    || (study.plots_on_price() && !study.is_overlay() && !self.indicators_hidden))
                     && !self.config.scale_price_chart_only
                     && **autoscale
                     && !study.is_volume()
@@ -2338,7 +2339,7 @@ impl Chart {
                     &price_map,
                     &coords,
                 );
-            } else {
+            } else if !study.plots_on_price() {
                 let mapping = rendering::study_mapping(study.as_ref(), &coords);
                 if let Some(color) = study.background() {
                     painter
@@ -2609,6 +2610,21 @@ impl Chart {
             .iter()
             .filter(|study| self.shows_study(study.as_ref()))
         {
+            // A study that keeps its plots on the price chart from a pane of its own.
+            if study.plots_on_price() && !study.is_overlay() {
+                let mapping = crate::chart::coords::ChartMapping {
+                    price: price_map,
+                    ..coords.clone()
+                };
+                rendering::IndicatorRenderer::render_study(
+                    &price_ctx,
+                    study.as_ref(),
+                    visible_data,
+                    mapping.start_idx,
+                    &mapping.price,
+                    &mapping,
+                );
+            }
             crate::chart::indicators::plots::paint_price_segments(
                 &clipped_painter,
                 study.as_ref(),

@@ -635,16 +635,20 @@ impl DrawingManager {
             {
                 return;
             }
+            let table_edge = matches!(
+                handle,
+                HandlePos::Column(_) | HandlePos::Row(_) | HandlePos::BottomRight
+            );
             // Size and rotation handles follow the pointer rather than a bar's price.
             let free = handle != HandlePos::Middle
                 && self.drawings.iter().any(|d| {
                     d.id == id
-                        && matches!(
+                        && (matches!(
                             d.tool_type,
                             DrawingToolType::FontIcon
                                 | DrawingToolType::Sticker
                                 | DrawingToolType::Image
-                        )
+                        ) || (d.tool_type == DrawingToolType::Table && table_edge))
                 });
             let mut snapped = if free {
                 new_pos
@@ -731,6 +735,12 @@ impl DrawingManager {
                     }
                 }
             }
+            // A table sizes itself from the grid it was last painted with.
+            let table_edges = self
+                .drawings
+                .iter()
+                .find(|d| d.id == id && d.tool_type == DrawingToolType::Table && table_edge)
+                .map(|d| self.handle_drawing(d).into_owned().points);
             if let Some(drawing) = self
                 .drawings
                 .iter_mut()
@@ -779,6 +789,8 @@ impl DrawingManager {
                     for (point, before) in drawing.points.iter_mut().zip(&old.points).skip(skip) {
                         *point = *before + moved;
                     }
+                } else if let Some(edges) = &table_edges {
+                    drawing.resize_table(handle, snapped, edges);
                 } else {
                     HandleService::update_handle(
                         drawing,
@@ -806,10 +818,11 @@ impl DrawingManager {
         }
     }
 
-    /// Keeps each anchored text of this pane on the bar and price under the point it is drawn
-    /// at, so its coordinates follow its pane position through pans, zooms and resizes. A bar or
-    /// price already within half a pixel of that point is kept, so an exact time or price set
-    /// from code stays exact, and a whole bar within half a pixel is taken over a fraction.
+    /// Keeps each anchored text and each table anchored to the screen of this pane on the bar
+    /// and price under the point it is drawn at, so its coordinates follow its pane position
+    /// through pans, zooms and resizes, and a table taken off the screen stays where it is shown.
+    /// A bar or price already within half a pixel of that point is kept, so an exact time or price
+    /// set from code stays exact, and a whole bar within half a pixel is taken over a fraction.
     /// Called by the chart after the pane's screen coordinates are updated; the pane position is
     /// left as it is, and nothing is queued for saving.
     pub(crate) fn place_anchored_text(
@@ -821,7 +834,7 @@ impl DrawingManager {
     ) {
         let near = |a: f32, b: f32| (a - b).abs() <= 0.5;
         for drawing in self.drawings.iter_mut().chain(&mut self.curr_drawing) {
-            if drawing.tool_type != DrawingToolType::AnchoredText
+            if !drawing.pins_to_pane()
                 || drawing.screen_anchor.is_none()
                 || !self.pane_members.contains(&drawing.pane)
             {
@@ -934,7 +947,7 @@ impl DrawingManager {
             } else {
                 let mut before = std::mem::take(&mut self.drag_group);
                 for drawing in &before {
-                    self.queue_change(drawing, true);
+                    self.queue_change(drawing, moved);
                 }
                 before.push(old_state);
                 let snapshot = self
@@ -946,7 +959,11 @@ impl DrawingManager {
                         Some((index, old.clone()))
                     })
                     .collect();
-                self.history.push_moved_snapshot(snapshot);
+                if moved {
+                    self.history.push_moved_snapshot(snapshot);
+                } else {
+                    self.history.push_snapshot(snapshot);
+                }
             }
         }
         self.dragging_handle = None;
@@ -1843,6 +1860,43 @@ mod tests {
                 .insert(DrawingToolType::AnchoredVWAP, template);
             let drawing = place(&mut manager, DrawingToolType::AnchoredVWAP);
             assert_eq!(drawing.color, color);
+        }
+
+        for tool in [DrawingToolType::GannSquare, DrawingToolType::GannFixed] {
+            let mut drawing = place(&mut manager, tool);
+            let config = drawing
+                .gann
+                .as_ref()
+                .expect("new square stores its defaults");
+            assert_eq!(config.arc_ratios.len(), 11, "{tool:?}");
+            assert_eq!(config.arc_ratios[2].value, 1.5);
+            assert_eq!(config.fan_ratios[0].color, [179, 157, 219, 255]);
+
+            // A template and a per-tool default saved without settings keep the former look.
+            for gann in [serde_json::Value::Null, serde_json::json!({})] {
+                let template = crate::drawings::DrawingTemplate::from_drawing(&drawing);
+                let mut saved = serde_json::to_value(template).unwrap();
+                saved["settings"]["gann"] = gann;
+                let template: crate::drawings::DrawingTemplate =
+                    serde_json::from_value(saved).unwrap();
+                template.apply_to(&mut drawing).unwrap();
+                assert_eq!(
+                    drawing.gann_config().arc_ratios.len(),
+                    10,
+                    "{tool:?}: template"
+                );
+                manager.tool_defaults.insert(tool, template);
+                let placed = place(&mut manager, tool);
+                assert_eq!(
+                    placed.gann_config().arc_ratios.len(),
+                    10,
+                    "{tool:?}: saved default"
+                );
+                assert_eq!(
+                    placed.gann_config().fan_ratios[0].color,
+                    [128, 128, 128, 255]
+                );
+            }
         }
 
         // Closure belongs to the outline, so a saved default cannot close a new polyline.

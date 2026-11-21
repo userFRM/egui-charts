@@ -411,7 +411,10 @@ fn hidden_alerts_and_settings_leave_the_drawing_menu_and_chart() {
         let ctx = Context::default();
         chart.drawings_mut().select(7);
         let mut toolbar = crate::ui::floating_toolbar::FloatingSelectionToolbar::new();
-        toolbar.set_alert_available(!menus.drawing.hidden.contains(&Control::Alerts));
+        toolbar.set_control_visible(
+            Control::Alerts,
+            !menus.drawing.hidden.contains(&Control::Alerts),
+        );
         let mut frame = |events| {
             ctx.run_ui(
                 RawInput {
