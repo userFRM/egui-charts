@@ -1011,6 +1011,23 @@ mod tests {
                 assert_eq!(image.pixels.contains(&OVERLAY), overlays);
                 output.drop_without_applying_deltas();
             }
+            app.financials = Some((
+                app.chart.symbol().to_owned(),
+                egui_charts::ui::financials::FinancialsPanel::new("Financials", None),
+            ));
+            let output = export_frame(&mut app, &ctx, vec![]);
+            let offered = ["Whole layout", "Current size"].map(|label| {
+                (label, output.shapes.iter().any(|shape|
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)))
+            });
+            output.drop_without_applying_deltas();
+            for (label, visible) in offered {
+                assert!(
+                    !visible,
+                    "{label} must not reuse the hidden chart's geometry"
+                );
+            }
+            app.financials = None;
             app.ensure_chart_slots(ChartLayoutMode::Single);
             let output = export_frame(&mut app, &ctx, vec![]);
             assert!(!output.shapes.iter().any(|shape|

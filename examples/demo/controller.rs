@@ -3546,6 +3546,8 @@ impl DemoApp {
 
     fn show_chart(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         if let Some((_, financials)) = &mut self.financials {
+            self.export_dialog.set_chart_size(None);
+            self.export_dialog.set_layout_size(None);
             let frame = panel_frame(bg).corner_radius(4).inner_margin(16);
             let back = egui::CentralPanel::default()
                 .frame(frame)
