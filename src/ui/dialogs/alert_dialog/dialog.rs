@@ -27,6 +27,15 @@ use crate::ui_kit::status_message::{MessageKind, status_message};
 /// The name of the presets document.
 const PRESETS: &str = "presets";
 
+/// Ready notification schedules, derived from the staged days and windows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScheduleChoice {
+    Always,
+    Weekdays,
+    WorkingHours,
+    Custom,
+}
+
 /// A dialog that creates or edits the same alert type the host stores and evaluates.
 pub struct AlertDialog {
     /// Layout dimensions.
@@ -356,6 +365,28 @@ impl AlertDialog {
                 .map(|w| [text(w.start), text(w.end)])
                 .collect()
         });
+    }
+
+    fn schedule_choice(&self) -> ScheduleChoice {
+        if !self.scheduled {
+            return ScheduleChoice::Always;
+        }
+        if self.schedule_days == [true, true, true, true, true, false, false]
+            && let [[start, end]] = self.schedule_windows.as_slice()
+        {
+            let time = |text: &str| NaiveTime::parse_from_str(text.trim(), "%H:%M").ok();
+            let hours = |hour| NaiveTime::from_hms_opt(hour, 0, 0);
+            match (time(start), time(end)) {
+                (Some(start), Some(end)) if Some(start) == hours(0) && Some(end) == hours(0) => {
+                    return ScheduleChoice::Weekdays;
+                }
+                (Some(start), Some(end)) if Some(start) == hours(9) && Some(end) == hours(18) => {
+                    return ScheduleChoice::WorkingHours;
+                }
+                _ => {}
+            }
+        }
+        ScheduleChoice::Custom
     }
 
     /// The staged schedule: none when notifications go out at any time, otherwise the entered
@@ -910,13 +941,42 @@ impl AlertDialog {
                 .accessible_name(time_label);
                 ui.end_row();
             }
-            ui.label(l10n::text(ui.ctx(), "Notifications"));
-            let mut any_time = !self.scheduled;
-            if ui
-                .checkbox(&mut any_time, l10n::text(ui.ctx(), "Any time"))
-                .changed()
-            {
-                self.scheduled = !any_time;
+            let schedule_label = ui.label(l10n::text(ui.ctx(), "Notifications"));
+            let before = self.schedule_choice();
+            let mut choice = before;
+            let choices = [
+                (ScheduleChoice::Always, "Always"),
+                (ScheduleChoice::Weekdays, "Weekdays"),
+                (ScheduleChoice::WorkingHours, "Working hours"),
+                (ScheduleChoice::Custom, "Custom"),
+            ];
+            let label = choices
+                .iter()
+                .find(|(value, _)| *value == choice)
+                .unwrap()
+                .1;
+            egui::ComboBox::from_id_salt("alert_schedule")
+                .selected_text(l10n::text(ui.ctx(), label))
+                .show_ui(ui, |ui| {
+                    for (value, label) in choices {
+                        ui.selectable_value(&mut choice, value, l10n::text(ui.ctx(), label));
+                    }
+                })
+                .response
+                .labelled_by(schedule_label.id);
+            if choice != before {
+                self.scheduled = choice != ScheduleChoice::Always;
+                if matches!(
+                    choice,
+                    ScheduleChoice::Weekdays | ScheduleChoice::WorkingHours
+                ) {
+                    self.schedule_days = [true, true, true, true, true, false, false];
+                    self.schedule_windows = vec![if choice == ScheduleChoice::Weekdays {
+                        ["00:00".into(), "00:00".into()]
+                    } else {
+                        ["09:00".into(), "18:00".into()]
+                    }];
+                }
             }
             ui.end_row();
             if self.scheduled {
@@ -1448,6 +1508,15 @@ pub(crate) fn rule_form(
     let position = offer_position
         .then(|| drawing_position(source, condition, sources))
         .flatten();
+    // Switching direction or units keeps the amount and lookback.
+    let (amount, moving_bars) = match condition {
+        AlertCondition::MovingBy { value, bars }
+        | AlertCondition::MovingByPercent {
+            percent: value,
+            bars,
+        } => (value.abs(), *bars),
+        _ => (1.0, 1),
+    };
     let choices = [
         (AlertCondition::Crossing(lower), "Crossing"),
         (AlertCondition::CrossingUp(lower), "Crossing up"),
@@ -1472,17 +1541,31 @@ pub(crate) fn rule_form(
         ),
         (
             AlertCondition::MovingBy {
-                value: 1.0,
-                bars: 1,
+                value: amount,
+                bars: moving_bars,
             },
-            "Moving by value",
+            "Moving up",
+        ),
+        (
+            AlertCondition::MovingBy {
+                value: -amount,
+                bars: moving_bars,
+            },
+            "Moving down",
         ),
         (
             AlertCondition::MovingByPercent {
-                percent: 1.0,
-                bars: 1,
+                percent: amount,
+                bars: moving_bars,
             },
-            "Moving by percent",
+            "Moving up %",
+        ),
+        (
+            AlertCondition::MovingByPercent {
+                percent: -amount,
+                bars: moving_bars,
+            },
+            "Moving down %",
         ),
         (
             AlertCondition::Compare {
@@ -1513,16 +1596,24 @@ pub(crate) fn rule_form(
             .map(|(id, _)| (AlertCondition::StrategyFills(id.clone()), "Strategy fills")),
     )
     .collect::<Vec<_>>();
-    let selected = choices
-        .iter()
-        .find(|(c, _)| std::mem::discriminant(c) == std::mem::discriminant(condition))
-        .map(|(_, name)| *name)
-        .unwrap_or(match condition {
-            AlertCondition::StrategyFills(_) => "Strategy fills",
-            AlertCondition::DetectorSignals(_) => "Detector signals",
-            AlertCondition::CustomEvents(_) => "Custom events",
-            _ => "Condition",
-        });
+    let selected = match condition {
+        AlertCondition::MovingBy { value, .. } if value.is_sign_negative() => "Moving down",
+        AlertCondition::MovingBy { .. } => "Moving up",
+        AlertCondition::MovingByPercent { percent, .. } if percent.is_sign_negative() => {
+            "Moving down %"
+        }
+        AlertCondition::MovingByPercent { .. } => "Moving up %",
+        _ => choices
+            .iter()
+            .find(|(c, _)| std::mem::discriminant(c) == std::mem::discriminant(condition))
+            .map(|(_, name)| *name)
+            .unwrap_or(match condition {
+                AlertCondition::StrategyFills(_) => "Strategy fills",
+                AlertCondition::DetectorSignals(_) => "Detector signals",
+                AlertCondition::CustomEvents(_) => "Custom events",
+                _ => "Condition",
+            }),
+    };
     egui::ComboBox::from_id_salt("condition")
         .selected_text(l10n::text(ui.ctx(), selected))
         .show_ui(ui, |ui| {
@@ -1642,9 +1733,16 @@ pub(crate) fn rule_form(
             percent: value,
             bars,
         } => {
-            ui.label(l10n::text(ui.ctx(), "Change / bars"));
-            ui.add(egui::DragValue::new(value))
-                .accessible_name(l10n::text(ui.ctx(), "Change"));
+            ui.label(l10n::text(ui.ctx(), "Amount / bars"));
+            let down = value.is_sign_negative();
+            let mut amount = value.abs();
+            if ui
+                .add(egui::DragValue::new(&mut amount).range(0.0..=f64::MAX))
+                .accessible_name(l10n::text(ui.ctx(), "Amount"))
+                .changed()
+            {
+                *value = if down { -amount } else { amount };
+            }
             ui.add(egui::DragValue::new(bars).range(1..=u32::MAX))
                 .accessible_name(l10n::text(ui.ctx(), "Bars"));
         }
@@ -1831,6 +1929,169 @@ mod tests {
         // A span captured on the source chart's interval does not describe another interval.
         let inputs = h.state().alert.inputs.as_ref().unwrap();
         assert_eq!((inputs.start, inputs.visible), (None, None));
+    }
+
+    #[test]
+    fn moving_operators_save_their_direction_as_a_sign() {
+        use egui::accesskit::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let mut dialog = AlertDialog::new();
+        dialog.edit(Alert::new("SAMPLE", AlertCondition::Above(100.0)));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(960.0, 900.0))
+            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+        h.run();
+        for (label, expected, text) in [
+            (
+                "Moving up",
+                AlertCondition::MovingBy {
+                    value: 5.0,
+                    bars: 3,
+                },
+                "Moving up 5 over 3 bars",
+            ),
+            (
+                "Moving down",
+                AlertCondition::MovingBy {
+                    value: -5.0,
+                    bars: 3,
+                },
+                "Moving down 5 over 3 bars",
+            ),
+            (
+                "Moving up %",
+                AlertCondition::MovingByPercent {
+                    percent: 5.0,
+                    bars: 3,
+                },
+                "Moving up 5% over 3 bars",
+            ),
+            (
+                "Moving down %",
+                AlertCondition::MovingByPercent {
+                    percent: -5.0,
+                    bars: 3,
+                },
+                "Moving down 5% over 3 bars",
+            ),
+        ] {
+            h.get_by_label("Condition").click();
+            h.run();
+            h.get_by_label(label).scroll_to_me();
+            h.run();
+            h.get_by_label(label).click();
+            h.run();
+            h.get_by_role_and_label(Role::SpinButton, "Amount")
+                .set_value_accesskit(5.0);
+            h.run();
+            h.get_by_role_and_label(Role::SpinButton, "Bars")
+                .set_value_accesskit(3.0);
+            h.run();
+            assert_eq!(h.state().alert.condition, expected, "{label}");
+            assert_eq!(h.state().alert.condition.to_string(), text);
+        }
+        // The stored representation predates the directional menu.
+        let saved = r#"{"symbol":"SAMPLE","condition":{"MovingBy":{"value":-5.0,"bars":3}}}"#;
+        h.state_mut().edit(serde_json::from_str(saved).unwrap());
+        h.run();
+        assert_eq!(
+            h.get_by_label("Condition").value().as_deref(),
+            Some("Moving down")
+        );
+        assert_eq!(
+            h.get_by_role_and_label(Role::SpinButton, "Amount")
+                .accesskit_node()
+                .numeric_value(),
+            Some(5.0)
+        );
+        h.get_by_role_and_label(Role::SpinButton, "Amount")
+            .set_value_accesskit(0.0);
+        h.run();
+        assert_eq!(
+            h.get_by_label("Condition").value().as_deref(),
+            Some("Moving down")
+        );
+        assert!(!h.state().alert.condition.is_valid());
+    }
+
+    #[test]
+    fn ready_schedules_fill_days_and_windows_and_reopen_selected() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let zone = if cfg!(feature = "timezones") {
+            TimezoneId::named("America/New_York").unwrap()
+        } else {
+            TimezoneId::fixed_offset(-5 * 3600).unwrap()
+        };
+        let mut dialog = AlertDialog::new();
+        dialog.account_timezone = Some(zone.clone());
+        dialog.edit(Alert::new("SAMPLE", AlertCondition::Above(100.0)));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(960.0, 1100.0))
+            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+        h.run();
+        let mut schedules = Vec::new();
+        for (label, start, end, inside, outside) in [
+            ("Weekdays", 0, 0, (18, 17), (21, 17)),
+            ("Working hours", 9, 18, (18, 14), (18, 23)),
+        ] {
+            h.get_by_label("Notifications").click();
+            h.run();
+            h.get_by_label(label).click();
+            h.run();
+            let expected = NotificationSchedule::new(
+                zone.clone(),
+                vec![
+                    Weekday::Mon,
+                    Weekday::Tue,
+                    Weekday::Wed,
+                    Weekday::Thu,
+                    Weekday::Fri,
+                ],
+                vec![NotificationWindow::new(
+                    NaiveTime::from_hms_opt(start, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(end, 0, 0).unwrap(),
+                )],
+            );
+            assert_eq!(h.state().schedule(), Ok(Some(expected.clone())), "{label}");
+            // In November New York is UTC-5: 14:00 UTC is 09:00, 23:00 is 18:00.
+            let at = |(day, hour)| Utc.with_ymd_and_hms(2026, 11, day, hour, 0, 0).unwrap();
+            assert!(expected.allows(at(inside)), "{label}");
+            assert!(!expected.allows(at(outside)), "{label}");
+            schedules.push((label, expected));
+        }
+        h.get_by_label("Sat").click();
+        h.run();
+        assert_eq!(
+            h.get_by_label("Notifications").value().as_deref(),
+            Some("Custom")
+        );
+        for (label, schedule) in &schedules {
+            let mut alert = Alert::new("SAMPLE", AlertCondition::Above(100.0));
+            alert.schedule = Some(Box::new(schedule.clone()));
+            h.state_mut().edit(alert);
+            h.run();
+            assert_eq!(
+                h.get_by_label("Notifications").value().as_deref(),
+                Some(*label)
+            );
+        }
+        h.state_mut()
+            .edit(Alert::new("SAMPLE", AlertCondition::Above(100.0)));
+        h.run();
+        assert_eq!(
+            h.get_by_label("Notifications").value().as_deref(),
+            Some("Always")
+        );
+        h.state_mut().last_schedule = Some(schedules[0].1.clone());
+        h.state_mut().open("SAMPLE".into(), 100.0);
+        h.run();
+        assert_eq!(
+            h.get_by_label("Notifications").value().as_deref(),
+            Some("Weekdays")
+        );
     }
 
     /// The row writes the session into the inputs the chart prepared and offers overnight hours
