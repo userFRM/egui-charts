@@ -1244,6 +1244,10 @@ impl Indicator for OptionsVolumeProfile {
     fn set_timeframe(&mut self, timeframe: crate::model::Timeframe) {
         self.timeframe = Some(timeframe);
     }
+    // The option chain belongs to the chart's underlying, so the profile cannot follow another symbol.
+    fn draws_on_other_bars(&self) -> bool {
+        false
+    }
     fn set_chart_symbol(&mut self, symbol: &str) -> bool {
         // The chart's instrument may name the underlying otherwise, such as `X:ABC` for `ABC`.
         let matching = symbol.is_empty() || symbol == self.symbol;
@@ -3514,10 +3518,23 @@ mod tests {
         .unwrap();
         let chain = OptionsVolumeProfile::from_chain(chain, "SAMPLE", dates).unwrap();
         for profile in [volume, chain] {
-            let study = crate::studies::ConfiguredStudy::new(Box::new(profile));
+            let mut study = crate::studies::ConfiguredStudy::new(Box::new(profile));
             let visibility = study.settings().timeframe_visibility;
             for (interval, shown) in [("5min", false), ("1h", false), ("1D", true), ("1W", true)] {
                 assert_eq!(visibility.is_visible_on(interval), shown, "{interval}");
+            }
+            // The chain belongs to the chart's underlying: no Symbol, Interval or close wait.
+            let ids: Vec<_> = study.inputs().into_iter().map(|input| input.id).collect();
+            for (id, value) in [
+                ("calculation_symbol", InputValue::Symbol("OTHER".into())),
+                (
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(crate::model::Timeframe::Week1)),
+                ),
+                ("wait_for_close", InputValue::Toggle(true)),
+            ] {
+                assert!(!ids.iter().any(|listed| listed == id), "{id}");
+                assert!(study.set_input(id, value).is_err(), "{id}");
             }
         }
     }
