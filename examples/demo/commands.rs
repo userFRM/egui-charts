@@ -409,6 +409,7 @@ impl DemoApp {
             "interval" => Some(KeyboardAction::OpenIntervalSearch),
             "data-window" => Some(KeyboardAction::OpenDataWindow),
             "open-layout" => Some(KeyboardAction::OpenLayout),
+            "snapshot" => Some(KeyboardAction::Snapshot),
             _ => None,
         };
         if let Some(action) = shortcut {
@@ -433,7 +434,6 @@ impl DemoApp {
             "symbols" => TopToolbarAction::OpenSymbolSearch,
             "indicators" => TopToolbarAction::OpenIndicators,
             "settings" => TopToolbarAction::OpenSettings,
-            "snapshot" => TopToolbarAction::TakeScreenshot,
             "alert" => TopToolbarAction::CreateAlert,
             "compare" => TopToolbarAction::OpenCompare,
             "fullscreen" => TopToolbarAction::ToggleFullscreen,

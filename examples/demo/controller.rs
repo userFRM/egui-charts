@@ -9278,7 +9278,11 @@ mod tests {
                     Some(egui_charts::drawings::DrawingToolType::TrendLine)
                 ),
                 "Undo" => assert!(app.chart.drawings().drawings.is_empty()),
-                "Take a snapshot" => assert!(app.screenshot_requested.is_some()),
+                // The row shows the snapshot shortcut's keys and runs what they run.
+                "Take a snapshot" => assert!(matches!(
+                    app.screenshot_requested,
+                    Some((ScreenshotTarget::Post { copy_link: true }, ..))
+                )),
                 "Toggle percent scale" => assert_eq!(
                     app.chart.state().price_scale().options().mode,
                     egui_charts::scales::PriceScaleMode::Percentage
