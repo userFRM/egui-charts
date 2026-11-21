@@ -118,13 +118,13 @@ pub fn handle_selection<F1, F2, F3>(
                 }
                 return;
             }
-            // A locked drawing, or one whose user edits are off, cannot be erased, so it is
-            // not offered.
+            // A locked drawing, one whose user edits are off, or any while all are locked, cannot
+            // be erased, so it is not offered.
             let hit = drawing_manager.hit_test(pos).filter(|&id| {
                 drawing_manager
                     .drawings
                     .iter()
-                    .any(|d| d.id == id && d.accepts_user_edits())
+                    .any(|d| d.id == id && drawing_manager.accepts_user_edits(d))
             });
             cursor_modes.eraser.set_hover(hit);
             ui.ctx().set_cursor_icon(if hit.is_some() {
@@ -153,7 +153,7 @@ pub fn handle_selection<F1, F2, F3>(
             drawing_manager
                 .drawings
                 .iter()
-                .any(|d| d.id == id && d.accepts_user_edits())
+                .any(|d| d.id == id && drawing_manager.accepts_user_edits(d))
         });
         if let Some((id, handle)) = handle {
             ui.ctx()
