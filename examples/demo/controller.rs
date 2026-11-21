@@ -3363,7 +3363,6 @@ impl DemoApp {
             AlertPanelAction::EditAlert(alert) | AlertPanelAction::DuplicateAlert(alert) => {
                 self.edit_alert(*alert)
             }
-            AlertPanelAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
             AlertPanelAction::ExportLog(csv) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 let path = std::env::temp_dir().join("alerts.csv");
