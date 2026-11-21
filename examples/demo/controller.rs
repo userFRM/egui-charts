@@ -1781,6 +1781,18 @@ impl eframe::App for DemoApp {
         let alerts = &self.settings_state.alerts;
         self.alerts
             .set_sound(alerts.play_sound.then(|| alerts.sound.clone()));
+        self.alerts.set_price(
+            self.chart.symbol(),
+            self.chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .rev()
+                .find(|bar| !bar.is_whitespace())
+                .map(|bar| bar.close),
+            self.chart
+                .instrument()
+                .and_then(|instrument| instrument.tick_size),
+        );
         self.alerts.poll(&ctx, &mut self.toasts);
         self.monitor_alerts(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
@@ -3287,7 +3299,6 @@ impl DemoApp {
 
     fn show_alerts_panel(&mut self, ui: &mut egui::Ui) {
         self.list_alert_sources();
-        self.alerts.set_symbol(&self.state.symbol);
         match self.alerts.show(ui) {
             AlertPanelAction::CreateAlert => self.open_alert(None),
             AlertPanelAction::EditAlert(mut alert)
@@ -4381,11 +4392,9 @@ impl DemoApp {
                     if ctx
                         .layer_id_at(pos)
                         .is_some_and(|layer| layer.order == egui::Order::Background)
+                        && let Some(price) = self.chart.alert_price_at(pos)
                     {
-                        let price = mapping.y_to_price(pos.y);
-                        if price.is_finite() {
-                            self.quick_price_alert(self.chart.symbol().to_owned(), price);
-                        }
+                        self.quick_price_alert(self.chart.symbol().to_owned(), price);
                     }
                 } else {
                     self.open_alert(None);
@@ -9151,7 +9160,13 @@ mod tests {
         let map = app.chart.get_chart_mapping();
         let point = egui::pos2(map.rect.center().x, map.rect.center().y);
         let range = map.price.range();
-        let expected = (range.min + range.max) / 2.0;
+        let expected = app.chart.alert_price_at(point).unwrap();
+        let tick = app
+            .chart
+            .instrument()
+            .and_then(|instrument| instrument.tick_size)
+            .unwrap_or(0.01);
+        assert!((expected - (range.min + range.max) / 2.0).abs() <= tick / 2.0 + 1e-9);
         frame(
             &mut app,
             vec![
