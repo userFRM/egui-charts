@@ -523,15 +523,12 @@ impl Indicator for Seasonality {
                     .iter()
                     .rposition(|bar| bar.time < data[right].time)
                     .unwrap_or(right);
-                let seconds = |duration: chrono::TimeDelta| {
-                    duration.num_seconds() as f64 + duration.subsec_nanos() as f64 / 1e9
-                };
                 let step = if left == right {
                     1.0
                 } else {
-                    seconds(data[right].time - data[left].time) / (right - left) as f64
+                    (data[right].time - data[left].time).as_seconds_f64() / (right - left) as f64
                 };
-                let to = right as f64 + seconds(end.and_utc() - data[right].time) / step;
+                let to = right as f64 + (end.and_utc() - data[right].time).as_seconds_f64() / step;
                 if to.is_finite() && to > i as f64 {
                     self.projection.push(StudyProjection {
                         bars: i as f64..to,
