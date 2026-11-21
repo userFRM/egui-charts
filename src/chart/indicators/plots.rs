@@ -248,10 +248,19 @@ pub(crate) fn paint_zones(
         else {
             continue;
         };
-        let stroke = egui::Stroke::new(style.width, style.color);
         painter.rect_filled(rect, 0.0, style.color.gamma_multiply(0.15));
-        painter.line_segment([rect.left_top(), rect.right_top()], stroke);
-        painter.line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
+        let line = crate::studies::PlotStyle {
+            plot_type: crate::studies::PlotType::Line,
+            ..style
+        };
+        for y in [rect.top(), rect.bottom()] {
+            crate::chart::rendering::paint_study_plot(
+                painter,
+                &[egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                line,
+                f32::NAN,
+            );
+        }
     }
 }
 
@@ -476,7 +485,6 @@ pub(crate) fn paint_drawings(
 #[cfg(all(test, feature = "studies"))]
 mod tests {
     use super::*;
-    #[cfg(feature = "timezones")]
     use crate::chart::coords::ChartMapping;
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
     use crate::studies::Indicator;
@@ -607,5 +615,76 @@ mod tests {
                 (4..5, 5, 399.0, 499.0)
             ]
         );
+    }
+
+    /// The swing high of 10 at bar 2 is never revisited, so its level runs from the centre of bar
+    /// 2 to that of bar 5, x = 249 to 549, at y = 90; it has no height, so both edges lie there.
+    /// Each edge is one segment when solid, dashes of 6 px with gaps of 4 px from its left end
+    /// (12 and 8 large), or dots of radius 0.5 (half the 1 px width) every 4 px (8 sparse).
+    #[test]
+    fn zone_edges_follow_their_plot_pattern() {
+        use crate::model::LineStyle;
+        use crate::studies::{ConfiguredStudy, MissedPivots};
+        let bars: Vec<_> = [5.0, 8.0, 10.0, 8.0, 5.0, 6.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i as i64);
+                crate::model::Bar::new(time, p, p, p, p, 1.0)
+            })
+            .collect();
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(600.0, 100.0));
+        let coords = ChartMapping::new(rect, 100.0, 0, 5, 0.0, price);
+        for (pattern, count, first, last) in [
+            (LineStyle::Solid, 2, [249.0, 549.0], [249.0, 549.0]),
+            (LineStyle::Dashed, 60, [249.0, 255.0], [539.0, 545.0]),
+            (LineStyle::LargeDashed, 30, [249.0, 261.0], [529.0, 541.0]),
+            (LineStyle::Dotted, 150, [248.5, 249.5], [544.5, 545.5]),
+            (LineStyle::SparseDotted, 76, [248.5, 249.5], [544.5, 545.5]),
+        ] {
+            let mut study = ConfiguredStudy::new(Box::new(MissedPivots::new(2, 2, 0.1, 20)));
+            let mut settings = study.settings();
+            settings.plots[0].pattern = pattern;
+            study.apply_settings(&[], settings).unwrap();
+            study.calculate(&bars);
+            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                paint_zones(&ui.painter().with_clip_rect(rect), &study, &price, &coords);
+            });
+            // Every stroke piece as its left and right x and its y; the band is a filled rect.
+            let pieces: Vec<[f32; 3]> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { points, .. } => {
+                        Some([points[0].x, points[1].x, points[0].y])
+                    }
+                    egui::Shape::Path(path) => {
+                        Some([path.points[0].x, path.points[1].x, path.points[0].y])
+                    }
+                    egui::Shape::Circle(dot) => Some([
+                        dot.center.x - dot.radius,
+                        dot.center.x + dot.radius,
+                        dot.center.y,
+                    ]),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            let close = |piece: [f32; 3], [left, right]: [f32; 2]| {
+                [piece[0] - left, piece[1] - right, piece[2] - 90.0]
+                    .iter()
+                    .all(|d| d.abs() < 1e-3)
+            };
+            assert_eq!(pieces.len(), count, "{pattern:?}: {pieces:?}");
+            assert!(close(pieces[0], first), "{pattern:?}: {pieces:?}");
+            assert!(close(pieces[count - 1], last), "{pattern:?}: {pieces:?}");
+        }
     }
 }
