@@ -3137,7 +3137,8 @@ mod tests {
         };
         assert_eq!(flags(&h, "AAPL"), [Some(Red), Some(Red)]);
         assert_eq!(flags(&h, "NVDA"), [Some(Green), Some(Green)]);
-        h.get_by_label("AAPL").click_secondary();
+        h.get_by_role_and_label(egui::Role::ListBoxOption, "AAPL")
+            .click_secondary();
         h.run();
         h.get_by_label("Green").click();
         h.run();
@@ -3147,7 +3148,8 @@ mod tests {
         h.state_mut().set_flag_filter(Some(Red));
         h.run();
         assert_eq!(h.state().symbols().collect::<Vec<_>>(), ["MSFT", "XOM"]);
-        h.get_by_label("XOM").click_secondary();
+        h.get_by_role_and_label(egui::Role::ListBoxOption, "XOM")
+            .click_secondary();
         h.run();
         h.get_by_label("Remove from list").click();
         h.run();
@@ -3174,7 +3176,8 @@ mod tests {
         choose(&mut h, "Imported", "Tech");
         choose(&mut h, "Tech", "Clear list");
         choose(&mut h, "Tech", "Other");
-        h.get_by_label("AAPL").click_secondary();
+        h.get_by_role_and_label(egui::Role::ListBoxOption, "AAPL")
+            .click_secondary();
         h.run();
         h.get_by_label("Remove flag").click();
         h.run();
@@ -3226,7 +3229,8 @@ mod tests {
                 h.get_by_label("Two").click();
                 h.run();
             }
-            h.get_by_label("B").click_secondary();
+            h.get_by_role_and_label(egui::Role::ListBoxOption, "B")
+                .click_secondary();
             h.run();
             assert_eq!(
                 h.get_by_label("Add section").accesskit_node().is_disabled(),
@@ -3239,7 +3243,10 @@ mod tests {
             assert_eq!(h.state().lists()[0].to_text(), expected);
             let visible: Vec<_> = ["A", "B", "C"]
                 .into_iter()
-                .filter(|s| h.query_by_label(s).is_some())
+                .filter(|s| {
+                    h.query_by_role_and_label(egui::Role::ListBoxOption, s)
+                        .is_some()
+                })
                 .collect();
             assert_eq!(visible, shown);
         }

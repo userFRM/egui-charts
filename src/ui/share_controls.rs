@@ -271,11 +271,17 @@ mod tests {
             },
             (controls, "Private".into()),
         );
-        assert!(h.query_by_value("Shared by link").is_none());
+        assert!(
+            h.query_by_role_and_label(egui::Role::Label, "Shared by link")
+                .is_none()
+        );
         assert!(h.query_by_label("Stop sharing").is_none());
         h.state_mut().1 = "Shared".into();
         h.run();
-        assert!(h.query_by_value("Shared by link").is_some());
+        assert!(
+            h.query_by_role_and_label(egui::Role::Label, "Shared by link")
+                .is_some()
+        );
         h.get_by_label("Stop sharing").click();
         h.run();
         assert!(
@@ -283,16 +289,25 @@ mod tests {
                 .accesskit_node()
                 .is_disabled()
         );
-        assert!(h.query_by_value("Stopping sharing…").is_some());
+        assert!(
+            h.query_by_role_and_label(egui::Role::Label, "Stopping sharing…")
+                .is_some()
+        );
         *host.stopped.lock().unwrap() = true;
         h.run();
-        assert!(h.query_by_value("Stopping sharing…").is_some());
+        assert!(
+            h.query_by_role_and_label(egui::Role::Label, "Stopping sharing…")
+                .is_some()
+        );
         *host.stopped.lock().unwrap() = false;
         let (kind, name, reply) = host.calls.lock().unwrap().pop().unwrap();
         assert_eq!((kind, name.as_str()), (ShareKind::Watchlist, "Shared"));
         reply.send(Err(FeedError::Other("locked".into())));
         h.run();
-        assert!(h.query_by_value("Could not stop sharing: locked").is_some());
+        assert!(
+            h.query_by_role_and_label(egui::Role::Label, "Could not stop sharing: locked")
+                .is_some()
+        );
         assert!(
             !h.get_by_label("Stop sharing")
                 .accesskit_node()
@@ -304,8 +319,14 @@ mod tests {
         *host.stopped.lock().unwrap() = true;
         reply.send(Ok(()));
         h.run();
-        assert!(h.query_by_value("Sharing stopped").is_some());
-        assert!(h.query_by_value("Shared by link").is_none());
+        assert!(
+            h.query_by_role_and_label(egui::Role::Label, "Sharing stopped")
+                .is_some()
+        );
+        assert!(
+            h.query_by_role_and_label(egui::Role::Label, "Shared by link")
+                .is_none()
+        );
         assert!(h.query_by_label("Stop sharing").is_none());
     }
 
