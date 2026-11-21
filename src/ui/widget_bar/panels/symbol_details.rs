@@ -762,6 +762,7 @@ impl SymbolDetailsPanel {
                         let (session, color) = match extended.session {
                             ExtendedSession::PreMarket => ("Pre-market", theme.ui.warning),
                             ExtendedSession::PostMarket => ("Post-market", theme.ui.info),
+                            ExtendedSession::Overnight => ("Overnight", theme.ui.accent),
                         };
                         ui.horizontal(|ui| {
                             ui.label(
@@ -1366,20 +1367,27 @@ mod tests {
         panel.set_instrument(&Instrument::new("QQQ").with_price_decimals(2));
         panel.set_timezone("Europe/Berlin".parse().unwrap());
         let quote = Quote::new(704.47, 725.20, "2026-10-22T19:59:00Z".parse().unwrap());
-        panel.set_quote(quote.with_extended(crate::model::ExtendedHoursQuote {
-            session: ExtendedSession::PreMarket,
-            last: 703.65,
-            // Summer time ends in Berlin on October 25.
-            time: "2026-10-26T12:30:00Z".parse().unwrap(),
-        }));
-        let shown = texts(&ctx, &mut panel);
-        for text in [
-            "704.47-20.73-2.86%",
-            "Last update at 21:59 GMT+2",
-            "703.65-0.82-0.12%",
-            "Last update at 13:30 GMT+1",
+        for (session, label) in [
+            (ExtendedSession::PreMarket, "Pre-market"),
+            (ExtendedSession::PostMarket, "Post-market"),
+            (ExtendedSession::Overnight, "Overnight"),
         ] {
-            assert!(shown.contains(&text.into()), "{text}: {shown:?}");
+            panel.set_quote(quote.with_extended(crate::model::ExtendedHoursQuote {
+                session,
+                last: 703.65,
+                // Summer time ends in Berlin on October 25.
+                time: "2026-10-26T12:30:00Z".parse().unwrap(),
+            }));
+            let shown = texts(&ctx, &mut panel);
+            for text in [
+                label,
+                "704.47-20.73-2.86%",
+                "Last update at 21:59 GMT+2",
+                "703.65-0.82-0.12%",
+                "Last update at 13:30 GMT+1",
+            ] {
+                assert!(shown.contains(&text.into()), "{text}: {shown:?}");
+            }
         }
         for (offset, label) in [(0, "UTC"), (-5 * 3600, "GMT-5"), (-12600, "GMT-3:30")] {
             assert_eq!(zone_label(offset), label);
