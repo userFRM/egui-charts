@@ -39,6 +39,9 @@ pub struct IndicatorSettingsDialog {
     /// The edited study's name, for the title.
     study: String,
     line_names: Vec<String>,
+    /// The plots that hold no values, offered without a plot type, scale tag or latest value
+    /// line.
+    valueless_plots: Vec<usize>,
     levels: Vec<(f64, &'static str)>,
     gradient_names: Vec<&'static str>,
     tab: Tab,
@@ -120,19 +123,27 @@ impl IndicatorSettingsDialog {
         });
         self.inputs = study.inputs();
         self.study = study.name().to_owned();
-        self.line_names = study.line_names();
+        self.read_plots(study);
         self.gradient_names = study.gradients().iter().map(|fill| fill.name).collect();
+        self.overlay = study.is_overlay();
+        self.price_scale = study.scale() == StudyScale::Main;
+        self.current_interval = interval;
+        self.tab = Tab::Inputs;
+        self.sources.clear();
+    }
+
+    /// Reads the plot names, the plots without values and the guide levels of `study`.
+    fn read_plots(&mut self, study: &dyn Indicator) {
+        self.line_names = study.line_names();
+        self.valueless_plots = (0..study.line_count())
+            .filter(|&line| !study.plot_holds_values(line))
+            .collect();
         self.levels = study
             .pane()
             .levels
             .into_iter()
             .map(|(value, _, caption)| (value, caption))
             .collect();
-        self.overlay = study.is_overlay();
-        self.price_scale = study.scale() == StudyScale::Main;
-        self.current_interval = interval;
-        self.tab = Tab::Inputs;
-        self.sources.clear();
     }
 
     /// Open on a chart study and offer other studies' outputs, excluding cycles, to the input
@@ -261,13 +272,7 @@ impl IndicatorSettingsDialog {
             // Inputs can change the number of plots and the declared guide values.
             pending.settings = study.settings();
             self.edit.as_mut()?.settings = pending.settings.clone();
-            self.line_names = study.line_names();
-            self.levels = study
-                .pane()
-                .levels
-                .into_iter()
-                .map(|(value, _, caption)| (value, caption))
-                .collect();
+            self.read_plots(study);
             self.previewed = Some(pending);
             ctx.request_repaint();
         }
@@ -450,6 +455,11 @@ impl IndicatorSettingsDialog {
                                     });
                                     ui.horizontal_wrapped(|ui| {
                                         pattern_combo(ui, &mut plot.pattern);
+                                        // Zone edges are lines and a plot without values has no
+                                        // last value to tag or extend.
+                                        if self.valueless_plots.contains(&line) {
+                                            return;
+                                        }
                                         egui::ComboBox::from_id_salt("plot_type")
                                             .selected_text(l10n::text(
                                                 ui.ctx(),
@@ -2995,5 +3005,90 @@ mod tests {
         harness.run();
         assert!(harness.query_by_label("Auto (1min)").is_some());
         assert!(harness.query_by_label("Chart interval").is_none());
+    }
+
+    /// A plot that only styles zones offers visibility, colour, width and line pattern on the
+    /// Style tab, and no plot type, scale tag or latest value line, which would change nothing.
+    /// Plots that hold values keep all three. Missed Pivot Levels switched from swings to the
+    /// three periods offers its new third plot the same way.
+    #[test]
+    fn zone_plots_offer_only_zone_styles() {
+        use crate::studies::{AutoKeyLevels, Gaps, MissedPivots};
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let combined = ["Daily pivots", "Weekly pivots", "Monthly pivots"];
+        for (study, period, names, holds_values) in [
+            (
+                Box::new(MissedPivots::default()) as Box<dyn Indicator>,
+                None,
+                &combined[..],
+                false,
+            ),
+            (
+                Box::new(MissedPivots::new(10, 10, 0.0, 500)),
+                Some(4),
+                &combined[..],
+                false,
+            ),
+            (
+                Box::new(Gaps::default()),
+                None,
+                &["Up gaps", "Down gaps"][..],
+                false,
+            ),
+            (
+                Box::new(AutoKeyLevels::new()),
+                None,
+                &[
+                    "Day",
+                    "Week",
+                    "Month",
+                    "Prev Day",
+                    "Prev Week",
+                    "Prev Month",
+                    "Custom",
+                ][..],
+                false,
+            ),
+            (Box::new(SMA::new(2)), None, &["SMA(2)"][..], true),
+        ] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            let id = chart.add_indicator(study);
+            let mut dialog = IndicatorSettingsDialog::default();
+            assert!(dialog.open_for_chart(&chart, id));
+            dialog.tab = Tab::Style;
+            if let Some(choice) = period {
+                let input = dialog
+                    .inputs
+                    .iter_mut()
+                    .find(|input| input.id == "period")
+                    .unwrap();
+                input.value = InputValue::Choice(choice);
+            }
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 1600.0))
+                .build_ui(|ui| {
+                    let _ = dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart);
+                });
+            harness.run();
+            let plots = names.len();
+            for name in names {
+                assert!(harness.query_all_by_label(name).next().is_some(), "{name}");
+            }
+            let count = |label| harness.query_all_by_label(label).count();
+            assert_eq!(
+                harness.query_all_by_role(Role::ColorWell).count(),
+                plots,
+                "{names:?}"
+            );
+            assert_eq!(count("Line width"), plots, "{names:?}");
+            assert_eq!(count("Line pattern"), plots, "{names:?}");
+            let offered = if holds_values { plots } else { 0 };
+            for label in ["Plot type", "Value on scale", "Latest value line"] {
+                assert_eq!(count(label), offered, "{names:?}: {label}");
+            }
+        }
     }
 }

@@ -218,6 +218,67 @@ fn equity_curve_fills_the_width_with_distinct_time_labels() {
 }
 
 #[test]
+fn margin_figures_and_chart_follow_margin_data() {
+    let hour = |h| DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(h);
+    let mut plain = StrategyReport::new("Leveraged", "LEV", Timeframe::Hour1, 1000.0);
+    let mut trade = StrategyTrade::new(OrderSide::Buy, 15.0, hour(2), 100.0);
+    trade.exit = Some(StrategyExit::new(hour(3), 200.0 / 3.0, -500.0));
+    trade.label = Some("A / Margin call".into());
+    plain.trades = vec![trade];
+    let curve = |values: [f64; 4]| {
+        values
+            .into_iter()
+            .enumerate()
+            .map(|(i, value)| (hour(i as i64), value))
+            .collect()
+    };
+    plain.equity = curve([1000.0, 1000.0, 1000.0, 500.0]);
+    let mut leveraged = plain.clone();
+    leveraged.margin = curve([0.0, 0.0, 750.0, 0.0]);
+    leveraged.peak_margin = curve([0.0, 0.0, 750.0, 750.0]);
+    leveraged.margin_calls = vec![(hour(3), 15.0)];
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        let mut unavailable = Vec::new();
+        for (report, with_margin) in [(&leveraged, true), (&plain, false)] {
+            let mut panel = StrategyReportPanel::default();
+            panel.set_report(Some(report.clone()), &[]);
+            let theme = theme.clone();
+            let color = theme.ui.info;
+            let mut h = Harness::builder()
+                .with_size(Vec2::new(1440.0, 1600.0))
+                .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
+                .build_ui_state(
+                    |ui, panel: &mut StrategyReportPanel| {
+                        panel.show(ui);
+                    },
+                    panel,
+                );
+            h.run();
+            h.get_by_label("Margin calls");
+            if with_margin {
+                // Peak 750 + drawdown 500; average (0 + 0 + 750 + 0) / 4; -500 / 1250.
+                h.get_by_label("1250.00");
+                h.get_by_label("187.50");
+                h.get_by_label("-40.00%");
+            }
+            assert_eq!(h.query_by_label("Margin used").is_some(), with_margin);
+            unavailable.push(h.query_all_by_label("N/A").count());
+            let paths = h
+                .output()
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(&shape.shape, egui::Shape::Path(path)
+                    if path.stroke.color == egui::epaint::ColorMode::Solid(color))
+                })
+                .count();
+            assert_eq!(paths > 0, with_margin);
+        }
+        assert_eq!(unavailable[1], unavailable[0] + 8);
+    }
+}
+
+#[test]
 fn summary_lists_open_profit_and_charts_switch_to_percent() {
     let hour = |h| DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(h);
     let mut report = StrategyReport::new("Held", "HELD", Timeframe::Hour1, 10_000.0);
@@ -292,6 +353,24 @@ fn range_limits_summary_charts_and_trades() {
         crate::model::EquityRange::new(950.0, 1250.0, 50.0, 300.0),
         crate::model::EquityRange::new(800.0, 1200.0, 400.0, 100.0),
         crate::model::EquityRange::new(850.0, 1100.0, 100.0, 250.0),
+    ];
+    report.margin = vec![
+        (day(1, 1), 0.0),
+        (day(2, 1), 100.0),
+        (day(3, 1), 200.0),
+        (day(4, 1), 0.0),
+    ];
+    report.peak_margin = vec![
+        (day(1, 1), 0.0),
+        (day(2, 1), 300.0),
+        (day(3, 1), 250.0),
+        (day(4, 1), 0.0),
+    ];
+    report.margin_calls = vec![
+        (day(1, 10), 5.0),
+        (day(2, 15), 2.0),
+        (day(3, 1), 1.0),
+        (day(4, 2), 10.0),
     ];
     for (entry, exit, profit) in [
         (day(1, 10), day(1, 20), 200.0),
@@ -381,6 +460,12 @@ fn range_limits_summary_charts_and_trades() {
         h.run();
         assert_eq!(row(&h, "Net return", 3), ["-33.33%", "-33.33%", "0.00%"]);
         let data = h.state().0.data.as_ref().unwrap();
+        assert_eq!(data.margin, report.margin[2..]);
+        assert_eq!(data.shown.average_margin, Some(100.0));
+        assert_eq!(data.shown.largest_margin, Some(250.0));
+        assert_eq!(data.shown.margin_calls, Some(2));
+        assert_eq!(data.shown.liquidated_quantity, Some(3.0));
+        assert_eq!(data.report, report);
         assert_eq!(data.initial_capital, 900.0);
         assert_eq!(data.shown.intrabar_max_drawdown, Some(400.0));
         assert_eq!(data.shown.intrabar_max_run_up, Some(300.0));
@@ -477,6 +562,9 @@ fn range_limits_summary_charts_and_trades() {
         h.get_by_role_and_label(Role::Button, "Whole run").click();
         h.run();
         assert_eq!(row(&h, "Net return", 3), ["-10.00%", "-10.00%", "0.00%"]);
+        let data = h.state().0.data.as_ref().unwrap();
+        assert_eq!(data.margin, report.margin);
+        assert_eq!(data.shown, report.performance());
         assert_eq!(
             h.get_by_role_and_label(Role::TextInput, "From (UTC)")
                 .value()
