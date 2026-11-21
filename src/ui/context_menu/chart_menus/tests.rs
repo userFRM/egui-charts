@@ -1756,8 +1756,7 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
                     .clone()
             };
             config.tick_size = 1.0;
-            let (clock, session) = chart.profile_hours(&config.session);
-            config.session = session.clone();
+            let (clock, config) = chart.tpo_division(&config);
             to_tpo_profiles(chart.bars(SeriesId::MAIN), &config, &clock)
                 .iter()
                 .map(|p| {
