@@ -5027,7 +5027,7 @@ mod tests {
         h.run_steps(5);
         h.get_by_label("Alert: Rates alert");
         finish_feed(&h.state().live);
-        let now = h.state().live.now();
+        let now = chrono::Utc::now();
         h.state().live.set_paused(false);
         h.state().live.advance(now + chrono::Duration::hours(1));
         assert_eq!(h.state().live.now(), now + chrono::Duration::hours(1));
