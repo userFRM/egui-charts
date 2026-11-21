@@ -82,7 +82,12 @@ impl DemoApp {
     pub(super) fn handle_ideas(&mut self, action: IdeasAction) {
         match action {
             IdeasAction::Publish(draft) => self.publish_idea(&draft),
-            IdeasAction::OpenChart { symbol, .. } => self.open_catalog_symbol(&symbol),
+            IdeasAction::OpenChart { symbol, interval } => {
+                self.open_catalog_symbol(&symbol);
+                if let Ok(timeframe) = interval.parse() {
+                    self.switch_timeframe(timeframe);
+                }
+            }
             IdeasAction::Place(link) => self
                 .chart
                 .drawings_mut()
@@ -157,5 +162,18 @@ mod tests {
         app.open_panel = None;
         app.handle_notification(NotificationsAction::OpenPost(id));
         assert!(app.open_panel == Some(SidePanel::Ideas));
+        let symbol = crate::sampledata::DemoSymbol::catalog()
+            .iter()
+            .find(|spec| spec.symbol != app.state.symbol)
+            .unwrap()
+            .symbol;
+        let timeframe = egui_charts::model::Timeframe::Day1;
+        assert_ne!(app.state.timeframe, timeframe);
+        app.handle_ideas(IdeasAction::OpenChart {
+            symbol: symbol.into(),
+            interval: timeframe.as_str().into(),
+        });
+        assert_eq!(app.state.symbol, symbol);
+        assert_eq!(app.state.timeframe, timeframe);
     }
 }
