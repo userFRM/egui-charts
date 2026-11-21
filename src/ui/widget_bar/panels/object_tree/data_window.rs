@@ -7,7 +7,7 @@ use crate::localization as l10n;
 use egui::{RichText, Ui};
 
 use crate::icons::icons;
-use crate::scales::{PriceFormatter, VolumeFormatter};
+use crate::scales::VolumeFormatter;
 use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;
 
@@ -305,7 +305,7 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
                                 VolumeFormatter {
                                     precision: usize::from(decimals),
                                 }
-                                .format(data.volume)
+                                .format_with_min_unit_decimals(data.volume, 2)
                             },
                         )
                     }),
