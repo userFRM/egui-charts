@@ -267,7 +267,7 @@ pub fn render_floating_tooltip(
                 .and_then(|instrument| instrument.volume_decimals)
                 .map_or(2, usize::from),
         }
-        .format(candle.volume);
+        .format_with_min_unit_decimals(candle.volume, 2);
         rows.push((
             "Vol",
             formatters
@@ -508,7 +508,7 @@ pub fn render_tracking_tooltip(
                         .and_then(|instrument| instrument.volume_decimals)
                         .map_or(2, usize::from),
                 }
-                .format(candle.volume)
+                .format_with_min_unit_decimals(candle.volume, 2)
             },
             |formatter| formatter.format(candle.volume),
         );

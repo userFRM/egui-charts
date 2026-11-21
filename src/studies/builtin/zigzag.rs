@@ -265,7 +265,16 @@ impl ZigZag {
                         .map(|&bar| data[bar].volume)
                         .filter(|volume| volume.is_finite())
                         .sum();
-                    lines.push(StudyFormat::Volume.format(volume, volume_precision));
+                    lines.push(match (self.label_precision, self.volume_decimals) {
+                        // Volume decimals stand below a thousand; K, M and B values keep two.
+                        (None, Some(decimals)) if volume.is_finite() => {
+                            crate::scales::VolumeFormatter {
+                                precision: decimals.min(12),
+                            }
+                            .format_with_min_unit_decimals(volume, 2)
+                        }
+                        _ => StudyFormat::Volume.format(volume, volume_precision),
+                    });
                 }
             }
             if !lines.is_empty() {
@@ -596,6 +605,11 @@ impl Indicator for ZigZag {
 
     fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
+    }
+
+    // Its labels sit on source bars, which another symbol or interval does not place.
+    fn draws_on_other_bars(&self) -> bool {
+        false
     }
 
     fn clone_box(&self) -> Box<dyn Indicator> {
