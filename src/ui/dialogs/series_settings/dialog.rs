@@ -102,7 +102,7 @@ impl SeriesSettingsDialog {
         let mut action = SeriesSettingsAction::None;
 
         // Main content: sidebar + content area
-        let sidebar_width = DESIGN_TOKENS.sizing.dialog.series_sidebar_width.max(200.0);
+        let sidebar_width = DESIGN_TOKENS.sizing.dialog.series_sidebar_width;
         let active_tab = self.active_tab;
         let active_tab_mut = &mut self.active_tab;
         let settings = &mut self.settings;
