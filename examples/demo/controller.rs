@@ -10763,6 +10763,63 @@ mod tests {
             }
             app.drawing_props.close();
         }
+        // The demo opens the library's fixed-square label controls and applies their preview.
+        {
+            app.chart.drawings_mut().drawings[0].tool_type = Tool::GannFixed;
+            app.open_drawing_props_for(7);
+            app.drawing_props.active_tab = PropertiesTab::Inputs;
+            app.drawing_props.config.height = 2400.0;
+            let label_ctx = egui::Context::default();
+            let mut label_frame = |events| {
+                let output = label_ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 2600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| app.show_dialogs(ui.ctx()),
+                );
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "Labels" => {
+                            Some(text.visual_bounding_rect().center())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                labels
+            };
+            for _ in 0..3 {
+                label_frame(vec![]);
+            }
+            let point = label_frame(vec![])[0];
+            label_frame(vec![egui::Event::PointerMoved(point)]);
+            label_frame(
+                [true, false]
+                    .map(|pressed| egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    })
+                    .to_vec(),
+            );
+            assert!(
+                app.chart.drawings().drawings[0]
+                    .gann
+                    .as_ref()
+                    .unwrap()
+                    .show_labels
+            );
+            app.drawing_props.close();
+            frame(&mut app, &ctx, vec![]);
+        }
         app.chart.drawings_mut().drawings[0].tool_type = Tool::TrendLine;
         app.open_drawing_props_for(7);
         app.drawing_props.active_tab = PropertiesTab::Coordinates;
