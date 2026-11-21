@@ -14,6 +14,15 @@ not. The focused chart keeps arrow keys for navigation. **Tab** and **Shift+Tab*
 continue through the remaining controls and out of the chart. **Escape** cancels
 the current interaction; it is not a substitute for Tab to leave the chart.
 
+In a `ChartLayout` showing more than one chart, **Tab** and **Shift+Tab** move to
+the next and previous chart instead, wrapping at the ends. A host that needs them
+to leave the layout removes the `CycleChartFocus` and `CycleChartFocusBack`
+bindings through
+[`shortcuts_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.shortcuts_mut).
+If the host supplies a map through
+[`ChartLayout::set_shortcuts`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartLayout.html#method.set_shortcuts),
+remove the bindings from that map instead.
+
 The [presentation scene](theming.mdx#try-presentation-changes) has egui controls
 before the chart in the native example. In the web guide, tab from **Open full
 size** into the canvas, then tab again to return to the guide. Shift+Tab returns

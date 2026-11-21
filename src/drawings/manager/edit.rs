@@ -706,6 +706,76 @@ impl DrawingManager {
         Ok(())
     }
 
+    /// [`Self::drag_edit_drawing`] for the drawings of `ids` together, skipping ids of no drawing
+    /// and locked drawings: the gesture's first frame records each drawing's state, and
+    /// [`Self::end_drag_handle`] makes the whole gesture one undo step and queues one update per
+    /// drawing. A frame after which saving would refuse one of them, as [`Self::edit_drawing`]
+    /// describes, changes none of them and returns the reason; the gesture keeps its earlier frames.
+    /// An open gesture on drawings outside `ids` ends first.
+    #[cfg(feature = "ui")]
+    pub(crate) fn drag_edit_drawings(
+        &mut self,
+        ids: &[usize],
+        mut edit: impl FnMut(&mut Drawing),
+    ) -> Result<(), &'static str> {
+        if self
+            .drag_old_state
+            .iter()
+            .chain(&self.drag_group)
+            .any(|d| !ids.contains(&d.id))
+        {
+            self.end_drag_handle();
+        }
+        let before: Vec<_> = self
+            .drawings
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| ids.contains(&d.id) && !d.locked)
+            .map(|(index, d)| (index, d.clone()))
+            .collect();
+        if before.is_empty() {
+            return Ok(());
+        }
+        for (index, old) in &before {
+            let drawing = &mut self.drawings[*index];
+            edit(drawing);
+            if let Err(reason) =
+                crate::drawings::validation::validate_edit(old, drawing, self.mapped_bars.as_ref())
+            {
+                for (index, old) in &before {
+                    self.drawings[*index] = old.clone();
+                }
+                return Err(reason);
+            }
+        }
+        if let Some(reason) = before
+            .iter()
+            .find_map(|(index, old)| self.check_identity(*index, old).err())
+        {
+            for (index, old) in &before {
+                self.drawings[*index] = old.clone();
+            }
+            return Err(reason);
+        }
+        for (_, old) in &before {
+            if self.drag_old_state.is_none() {
+                self.drag_old_state = Some(old.clone());
+            } else if !self
+                .drag_old_state
+                .iter()
+                .chain(&self.drag_group)
+                .any(|d| d.id == old.id)
+            {
+                self.drag_group.push(old.clone());
+            }
+        }
+        self.painted
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p| !before.iter().any(|(_, d)| d.id == p.id));
+        Ok(())
+    }
+
     // === Coordinate updates ===
 
     /// Recomputes screen coordinates for all drawings (completed and in-progress)
@@ -1317,7 +1387,14 @@ mod tests {
                 "Another drawing is stored under this id",
             ),
         ];
-        let paths: [(&str, Edit); 4] = [
+        let paths: Vec<(&str, Edit)> = vec![
+            #[cfg(feature = "ui")]
+            ("drag_edit_drawings", |m, setting| {
+                let ids: Vec<_> = m.drawings.iter().map(|d| d.id).collect();
+                let result = m.drag_edit_drawings(&ids, setting);
+                m.end_drag_handle();
+                result
+            }),
             ("edit_drawing", |m, setting| {
                 let id = m.drawings[1].id;
                 m.edit_drawing(id, setting)
@@ -1361,6 +1438,50 @@ mod tests {
                 assert_eq!(chart.save_drawings().unwrap().drawings.len(), 2, "{case}");
             }
         }
+    }
+
+    /// Several colour frames form one undo step, with one update each and locked drawings left.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn a_colour_drag_over_several_drawings_is_one_undo_step() {
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let manager = chart.drawings_mut();
+        for _ in 0..3 {
+            let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+            drawing.chart_points = vec![ChartPoint::new(1.0, 105.0), ChartPoint::new(2.0, 106.0)];
+            drawing.completed = true;
+            manager.add_drawing(drawing).unwrap();
+        }
+        manager.drawings[2].locked = true;
+        let original: Vec<_> = manager.drawings.iter().map(|d| d.color).collect();
+        manager.history.clear();
+        manager.pending_sync.lock().unwrap().clear();
+        for red in 0..3 {
+            manager
+                .drag_edit_drawings(&[0, 1, 2], |d| d.color = [red, 0, 0, 255])
+                .unwrap();
+        }
+        manager.end_drag_handle();
+        assert_eq!(
+            manager.drawings.iter().map(|d| d.color).collect::<Vec<_>>(),
+            [[2, 0, 0, 255], [2, 0, 0, 255], original[2]]
+        );
+        assert_eq!(
+            manager
+                .pending_sync
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|action| format!("{action:?}"))
+                .collect::<Vec<_>>(),
+            ["UpdateDrawing(0)", "UpdateDrawing(1)"]
+        );
+        assert!(manager.undo());
+        assert_eq!(
+            manager.drawings.iter().map(|d| d.color).collect::<Vec<_>>(),
+            original
+        );
+        assert!(!manager.can_undo());
     }
 
     /// A restored id already used by a drawing that has not been stored makes a new drawing,
