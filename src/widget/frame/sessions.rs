@@ -924,7 +924,8 @@ mod tests {
             })
             .collect();
         // On the last day 100 holds 36 of 40 volume units, and four of eight TPOs.
-        // 241 quarter-point ticks / 24 requested rows rounds up to 11 ticks per row. Keys
+        // Over 241 quarter-point ticks, rows of 10 ticks make 25 rows and rows of 11 make 23,
+        // equally close to the 24 requested, so the taller 11. Keys
         // floor(400/11)=36 through floor(640/11)=58 span 98.875..162.125, with POC 100.25.
         for (kind, mode, letters) in [
             (

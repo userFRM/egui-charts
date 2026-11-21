@@ -160,11 +160,7 @@ impl Terminal {
                         self.alerts.panel.alerts().iter().filter(|alert| {
                             alert.symbol == chart.symbol() && alert.watchlist.is_none()
                         }),
-                        if series.color != egui_charts::model::SeriesAlerts::default().color {
-                            series.color
-                        } else {
-                            settings.alert_color
-                        },
+                        series.color.unwrap_or(settings.alert_color),
                         settings.show_alert_labels && series.labels,
                         settings.show_active_only,
                         |price| format!("{price:.decimals$} {currency}"),

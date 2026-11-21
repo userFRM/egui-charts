@@ -725,7 +725,8 @@ mod tests {
         }
     }
 
-    /// Four hundred ticks grouped by ceil(400 / 24) = 17 give keys 100 through 123.
+    /// Four hundred ticks in rows of 17 give keys 100 through 123, the 24 rows asked for;
+    /// rows of 16 would give 26.
     #[test]
     fn default_session_profile_groups_four_hundred_ticks_into_twenty_four_rows() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -1512,7 +1513,7 @@ mod tests {
             (ProfileRows::Ticks(4), [(101.5, 2), (103.5, 3), (99.5, 4)]),
             (ProfileRows::Count(2), [(101.5, 2), (103.5, 3), (99.5, 4)]),
             (ProfileRows::Feed, [(100.0, 1), (100.5, 2), (99.5, 4)]),
-            // ceil(1 / 24) = 1, retaining the same feed row.
+            // One traded row cannot be split, so it keeps the feed row.
             (ProfileRows::Count(24), [(100.0, 1), (100.5, 2), (99.5, 4)]),
         ] {
             let (mut ticks, mut bars) = (ticks.clone(), bars.clone());
