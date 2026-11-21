@@ -1734,7 +1734,7 @@ impl Datafeed for LiveFeed {
 
     /// Synthetic stories about the catalog symbols.
     fn news(&self, query: NewsQuery, reply: Reply<Vec<NewsStory>>) {
-        reply.send(Ok(super::feeds::news(&query, Utc::now())));
+        reply.send(Ok(super::feeds::news(&query, self.now())));
     }
 
     /// Synthetic statistics, profile and category derived from the catalog entry of `symbol`.

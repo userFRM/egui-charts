@@ -252,7 +252,10 @@ impl Chart {
         present.then(|| self.pane_price_scale_mut(pane, key))
     }
 
-    fn pane_scale_keys(&self, pane: PaneId) -> impl Iterator<Item = crate::widget::PaneScale> {
+    pub(in crate::widget) fn pane_scale_keys(
+        &self,
+        pane: PaneId,
+    ) -> impl Iterator<Item = crate::widget::PaneScale> {
         use crate::widget::PaneScale;
         let Some(options) = self.pane_axis_options(pane) else {
             return None.into_iter().chain(Vec::new());
