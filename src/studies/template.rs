@@ -368,10 +368,11 @@ impl StudyTemplate {
 
     /// This template under the current input ids of a built-in study whose inputs changed after
     /// it was saved, with inputs added since set to draw what it drew, or `None` when it needs no
-    /// change. `study` names the study being restored, which a host may register under another
-    /// name. `own` holds the inputs of the study registered under the saved name, or the
-    /// chart's study a stored pane is matched against; a saved input that study takes as saved
-    /// is neither renamed nor converted.
+    /// change. Hours saved as minute counts and zones saved as text are converted for the inputs
+    /// `own` declares as a time of day or a time zone. `study` names the study being restored,
+    /// which a host may register under another name. `own` holds the inputs of the study
+    /// registered under the saved name, or the chart's study a stored pane is matched against; a
+    /// saved input that study takes as saved is neither renamed nor converted.
     pub(crate) fn upgraded(&self, study: &str, own: &[StudyInput]) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
         let declares = |id: &str| own.iter().any(|input| input.id == id);
@@ -1004,6 +1005,15 @@ impl StudyTemplate {
             }
             _ => changed = false,
         }
+        // Hours saved as minute counts and zones saved as text, before inputs had a time of day
+        // and a time zone, in the form `own` declares them now.
+        for (id, value) in &mut template.inputs {
+            if let Some(input) = own.iter().find(|input| input.id == *id) {
+                let upgraded = super::inputs::upgrade_saved_value(&input.kind, value.clone());
+                changed |= upgraded != *value;
+                *value = upgraded;
+            }
+        }
         // Profile inputs added since a save, set to draw what it drew.
         if matches!(
             study,
@@ -1600,12 +1610,36 @@ mod tests {
             let mut restored = saved.create().unwrap();
             let inputs = restored.inputs();
             for (id, value) in &saved.inputs {
+                let expected = if saved.name == "Trading Sessions" {
+                    let clock = |hour, minute| {
+                        InputValue::TimeOfDay(
+                            chrono::NaiveTime::from_hms_opt(hour, minute, 0).unwrap(),
+                        )
+                    };
+                    match id.as_str() {
+                        "start [0]" => clock(9, 0),
+                        "end [0]" => clock(15, 0),
+                        "start [1]" => clock(8, 30),
+                        "end [1]" => clock(16, 30),
+                        "start [2]" => clock(9, 30),
+                        "end [2]" => clock(16, 0),
+                        "zone [0]" | "zone [1]" | "zone [2]" => {
+                            let InputValue::Text(zone) = value else {
+                                panic!("a legacy session zone is text");
+                            };
+                            InputValue::TimeZone(zone.clone())
+                        }
+                        _ => value.clone(),
+                    }
+                } else {
+                    value.clone()
+                };
                 assert_eq!(
                     inputs
                         .iter()
                         .find(|input| input.id == *id)
                         .map(|input| &input.value),
-                    Some(value),
+                    Some(&expected),
                     "{} {id}",
                     saved.name
                 );
@@ -2192,13 +2226,20 @@ mod tests {
         expected.plot_variants = vec![vec![]; 3];
         assert_eq!(restored.settings(), expected);
         for (id, value) in &saved.inputs {
+            let value = match (id.as_str(), value) {
+                ("session_start" | "session_end", InputValue::Length(0)) => {
+                    InputValue::TimeOfDay(NaiveTime::MIN)
+                }
+                ("session_zone", InputValue::Text(zone)) => InputValue::TimeZone(zone.clone()),
+                (_, value) => value.clone(),
+            };
             assert_eq!(
                 restored
                     .inputs()
                     .iter()
                     .find(|input| &input.id == id)
                     .map(|input| &input.value),
-                Some(value),
+                Some(&value),
                 "{id}"
             );
         }
@@ -3123,6 +3164,54 @@ mod tests {
             colors,
             [crate::studies::palette::GREEN.gamma_multiply_u8(13)]
         );
+    }
+
+    /// Trading Sessions and VWAP templates saved while session hours were minute counts and time
+    /// zones were text restore with the same hours and zones, now times of day and time zones.
+    #[test]
+    fn session_hours_saved_as_minute_counts_restore_as_times_and_zones() {
+        // Saved on origin/main: the first session 570 to 960 at -05:00, and a VWAP whose zones
+        // are -06:00 and +09:00 and whose trading day starts at 1020.
+        let sessions = r#"{"name":"Trading Sessions","inputs":[["show [0]",{"Toggle":true}],["name [0]",{"Text":"Tokyo"}],["start [0]",{"Length":570}],["end [0]",{"Length":960}],["zone [0]",{"Text":"-05:00"}],["show [1]",{"Toggle":true}],["name [1]",{"Text":"London"}],["start [1]",{"Length":510}],["end [1]",{"Length":990}],["zone [1]",{"Text":"Europe/London"}],["show [2]",{"Toggle":true}],["name [2]",{"Text":"New York"}],["start [2]",{"Length":570}],["end [2]",{"Length":960}],["zone [2]",{"Text":"America/New_York"}],["boxes",{"Toggle":true}],["name_labels",{"Toggle":true}],["range_labels",{"Toggle":false}],["average_labels",{"Toggle":false}],["open_lines",{"Toggle":false}],["close_lines",{"Toggle":false}],["average_lines",{"Toggle":false}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradingSessions.html","plots":[{"color":[6,15,38,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true},{"color":[38,23,0,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true},{"color":[1,23,19,38],"width":1.0,"pattern":"Solid","plot_type":"BackgroundColor","visible":true}],"precision":0,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[0,1,2,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let vwap = r#"{"name":"VWAP","inputs":[["hide_daily",{"Toggle":false}],["anchor",{"Choice":0}],["time_zone",{"Text":"-06:00"}],["day_start",{"Length":1020}],["percentage_bands",{"Toggle":false}],["band_count",{"Length":1}],["band_0",{"Number":1.0}],["event_time_zone",{"Text":"+09:00"}],["event_count",{"Length":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolumeWeightedAvgPrice.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[4,9,4,13],"inverted_color":null,"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let time =
+            |hour, minute| InputValue::TimeOfDay(NaiveTime::from_hms_opt(hour, minute, 0).unwrap());
+        let zone = |name: &str| InputValue::TimeZone(name.into());
+        // 570 = 9 x 60 + 30, 960 = 16 x 60, 510 = 8 x 60 + 30, 990 = 16 x 60 + 30, 1020 = 17 x 60.
+        // The other two sessions' zones stand in as fixed offsets without `timezones`.
+        let cases = [
+            (
+                sessions,
+                vec![
+                    ("start [0]", time(9, 30)),
+                    ("end [0]", time(16, 0)),
+                    ("zone [0]", zone("-05:00")),
+                    ("start [1]", time(8, 30)),
+                    ("end [1]", time(16, 30)),
+                    ("start [2]", time(9, 30)),
+                    ("end [2]", time(16, 0)),
+                ],
+            ),
+            (
+                vwap,
+                vec![
+                    ("time_zone", zone("-06:00")),
+                    ("day_start", time(17, 0)),
+                    ("event_time_zone", zone("+09:00")),
+                ],
+            ),
+        ];
+        for (saved, expected) in cases {
+            let study = serde_json::from_str::<StudyTemplate>(saved)
+                .unwrap()
+                .create()
+                .unwrap();
+            let inputs = study.inputs();
+            for (id, value) in expected {
+                let restored = inputs.iter().find(|input| input.id == id);
+                assert_eq!(restored.map(|input| &input.value), Some(&value), "{id}");
+            }
+        }
     }
 
     /// A VWAP template with a band count no VWAP accepts fails to restore like any invalid input,

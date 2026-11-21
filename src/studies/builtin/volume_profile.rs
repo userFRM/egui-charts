@@ -553,37 +553,22 @@ impl ProfileStudy {
                     "Each segment of the day".into(),
                 ]),
             ));
-            // Study inputs have no time of day, so custom hours take minutes after midnight.
-            let minutes = |time: NaiveTime| (time - NaiveTime::MIN).num_minutes() as usize;
             for (id, label, time) in [
-                (
-                    "session_start",
-                    "Session start, minutes after midnight",
-                    self.custom[0].start,
-                ),
-                (
-                    "session_end",
-                    "Session end, minutes after midnight",
-                    self.custom[0].end,
-                ),
+                ("session_start", "Session start", self.custom[0].start),
+                ("session_end", "Session end", self.custom[0].end),
             ] {
                 inputs.push(
-                    StudyInput::new(
-                        id,
-                        label,
-                        InputValue::Length(minutes(time)),
-                        InputKind::Length(0, 1439),
-                    )
-                    .shown_when("sessions", [3]),
+                    StudyInput::new(id, label, InputValue::TimeOfDay(time), InputKind::TimeOfDay)
+                        .shown_when("sessions", [3]),
                 );
             }
             let zone = self.custom[0].zone.as_ref().map_or("", TimezoneId::name);
             inputs.push(
                 StudyInput::new(
                     "session_zone",
-                    "Session time zone (empty = exchange)",
-                    InputValue::Text(zone.into()),
-                    InputKind::Text,
+                    "Session time zone",
+                    InputValue::TimeZone(zone.into()),
+                    InputKind::TimeZone { exchange: true },
                 )
                 .shown_when("sessions", [3]),
             );
@@ -607,26 +592,28 @@ impl ProfileStudy {
                     (
                         "start",
                         "start",
-                        InputValue::Length(minutes(session.start)),
-                        InputKind::Length(0, 1439),
+                        InputValue::TimeOfDay(session.start),
+                        InputKind::TimeOfDay,
                     ),
                     (
                         "end",
                         "end",
-                        InputValue::Length(minutes(session.end)),
-                        InputKind::Length(0, 1439),
+                        InputValue::TimeOfDay(session.end),
+                        InputKind::TimeOfDay,
                     ),
                     (
                         "zone",
                         "time zone",
-                        InputValue::Text(session.zone.as_ref().map_or("", TimezoneId::name).into()),
-                        InputKind::Text,
+                        InputValue::TimeZone(
+                            session.zone.as_ref().map_or("", TimezoneId::name).into(),
+                        ),
+                        InputKind::TimeZone { exchange: true },
                     ),
                 ] {
                     let default = if suffix == "zone" {
-                        InputValue::Text(String::new())
+                        InputValue::TimeZone(String::new())
                     } else {
-                        InputValue::Length(0)
+                        InputValue::TimeOfDay(NaiveTime::MIN)
                     };
                     custom_inputs.push(
                         StudyInput::new(
@@ -795,11 +782,13 @@ impl ProfileStudy {
     }
 
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
-        if !self
+        let schema = self
             .inputs()
-            .iter()
-            .any(|input| input.id == id && input.accepts(&value))
-        {
+            .into_iter()
+            .find(|input| input.id == id)
+            .ok_or_else(|| crate::studies::StudyError::rejected(&self.inputs(), id))?;
+        let value = crate::studies::inputs::upgrade_saved_value(&schema.kind, value);
+        if !schema.accepts(&value) {
             return Err(crate::studies::StudyError::rejected(&self.inputs(), id));
         }
         let window = (0..CustomProfileSessions::MAX).find_map(|i| {
@@ -814,13 +803,11 @@ impl ProfileStudy {
         });
         let (i, field) = window.unwrap_or((0, id));
         match (field, value) {
-            ("start", InputValue::Length(minutes @ 0..=1439)) if window.is_some() => {
-                self.custom[i].start = NaiveTime::MIN + TimeDelta::minutes(minutes as i64)
+            ("start", InputValue::TimeOfDay(time)) if window.is_some() => {
+                self.custom[i].start = time
             }
-            ("end", InputValue::Length(minutes @ 0..=1439)) if window.is_some() => {
-                self.custom[i].end = NaiveTime::MIN + TimeDelta::minutes(minutes as i64)
-            }
-            ("zone", InputValue::Text(text)) if window.is_some() => {
+            ("end", InputValue::TimeOfDay(time)) if window.is_some() => self.custom[i].end = time,
+            ("zone", InputValue::TimeZone(text)) if window.is_some() => {
                 self.custom[i].zone = if text.is_empty() {
                     None
                 } else {
@@ -3274,37 +3261,40 @@ mod tests {
             let times: Vec<_> = study
                 .inputs()
                 .into_iter()
-                .filter_map(|input| match input.value {
-                    InputValue::Text(text) => Some((input.id, text)),
-                    _ => None,
+                .filter(|input| {
+                    matches!(input.value, InputValue::Text(_) | InputValue::TimeZone(_))
                 })
+                .map(|input| (input.id, input.value))
                 .collect();
-            let expected_times: &[(&str, &str)] = match study.name() {
-                "Vol Profile FR" => &[
-                    ("start_time", "2026-03-06 23:00:00"),
-                    ("end_time", "2026-03-07 00:00:00"),
+            let text = |text: &str| InputValue::Text(text.into());
+            let expected_times = match study.name() {
+                "Vol Profile FR" => vec![
+                    ("start_time", text("2026-03-06 23:00:00")),
+                    ("end_time", text("2026-03-07 00:00:00")),
                 ],
-                "Vol Profile Anchored" => &[("start_time", "2026-03-07 00:00:00")],
-                "Vol Profile Session" => &[
-                    ("session_zone", ""),
-                    ("session_2_zone", ""),
-                    ("session_3_zone", ""),
-                    ("session_4_zone", ""),
-                    ("session_5_zone", ""),
-                ],
-                _ => &[],
+                "Vol Profile Anchored" => vec![("start_time", text("2026-03-07 00:00:00"))],
+                "Vol Profile Session" => [
+                    "session_zone",
+                    "session_2_zone",
+                    "session_3_zone",
+                    "session_4_zone",
+                    "session_5_zone",
+                ]
+                .map(|id| (id, InputValue::TimeZone(String::new())))
+                .to_vec(),
+                _ => Vec::new(),
             };
             assert_eq!(
                 times
                     .iter()
-                    .map(|(id, text)| (id.as_str(), text.as_str()))
+                    .map(|(id, value)| (id.as_str(), value.clone()))
                     .collect::<Vec<_>>(),
                 expected_times,
                 "{}",
                 study.name()
             );
-            for (id, text) in times {
-                study.set_input(&id, InputValue::Text(text)).unwrap();
+            for (id, value) in times {
+                study.set_input(&id, value).unwrap();
             }
             study
                 .set_input("value_area", InputValue::Number(70.0))

@@ -5,7 +5,7 @@ use crate::model::{
     TPOColorMode, TPOConfig, TPODisplayMode, TimezoneId,
 };
 use crate::studies::{Indicator, IndicatorValues, InputKind, InputValue, StudyInput};
-use chrono::{DateTime, NaiveTime, SecondsFormat, TimeDelta, Utc};
+use chrono::{DateTime, NaiveTime, SecondsFormat, Utc};
 use egui::Color32;
 use std::ops::RangeInclusive;
 
@@ -139,8 +139,6 @@ impl Indicator for TimePriceOpportunity {
     }
     fn inputs(&self) -> Vec<StudyInput> {
         let defaults = TPOConfig::default();
-        // Study inputs have no time of day, so custom hours take minutes after midnight.
-        let minutes = |time: NaiveTime| (time - NaiveTime::MIN).num_minutes() as usize;
         let zone = self.custom[0].zone.as_ref().map_or("", TimezoneId::name);
         let mut inputs = vec![
             StudyInput::new(
@@ -179,27 +177,27 @@ impl Indicator for TimePriceOpportunity {
             .with_default(InputValue::Choice(0)),
             StudyInput::new(
                 "session_start",
-                "Session start, minutes after midnight",
-                InputValue::Length(minutes(self.custom[0].start)),
-                InputKind::Length(0, 1439),
+                "Session start",
+                InputValue::TimeOfDay(self.custom[0].start),
+                InputKind::TimeOfDay,
             )
-            .with_default(InputValue::Length(0))
+            .with_default(InputValue::TimeOfDay(NaiveTime::MIN))
             .shown_when("hours", [2]),
             StudyInput::new(
                 "session_end",
-                "Session end, minutes after midnight",
-                InputValue::Length(minutes(self.custom[0].end)),
-                InputKind::Length(0, 1439),
+                "Session end",
+                InputValue::TimeOfDay(self.custom[0].end),
+                InputKind::TimeOfDay,
             )
-            .with_default(InputValue::Length(0))
+            .with_default(InputValue::TimeOfDay(NaiveTime::MIN))
             .shown_when("hours", [2]),
             StudyInput::new(
                 "session_zone",
-                "Session time zone (empty = exchange)",
-                InputValue::Text(zone.into()),
-                InputKind::Text,
+                "Session time zone",
+                InputValue::TimeZone(zone.into()),
+                InputKind::TimeZone { exchange: true },
             )
-            .with_default(InputValue::Text(String::new()))
+            .with_default(InputValue::TimeZone(String::new()))
             .shown_when("hours", [2]),
             StudyInput::new(
                 "split_sessions",
@@ -411,26 +409,26 @@ impl Indicator for TimePriceOpportunity {
                 (
                     "start",
                     "start",
-                    InputValue::Length(minutes(session.start)),
-                    InputKind::Length(0, 1439),
+                    InputValue::TimeOfDay(session.start),
+                    InputKind::TimeOfDay,
                 ),
                 (
                     "end",
                     "end",
-                    InputValue::Length(minutes(session.end)),
-                    InputKind::Length(0, 1439),
+                    InputValue::TimeOfDay(session.end),
+                    InputKind::TimeOfDay,
                 ),
                 (
                     "zone",
                     "time zone",
-                    InputValue::Text(session.zone.as_ref().map_or("", TimezoneId::name).into()),
-                    InputKind::Text,
+                    InputValue::TimeZone(session.zone.as_ref().map_or("", TimezoneId::name).into()),
+                    InputKind::TimeZone { exchange: true },
                 ),
             ] {
                 let default = if suffix == "zone" {
-                    InputValue::Text(String::new())
+                    InputValue::TimeZone(String::new())
                 } else {
-                    InputValue::Length(0)
+                    InputValue::TimeOfDay(NaiveTime::MIN)
                 };
                 custom_inputs.push(
                     StudyInput::new(
@@ -486,6 +484,15 @@ impl Indicator for TimePriceOpportunity {
         inputs
     }
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
+        let schema = self
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .ok_or_else(|| crate::studies::StudyError::rejected(&self.inputs(), id))?;
+        let value = crate::studies::inputs::upgrade_saved_value(&schema.kind, value);
+        if !schema.accepts(&value) {
+            return Err(crate::studies::StudyError::rejected(&self.inputs(), id));
+        }
         let window = (0..CustomProfileSessions::MAX).find_map(|i| {
             let prefix = if i == 0 {
                 "session_".to_owned()
@@ -498,13 +505,11 @@ impl Indicator for TimePriceOpportunity {
         });
         let (i, field) = window.unwrap_or((0, id));
         match (field, value) {
-            ("start", InputValue::Length(minutes @ 0..=1439)) if window.is_some() => {
-                self.custom[i].start = NaiveTime::MIN + TimeDelta::minutes(minutes as i64)
+            ("start", InputValue::TimeOfDay(time)) if window.is_some() => {
+                self.custom[i].start = time
             }
-            ("end", InputValue::Length(minutes @ 0..=1439)) if window.is_some() => {
-                self.custom[i].end = NaiveTime::MIN + TimeDelta::minutes(minutes as i64)
-            }
-            ("zone", InputValue::Text(text)) if window.is_some() => {
+            ("end", InputValue::TimeOfDay(time)) if window.is_some() => self.custom[i].end = time,
+            ("zone", InputValue::TimeZone(text)) if window.is_some() => {
                 self.custom[i].zone = if text.is_empty() {
                     None
                 } else {
