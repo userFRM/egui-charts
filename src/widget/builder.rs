@@ -1280,6 +1280,7 @@ mod tests {
         chart.drawings_mut().eraser_mode = true;
         chart.drawings_mut().start_drag_body(7, egui::Pos2::ZERO);
         chart.drawings_mut().set_hidden(true);
+        chart.drawings_mut().set_locked(true);
         chart.drawings_mut().registry.set_availability(
             DrawingToolType::TrendLine,
             crate::drawings::ToolAvailability {
@@ -1300,6 +1301,7 @@ mod tests {
         assert!(chart.drawings().stay_in_drawing_mode);
         assert!(chart.drawings().eraser_mode);
         assert!(chart.drawings().is_hidden());
+        assert!(chart.drawings().is_locked());
         chart.set_data(SeriesId::MAIN, bars(&[0, 120, 240]));
         chart.set_symbol("A");
         assert!(chart.drawings().dragging_handle.is_none());
