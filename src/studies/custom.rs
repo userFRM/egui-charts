@@ -67,6 +67,7 @@ pub struct CustomIndicator {
     input_calculate_fn: Option<InputCalculateFn>,
     inputs: Vec<super::StudyInput>,
     data_requests: Option<DataRequestsFn>,
+    wait_for_close: bool,
     values: IndicatorValues,
     colors: Vec<Color32>,
     is_overlay: bool,
@@ -110,6 +111,7 @@ impl CustomIndicator {
             input_calculate_fn: None,
             inputs: Vec::new(),
             data_requests: None,
+            wait_for_close: false,
             values: IndicatorValues::new(),
             colors: vec![palette::YELLOW], // Yellow default
             is_overlay: true,
@@ -185,8 +187,13 @@ impl CustomIndicator {
     /// [`Symbol`](super::InputKind::Symbol) input. Empty symbols and absent intervals follow
     /// the chart. Input edits update the chart's requests; the calculation supplied to
     /// [`with_inputs`](Self::with_inputs) receives each available history with its declaration.
-    /// Histories that have not arrived are absent. A study declaring histories has no
-    /// [`Indicator::source`]; its `source` input, if present, reads a chart-bar price field.
+    /// Histories that have not arrived are absent. Read the bars of another interval as each
+    /// chart bar knew them with [`StudyData::closed_at`](super::StudyData::closed_at), passing
+    /// `developing` for the chart's latest bar, and offer Wait for interval close for them with
+    /// [`with_wait_for_close`](Self::with_wait_for_close).
+    /// [`StudyData::bar_at`](super::StudyData::bar_at) reads the bar containing a time, also
+    /// while it is still open. A study declaring histories has no [`Indicator::source`]; its
+    /// `source` input, if present, reads a chart-bar price field.
     ///
     /// ```
     /// use egui_charts::model::Timeframe;
@@ -210,14 +217,18 @@ impl CustomIndicator {
     ///     .with_inputs(vec![symbol], move |bars, inputs, _, histories| {
     ///         let requests = hourly(inputs);
     ///         let history = histories.iter().find(|history| requests.contains(&history.request));
-    ///         bars.iter().map(|bar| {
+    ///         bars.iter().enumerate().map(|(at, bar)| {
     ///             history
-    ///                 .and_then(|history| Some(history.bars[history.bar_at(bar.time)?].close))
+    ///                 .and_then(|history| {
+    ///                     let at = history.closed_at(bar.time, at + 1 == bars.len())?;
+    ///                     Some(history.bars[at].close)
+    ///                 })
     ///                 .map_or(IndicatorValue::None, IndicatorValue::Single)
     ///         }).collect()
     ///     })
     ///     .unwrap()
-    ///     .with_data_requests(hourly);
+    ///     .with_data_requests(hourly)
+    ///     .with_wait_for_close();
     /// assert_eq!(other_close.data_requests()[0].symbol, "OTHER");
     /// ```
     pub fn with_data_requests<F>(mut self, requests: F) -> Self
@@ -226,6 +237,16 @@ impl CustomIndicator {
     {
         self.data_requests = Some(Arc::new(requests));
         self.values.clear();
+        self
+    }
+
+    /// Offer Wait for interval close, on by default, for the histories this study reads with
+    /// [`StudyData::closed_at`](super::StudyData::closed_at), also when an interval input of
+    /// its own chooses them. While it is on, the chart's latest bar reads only bars of a longer
+    /// interval that closed by its open; turned off, it reads the developing bar. The chart
+    /// applies the setting through [`StudyData::chart`](super::StudyData::chart).
+    pub fn with_wait_for_close(mut self) -> Self {
+        self.wait_for_close = true;
         self
     }
 
@@ -438,6 +459,10 @@ impl Indicator for CustomIndicator {
         self.data_requests
             .as_ref()
             .map_or_else(Vec::new, |requests| requests(&self.inputs))
+    }
+
+    fn offers_wait_for_close(&self) -> bool {
+        self.wait_for_close
     }
 
     fn update_data(&mut self, data: &[Bar], _from: usize, sources: &[super::StudyData<'_>]) {
