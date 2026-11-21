@@ -1035,6 +1035,30 @@ mod tests {
                 Some(A::OpenDataWindow),
             ),
             (Key::E, alt_shift, None, Some(A::ToggleSession)),
+            (
+                Key::ArrowDown,
+                Modifiers::NONE,
+                None,
+                Some(A::NextWatchlistSymbol),
+            ),
+            (
+                Key::ArrowUp,
+                Modifiers::NONE,
+                None,
+                Some(A::PreviousWatchlistSymbol),
+            ),
+            (
+                Key::Space,
+                Modifiers::NONE,
+                Some((" ", false)),
+                Some(A::NextWatchlistSymbol),
+            ),
+            (
+                Key::Space,
+                Modifiers::SHIFT,
+                Some((" ", true)),
+                Some(A::PreviousWatchlistSymbol),
+            ),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
@@ -1218,6 +1242,11 @@ mod tests {
                 .bindings
                 .push((KeyboardShortcut::new(Modifiers::NONE, key), action));
         }
+        // An unbound space, as a host that leaves the watchlist keys out has it.
+        chart
+            .shortcuts_mut()
+            .bindings
+            .retain(|(shortcut, _)| shortcut.logical_key != Key::Space);
         // A press that ran a binding types nothing, whatever character its text carries and in
         // either order, and a space typed before it in the same frame is not taken for its text.
         for (events, text) in [
