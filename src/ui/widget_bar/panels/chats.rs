@@ -852,9 +852,7 @@ impl ChatsPanel {
                                         .filter(|held| !by_ignored(ignored, held))
                                         .map_or_else(
                                             || l10n::text(ui.ctx(), "Reply to an earlier message"),
-                                            |held| {
-                                                format!("{}: {}", held.author, held.text)
-                                            },
+                                            |held| format!("{}: {}", held.author, held.text),
                                         );
                                     ui.add(
                                         egui::Label::new(
