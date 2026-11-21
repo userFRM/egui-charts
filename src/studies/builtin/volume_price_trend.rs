@@ -4,9 +4,9 @@ use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
-/// Volume Price Trend (VPT)
-/// Cumulative volume indicator that considers price changes
-/// Similar to OBV but uses percentage changes
+/// Price Volume Trend (PVT)
+/// Cumulative volume weighted by the close's percentage change; the first bar, which has no
+/// previous close, has no value.
 #[derive(Clone, Debug)]
 pub struct VolumePriceTrend {
     values: IndicatorValues,
@@ -21,7 +21,7 @@ impl VolumePriceTrend {
         Self {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::BLUE, // Teal
+            color: palette::BLUE,
             visible: true,
         }
     }
@@ -51,11 +51,11 @@ impl Indicator for VolumePriceTrend {
     }
 
     fn name(&self) -> &str {
-        "VPT"
+        "PVT"
     }
 
     fn desc(&self) -> &str {
-        "Volume Price Trend - Volume weighted by price change"
+        "Price Volume Trend - Cumulative volume weighted by the close's percentage change"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
@@ -68,11 +68,13 @@ impl Indicator for VolumePriceTrend {
                 if !bar.close.is_finite() || !bar.volume.is_finite() {
                     return IndicatorValue::None;
                 }
-                if let Some(previous) = state.0.filter(|p| *p != 0.0) {
+                let Some(previous) = state.0.replace(bar.close) else {
+                    return IndicatorValue::None;
+                };
+                if previous != 0.0 {
                     let change = (bar.close - previous) / previous;
                     state.1 += bar.volume * change;
                 }
-                state.0 = Some(bar.close);
                 IndicatorValue::Single(state.1)
             });
     }
@@ -112,7 +114,7 @@ impl Indicator for VolumePriceTrend {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec!["VPT".to_string()]
+        vec!["PVT".to_string()]
     }
 }
 
@@ -422,30 +424,37 @@ mod tests {
         }
     }
 
+    /// With closes 100, 105, 102 and volumes 1000, 1200, 800, the first change is
+    /// 1200 * 5 / 100 = 60, then 60 - 800 * 3 / 105 = 260/7. An invalid first
+    /// close leaves no previous close, so the first change is instead -160/7.
     #[test]
-    fn test_vpt() {
-        let mut vpt = VolumePriceTrend::new();
-
-        let data = vec![
-            make_bar(100.0, 1000.0),
-            make_bar(105.0, 1200.0), // +5% change
-            make_bar(102.0, 800.0),  // -2.86% change
-        ];
-
-        vpt.calculate(&data);
-
-        assert_eq!(vpt.values.len(), 3);
-
-        // First VPT should be 0
-        let IndicatorValue::Single(v) = vpt.values.to_rows()[0] else {
-            panic!("no value: {:?}", vpt.values.to_rows()[0]);
-        };
-        assert_eq!(v, 0.0);
-        // Hand VPT: 1200*(105-100)/100 = 60;
-        // then 60 + 800*(102-105)/105 = 260/7.
-        for (bar, want) in [(1, 60.0), (2, 260.0 / 7.0)] {
-            let got = vpt.values().value(0, bar).unwrap();
-            assert!((got - want).abs() < 1e-12, "bar {bar}: {got}");
+    fn pvt_has_no_value_before_its_first_change() {
+        for (closes, expected) in [
+            ([100.0, 105.0, 102.0], [None, Some(60.0), Some(260.0 / 7.0)]),
+            ([f64::NAN, 105.0, 102.0], [None, None, Some(-160.0 / 7.0)]),
+        ] {
+            let bars: Vec<_> = closes
+                .into_iter()
+                .zip([1000.0, 1200.0, 800.0])
+                .map(|(close, volume)| make_bar(close, volume))
+                .collect();
+            let mut full = VolumePriceTrend::new();
+            full.calculate(&bars);
+            let mut streamed = VolumePriceTrend::new();
+            streamed.calculate(&bars[..1]);
+            streamed.update(&bars[..1], 0);
+            streamed.update(&bars[..2], 1);
+            streamed.update(&bars, 2);
+            for study in [full, streamed] {
+                assert_eq!(study.values().len(), bars.len());
+                for (bar, want) in expected.into_iter().enumerate() {
+                    let got = study.values().value(0, bar);
+                    match (got, want) {
+                        (Some(got), Some(want)) => assert!((got - want).abs() < 1e-12),
+                        _ => assert_eq!(got, want, "bar {bar}"),
+                    }
+                }
+            }
         }
     }
 

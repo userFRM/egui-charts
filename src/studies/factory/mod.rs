@@ -62,6 +62,12 @@ macro_rules! register_builtins {
     };
 }
 
+/// A built-in study's earlier factory key, its key now and its constructor.
+type Renamed = (&'static str, &'static str, fn() -> Box<dyn Indicator>);
+
+/// Earlier built-in keys kept for saved studies, stored drawing panes and browser favourites.
+const RENAMED: [Renamed; 1] = [("VPT", "PVT", || Box::new(VolumePriceTrend::default()))];
+
 /// A factory that creates [`Indicator`] instances by name.
 ///
 /// On construction, catalogue studies are registered under their canonical
@@ -72,8 +78,9 @@ macro_rules! register_builtins {
 /// [`create`](Self::create) and [`has`](Self::has) also resolve the names of five exported
 /// studies the catalogue leaves out, so that a template, a copied study or a saved layout of
 /// one is recreated: `CVD`, `HL2`, `HLC3`, `Ehlers Fisher` and `MA Combination`, which creates
-/// [`MACombination::ribbon`] for its inputs to reshape. They have no category and are not in
-/// [`list`](Self::list) or [`count`](Self::count).
+/// [`MACombination::ribbon`] for its inputs to reshape. They also resolve `VPT`, the earlier
+/// name of Price Volume Trend (`PVT`), which a saved study restores under. They have no category
+/// and are not in [`list`](Self::list) or [`count`](Self::count).
 pub struct IndicatorFactory {
     /// The category of each name, `None` for a built-in outside the catalogue, and its constructor.
     constructors: HashMap<String, (Option<&'static str>, IndicatorConstructor)>,
@@ -143,6 +150,11 @@ impl IndicatorFactory {
                 constructor().name().to_owned(),
                 (None, Box::new(constructor)),
             );
+        }
+        // Earlier names resolve without being listed, so that saves made under them load.
+        for (earlier, _, constructor) in RENAMED {
+            self.constructors
+                .insert(earlier.to_owned(), (None, Box::new(constructor)));
         }
         register_builtins!(
             self,
@@ -480,6 +492,14 @@ impl IndicatorFactory {
                 Box::new(|| Box::new(AutoTrendLines::new())),
             ),
         );
+    }
+
+    /// The name a built-in study saved as `saved` has now, or `None` when it was not renamed.
+    pub(crate) fn renamed(saved: &str) -> Option<&'static str> {
+        RENAMED
+            .iter()
+            .find(|(earlier, ..)| *earlier == saved)
+            .map(|(_, now, _)| *now)
     }
 
     /// Register a named indicator constructor in the [`CUSTOM`](Self::CUSTOM) category.
