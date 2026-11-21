@@ -1758,30 +1758,21 @@ fn crosshair_time_label_names_the_nearest_bar() {
     }
 }
 
-/// Dragging a drawing raises no value readout in either tooltip mode, so the area around the
-/// drawing stays visible, and the readout returns on the next hover or hold.
+/// Dragging a drawing or a box-zoom selection raises no value readout in either tooltip mode,
+/// so the area around the drawing or inside the selection stays visible, and the readout
+/// returns on the next hover or hold.
 #[cfg(feature = "drawings")]
 #[test]
 fn drawing_drag_hides_the_value_readout() {
     use crate::drawings::{Drawing, DrawingToolType};
-    for on_long_press in [false, true] {
+    for (box_zoom, on_long_press) in [(false, false), (false, true), (true, false), (true, true)] {
+        let row = format!("box zoom {box_zoom}, on_long_press {on_long_press}");
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[120.0]);
         chart.config.show_ohlc_info = true;
         chart.chart_options.tooltip.on_long_press = on_long_press;
         chart.chart_options.tooltip.show_time = false;
         frame(&ctx, &mut chart, 0.0, vec![]);
-        let time = chart.state.shown()[50].time;
-        let id = chart
-            .create_drawing(
-                Drawing::new(0, DrawingToolType::HorizontalLine),
-                &[(time, 110.0)],
-            )
-            .unwrap();
-        frame(&ctx, &mut chart, 0.1, vec![]);
-        let map = chart.get_chart_mapping();
-        let start = Pos2::new(map.idx_to_x(50), chart.last_price_map.price_to_y(110.0));
-        let end = start + egui::vec2(0.0, 20.0);
         let button = |pos, pressed| Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
@@ -1793,8 +1784,30 @@ fn drawing_drag_hides_the_value_readout() {
                 .iter()
                 .any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "Open"))
         };
+        let rect = chart.last_rendered_price_rect;
+        let mut drawing = None;
+        let (start, end) = if box_zoom {
+            // Up and to the left, so that the card beside the pointer lies inside the selection.
+            chart.set_zoom_mode(true);
+            let start = rect.center() + egui::vec2(120.0, 100.0);
+            (start, start - egui::vec2(240.0, 200.0))
+        } else {
+            let time = chart.state.shown()[50].time;
+            drawing = Some(
+                chart
+                    .create_drawing(
+                        Drawing::new(0, DrawingToolType::HorizontalLine),
+                        &[(time, 110.0)],
+                    )
+                    .unwrap(),
+            );
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.get_chart_mapping();
+            let start = Pos2::new(map.idx_to_x(50), chart.last_price_map.price_to_y(110.0));
+            (start, start + egui::vec2(0.0, 20.0))
+        };
 
-        frame(
+        let pressed = shapes(
             &ctx,
             &mut chart,
             0.2,
@@ -1803,20 +1816,37 @@ fn drawing_drag_hides_the_value_readout() {
         let dragged = shapes(&ctx, &mut chart, 0.3, vec![Event::PointerMoved(end)]);
         assert_eq!(
             chart.drawings.dragging_handle().map(|(drawing, _)| drawing),
-            Some(id),
-            "on_long_press {on_long_press}: the drag started"
+            drawing,
+            "{row}: the drawing drag started"
         );
+        if box_zoom {
+            assert!(chart.box_zoom.active, "{row}: the selection started");
+            assert!(
+                !shows_readout(&pressed),
+                "{row}: readout painted on the press"
+            );
+        }
         assert!(
             !shows_readout(&dragged),
-            "on_long_press {on_long_press}: readout painted during the drag"
+            "{row}: readout painted during the drag"
         );
 
         frame(&ctx, &mut chart, 0.4, vec![button(end, false)]);
-        assert_eq!(chart.drawings.dragging_handle(), None);
-        let after = shapes(&ctx, &mut chart, 0.5, vec![button(end, true)]);
+        assert_eq!(chart.drawings.dragging_handle(), None, "{row}");
+        assert!(
+            !chart.is_zoom_mode_active(),
+            "{row}: the zoom ends the mode"
+        );
+        let at = rect.center();
+        let after = shapes(
+            &ctx,
+            &mut chart,
+            0.5,
+            vec![Event::PointerMoved(at), button(at, true)],
+        );
         assert!(
             shows_readout(&after),
-            "on_long_press {on_long_press}: readout returns after the drag"
+            "{row}: readout returns after the drag"
         );
     }
 }
