@@ -328,6 +328,7 @@ fn same_profiles(old: &TPOConfig, new: &TPOConfig) -> bool {
         && old.custom_letters == new.custom_letters
         && old.split_sessions == new.split_sessions
         && old.session == new.session
+        && old.regular_hours == new.regular_hours
         && old.profile_period == new.profile_period
         && old.composites == new.composites
         && old.splits == new.splits
@@ -383,7 +384,9 @@ fn whole_sessions(
             end = end.max(end_of(last));
         }
         // Adjacent bars of one period may share a profile, so keep their sessions together.
-        if config.profile_period != TPOProfilePeriod::Session {
+        if config.profile_period != TPOProfilePeriod::Session
+            && !matches!(config.session, crate::model::ProfileSession::Custom(_))
+        {
             let period = |i: usize| config.profile_period.key(sessions, full[i].time);
             while start > 0 && period(start - 1) == period(start) {
                 start = start_of(start - 1);
@@ -394,6 +397,55 @@ fn whole_sessions(
         }
         if before == (start..end) {
             break;
+        }
+    }
+    if let crate::model::ProfileSession::Custom(custom) = &config.session {
+        // A month and an overnight window fit in this padding; no unrelated history is scanned.
+        let days = match config.profile_period {
+            TPOProfilePeriod::Session => 2,
+            TPOProfilePeriod::Week => 9,
+            TPOProfilePeriod::Month => 33,
+        };
+        let padding = chrono::TimeDelta::days(days);
+        let first = full[start]
+            .time
+            .checked_sub_signed(padding)
+            .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC);
+        let last = full[end - 1]
+            .time
+            .checked_add_signed(padding)
+            .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC);
+        let slice =
+            full.partition_point(|b| b.time < first)..full.partition_point(|b| b.time <= last);
+        let parts = custom.parts(
+            full,
+            slice,
+            crate::model::Timeframe::Min1,
+            config.regular_hours.as_ref(),
+            true,
+        );
+        let key = |session, date| {
+            let layer = if custom.overlap == crate::model::SessionOverlap::InBoth {
+                session
+            } else {
+                0
+            };
+            (layer, config.profile_period.date_key(date))
+        };
+        let selected = start..end;
+        let periods: Vec<_> = parts
+            .iter()
+            .filter(|p| p.bars.start < selected.end && p.bars.end > selected.start)
+            .map(|p| key(p.session, p.date))
+            .filter(|(_, period)| period.is_some())
+            .collect();
+        for part in parts {
+            if (part.bars.start < selected.end && part.bars.end > selected.start)
+                || periods.contains(&key(part.session, part.date))
+            {
+                start = start.min(part.bars.start);
+                end = end.max(part.bars.end);
+            }
         }
     }
     start..end
@@ -471,12 +523,42 @@ fn build_profiles(
     let mut open = 0;
     // Keep whole sessions in each unit so split parts can count periods from their session's open.
     let starts = crate::model::tpo::session_starts(bars, sessions, config.split_hours(), &[]);
-    let parts = (!config.splits.is_empty()).then(|| {
-        crate::model::tpo::session_starts(bars, sessions, config.split_hours(), &config.splits)
-    });
+    let parts = if matches!(config.session, crate::model::ProfileSession::Custom(_)) {
+        // A custom profile may open after the chart's day starts. Composites refer to its own
+        // opening bar, including a split, rather than a bar outside the selected hours.
+        Some(
+            crate::model::tpo::profile_parts(bars, sessions, &config, clock.timeframe())
+                .into_iter()
+                .map(|part| part.bars.start)
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        (!config.splits.is_empty()).then(|| {
+            crate::model::tpo::session_starts(bars, sessions, config.split_hours(), &config.splits)
+        })
+    };
     let mut profile_open = starts.first().copied().unwrap_or(0);
+    let custom_parts = match &config.session {
+        crate::model::ProfileSession::Custom(custom) => custom.parts(
+            bars,
+            0..bars.len(),
+            clock.timeframe().unwrap_or_default(),
+            config.regular_hours.as_ref(),
+            true,
+        ),
+        _ => Vec::new(),
+    };
     let breaks = starts.into_iter().skip(1);
     for end in breaks.chain([bars.len()]) {
+        if end < bars.len()
+            && (matches!(config.session, crate::model::ProfileSession::Custom(_))
+                && config.profile_period != TPOProfilePeriod::Session
+                || custom_parts
+                    .iter()
+                    .any(|p| p.bars.start < end && end < p.bars.end))
+        {
+            continue;
+        }
         // A session's last split part can join the next session while its first part stays apart.
         let last_open = parts
             .as_ref()
@@ -875,10 +957,22 @@ fn place_profiles(
                 continue;
             }
             // The forming session has the empty space after the last bar to grow into.
-            let end_x = if span[1] == full_data.len() {
+            // Shared custom windows can start on the same bar; each still needs drawing room.
+            let end = if matches!(&config.session, crate::model::ProfileSession::Custom(custom)
+                if custom.overlap == crate::model::SessionOverlap::InBoth)
+            {
+                anchors
+                    .iter()
+                    .copied()
+                    .find(|&i| i > span[0])
+                    .unwrap_or(span[1])
+            } else {
+                span[1]
+            };
+            let end_x = if end == full_data.len() {
                 f32::INFINITY
             } else {
-                idx_to_coord(span[1])
+                idx_to_coord(end)
             };
             // A session that opened left of the plot keeps its profile at the plot's edge.
             let open_x = idx_to_coord(span[0]);
@@ -3699,6 +3793,99 @@ mod tests {
                 |profile, _, _, _, _| counts.push(profile.tpo_count_at(100.0)),
             );
             assert_eq!(counts, expected, "{range:?}, latest={latest_session_only}");
+        }
+    }
+
+    /// Cache units retain overnight windows across calendar boundaries, including windows
+    /// sharing an opening bar; neither a midnight cut nor a zero-width placement loses a part.
+    #[test]
+    fn cached_custom_profiles_keep_overnight_and_shared_opening_bars() {
+        use crate::model::{
+            CustomProfileSession, CustomProfileSessions, ProfileSession, SessionOverlap,
+        };
+        let at = |hour| chrono::NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        let bars: Vec<_> = (0..72)
+            .map(|i| Bar::from_value(chrono::DateTime::UNIX_EPOCH + Duration::hours(i), 100.0))
+            .collect();
+        let clock = BarClock::new(Timeframe::Hour1);
+        for (second_start, overlap, profile_period, expected) in [
+            (
+                23,
+                SessionOverlap::InBoth,
+                TPOProfilePeriod::Session,
+                vec![4, 2, 4, 2],
+            ),
+            (
+                23,
+                SessionOverlap::OwnProfile,
+                TPOProfilePeriod::Session,
+                vec![2, 1, 1, 2],
+            ),
+            (
+                22,
+                SessionOverlap::InBoth,
+                TPOProfilePeriod::Session,
+                vec![4, 3, 4, 3],
+            ),
+            (
+                23,
+                SessionOverlap::InBoth,
+                TPOProfilePeriod::Week,
+                vec![10, 5],
+            ),
+        ] {
+            // Sunday through Tuesday: Sunday night's window belongs to Monday's ISO week.
+            let bars: Vec<_> = bars
+                .iter()
+                .cloned()
+                .map(|mut bar| {
+                    if profile_period == TPOProfilePeriod::Week {
+                        bar.time += Duration::days(3);
+                    }
+                    bar
+                })
+                .collect();
+            let mut custom = CustomProfileSessions::new([
+                CustomProfileSession::new(at(22), at(2)),
+                CustomProfileSession::new(at(second_start), at(1)),
+            ]);
+            custom.overlap = overlap;
+            let config = TPOConfig {
+                session: ProfileSession::Custom(custom),
+                profile_period,
+                period_minutes: 60,
+                ..Default::default()
+            };
+            let span = whole_sessions(&bars, 27..28, &clock.sessions(), &config);
+            assert_eq!(
+                span,
+                if overlap == SessionOverlap::OwnProfile {
+                    23..49
+                } else if profile_period == TPOProfilePeriod::Session {
+                    22..50
+                } else {
+                    22..72
+                }
+            );
+            let cached = cached_profiles(
+                &bars[span.clone()],
+                1,
+                span.start,
+                &config,
+                &clock,
+                &clock.sessions(),
+            );
+            let mut counts = Vec::new();
+            place_profiles(
+                &cached,
+                &bars,
+                Rect::from_x_y_ranges(-1.0..=1000.0, 0.0..=1000.0),
+                &config,
+                &clock.sessions(),
+                |i| i as f32 * 10.0,
+                |profile, _, _, _, _| counts.push(profile.tpo_count_at(100.0)),
+            );
+            assert_eq!(counts, expected, "{overlap:?} second start {second_start}");
         }
     }
 

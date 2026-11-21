@@ -761,7 +761,7 @@ mod tests {
                     false,
                 ),
             );
-            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                 render_session_volume_profiles(
                     ui.painter(),
                     &mapping,
@@ -772,6 +772,7 @@ mod tests {
                     None,
                 );
             });
+            output.textures_delta.clear();
             let rectangles = output
                 .shapes
                 .iter()

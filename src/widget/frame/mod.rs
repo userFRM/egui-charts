@@ -1167,10 +1167,12 @@ impl Chart {
                             <= price_rect.right()
                 });
                 // Sessions left of the view only draw their extensions.
-                let shown = profiles.partition_point(|profile| {
+                let left_of_view = |profile: &crate::studies::TradeProfile| {
                     let end = bars.partition_point(|b| b.time < profile.range.end);
                     mapping.idx_to_x(end - 1) < price_rect.left()
-                });
+                };
+                profiles.sort_by_key(|p| !left_of_view(p));
+                let shown = profiles.iter().take_while(|p| left_of_view(p)).count();
                 Some((flow.price_step(), flow.tick_size(), profiles, shown))
             });
         // Rows of the chart type's footprint, from all the bars the chart holds and never from
@@ -2299,11 +2301,7 @@ impl Chart {
                 .tpo()
                 .filter(|_| !self.chart_type.is_time_independent())
             {
-                let (clock, session) = self.profile_hours(&config.session);
-                let config = crate::model::TPOConfig {
-                    session: session.clone(),
-                    ..config.clone()
-                };
+                let (clock, config) = self.tpo_division(config);
                 rendering::candles::tpo::render_live_tpo(
                     &clipped_painter,
                     price_rect,

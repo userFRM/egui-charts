@@ -18,7 +18,8 @@ pub fn trade_profile_menu(
     index: usize,
     split_at: Option<DateTime<Utc>>,
 ) -> bool {
-    let merge = index < ranges.ranges().len().saturating_sub(1);
+    let editable = !ranges.ranges().windows(2).any(|r| r[0].end > r[1].start);
+    let merge = editable && index < ranges.ranges().len().saturating_sub(1);
     if ui
         .add_enabled(
             merge,
@@ -30,10 +31,11 @@ pub fn trade_profile_menu(
         return ranges.merge_next(index);
     }
     let split = split_at.filter(|time| {
-        ranges
-            .ranges()
-            .get(index)
-            .is_some_and(|r| r.start < *time && *time < r.end)
+        editable
+            && ranges
+                .ranges()
+                .get(index)
+                .is_some_and(|r| r.start < *time && *time < r.end)
     });
     if ui
         .add_enabled(
@@ -80,21 +82,22 @@ impl TradeProfileMenu {
     }
 
     pub(super) fn entries(&self) -> Vec<MenuEntry<ContextMenuAction>> {
+        let editable = !self.ranges.windows(2).any(|r| r[0].end > r[1].start);
         [
             (
                 "Merge with previous profile",
                 ContextMenuAction::MergeTradeProfilePrevious,
-                self.index > 0,
+                editable && self.index > 0,
             ),
             (
                 "Merge with next profile",
                 ContextMenuAction::MergeTradeProfileNext,
-                self.index + 1 < self.ranges.len(),
+                editable && self.index + 1 < self.ranges.len(),
             ),
             (
                 "Split profile at selected bar",
                 ContextMenuAction::SplitTradeProfile,
-                self.time > self.ranges[self.index].start,
+                editable && self.time > self.ranges[self.index].start,
             ),
             (
                 "Reset merges and splits",

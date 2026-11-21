@@ -40,11 +40,7 @@ impl TpoMenu {
         let tick = chart.instrument().and_then(|i| i.tick_size);
         let mapping = chart.get_chart_mapping();
         let hit = |config: &TPOConfig| {
-            let (clock, session) = chart.profile_hours(&config.session);
-            let config = TPOConfig {
-                session: session.clone(),
-                ..config.clone()
-            };
+            let (clock, config) = chart.tpo_division(config);
             let profile = crate::chart::rendering::candles::tpo::profile_at(
                 bars,
                 start..end,
@@ -84,32 +80,52 @@ impl TpoMenu {
                         Some((TpoOwner::Study(id), hit(config)?))
                     })?
             };
+        if matches!(&config.session, crate::model::ProfileSession::Custom(custom)
+            if custom.overlap == crate::model::SessionOverlap::InBoth && custom.sessions.len() > 1)
+        {
+            return Some(Self {
+                owner,
+                config,
+                params,
+                clock,
+                symbol: chart.symbol().to_owned(),
+                previous: None,
+                next: None,
+                split: None,
+            });
+        }
         let composite = |time| config.composites.iter().position(|r| r.contains(&time));
         let sessions = clock.sessions();
         // Use the renderer's parts, including hours excluded by the study's session choice.
         let starts = |config: &TPOConfig| {
-            crate::model::tpo::profile_parts(bars, &sessions, config)
+            crate::model::tpo::profile_parts(bars, &sessions, config, clock.timeframe())
                 .into_iter()
-                .filter_map(|(part, opens)| {
-                    part.clone()
+                .filter_map(|part| {
+                    part.bars
+                        .clone()
                         .find(|&i| {
                             bars[i].high.is_finite()
                                 && bars[i].low.is_finite()
                                 && bars[i].high >= bars[i].low
                         })
-                        .map(|i| (i, opens))
+                        .map(|i| (i, part.opens, part.date))
                 })
                 .collect::<Vec<_>>()
         };
         let parts = starts(&config);
         let opens: Vec<_> = parts
             .iter()
-            .filter(|(_, opens)| *opens)
-            .map(|&(i, _)| bars[i].time)
+            .filter(|(_, opens, _)| *opens)
+            .map(|&(i, _, _)| bars[i].time)
             .collect();
         let mut groups: Vec<RangeInclusive<DateTime<Utc>>> = Vec::new();
-        for &(i, _) in &parts {
+        let mut group_period = None;
+        for &(i, _, date) in &parts {
             let time = bars[i].time;
+            let period = date.map_or_else(
+                || config.profile_period.key(&sessions, time),
+                |date| config.profile_period.date_key(date),
+            );
             let previous = bars[..i]
                 .iter()
                 .rposition(|bar| bar.high.is_finite() && bar.low.is_finite() && bar.high >= bar.low)
@@ -124,16 +140,15 @@ impl TpoMenu {
                                 previous,
                                 time,
                             )
-                            && config
-                                .profile_period
-                                .key(&sessions, *last.start())
-                                .is_some()
-                            && config.profile_period.key(&sessions, *last.start())
-                                == config.profile_period.key(&sessions, time)) =>
+                            && group_period.is_some()
+                            && group_period == period) =>
                 {
                     *last = *last.start()..=time;
                 }
-                _ => groups.push(time..=time),
+                _ => {
+                    groups.push(time..=time);
+                    group_period = period;
+                }
             }
         }
         let at = groups.iter().position(|r| *r.start() == open)?;
@@ -166,7 +181,7 @@ impl TpoMenu {
                 };
                 let previous = starts(&split_config)
                     .into_iter()
-                    .map(|(j, _)| bars[j].time)
+                    .map(|(j, _, _)| bars[j].time)
                     .rfind(|t| *t < time && range.contains(t))
                     .unwrap();
                 let mut parts = Vec::new();
@@ -243,11 +258,7 @@ impl TpoMenu {
                     .and_then(|(_, study)| study.tpo());
                 if !chart.indicator_user_edit_enabled(id)
                     || current.is_none_or(|config| {
-                        let (clock, session) = chart.profile_hours(&config.session);
-                        let config = TPOConfig {
-                            session: session.clone(),
-                            ..config.clone()
-                        };
+                        let (clock, config) = chart.tpo_division(config);
                         clock != self.clock || config != self.config
                     })
                 {

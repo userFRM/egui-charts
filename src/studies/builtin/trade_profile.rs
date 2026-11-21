@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use std::ops::Range;
 
 /// Half-open session ranges. Adjacent sessions can be merged and split again by the user.
+/// Chart-generated custom sessions may overlap when shared hours stay in both profiles.
 #[derive(Clone, Debug)]
 pub struct TradeProfileRanges(Vec<Range<DateTime<Utc>>>);
 
@@ -30,22 +31,46 @@ impl TradeProfileRanges {
         Ok(Self(ranges))
     }
 
+    /// Ordered ranges that can overlap when custom sessions share their bars.
+    #[cfg(feature = "widget")]
+    pub(crate) fn overlapping(ranges: Vec<Range<DateTime<Utc>>>) -> Result<Self, FeedError> {
+        if let Some(i) = ranges.iter().position(|r| r.start >= r.end) {
+            return Err(FeedError::InvalidData(format!(
+                "trade profile range {i} must end after it starts, got {} to {}",
+                ranges[i].start, ranges[i].end
+            )));
+        }
+        if let Some(i) = ranges.windows(2).position(|r| r[0].start > r[1].start) {
+            return Err(FeedError::InvalidData(format!(
+                "trade profile range {} starts before range {i}",
+                i + 1
+            )));
+        }
+        Ok(Self(ranges))
+    }
+
     /// The current ranges in time order.
     pub fn ranges(&self) -> &[Range<DateTime<Utc>>] {
         &self.0
     }
 
     /// Combines this profile with its next neighbour, including any intervening gap.
+    /// Overlapping profiles cannot be merged or split.
     pub fn merge_next(&mut self, index: usize) -> bool {
-        if index >= self.0.len().saturating_sub(1) {
+        if self.0.windows(2).any(|r| r[0].end > r[1].start)
+            || index >= self.0.len().saturating_sub(1)
+        {
             return false;
         }
         self.0[index].end = self.0.remove(index + 1).end;
         true
     }
 
-    /// Splits a profile at an interior bar boundary. An endpoint leaves it unchanged.
+    /// Splits a profile at an interior bar boundary. An endpoint or overlapping profiles leave it unchanged.
     pub fn split(&mut self, index: usize, time: DateTime<Utc>) -> bool {
+        if self.0.windows(2).any(|r| r[0].end > r[1].start) {
+            return false;
+        }
         let Some(range) = self.0.get_mut(index) else {
             return false;
         };

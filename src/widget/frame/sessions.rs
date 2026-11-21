@@ -1,4 +1,6 @@
 use super::Chart;
+#[cfg(feature = "studies")]
+use std::borrow::Cow;
 
 impl Chart {
     /// The session break dividers in the chart's colour, width and pattern.
@@ -63,10 +65,14 @@ impl Chart {
     /// extended hours still divide daily bars by their trading dates. The other choices on daily
     /// bars, and a choice without the instrument hours it reads, keep the chart's calendar, in
     /// the instrument's zone when it has no hours.
+    #[cfg(feature = "studies")]
     pub(crate) fn profile_hours<'a>(
         &self,
         selection: &'a crate::model::ProfileSession,
-    ) -> (crate::model::BarClock, &'a crate::model::ProfileSession) {
+    ) -> (
+        crate::model::BarClock,
+        Cow<'a, crate::model::ProfileSession>,
+    ) {
         use crate::model::{ProfileSession, Timeframe, TimezoneId};
         let mut clock = self.bar_clock();
         let instrument = self.instrument();
@@ -77,6 +83,15 @@ impl Chart {
             .and_then(|i| i.time_zone.clone())
             .unwrap_or_else(TimezoneId::utc);
         let hours = instrument.and_then(|i| i.session.as_ref());
+        if intraday && let ProfileSession::Custom(custom) = selection {
+            if hours.is_none() {
+                clock = clock.with_timezone(zone.clone());
+            }
+            return (
+                clock,
+                Cow::Owned(ProfileSession::Custom(custom.with_zone(&zone))),
+            );
+        }
         let by_time_of_day = !matches!(
             selection,
             ProfileSession::Regular | ProfileSession::Extended
@@ -90,7 +105,7 @@ impl Chart {
             } else {
                 &ProfileSession::Chart
             };
-            return (divided, kept);
+            return (divided, Cow::Borrowed(kept));
         }
         // Without instrument hours there is nothing to select among, so the chart's calendar stays.
         if let Some(zone) = instrument
@@ -99,7 +114,40 @@ impl Chart {
         {
             clock = clock.with_timezone(zone.clone());
         }
-        (clock, &ProfileSession::Chart)
+        (clock, Cow::Borrowed(&ProfileSession::Chart))
+    }
+
+    /// The instrument's regular hours on this interval, absent when it supplies no hours.
+    #[cfg(feature = "studies")]
+    pub(crate) fn regular_hours_clock(&self) -> Option<crate::model::BarClock> {
+        let instrument = self.instrument()?;
+        let hours = instrument.session.as_ref()?;
+        let zone = instrument
+            .time_zone
+            .clone()
+            .unwrap_or_else(crate::model::TimezoneId::utc);
+        Some(
+            crate::model::BarClock::new(self.timeframe.unwrap_or_default()).with_session(
+                zone,
+                hours.clone(),
+                false,
+            ),
+        )
+    }
+
+    /// Resolve a TPO study's custom zones and the regular calendar it may clip to.
+    #[cfg(feature = "studies")]
+    pub(crate) fn tpo_division(
+        &self,
+        config: &crate::model::TPOConfig,
+    ) -> (crate::model::BarClock, crate::model::TPOConfig) {
+        let (clock, session) = self.profile_hours(&config.session);
+        let config = crate::model::TPOConfig {
+            session: session.into_owned(),
+            regular_hours: self.regular_hours_clock(),
+            ..config.clone()
+        };
+        (clock, config)
     }
 }
 
