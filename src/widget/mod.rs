@@ -757,6 +757,7 @@ impl Chart {
             && bars >= 0.0
             && (options.right_offset != bars || options.right_offset_pixels.is_some())
         {
+            self.history.clear_view_restore();
             options.right_offset = bars;
             options.right_offset_pixels = None;
             let scale = self.state.time_scale_mut();
@@ -803,10 +804,13 @@ impl Chart {
 
     /// Activates or deactivates box-zoom mode.
     ///
-    /// While active, a left-button drag on the plot draws a selection rectangle and zooms into
-    /// it. The mode applies to one selection: it ends once a zoom is applied (see
-    /// [`Chart::zoom_was_applied`]), while a selection of 20 points or less zooms nothing and
-    /// keeps it. A drawing tool or the eraser owns the plot's drags, so the next frame with
+    /// While active, a left-button drag that starts on a plot, in the price pane or another
+    /// expanded pane, draws a selection rectangle and zooms into it: the selected bars fill the
+    /// width and the selected values fill the pane the selection began in, while the other panes
+    /// keep their scales. A press on an axis scales that axis, and a press on a drawing drags the
+    /// drawing, as without the mode. The mode applies to one selection: it ends once a zoom is
+    /// applied (see [`Chart::zoom_was_applied`]). A selection of 20 points or less zooms nothing
+    /// and keeps it. A drawing tool or the eraser owns the plot's drags, so the next frame with
     /// either active ends the mode. [`Chart::is_zoom_mode_active`] reports it.
     pub fn set_zoom_mode(&mut self, active: bool) {
         self.zoom_mode_active = active;
@@ -818,10 +822,16 @@ impl Chart {
     }
 
     /// Restore the view preceding the last box zoom. Drawing and chart edit history is unchanged.
+    /// A study pane keeps the values a box zoom selected there until its axis is reset with a
+    /// double click.
     pub fn zoom_back(&mut self) -> bool {
         self.pending_scroll_time = None;
         self.tracking_mode_active = false;
-        self.state.pop_zoom_state()
+        let popped = self.state.pop_zoom_state();
+        if popped {
+            self.history.clear_view_restore();
+        }
+        popped
     }
 
     /// Returns `true` if a box zoom was completed in the most recent frame. Box-zoom mode has
@@ -1118,6 +1128,12 @@ impl Chart {
             new.right_offset,
             new.right_offset_pixels,
         ) {
+            if new.bar_spacing != old.bar_spacing
+                || (new.right_offset, new.right_offset_pixels)
+                    != (old.right_offset, old.right_offset_pixels)
+            {
+                self.history.clear_view_restore();
+            }
             let scale = self.state.time_scale_mut();
             let offset = scale.right_offset_precise();
             let spacing = if new.bar_spacing == old.bar_spacing {
