@@ -194,6 +194,35 @@ impl DemoApp {
         }
     }
 
+    /// Disables the restored alerts of live runs. A run ends with the session that started it,
+    /// so nothing would feed them and they would read as active without ever firing.
+    pub(super) fn stop_restored_strategy_alerts(&mut self) {
+        let mut stopped = 0;
+        for mut alert in self.alert_host.engine().alerts() {
+            let watches_run = match &alert.condition {
+                AlertCondition::StrategyFills(_) => true,
+                AlertCondition::CustomEvents(source) => source.ends_with(TURNS),
+                _ => false,
+            };
+            if watches_run && alert.status == AlertStatus::Active {
+                alert.status = AlertStatus::Disabled;
+                self.alerts.save(alert);
+                stopped += 1;
+            }
+        }
+        match stopped {
+            0 => {}
+            1 => self.notify(
+                "A strategy alert was stopped: its live run ended when the demo closed. \
+                 Add it again from the strategy tester.",
+            ),
+            n => self.notify(format!(
+                "{n} strategy alerts were stopped: their live runs ended when the demo closed. \
+                 Add them again from the strategy tester."
+            )),
+        }
+    }
+
     pub(super) fn update_live_strategy(&mut self) {
         let Some(LiveStrategy {
             run, id, script, ..
@@ -256,7 +285,7 @@ impl DemoApp {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{ui_click, ui_frame};
+    use super::super::tests::{AppStorage, ui_click, ui_frame};
     use super::*;
     use egui_charts::model::{Bar, BarClock, Timeframe};
     use egui_charts::strategies::Commission;
@@ -280,6 +309,15 @@ mod tests {
             panic!("{label}: {found:?}");
         };
         ui_click(ctx, size, rect.center(), &mut draw);
+    }
+
+    /// Saves `app` and starts the demo again from what it saved.
+    fn restart(app: &mut DemoApp, ctx: &egui::Context) -> Box<DemoApp> {
+        let mut storage = AppStorage::default();
+        eframe::App::save(app, &mut storage);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        DemoApp::new_at(&cc, "2026-10-27T19:29:50Z".parse().unwrap(), true)
     }
 
     #[test]
@@ -410,6 +448,15 @@ mod tests {
             };
             assert!(trigger.message.starts_with(side), "{}", trigger.message);
         }
+        // A run ends with its session, so a restarted demo stops the alert and says why.
+        let restored = restart(&mut app, &ctx);
+        let [alert] = <[Alert; 1]>::try_from(restored.alert_host.engine().alerts()).unwrap();
+        assert_eq!(alert.id, saved.id);
+        assert_eq!(alert.status, AlertStatus::Disabled);
+        assert!(restored.toasts.toasts().iter().any(|toast| toast.message
+            == "A strategy alert was stopped: its live run ended when the demo closed. \
+                Add it again from the strategy tester."));
+        drop(restored);
         app.stop_live_strategy();
         assert_eq!(
             app.alert_host.engine().alerts()[0].status,
@@ -518,5 +565,14 @@ mod tests {
             Some("Exchange rates from USD to EUR are unavailable")
         );
         assert!(report.trades.is_empty() && report.equity.is_empty());
+
+        let restored = restart(&mut app, &ctx);
+        let alerts = restored.alert_host.engine().alerts();
+        assert_eq!(alerts.len(), 4);
+        assert!(alerts.iter().all(|a| a.status == AlertStatus::Disabled));
+        // Only the two alerts of the run that was still going are counted.
+        assert!(restored.toasts.toasts().iter().any(|toast| toast.message
+            == "2 strategy alerts were stopped: their live runs ended when the demo closed. \
+                Add them again from the strategy tester."));
     }
 }

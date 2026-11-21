@@ -5301,6 +5301,7 @@ mod rendering_tests {
                     clock: BarClock::new(timeframe),
                     instrument: None,
                     timeframe,
+                    chart: None,
                 }],
             );
             study

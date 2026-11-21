@@ -719,6 +719,10 @@ impl Indicator for AutoKeyLevels {
         Vec::new()
     }
 
+    fn plot_holds_values(&self, _line: usize) -> bool {
+        false
+    }
+
     fn table(&self) -> Option<&StudyTable> {
         self.notice.as_ref()
     }
@@ -1264,6 +1268,7 @@ mod tests {
                         clock: BarClock::new(Timeframe::Min1),
                         instrument: None,
                         timeframe: Timeframe::Min1,
+                        chart: None,
                     }],
                 );
                 assert_eq!(
