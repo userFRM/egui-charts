@@ -1,9 +1,10 @@
 //! Start selection intents; the host supplies history, randomness and saved sessions.
 
 use crate::localization as l10n;
+use crate::scales::TimezoneMode;
 use crate::theme::ThemeExt;
 use crate::ui_kit::{buttons::Button, modal::Modal};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use egui::{Painter, Pos2, Rect, Stroke, Vec2, pos2};
 
 /// A replay start requested by the user.
@@ -21,7 +22,8 @@ pub enum ReplayStartAction {
     First,
     /// A random source bar selected by the host.
     Random,
-    /// First source bar opening on or after this UTC instant.
+    /// First source bar opening on or after this instant. [`ReplayStartPicker`] gives the start
+    /// of the chosen day on its calendar.
     Date(DateTime<Utc>),
     /// Restore the host's saved session.
     Resume,
@@ -33,12 +35,36 @@ pub struct ReplayStartPicker {
     /// Whether the dialog is open.
     pub is_open: bool,
     date: String,
+    /// The calendar the date is read on.
+    timezone: TimezoneMode,
 }
 
 impl ReplayStartPicker {
-    /// Opens date entry with an optional initial UTC date.
+    /// Opens date entry on the UTC calendar with an optional initial date.
+    /// [`Self::open_for_chart`] reads the date in a chart's time zone instead.
     pub fn open(&mut self, date: Option<DateTime<Utc>>) {
-        self.date = date.map_or_else(String::new, |time| time.format("%Y-%m-%d").to_string());
+        self.open_in(TimezoneMode::Utc, date);
+    }
+
+    /// Opens date entry on the calendar of `chart`, the one
+    /// [`Chart::go_to_local_time`](crate::widget::Chart::go_to_local_time) reads: the zone the
+    /// chart [shows](crate::widget::Chart::display_timezone), or UTC where supplied bars of a day
+    /// or longer carry their trading date at 00:00 UTC. `date` fills the field with its date in
+    /// that zone. The confirmed date gives [`ReplayStartAction::Date`] at the first instant of
+    /// that day there; a midnight the clocks skip gives the instant of the jump.
+    pub fn open_for_chart(&mut self, chart: &crate::widget::Chart, date: Option<DateTime<Utc>>) {
+        self.open_in(chart.bar_date_timezone(), date);
+    }
+
+    fn open_in(&mut self, timezone: TimezoneMode, date: Option<DateTime<Utc>>) {
+        self.date = date.map_or_else(String::new, |time| {
+            timezone
+                .wall_time(time)
+                .date()
+                .format("%Y-%m-%d")
+                .to_string()
+        });
+        self.timezone = timezone;
         self.is_open = true;
     }
 
@@ -51,14 +77,16 @@ impl ReplayStartPicker {
         Modal::new("replay_start", "Select date")
             .width(360.0)
             .show(ctx, &mut self.is_open, |ui| {
-                ui.label(l10n::text(ui.ctx(), "Date (UTC, YYYY-MM-DD)"));
+                let label = ui.label(l10n::text(ui.ctx(), "Date"));
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.date).desired_width(ui.available_width()),
-                );
+                    egui::TextEdit::singleline(&mut self.date)
+                        .hint_text(l10n::text(ui.ctx(), "YYYY-MM-DD"))
+                        .desired_width(ui.available_width()),
+                )
+                .labelled_by(label.id);
                 let date = NaiveDate::parse_from_str(self.date.trim(), "%Y-%m-%d")
                     .ok()
-                    .and_then(|date| date.and_hms_opt(0, 0, 0))
-                    .map(|date| date.and_utc());
+                    .and_then(|date| self.timezone.instant(date.and_time(NaiveTime::MIN)));
                 if Button::new("Start at date")
                     .secondary()
                     .enabled(date.is_some())
@@ -107,6 +135,85 @@ pub fn paint_start_line(painter: &Painter, plot: Rect, pointer: Pos2) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The typed day starts at its midnight in the chart's zone, and the field is found by its
+    /// caption under the default accessibility check. EDT is UTC-4 in October; Tokyo is UTC+9,
+    /// including when used as exchange time.
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn select_date_reads_the_day_in_the_chart_zone() {
+        use crate::model::{BarData, TimezoneId};
+        use crate::widget::Chart;
+        use egui::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for (zone, expected, initial) in [
+            (
+                TimezoneMode::Timezone(TimezoneId::named("America/New_York").unwrap()),
+                "2026-10-23T04:00:00Z",
+                // 22:00 EDT on 30 September.
+                Some(("2026-10-01T02:00:00Z", "2026-09-30")),
+            ),
+            (
+                TimezoneMode::Exchange(TimezoneId::named("Asia/Tokyo").unwrap()),
+                "2026-10-22T15:00:00Z",
+                None,
+            ),
+            (TimezoneMode::Utc, "2026-10-23T00:00:00Z", None),
+        ] {
+            let mut chart = Chart::new(BarData::new());
+            chart.chart_options.time_scale.timezone = zone.clone();
+            let mut picker = ReplayStartPicker::default();
+            if let Some((time, date)) = initial {
+                picker.open_for_chart(&chart, Some(time.parse().unwrap()));
+                let mut h = Harness::builder()
+                    .allow_missing_glyphs()
+                    .with_size(Vec2::new(1440.0, 900.0))
+                    .build_ui_state(
+                        |ui, picker: &mut ReplayStartPicker| {
+                            picker.show(ui.ctx());
+                        },
+                        picker,
+                    );
+                h.run();
+                assert_eq!(
+                    h.get_by_role_and_label(Role::TextInput, "Date").value(),
+                    Some(date.to_owned()),
+                    "{zone:?}"
+                );
+                picker = ReplayStartPicker::default();
+            }
+            picker.open_for_chart(&chart, None);
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(Vec2::new(1440.0, 900.0))
+                .build_ui_state(
+                    |ui, state: &mut (ReplayStartPicker, ReplayStartAction)| {
+                        let action = state.0.show(ui.ctx());
+                        if action != ReplayStartAction::None {
+                            state.1 = action;
+                        }
+                    },
+                    (picker, ReplayStartAction::None),
+                );
+            h.run();
+            h.get_by_role_and_label(Role::TextInput, "Date").focus();
+            h.run();
+            h.get_by_role_and_label(Role::TextInput, "Date")
+                .type_text("2026-10-23");
+            h.run();
+            h.get_by_role_and_label(Role::Button, "Start at date")
+                .click();
+            h.run();
+            let (picker, action) = h.state();
+            assert_eq!(
+                *action,
+                ReplayStartAction::Date(expected.parse().unwrap()),
+                "{zone:?}"
+            );
+            assert!(!picker.is_open, "{zone:?}");
+        }
+    }
 
     /// A price pane shorter than the scissors still gets the line through the bar under the
     /// pointer, with the scissors centred on it.

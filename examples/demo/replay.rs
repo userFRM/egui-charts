@@ -1383,7 +1383,7 @@ impl DemoApp {
             ReplayStartAction::SelectBar => self.select_replay_start(),
             ReplayStartAction::SelectDate => {
                 let first = self.replay_start_bars().first().map(|bar| bar.time);
-                self.replay_start.open(first);
+                self.replay_start.open_for_chart(&self.chart, first);
             }
             ReplayStartAction::Resume => {
                 if let Some((session, interval)) = self.replay_session.clone() {
