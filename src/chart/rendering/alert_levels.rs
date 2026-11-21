@@ -306,23 +306,6 @@ fn blinks(alert: &Alert, now: DateTime<Utc>) -> bool {
             .is_some_and(|fired| (0..60).contains(&(now - fired).num_seconds()))
 }
 
-/// Resolve Alt+A at a hovered chart price without handling keys owned by a field or popup.
-/// The host decides whether to open a dialog or save a default alert at the returned price.
-pub fn alert_shortcut_price(ui: &mut Ui, mapping: &ChartMapping) -> Option<f64> {
-    let pointer = ui.ctx().pointer_hover_pos()?;
-    if !ui.rect_contains_pointer(mapping.rect)
-        || ui.ctx().egui_wants_keyboard_input()
-        || egui::Popup::is_any_open(ui.ctx())
-    {
-        return None;
-    }
-    if ui.input_mut(|input| input.consume_key(egui::Modifiers::ALT, egui::Key::A)) {
-        let price = mapping.y_to_price(pointer.y);
-        return price.is_finite().then_some(price);
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
