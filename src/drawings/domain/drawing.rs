@@ -348,8 +348,8 @@ pub struct Drawing {
     pub vwap: Option<VwapConfig>,
 
     /// Levels, fan lines, arcs, background and labels of the Gann tools. New drawings store
-    /// [`GannConfig::drawing_default`]; `None` draws [`GannConfig::for_tool`], preserving saved
-    /// boxes' left and bottom labels and squares' 10 point labels.
+    /// [`GannConfig::drawing_default`]; `None` keeps saved boxes' left and bottom labels and
+    /// squares' 10 point labels, ten arcs and grey hidden fan lines.
     #[serde(default)]
     pub gann: Option<GannConfig>,
     /// Average range and noise, in ticks, and colours of the candles a Ghost Feed projects. New
@@ -412,10 +412,11 @@ pub struct Drawing {
     /// colour with a flat fill and no coefficients. Other tools ignore it.
     #[serde(default)]
     pub projection: Option<ProjectionConfig>,
-    /// Card and badge colours and the background transparency of the forecast tool. New
+    /// Card, badge and anchor colours and the background transparency of the forecast tool. New
     /// forecasts start from [`ForecastStyle::default`]; `None`, as on forecasts saved before
     /// these settings, draws the theme's colours without borders, with the fill colour, when
-    /// set, as the background of every card and badge. Other tools ignore it.
+    /// set, as the background of its cards and decided badges, and the default pending badge
+    /// and anchor dots. Other tools ignore it.
     #[serde(default)]
     pub forecast: Option<ForecastStyle>,
 
@@ -1063,7 +1064,9 @@ impl Drawing {
             }
         }
         if matches!(tool, T::GannBox | T::GannSquare | T::GannFixed | T::GannFan) {
-            let config = self.gann.get_or_insert_with(|| GannConfig::for_tool(tool));
+            let config = self
+                .gann
+                .get_or_insert_with(|| GannConfig::saved_default(tool));
             for (list, levels) in [
                 (3, &mut config.price_levels),
                 (4, &mut config.time_levels),
@@ -1569,8 +1572,8 @@ impl Serialize for Drawing {
 }
 
 impl<'de> Deserialize<'de> for Drawing {
-    /// A saved `gann` object takes the fields it leaves out from [`GannConfig::for_tool`] of the
-    /// drawing's tool, which a drawing without one draws. Range settings it leaves out take
+    /// Missing Gann settings take the drawing's former defaults. Saved squares store them on
+    /// load so editing their Inputs also keeps their former lists. Missing range settings take
     /// the drawing's font size for the readouts.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         GannConfig::forget_left_out();
@@ -1581,6 +1584,11 @@ impl<'de> Deserialize<'de> for Drawing {
         drawing.range_settings.fill_left_out(drawing.font_size);
         if let Some(gann) = &mut drawing.gann {
             gann.fill_left_out(drawing.tool_type);
+        } else if matches!(
+            drawing.tool_type,
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed
+        ) {
+            drawing.gann = Some(GannConfig::saved_default(drawing.tool_type));
         }
         Ok(drawing)
     }

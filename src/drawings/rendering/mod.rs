@@ -533,7 +533,7 @@ impl Drawing {
                 | T::FixedRangeVolumeProfile
                 | T::HeadAndShoulders
                 | T::TrianglePattern
-        ) || (self.tool_type == T::DateRange
+        ) || (matches!(self.tool_type, T::DateRange | T::DateAndPriceRange)
             && (self.range_settings.extend_top || self.range_settings.extend_bottom));
         Some(if time_only {
             Rect::from_x_y_ranges(bounds.x_range(), egui::Rangef::EVERYTHING)
@@ -948,6 +948,15 @@ mod tests {
                         size: Some([1500.0, 800.0]),
                         ..Default::default()
                     });
+                }
+                if matches!(
+                    tool,
+                    DrawingToolType::DateRange | DrawingToolType::DateAndPriceRange
+                ) {
+                    // Time edges run to the pane's top and bottom.
+                    drawing.range_settings.border = true;
+                    drawing.range_settings.extend_top = true;
+                    drawing.range_settings.extend_bottom = true;
                 }
                 // The largest label size, whose text reaches far past a circle, on closed arcs.
                 if matches!(

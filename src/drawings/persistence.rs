@@ -1186,6 +1186,7 @@ mod v1 {
         }
         .map(|alpha| [r, g, b, alpha]);
         drawing.fib_config = None;
+        drawing.gann = None;
         drawing.pitchfork = None;
         drawing.volume_profile = None;
         // Version 1 feeds keep the range and noise the former loader supplied.
@@ -2618,6 +2619,8 @@ mod tests {
             (T::Pitchfan, [100.0, 110.0], None, None),
             (T::FixedRangeVolumeProfile, [100.0, 110.0], None, None),
             (T::AnchoredVolumeProfile, [100.0, 110.0], None, None),
+            (T::GannSquare, [100.0, 110.0], None, None),
+            (T::GannFixed, [100.0, 110.0], None, None),
             (T::FibonacciRetracement, [100.0, 110.0], None, None),
             (T::ParallelChannel, [100.0, 110.0], None, None),
             (T::FlatTopBottom, [100.0, 110.0], None, Some(35)),
@@ -2691,6 +2694,18 @@ mod tests {
             }
             for storage in [&once, &twice] {
                 let drawing = &storage.drawings[0].drawing;
+                if matches!(tool, T::GannSquare | T::GannFixed) {
+                    let config = drawing.gann_config();
+                    assert_eq!(config.arc_ratios.len(), 10, "{tool:?}");
+                    assert!(
+                        config
+                            .fan_ratios
+                            .iter()
+                            .filter(|line| !line.visible)
+                            .all(|line| line.color == [128, 128, 128, 255]),
+                        "{tool:?}: hidden fan lines keep their former grey"
+                    );
+                }
                 if matches!(tool, T::DateRange | T::DateAndPriceRange) {
                     assert!(drawing.range_settings.border, "{tool:?}");
                     assert_eq!(drawing.range_settings.border_width, None, "{tool:?}");
