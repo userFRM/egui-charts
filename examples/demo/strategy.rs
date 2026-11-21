@@ -1,9 +1,7 @@
 //! A host-run sample backtest and the report's navigation, signals and CSV delivery.
 
 use super::{Bar, DemoApp, SeriesId, Timeframe, panel_frame};
-use egui_charts::model::{
-    BarClock, OrderSide, SignalId, StrategyExit, StrategyReport, StrategyTrade,
-};
+use egui_charts::model::{BarClock, OrderSide, StrategyExit, StrategyReport, StrategyTrade};
 use egui_charts::services::{Events, SignalEvent, Signals};
 use egui_charts::ui::strategy_report::{
     StrategyHistoryRequest, StrategyReportAction, StrategyTesterAction,
@@ -374,6 +372,7 @@ impl DemoApp {
     }
 
     /// Keep the existing live analytics when a finished report also supplies fill markers.
+    /// The report gets a stream of its own, so that its markers never crowd out the live ones.
     pub(super) fn refresh_strategy_signals(&mut self) {
         if self.own_data.is_some() {
             return;
@@ -388,36 +387,35 @@ impl DemoApp {
             } else {
                 live.detectors()
             };
-            let source: Arc<dyn Signals> = match self.strategy_report.report() {
-                Some(report) => Arc::new(ReportSignals {
+            let mut sources = vec![live];
+            if let Some(report) = self.strategy_report.report() {
+                sources.push(Arc::new(ReportSignals {
                     report: report.clone(),
-                    live,
-                }),
-                None => live,
-            };
-            chart.set_signal_source(Some(source));
+                }));
+            }
+            chart.set_signal_sources(sources);
         }
     }
 }
 
+/// A signal stream takes 10,000 pushes between frames; a report sends its last fills.
+const MARKED_SIGNALS: usize = 10_000;
+
+/// The entry and exit markers of a finished report.
 struct ReportSignals {
     report: StrategyReport,
-    live: Arc<dyn Signals>,
 }
 
 impl Signals for ReportSignals {
     fn subscribe(&self, symbol: &str, timeframe: Timeframe, events: Events<SignalEvent>) {
-        self.live.subscribe(symbol, timeframe, events.clone());
         if self.report.symbol != symbol || self.report.timeframe != timeframe {
             return;
         }
-        for signal in self.report.signals() {
+        let signals = self.report.signals();
+        let skipped = signals.len().saturating_sub(MARKED_SIGNALS);
+        for signal in signals.into_iter().skip(skipped) {
             events.push(SignalEvent::Upsert(signal));
         }
-    }
-
-    fn clicked(&self, id: &SignalId) {
-        self.live.clicked(id);
     }
 }
 
@@ -1004,5 +1002,86 @@ mod tests {
                 std::fs::remove_file(std::env::temp_dir().join("strategy-trades.csv")).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn large_report_shows_its_last_fills_beside_the_live_marker() {
+        use std::time::Duration;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        super::super::tests::settle(&mut app, &ctx);
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        // Detector triangles can share a fill's price; this test identifies report markers.
+        for kind in egui_charts::services::DetectionKind::ALL {
+            app.chart
+                .set_signal_category_visible(kind.category(), false);
+        }
+        app.execute_search_command(&ctx, "samples");
+        let bars = app.chart.bars(SeriesId::MAIN).to_vec();
+        let n = bars.len();
+        // 5,100 closed trades give 10,200 markers, over the stream's 10,000. All trades but the
+        // last share two older bars; the last alone takes the newest completed bars.
+        let mut report = StrategyReport::new(
+            "Large",
+            app.chart.symbol(),
+            app.chart.timeframe().unwrap(),
+            10_000.0,
+        );
+        report.trades = (0..5_100)
+            .map(|index| {
+                let (entry, exit) = if index == 5_099 {
+                    (&bars[n - 3], &bars[n - 2])
+                } else {
+                    (&bars[n - 60], &bars[n - 59])
+                };
+                let mut trade = StrategyTrade::new(OrderSide::Buy, 1.0, entry.time, entry.close);
+                trade.exit = Some(StrategyExit::new(
+                    exit.time,
+                    exit.close,
+                    exit.close - entry.close,
+                ));
+                trade
+            })
+            .collect();
+        let last = report.trades.last().unwrap().clone();
+        app.strategy_report.set_report(Some(report), &bars);
+        app.refresh_strategy_signals();
+        let accent = app.theme.ui.accent;
+        let mut delays = Vec::new();
+        for index in 0..12 {
+            super::super::tests::finish_feed(&app.live);
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                    // Scroll animations settle within 0.25 s of input time.
+                    time: Some(index as f64 * 0.05),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.show_strategy_report(ui, app.theme.ui.panel_bg);
+                    app.show_chart(ui, app.theme.chart.bg);
+                },
+            );
+            delays.push(output.viewport_output[&egui::ViewportId::ROOT].repaint_delay);
+            if index >= 2 {
+                assert_eq!(
+                    fills_visible(&output, &app.chart, &last),
+                    [true, true],
+                    "frame {index}: the last trade's fills"
+                );
+                assert!(
+                    output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        Shape::Circle(circle) if circle.radius == 4.0 && circle.fill == accent)),
+                    "frame {index}: the live analytics marker"
+                );
+            }
+            output.drop_without_applying_deltas();
+        }
+        // Subscribing again pushes the report's markers, which wakes the chart at once.
+        assert!(
+            delays[8..].iter().all(|delay| *delay != Duration::ZERO),
+            "subscribed again: {delays:?}"
+        );
     }
 }

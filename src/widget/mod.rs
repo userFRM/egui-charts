@@ -57,7 +57,7 @@ use chrono::{DateTime, Utc};
 use egui::{Pos2, Rect, Vec2};
 #[cfg(feature = "ui")]
 pub(crate) use export::ColumnId;
-pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
+pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions, PixelDensity};
 pub use feed::checkpoint::{
     TradeReplayCheckpoint, TradeReplayCheckpointError, TradeReplayCheckpointPlan,
 };
