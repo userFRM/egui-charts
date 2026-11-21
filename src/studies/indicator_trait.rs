@@ -679,6 +679,9 @@ pub trait Indicator: Send + ConcreteStudy {
     }
 
     /// Current editable inputs. A host study can supply the same schema as built-ins.
+    /// The chart adds inputs of its own after these under the ids `plot_offset`,
+    /// `calculation_symbol`, `calculation_timeframe` and `wait_for_close`; where it adds one, an
+    /// edit by that id reaches the chart's input, so give the study's inputs other ids.
     fn inputs(&self) -> Vec<super::StudyInput> {
         Vec::new()
     }
