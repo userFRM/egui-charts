@@ -3847,12 +3847,7 @@ impl DemoApp {
                     let series = self.chart.series_settings().alerts;
                     let chart_wide = &self.settings_state.alerts;
                     if chart_wide.show_alerts && series.visible {
-                        let color =
-                            if series.color != egui_charts::model::SeriesAlerts::default().color {
-                                series.color
-                            } else {
-                                chart_wide.alert_color
-                            };
+                        let color = series.color.unwrap_or(chart_wide.alert_color);
                         let decimals = self
                             .chart
                             .instrument()
@@ -4270,9 +4265,11 @@ impl DemoApp {
             ContextMenuAction::OpenSettings => {
                 self.open_chart_settings_dialog();
             }
-            ContextMenuAction::OpenSeriesSettings => self
-                .series_settings
-                .open(SeriesId::MAIN, self.chart.series_settings()),
+            ContextMenuAction::OpenSeriesSettings => {
+                let mut settings = self.chart.series_settings();
+                settings.chart_alert_color = self.settings_state.alerts.alert_color;
+                self.series_settings.open(SeriesId::MAIN, settings);
+            }
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::ApplyIndicatorsToLayout => {
@@ -13551,8 +13548,11 @@ mod tests {
         ));
         app.alerts.set_service(app.alert_host.clone());
         app.alerts.poll(&ctx, &mut app.toasts);
-        let default = egui_charts::model::SeriesAlerts::default().color;
-        assert!(painted(&mut app, &ctx, default));
+        let orange = egui::Color32::from_rgb(255, 152, 0);
+        let blue = egui::Color32::from_rgb(0, 0, 255);
+        let purple = egui::Color32::from_rgb(156, 39, 176);
+        assert!(painted(&mut app, &ctx, orange));
+        assert!(!painted(&mut app, &ctx, blue));
         app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
         assert!(app.series_settings.is_open);
         app.series_settings.active_tab = SeriesSettingsTab::ScalesAndLines;
@@ -13580,14 +13580,26 @@ mod tests {
         });
         assert!(!app.series_settings.settings.alerts.visible);
         apply(&mut app, &ctx);
-        assert!(!painted(&mut app, &ctx, default));
-        app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
-        app.series_settings.settings.alerts.visible = true;
-        let color = egui::Color32::from_rgb(156, 39, 176);
-        app.series_settings.settings.alerts.color = color;
-        apply(&mut app, &ctx);
-        assert!(painted(&mut app, &ctx, color));
-        assert!(!painted(&mut app, &ctx, default));
+        assert!(!painted(&mut app, &ctx, orange));
+        for (chart_wide, own, drawn, not_drawn) in [
+            (orange, Some(purple), purple, orange),
+            // A colour picked equal to the default is the series' own.
+            (blue, Some(orange), orange, blue),
+            // A series without its own colour follows the chart settings.
+            (blue, None, blue, orange),
+        ] {
+            app.settings_state.alerts.alert_color = chart_wide;
+            app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
+            assert_eq!(app.series_settings.settings.chart_alert_color, chart_wide);
+            app.series_settings.settings.alerts.visible = true;
+            app.series_settings.settings.alerts.color = own;
+            apply(&mut app, &ctx);
+            assert!(painted(&mut app, &ctx, drawn), "{own:?} on {chart_wide:?}");
+            assert!(
+                !painted(&mut app, &ctx, not_drawn),
+                "{own:?} on {chart_wide:?}"
+            );
+        }
     }
 
     #[test]
