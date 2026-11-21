@@ -799,7 +799,8 @@ mod tests {
     /// from before the window rule, with pivot sides, matches the study without them. A Doji
     /// record from before the patterns without a trend condition dropped the trend rule matches
     /// the Doji without it. An ADX record from before the smoothing had an input matches the ADX
-    /// whose smoothing equals its period. Loading and pasting agree.
+    /// whose smoothing equals its period. A Knoxville record stored while the study offered
+    /// Symbol and Interval matches the Knoxville that offers neither. Loading and pasting agree.
     #[cfg(feature = "studies")]
     #[test]
     fn stored_pane_survives_a_new_study_input() {
@@ -844,6 +845,27 @@ mod tests {
                     serde_json::json!(["right", side]),
                 ],
             );
+        };
+        let other_bars = |inputs: &mut Vec<serde_json::Value>| {
+            inputs.retain(|input| {
+                !matches!(
+                    input[0].as_str(),
+                    Some("calculation_symbol" | "calculation_timeframe" | "wait_for_close")
+                )
+            });
+            for (id, value) in [
+                ("calculation_symbol", InputValue::Symbol("OTHER".into())),
+                (
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(crate::model::Timeframe::Day1)),
+                ),
+                ("wait_for_close", InputValue::Toggle(false)),
+            ] {
+                inputs.push(serde_json::json!([
+                    id,
+                    serde_json::to_value(value).unwrap()
+                ]));
+            }
         };
         // A Doji record from before the trendless patterns dropped the trend rule.
         let trend_rule = |inputs: &mut Vec<serde_json::Value>| {
@@ -935,7 +957,7 @@ mod tests {
             Option<(&'a str, InputValue)>,
             bool,
         );
-        let cases: [Case<'_>; 15] = [
+        let cases: [Case<'_>; 16] = [
             // From before an input existed: the last one, which the chart adds after the study's
             // own, or one of the study's own, which comes before the chart's.
             (rsi, &last, None, true),
@@ -943,6 +965,8 @@ mod tests {
             (rsi, &last, wait(false), false),
             (restored, &last, None, true),
             (knoxville, &pivots, None, true),
+            // Stored while it listed Symbol and Interval, with values set.
+            (knoxville, &other_bars, None, true),
             (doji, &trend_rule, None, true),
             // Before the ADX smoothing had an input, the DI period set it too.
             (adx, &no_smoothing, None, true),

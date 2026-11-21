@@ -547,6 +547,11 @@ impl Indicator for TimePriceOpportunity {
     fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
     }
+    // The chart draws its profiles from its own bars.
+    fn draws_on_other_bars(&self) -> bool {
+        false
+    }
+
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
     }
