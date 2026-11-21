@@ -516,6 +516,7 @@ impl IndicatorPane {
             if let Some(index) = self.bar_index {
                 pos.x = mapping.idx_to_x(index);
                 if options.mode.snaps()
+                    && !indicator.plots_on_price()
                     && chart_rect.contains(pos)
                     && let Some(value) = crate::chart::rendering::snap_to_values(
                         pos.y,
