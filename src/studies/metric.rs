@@ -372,6 +372,7 @@ mod tests {
                 clock: BarClock::new(Timeframe::Ticks(1.try_into().unwrap())),
                 instrument: None,
                 timeframe: Timeframe::Min1,
+                chart: None,
             };
             study.update_data(&chart, 0, &[source]);
             for (i, want) in expected.into_iter().enumerate() {

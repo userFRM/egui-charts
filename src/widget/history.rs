@@ -2689,10 +2689,10 @@ mod tests {
         let main_alerts = SeriesAlerts {
             visible: false,
             labels: false,
-            color: Color32::RED,
+            color: Some(Color32::RED),
         };
         let other_alerts = SeriesAlerts {
-            color: Color32::BLUE,
+            color: Some(Color32::BLUE),
             ..SeriesAlerts::default()
         };
         chart.user_action(|chart| {
@@ -2789,7 +2789,7 @@ mod tests {
             }),
             ("main series alerts", |chart, earlier| {
                 let mut settings = chart.series_settings();
-                settings.alerts.color = Color32::RED;
+                settings.alerts.color = Some(Color32::RED);
                 chart.apply_series_settings(&settings);
                 vec![earlier]
             }),

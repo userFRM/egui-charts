@@ -2834,4 +2834,61 @@ mod tests {
                 .1,
         );
     }
+
+    /// A series alert colour saves and loads as picked, the default orange too, and a layout saved
+    /// while the default orange stood for the chart-wide colour still follows it.
+    #[test]
+    fn series_alert_colours_load_as_saved_and_as_drawn_before() {
+        use crate::widget::test_frames::chart;
+        use egui::Color32;
+        use serde_json::json;
+        let orange = Color32::from_rgb(255, 152, 0);
+        let blue = Color32::from_rgb(0, 0, 255);
+        let restored = |document: serde_json::Value| {
+            let mut chart = chart(&[10.0], &[11.0]);
+            let mut settings = chart.series_settings();
+            // Restoring must replace it.
+            settings.alerts.color = Some(Color32::RED);
+            chart.apply_series_settings(&settings);
+            chart
+                .restore(&serde_json::from_value(document).unwrap())
+                .unwrap();
+            chart.series_settings().alerts.color
+        };
+        for (picked, saved) in [
+            (None, json!({"visible": true, "labels": true})),
+            (
+                Some(orange),
+                json!({"visible": true, "labels": true, "own_color": [255, 152, 0, 255]}),
+            ),
+            (
+                Some(blue),
+                json!({"visible": true, "labels": true, "own_color": [0, 0, 255, 255]}),
+            ),
+        ] {
+            let mut source = chart(&[10.0], &[11.0]);
+            let mut settings = source.series_settings();
+            settings.alerts.color = picked;
+            source.apply_series_settings(&settings);
+            let document = serde_json::to_value(source.snapshot().unwrap()).unwrap();
+            assert_eq!(document["main_series_alerts"], saved, "{picked:?}");
+            assert_eq!(restored(document), picked, "{picked:?}");
+        }
+        // Saved before a series could keep the default orange as its own colour.
+        let mut document =
+            serde_json::to_value(chart(&[10.0], &[11.0]).snapshot().unwrap()).unwrap();
+        for (saved, loaded) in [
+            (
+                r#"{"visible":true,"labels":true,"color":[255,152,0,255]}"#,
+                None,
+            ),
+            (
+                r#"{"visible":true,"labels":true,"color":[0,0,255,255]}"#,
+                Some(blue),
+            ),
+        ] {
+            document["main_series_alerts"] = serde_json::from_str(saved).unwrap();
+            assert_eq!(restored(document.clone()), loaded, "{saved}");
+        }
+    }
 }

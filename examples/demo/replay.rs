@@ -830,8 +830,8 @@ impl DemoApp {
             _ => {}
         }
         match self.replay_results.show(ctx) {
-            StrategyReportAction::ExportCsv(csv) => self.save_text("replay-trades.csv", &csv),
-            StrategyReportAction::ExportSummaryCsv { filename, content } => {
+            StrategyReportAction::ExportCsv { filename, content }
+            | StrategyReportAction::ExportSummaryCsv { filename, content } => {
                 self.save_text(&filename, &content);
             }
             _ => {}
