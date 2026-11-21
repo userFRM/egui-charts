@@ -416,7 +416,7 @@ pub struct DemoApp {
 
     // A finished host-run sample, independent of subsequent chart navigation.
     strategy_report: Box<egui_charts::ui::strategy_report::StrategyTester>,
-    live_strategy: Option<(egui_charts::strategies::Backtest, String)>,
+    live_strategy: Option<strategy_live::LiveStrategy>,
     strategy_trade: Option<usize>,
     strategy_session: SessionType,
     /// The symbol and tick size the tester's price increment last followed.
@@ -1253,7 +1253,7 @@ impl DemoApp {
         self.chart.prepare_alert(&mut self.alert_dialog.alert);
     }
 
-    /// Offers the studies' outputs and every level of the drawings as alert sources.
+    /// Offers study outputs, drawing levels and live strategy runs as alert sources.
     fn list_alert_sources(&mut self) {
         let inputs = self.chart.alert_inputs();
         self.alert_dialog.sources = inputs.sources.clone();
@@ -1264,6 +1264,11 @@ impl DemoApp {
             .lists()
             .iter()
             .map(|list| (list.name.clone(), list.name.clone()))
+            .collect();
+        self.alert_dialog.strategy_runs = self
+            .live_strategy
+            .iter()
+            .map(|live| (live.id.clone(), live.run.name.clone()))
             .collect();
     }
 
@@ -1484,8 +1489,10 @@ impl DemoApp {
             AlertDialogAction::Create(mut alert) => {
                 self.chart.prepare_alert(&mut alert);
                 self.alerts.save(*alert);
+                self.strategy_alert_closed(true);
             }
-            AlertDialogAction::Cancel | AlertDialogAction::None => {}
+            AlertDialogAction::Cancel => self.strategy_alert_closed(false),
+            AlertDialogAction::None => {}
             _ => {}
         }
 
