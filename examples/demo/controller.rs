@@ -5078,10 +5078,7 @@ mod tests {
         assert!(h.state().open_panel == Some(SidePanel::News));
         h.get_by_role_and_label(egui::Role::Label, &story.headline);
         h.get_by_label(&story.body);
-        h.get_by_label(&format!(
-            "{} UTC · Demo Wire",
-            time.format("%b %-d, %H:%M")
-        ));
+        h.get_by_label(&format!("{} UTC · Demo Wire", time.format("%b %-d, %H:%M")));
     }
 
     /// The menu actions reach the other chart, which lacks nothing, without a prompt; a chart
