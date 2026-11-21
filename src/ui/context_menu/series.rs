@@ -146,7 +146,10 @@ impl SeriesContextMenu {
                     l10n::format_text(
                         ctx,
                         "Add alert on {name} at {price}…",
-                        &[("name", symbol.as_str()), ("price", alert_price_str.as_str())],
+                        &[
+                            ("name", symbol.as_str()),
+                            ("price", alert_price_str.as_str()),
+                        ],
                     ),
                     SeriesContextMenuAction::AddAlert,
                 )
