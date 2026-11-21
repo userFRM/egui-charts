@@ -251,12 +251,12 @@ impl Drawing {
         )
     }
 
-    /// The stored configuration, or the tool's defaults without building them each frame.
+    /// The stored configuration, or the saved defaults without building them each frame.
     pub(crate) fn gann_config(&self) -> &GannConfig {
         static BOX: LazyLock<GannConfig> =
             LazyLock::new(|| GannConfig::for_tool(DrawingToolType::GannBox));
         static SQUARE: LazyLock<GannConfig> =
-            LazyLock::new(|| GannConfig::for_tool(DrawingToolType::GannSquare));
+            LazyLock::new(|| GannConfig::saved_default(DrawingToolType::GannSquare));
         static FAN: LazyLock<GannConfig> =
             LazyLock::new(|| GannConfig::for_tool(DrawingToolType::GannFan));
         self.gann.as_ref().unwrap_or_else(|| match self.tool_type {
@@ -1405,6 +1405,48 @@ mod tests {
                     d.update_screen_coords(|b| b * 10.0, |p| 300.0 - p as f32);
                 }
                 assert_eq!(painted(&loaded), painted(&drawing), "{tool:?} {saved}");
+            }
+        }
+
+        // A square saved on main without an Inputs edit has no explicit configuration.
+        const SQUARE: &str = r#"{"label":null,"pane":null,"selectable":true,"saveable":true,"listed":true,"user_edit_enabled":true,"group":null,"folder":[],"custom_tool":null,"custom_settings":null,"tool_type":"GannSquare","screen_anchor":null,"color":[41,98,255,255],"stroke_width":2.0,"text":null,"post":null,"line_style":"Solid","fill_color":null,"locked":false,"visible":true,"font_size":14.0,"font_weight":"Normal","italic":false,"text_color":null,"background":true,"border":true,"border_color":null,"text_wrap":false,"text_wrap_width":200.0,"text_follows_zoom":false,"text_zoom_spacing":null,"note_text_style":null,"extend_left":false,"extend_right":false,"arrow_start_style":"None","arrow_end_style":"None","timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"price_axis_label":true,"time_axis_label":true,"line_measurements":{"persistent":false,"price_change":false,"percent_change":false,"pip_change":false,"bar_count":false,"elapsed_time":false,"length":false,"inclination":false,"midpoint":false,"price_labels":false,"position":"Right","text_horizontal_align":"Center","text_vertical_align":"Bottom","text_orientation":"Vertical","across_panes":false},"range_settings":{"price_change":true,"percent_change":true,"pip_change":true,"bar_count":true,"elapsed_time":true,"volume":true,"text_color":null,"font_size":12.0,"background":true,"background_color":null,"shadow_color":[0,0,0,0],"border":true,"border_color":null,"border_width":null,"border_style":null,"extend_top":false,"extend_bottom":false},"position_size":null,"position_sizing":{"point_value":1.0,"lot_size":1.0,"quantity_step":0.0,"leverage":1.0},"position_readout":{"persistent":false,"condensed":false,"account_currency":null,"conversion_rate":null,"quantity_decimals":null},"position_target_color":null,"position_stop_color":null,"position_style":{"line_color":null,"line_width":1.0,"text_color":null,"font_size":12.0,"label_background":true,"label_color":null,"fill":true,"border":false,"border_color":[102,123,139,255]},"marker":{"show_text":true,"glyph":"\ud83d\ude42","show_glyph":false,"glyph_color":null},"fib_config":null,"volume_profile":null,"regression_trend":null,"vwap":null,"gann":null,"ghost_feed":null,"channel_midline":false,"anchor_price_style":null,"middle_line":{"color":null,"width":1.0,"line_style":"Dashed"},"theme_shade":true,"image":null,"glyph_angle":0.0,"closed":false,"pitchfork":null,"elliott_degree":"Minor","elliott_show_wave":true,"bars_pattern":null,"projection":null,"forecast":null,"z_order":0}"#;
+        for tool in [DrawingToolType::GannSquare, DrawingToolType::GannFixed] {
+            for config in ["null", "{}"] {
+                let mut file: serde_json::Value = serde_json::from_str(SQUARE).unwrap();
+                file["tool_type"] = serde_json::to_value(tool).unwrap();
+                file["gann"] = serde_json::from_str(config).unwrap();
+                let mut drawing: Drawing = serde_json::from_value(file).unwrap();
+                drawing.chart_points =
+                    vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(4.0, 140.0)];
+                drawing.update_screen_coords(|b| b * 10.0, |p| 300.0 - p as f32);
+                let shapes = painted(&drawing);
+                let arcs: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Path(path) if !path.closed && path.stroke.width > 0.0 => {
+                            Some(path)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(arcs.len(), 10, "{tool:?} {config}: saved arc count");
+                // At 1.5 units an arc would start at x = 12 (square) or 60 (fixed).
+                let extra = Pos2::new(
+                    if tool == DrawingToolType::GannFixed {
+                        60.0
+                    } else {
+                        12.0
+                    },
+                    200.0,
+                );
+                assert!(
+                    arcs.iter().all(|arc| arc.points[0].distance(extra) > 0.01),
+                    "{tool:?} {config}: unexpected 1.5 arc"
+                );
+                assert_eq!(
+                    drawing.gann_config().fan_ratios[0].color,
+                    [128, 128, 128, 255]
+                );
             }
         }
 

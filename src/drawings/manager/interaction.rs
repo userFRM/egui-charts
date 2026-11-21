@@ -1849,6 +1849,43 @@ mod tests {
             assert_eq!(drawing.color, color);
         }
 
+        for tool in [DrawingToolType::GannSquare, DrawingToolType::GannFixed] {
+            let mut drawing = place(&mut manager, tool);
+            let config = drawing
+                .gann
+                .as_ref()
+                .expect("new square stores its defaults");
+            assert_eq!(config.arc_ratios.len(), 11, "{tool:?}");
+            assert_eq!(config.arc_ratios[2].value, 1.5);
+            assert_eq!(config.fan_ratios[0].color, [179, 157, 219, 255]);
+
+            // A template and a per-tool default saved without settings keep the former look.
+            for gann in [serde_json::Value::Null, serde_json::json!({})] {
+                let template = crate::drawings::DrawingTemplate::from_drawing(&drawing);
+                let mut saved = serde_json::to_value(template).unwrap();
+                saved["settings"]["gann"] = gann;
+                let template: crate::drawings::DrawingTemplate =
+                    serde_json::from_value(saved).unwrap();
+                template.apply_to(&mut drawing).unwrap();
+                assert_eq!(
+                    drawing.gann_config().arc_ratios.len(),
+                    10,
+                    "{tool:?}: template"
+                );
+                manager.tool_defaults.insert(tool, template);
+                let placed = place(&mut manager, tool);
+                assert_eq!(
+                    placed.gann_config().arc_ratios.len(),
+                    10,
+                    "{tool:?}: saved default"
+                );
+                assert_eq!(
+                    placed.gann_config().fan_ratios[0].color,
+                    [128, 128, 128, 255]
+                );
+            }
+        }
+
         // Closure belongs to the outline, so a saved default cannot close a new polyline.
         let mut closed = Drawing::new(0, DrawingToolType::Polyline);
         closed.closed = true;
