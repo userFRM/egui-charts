@@ -189,6 +189,9 @@ impl StoredDrawing {
         }) {
             return Some("image.size".into());
         }
+        if d.table.as_ref().is_some_and(|table| !table.is_valid()) {
+            return Some("table".into());
+        }
         if !FONT_SIZES.contains(&d.font_size) {
             return Some("font_size".into());
         }
@@ -1627,6 +1630,20 @@ mod tests {
                 }],
                 ..Default::default()
             });
+            drawing.table = Some(Box::new(crate::drawings::TableConfig {
+                column_widths: vec![None, Some(120.5)],
+                row_heights: vec![Some(30.0)],
+                cells: vec![
+                    vec![],
+                    vec![crate::drawings::TableCellStyle {
+                        text_color: Some([1, 2, 3, 4]),
+                        background: Some([5, 6, 7, 8]),
+                        horizontal_align: Some(crate::drawings::LineTextHorizontalAlign::Right),
+                        vertical_align: Some(crate::drawings::LineTextVerticalAlign::Top),
+                    }],
+                ],
+                screen_anchored: true,
+            }));
             drawing.forecast = Some(crate::drawings::ForecastStyle {
                 start_text: None,
                 target_border: Some([11, 12, 13, 14]),
@@ -3213,6 +3230,16 @@ mod tests {
                         .size = Some([f32::NAN, 1.0])
                 },
                 "invalid image.size",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .table
+                        .get_or_insert_with(Default::default)
+                        .column_widths = vec![Some(f32::NAN)]
+                },
+                "invalid table",
             ),
             (
                 |s| {

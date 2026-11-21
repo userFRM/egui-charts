@@ -13,7 +13,8 @@ use super::{
     ElliottDegree, FibonacciConfig, FontWeight, ForecastStyle, GANN_SQUARE_UNITS, GannConfig,
     GhostFeedConfig, ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle,
     PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
-    ProjectionConfig, RangeSettings, RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    ProjectionConfig, RangeSettings, RegressionTrendConfig, TableConfig, TimeframeVisibility,
+    VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -204,9 +205,9 @@ pub struct Drawing {
     #[serde(skip)]
     pub completed: bool,
     /// Optional annotation content, preserved with the drawing. Tables use one row per line
-    /// and tab-separated cells. Images use an image URI resolved by the host's egui image
-    /// loaders. Posts and ideas use the first line as author or title and the rest as body,
-    /// when they have no [`post`](Self::post).
+    /// and tab-separated cells, styled by [`table`](Self::table). Images use an image URI
+    /// resolved by the host's egui image loaders. Posts and ideas use the first line as author or
+    /// title and the rest as body, when they have no [`post`](Self::post).
     pub text: Option<String>,
     /// The post or idea a post or idea drawing shows: its link and the content the host
     /// resolved it to through [`Posts`](crate::services::Posts). The content is saved with the
@@ -381,6 +382,12 @@ pub struct Drawing {
     /// Frame size and opacity of the image tool; `None` uses the defaults.
     #[serde(default)]
     pub image: Option<ImageConfig>,
+    /// Column widths, row heights, cell styles and the Anchor to screen switch of a table, by
+    /// the rows and columns of its [`text`](Self::text). `None`, as on tables saved before these
+    /// settings, fits each column to its text and each row to one line, with no cell styles, on
+    /// the table's bar and price. Other tools ignore it. Boxed so their drawing copies stay small.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<Box<TableConfig>>,
     /// Clockwise rotation of an icon, emoji or sticker about its centre, in degrees; 0 is upright.
     /// Its handles, selection frame and hit area rotate with it. Other tools ignore this field.
     /// Drawings saved before this setting load upright.
@@ -852,6 +859,7 @@ impl Drawing {
             middle_line: MiddleLineStyle::default(),
             theme_shade: tool_type != DrawingToolType::ProjectionTool,
             image: None,
+            table: None,
             glyph_angle: 0.0,
             closed: false,
             gann: matches!(
@@ -943,6 +951,25 @@ impl Drawing {
         match &self.projection {
             Some(config) => std::borrow::Cow::Borrowed(config),
             None => std::borrow::Cow::Owned(ProjectionConfig::legacy(self)),
+        }
+    }
+
+    /// Whether the drawing keeps its place in its pane while the chart scrolls and zooms:
+    /// anchored text, and a table anchored to the screen.
+    pub(crate) fn pins_to_pane(&self) -> bool {
+        self.tool_type == DrawingToolType::AnchoredText
+            || (self.tool_type == DrawingToolType::Table
+                && self
+                    .table
+                    .as_ref()
+                    .is_some_and(|table| table.screen_anchored))
+    }
+
+    /// The table settings in use: its own, or the defaults.
+    pub(crate) fn table_config(&self) -> std::borrow::Cow<'_, TableConfig> {
+        match &self.table {
+            Some(config) => std::borrow::Cow::Borrowed(config),
+            None => std::borrow::Cow::Owned(TableConfig::default()),
         }
     }
 
@@ -1144,16 +1171,18 @@ impl Drawing {
         }
     }
 
-    /// Rebuilds anchored text coordinates relative to the pane. Call after
-    /// `update_screen_coords`; other tools retain their chart coordinates. A text without a pane
-    /// position, such as an older drawing or one just moved, takes one the first time its point
-    /// is drawn inside `pane`, and stays on its bar and price until then. Resizing preserves the
-    /// width and height fractions.
+    /// Rebuilds the pane position of anchored text and of a table anchored to the screen. Call
+    /// after `update_screen_coords`; other tools retain their chart coordinates. A text or table
+    /// without a pane position, such as an older drawing or one just moved, takes one the first
+    /// time its point is drawn inside `pane`, and stays on its bar and price until then. Resizing
+    /// preserves the width and height fractions. A table not anchored to the screen drops the
+    /// pane position it still holds.
     pub fn update_pane_coords(&mut self, pane: egui::Rect) {
-        if self.tool_type != DrawingToolType::AnchoredText
-            || !pane.is_finite()
-            || pane.width() <= 0.0
-            || pane.height() <= 0.0
+        // A table taken off the screen keeps the bar and price it was last drawn at.
+        if self.tool_type == DrawingToolType::Table && !self.pins_to_pane() {
+            self.screen_anchor = None;
+        }
+        if !self.pins_to_pane() || !pane.is_finite() || pane.width() <= 0.0 || pane.height() <= 0.0
         {
             return;
         }
