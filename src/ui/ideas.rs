@@ -129,6 +129,9 @@ pub struct IdeaPage {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct IdeaDraft {
+    /// What is published: a short post when the feed shows the Short posts tab, otherwise an
+    /// idea. A short post has an empty title.
+    pub kind: IdeaKind,
     /// The title.
     pub title: String,
     /// The text.
@@ -216,6 +219,7 @@ impl IdeasPanel {
     pub fn new() -> Self {
         Self {
             draft: IdeaDraft {
+                kind: IdeaKind::Idea,
                 title: String::new(),
                 body: String::new(),
                 symbol: String::new(),
@@ -245,9 +249,11 @@ impl IdeasPanel {
         self.can_browse = available;
     }
 
-    /// Shows the entries of `kind` in the feed, as the tabs above it do.
+    /// Shows the entries of `kind` in the feed, as the tabs above it do. On Short posts the
+    /// composer writes a short post.
     pub fn set_feed_kind(&mut self, kind: IdeaKind) {
         self.filter = kind;
+        self.draft.kind = draft_kind(kind);
     }
 
     /// Sets the instrument and interval the draft is about, normally those of the chart.
@@ -319,11 +325,15 @@ impl IdeasPanel {
 
     fn composer(&mut self, ui: &mut Ui) -> IdeasAction {
         let weak = ui.visuals().weak_text_color();
-        ui.add(
-            TextEdit::singleline(&mut self.draft.title)
-                .hint_text(l10n::text(ui.ctx(), "Title"))
-                .desired_width(f32::INFINITY),
-        );
+        self.draft.kind = draft_kind(self.filter);
+        let post = self.draft.kind == IdeaKind::ShortPost;
+        if !post {
+            ui.add(
+                TextEdit::singleline(&mut self.draft.title)
+                    .hint_text(l10n::text(ui.ctx(), "Title"))
+                    .desired_width(f32::INFINITY),
+            );
+        }
         ui.add(
             TextEdit::multiline(&mut self.draft.body)
                 .hint_text(l10n::text(ui.ctx(), "What is your idea?"))
@@ -366,9 +376,8 @@ impl IdeasPanel {
             l10n::text(ui.ctx(), "Attach chart image"),
         );
         let pending = self.publish == Publish::Pending;
-        let ready = !self.draft.title.trim().is_empty()
-            && !self.draft.body.trim().is_empty()
-            && !self.draft.symbol.is_empty();
+        let ready = !self.draft.body.trim().is_empty()
+            && (post || (!self.draft.title.trim().is_empty() && !self.draft.symbol.is_empty()));
         let mut action = IdeasAction::None;
         if Button::new("Publish")
             .enabled(ready && !pending)
@@ -376,7 +385,12 @@ impl IdeasPanel {
             .clicked()
         {
             self.publish = Publish::Pending;
-            action = IdeasAction::Publish(self.draft.clone());
+            let mut draft = self.draft.clone();
+            if post {
+                // The title typed on the Ideas tab stays in the panel for an idea.
+                draft.title.clear();
+            }
+            action = IdeasAction::Publish(draft);
         }
         match &self.publish {
             Publish::Idle => {}
@@ -500,6 +514,16 @@ impl IdeasPanel {
     }
 }
 
+/// What the composer publishes while the feed shows `filter`: a short post on Short posts, an idea
+/// on every other tab.
+fn draft_kind(filter: IdeaKind) -> IdeaKind {
+    if filter == IdeaKind::ShortPost {
+        IdeaKind::ShortPost
+    } else {
+        IdeaKind::Idea
+    }
+}
+
 /// The tags of a comma-separated list: trimmed, without empty ones, each once in the order typed.
 fn parse_tags(text: &str) -> Vec<String> {
     let mut tags: Vec<String> = Vec::new();
@@ -578,26 +602,38 @@ mod tests {
     }
 
     /// Whitespace is not a title or a description, and a disabled Publish keeps the draft idle.
+    /// A short post needs only its text, and is sent without a title or symbol.
     #[test]
     fn publish_waits_for_a_title_and_a_text() {
-        for (title, body, ready) in [
-            ("", "Above the range", false),
-            ("  ", "Above the range", false),
-            ("Breakout", " ", false),
-            ("Breakout", "Above the range", true),
+        for (kind, title, body, symbol, ready) in [
+            (IdeaKind::Idea, "", "Above the range", "AAPL", false),
+            (IdeaKind::Idea, "  ", "Above the range", "AAPL", false),
+            (IdeaKind::Idea, "Breakout", " ", "AAPL", false),
+            (IdeaKind::Idea, "Breakout", "Above the range", "", false),
+            (IdeaKind::Idea, "Breakout", "Above the range", "AAPL", true),
+            (IdeaKind::ShortPost, "", "Quick note", "", true),
+            (IdeaKind::ShortPost, "Ignored title", "Quick note", "AAPL", true),
+            (IdeaKind::ShortPost, "", "  ", "AAPL", false),
         ] {
             let mut panel = IdeasPanel::new();
             panel.set_publishing(true);
-            panel.set_context("AAPL", "1D");
+            panel.set_browsing(true);
+            panel.set_feed_kind(kind);
+            panel.set_context(symbol, "1D");
             panel.draft.title = title.into();
             panel.draft.body = body.into();
-            let expected = panel.draft().clone();
+            let mut expected = panel.draft().clone();
+            assert_eq!(expected.kind, kind);
             assert_eq!(expected.direction, IdeaDirection::Neutral);
             assert!(expected.tags.is_empty());
             assert!(expected.public);
+            if kind == IdeaKind::ShortPost {
+                expected.title.clear();
+            }
             let action = click(&mut panel, "Publish", None);
             if ready {
                 assert_eq!(action, IdeasAction::Publish(expected));
+                assert_eq!(panel.draft().title, title);
             } else {
                 assert_eq!(action, IdeasAction::None, "title={title:?}, body={body:?}");
                 assert_eq!(panel.publish, Publish::Idle);

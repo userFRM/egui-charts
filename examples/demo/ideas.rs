@@ -64,7 +64,7 @@ impl DemoIdeas {
 impl DemoApp {
     fn publish_idea(&mut self, ctx: &egui::Context, draft: &IdeaDraft) {
         let id = format!("demo-{}", self.ideas.next);
-        let mut idea = Idea::new(&id, IdeaKind::Idea, &draft.body, "You", Utc::now());
+        let mut idea = Idea::new(&id, draft.kind, &draft.body, "You", Utc::now());
         idea.title = draft.title.clone();
         idea.symbol = draft.symbol.clone();
         idea.interval = draft.interval.clone();
@@ -87,8 +87,12 @@ impl DemoApp {
         self.ideas.next += 1;
         self.ideas.add(idea);
         self.ideas.panel.publish_succeeded(&id, None);
-        self.notification_host
-            .notify_post(format!("Idea published: {}", draft.title), &id);
+        let title = if draft.kind == IdeaKind::ShortPost {
+            "Post published".to_owned()
+        } else {
+            format!("Idea published: {}", draft.title)
+        };
+        self.notification_host.notify_post(title, &id);
     }
 
     pub(super) fn post_image(
