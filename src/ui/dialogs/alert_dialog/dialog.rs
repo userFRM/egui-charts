@@ -1,6 +1,7 @@
 //! Typed alert editing. Hosts supply output identifiers, watchlists and optional preset storage.
 
 use crate::localization as l10n;
+use crate::ui::widget_bar::panels::watchlist::DEFAULT_LIST;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -744,19 +745,18 @@ impl AlertDialog {
             egui::ComboBox::from_id_salt("alert_watchlist")
                 .width(ui.spacing().text_edit_width)
                 .truncate()
-                .selected_text(l10n::text(
-                    ui.ctx(),
-                    self.alert
-                        .watchlist
-                        .as_ref()
-                        .and_then(|id| {
-                            self.watchlists
-                                .iter()
-                                .find(|(key, _)| key == id)
-                                .map(|(_, name)| name.as_str())
-                        })
-                        .unwrap_or(self.alert.watchlist.as_deref().unwrap_or("One symbol")),
-                ))
+                .selected_text(match &self.alert.watchlist {
+                    // An alert on a list the host no longer offers shows the list's id.
+                    Some(id) => self
+                        .watchlists
+                        .iter()
+                        .find(|(key, _)| key == id)
+                        .map_or_else(
+                            || id.clone(),
+                            |(_, name)| l10n::saved_name(ui.ctx(), name, DEFAULT_LIST),
+                        ),
+                    None => l10n::text(ui.ctx(), "One symbol"),
+                })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
                         &mut self.alert.watchlist,
@@ -767,7 +767,7 @@ impl AlertDialog {
                         ui.selectable_value(
                             &mut self.alert.watchlist,
                             Some(id.clone()),
-                            l10n::text(ui.ctx(), name),
+                            l10n::saved_name(ui.ctx(), name, DEFAULT_LIST),
                         );
                     }
                 })

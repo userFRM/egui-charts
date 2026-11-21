@@ -215,6 +215,11 @@ impl std::fmt::Debug for WatchlistPanel {
     }
 }
 
+/// The name of the list a panel starts with when the host gives none.
+pub(crate) const DEFAULT_LIST: &str = "Watchlist";
+/// The title of a section the user adds.
+const NEW_SECTION: &str = "New section";
+
 impl Default for WatchlistPanel {
     fn default() -> Self {
         Self::new(Vec::new())
@@ -225,7 +230,7 @@ impl WatchlistPanel {
     /// A panel showing the first of `lists`, or one empty list when there are none.
     pub fn new(mut lists: Vec<Watchlist>) -> Self {
         if lists.is_empty() {
-            lists.push(Watchlist::new("Watchlist"));
+            lists.push(Watchlist::new(DEFAULT_LIST));
         }
         Self {
             lists,
@@ -498,7 +503,7 @@ impl WatchlistPanel {
                         "{0} flagged",
                         &[("0", l10n::text(ui.ctx(), format!("{flag:?}")))],
                     ),
-                    None => l10n::text(ui.ctx(), lists[*active].name.clone()),
+                    None => l10n::saved_name(ui.ctx(), &lists[*active].name, DEFAULT_LIST),
                 };
                 let title = LayoutJob::single_section(
                     name,
@@ -543,7 +548,7 @@ impl WatchlistPanel {
                     if ui
                         .selectable_label(
                             flag_filter.is_none() && index == *active,
-                            l10n::text(ui.ctx(), &list.name),
+                            l10n::saved_name(ui.ctx(), &list.name, DEFAULT_LIST),
                         )
                         .clicked()
                     {
@@ -660,7 +665,7 @@ impl WatchlistPanel {
             if ui.button(l10n::text(ui.ctx(), "Add section")).clicked() {
                 lists[*active]
                     .items
-                    .push(WatchlistItem::Section("New section".to_owned()));
+                    .push(WatchlistItem::Section(NEW_SECTION.to_owned()));
             }
             ui.checkbox(
                 &mut lists[*active].show_descriptions,
@@ -1015,7 +1020,7 @@ impl WatchlistPanel {
                     match &mut list.items[index] {
                         WatchlistItem::Section(title) => {
                             let is_collapsed = collapsed.contains(&index);
-                            let translated_label = l10n::text(ui.ctx(), &*title);
+                            let translated_label = l10n::saved_name(ui.ctx(), title, NEW_SECTION);
                             response.widget_info(|| {
                                 egui::WidgetInfo::labeled(
                                     egui::Role::Button,
@@ -1057,7 +1062,7 @@ impl WatchlistPanel {
                             )
                             .add(
                                 Label::new(
-                                    RichText::new(l10n::text(ui.ctx(), title.to_uppercase()))
+                                    RichText::new(translated_label.to_uppercase())
                                         .font(small.clone())
                                         .color(theme.ui.text_secondary),
                                 )
