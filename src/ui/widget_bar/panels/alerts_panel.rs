@@ -1249,7 +1249,10 @@ impl AlertsPanel {
         }
     }
 
-    /// Render the host's alerts or trigger log after `poll`, returning creation or export intents.
+    /// Render the host's alerts or trigger log after [`poll`](Self::poll), returning host intents.
+    /// Clicking a row selects and focuses it; arrows and Space move the selection. On alert rows,
+    /// Enter or a double click returns [`EditAlert`](AlertPanelAction::EditAlert), Delete asks
+    /// before removal, and a secondary click or long press offers the row's actions.
     pub fn show(&mut self, ui: &mut Ui) -> AlertPanelAction {
         let mut action = AlertPanelAction::None;
         let arrows = EventFilter {
