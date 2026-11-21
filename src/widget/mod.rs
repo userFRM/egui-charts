@@ -757,6 +757,7 @@ impl Chart {
             && bars >= 0.0
             && (options.right_offset != bars || options.right_offset_pixels.is_some())
         {
+            self.history.clear_view_restore();
             options.right_offset = bars;
             options.right_offset_pixels = None;
             let scale = self.state.time_scale_mut();
@@ -826,7 +827,11 @@ impl Chart {
     pub fn zoom_back(&mut self) -> bool {
         self.pending_scroll_time = None;
         self.tracking_mode_active = false;
-        self.state.pop_zoom_state()
+        let popped = self.state.pop_zoom_state();
+        if popped {
+            self.history.clear_view_restore();
+        }
+        popped
     }
 
     /// Returns `true` if a box zoom was completed in the most recent frame. Box-zoom mode has
@@ -1123,6 +1128,12 @@ impl Chart {
             new.right_offset,
             new.right_offset_pixels,
         ) {
+            if new.bar_spacing != old.bar_spacing
+                || (new.right_offset, new.right_offset_pixels)
+                    != (old.right_offset, old.right_offset_pixels)
+            {
+                self.history.clear_view_restore();
+            }
             let scale = self.state.time_scale_mut();
             let offset = scale.right_offset_precise();
             let spacing = if new.bar_spacing == old.bar_spacing {
