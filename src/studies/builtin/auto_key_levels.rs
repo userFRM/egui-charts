@@ -1259,6 +1259,7 @@ mod tests {
                         clock: BarClock::new(Timeframe::Min1),
                         instrument: None,
                         timeframe: Timeframe::Min1,
+                        chart: None,
                     }],
                 );
                 assert_eq!(

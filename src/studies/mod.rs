@@ -63,7 +63,7 @@
 mod builtin;
 mod custom;
 mod error;
-pub use crate::data::{StudyData, StudyDataRequest};
+pub use crate::data::{StudyChart, StudyData, StudyDataRequest};
 pub use error::{RefusedStudy, StudyError};
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]

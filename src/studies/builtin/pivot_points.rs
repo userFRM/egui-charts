@@ -1177,6 +1177,7 @@ mod tests {
                 clock: crate::model::BarClock::new(Timeframe::Day1),
                 instrument: None,
                 timeframe: Timeframe::Day1,
+                chart: None,
             }],
         );
         // Traditional levels by hand from H=13,L=7,C=11,P=31/3 and range=6:
@@ -1216,6 +1217,7 @@ mod tests {
                     clock: crate::model::BarClock::new(Timeframe::Day1),
                     instrument: None,
                     timeframe: Timeframe::Day1,
+                    chart: None,
                 }],
             );
             assert!((pivots.values().value(0, 2).unwrap() - p).abs() < 1e-9);

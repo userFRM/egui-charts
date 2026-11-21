@@ -125,7 +125,7 @@ pub use replay::{MarketEvent, ReplayClock, ReplayDriver, ReplayEvent};
 #[cfg(feature = "studies")]
 pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session, resample_with_session_hours};
-pub use study::{StudyData, StudyDataRequest};
+pub use study::{StudyChart, StudyData, StudyDataRequest};
 pub use targets::PriceTargets;
 pub use trades::{CombinedTrade, ConsumedOrder, SizeBasis, combine_trades};
 pub use volume_profile::{
