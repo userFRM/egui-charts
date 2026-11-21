@@ -969,10 +969,11 @@ impl Chart {
         // Right-click is reserved for context menu, zoom uses left-click when mode is active
         self.zoom_just_applied = self.handle_box_zoom(
             ui,
-            &response,
+            &time_response,
             chart_rect,
             chart_width,
             self.zoom_mode_active,
+            owns_drag,
         );
         if self.time_scale_view() != view_before_input {
             // Pointer navigation replaces an undo still waiting for its bars or axis width.
@@ -983,8 +984,13 @@ impl Chart {
             self.zoom_mode_active = false;
         }
 
-        // Set zoom-in cursor when zoom mode is active
-        if self.zoom_mode_active && response.hovered() {
+        // The zoom-in cursor over the plots, where a press starts a selection, and while one runs.
+        let selection_plot = ui
+            .input(|i| i.pointer.hover_pos())
+            .is_some_and(|pos| self.box_zoom_plot(pos, chart_rect).is_some());
+        if self.zoom_mode_active
+            && (self.box_zoom.active || (time_response.hovered() && selection_plot))
+        {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ZoomIn);
         }
         // Axes that a drag would zoom show its direction, keeping the axis where it began.
@@ -3638,12 +3644,14 @@ impl Chart {
         // the menu closes.
         #[cfg(feature = "drawings")]
         let eraser_mode = self.drawings.eraser_mode;
-        // A handle or body drag runs without an active tool and keeps the readout off the drawing.
+        // A handle or body drag runs without an active tool and keeps the readout off the drawing,
+        // as a box-zoom selection keeps it off the bars it selects.
         #[cfg(feature = "drawings")]
-        let drawing_interaction_active =
-            self.drawings.active_tool.is_some() || self.drawings.dragging_handle.is_some();
+        let drawing_interaction_active = self.box_zoom.active
+            || self.drawings.active_tool.is_some()
+            || self.drawings.dragging_handle.is_some();
         #[cfg(not(feature = "drawings"))]
-        let drawing_interaction_active = false;
+        let drawing_interaction_active = self.box_zoom.active;
         let menu_open = self.menu_open || response.secondary_clicked();
         self.menu_open = menu_open;
         let mut crosshair_tags = [None; 2];
@@ -4526,8 +4534,10 @@ impl Chart {
             );
         }
 
-        // Draw box zoom rect
-        crate::widget::pan_zoom::render_box_zoom(&painter, &self.box_zoom);
+        // Over the other panes, which are painted after this frame, the panes draw it.
+        if shared_time_axis.is_none() {
+            crate::widget::pan_zoom::render_box_zoom(&painter, &self.box_zoom);
+        }
 
         if let Some((nav, buttons)) = navigation {
             self.paint_navigation(ui, nav, buttons);
