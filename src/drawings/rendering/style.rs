@@ -47,6 +47,15 @@ impl egui::cache::ComputerMut<(DrawingToolType, [Color32; 3]), Shades> for Theme
     fn compute(&mut self, (tool, [text, chart, panel]): (DrawingToolType, [Color32; 3])) -> Shades {
         let mut shades = Vec::new();
         let mut drawings = vec![Drawing::new(0, tool)];
+        // Saved squares keep the shades of their former fan colours.
+        if matches!(
+            tool,
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed
+        ) {
+            let mut old = Drawing::new(0, tool);
+            old.gann = None;
+            drawings.push(old);
+        }
         // Drawings saved before the current default keep their former colour's shade.
         if let Some(former) = Drawing::former_default_color(tool) {
             let mut old = Drawing::new(0, tool);
@@ -411,7 +420,11 @@ impl Drawing {
                 stroke
             }
             Shape::Circle(c) => {
-                if dash.is_none() || c.stroke.is_empty() {
+                // Anchor outlines stay solid, just like the forecast's card frames.
+                if dash.is_none()
+                    || c.stroke.is_empty()
+                    || self.tool_type == DrawingToolType::Forecast
+                {
                     return;
                 }
                 path = ellipse_arc(
