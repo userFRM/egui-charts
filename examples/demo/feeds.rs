@@ -1486,7 +1486,7 @@ mod tests {
         app.activate_chart_slot(0);
         app.live.set_paused(true);
         let now = app.live.now();
-        app.handle_layout_action(LayoutAction::CreateNew);
+        app.handle_layout_action(LayoutAction::CreateNew("Second".into()));
         app.switch_symbol("FOREXA");
         app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "STOCKA")]);
         app.watchlist.set_service(app.quotes.clone());

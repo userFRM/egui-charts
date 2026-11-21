@@ -1617,7 +1617,7 @@ mod tests {
                 (
                     S::Save,
                     "Create new layout",
-                    TopToolbarAction::Layout(LayoutAction::CreateNew),
+                    TopToolbarAction::Layout(LayoutAction::CreateNew("Desk".into())),
                 ),
                 (
                     S::Save,
@@ -1833,7 +1833,11 @@ mod tests {
                 let (mut action, _, _) = frame(vec![click(pos, false)]);
                 if matches!(
                     expected,
-                    TopToolbarAction::Layout(LayoutAction::Rename(_, _) | LayoutAction::SaveAs(_))
+                    TopToolbarAction::Layout(
+                        LayoutAction::Rename(_, _)
+                            | LayoutAction::SaveAs(_)
+                            | LayoutAction::CreateNew(_)
+                    )
                 ) {
                     let (_, _, labels) = frame(vec![]);
                     assert!(

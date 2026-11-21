@@ -50,14 +50,27 @@ pub enum LayoutAction {
     OpenLayout,
     /// Request a chart image download.
     DownloadImage,
-    /// Request a new layout.
-    CreateNew,
+    /// Open a new layout under the name the user entered in the menu's name field: trimmed, not
+    /// empty, and not the name of a layout in [`LayoutMenu::layouts`]. The host opens it under
+    /// that name, with a numeric suffix if one of its open, unsaved layouts already has it.
+    CreateNew(String),
     /// Open the named layout.
     Open(String),
     /// Delete the named layout.
     Delete(String),
     /// Rename the current layout from the first name to the second.
     Rename(String, String),
+}
+
+/// What the menu's name field names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Naming {
+    /// The current layout, under a new name.
+    Rename,
+    /// A copy of the current layout.
+    SaveAs,
+    /// A new layout.
+    Create,
 }
 
 #[derive(Debug)]
@@ -92,7 +105,10 @@ pub struct LayoutMenu {
     /// [`UserSettings::layout_favorites`](crate::services::UserSettings::layout_favorites).
     pub favorites: Vec<String>,
     favorites_only: bool,
-    editing: Option<bool>,
+    /// What the name field is open for.
+    editing: Option<Naming>,
+    /// Whether the name field still waits for the keyboard focus it takes on opening.
+    focus_name: bool,
     new_name: String,
     storage: Option<Arc<dyn Storage>>,
     inbox: Arc<Inbox>,
@@ -158,6 +174,7 @@ impl LayoutMenu {
             favorites: Vec::new(),
             favorites_only: false,
             editing: None,
+            focus_name: false,
             new_name: String::new(),
             storage: None,
             inbox: Arc::default(),
@@ -780,8 +797,11 @@ impl LayoutMenu {
     pub fn show_menu(&mut self, ui: &mut Ui) -> LayoutAction {
         let height =
             (ui.ctx().content_rect().bottom() - ui.next_widget_position().y - 16.0).max(0.0);
+        // The popup's area holds the last frame's size: without a minimum the scroll area keeps
+        // to it, and the name field opened by a click would stay clipped below it.
         egui::ScrollArea::vertical()
             .max_height(height)
+            .min_scrolled_height(height)
             .show(ui, |ui| self.show_contents(ui))
             .inner
     }
@@ -815,18 +835,29 @@ impl LayoutMenu {
             action = LayoutAction::Save;
             ui.close();
         }
+        let mut create = false;
         for (icon, label, value) in [
             (
                 &DOWNLOAD_ICON,
                 "Download chart data",
-                LayoutAction::DownloadData,
+                Some(LayoutAction::DownloadData),
             ),
-            (&icons::PLUS, "Create new layout", LayoutAction::CreateNew),
-            (&icons::FOLDER_OPEN, "Open layout", LayoutAction::OpenLayout),
+            (&icons::PLUS, "Create new layout", None),
+            (
+                &icons::FOLDER_OPEN,
+                "Open layout",
+                Some(LayoutAction::OpenLayout),
+            ),
         ] {
             if menu_row(ui, Some(icon), label, None, None).clicked() {
-                action = value;
-                ui.close();
+                match value {
+                    Some(value) => {
+                        action = value;
+                        ui.close();
+                    }
+                    // The name field below takes the name; the menu stays open.
+                    None => create = true,
+                }
             }
         }
         ui.separator();
@@ -834,11 +865,15 @@ impl LayoutMenu {
         let rename = menu_row(ui, None, "Rename…", None, None).clicked();
         let save_as = menu_row(ui, None, "Save layout as…", None, None).clicked();
         if rename {
-            self.editing = Some(true);
+            self.editing = Some(Naming::Rename);
             self.new_name = curr.clone();
         }
         if save_as {
-            self.editing = Some(false);
+            self.editing = Some(Naming::SaveAs);
+            self.new_name.clear();
+        }
+        if create {
+            self.editing = Some(Naming::Create);
             self.new_name.clear();
         }
         ui.separator();
@@ -853,12 +888,19 @@ impl LayoutMenu {
         {
             self.autosave = !self.autosave;
         }
-        if let Some(is_rename) = self.editing {
+        if let Some(naming) = self.editing {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.new_name).desired_width(ui.available_width()),
             );
-            if save_as || rename {
-                response.request_focus();
+            // The click that opened the field can take the focus away again within its frame,
+            // so the request repeats until the field has it.
+            self.focus_name |= save_as || rename || create;
+            if self.focus_name {
+                if response.has_focus() {
+                    self.focus_name = false;
+                } else {
+                    response.request_focus();
+                }
             }
             let name = self.new_name.trim();
             let valid = !name.is_empty() && !self.layouts.iter().any(|l| l == name);
@@ -867,15 +909,16 @@ impl LayoutMenu {
                 .clicked()
                 || (valid && response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
             {
-                action = if is_rename {
-                    LayoutAction::Rename(
+                action = match naming {
+                    Naming::Rename => LayoutAction::Rename(
                         self.curr_layout.clone().unwrap_or_default(),
                         name.to_owned(),
-                    )
-                } else {
-                    LayoutAction::SaveAs(name.to_owned())
+                    ),
+                    Naming::SaveAs => LayoutAction::SaveAs(name.to_owned()),
+                    Naming::Create => LayoutAction::CreateNew(name.to_owned()),
                 };
                 self.editing = None;
+                self.focus_name = false;
                 ui.close();
             }
         }
@@ -1409,7 +1452,7 @@ mod tests {
                     .map(|i| format!("{i} {}", "Long layout ".repeat(30)))
                     .collect();
                 menu.curr_layout = Some(menu.layouts[0].clone());
-                menu.editing = Some(true);
+                menu.editing = Some(Naming::Rename);
                 menu.new_name = menu.layouts[0].clone();
                 for pass in 0..2 {
                     let output = ctx.run_ui(

@@ -358,7 +358,7 @@ impl DemoApp {
             self.close_layout(index);
         }
         if new {
-            self.new_layout(None);
+            self.new_layout(None, false);
         }
     }
 
@@ -436,9 +436,10 @@ impl DemoApp {
         self.top_toolbar.chart_grid_selector.sync = self.layout.sync.clone();
     }
 
-    fn new_layout(&mut self, name: Option<String>) {
+    /// Opens a tab named `name`, or `Unnamed`, with a numeric suffix while that name is taken;
+    /// with `duplicate` it holds a copy of the whole layout, otherwise a copy of the active chart.
+    fn new_layout(&mut self, name: Option<String>, duplicate: bool) {
         let copy = self.copy_chart(&self.chart, &self.live, &self.comparisons, &self.spreads);
-        let duplicate = name.is_some();
         let layout = if duplicate {
             self.layout.clone()
         } else {
@@ -543,14 +544,14 @@ impl DemoApp {
             }
             LayoutAction::DownloadData => self.export_csv(None),
             LayoutAction::OpenLayout => self.open_layout = true,
-            LayoutAction::CreateNew => self.new_layout(None),
+            LayoutAction::CreateNew(name) => self.new_layout(Some(name), false),
             LayoutAction::SaveAs(name) => match self
                 .capture_layout()
                 .and_then(|layout| Ok((layout, self.capture_comparisons()?)))
             {
                 Ok((layout, comparisons)) => {
                     let groups = self.layout_groups();
-                    self.new_layout(Some(name));
+                    self.new_layout(Some(name), true);
                     let name = self.layout_tabs[self.layout_tab].name.clone();
                     if let Err(error) = self
                         .storage
@@ -1214,7 +1215,7 @@ mod tests {
                     }
                 }
             }
-            app.new_layout(None);
+            app.new_layout(None, false);
             ctx.run_ui(egui::RawInput::default(), |ui| {
                 let top = ui.available_rect_before_wrap().top();
                 app.show_layout_tabs(ui);
@@ -1491,7 +1492,7 @@ mod tests {
         ));
         assert!(app.range_fit.is_some());
         let before = app.chart.get_time_scale_state();
-        app.new_layout(Some("Saved".into()));
+        app.new_layout(Some("Saved".into()), true);
         assert!(
             app.range_fit.is_none(),
             "a pending fit belongs to its original chart"

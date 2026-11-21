@@ -785,7 +785,9 @@ mod tests {
             app.top_toolbar.layout_menu.save("Unnamed 2", &layout);
             app.poll_storage(&ctx);
             app.handle_layout_action(
-                egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction::CreateNew,
+                egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction::CreateNew(
+                    "Fresh".into(),
+                ),
             );
             assert!(
                 !app.top_toolbar

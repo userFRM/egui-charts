@@ -1787,4 +1787,47 @@ mod tests {
                 >= app.chart.time_to_index(horizon).unwrap()
         );
     }
+
+    #[test]
+    fn layout_menu_names_new_layouts_and_confirms_deletes() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        // Create new layout takes its name from the menu's field.
+        click(&mut app, &ctx, "Named layouts");
+        click(&mut app, &ctx, "Create new layout");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![egui::Event::Text("Morning".into())])
+            .drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![enter]).drop_without_applying_deltas();
+        let tabs: Vec<_> = app
+            .layout_tabs
+            .iter()
+            .map(|tab| tab.name.as_str())
+            .collect();
+        assert_eq!(tabs, ["Unnamed", "Morning"]);
+        assert_eq!(app.layout_tabs[app.layout_tab].name, "Morning");
+        assert_eq!(
+            app.top_toolbar.layout_menu.curr_layout.as_deref(),
+            Some("Morning")
+        );
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
+        app.poll_storage(&ctx);
+        assert!(
+            app.top_toolbar
+                .layout_menu
+                .layouts
+                .contains(&"Morning".to_owned())
+        );
+    }
 }
