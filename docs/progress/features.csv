@@ -923,7 +923,7 @@ Workspace,"News, calendar and social",Economic calendar,incomplete,host,src/ui/w
 Workspace,"News, calendar and social",Filtered headline stream,incomplete,host,src/ui/widget_bar/panels/news.rs;src/data/market.rs;terminal/src/panels.rs,
 Workspace,"News, calendar and social",Ideas and community feed,unverified,host,src/ui/ideas.rs;examples/demo/ideas.rs,3590
 Workspace,"News, calendar and social",News alerts,incomplete,host,src/services/notifications.rs;src/ui/widget_bar/panels/notifications.rs;terminal/src/panels.rs;examples/demo/marks.rs;examples/demo/layouts.rs;examples/demo/feeds.rs,1931;3586
-Workspace,"News, calendar and social",Private chats,incomplete,host,src/services/chats.rs;src/ui/widget_bar/panels/chats.rs;terminal/src/panels.rs,3590
+Workspace,"News, calendar and social",Private chats,unverified,host,src/services/chats.rs;src/ui/widget_bar/panels/chats.rs;terminal/src/panels.rs;examples/demo/feeds.rs,3590
 Workspace,"News, calendar and social","Profiles, following and social notifications",unverified,host,src/services/profiles.rs;src/services/profile_directory.rs;src/services/notifications.rs;src/ui/profile/mod.rs;src/ui/widget_bar/panels/notifications.rs;terminal/src/panels.rs;examples/demo/ideas.rs,3590
 Workspace,"News, calendar and social",Publish an idea from the chart,unverified,host,src/ui/top_toolbar/toolbar.rs;src/ui/ideas.rs;src/widget/export.rs;src/ui/top_toolbar/actions.rs;src/ui/top_toolbar/state.rs;examples/demo/ideas.rs,3590
 Workspace,"News, calendar and social",Symbol news in the right panel,verified,host,src/ui/widget_bar/panels/news.rs;terminal/src/panels.rs,

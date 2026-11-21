@@ -12,8 +12,8 @@ use egui_charts::data::{
 };
 use egui_charts::model::{Bar, PostContent, Quote};
 use egui_charts::services::{
-    ChatEvent, ChatMessage, Chats, Events, Notification, NotificationTarget, Notifications, Posts,
-    Quotes,
+    ChatCapabilities, ChatEvent, ChatMessage, Chats, Events, Notification, NotificationTarget,
+    Notifications, Posts, Quotes,
 };
 
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
@@ -704,39 +704,60 @@ impl Notifications for DemoNotifications {
     }
 }
 
-/// Two rooms with a few synthetic messages, echoing what the user posts.
-pub(super) struct DemoChats(Mutex<(Vec<ChatMessage>, Option<Events<ChatEvent>>)>);
+/// Two rooms with recent messages, a fixed older backlog and echoes of what the user posts.
+pub(super) struct DemoChats(
+    Mutex<(Vec<ChatMessage>, Option<Events<ChatEvent>>)>,
+    Vec<ChatMessage>,
+);
 
 impl DemoChats {
     pub(super) fn new(now: DateTime<Utc>) -> Self {
         let message = |room, author, minutes, text| {
             ChatMessage::new(room, author, now - TimeDelta::minutes(minutes), text)
+                .with_id(format!("{room}-seed-{minutes}"))
         };
-        Self(Mutex::new((
-            vec![
-                message("General", "Ana", 42, "Morning. Anyone watching the open?"),
-                message(
-                    "General",
-                    "Ravi",
-                    37,
-                    "INDEXA holding above yesterday's close so far.",
-                ),
-                message(
-                    "General",
-                    "Ana",
-                    12,
-                    "Volume looks light ahead of the CPI release.",
-                ),
-                message("Crypto", "Lee", 25, "TOKENA testing the range high again."),
-                message(
-                    "Crypto",
-                    "Mia",
-                    9,
-                    "Watching for a close above it on the hourly.",
-                ),
-            ],
-            None,
-        )))
+        let history = ["General", "Crypto"]
+            .into_iter()
+            .flat_map(|room| {
+                (1..=60).map(move |n| {
+                    ChatMessage::new(
+                        room,
+                        "Ana",
+                        now - TimeDelta::minutes(121 - n),
+                        format!("{room} history {n}"),
+                    )
+                    .with_id(format!("{room}-history-{n}"))
+                })
+            })
+            .collect();
+        Self(
+            Mutex::new((
+                vec![
+                    message("General", "Ana", 42, "Morning. Anyone watching the open?"),
+                    message(
+                        "General",
+                        "Ravi",
+                        37,
+                        "INDEXA holding above yesterday's close so far.",
+                    ),
+                    message(
+                        "General",
+                        "Ana",
+                        12,
+                        "Volume looks light ahead of the CPI release.",
+                    ),
+                    message("Crypto", "Lee", 25, "TOKENA testing the range high again."),
+                    message(
+                        "Crypto",
+                        "Mia",
+                        9,
+                        "Watching for a close above it on the hourly.",
+                    ),
+                ],
+                None,
+            )),
+            history,
+        )
     }
 }
 
@@ -750,13 +771,53 @@ impl Chats for DemoChats {
     }
 
     fn send(&self, room: String, text: String, reply: Reply<()>) {
-        let message = ChatMessage::new(room, "You", Utc::now(), text);
         let mut state = self.0.lock().unwrap();
+        let message = ChatMessage::new(room, "You", Utc::now(), text)
+            .with_id(format!("live-{}", state.0.len()));
         if let Some(events) = &state.1 {
             events.push(ChatEvent::Message(message.clone()));
         }
         state.0.push(message);
         reply.send(Ok(()));
+    }
+
+    fn capabilities(&self) -> ChatCapabilities {
+        let mut capabilities = ChatCapabilities::default();
+        capabilities.history = true;
+        capabilities
+    }
+
+    fn history(
+        &self,
+        room: String,
+        before: Option<String>,
+        limit: u32,
+        reply: Reply<Vec<ChatMessage>>,
+    ) {
+        let state = self.0.lock().unwrap();
+        let mut messages: Vec<_> = self
+            .1
+            .iter()
+            .chain(&state.0)
+            .filter(|message| message.room == room)
+            .collect();
+        if let Some(id) = before {
+            let Some(time) = messages
+                .iter()
+                .find(|message| message.id.as_deref() == Some(&id))
+                .map(|message| message.time)
+            else {
+                reply.send(Err(FeedError::InvalidData("Unknown chat message".into())));
+                return;
+            };
+            messages.retain(|message| message.time < time);
+        }
+        messages.sort_by_key(|message| message.time);
+        let start = messages.len().saturating_sub(limit as usize);
+        reply.send(Ok(messages[start..]
+            .iter()
+            .map(|message| (*message).clone())
+            .collect()));
     }
 }
 
@@ -966,6 +1027,112 @@ pub(super) fn seasonality(bars: &[Bar]) -> Seasonality {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn demo_chat_history_pages_to_the_end_without_duplicates() {
+        use crate::controller::{DemoApp, SidePanel};
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let now = Utc.with_ymd_and_hms(2026, 11, 21, 12, 0, 0).unwrap();
+        let host = Arc::new(DemoChats::new(now));
+        let seeded: Vec<_> = host
+            .0
+            .lock()
+            .unwrap()
+            .0
+            .iter()
+            .filter(|message| message.room == "General")
+            .cloned()
+            .collect();
+        app.chats.set_service(host.clone());
+        app.open_panel = Some(SidePanel::Chats);
+        let mut texts = Vec::new();
+        for _ in 0..8 {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 8000.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.chats.poll(&ctx);
+                    app.chats.show(ui);
+                },
+            );
+            texts = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            if texts.iter().any(|text| text == "No older messages") {
+                break;
+            }
+        }
+        let shown: Vec<_> = texts
+            .iter()
+            .filter(|text| {
+                text.starts_with("General history ")
+                    || seeded.iter().any(|message| message.text == text.as_str())
+            })
+            .cloned()
+            .collect();
+        let expected: Vec<_> = (1..=60)
+            .map(|n| format!("General history {n}"))
+            .chain(seeded.iter().map(|message| message.text.clone()))
+            .collect();
+        assert_eq!(
+            shown, expected,
+            "the room must grow beyond its seeded messages in time order, each once"
+        );
+        let times: Vec<_> = texts
+            .iter()
+            .filter_map(|text| NaiveTime::parse_from_str(text, "%H:%M").ok())
+            .collect();
+        assert_eq!(times.len(), 63);
+        assert!(times.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(texts.iter().any(|text| text == "No older messages"));
+
+        use egui_charts::data::ReplyReader;
+        let (answer, reply) = ReplyReader::new();
+        host.send("General".into(), "Hello".into(), reply);
+        assert!(answer.take().unwrap().is_ok());
+        let state = host.0.lock().unwrap();
+        let ids: std::collections::HashSet<_> = state
+            .0
+            .iter()
+            .map(|message| {
+                message
+                    .id
+                    .as_deref()
+                    .expect("seeded and echoed messages have identifiers")
+            })
+            .collect();
+        assert_eq!(ids.len(), state.0.len());
+        drop(state);
+        for room in ["General", "Crypto"] {
+            let (answer, reply) = ReplyReader::new();
+            host.history(room.into(), None, 2, reply);
+            let page = answer.take().unwrap().unwrap();
+            assert_eq!(page.len(), 2);
+            assert!(
+                page.iter()
+                    .all(|message| message.room == room && message.id.is_some())
+            );
+            assert!(page[0].time < page[1].time);
+            let (answer, reply) = ReplyReader::new();
+            host.history(room.into(), page[0].id.clone(), 1, reply);
+            let older = answer.take().unwrap().unwrap();
+            assert_eq!(older.len(), 1);
+            assert!(older[0].time < page[0].time);
+        }
+    }
 
     #[test]
     fn long_intervals_warm_up_and_page_without_execution_history() {
