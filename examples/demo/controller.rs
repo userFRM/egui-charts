@@ -11186,6 +11186,81 @@ mod tests {
         assert!(near(span.to, "2026-11-11T05:00:00Z"), "{span:?}");
     }
 
+    /// The demo's interval menu lists every range preset and applies the chosen size in ticks.
+    #[test]
+    fn interval_menu_selects_a_range_preset() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+        );
+        let trigger = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find_map(|(_, node)| {
+                // Without saved favorites the menu trigger is named for the current interval.
+                if node.role() == egui::accesskit::Role::Button && node.label() == Some("1 minute")
+                {
+                    node.bounds()
+                } else {
+                    None
+                }
+            })
+            .expect("Chart interval trigger");
+        let point = egui::pos2(
+            ((trigger.x0 + trigger.x1) / 2.0) as f32,
+            ((trigger.y0 + trigger.y1) / 2.0) as f32,
+        );
+        output.drop_without_applying_deltas();
+        ui_click(&ctx, size, point, |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest());
+        });
+        let rows = ui_frame(&ctx, size, Vec::new(), |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest());
+        });
+        for label in [
+            "1 range tick",
+            "10 range ticks",
+            "100 range ticks",
+            "1000 range ticks",
+        ] {
+            assert_eq!(
+                rows.iter().filter(|(text, _)| text == label).count(),
+                1,
+                "{label} must be listed in the demo interval menu"
+            );
+        }
+        let point = rows
+            .iter()
+            .find(|(text, _)| text == "100 range ticks")
+            .unwrap()
+            .1
+            .center();
+        ui_click(&ctx, size, point, |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest());
+        });
+        assert_eq!(app.chart.timeframe(), Some("100r".parse().unwrap()));
+        assert_eq!(app.chart.chart_type(), ChartType::Range);
+        let tick_size = app.chart.instrument().unwrap().tick_size.unwrap();
+        assert!((app.chart.chart_type_params().range_size - 100.0 * tick_size).abs() < 1e-10);
+    }
+
     /// Selecting seconds must rebuild the same executions, including the current partial minute.
     #[test]
     fn interval_switch_rebuilds_the_same_executions() {
