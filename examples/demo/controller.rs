@@ -4708,7 +4708,15 @@ impl DemoApp {
                 self.interval_focus = true;
             }
             A::GoToDate => self.date_picker.open_for_chart(&self.chart),
-            A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
+            A::Snapshot => {
+                // Run the entry the snapshot menu shows the shortcut beside.
+                let action = if self.top_toolbar.state.can_publish_image {
+                    TopToolbarAction::CopyImageLink
+                } else {
+                    TopToolbarAction::TakeScreenshot
+                };
+                self.handle_top_toolbar(ctx, action);
+            }
             A::SaveLayout => self.handle_top_toolbar(ctx, TopToolbarAction::Save),
             A::OpenLayout => {
                 self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::OpenLayout)
@@ -9353,7 +9361,11 @@ mod tests {
                     Some(egui_charts::drawings::DrawingToolType::TrendLine)
                 ),
                 "Undo" => assert!(app.chart.drawings().drawings.is_empty()),
-                "Take a snapshot" => assert!(app.screenshot_requested.is_some()),
+                // The row shows the snapshot shortcut's keys and runs what they run.
+                "Take a snapshot" => assert!(matches!(
+                    app.screenshot_requested,
+                    Some((ScreenshotTarget::Post { copy_link: true }, ..))
+                )),
                 "Toggle percent scale" => assert_eq!(
                     app.chart.state().price_scale().options().mode,
                     egui_charts::scales::PriceScaleMode::Percentage

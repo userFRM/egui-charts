@@ -235,6 +235,12 @@ mod tests {
         assert!(app.open_panel == Some(SidePanel::Ideas));
         app.handle_top_toolbar(&ctx, TopToolbarAction::Publish);
         assert!(app.open_panel.is_none());
+        // The snapshot shortcut runs Copy link, the entry the snapshot menu shows its keys on.
+        app.handle_shortcut_action(&ctx, egui_charts::config::KeyboardAction::Snapshot);
+        assert!(matches!(
+            app.screenshot_requested,
+            Some((ScreenshotTarget::Post { copy_link: true }, ..))
+        ));
         for (action, expected) in [
             (TopToolbarAction::PostImage, false),
             (TopToolbarAction::CopyImageLink, true),
