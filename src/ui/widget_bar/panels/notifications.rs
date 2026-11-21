@@ -270,15 +270,12 @@ mod tests {
                 )
             };
             let output = step(vec![]);
-            let pos = output
-                .shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    Shape::Text(text) if text.galley.text() == label => {
-                        Some(Rect::from_min_size(text.pos, text.galley.size()).center())
-                    }
-                    _ => None,
-                });
+            let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                Shape::Text(text) if text.galley.text() == label => {
+                    Some(Rect::from_min_size(text.pos, text.galley.size()).center())
+                }
+                _ => None,
+            });
             output.drop_without_applying_deltas();
             let pos = pos.expect(label);
             step(vec![Event::PointerMoved(pos)]).drop_without_applying_deltas();
