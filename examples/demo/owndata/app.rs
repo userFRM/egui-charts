@@ -30,7 +30,7 @@ pub(crate) struct OwnData {
     /// then takes its size in ticks of the instrument.
     pub(crate) sizing: bool,
     /// The symbol search of the synthetic session, set aside while own data is on.
-    pub(crate) search: SymbolSearchDialog,
+    pub(crate) search: Box<SymbolSearchDialog>,
 }
 
 impl DemoApp {
@@ -112,16 +112,18 @@ impl DemoApp {
         let intervals = profile.intervals.iter().map(|interval| interval.chart);
         let intervals = intervals.collect();
         let feed = Arc::new(MappedFeed::new(profile.clone(), secrets));
-        let mut chart = egui_charts::ChartBuilder::new()
-            .with_feed(feed.clone())
-            .with_symbol(symbol)
-            .with_timeframe(timeframe)
-            .with_theme(self.theme.clone())
-            .with_config(self.chart.config().clone())
-            .with_chart_options(self.chart.chart_options().clone())
-            .with_drawing_registry(self.chart.drawings().registry.clone())
-            .with_visible_candles(0)
-            .build();
+        let mut chart = Box::new(
+            egui_charts::ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol(symbol)
+                .with_timeframe(timeframe)
+                .with_theme(self.theme.clone())
+                .with_config(self.chart.config().clone())
+                .with_chart_options(self.chart.chart_options().clone())
+                .with_drawing_registry(self.chart.drawings().registry.clone())
+                .with_visible_candles(0)
+                .build(),
+        );
         self.formatting.apply(&mut chart);
         super::super::size_by_atr(&mut chart);
         chart.set_event_visibility(self.chart.event_visibility().clone());
@@ -141,7 +143,8 @@ impl DemoApp {
             let synthetic_paused = self.live.paused();
             self.live.set_paused(true);
             self.park_workspace(chart);
-            let search = std::mem::replace(&mut self.symbol_search, SymbolSearchDialog::new());
+            let search =
+                std::mem::replace(&mut self.symbol_search, Box::new(SymbolSearchDialog::new()));
             self.own_data = Some(OwnData {
                 profile,
                 feed,
