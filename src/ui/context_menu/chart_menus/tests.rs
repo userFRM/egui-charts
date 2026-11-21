@@ -78,10 +78,10 @@ fn stop_limit_orders_keep_their_requests_and_host_text_through_menu_rows() {
 #[test]
 fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
     let mut menu = ChartContextMenu::new();
-    let submenu = |menu: &ChartContextMenu| {
+    let submenu = |menu: &ChartContextMenu, shortcuts: &crate::widget::ShortcutMap| {
         menu.build_menu_items(
             &Context::default(),
-            &crate::widget::ShortcutMap::default(),
+            shortcuts,
             &crate::ui::context_menu::format_price,
         )
         .into_iter()
@@ -99,15 +99,16 @@ fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
             _ => None,
         })
     };
+    let mut shortcuts = crate::widget::ShortcutMap::default();
     menu.watchlists = vec!["Tech".into(), "Energy".into()];
-    assert_eq!(submenu(&menu), None, "no symbol");
+    assert_eq!(submenu(&menu, &shortcuts), None, "no symbol");
     menu.symbol = "AAPL".into();
     let add = |list| ContextMenuAction::AddToWatchlist {
         list,
         symbol: "AAPL".into(),
     };
     assert_eq!(
-        submenu(&menu),
+        submenu(&menu, &shortcuts),
         Some((
             "Add AAPL to watchlist".into(),
             vec![(add(0), None), (add(1), None)]
@@ -115,7 +116,7 @@ fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
     );
     menu.active_watchlist = Some(1);
     assert_eq!(
-        submenu(&menu),
+        submenu(&menu, &shortcuts),
         Some((
             "Add AAPL to watchlist".into(),
             vec![
@@ -130,8 +131,39 @@ fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
             ]
         ))
     );
+    shortcuts
+        .bindings
+        .retain(|(_, action)| *action != KeyboardAction::AddToWatchlist);
+    for binding in [
+        None,
+        Some(egui::KeyboardShortcut::new(
+            egui::Modifiers::ALT,
+            egui::Key::G,
+        )),
+    ] {
+        if let Some(binding) = binding {
+            shortcuts
+                .bindings
+                .push((binding, KeyboardAction::AddToWatchlist));
+        }
+        assert_eq!(
+            submenu(&menu, &shortcuts),
+            Some((
+                "Add AAPL to watchlist".into(),
+                vec![(add(0), None), (add(1), binding)]
+            ))
+        );
+    }
+    menu.active_watchlist = None;
+    assert_eq!(
+        submenu(&menu, &shortcuts),
+        Some((
+            "Add AAPL to watchlist".into(),
+            vec![(add(0), None), (add(1), None)]
+        ))
+    );
     menu.watchlists.clear();
-    assert_eq!(submenu(&menu), None, "no lists");
+    assert_eq!(submenu(&menu, &shortcuts), None, "no lists");
 }
 
 /// Each named control removes its row while leaving unrelated entries available; removing
