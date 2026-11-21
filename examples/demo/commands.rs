@@ -1909,4 +1909,59 @@ mod tests {
             .drop_without_applying_deltas();
         }
     }
+
+    /// The sample overlays reach the public fill renderer with their own size and font, and
+    /// switching them off removes the imported fill too.
+    #[test]
+    fn samples_mark_their_fill_in_its_own_style() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        super::super::tests::settle(&mut app, &ctx);
+        let draw = |app: &mut DemoApp| {
+            let (mut triangles, mut font) = (Vec::new(), None);
+            for _ in 0..3 {
+                let output = frame(app, &ctx, vec![]);
+                triangles = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Path(path)
+                            if path.closed
+                                && path.points.len() == 3
+                                && path.fill == super::super::marks::IMPORT =>
+                        {
+                            Some([path.points[0], path.points[1], path.points[2]])
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                font = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Buy 3" => {
+                        Some(text.galley.job.sections[0].format.font_id.clone())
+                    }
+                    _ => None,
+                });
+                output.drop_without_applying_deltas();
+            }
+            (triangles, font)
+        };
+        assert!(draw(&mut app).0.is_empty());
+        app.execute_search_command(&ctx, "samples");
+        assert!(
+            app.chart
+                .markers(egui_charts::widget::SeriesId::MAIN)
+                .iter()
+                .any(|marker| marker.text.as_deref() == Some("Fill")),
+            "the samples must supply their fill before it can be rendered"
+        );
+        let (triangles, font) = draw(&mut app);
+        assert_eq!(triangles.len(), 1, "one imported sample fill");
+        let [tip, right, left] = triangles[0];
+        assert!((right.x - left.x - 10.0).abs() < 0.01);
+        assert!(((right.y - tip.y).abs() - 12.0).abs() < 0.01);
+        assert_eq!(font, Some(egui::FontId::monospace(11.0)));
+        app.execute_search_command(&ctx, "samples");
+        assert!(draw(&mut app).0.is_empty());
+    }
 }

@@ -15,7 +15,7 @@ use egui::{
 
 use super::market_details::WatchlistDetails;
 use super::symbol_details::detail_section;
-use super::{HEADER_HEIGHT, grouped, price_decimals, signed, weighted};
+use super::{HEADER_HEIGHT, price_decimals, weighted};
 use crate::data::inbox::Inbox;
 use crate::data::{CalendarEvent, NewsStory};
 use crate::icons::icons;
@@ -25,6 +25,7 @@ use crate::scales::StudyFormat;
 use crate::services::{Listener, Quotes, ShareKind, Sharing};
 use crate::theme::{Theme, ThemeExt};
 use crate::ui::share_controls::ShareControls;
+use crate::ui::trading::grouped;
 use crate::ui_kit::alert::Alert;
 use crate::ui_kit::buttons::ButtonSize;
 use crate::ui_kit::{EmptyState, IconButton};
@@ -243,16 +244,17 @@ enum SectionUndo {
 /// cycle through ascending, descending and list order; sorting keeps symbols inside their section.
 /// Dragging the left edge of a quote column header resizes the column and a double click restores
 /// its width. Clicking a section collapses or expands its symbols independently; its state
-/// follows renames, moves and sorting. Unsorted rows are dragged to
-/// reorder, and rows are right-clicked to flag, rename or remove, and sections to move them with
-/// their symbols. The list menu stars lists, which it then shows first, clears the active list and
-/// undoes a clear or a section move; the more menu shows the descriptions given with
+/// follows renames, moves and sorting. Unsorted rows are dragged to reorder. Symbol rows are
+/// right-clicked to flag or remove them, and sections to rename or remove them or move them with
+/// their symbols. The list menu stars lists, which it then shows first, renames the active list,
+/// clears it and undoes a clear or a section move; the more menu shows the descriptions given with
 /// [`set_description`](Self::set_description) and hides the symbol marks. The host persists
 /// [`lists`](Self::lists), with the stars, descriptions and logos settings and column widths of
 /// each, and handles file intents.
 /// The wide view groups rows by section, exchange, instrument type, sector or currency from
 /// [`set_instrument`](Self::set_instrument), shows optional summary rows, and shows the host's
 /// numeric columns added with [`add_column`](Self::add_column).
+/// Each symbol has the same flag in every list; removing it from a flag view clears its flag.
 pub struct WatchlistPanel {
     lists: Vec<Watchlist>,
     active: usize,
@@ -328,6 +330,11 @@ impl std::fmt::Debug for WatchlistPanel {
     }
 }
 
+/// The name of the list a panel starts with when the host gives none.
+pub(crate) const DEFAULT_LIST: &str = "Watchlist";
+/// The title of a section the user adds.
+const NEW_SECTION: &str = "New section";
+
 impl Default for WatchlistPanel {
     fn default() -> Self {
         Self::new(Vec::new())
@@ -336,10 +343,12 @@ impl Default for WatchlistPanel {
 
 impl WatchlistPanel {
     /// A panel showing the first of `lists`, or one empty list when there are none.
+    /// Conflicting saved flags take the first flagged entry in list order, then row order.
     pub fn new(mut lists: Vec<Watchlist>) -> Self {
         if lists.is_empty() {
-            lists.push(Watchlist::new("Watchlist"));
+            lists.push(Watchlist::new(DEFAULT_LIST));
         }
+        share_flags(&mut lists);
         Self {
             lists,
             active: 0,
@@ -372,8 +381,9 @@ impl WatchlistPanel {
     }
 
     /// Shows these columns after the symbol, in order; the default is
-    /// [`WatchlistColumn::DEFAULT`]. A quote without a column's figure shows a dash, apart from a
-    /// symbol without a quote, which shows nothing.
+    /// [`WatchlistColumn::DEFAULT`]. Lists with their own [`Watchlist::columns`] choice use it
+    /// instead. A quote without a column's figure shows a dash, apart from a symbol without a
+    /// quote, which shows nothing.
     pub fn set_columns(&mut self, columns: impl IntoIterator<Item = WatchlistColumn>) {
         self.columns = columns
             .into_iter()
@@ -395,6 +405,32 @@ impl WatchlistPanel {
     /// Every list, for the host to persist.
     pub fn lists(&self) -> &[Watchlist] {
         &self.lists
+    }
+
+    /// The index in [`lists`](Self::lists) of the active list, for the host to save.
+    /// A flag filter shows symbols across lists without changing this index.
+    pub fn active_list(&self) -> usize {
+        self.active
+    }
+
+    /// Shows the list at `index` and clears the flag filter. An index past the last list
+    /// changes nothing, so a saved index can be restored after the lists changed.
+    ///
+    /// ```
+    /// use egui_charts::model::Watchlist;
+    /// use egui_charts::ui::widget_bar::WatchlistPanel;
+    ///
+    /// let mut panel = WatchlistPanel::new(vec![Watchlist::new("A"), Watchlist::new("B")]);
+    /// panel.set_flag_filter(Some(egui_charts::model::WatchlistFlag::Red));
+    /// panel.set_active_list(1);
+    /// assert_eq!(panel.flag_filter(), None);
+    /// panel.set_active_list(2);
+    /// assert_eq!(panel.active_list(), 1);
+    /// ```
+    pub fn set_active_list(&mut self, index: usize) {
+        if index < self.lists.len() {
+            (self.active, self.flag_filter) = (index, None);
+        }
     }
 
     /// The symbols the panel shows, which need quotes: those of the active list, or with a
@@ -453,8 +489,8 @@ impl WatchlistPanel {
         self.marks.insert(symbol.to_owned(), mark);
     }
 
-    /// Shows `description`, such as `Instrument::description`, under `symbol` in the lists that
-    /// show descriptions.
+    /// Supplies `description`, such as `Instrument::description`, below the ticker in lists
+    /// showing descriptions, or in its place in lists hiding tickers.
     pub fn set_description(&mut self, symbol: &str, description: impl Into<String>) {
         self.descriptions
             .insert(symbol.to_owned(), description.into());
@@ -553,7 +589,7 @@ impl WatchlistPanel {
         self.listener = None;
     }
 
-    /// Offers copy-link and save-a-copy on the active list, as `sharing` reports them for
+    /// Offers sharing operations and shared state on the active list, as `sharing` reports them for
     /// [`ShareKind::Watchlist`]. A saved copy holds the list as it was when Save a copy was
     /// chosen, whatever its name or place when the host answers, and is added under the name
     /// the host answers; like a duplicate, it is not starred. [`poll`](Self::poll) receives the
@@ -570,6 +606,7 @@ impl WatchlistPanel {
             && let Some(mut copy) = self.copy_source.take()
         {
             (copy.name, copy.favorite) = (name, false);
+            adopt_flags(&mut copy.items, &self.lists);
             self.lists.push(copy);
         }
         let Some(service) = &self.service else {
@@ -649,7 +686,12 @@ impl WatchlistPanel {
             &items,
             self.sort
                 .as_ref()
-                .filter(|(column, _)| column.is_shown(self.wide, &self.columns))
+                .filter(|(column, _)| {
+                    column.is_shown(
+                        self.wide,
+                        &chosen_columns(&self.lists[self.active], &self.columns),
+                    )
+                })
                 .map(|(c, d)| (c, *d)),
             |c, s| table_value(c, s, &self.quotes, &self.host_columns),
             (self.wide && self.grouping != WatchlistGrouping::Sections)
@@ -687,16 +729,21 @@ impl WatchlistPanel {
     /// Appends `symbol` to the active list as [`Watchlist::add_symbol`] does, such as the symbol
     /// picked after [`WatchlistAction::AddSymbol`]. Returns false when the list is unchanged.
     pub fn add_symbol(&mut self, symbol: &str) -> bool {
-        self.lists[self.active].add_symbol(symbol)
+        self.add_symbol_to(self.active, symbol)
     }
 
     /// Appends `symbol` to the list at `list` in [`lists`](Self::lists) as [`Watchlist::add_symbol`]
     /// does, such as for [`ContextMenuAction::AddToWatchlist`](crate::ui::context_menu::ContextMenuAction::AddToWatchlist).
     /// Returns false when there is no such list or it is unchanged.
     pub fn add_symbol_to(&mut self, list: usize, symbol: &str) -> bool {
-        self.lists
+        let added = self
+            .lists
             .get_mut(list)
-            .is_some_and(|list| list.add_symbol(symbol))
+            .is_some_and(|list| list.add_symbol(symbol));
+        if added {
+            share_flags(&mut self.lists);
+        }
+        added
     }
 
     /// Adds a list read with [`Watchlist::read_text`] and shows it, turning any flag filter off.
@@ -705,6 +752,7 @@ impl WatchlistPanel {
     pub fn import(&mut self, name: impl Into<String>, text: &str) {
         let (list, skipped) = Watchlist::read_text(name, text);
         self.lists.push(list);
+        share_flags(&mut self.lists);
         (self.active, self.flag_filter) = (self.lists.len() - 1, None);
         self.import_note = (skipped != SkippedEntries::default()).then_some((self.active, skipped));
     }
@@ -794,7 +842,7 @@ impl WatchlistPanel {
                         "{0} flagged",
                         &[("0", l10n::text(ui.ctx(), format!("{flag:?}")))],
                     ),
-                    None => l10n::text(ui.ctx(), lists[*active].name.clone()),
+                    None => l10n::saved_name(ui.ctx(), &lists[*active].name, DEFAULT_LIST),
                 };
                 let title = LayoutJob::single_section(
                     name,
@@ -814,172 +862,221 @@ impl WatchlistPanel {
         let (Some(menu), Some(more)) = (menu, more) else {
             return action;
         };
-        egui::Popup::menu(&menu).show(|ui| {
-            let mut menu_order: Vec<usize> = (0..lists.len()).collect();
-            menu_order.sort_by_key(|&index| !lists[index].favorite);
-            for index in menu_order {
-                ui.horizontal(|ui| {
-                    let list = &mut lists[index];
-                    if IconButton::new(if list.favorite {
-                        &icons::STAR_FILLED
-                    } else {
-                        &icons::STAR_EMPTY
-                    })
-                    .size(ButtonSize::SM)
-                    .tooltip(if list.favorite {
-                        "Remove from favorites"
-                    } else {
-                        "Add to favorites"
-                    })
-                    .show(ui)
-                    .clicked()
-                    {
-                        list.favorite = !list.favorite;
-                    }
-                    if ui
-                        .selectable_label(
-                            flag_filter.is_none() && index == *active,
-                            l10n::text(ui.ctx(), &list.name),
-                        )
+        // The name field takes clicks, so only a click outside closes the menu; its entries close it.
+        egui::Popup::menu(&menu)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                let mut menu_order: Vec<usize> = (0..lists.len()).collect();
+                menu_order.sort_by_key(|&index| !lists[index].favorite);
+                for index in menu_order {
+                    ui.horizontal(|ui| {
+                        let list = &mut lists[index];
+                        if IconButton::new(if list.favorite {
+                            &icons::STAR_FILLED
+                        } else {
+                            &icons::STAR_EMPTY
+                        })
+                        .size(ButtonSize::SM)
+                        .tooltip(if list.favorite {
+                            "Remove from favorites"
+                        } else {
+                            "Add to favorites"
+                        })
+                        .show(ui)
                         .clicked()
-                    {
-                        (*active, *flag_filter) = (index, None);
+                        {
+                            list.favorite = !list.favorite;
+                            ui.close();
+                        }
+                        if ui
+                            .selectable_label(
+                                flag_filter.is_none() && index == *active,
+                                l10n::saved_name(ui.ctx(), &list.name, DEFAULT_LIST),
+                            )
+                            .clicked()
+                        {
+                            (*active, *flag_filter) = (index, None);
+                            ui.close();
+                        }
+                    });
+                }
+                ui.separator();
+                ui.label(l10n::text(ui.ctx(), "Flagged symbols"));
+                ui.horizontal(|ui| {
+                    for choice in WatchlistFlag::ALL {
+                        let (swatch, response) =
+                            ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                        let translated_label = l10n::text(ui.ctx(), format!("{choice:?}"));
+                        response.widget_info(|| {
+                            egui::WidgetInfo::selected(
+                                egui::Role::RadioButton,
+                                response.enabled(),
+                                *flag_filter == Some(choice),
+                                &translated_label,
+                            )
+                        });
+                        ui.painter().circle_filled(
+                            swatch.center(),
+                            if *flag_filter == Some(choice) {
+                                8.0
+                            } else {
+                                6.0
+                            },
+                            choice.color(),
+                        );
+                        if response.on_hover_text(&translated_label).clicked() {
+                            *flag_filter = (*flag_filter != Some(choice)).then_some(choice);
+                            ui.close();
+                        }
                     }
                 });
-            }
-            ui.separator();
-            ui.label(l10n::text(ui.ctx(), "Flagged symbols"));
-            ui.horizontal(|ui| {
-                for choice in WatchlistFlag::ALL {
-                    let (swatch, response) =
-                        ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
-                    let translated_label = l10n::text(ui.ctx(), format!("{choice:?}"));
-                    response.widget_info(|| {
-                        egui::WidgetInfo::selected(
-                            egui::Role::RadioButton,
-                            response.enabled(),
-                            *flag_filter == Some(choice),
-                            &translated_label,
-                        )
-                    });
-                    ui.painter().circle_filled(
-                        swatch.center(),
-                        if *flag_filter == Some(choice) {
-                            8.0
-                        } else {
-                            6.0
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(l10n::text(ui.ctx(), "Name"));
+                    ui.text_edit_singleline(&mut lists[*active].name)
+                        .accessible_name(l10n::text(ui.ctx(), "Name"));
+                });
+                if ui.button(l10n::text(ui.ctx(), "New list")).clicked() {
+                    let name = (2..)
+                        .map(|n| format!("Watchlist {n}"))
+                        .find(|name| lists.iter().all(|list| list.name != *name))
+                        .expect("an unused name exists");
+                    lists.push(Watchlist::new(name));
+                    (*active, *flag_filter) = (lists.len() - 1, None);
+                    ui.close();
+                }
+                if ui.button(l10n::text(ui.ctx(), "Duplicate list")).clicked() {
+                    let copy =
+                        lists[*active].duplicate(lists.iter().map(|list| list.name.as_str()));
+                    lists.push(copy);
+                    (*active, *flag_filter) = (lists.len() - 1, None);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        flag_filter.is_none() && !lists[*active].items.is_empty(),
+                        egui::Button::new(l10n::text(ui.ctx(), "Clear list")),
+                    )
+                    .clicked()
+                {
+                    record(
+                        undo,
+                        lists,
+                        SectionUndo::Clear(
+                            collapsed_sections.get(*active).cloned().unwrap_or_default(),
+                        ),
+                        *active,
+                        |list| {
+                            list.items.clear();
+                            true
                         },
-                        choice.color(),
                     );
-                    if response.on_hover_text(&translated_label).clicked() {
-                        *flag_filter = (*flag_filter != Some(choice)).then_some(choice);
-                        ui.close();
+                    ui.close();
+                }
+                let undoable = undo.last().is_some_and(|edit| {
+                    lists
+                        .get(edit.list)
+                        .is_some_and(|list| list.items == edit.after)
+                });
+                if ui
+                    .add_enabled(undoable, egui::Button::new(l10n::text(ui.ctx(), "Undo")))
+                    .clicked()
+                    && let Some(mut edit) = undo.pop()
+                {
+                    adopt_flags(&mut edit.before, lists);
+                    lists[edit.list].items = edit.before;
+                    let states = section_states(collapsed_sections, edit.list);
+                    match edit.sections {
+                        SectionUndo::Clear(collapsed) => *states = collapsed,
+                        SectionUndo::Move { at, down } => {
+                            states.swap(at, if down { at + 1 } else { at - 1 });
+                        }
                     }
+                    (*active, *flag_filter) = (edit.list, None);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        lists.len() > 1,
+                        egui::Button::new(l10n::text(ui.ctx(), "Delete list")),
+                    )
+                    .clicked()
+                {
+                    if *active < collapsed_sections.len() {
+                        collapsed_sections.remove(*active);
+                    }
+                    lists.remove(*active);
+                    *active = active.saturating_sub(1);
+                    // The recorded edits and the import note name lists by position.
+                    undo.clear();
+                    *import_note = None;
+                    ui.close();
                 }
             });
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label(l10n::text(ui.ctx(), "Name"));
-                ui.text_edit_singleline(&mut lists[*active].name)
-                    .accessible_name(l10n::text(ui.ctx(), "Name"));
-            });
-            if ui.button(l10n::text(ui.ctx(), "New list")).clicked() {
-                let name = (2..)
-                    .map(|n| format!("Watchlist {n}"))
-                    .find(|name| lists.iter().all(|list| list.name != *name))
-                    .expect("an unused name exists");
-                lists.push(Watchlist::new(name));
-                (*active, *flag_filter) = (lists.len() - 1, None);
-            }
-            if ui.button(l10n::text(ui.ctx(), "Duplicate list")).clicked() {
-                let copy = lists[*active].duplicate(lists.iter().map(|list| list.name.as_str()));
-                lists.push(copy);
-                (*active, *flag_filter) = (lists.len() - 1, None);
-            }
-            if ui
-                .add_enabled(
-                    flag_filter.is_none() && !lists[*active].items.is_empty(),
-                    egui::Button::new(l10n::text(ui.ctx(), "Clear list")),
-                )
-                .clicked()
-            {
-                record(
-                    undo,
-                    lists,
-                    SectionUndo::Clear(
-                        collapsed_sections.get(*active).cloned().unwrap_or_default(),
-                    ),
-                    *active,
-                    |list| {
-                        list.items.clear();
-                        true
-                    },
+        egui::Popup::menu(&more)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                if ui
+                    .add_enabled(
+                        flag_filter.is_none(),
+                        egui::Button::new(l10n::text(ui.ctx(), "Add section")),
+                    )
+                    .clicked()
+                {
+                    lists[*active]
+                        .items
+                        .push(WatchlistItem::Section(NEW_SECTION.to_owned()));
+                    ui.close();
+                }
+                ui.checkbox(
+                    &mut lists[*active].show_descriptions,
+                    l10n::text(ui.ctx(), "Symbol descriptions"),
                 );
-            }
-            let undoable = undo.last().is_some_and(|edit| {
-                lists
-                    .get(edit.list)
-                    .is_some_and(|list| list.items == edit.after)
-            });
-            if ui
-                .add_enabled(undoable, egui::Button::new(l10n::text(ui.ctx(), "Undo")))
-                .clicked()
-                && let Some(edit) = undo.pop()
-            {
-                lists[edit.list].items = edit.before;
-                let states = section_states(collapsed_sections, edit.list);
-                match edit.sections {
-                    SectionUndo::Clear(collapsed) => *states = collapsed,
-                    SectionUndo::Move { at, down } => {
-                        states.swap(at, if down { at + 1 } else { at - 1 });
+                ui.checkbox(
+                    &mut lists[*active].show_logos,
+                    l10n::text(ui.ctx(), "Symbol logos"),
+                );
+                ui.checkbox(
+                    &mut lists[*active].show_tickers,
+                    l10n::text(ui.ctx(), "Symbol tickers"),
+                );
+                if wide.is_none() {
+                    ui.label(l10n::text(ui.ctx(), "Columns"));
+                    let mut chosen = chosen_columns(&lists[*active], compact_columns);
+                    for column in WatchlistColumn::WIDE {
+                        let mut checked = chosen.contains(&column);
+                        if ui
+                            .checkbox(&mut checked, l10n::text(ui.ctx(), column_label(column)))
+                            .changed()
+                        {
+                            chosen.retain(|c| *c != column);
+                            if checked {
+                                chosen.push(column);
+                            }
+                            lists[*active].columns = Some(
+                                WatchlistColumn::WIDE
+                                    .into_iter()
+                                    .filter(|c| chosen.contains(c))
+                                    .collect(),
+                            );
+                        }
                     }
                 }
-                (*active, *flag_filter) = (edit.list, None);
-            }
-            if ui
-                .add_enabled(
-                    lists.len() > 1,
-                    egui::Button::new(l10n::text(ui.ctx(), "Delete list")),
-                )
-                .clicked()
-            {
-                if *active < collapsed_sections.len() {
-                    collapsed_sections.remove(*active);
+                if ui.button(l10n::text(ui.ctx(), "Import list…")).clicked() {
+                    action = WatchlistAction::Import;
+                    ui.close();
                 }
-                lists.remove(*active);
-                *active = active.saturating_sub(1);
-                // The recorded edits and the import note name lists by position.
-                undo.clear();
-                *import_note = None;
-            }
-        });
-        egui::Popup::menu(&more).show(|ui| {
-            if ui.button(l10n::text(ui.ctx(), "Add section")).clicked() {
-                lists[*active]
-                    .items
-                    .push(WatchlistItem::Section("New section".to_owned()));
-            }
-            ui.checkbox(
-                &mut lists[*active].show_descriptions,
-                l10n::text(ui.ctx(), "Symbol descriptions"),
-            );
-            ui.checkbox(
-                &mut lists[*active].show_logos,
-                l10n::text(ui.ctx(), "Symbol logos"),
-            );
-            if ui.button(l10n::text(ui.ctx(), "Import list…")).clicked() {
-                action = WatchlistAction::Import;
-            }
-            if ui.button(l10n::text(ui.ctx(), "Export list…")).clicked() {
-                action = WatchlistAction::Export {
-                    name: lists[*active].name.clone(),
-                    text: lists[*active].to_text(),
-                };
-            }
-            if share.show(ui, ShareKind::Watchlist, &lists[*active].name) {
-                *copy_source = Some(lists[*active].clone());
-            }
-        });
+                if ui.button(l10n::text(ui.ctx(), "Export list…")).clicked() {
+                    action = WatchlistAction::Export {
+                        name: lists[*active].name.clone(),
+                        text: lists[*active].to_text(),
+                    };
+                    ui.close();
+                }
+                if share.show(ui, ShareKind::Watchlist, &lists[*active].name) {
+                    *copy_source = Some(lists[*active].clone());
+                }
+            });
         if let Some((list, skipped)) = *import_note
             && list == *active
             && flag_filter.is_none()
@@ -990,8 +1087,8 @@ impl WatchlistPanel {
                     ui.ctx(),
                     "Entries past the limit of {0} not imported: {1}",
                     &[
-                        ("0", grouped(Watchlist::MAX_IMPORTED as f64, 0)),
-                        ("1", grouped(skipped.past_limit as f64, 0)),
+                        ("0", grouped(Watchlist::MAX_IMPORTED as f64, 0, false)),
+                        ("1", grouped(skipped.past_limit as f64, 0, false)),
                     ],
                 ));
             }
@@ -999,7 +1096,7 @@ impl WatchlistPanel {
                 lines.push(l10n::format_text(
                     ui.ctx(),
                     "Entries with control characters not imported: {0}",
-                    &[("0", grouped(skipped.invalid as f64, 0))],
+                    &[("0", grouped(skipped.invalid as f64, 0, false))],
                 ));
             }
             if Alert::warning(lines.join("\n"))
@@ -1062,6 +1159,7 @@ impl WatchlistPanel {
         // The number columns share 70.5% of the row, 23.5% each by default, which leaves the
         // symbol column room for a six-letter name after its mark; the last column's own gap
         // completes the right margin. A column the user resized keeps its width.
+        let compact_columns = chosen_columns(&lists[*active], compact_columns);
         let mut shown_columns: Vec<TableColumn> = if wide.is_some() {
             WatchlistColumn::WIDE
                 .iter()
@@ -1081,7 +1179,7 @@ impl WatchlistPanel {
         // Keep hidden columns' sorts for the wide view; compact rows keep list order.
         let shown_sort = sort
             .as_ref()
-            .filter(|(column, _)| column.is_shown(wide.is_some(), compact_columns))
+            .filter(|(column, _)| column.is_shown(wide.is_some(), &compact_columns))
             .cloned();
         let numbers = shown_columns.len();
         let columns =
@@ -1132,7 +1230,10 @@ impl WatchlistPanel {
             } else {
                 Align2::RIGHT_CENTER
             };
-            let text = ui.painter().text(
+            let painter = ui
+                .painter()
+                .with_clip_rect(cells[index].intersect(ui.clip_rect()));
+            let text = painter.text(
                 egui::pos2(
                     if index == 0 {
                         cells[index].left()
@@ -1161,7 +1262,7 @@ impl WatchlistPanel {
                     (-3.0, 2.0)
                 };
                 let y = text.center().y;
-                ui.painter().add(Shape::convex_polygon(
+                painter.add(Shape::convex_polygon(
                     vec![
                         pos2(x - 3.5, y + base),
                         pos2(x + 3.5, y + base),
@@ -1173,7 +1274,7 @@ impl WatchlistPanel {
             }
             let response = ui
                 .interact(
-                    text.expand(3.0),
+                    text.expand(3.0).intersect(cells[index].expand(3.0)),
                     list_id.with(("column", index)),
                     Sense::click(),
                 )
@@ -1268,6 +1369,7 @@ impl WatchlistPanel {
         );
         let show_descriptions = lists[*active].show_descriptions;
         let show_logos = lists[*active].show_logos;
+        let show_tickers = lists[*active].show_tickers;
         let filtered = flagged.is_some();
         let list = match &mut flagged {
             Some(view) => view,
@@ -1358,6 +1460,8 @@ impl WatchlistPanel {
 
         let mut moved = None;
         let mut removed = None;
+        let mut flag_edit = None;
+        let mut added_section = None;
         let mut section_move = None;
         let show_summary = wide.is_some() && *summary;
         let summaries: Vec<_> = shown_columns
@@ -1412,9 +1516,10 @@ impl WatchlistPanel {
                         let id = group_id(label);
                         let collapsed = ui.data(|d| d.get_temp(id).unwrap_or(false));
                         let response = ui.interact(rect, id, Sense::click());
-                        let title = label
-                            .clone()
-                            .unwrap_or_else(|| l10n::text(ui.ctx(), "Other"));
+                        let title = label.as_deref().map_or_else(
+                            || l10n::text(ui.ctx(), "Other"),
+                            |label| l10n::text(ui.ctx(), label),
+                        );
                         heading(ui, rect, &response, &title, collapsed, &theme);
                         if response.clicked() {
                             ui.data_mut(|d| d.insert_temp(id, !collapsed));
@@ -1461,36 +1566,41 @@ impl WatchlistPanel {
                     match &mut list.items[index] {
                         WatchlistItem::Section(title) => {
                             let is_collapsed = collapsed.contains(&index);
-                            heading(ui, rect, &response, title, is_collapsed, &theme);
+                            let label = l10n::saved_name(ui.ctx(), title, NEW_SECTION);
+                            heading(ui, rect, &response, &label, is_collapsed, &theme);
                             if response.clicked()
                                 && let Some(at) =
                                     sections.iter().position(|&section| section == index)
                             {
                                 states[at] = !states[at];
                             }
-                            response.context_menu(|ui| {
-                                ui.text_edit_singleline(title)
-                                    .accessible_name(l10n::text(ui.ctx(), "Section name"));
-                                for (down, label, last) in [
-                                    (false, "Move section up", sections.first()),
-                                    (true, "Move section down", sections.last()),
-                                ] {
-                                    if ui
-                                        .add_enabled(
-                                            last != Some(&index),
-                                            egui::Button::new(l10n::text(ui.ctx(), label)),
-                                        )
-                                        .clicked()
-                                    {
-                                        section_move = Some((index, down));
+                            // The name field takes clicks, so only a click outside closes the
+                            // menu; its entries close it.
+                            egui::Popup::context_menu(&response)
+                                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                                .show(|ui| {
+                                    ui.text_edit_singleline(title)
+                                        .accessible_name(l10n::text(ui.ctx(), "Section name"));
+                                    for (down, label, last) in [
+                                        (false, "Move section up", sections.first()),
+                                        (true, "Move section down", sections.last()),
+                                    ] {
+                                        if ui
+                                            .add_enabled(
+                                                last != Some(&index),
+                                                egui::Button::new(l10n::text(ui.ctx(), label)),
+                                            )
+                                            .clicked()
+                                        {
+                                            section_move = Some((index, down));
+                                            ui.close();
+                                        }
+                                    }
+                                    if ui.button(l10n::text(ui.ctx(), "Remove section")).clicked() {
+                                        removed = Some(index);
                                         ui.close();
                                     }
-                                }
-                                if ui.button(l10n::text(ui.ctx(), "Remove section")).clicked() {
-                                    removed = Some(index);
-                                    ui.close();
-                                }
-                            });
+                                });
                         }
                         WatchlistItem::Symbol { symbol, flag } => {
                             let is_selected = selected.as_deref() == Some(symbol.as_str());
@@ -1533,9 +1643,17 @@ impl WatchlistPanel {
                             } else {
                                 cells[0]
                             };
-                            let description = show_descriptions
+                            let stand_in = (!show_tickers)
                                 .then(|| descriptions.get(symbol.as_str()))
-                                .flatten();
+                                .flatten()
+                                .filter(|text| !text.trim().is_empty());
+                            let description = if stand_in.is_some() {
+                                None
+                            } else {
+                                show_descriptions
+                                    .then(|| descriptions.get(symbol.as_str()))
+                                    .flatten()
+                            };
                             // With a description the symbol sits above the centre line.
                             let (name, align) = match description {
                                 Some(_) => (text.with_max_y(text.center().y + 2.0), Align::Max),
@@ -1548,9 +1666,12 @@ impl WatchlistPanel {
                             )
                             .add(
                                 Label::new(
-                                    RichText::new(symbol.as_str())
-                                        .font(font.clone())
-                                        .color(theme.ui.text),
+                                    RichText::new(stand_in.map_or_else(
+                                        || symbol.clone(),
+                                        |text| l10n::text(ui.ctx(), text),
+                                    ))
+                                    .font(font.clone())
+                                    .color(theme.ui.text),
                                 )
                                 .truncate()
                                 .selectable(false),
@@ -1634,11 +1755,21 @@ impl WatchlistPanel {
                                             choice.color(),
                                         );
                                         if response.on_hover_text(&translated_label).clicked() {
-                                            *flag = Some(choice);
+                                            flag_edit = Some((symbol.clone(), Some(choice)));
                                             ui.close();
                                         }
                                     }
                                 });
+                                if ui
+                                    .add_enabled(
+                                        reorderable,
+                                        egui::Button::new(l10n::text(ui.ctx(), "Add section")),
+                                    )
+                                    .clicked()
+                                {
+                                    added_section = Some(index);
+                                    ui.close();
+                                }
                                 if ui
                                     .add_enabled(
                                         flag.is_some(),
@@ -1646,14 +1777,18 @@ impl WatchlistPanel {
                                     )
                                     .clicked()
                                 {
-                                    *flag = None;
+                                    flag_edit = Some((symbol.clone(), None));
                                     ui.close();
                                 }
                                 if ui
                                     .button(l10n::text(ui.ctx(), "Remove from list"))
                                     .clicked()
                                 {
-                                    removed = Some(index);
+                                    if filtered {
+                                        flag_edit = Some((symbol.clone(), None));
+                                    } else {
+                                        removed = Some(index);
+                                    }
                                     ui.close();
                                 }
                             });
@@ -1735,8 +1870,14 @@ impl WatchlistPanel {
             }
             list.items.remove(index);
         }
-        if let (Some(view), Some(filter)) = (flagged, *flag_filter) {
-            apply_flag_view(lists, filter, &view.items, removed);
+        if let Some(index) = added_section {
+            let at = sections.iter().filter(|&&section| section < index).count();
+            states.insert(at, false);
+            list.items
+                .insert(index, WatchlistItem::Section("New section".to_owned()));
+        }
+        if let Some((symbol, flag)) = flag_edit {
+            set_flag(lists, &symbol, flag);
         }
         if let Some((index, down)) = section_move
             && let Some(at) = sections.iter().position(|&section| section == index)
@@ -1894,33 +2035,65 @@ fn detail_rows(
     picked
 }
 
-/// Applies the edits of the `filter` flag view to `lists`. Each row stands for its symbol wherever
-/// it is flagged `filter`, so a new flag reaches every such entry and removing the row removes them
-/// all; otherwise the row would come back from another list.
-fn apply_flag_view(
-    lists: &mut [Watchlist],
-    filter: WatchlistFlag,
-    view: &[WatchlistItem],
-    removed: Option<usize>,
-) {
-    for (index, item) in view.iter().enumerate() {
-        let WatchlistItem::Symbol { symbol, flag: new } = item else {
-            continue;
-        };
-        let remove = removed == Some(index);
-        if *new == Some(filter) && !remove {
-            continue;
+/// The active list's choice overrides the panel's compact columns.
+fn chosen_columns(list: &Watchlist, fallback: &[WatchlistColumn]) -> Vec<WatchlistColumn> {
+    list.columns
+        .as_deref()
+        .unwrap_or(fallback)
+        .iter()
+        .copied()
+        .filter(|column| *column != WatchlistColumn::Symbol)
+        .collect()
+}
+
+/// Reconcile loaded lists: the first flagged entry of a symbol supplies every entry's flag.
+fn share_flags(lists: &mut [Watchlist]) {
+    let mut flags = HashMap::new();
+    for item in lists.iter().flat_map(|list| &list.items) {
+        if let WatchlistItem::Symbol {
+            symbol,
+            flag: Some(flag),
+        } = item
+        {
+            flags.entry(symbol.clone()).or_insert(*flag);
         }
-        for list in lists.iter_mut() {
-            list.items.retain_mut(|entry| match entry {
-                WatchlistItem::Symbol { symbol: at, flag }
-                    if at == symbol && *flag == Some(filter) =>
-                {
-                    *flag = *new;
-                    !remove
-                }
-                _ => true,
-            });
+    }
+    for item in lists.iter_mut().flat_map(|list| &mut list.items) {
+        if let WatchlistItem::Symbol { symbol, flag } = item {
+            *flag = flags.get(symbol.as_str()).copied();
+        }
+    }
+}
+
+/// Change a symbol's flag everywhere it occurs.
+fn set_flag(lists: &mut [Watchlist], symbol: &str, flag: Option<WatchlistFlag>) {
+    for item in lists.iter_mut().flat_map(|list| &mut list.items) {
+        if let WatchlistItem::Symbol {
+            symbol: at,
+            flag: entry,
+        } = item
+            && at == symbol
+        {
+            *entry = flag;
+        }
+    }
+}
+
+/// Restored snapshots take current flags, including a removed flag, for symbols still listed.
+fn adopt_flags(items: &mut [WatchlistItem], lists: &[Watchlist]) {
+    let current: HashMap<&str, Option<WatchlistFlag>> = lists
+        .iter()
+        .flat_map(|list| &list.items)
+        .filter_map(|item| match item {
+            WatchlistItem::Symbol { symbol, flag } => Some((symbol.as_str(), *flag)),
+            WatchlistItem::Section(_) => None,
+        })
+        .collect();
+    for item in items {
+        if let WatchlistItem::Symbol { symbol, flag } = item
+            && let Some(shared) = current.get(symbol.as_str())
+        {
+            *flag = *shared;
         }
     }
 }
@@ -2028,11 +2201,11 @@ fn cell_text(
         TableColumn::Quote(WatchlistColumn::Volume) => StudyFormat::Volume.format(value, None),
         TableColumn::Quote(
             WatchlistColumn::ChangePercent | WatchlistColumn::ExtendedChangePercent,
-        ) => format!("{}%", signed(value, 2)),
+        ) => format!("{}%", grouped(value, 2, true)),
         TableColumn::Quote(WatchlistColumn::Change | WatchlistColumn::ExtendedChange) => {
-            signed(value, usize::from(decimals))
+            grouped(value, usize::from(decimals), true)
         }
-        _ => grouped(value, usize::from(decimals)),
+        _ => grouped(value, usize::from(decimals), false),
     };
     let color = match column {
         TableColumn::Quote(
@@ -2054,18 +2227,17 @@ fn cell_text(
     (text, color)
 }
 
-/// Paints a collapsible section or generated group heading with the same accessible state.
+/// Paints `label` as shown for a collapsible section or generated group heading.
 fn heading(
     ui: &mut Ui,
     rect: egui::Rect,
     response: &egui::Response,
-    title: &str,
+    label: &str,
     collapsed: bool,
     theme: &Theme,
 ) {
-    let label = l10n::text(ui.ctx(), title);
     response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), &label));
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), label));
     ui.ctx()
         .accesskit_node_builder(response.id, |node| node.set_expanded(!collapsed));
     if response.hovered() {
@@ -2091,7 +2263,7 @@ fn heading(
     )
     .add(
         Label::new(
-            RichText::new(l10n::text(ui.ctx(), title.to_uppercase()))
+            RichText::new(label.to_uppercase())
                 .font(TextStyle::Small.resolve(ui.style()))
                 .color(theme.ui.text_secondary),
         )
@@ -2357,10 +2529,13 @@ mod tests {
         use crate::services::UserSettings;
         let mut list = Watchlist::from_text("Main", "A,###S");
         (list.favorite, list.show_descriptions, list.show_logos) = (true, true, false);
+        list.show_tickers = false;
+        list.columns = Some(vec![WatchlistColumn::Last, WatchlistColumn::Volume]);
         list.column_widths.insert(WatchlistColumn::Last, 70.0);
         list.host_column_widths.insert("Rating".into(), 60.0);
         let settings = UserSettings {
             watchlists: vec![list],
+            active_watchlist: 1,
             ..Default::default()
         };
         assert_eq!(
@@ -2368,6 +2543,7 @@ mod tests {
             settings
         );
         let older = r#"{"version":1,"watchlists":[{"name":"Main","items":[{"Symbol":{"symbol":"A","flag":null}},{"Section":"S"}]}]}"#;
+        assert_eq!(UserSettings::from_json(older).unwrap().active_watchlist, 0);
         assert_eq!(
             UserSettings::from_json(older).unwrap().watchlists,
             [Watchlist::from_text("Main", "A,###S")]
@@ -2375,13 +2551,16 @@ mod tests {
         let prior = r#"{"version":1,"watchlists":[{"name":"Main","items":[{"Symbol":{"symbol":"A","flag":null}},{"Section":"S"}],"favorite":true,"show_descriptions":true,"show_logos":false,"column_widths":{"Last":70.0}}]}"#;
         let mut expected_prior = settings.watchlists[0].clone();
         expected_prior.host_column_widths.clear();
+        expected_prior.show_tickers = true;
+        expected_prior.columns = None;
         assert_eq!(
             UserSettings::from_json(prior).unwrap().watchlists,
             [expected_prior]
         );
-        let newer = r#"{"version":1,"watchlists":[{"name":"Main","items":[],"column_widths":{"Bid":50.0,"Last":70.0}}]}"#;
+        let newer = r#"{"version":1,"watchlists":[{"name":"Main","items":[],"columns":["Bid","Last"],"column_widths":{"Bid":50.0,"Last":70.0}}]}"#;
         let mut expected = Watchlist::new("Main");
         expected.column_widths.insert(WatchlistColumn::Last, 70.0);
+        expected.columns = Some(vec![WatchlistColumn::Last]);
         assert_eq!(
             UserSettings::from_json(newer).unwrap().watchlists,
             [expected]
@@ -2600,6 +2779,7 @@ mod tests {
         *h.state_mut() = panel;
         h.run();
         press(&mut h, "More", "Save a copy");
+        set_flag(&mut h.state_mut().lists, "B", Some(WatchlistFlag::Red));
         h.state_mut().lists[1].name = "Renamed".into();
         h.state_mut().lists[1].add_symbol("C");
         host.0
@@ -2622,6 +2802,73 @@ mod tests {
             ]
         );
         assert!(!h.state().lists()[2].favorite);
+        assert!(matches!(
+            &h.state().lists()[2].items[0],
+            WatchlistItem::Symbol {
+                flag: Some(WatchlistFlag::Red),
+                ..
+            }
+        ));
+    }
+
+    /// A click into the list menu's name field keeps the menu open for typing, while its stars,
+    /// lists and list actions close it.
+    #[test]
+    fn list_menu_name_field_keeps_it_open_and_its_entries_close_it() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 600.0))
+            .build_ui_state(
+                |ui, panel: &mut WatchlistPanel| {
+                    panel.show(ui);
+                },
+                WatchlistPanel::new(vec![
+                    Watchlist::from_text("Main", "A"),
+                    Watchlist::from_text("Other", "B"),
+                ]),
+            );
+        // The header button carries the active list's name and opens the list menu.
+        let open = |h: &mut Harness<'_, WatchlistPanel>| {
+            let name = h.state().lists()[h.state().active].name.clone();
+            h.get_by_label(&name).click();
+            h.run();
+        };
+        let name_field_shown = |h: &Harness<'_, WatchlistPanel>| {
+            h.query_by_role_and_label(egui::Role::TextInput, "Name")
+                .is_some()
+        };
+        open(&mut h);
+        h.get_by_role_and_label(egui::Role::TextInput, "Name")
+            .click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_role_and_label(egui::Role::TextInput, "Name")
+            .type_text("First");
+        h.run();
+        assert!(
+            name_field_shown(&h),
+            "the click into the field keeps the menu open"
+        );
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(!name_field_shown(&h), "Escape closes the menu");
+        for entry in ["Add to favorites", "Other", "Duplicate list", "New list"] {
+            open(&mut h);
+            h.get_all_by_label(entry).next().unwrap().click();
+            h.run();
+            assert!(!name_field_shown(&h), "{entry} closes the menu");
+        }
+        let lists = h.state().lists();
+        assert_eq!(
+            lists
+                .iter()
+                .map(|list| list.name.as_str())
+                .collect::<Vec<_>>(),
+            ["First", "Other", "Other copy", "Watchlist 2"]
+        );
+        assert!(lists[0].favorite);
+        assert_eq!(h.state().active, 3);
     }
 
     /// Equal section titles collapse separately, and rename, move, undo, heading drag and
@@ -2663,8 +2910,36 @@ mod tests {
         h.get_all_by_label("New section").next().unwrap().click();
         h.run();
         assert_eq!(shown(&h), ["A", "C"]);
-        h.state_mut().lists[0].items[1] = WatchlistItem::Section("Renamed".into());
+        // A pointer click into the name field keeps the section menu open for typing.
+        h.get_all_by_label("New section")
+            .next()
+            .unwrap()
+            .click_secondary();
         h.run();
+        h.get_by_label("Section name").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Section name").type_text("Renamed");
+        h.run();
+        assert_eq!(
+            h.state().lists()[0].to_text(),
+            "A,###Renamed,B,###New section,C"
+        );
+        let outside = pos2(150.0, 550.0);
+        h.event(egui::Event::PointerMoved(outside));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: outside,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        h.run();
+        assert!(
+            h.query_by_label("Section name").is_none(),
+            "a click outside closes the menu"
+        );
         assert_eq!(shown(&h), ["A", "C"]);
         press(&mut h, "Renamed", "Move section down");
         assert_eq!(
@@ -2928,9 +3203,262 @@ mod tests {
         assert_eq!(quote(-37.63, -10.0).change_percent(), -276.3);
     }
 
+    /// Flags belong to symbols across lists, including imports, delayed copies and undo.
+    #[test]
+    fn a_symbol_keeps_one_flag_in_every_list() {
+        use WatchlistFlag::{Blue, Green, Red};
+        use egui_kittest::{Harness, kittest::Queryable};
+        let entry = |symbol: &str, flag| WatchlistItem::Symbol {
+            symbol: symbol.into(),
+            flag,
+        };
+        let mut tech = Watchlist::from_text("Tech", "MSFT,NVDA,AAPL");
+        tech.items = vec![
+            entry("MSFT", Some(Red)),
+            entry("NVDA", None),
+            entry("AAPL", Some(Red)),
+        ];
+        let mut other = Watchlist::new("Other");
+        other.items = vec![
+            entry("AAPL", Some(Blue)),
+            entry("NVDA", Some(Green)),
+            entry("XOM", Some(Red)),
+            entry("BP", None),
+        ];
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 600.0))
+            .build_ui_state(
+                |ui, panel: &mut WatchlistPanel| {
+                    panel.show(ui);
+                },
+                WatchlistPanel::new(vec![tech, other]),
+            );
+        let flags = |h: &Harness<'_, WatchlistPanel>, symbol: &str| {
+            h.state()
+                .lists()
+                .iter()
+                .flat_map(|l| &l.items)
+                .filter_map(|i| match i {
+                    WatchlistItem::Symbol { symbol: at, flag } if at == symbol => Some(*flag),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(flags(&h, "AAPL"), [Some(Red), Some(Red)]);
+        assert_eq!(flags(&h, "NVDA"), [Some(Green), Some(Green)]);
+        h.get_by_role_and_label(egui::Role::ListBoxOption, "AAPL")
+            .click_secondary();
+        h.run();
+        h.get_by_label("Green").click();
+        h.run();
+        assert_eq!(flags(&h, "AAPL"), [Some(Green), Some(Green)]);
+        assert!(h.state_mut().add_symbol_to(0, "XOM"));
+        assert_eq!(flags(&h, "XOM"), [Some(Red), Some(Red)]);
+        h.state_mut().set_flag_filter(Some(Red));
+        h.run();
+        assert_eq!(h.state().symbols().collect::<Vec<_>>(), ["MSFT", "XOM"]);
+        h.get_by_role_and_label(egui::Role::ListBoxOption, "XOM")
+            .click_secondary();
+        h.run();
+        h.get_by_label("Remove from list").click();
+        h.run();
+        assert_eq!(
+            h.state()
+                .lists()
+                .iter()
+                .map(Watchlist::to_text)
+                .collect::<Vec<_>>(),
+            ["MSFT,NVDA,AAPL,XOM", "AAPL,NVDA,XOM,BP"]
+        );
+        assert_eq!(flags(&h, "XOM"), [None, None]);
+        assert_eq!(h.state().symbols().collect::<Vec<_>>(), ["MSFT"]);
+        h.state_mut().import("Imported", "AAPL,TSLA");
+        h.run();
+        assert_eq!(flags(&h, "AAPL"), [Some(Green); 3]);
+        assert_eq!(flags(&h, "TSLA"), [None]);
+        let choose = |h: &mut Harness<'_, WatchlistPanel>, from: &str, to: &str| {
+            h.get_by_label(from).click();
+            h.run();
+            h.get_by_label(to).click();
+            h.run();
+        };
+        choose(&mut h, "Imported", "Tech");
+        choose(&mut h, "Tech", "Clear list");
+        choose(&mut h, "Tech", "Other");
+        h.get_by_role_and_label(egui::Role::ListBoxOption, "AAPL")
+            .click_secondary();
+        h.run();
+        h.get_by_label("Remove flag").click();
+        h.run();
+        choose(&mut h, "Other", "Undo");
+        assert_eq!(h.state().lists()[0].to_text(), "MSFT,NVDA,AAPL,XOM");
+        assert_eq!(flags(&h, "AAPL"), [None; 3]);
+        assert_eq!(flags(&h, "MSFT"), [Some(Red)]);
+        assert_eq!(flags(&h, "NVDA"), [Some(Green); 2]);
+    }
+
+    /// A symbol's menu inserts an expanded section above it without shifting later collapse states.
+    #[test]
+    fn a_symbols_menu_adds_a_section_above_it_in_list_order() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        for (text, collapsed, sorted, expected, shown) in [
+            (
+                "A,B,C",
+                false,
+                false,
+                "A,###New section,B,C",
+                vec!["A", "B", "C"],
+            ),
+            (
+                "###One,A,B,###Two,C",
+                true,
+                false,
+                "###One,A,###New section,B,###Two,C",
+                vec!["A", "B"],
+            ),
+            ("A,B,C", false, true, "A,B,C", vec!["A", "B", "C"]),
+        ] {
+            let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", text)]);
+            if sorted {
+                panel.sort = Some((WatchlistColumn::Symbol.into(), false));
+            }
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(vec2(300.0, 600.0))
+                .build_ui_state(
+                    |ui, panel: &mut WatchlistPanel| {
+                        panel.show(ui);
+                    },
+                    panel,
+                );
+            if collapsed {
+                h.get_by_label("Two").click();
+                h.run();
+            }
+            h.get_by_role_and_label(egui::Role::ListBoxOption, "B")
+                .click_secondary();
+            h.run();
+            assert_eq!(
+                h.get_by_label("Add section").accesskit_node().is_disabled(),
+                sorted
+            );
+            if !sorted {
+                h.get_by_label("Add section").click();
+                h.run();
+            }
+            assert_eq!(h.state().lists()[0].to_text(), expected);
+            let visible: Vec<_> = ["A", "B", "C"]
+                .into_iter()
+                .filter(|s| {
+                    h.query_by_role_and_label(egui::Role::ListBoxOption, s)
+                        .is_some()
+                })
+                .collect();
+            assert_eq!(visible, shown);
+        }
+    }
+
+    /// Column choices apply immediately, stay open for more edits, and govern keyboard sorting.
+    #[test]
+    fn more_menu_ticks_columns_and_hides_tickers() {
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "AAA,BBB")]);
+        let time = chrono::Utc::now();
+        for (symbol, volume) in [("AAA", 5.0), ("BBB", 9.0)] {
+            panel.set_quote(symbol, Quote::new(10.0, 9.0, time).with_volume(volume));
+        }
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 600.0))
+            .build_ui_state(
+                |ui, panel: &mut WatchlistPanel| {
+                    panel.show(ui);
+                },
+                panel,
+            );
+        h.get_by_label("More").click();
+        h.run();
+        for (label, checked) in [
+            ("Last", true),
+            ("Chg", true),
+            ("Chg%", true),
+            ("Vol", false),
+            ("Symbol tickers", true),
+        ] {
+            assert_eq!(
+                h.get_by_role_and_label(Role::CheckBox, label)
+                    .accesskit_node()
+                    .data()
+                    .toggled(),
+                Some(if checked {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
+            );
+        }
+        h.get_by_role_and_label(Role::CheckBox, "Vol").click();
+        h.run();
+        assert_eq!(
+            h.state().lists()[0].columns,
+            Some(vec![
+                WatchlistColumn::Last,
+                WatchlistColumn::Change,
+                WatchlistColumn::ChangePercent,
+                WatchlistColumn::Volume
+            ])
+        );
+        h.get_by_role_and_label(Role::CheckBox, "Last").click();
+        h.run();
+        assert_eq!(
+            h.state().lists()[0].columns,
+            Some(vec![
+                WatchlistColumn::Change,
+                WatchlistColumn::ChangePercent,
+                WatchlistColumn::Volume
+            ])
+        );
+        assert!(
+            h.query_by_role_and_label(Role::ColumnHeader, "Last")
+                .is_none()
+        );
+        h.get_by_label("Symbol tickers").click();
+        h.run();
+        assert!(!h.state().lists()[0].show_tickers);
+        h.get_by_label("More").click();
+        h.run();
+        for _ in 0..2 {
+            h.get_by_role_and_label(Role::ColumnHeader, "Vol").click();
+            h.run();
+        }
+        assert_eq!(
+            h.state_mut().select_next_symbol(),
+            WatchlistAction::SelectSymbol("BBB".into())
+        );
+        h.get_by_label("More").click();
+        h.run();
+        for label in ["Chg", "Chg%", "Vol"] {
+            h.get_by_role_and_label(Role::CheckBox, label).click();
+            h.run();
+        }
+        assert_eq!(h.state().lists()[0].columns, Some(vec![]));
+        assert!(
+            h.query_by_role_and_label(Role::ColumnHeader, "Vol")
+                .is_none()
+        );
+    }
+
     /// A list copy keeps sections, symbol order and flags under a fresh name, the flag view lists a
-    /// symbol once however many lists flag it and its edits reach each of them, and the new columns
-    /// read the quote's volume and extended-hours price.
+    /// symbol once however many lists flag it, and quote columns read the volume and
+    /// extended-hours price.
     #[test]
     fn duplicates_flag_views_and_quote_columns_follow_the_lists_and_quotes() {
         let flagged = |name: &str, flag| WatchlistItem::Symbol {
@@ -2965,27 +3493,7 @@ mod tests {
         assert_eq!(panel.symbols().count(), 3);
         assert!(panel.add_symbol_to(1, "SHEL") && !panel.add_symbol_to(1, "SHEL"));
         assert!(!panel.add_symbol_to(9, "SHEL"));
-        // A row of the red view stands for the symbol in every list that flags it red, so
-        // unflagging AAPL or removing XOM there cannot leave a red copy behind in another list.
-        let red = Some(WatchlistFlag::Red);
-        apply_flag_view(
-            &mut panel.lists,
-            WatchlistFlag::Red,
-            &[flagged("AAPL", None)],
-            None,
-        );
-        apply_flag_view(
-            &mut panel.lists,
-            WatchlistFlag::Red,
-            &[flagged("XOM", red)],
-            Some(0),
-        );
-        panel.set_flag_filter(red);
-        assert_eq!(panel.symbols().collect::<Vec<_>>(), ["MSFT"]);
-        assert_eq!(
-            panel.lists[1].symbols().collect::<Vec<_>>(),
-            ["AAPL", "BP", "SHEL"]
-        );
+        panel.set_flag_filter(Some(WatchlistFlag::Red));
         panel.import("Imported", "TSLA");
         assert_eq!(
             panel.flag_filter(),
@@ -3169,6 +3677,17 @@ mod tests {
         assert!((edge(1).x - limit).abs() < 0.01, "{} {limit}", edge(1).x);
         panel.lists[0].show_descriptions = true;
         assert!(frame(&mut panel, vec![]).1.contains(&"Alpha Inc".into()));
+        panel.lists[0].show_logos = false;
+        panel.lists[0].show_tickers = false;
+        for descriptions in [true, false] {
+            panel.lists[0].show_descriptions = descriptions;
+            let texts = frame(&mut panel, vec![]).1;
+            assert_eq!(texts.iter().filter(|s| *s == "Alpha Inc").count(), 1);
+            assert!(!texts.contains(&"A".into()));
+            assert!(texts.contains(&"B".into()));
+        }
+        panel.set_description("B", " ");
+        assert!(frame(&mut panel, vec![]).1.contains(&"B".into()));
     }
 
     /// After a click, the arrow keys move through the displayed order and select each symbol.
@@ -3445,6 +3964,14 @@ mod tests {
             h.state().lists()[0].to_text(),
             "AAA,BBB,###Second,CCC,DDD,EEE"
         );
+        // Generated headings still translate once when user section names are shown as saved.
+        l10n::set_translator(&h.ctx, |key| Some(format!("T:{key}")));
+        h.run();
+        let painted = texts(&h);
+        for label in ["Energy", "Tech", "Other"] {
+            h.get_by_role_and_label(Role::Button, &format!("T:{label}"));
+            assert!(painted.contains(&format!("T:{}", label.to_uppercase())));
+        }
     }
 
     /// Summary arithmetic stays finite at the numeric limits and handles empty and single values.

@@ -9,6 +9,11 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(feature = "widget")]
+mod checkpoint;
+#[cfg(feature = "widget")]
+pub(crate) use checkpoint::PackedFootprintState;
+
 #[derive(Clone)]
 struct PreparedPage {
     source: Arc<dyn FootprintSource>,

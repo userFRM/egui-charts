@@ -160,6 +160,7 @@ mod tests {
                 clock: BarClock::new(Timeframe::Min5),
                 instrument: None,
                 timeframe: Timeframe::Min5,
+                chart: None,
             };
             study.update_data(chart, from, &[source]);
         };
@@ -199,6 +200,7 @@ mod tests {
             clock: BarClock::new(Timeframe::Min1),
             instrument: None,
             timeframe: Timeframe::Min1,
+            chart: None,
         };
         study.update_data(&chart, 0, &[source]);
         assert_eq!(study.values().value(0, 9), Some(202.0));
