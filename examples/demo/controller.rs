@@ -3706,8 +3706,13 @@ impl DemoApp {
                 if self.chart.take_scale_settings_request() {
                     self.open_chart_settings_dialog();
                 }
-                if self.chart.take_event_click().is_some() {
-                    self.notify("Synthetic session: generated example data");
+                if let Some(id) = self.chart.take_event_click() {
+                    if let Some(story) = marks::news_story(&id) {
+                        self.news.open_story(story);
+                        self.open_panel = Some(SidePanel::News);
+                    } else {
+                        self.notify("Synthetic session: generated example data");
+                    }
                 }
                 if (self.replay.is_some() || self.own_data.is_some())
                     && let Some(bar) = self
@@ -5031,6 +5036,48 @@ mod tests {
         h.state_mut().open_panel = Some(SidePanel::Notifications);
         h.run_steps(5);
         h.get_by_label("Rates alert");
+    }
+
+    #[test]
+    fn calendar_news_demo_badge_opens_its_headline() {
+        use egui_charts::model::{EventKind, TimeScaleEvent};
+        let mut h = calendar_news_harness(SidePanel::Calendar);
+        h.run_steps(5);
+        let time = h
+            .state()
+            .chart
+            .bars(SeriesId::MAIN)
+            .iter()
+            .rev()
+            .nth(10)
+            .unwrap()
+            .time;
+        let id = format!(
+            "demo-news-{}-{}",
+            h.state().chart.symbol(),
+            time.timestamp_millis()
+        );
+        let mut query = egui_charts::data::NewsQuery::new(1);
+        query.symbols = vec![h.state().chart.symbol().into()];
+        let story = feeds::news(&query, time).remove(0);
+        let mut visibility = h.state().chart.event_visibility().clone();
+        visibility.show_news = true;
+        h.state_mut().chart.set_event_visibility(visibility);
+        h.state_mut().chart.set_mark_source(None);
+        h.state_mut()
+            .chart
+            .set_time_scale_events(vec![TimeScaleEvent::new(
+                id,
+                time,
+                EventKind::News,
+                "Read this news",
+            )]);
+        h.run_steps(5);
+        h.get_by_label_contains("Read this news").click();
+        h.run_steps(5);
+        assert!(h.state().open_panel == Some(SidePanel::News));
+        h.get_by_role_and_label(egui::Role::Label, &story.headline);
+        h.get_by_label(&story.body);
     }
 
     /// The menu actions reach the other chart, which lacks nothing, without a prompt; a chart

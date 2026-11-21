@@ -295,6 +295,22 @@ impl NewsPanel {
         self.timezone = timezone;
     }
 
+    /// Open the story the host resolved from an event's id, even when the current filter did
+    /// not return it. The filter and saved view stay selected; the next refresh replaces the list.
+    pub fn open_story(&mut self, story: NewsStory) {
+        self.open = Some(story.id.clone());
+        self.focus_back = false;
+        if let Some(existing) = self
+            .stories
+            .iter_mut()
+            .find(|existing| existing.id == story.id)
+        {
+            *existing = story;
+        } else {
+            self.stories.insert(0, story);
+        }
+    }
+
     /// Ask the feed again, such as when the host learns of new stories.
     pub fn refresh(&mut self) {
         self.alerts_refresh = true;
