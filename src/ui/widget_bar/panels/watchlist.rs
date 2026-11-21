@@ -400,6 +400,32 @@ impl WatchlistPanel {
         &self.lists
     }
 
+    /// The index in [`lists`](Self::lists) of the active list, for the host to save.
+    /// A flag filter shows symbols across lists without changing this index.
+    pub fn active_list(&self) -> usize {
+        self.active
+    }
+
+    /// Shows the list at `index` and clears the flag filter. An index past the last list
+    /// changes nothing, so a saved index can be restored after the lists changed.
+    ///
+    /// ```
+    /// use egui_charts::model::Watchlist;
+    /// use egui_charts::ui::widget_bar::WatchlistPanel;
+    ///
+    /// let mut panel = WatchlistPanel::new(vec![Watchlist::new("A"), Watchlist::new("B")]);
+    /// panel.set_flag_filter(Some(egui_charts::model::WatchlistFlag::Red));
+    /// panel.set_active_list(1);
+    /// assert_eq!(panel.flag_filter(), None);
+    /// panel.set_active_list(2);
+    /// assert_eq!(panel.active_list(), 1);
+    /// ```
+    pub fn set_active_list(&mut self, index: usize) {
+        if index < self.lists.len() {
+            (self.active, self.flag_filter) = (index, None);
+        }
+    }
+
     /// The symbols the panel shows, which need quotes: those of the active list, or with a
     /// [flag filter](Self::set_flag_filter) the flagged ones of every list, each once.
     pub fn symbols(&self) -> impl Iterator<Item = &str> {
@@ -2398,6 +2424,7 @@ mod tests {
         list.host_column_widths.insert("Rating".into(), 60.0);
         let settings = UserSettings {
             watchlists: vec![list],
+            active_watchlist: 1,
             ..Default::default()
         };
         assert_eq!(
@@ -2405,6 +2432,7 @@ mod tests {
             settings
         );
         let older = r#"{"version":1,"watchlists":[{"name":"Main","items":[{"Symbol":{"symbol":"A","flag":null}},{"Section":"S"}]}]}"#;
+        assert_eq!(UserSettings::from_json(older).unwrap().active_watchlist, 0);
         assert_eq!(
             UserSettings::from_json(older).unwrap().watchlists,
             [Watchlist::from_text("Main", "A,###S")]

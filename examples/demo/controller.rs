@@ -919,6 +919,12 @@ impl DemoApp {
         app.alerts.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.top_toolbar.state.can_trade = true;
         app.watchlist.set_selected(symbol);
+        if let Some(active) = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, "watchlist_active"))
+        {
+            app.watchlist.set_active_list(active);
+        }
         app.watchlist.set_service(app.quotes.clone());
         app.watchlist.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.alert_evaluator.set_storage(app.storage.clone());
@@ -1734,6 +1740,7 @@ impl eframe::App for DemoApp {
             &self.chart.drawings().tool_defaults,
         );
         eframe::set_value(storage, "watchlists", &self.watchlist.lists());
+        eframe::set_value(storage, "watchlist_active", &self.watchlist.active_list());
         eframe::set_value(storage, "alerts", &self.alert_host.engine().alerts());
         eframe::set_value(storage, "alert_list_options", self.alerts.options());
         self.checkpoint_replay();
