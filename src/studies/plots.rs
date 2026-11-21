@@ -113,8 +113,8 @@ pub struct StudyZone {
     pub top: f64,
     /// Lower price.
     pub bottom: f64,
-    /// Output whose colour, stroke width and visibility apply to this zone: its edges in that
-    /// colour and its band at 15% opacity.
+    /// Output whose colour, stroke width, line pattern and visibility apply to this zone: its
+    /// edges in that colour and pattern, and its band at 15% opacity.
     pub plot: usize,
 }
 

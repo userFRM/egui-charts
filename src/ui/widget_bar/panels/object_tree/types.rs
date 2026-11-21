@@ -332,6 +332,16 @@ impl SourceItem {
         }
     }
 
+    /// The row's text: the label the user gave as saved, otherwise the library's name through
+    /// the host translator.
+    pub(super) fn shown_name(&self, ctx: &egui::Context) -> String {
+        if self.label.is_some() {
+            self.full_display_name()
+        } else {
+            crate::localization::text(ctx, self.full_display_name())
+        }
+    }
+
     /// Set custom label
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());

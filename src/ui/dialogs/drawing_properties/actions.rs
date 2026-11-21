@@ -582,6 +582,9 @@ impl DrawingProps {
                 {
                     return Err("Gann widths must be above 0 and at most 100");
                 }
+                if !FONT_SIZES.contains(&c.label_size) {
+                    return Err("Gann label size must be between 1 and 256");
+                }
             }
             if settings.ghost_feed.is_some_and(|c| !c.is_valid()) {
                 return Err(

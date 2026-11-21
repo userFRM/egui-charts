@@ -42,7 +42,7 @@ pub fn render_item_row(
         Sense::click_and_drag(),
     );
 
-    let translated_label = l10n::text(ui.ctx(), item.full_display_name());
+    let translated_label = item.shown_name(ui.ctx());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::Role::TreeItem, response.enabled(), &translated_label)
     });
@@ -67,7 +67,7 @@ pub fn render_item_row(
         });
     }
 
-    response.on_hover_text(l10n::text(ui.ctx(), item.full_display_name()));
+    response.on_hover_text(item.shown_name(ui.ctx()));
 
     // Handle expand/collapse for items with properties
     if item.source_type == SourceType::Drawing && state.is_item_expanded(id) {
@@ -249,7 +249,7 @@ fn render_row_content(
             ui.active_theme().ui.text_muted
         };
         let mut job = egui::text::LayoutJob::simple(
-            l10n::text(ui.ctx(), item.full_display_name()),
+            item.shown_name(ui.ctx()),
             egui::FontId::proportional(ui.active_theme().text.label),
             name_color,
             (rect.right() - ui.active_theme().spacing.sm - 40.0 - x).max(0.0),
