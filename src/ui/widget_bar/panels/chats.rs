@@ -253,12 +253,6 @@ impl ChatsPanel {
         service.create_room(room, self.inbox.reply(self.create_key));
     }
 
-    /// Shows `room` once the service pushes it, such as a room a notification names.
-    pub fn open_room(&mut self, room: impl Into<String>) {
-        self.open = Some(room.into());
-        self.view = View::Room;
-    }
-
     /// Offers View profile in the menu of each message whose author has an identifier; hidden by
     /// default. Read the request with [`take_profile_request`](Self::take_profile_request).
     pub fn set_profiles(&mut self, available: bool) {
