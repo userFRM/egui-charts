@@ -86,6 +86,7 @@ pub use plots::{
     StudyZone,
 };
 pub use projection::StudyProjection;
+pub(crate) use settings::CHART_INPUT_IDS;
 pub use settings::{
     ConfiguredStudy, FillStyle, GradientStyle, LevelStyle, PlotStyle, PlotType, PlotVariant,
     StudySettings, StudySettingsSnapshot,

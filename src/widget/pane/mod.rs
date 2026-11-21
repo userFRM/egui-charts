@@ -739,12 +739,7 @@ impl Chart {
                             .1
                             .iter()
                             .filter(|(id, _)| {
-                                !matches!(
-                                    id.as_str(),
-                                    "calculation_symbol"
-                                        | "calculation_timeframe"
-                                        | "wait_for_close"
-                                )
+                                !crate::studies::CHART_INPUT_IDS[1..].contains(&id.as_str())
                             })
                             .cloned()
                             .collect(),

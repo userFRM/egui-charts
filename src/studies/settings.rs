@@ -1048,7 +1048,9 @@ impl ConfiguredStudy {
 }
 
 /// Ids of the inputs [`ConfiguredStudy::inputs`] adds to a study itself, refused by
-/// `CustomIndicator::with_inputs`. Keep in step with the inputs listed there.
+/// `CustomIndicator::with_inputs`. Keep in step with the inputs listed there, with the
+/// calculation inputs after `plot_offset`, which restores of studies that cannot follow another
+/// symbol or interval drop.
 pub(crate) const CHART_INPUT_IDS: [&str; 4] = [
     "plot_offset",
     "calculation_symbol",

@@ -361,12 +361,7 @@ impl StudyTemplate {
         // A study whose outputs cannot follow another symbol or interval restores on the chart's
         // bars, without the inputs it saved for them.
         if !study.draws_on_other_bars() {
-            inputs.retain(|(id, _)| {
-                !matches!(
-                    id.as_str(),
-                    "calculation_symbol" | "calculation_timeframe" | "wait_for_close"
-                )
-            });
+            inputs.retain(|(id, _)| !super::CHART_INPUT_IDS[1..].contains(&id.as_str()));
         }
         study.apply_settings(&inputs, settings.clone())?;
         study.set_visible(template.visible);
