@@ -3038,7 +3038,11 @@ pub(super) mod tests {
                 timeframe: Some(Timeframe::Hour1),
                 metric: None,
             };
-            assert_eq!(chart.study_data_requests(), [hourly.clone()], "{case}");
+            assert_eq!(
+                chart.study_data_requests(),
+                std::slice::from_ref(&hourly),
+                "{case}"
+            );
             chart.set_study_data(hourly, bars(&[10.5, 20.5, 30.5], 60), None);
             let ctx = egui::Context::default();
             let values = |chart: &mut Chart, frames: std::ops::Range<u32>| {
