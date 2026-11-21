@@ -254,12 +254,13 @@ pub(crate) fn paint_zones(
             ..style
         };
         for y in [rect.top(), rect.bottom()] {
-            crate::chart::rendering::paint_study_plot(
-                painter,
-                &[egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                line,
-                f32::NAN,
-            );
+            let points = [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)];
+            if line.pattern == crate::model::LineStyle::Solid {
+                // Keep solid edges pixel-aligned as they were in saved charts.
+                painter.line_segment(points, egui::Stroke::new(line.width, line.color));
+            } else {
+                crate::chart::rendering::paint_study_plot(painter, &points, line, f32::NAN);
+            }
         }
     }
 }
