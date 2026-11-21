@@ -4375,7 +4375,10 @@ impl DemoApp {
             A::AddToWatchlist => {
                 let symbol = self.chart.symbol().to_owned();
                 let list = self.watchlist.active_list();
-                self.handle_context_action(ctx, ContextMenuAction::AddToWatchlist { list, symbol });
+                self.handle_context_action(
+                    ctx,
+                    ChartContextAction::Chart(ContextMenuAction::AddToWatchlist { list, symbol }),
+                );
             }
             A::NextWatchlistSymbol | A::PreviousWatchlistSymbol => {
                 let step = if action == A::NextWatchlistSymbol {
