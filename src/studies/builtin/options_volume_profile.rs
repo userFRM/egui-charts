@@ -79,14 +79,16 @@ const SIDES: [(&str, &[&str], usize); 3] = [
 const TEAL: Color32 = Color32::from_rgba_unmultiplied_const(38, 166, 154, 180);
 const RED: Color32 = Color32::from_rgba_unmultiplied_const(239, 83, 80, 180);
 const BLUE: Color32 = Color32::from_rgba_unmultiplied_const(41, 98, 255, 180);
+const ORANGE: Color32 = Color32::from_rgba_unmultiplied_const(255, 152, 0, 180);
 
 /// The chain profile's bar colour inputs with their defaults, in the order of its `bar_colors`.
-const BAR_COLORS: [(&str, &str, Color32); 5] = [
+const BAR_COLORS: [(&str, &str, Color32); 6] = [
     ("call_color", "Calls colour", BLUE),
     ("put_color", "Puts colour", RED),
     ("net_positive_color", "Net positive colour", TEAL),
     ("net_negative_color", "Net negative colour", RED),
     ("total_color", "Calls plus puts colour", BLUE),
+    ("ratio_color", "Puts / calls colour", ORANGE),
 ];
 
 /// Colours of the expiries of a profile drawn by expiry, by the expiry's place in the listing,
@@ -173,8 +175,9 @@ pub struct OptionsVolumeProfile {
     // Write each row's figures beside it.
     show_values: bool,
     current_price: bool,
-    // Split calls and puts, net positive and negative, then calls plus puts, as BAR_COLORS.
-    bar_colors: [Color32; 5],
+    // Split calls and puts, net positive and negative, calls plus puts, then puts divided by
+    // calls, as BAR_COLORS.
+    bar_colors: [Color32; 6],
     left: bool,
     // The widest row's share of the plot's width, in percent.
     width_percent: f64,
@@ -291,20 +294,22 @@ impl OptionsVolumeProfile {
     /// and put walls, off by default, mark the strikes with the largest call and the largest
     /// put figure of the measure in size, summed over the selected expiries, the lower strike
     /// on a tie; a side whose figures are all zero has none, and volume or open interest drawn in
-    /// place of a saved measure that waits for its data has none. Split, net and calls plus puts
-    /// bars take their own colour inputs, calls blue and puts red by default, and puts divided
-    /// by calls the puts colour. Every row takes its display's colours at one opacity; the
-    /// profile marks no point of control or value area. Values, off by default, writes the
-    /// calls × puts figures of each volume or open interest row beside it, with at most two
-    /// decimals and no trailing zeros, abbreviated with K, M or B from a thousand, or the row's
-    /// ratio of puts to calls. The profile takes the right or the left 30% of the plot, its
-    /// widest row from 1% to 30% of the plot's width, 27% by default. Layout can instead place
-    /// each upcoming expiration beside its date on the time scale, on the chosen side,
-    /// separately or grouped by week or month. Maximum expirations counts from the nearest, 10
-    /// by default. Each group shares the strike window and row height, names its own walls
-    /// beside their rows, past their bars and figures, and labels its latest date on the time
-    /// scale while Expiration labels is on. Groups mapping to one bar are combined; without
-    /// chart bars no dated profiles are drawn.
+    /// place of a saved measure that waits for its data has none. Split, net, calls plus puts and
+    /// puts divided by calls bars take their own colour inputs in the Style tab, calls blue, puts
+    /// red and puts divided by calls orange by default. Every row takes its display's colours at
+    /// one opacity; the profile marks no point of control or value area. Values, off by default,
+    /// writes the calls × puts figures of each volume or open interest row beside it, or over the
+    /// end of its bar where the profile has no room past it, with at most two decimals and no
+    /// trailing zeros, abbreviated with K, M or B from a thousand, or the row's ratio of puts to
+    /// calls. The profile takes the right or the left 30% of the plot, its widest row from 1% to
+    /// 30% of the plot's width, 27% by default. Layout can instead place each upcoming expiration
+    /// beside its date on the time scale, on the chosen side, separately or grouped by week or
+    /// month. Maximum expirations counts from the nearest, 10 by default. Each group shares the
+    /// strike window and row height, names its own walls inside its profile, past their rows' bars
+    /// and figures where there is room and otherwise over the bars near their base, leaving out a
+    /// label with no room clear of the figures, and labels its latest date on the time scale
+    /// while Expiration labels is on. Groups mapping to one bar are combined; without chart bars
+    /// no dated profiles are drawn.
     /// Under Through date, Maximum expirations keeps the first N listed expiries on or after the
     /// current day; 0 keeps every listed expiry up to the date. Strikes around price draws the
     /// strikes at the underlying price the expected move uses and the N nearest below and above
@@ -1269,11 +1274,11 @@ impl Indicator for OptionsVolumeProfile {
         let (mut sides, mut color) = ([self.colors[0], self.colors[1]], self.colors[0]);
         let (mut right_aligned, mut width) = (true, 0.9);
         if matches!(self.source, ProfileSource::Chain(..)) {
-            let [call, put, positive, negative, total] = self.bar_colors;
+            let [call, put, positive, negative, total, ratio] = self.bar_colors;
             (config.display, sides, color) = match self.sides[self.drawn_measure(&cache)] {
                 0 => (ProfileDisplay::UpDown, [call, put], call),
                 1 => (ProfileDisplay::Delta, [positive, negative], positive),
-                4 => (ProfileDisplay::Total, [call, put], put),
+                4 => (ProfileDisplay::Total, [call, put], ratio),
                 _ => (ProfileDisplay::Total, [call, put], total),
             };
             (right_aligned, width) = (!self.left, (self.width_percent / 30.0) as f32);
@@ -1776,7 +1781,8 @@ impl Indicator for OptionsVolumeProfile {
         for ((id, label, default), color) in BAR_COLORS.into_iter().zip(self.bar_colors) {
             inputs.push(
                 StudyInput::new(id, label, InputValue::Color(color), InputKind::Color)
-                    .with_default(InputValue::Color(default)),
+                    .with_default(InputValue::Color(default))
+                    .in_style_tab(),
             );
         }
         inputs.extend([
@@ -3754,8 +3760,9 @@ mod tests {
             assert_eq!((plot.right_aligned, plot.width), (true, 0.9));
             assert!(restored.legend_visible(readout), "{label}");
             assert!(!restored.plot_style(readout).visible, "{label}");
-            // Saved before the strike limit, the current price line and the daily interval
-            // default: every strike, no price line and every interval.
+            // Saved before the strike limit, the current price line, the daily interval default
+            // and the Puts / calls colour: every strike, no price line, every interval and the
+            // puts colour.
             let input = |id: &str| {
                 let inputs = restored.inputs();
                 inputs
@@ -3766,18 +3773,36 @@ mod tests {
             assert_eq!(input("strikes_around_price"), Some(InputValue::Length(0)));
             assert_eq!(input("current_price"), Some(InputValue::Toggle(false)));
             assert_eq!(input("layout"), Some(InputValue::Choice(0)));
+            assert_eq!(
+                input("ratio_color"),
+                Some(InputValue::Color(template.settings.plots[1].color))
+            );
             restored.calculate(&[Bar::new(Utc::now(), 100.0, 101.0, 99.0, 100.0, 1.0)]);
             assert_eq!(restored.plot_value(8, 0), None);
             assert!(!restored.legend_visible(8), "{label}");
             let intervals = restored.settings().timeframe_visibility;
             assert!(intervals.is_visible_on(&crate::model::Timeframe::Min5.as_str()));
         }
+        // Saved with bar colours of its own before puts divided by calls had one, showing them
+        // in its puts colour rgba(7, 8, 9, 200).
+        let saved = r#"{"name":"Options Volume Profile","inputs":[["layout",{"Choice":0}],["expirations",{"Length":10}],["grouping",{"Choice":0}],["expiry_labels",{"Toggle":true}],["expiry",{"Choice":0}],["expiry_label",{"Text":"Nearest"}],["through_date",{"Text":"2026-11-29"}],["max_expiries",{"Length":0}],["measure",{"Choice":0}],["measure_label",{"Text":"Volume"}],["volume_sides",{"Choice":4}],["interest_sides",{"Choice":0}],["gamma_sides",{"Choice":1}],["strikes_around_price",{"Length":10}],["put_call",{"Toggle":true}],["show_values",{"Toggle":false}],["current_price",{"Toggle":true}],["call_wall",{"Toggle":false}],["put_wall",{"Toggle":false}],["max_pain",{"Toggle":false}],["placement",{"Choice":0}],["profile_width",{"Number":27.0}],["call_color",{"Color":[29,69,180,180]}],["put_color",{"Color":[5,6,7,200]}],["net_positive_color",{"Color":[27,117,109,180]}],["net_negative_color",{"Color":[169,59,56,180]}],["total_color",{"Color":[29,69,180,180]}],["expected_move",{"Toggle":false}],["move_method",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.OptionsVolumeProfile.html","plots":[{"color":[27,117,109,180],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[169,59,56,180],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[27,117,109,180],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[29,69,180,180],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[169,59,56,180],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[27,117,109,180],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[38,166,154,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[38,166,154,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Dotted","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":false,"visible_timeframes":[],"ranges":{"Second":{"start":86400,"end":18446744073709551615},"Minute":{"start":1440,"end":18446744073709551615},"Hour":{"start":24,"end":18446744073709551615},"Day":{"start":1,"end":18446744073709551615},"Week":{"start":1,"end":18446744073709551615},"Month":{"start":1,"end":18446744073709551615}}},"levels":[],"fill_between_levels":false,"level_fill_color":[2,7,7,16],"untagged_plots":[0,1,2,3,4,5,6,7,8],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let template: crate::studies::StudyTemplate = serde_json::from_str(saved).unwrap();
+        let restored = template.create_with(&factory).unwrap();
+        let puts = Color32::from_rgba_unmultiplied(7, 8, 9, 200);
+        let ratio = restored
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == "ratio_color")
+            .map(|input| input.value);
+        assert_eq!(ratio, Some(InputValue::Color(puts)));
+        let plot = restored.volume_profiles(0..1).remove(0);
+        assert_eq!(plot.color, puts.to_srgba_unmultiplied());
     }
 
     /// Each Sides choice draws its display in colours of its own, so that colours chosen for one
     /// display stay when another is shown, and the put/call ratio does not follow the choice.
-    /// Calls start blue and puts red, and puts divided by calls leave a strike without calls
-    /// empty.
+    /// Calls start blue, puts red and puts divided by calls orange, and puts divided by calls
+    /// leave a strike without calls empty.
     #[test]
     fn sides_choose_their_display_and_colours() {
         use InputValue::{Choice, Color};
@@ -3808,6 +3833,10 @@ mod tests {
                 "total_color",
                 Color32::from_rgba_unmultiplied(41, 98, 255, 180),
             ),
+            (
+                "ratio_color",
+                Color32::from_rgba_unmultiplied(255, 152, 0, 180),
+            ),
         ] {
             let input = study
                 .inputs()
@@ -3823,6 +3852,7 @@ mod tests {
             "net_positive_color",
             "net_negative_color",
             "total_color",
+            "ratio_color",
         ];
         for (id, n) in ids.into_iter().zip(1..) {
             study.set_input(id, Color(color(n))).unwrap();
@@ -3845,7 +3875,7 @@ mod tests {
             ),
             (0, "volume_sides", 2, (Total, None, rgba(5))),
             (0, "volume_sides", 3, (Total, None, rgba(5))),
-            (0, "volume_sides", 4, (Total, None, rgba(2))),
+            (0, "volume_sides", 4, (Total, None, rgba(6))),
             (
                 2,
                 "gamma_sides",
@@ -3881,15 +3911,15 @@ mod tests {
         }
         // Split colours chosen later leave the net ones, and a net colour the split ones.
         study.set_input("measure", Choice(0)).unwrap();
-        study.set_input("call_color", Color(color(6))).unwrap();
-        study.set_input("put_color", Color(color(7))).unwrap();
+        study.set_input("call_color", Color(color(7))).unwrap();
+        study.set_input("put_color", Color(color(8))).unwrap();
         study.set_input("volume_sides", Choice(1)).unwrap();
         assert_eq!(sides(&study).1, Some([rgba(3), rgba(4)]));
         study
-            .set_input("net_positive_color", Color(color(8)))
+            .set_input("net_positive_color", Color(color(9)))
             .unwrap();
         study.set_input("volume_sides", Choice(0)).unwrap();
-        assert_eq!(sides(&study).1, Some([rgba(6), rgba(7)]));
+        assert_eq!(sides(&study).1, Some([rgba(7), rgba(8)]));
         // A strike without calls has no ratio, and the readout still divides every put by every
         // call: (5 + 7 + 8) / (10 + 0 + 4).
         let (chain, dates) = chain_with_a_strike_without_calls();
@@ -3970,12 +4000,13 @@ mod tests {
     }
 
     /// Each Sides display paints every strike in its own colours at one opacity, with no line
-    /// across the profile, and with Values on, the walls are named beside their rows, clear of
-    /// every figure, at either placement.
+    /// across the profile: an edited Puts colour paints the puts of split bars alone, and puts
+    /// divided by calls keep a colour of their own. With Values on, the walls are named clear of
+    /// every figure and of each other, at either placement.
     #[cfg(feature = "widget")]
     #[test]
     fn options_rows_keep_their_colours_and_walls_clear_their_figures() {
-        use InputValue::{Choice, Toggle};
+        use InputValue::{Choice, Color, Toggle};
         use egui::{Rect, Shape};
         let (chain, dates) = chain_with_volumes(&[
             (100.0, [20.0, 10.0]),
@@ -3989,14 +4020,16 @@ mod tests {
         let blue = tone([41, 98, 255, 180]);
         let red = tone([239, 83, 80, 180]);
         let teal = tone([38, 166, 154, 180]);
+        let orange = tone([255, 152, 0, 180]);
+        let puts = [150, 40, 90, 180];
         let [r, g, b, _] = EXPIRY_COLORS[0].to_srgba_unmultiplied();
         let expiry = tone([r, g, b, 180]);
         for (sides, fills) in [
-            (0, vec![blue, red]),
+            (0, vec![blue, tone(puts)]),
             (1, vec![teal, red]),
             (2, vec![blue]),
             (3, vec![expiry]),
-            (4, vec![red]),
+            (4, vec![orange]),
         ] {
             for left in [false, true] {
                 for strikes in [[Some(105.0), Some(110.0)], [Some(110.0); 2]] {
@@ -4004,10 +4037,15 @@ mod tests {
                     let mut study =
                         OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.clone())
                             .unwrap();
+                    let [r, g, b, a] = puts;
                     for (id, value) in [
                         ("volume_sides", Choice(sides)),
                         ("placement", Choice(usize::from(left))),
                         ("show_values", Toggle(true)),
+                        (
+                            "put_color",
+                            Color(Color32::from_rgba_unmultiplied(r, g, b, a)),
+                        ),
                     ] {
                         study.set_input(id, value).unwrap();
                     }
@@ -4498,13 +4536,9 @@ mod tests {
                     } else {
                         label.pos.x
                     };
-                    // The widest bar reaches 90; the zero ratio has none. The label clears it by 4.
-                    let expected = match (left, sides) {
-                        (true, 0) => 106.0,
-                        (false, 0) => 194.0,
-                        (true, _) => 196.0,
-                        (false, _) => 104.0,
-                    };
+                    // The widest bar reaches 90, leaving no room past it inside the span, so the
+                    // label lies over it 4 from the base; the zero ratio has no bar.
+                    let expected = if left { 196.0 } else { 104.0 };
                     assert!((label_end - expected).abs() < 1e-3);
                     assert_eq!(
                         label.fallback_color,
@@ -4611,6 +4645,198 @@ mod tests {
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].profile.up(), [2.0]);
         assert_eq!(merged[1].profile.up(), [28.0]);
+    }
+
+    /// Expirations a week apart draw adjacent profiles. At either placement, with both walls and
+    /// Values on, each profile writes its wall labels and figures inside its own span, clear of
+    /// the other profile's rows and figures, a label with no room past its row lying over the
+    /// row's bar near its base. An exposure wall is named above its line only where the label
+    /// fits the span.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn wall_labels_stay_inside_their_expirations_profile() {
+        use crate::model::Timeframe;
+        use crate::scales::{PriceMap, PriceRange, PriceTransform};
+        use InputValue::{Choice, Toggle};
+        use egui::{Rect, Shape};
+        let dates = [13, 20].map(|day| NaiveDate::from_ymd_opt(2099, 11, day).unwrap());
+        let historical = dates[0]
+            .with_day(10)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_utc();
+        let feed = ChainFeed::default();
+        let mut query = OptionChainQuery::new("SAMPLE", dates[0]..=dates[1]);
+        query.as_of = Some(historical);
+        let chain = OptionChain::new(&feed, query, || {}).unwrap();
+        // Calls and puts by strike. On November 13 the call wall is at 110 and the put wall at
+        // 105, the widest row; on November 20 the call wall is at 100 and the put wall at 110,
+        // the widest row.
+        let volumes = [
+            [
+                (100.0, [1.0, 1.0]),
+                (105.0, [2.0, 50.0]),
+                (110.0, [40.0, 1.0]),
+            ],
+            [
+                (100.0, [30.0, 2.0]),
+                (105.0, [1.0, 1.0]),
+                (110.0, [2.0, 40.0]),
+            ],
+        ];
+        let rows = dates
+            .iter()
+            .zip(volumes)
+            .flat_map(|(&expiry, strikes)| {
+                strikes.into_iter().flat_map(move |(strike, volumes)| {
+                    [OptionKind::Call, OptionKind::Put]
+                        .into_iter()
+                        .zip(volumes)
+                        .map(move |(kind, volume)| {
+                            let symbol = format!("{expiry}-{strike}-{kind:?}");
+                            let mut row =
+                                OptionQuote::new(symbol, expiry, strike, kind, historical);
+                            row.volume = Some(volume);
+                            row.open_interest = Some(volume);
+                            row.gamma = Some(0.05);
+                            row.multiplier = Some(100.0);
+                            row.underlying_price = Some(100.0);
+                            row
+                        })
+                })
+            })
+            .collect();
+        feed.0.lock().unwrap().as_ref().unwrap().push(rows).unwrap();
+        // Daily bars from November 1 to 10, so November 13 and 20 map to indices 12 and 19.
+        let bars: Vec<_> = (1..=10)
+            .map(|day| {
+                let time = dates[0]
+                    .with_day(day)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap();
+                Bar::new(time.and_utc(), 100.0, 101.0, 99.0, 100.0, 1.0)
+            })
+            .collect();
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 200.0));
+        // 10 points a price unit: strike rows 50 tall.
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(95.0, 115.0),
+            0.0,
+            200.0,
+            false,
+        );
+        // A profile is 7 bars wide: 140 at spacing 20, 28 at spacing 4. At 140 the widest bar
+        // takes 126, so no wall label fits past its row and each lies over its bars, 4 from
+        // their base; an exposure label fits at 140 but not at 28.
+        for (measure, spacing, labels) in [(0, 20.0, 2), (2, 20.0, 2), (2, 4.0, 0)] {
+            for left in [false, true] {
+                let case = format!("measure {measure}, spacing {spacing}, left {left}");
+                let mut study =
+                    OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.to_vec())
+                        .unwrap();
+                study.set_timeframe(Timeframe::Day1);
+                for (id, value) in [
+                    ("layout", Choice(1)),
+                    ("placement", Choice(usize::from(left))),
+                    ("measure", Choice(measure)),
+                    ("show_values", Toggle(true)),
+                    ("call_wall", Toggle(true)),
+                    ("put_wall", Toggle(true)),
+                ] {
+                    study.set_input(id, value).unwrap();
+                }
+                study.calculate(&bars);
+                // Base index 30 keeps indices 6 to 26 inside the plot at both spacings.
+                let coords =
+                    crate::chart::coords::ChartMapping::new(rect, spacing, 0, 30, 0.0, map);
+                let painted: Vec<_> = study
+                    .volume_profiles(0..60)
+                    .into_iter()
+                    .map(|plot| {
+                        let span =
+                            crate::chart::rendering::volume_profile::profile_span(&plot, &coords);
+                        let mut output =
+                            egui::Context::default().run_ui(Default::default(), |ui| {
+                                crate::painting::volume_profile::paint_profile(
+                                    ui.painter(),
+                                    &plot.profile,
+                                    plot.config,
+                                    plot.color,
+                                    span.clone(),
+                                    crate::painting::volume_profile::ProfileStyle::Study {
+                                        right_aligned: plot.right_aligned,
+                                        strip: false,
+                                        walls_visible: [true; 2],
+                                        width: plot.width,
+                                        volume_decimals: None,
+                                    },
+                                    &|price| map.price_to_y(price),
+                                );
+                            });
+                        let shapes = std::mem::take(&mut output.shapes);
+                        output.drop_without_applying_deltas();
+                        let (mut walls, mut figures, mut rows) =
+                            (Vec::new(), Vec::new(), Vec::new());
+                        for shape in &shapes {
+                            match &shape.shape {
+                                Shape::Text(text) => {
+                                    let at = Rect::from_min_size(text.pos, text.galley.size());
+                                    if ["Call wall", "Put wall"].contains(&text.galley.text()) {
+                                        walls.push(at);
+                                    } else {
+                                        figures.push(at);
+                                    }
+                                }
+                                Shape::Rect(row) => rows.push(row.rect),
+                                _ => {}
+                            }
+                        }
+                        (span, plot.right_aligned, walls, figures, rows)
+                    })
+                    .collect();
+                assert_eq!(painted.len(), 2, "{case}");
+                assert!(
+                    (painted[0].0.end - painted[1].0.start).abs() < 1e-3,
+                    "{case}: adjacent"
+                );
+                for (index, (span, right_aligned, walls, figures, _)) in painted.iter().enumerate()
+                {
+                    assert_eq!(walls.len(), labels, "{case}");
+                    // Gamma exposure writes no figures.
+                    assert_eq!(figures.len(), if measure == 0 { 3 } else { 0 }, "{case}");
+                    for text in walls.iter().chain(figures) {
+                        assert!(
+                            span.start <= text.left() && text.right() <= span.end,
+                            "{case}: {text:?} inside {span:?}"
+                        );
+                    }
+                    let (_, _, _, other_figures, other_rows) = &painted[1 - index];
+                    for wall in walls {
+                        assert!(
+                            other_figures
+                                .iter()
+                                .chain(other_rows)
+                                .all(|shape| !wall.intersects(*shape)),
+                            "{case}: {wall:?} clears the other profile"
+                        );
+                        if measure == 0 {
+                            let base = if *right_aligned {
+                                span.end - 4.0 - wall.width()
+                            } else {
+                                span.start + 4.0
+                            };
+                            assert!(
+                                (wall.left() - base).abs() < 1e-3,
+                                "{case}: {wall:?} near its base"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Strikes around price draws the listed strikes at the price the expected move uses and the
