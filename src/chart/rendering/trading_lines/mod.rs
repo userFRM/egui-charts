@@ -6,7 +6,6 @@ mod position;
 
 pub use format::TradingFormatter;
 pub(crate) use format::quantity_text;
-use format::settled;
 #[cfg(feature = "ui")]
 pub(crate) use format::{grouped, quantity_decimals};
 
@@ -21,7 +20,7 @@ use crate::chart::rendering::{draw_dashed_polyline, render_price_line};
 use crate::localization as l10n;
 use crate::model::{
     Capabilities, LineStyle, Order, OrderId, OrderRequest, OrderSide, OrderType, Position,
-    PositionBracket, PriceLine, TimeInForce,
+    PositionBracket, PriceLine, TimeInForce, settled,
 };
 use crate::scales::{TimezoneMode, decimals, to_step};
 use crate::theme::{Theme, ThemeExt};
@@ -457,7 +456,14 @@ pub fn render_trading_lines<'a>(
             OrderType::Limit(_) => "Limit",
             OrderType::Stop(_) => "Stop",
             OrderType::StopLimit { .. } => "Stop limit",
+            OrderType::TrailingStop { .. } => "Trailing stop",
             _ => "Market",
+        };
+        // The broker moves a trailing stop; until it reports the stop, the line waits at the
+        // activation price.
+        let trailing = match request.order_type {
+            OrderType::TrailingStop { activation, .. } => Some(order.trailing_stop.or(activation)),
+            _ => None,
         };
         let parent = request.position_bracket.and_then(|_| {
             positions.iter().find(|p| {
@@ -469,7 +475,7 @@ pub fn render_trading_lines<'a>(
             Some(PositionBracket::StopLoss) => Level::StopLoss,
             None => Level::Entry,
         };
-        let initial_entry = entry_price(&request.order_type);
+        let initial_entry = trailing.unwrap_or_else(|| entry_price(&request.order_type));
         // Each line: its kind, its take-profit level if any, its price and its quantity.
         let levels_of = &request.take_profit_levels;
         let mut levels = vec![(Level::Entry, None, initial_entry, open)];
@@ -609,6 +615,7 @@ pub fn render_trading_lines<'a>(
                 && options.order_exits
                 && request.position_bracket.is_none()
                 && initial_entry.is_some()
+                && trailing.is_none()
             {
                 offered_exits(
                     request.take_profit.is_none() && request.take_profit_levels.is_empty(),
@@ -634,7 +641,7 @@ pub fn render_trading_lines<'a>(
                     && request.position_bracket.is_none())
                 .then(|| exit_coverage(request)),
                 buttons: if cancel { &[Button::Cancel] } else { &[] },
-                draggable: options.modify,
+                draggable: options.modify && trailing.is_none(),
                 submit: (options.submit && level == Level::Entry).then_some(request.side),
                 exits,
                 exit_pnl: &exit_pnl,
@@ -2323,6 +2330,86 @@ mod tests {
                     Some(TradingLineAction::Modify(order, changed)),
                     "{label} {limit}"
                 );
+            }
+        }
+    }
+
+    /// A trailing stop's line sits at the stop the broker reports and moves with it, waits at
+    /// the activation price before that, is not drawn without either, and cannot be dragged.
+    #[test]
+    fn trailing_stop_lines_follow_the_reported_stop() {
+        for theme in [Theme::light(), Theme::dark()] {
+            let sell = crate::theme::trading_side_color(&theme, OrderSide::Sell);
+            for (activation, stop, drawn) in [
+                (Some(105.0), Some(98.5), Some(98.5)),
+                (Some(105.0), Some(99.5), Some(99.5)),
+                (Some(105.0), None, Some(105.0)),
+                (None, None, None),
+            ] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+                let order_type = OrderType::TrailingStop {
+                    distance: crate::model::TrailDistance::Price(3.0),
+                    activation,
+                };
+                let request = OrderRequest::new("SYM", OrderSide::Sell, 1.0, order_type);
+                let mut order = Order::new(OrderId::new("T"), request, OrderStatus::Working);
+                order.trailing_stop = stop;
+                let mut options = TradingLineOptions::new("USD", 0.01);
+                options.modify = true;
+                let mut start = Pos2::ZERO;
+                let mut action = None;
+                for frame in 0..7 {
+                    let end = start + vec2(0.0, 40.0);
+                    let events = match frame {
+                        3 => vec![egui::Event::PointerMoved(start)],
+                        4 => vec![egui::Event::PointerButton {
+                            pos: start,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                        5 => vec![egui::Event::PointerMoved(end)],
+                        6 => vec![egui::Event::PointerButton {
+                            pos: end,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                        _ => vec![],
+                    };
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                            let mapping = chart.get_chart_mapping();
+                            let lines = render_trading_lines(ui, &mapping, [&order], [], &options);
+                            if frame == 2 {
+                                let expected: Vec<_> =
+                                    drawn.into_iter().map(|price| (price, sell)).collect();
+                                assert_eq!(lines.tags, expected, "{activation:?} {stop:?}");
+                            }
+                            action = action.take().or(lines.action);
+                        },
+                    );
+                    if frame == 2 {
+                        let label = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == "Trailing stop" => {
+                                Some(text.pos + text.galley.size() / 2.0)
+                            }
+                            _ => None,
+                        });
+                        assert_eq!(label.is_some(), drawn.is_some());
+                        start = label.unwrap_or(start);
+                    }
+                    output.drop_without_applying_deltas();
+                }
+                assert_eq!(action, None, "{activation:?} {stop:?}");
             }
         }
     }
