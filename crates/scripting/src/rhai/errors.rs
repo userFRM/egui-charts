@@ -5,22 +5,39 @@ use crate::ScriptError;
 use crate::runtime::BarError;
 use ::rhai::{EvalAltResult, LexError, ParseError, ParseErrorType};
 
-/// A compile error.
-pub(crate) fn compile(error: &ParseError) -> ScriptError {
-    let message = match error.err_type() {
-        ParseErrorType::VariableUndefined(name) => {
+/// A compile error, in the terms of `source`.
+pub(crate) fn compile(error: &ParseError, source: &str) -> ScriptError {
+    let at = span(error.position());
+    let message = match (error.err_type(), word_at(source, at)) {
+        // As a method, `x.curry()`, a disabled keyword reads as a missing property.
+        (_, Some(word @ ("eval" | "curry"))) => format!("reserved keyword '{word}' is disabled"),
+        (ParseErrorType::VariableUndefined(name), _) => {
             format!("{name} is not declared; declare it with let, input, state or series")
         }
-        ParseErrorType::BadInput(LexError::UnexpectedInput(token))
+        (ParseErrorType::BadInput(LexError::UnexpectedInput(token)), _)
             if token == "|" || token == "||" =>
         {
             "anonymous functions are not available; declare the function with fn and pass \
              Fn(\"name\")"
                 .into()
         }
-        other => other.to_string(),
+        (other, _) => other.to_string(),
     };
-    ScriptError::at(message, span(error.position()), None)
+    ScriptError::at(message, at, None)
+}
+
+/// The word that starts at `span` in `source`.
+fn word_at(source: &str, span: crate::runtime::program::Span) -> Option<&str> {
+    let line = source.lines().nth((span.line as usize).checked_sub(1)?)?;
+    let start = line
+        .char_indices()
+        .nth((span.column as usize).checked_sub(1)?)?
+        .0;
+    let word = &line[start..];
+    let end = word
+        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(word.len());
+    Some(&word[..end])
 }
 
 /// A runtime error of the bar program, at the innermost position, in the terms of `source`.

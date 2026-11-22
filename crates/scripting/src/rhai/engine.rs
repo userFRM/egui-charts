@@ -173,7 +173,9 @@ pub(crate) fn engine() -> Engine {
         // panics on the web, and one stored in a value it captures is never freed.
         .set_allow_anonymous_fn(false)
         // Code compiled at run time would bypass the declarations.
-        .disable_symbol("eval");
+        .disable_symbol("eval")
+        // `f.curry(f)` doubles a value at each step, out of sight of the size limits.
+        .disable_symbol("curry");
     // The standard package's `sleep` blocks the thread, which panics on the web. These come
     // first in every lookup, a function pointer's included, so a script has no such function.
     engine.register_fn("sleep", |_: INT| -> Result<()> {

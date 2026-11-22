@@ -275,6 +275,13 @@ fn scripts_are_refused_at_their_line_and_column() {
             9,
             "anonymous functions",
         ),
+        // Each step doubles a value that the size limits do not see into.
+        (
+            "fn g() { 1 } let f = Fn(\"g\"); for i in 0..20 { f = f.curry(f); }\nplot(\"x\", 1.0);",
+            1,
+            54,
+            "curry",
+        ),
     ] {
         let error = Script::compile("Test", source, &IndicatorFactory::new()).unwrap_err();
         assert_eq!(

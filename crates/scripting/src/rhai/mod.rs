@@ -34,7 +34,7 @@ pub(crate) fn compile(name: String, source: &str) -> Result<Compiled, ScriptErro
         engine.set_strict_variables(strict);
         let ast = engine
             .compile_with_scope(scope, source)
-            .map_err(|error| errors::compile(&error))?;
+            .map_err(|error| errors::compile(&error, source))?;
         let spec = std::mem::take(&mut collector.lock().unwrap_or_else(|e| e.into_inner()).spec);
         Ok::<_, ScriptError>((engine, ast, spec))
     };
