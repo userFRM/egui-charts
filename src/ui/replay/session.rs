@@ -10,7 +10,8 @@ impl ReplayController {
     /// completed bar there. Useful when changing source interval.
     pub fn seek_cutoff(&mut self, time: DateTime<Utc>, clock: &crate::model::BarClock) -> bool {
         let end = self.ts.partition_point(|&open| {
-            crate::widget::replay::bar_close(clock, clock.bar_open(open))
+            clock
+                .bar_close(clock.bar_open(open))
                 .map_or(open < time, |close| close <= time)
         });
         if end == 0 {
@@ -30,7 +31,8 @@ impl ReplayController {
             return None;
         }
         let time = *self.curr_ts()?;
-        crate::widget::replay::bar_close(clock, clock.bar_open(time))
+        clock
+            .bar_close(clock.bar_open(time))
             .or_else(|| time.checked_add_signed(chrono::TimeDelta::nanoseconds(1)))
     }
 

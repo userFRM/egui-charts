@@ -698,9 +698,8 @@ impl TradingNotifications {
 #[serde(default)]
 #[non_exhaustive]
 pub struct AlertsSettings {
-    /// Ask the host to play a local sound when an alert fires.
-    pub play_sound: bool,
-    /// Host sound name; empty selects its first available sound.
+    /// Host sound name played when an alert whose delivery keeps Sound fires; empty selects its
+    /// first available sound.
     pub sound: String,
     /// Local alert sound gain, from zero (muted) to one.
     pub sound_volume: f32,
@@ -726,7 +725,6 @@ pub struct AlertsSettings {
 impl Default for AlertsSettings {
     fn default() -> Self {
         Self {
-            play_sound: false,
             sound: String::new(),
             sound_volume: 1.0,
             show_alerts: true,
@@ -779,7 +777,7 @@ pub struct OrderFlowSettings {
 /// settings.candle_colors.show_wick = false;
 /// settings.status_line.show_logo = false;
 /// settings.trading.instant_orders = true;
-/// settings.alerts.play_sound = false;
+/// settings.alerts.sound_volume = 0.5;
 /// settings.session_background = Some(egui_charts::widget::settings::SessionBackgroundSettings::default());
 /// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
