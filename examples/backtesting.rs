@@ -83,8 +83,8 @@ fn show_report(report: StrategyReport, bars: &[Bar]) {
                     ui.label(&self.selection);
                 }
                 match self.panel.show(ui) {
-                    StrategyReportAction::ExportCsv(csv) => {
-                        ui.ctx().copy_text(csv);
+                    StrategyReportAction::ExportCsv { content, .. } => {
+                        ui.ctx().copy_text(content);
                         self.selection = "Trades CSV copied to clipboard".into();
                     }
                     StrategyReportAction::SelectTrade(trade) => {

@@ -199,19 +199,7 @@ impl<const RATIO: bool, const VOLUME: bool> Indicator for MarketBreadth<RATIO, V
             let value = advancing
                 .bar_at(bar.time)
                 .and_then(|_| {
-                    let forming_higher = at + 1 == data.len()
-                        && self.wait_for_close
-                        && clock
-                            .timeframe()
-                            .is_some_and(|tf| advancing.timeframe.duration_ms() > tf.duration_ms());
-                    let close = if forming_higher {
-                        bar.time
-                    } else {
-                        clock
-                            .next_open(clock.bar_open(bar.time))
-                            .unwrap_or(bar.time)
-                    };
-                    advancing.output_at(close, !self.wait_for_close && at + 1 == data.len())
+                    advancing.closed_on(clock, self.wait_for_close, bar.time, at + 1 == data.len())
                 })
                 .and_then(|at| self.source_values[at])
                 .unwrap_or(f64::NAN);
@@ -314,6 +302,7 @@ mod tests {
                         clock: BarClock::new(Timeframe::Day1),
                         instrument: None,
                         timeframe: Timeframe::Day1,
+                        chart: None,
                     })
                     .collect();
                 study.calculate(&chart);

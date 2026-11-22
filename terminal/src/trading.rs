@@ -261,10 +261,13 @@ impl Terminal {
                     ));
                 }
             }
-            StrategyReportAction::ExportCsv(csv) => {
+            StrategyReportAction::ExportCsv { filename, content } => {
                 let name = "strategy-trades.csv".to_owned();
-                if !self.save_file(name, ExportContents::Text(csv.clone())) {
-                    return Some(Action::StrategyReport(StrategyReportAction::ExportCsv(csv)));
+                if !self.save_file(name, ExportContents::Text(content.clone())) {
+                    return Some(Action::StrategyReport(StrategyReportAction::ExportCsv {
+                        filename,
+                        content,
+                    }));
                 }
             }
             action => return Some(Action::StrategyReport(action)),

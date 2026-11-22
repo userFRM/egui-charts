@@ -675,6 +675,17 @@ pub trait Indicator: Send + ConcreteStudy {
         false
     }
 
+    /// Whether a [`ConfiguredStudy`](super::ConfiguredStudy) offers this study the Wait for
+    /// interval close input, on by default, for the histories it requests and reads with
+    /// [`StudyData::closed_at`](super::StudyData::closed_at), also when it has an interval
+    /// input of its own. The chart passes the setting with each history in
+    /// [`StudyData::chart`](super::StudyData::chart). A study the chart can calculate on
+    /// another interval is offered the input in any case. The default, `false`, offers it no
+    /// other way.
+    fn offers_wait_for_close(&self) -> bool {
+        false
+    }
+
     /// The single price series this study reads, or `None` for OHLC or multi-source studies.
     /// Configured studies expose this as a Source input. Study references use chart ids and
     /// undisplaced output columns; missing or cyclic references produce missing values.
