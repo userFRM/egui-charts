@@ -90,7 +90,8 @@ fn allowed(kind: NewChatRoomKind, capabilities: &ChatCapabilities) -> bool {
 /// Chat rooms pushed by the host's [`Chats`] service.
 ///
 /// The user picks a room, reads its messages and posts; a posted message appears once the host
-/// pushes it. Messages show in time order, a message the room holds already is not added again,
+/// pushes it. Each room keeps its own scroll position, which starts at its newest messages.
+/// Messages show in time order, a message the room holds already is not added again,
 /// and the panel keeps the newest 1,000 messages of each room and 5,000 in all; past that the
 /// room holding the most loses its oldest, sparing a room receiving a history page. Where the
 /// service offers [`history`](Chats::history), reaching the top of a room asks for its older
@@ -117,9 +118,9 @@ pub struct ChatsPanel {
     messages: HashMap<String, VecDeque<ChatMessage>>,
     /// Paging back through each room's older messages, by room.
     paging: HashMap<String, Paging>,
-    /// The first message of the shown room last frame and its top below the top of the list, to
-    /// keep the view on it when older messages join above.
-    first: Option<(ChatMessage, f32)>,
+    /// The first message of each room when it last showed and its top below the top of the list,
+    /// to keep the view on it when older messages join above.
+    first: HashMap<String, (ChatMessage, f32)>,
     members: HashMap<String, Vec<ChatUser>>,
     draft: FilterWidget,
     error: Option<FeedError>,
@@ -218,7 +219,7 @@ impl ChatsPanel {
         self.rooms.clear();
         self.messages.clear();
         self.paging.clear();
-        self.first = None;
+        self.first.clear();
         self.members.clear();
         self.generation = self.next_key();
         let (listener, events) = Listener::new(&self.inbox, self.generation);
@@ -409,7 +410,7 @@ impl ChatsPanel {
                     self.rooms.clear();
                     self.messages.clear();
                     self.paging.clear();
-                    self.first = None;
+                    self.first.clear();
                     self.members.clear();
                 }
                 Err(_) => {}
@@ -547,8 +548,8 @@ impl ChatsPanel {
                     });
                 });
             });
-        // The message that led the list last frame, when another one leads it now.
-        let moved = self.first.take().filter(|(was, _)| {
+        // The message that led the room's list when it last showed, when another one leads it now.
+        let moved = self.first.remove(&room).filter(|(was, _)| {
             self.messages
                 .get(&room)
                 .and_then(VecDeque::front)
@@ -557,7 +558,9 @@ impl ChatsPanel {
         let mut first = None;
         let mut kept = false;
         let mut retry = false;
+        // Each room keeps its own scroll position, apart from other rooms and other panels.
         let output = egui::ScrollArea::vertical()
+            .id_salt(("chat_messages", room.as_str()))
             .auto_shrink([false, false])
             .stick_to_bottom(true)
             .show(ui, |ui| {
@@ -636,7 +639,9 @@ impl ChatsPanel {
                     ui.add_space(theme.spacing.sm);
                 }
             });
-        self.first = first;
+        if let Some(first) = first {
+            self.first.insert(room.clone(), first);
+        }
         if retry {
             self.paging.remove(&room);
             self.ask(&room);
@@ -1161,24 +1166,28 @@ mod tests {
     }
 
     /// Guards opening a room by its host identifier, as a notification's Open room does: a listed
-    /// room shows at once with its messages and composer, leaving the New chat view, and an
-    /// unlisted one joins the list and shows the newest messages it asks a service with history
-    /// for.
+    /// room shows at once with its composer at its newest messages, leaving the New chat view and
+    /// never taking the scroll position of the room shown before; a room shown again keeps the
+    /// view on the message that led its list when older messages joined meanwhile; an unlisted
+    /// room joins the list and shows the newest messages it asks a service with history for.
     #[test]
     fn open_room_shows_a_listed_or_unlisted_room_with_its_messages_and_composer() {
         let host = Arc::new(Host::default());
+        host.history.store(true, Ordering::Relaxed);
         let mut panel = ChatsPanel::new();
         panel.set_service(host.clone());
+        let message = |room: &str, minute: i64, text: &str| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(minute);
+            ChatMessage::new(room, "Ann", time, text).with_id(text)
+        };
         let events = host.events.lock().unwrap().clone().unwrap();
         for room in ["desk", "news"] {
-            let text = format!("{room} 0");
-            let time = chrono::DateTime::UNIX_EPOCH;
-            let message = ChatMessage::new(room, "Ann", time, text.clone()).with_id(text);
-            events.push(ChatEvent::Message(message));
+            for i in 0..40 {
+                events.push(ChatEvent::Message(message(room, i, &format!("{room} {i}"))));
+            }
         }
         let ctx = egui::Context::default();
         panel.poll(&ctx);
-        panel.view = View::NewChat;
         let mut h = Harness::builder()
             .with_size(Vec2::new(320.0, 600.0))
             .with_context_setup(|ctx| {
@@ -1186,33 +1195,58 @@ mod tests {
                 egui_extras::install_image_loaders(ctx);
             })
             .build_ui_state(|ui, panel: &mut ChatsPanel| panel.show(ui), panel);
-        h.run();
-
-        h.state_mut().open_room("news");
-        h.run();
-        h.get_by_role_and_label(Role::TextInput, "Message news");
-        h.get_by_label("news 0");
-        assert!(h.query_by_label("desk 0").is_none());
-        assert_eq!(h.state().rooms, ["desk", "news"]);
-
-        host.history.store(true, Ordering::Relaxed);
-        h.state_mut().open_room("dm-ada");
-        // Steps, not runs: the request on its way shows a spinner, which repaints.
-        h.run_steps(3);
-        h.get_by_role_and_label(Role::TextInput, "Message dm-ada");
-        assert_eq!(h.state().rooms, ["desk", "news", "dm-ada"]);
-        let (room, before, limit, reply) = {
+        // Whether the message reads in full between the room menu and the composer.
+        let shown = |h: &Harness<'_, ChatsPanel>, room: &str, text: &str| {
+            let menu = h.get_by_role_and_label(Role::Button, room).rect();
+            let label = format!("Message {room}");
+            let composer = h.get_by_role_and_label(Role::TextInput, &label).rect();
+            h.query_by_label(text).is_some_and(|node| {
+                menu.max.y <= node.rect().min.y && node.rect().max.y <= composer.min.y
+            })
+        };
+        let take = || {
             let mut asked = host.asked.lock().unwrap();
             assert_eq!(asked.len(), 1);
             asked.pop().unwrap()
         };
+
+        // Steps, not runs: a request on its way shows a spinner, which repaints.
+        h.run_steps(3);
+        assert!(shown(&h, "desk", "desk 39") && !shown(&h, "desk", "desk 0"));
+        for _ in 0..20 {
+            h.get_by_role_and_label(Role::Button, "desk").scroll_up();
+            h.run_steps(2);
+        }
+        let (_, before, _, desk_page) = take();
+        assert_eq!(before.as_deref(), Some("desk 0"));
+
+        h.state_mut().view = View::NewChat;
+        h.run_steps(1);
+        h.state_mut().open_room("news");
+        h.run_steps(3);
+        assert!(shown(&h, "news", "news 39") && !shown(&h, "news", "news 0"));
+        assert!(h.query_by_label("desk 39").is_none());
+        assert!(host.asked.lock().unwrap().is_empty());
+        assert_eq!(h.state().rooms, ["desk", "news"]);
+
+        let older = |i: i64| message("desk", -i, &format!("older {i}"));
+        desk_page.send(Ok((1..=20).map(older).collect()));
+        h.state_mut().poll(&ctx);
+        h.state_mut().open_room("desk");
+        h.run_steps(3);
+        assert!(shown(&h, "desk", "desk 0"));
+        assert!(host.asked.lock().unwrap().is_empty());
+
+        h.state_mut().open_room("dm-ada");
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::TextInput, "Message dm-ada");
+        assert_eq!(h.state().rooms, ["desk", "news", "dm-ada"]);
+        let (room, before, limit, reply) = take();
         assert_eq!(
             (room.as_str(), before.as_deref(), limit),
             ("dm-ada", None, 50)
         );
-        let time = chrono::DateTime::UNIX_EPOCH;
-        let message = ChatMessage::new("dm-ada", "Ada", time, "Can you check the open?");
-        reply.send(Ok(vec![message.with_id("a1")]));
+        reply.send(Ok(vec![message("dm-ada", 0, "Can you check the open?")]));
         h.state_mut().poll(&ctx);
         h.run_steps(3);
         h.get_by_label("Can you check the open?");
