@@ -69,12 +69,16 @@ pub enum OrderFlowKind {
         reversal: bool,
     },
     /// Buy minus sell volume per bar, counting only executions whose size lies in each of three
-    /// inclusive `[min, max]` ranges, all from the same trades. A range with `min > max`
-    /// matches nothing; executions of unknown side count for no range. With
-    /// [`OrderFlowInput::with_size_basis`] a range can test the combined size of each
-    /// execution's aggressive order instead.
+    /// ranges, all from the same trades. A range `[min, limit]` includes its smallest size `min`
+    /// and excludes its `limit`, so ranges such as `[0.0, 10.0]` and `[10.0, 100.0]` meet at 10
+    /// without a gap or an overlap and count an execution of 10 in the second. A limit of
+    /// `f64::MAX` has no upper bound. The ranges are independent: an execution counts in every
+    /// range that holds its size, and a range with `min >= limit` matches nothing. Executions of
+    /// unknown side count for no range. With [`OrderFlowInput::with_size_basis`] a range can test
+    /// the combined size of each execution's aggressive order instead.
     SizeDelta {
-        /// Inclusive size ranges, one per output.
+        /// Size ranges `[min, limit]`, one per output: `min` is counted and `limit` is not,
+        /// except that a limit of `f64::MAX` counts every larger size.
         ranges: [[f64; 2]; 3],
     },
     /// Total volume and buy minus sell volume per bar, which a study sums over `bars` bars.
@@ -1829,10 +1833,16 @@ impl OrderFlowInput {
     }
 }
 
-/// `size` signed by the execution's side when `measured`, its own or its order's size,
-/// lies in `min..=max`; zero for an unknown side or a size outside the range.
-fn signed_size(trade: &Tick, measured: f64, min: f64, max: f64, size: f64) -> f64 {
-    if !(min..=max).contains(&measured) {
+/// Whether `size` lies in a Multi-Range Delta range: from its smallest size, included, up to
+/// its limit, excluded, or without an upper bound when the limit is `f64::MAX`.
+fn in_size_range([min, limit]: [f64; 2], size: f64) -> bool {
+    min <= size && (size < limit || limit == f64::MAX)
+}
+
+/// `size` signed by the execution's side when `counted`, which says whether its own or its
+/// order's size lies in the range; zero for an unknown side or a size outside the range.
+fn signed_size(trade: &Tick, counted: bool, size: f64) -> f64 {
+    if !counted {
         return 0.0;
     }
     match trade.side {
@@ -1909,9 +1919,7 @@ impl State {
         };
         // Which size ranges count a size: three for SizeDelta, the first for FilteredCvd.
         let counted = |size: f64| match kind {
-            OrderFlowKind::SizeDelta { ranges } => {
-                ranges.map(|[min, max]| (min..=max).contains(&size))
-            }
+            OrderFlowKind::SizeDelta { ranges } => ranges.map(|range| in_size_range(range, size)),
             OrderFlowKind::FilteredCvd { min, max } => [(min..=max).contains(&size), false, false],
             _ => [false; 3],
         };
@@ -2038,22 +2046,18 @@ impl State {
             }
             OrderFlowKind::SizeDelta { ranges } => {
                 let mut row = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
-                for (sum, [min, max]) in row.iter_mut().zip(ranges) {
-                    *sum += signed_size(trade, measured, min, max, size);
+                for (sum, range) in row.iter_mut().zip(ranges) {
+                    *sum += signed_size(trade, in_size_range(range, measured), size);
                 }
                 row
             }
             OrderFlowKind::FlowSum { .. } => {
                 let old = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
-                [
-                    old[0] + size,
-                    old[1] + signed_size(trade, trade.size, 0.0, f64::MAX, size),
-                    0.0,
-                ]
+                [old[0] + size, old[1] + signed_size(trade, true, size), 0.0]
             }
             OrderFlowKind::FilteredCvd { min, max } => {
                 let old = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
-                let delta = old[0] + signed_size(trade, measured, min, max, size);
+                let delta = old[0] + signed_size(trade, (min..=max).contains(&measured), size);
                 [delta, old[1].max(delta), old[2].min(delta)]
             }
             OrderFlowKind::PriceRange { seconds } => {
