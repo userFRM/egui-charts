@@ -356,7 +356,9 @@ impl DrawingManager {
 
     /// Duplicate a drawing three bars to the right, recording its creation for undo and saving.
     /// The copy has user edits on. Adds nothing for a drawing of a disabled tool or a copy that
-    /// saving would refuse.
+    /// saving would refuse. On a chart with
+    /// [`local_placement_folder`](super::DrawingManagerOptions::local_placement_folder) set, the
+    /// copy goes into that chart-only folder, as a placed drawing does.
     pub fn duplicate_drawing(&mut self, id: usize) {
         let Some(mut copy) = self.drawings.iter().find(|d| d.id == id).cloned() else {
             return;
@@ -369,13 +371,16 @@ impl DrawingManager {
         for point in copy.chart_points.iter_mut().skip(first) {
             point.bar_idx += 3.0;
         }
+        self.place_locally(&mut copy);
         if self.validate_created(&copy).is_ok() {
             self.push_synced(copy);
         }
     }
 
     /// Paste copies three bars to the right with fresh identities and user edits on, selecting
-    /// them as one undoable addition.
+    /// them as one undoable addition. On a chart with
+    /// [`local_placement_folder`](super::DrawingManagerOptions::local_placement_folder) set, the
+    /// copies go into that chart-only folder, as a placed drawing does.
     /// The caller maps clipboard anchors into this manager's chart coordinates first. Leaves out a
     /// copy of a disabled tool or an unregistered custom tool and a copy that saving would refuse;
     /// when it leaves out every copy, it selects nothing and records no undo step.
@@ -399,6 +404,7 @@ impl DrawingManager {
             copy.id = self.take_id();
             copy.z_order = self.top_z_order();
             copy.series_layer = None;
+            self.place_locally(&mut copy);
             ids.push(copy.id);
             let id = copy.id;
             self.drawings.push(copy);

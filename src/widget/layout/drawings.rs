@@ -4602,15 +4602,54 @@ mod tests {
             assert_eq!(line.folder_sync_mode(), Some(scope), "line at {price}");
         }
         assert_eq!(prices(&charts)[1], [104.0]);
+
+        // A copy of the shared line, pasted from the other layout or cloned here, is placed in
+        // the numbered chart-only folder: absent from the other layout and from storage, also
+        // through undo and redo.
+        let mut check_local = |charts: &mut [Chart; 2], local: &[f64]| {
+            settle(charts);
+            assert_eq!(prices(charts), [local.to_vec(), vec![104.0]]);
+            let (stored, skipped) =
+                DrawingStorage::from_json(&host.get("SAMPLE").unwrap()).unwrap();
+            assert!(skipped.is_empty());
+            assert_eq!(stored.drawings().len(), 1);
+        };
         let shared = charts[1].drawings().drawings[0].id;
+        charts[1].drawings_mut().select(shared);
+        let copied = charts[1].copy_selected_drawings().unwrap().unwrap();
+        charts[0].paste_drawings(&copied).unwrap();
+        let pasted = charts[0].drawings().drawings.last().unwrap();
+        assert_eq!(pasted.folder, ["Notes (2)"]);
+        assert_eq!(pasted.folder_sync_mode(), Some(FolderSync::Chart));
+        check_local(&mut charts, &[104.0, 104.0, 108.0, 110.0]);
+        assert!(charts[0].undo());
+        check_local(&mut charts, &[104.0, 108.0, 110.0]);
+        assert!(charts[0].redo());
+        check_local(&mut charts, &[104.0, 104.0, 108.0, 110.0]);
+        let original = charts[0]
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.folder == ["Notes"])
+            .unwrap()
+            .id;
+        charts[0].user_action(|chart| chart.drawings_mut().duplicate_drawing(original));
+        let cloned = charts[0].drawings().drawings.last().unwrap();
+        assert_eq!(cloned.folder, ["Notes (2)"]);
+        assert_eq!(cloned.folder_sync_mode(), Some(FolderSync::Chart));
+        check_local(&mut charts, &[104.0, 104.0, 104.0, 108.0, 110.0]);
+
         charts[1].user_action(|chart| chart.drawings_mut().delete_drawing(shared));
         settle(&mut charts);
-        assert_eq!(prices(&charts), [vec![108.0, 110.0], vec![]]);
+        assert_eq!(prices(&charts), [vec![104.0, 104.0, 108.0, 110.0], vec![]]);
 
         // Same symbol, no opt-in: placement on the other chart still goes to both.
         place(&mut charts[1], 102.0);
         settle(&mut charts);
-        assert_eq!(prices(&charts), [vec![102.0, 108.0, 110.0], vec![102.0]]);
+        assert_eq!(
+            prices(&charts),
+            [vec![102.0, 104.0, 104.0, 108.0, 110.0], vec![102.0]]
+        );
     }
 
     fn shared_layouts() -> (
