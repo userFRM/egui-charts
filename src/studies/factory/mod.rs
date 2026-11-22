@@ -409,7 +409,7 @@ impl IndicatorFactory {
                 reversal: false,
             },
             OrderFlowKind::SizeDelta {
-                ranges: [[0.0, 9.0], [10.0, 99.0], [100.0, f64::MAX]],
+                ranges: [[0.0, 10.0], [10.0, 100.0], [100.0, f64::MAX]],
             },
             OrderFlowKind::FlowSum { bars: 10 },
             OrderFlowKind::FilteredCvd {

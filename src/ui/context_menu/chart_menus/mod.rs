@@ -293,7 +293,8 @@ impl ChartMenus {
     }
 
     /// Shows the binding of [`KeyboardAction::AddToWatchlist`] on the row at `list` in
-    /// [`set_watchlists`](Self::set_watchlists), such as the panel's active list.
+    /// [`set_watchlists`](Self::set_watchlists), such as the panel's active list. Pass `None` while
+    /// the panel shows a flag view, where the key flags the symbol instead of adding it to a list.
     pub fn set_active_watchlist(&mut self, list: Option<usize>) {
         self.chart.active_watchlist = list;
     }
