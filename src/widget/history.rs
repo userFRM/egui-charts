@@ -71,6 +71,8 @@ struct Action {
     #[cfg(feature = "drawings")]
     drawings_hidden: Option<bool>,
     #[cfg(feature = "drawings")]
+    shared_drawings_hidden: Option<bool>,
+    #[cfg(feature = "drawings")]
     drawings_locked: Option<bool>,
     event_visibility: Option<crate::model::EventVisibility>,
     options: Option<ChartOptions>,
@@ -114,6 +116,7 @@ impl Action {
         let drawings_changed = self.drawings.can_undo()
             || self.unshown.is_some()
             || self.drawings_hidden.is_some()
+            || self.shared_drawings_hidden.is_some()
             || self.drawings_locked.is_some();
         #[cfg(not(feature = "drawings"))]
         let drawings_changed = false;
@@ -558,6 +561,8 @@ impl Chart {
                 #[cfg(feature = "drawings")]
                 drawings_hidden: Some(self.drawings.is_hidden()),
                 #[cfg(feature = "drawings")]
+                shared_drawings_hidden: Some(self.drawings.shared_drawings_hidden()),
+                #[cfg(feature = "drawings")]
                 drawings_locked: Some(self.drawings.is_locked()),
                 event_visibility: Some(self.event_visibility.clone()),
                 options: Some(self.chart_options.clone()),
@@ -681,6 +686,10 @@ impl Chart {
         #[cfg(feature = "drawings")]
         if action.drawings_hidden == Some(self.drawings.is_hidden()) {
             action.drawings_hidden = None;
+        }
+        #[cfg(feature = "drawings")]
+        if action.shared_drawings_hidden == Some(self.drawings.shared_drawings_hidden()) {
+            action.shared_drawings_hidden = None;
         }
         #[cfg(feature = "drawings")]
         if action.drawings_locked == Some(self.drawings.is_locked()) {
@@ -1036,18 +1045,38 @@ impl Chart {
 
     /// Whether a chart user action can be undone (also drives toolbar availability).
     pub fn can_undo(&self) -> bool {
-        !self.history.undo.is_empty()
+        self.can_step_chart_history(false)
     }
 
     /// Whether a chart user action can be redone (also drives toolbar availability).
     pub fn can_redo(&self) -> bool {
-        !self.history.redo.is_empty()
+        self.can_step_chart_history(true)
+    }
+
+    fn can_step_chart_history(&self, redo: bool) -> bool {
+        let stack = if redo {
+            &self.history.redo
+        } else {
+            &self.history.undo
+        };
+        #[cfg(feature = "drawings")]
+        if self.drawings.shared_drawings_hidden()
+            && stack.last().is_some_and(|step| {
+                step.drawings.touches(redo, &self.drawings.drawings, |d| {
+                    self.drawings.shared_filter.hides(d)
+                })
+            })
+        {
+            return false;
+        }
+        !stack.is_empty()
     }
 
     /// Undo the most recent chart user action, across drawings, studies and settings.
     /// A drawing being placed is cancelled when the step takes away the pane that draws it.
     /// Returns false while a user action or a drawing drag is in progress, or a layout divider
     /// is pressed or dragged; finish it first.
+    /// A step that would change a filtered shared drawing waits until it is shown.
     /// A step that changed the interval restores its view once the bars of that interval have
     /// loaded; a view requested before then, by navigation or a call such as
     /// [`Self::scroll_to_time`], replaces it.
@@ -1119,7 +1148,7 @@ impl Chart {
     }
 
     fn step_chart_history(&mut self, redo: bool) -> bool {
-        if self.history_blocked() {
+        if self.history_blocked() || !self.can_step_chart_history(redo) {
             return false;
         }
         #[cfg(feature = "drawings")]
@@ -1270,6 +1299,12 @@ impl Chart {
         if let Some(hidden) = &mut action.drawings_hidden {
             let current = self.drawings.is_hidden();
             self.drawings.set_hidden(*hidden);
+            *hidden = current;
+        }
+        #[cfg(feature = "drawings")]
+        if let Some(hidden) = &mut action.shared_drawings_hidden {
+            let current = self.drawings.shared_drawings_hidden();
+            self.drawings.set_shared_drawings_hidden(*hidden);
             *hidden = current;
         }
         #[cfg(feature = "drawings")]

@@ -231,8 +231,8 @@ impl DrawingManager {
         }
     }
 
-    /// Removes every drawing that is neither locked nor kept from user edits and clears the
-    /// current drawing and selection.
+    /// Removes unlocked, user-editable drawings outside the shared-drawing filter and
+    /// clears the current drawing and selection.
     ///
     /// Queues a `Delete` for each drawing it removes, so the host deletes their stored records.
     /// To unload drawings without deleting them, clear [`Self::drawings`], then call
@@ -243,26 +243,25 @@ impl DrawingManager {
 
     /// Bulk removal with explicit permission to include locked drawings. Preserves locks in
     /// undo and queues deletion of stored records exactly as [`Self::clear_all`] does.
-    /// Drawings whose user edits are off always stay.
+    /// Drawings whose user edits are off or whose scope is filtered out always stay.
     pub fn clear_all_with_locked(&mut self, include_locked: bool) {
         let all_locked = self.locked;
+        let filter = self.shared_filter;
+        let remove = |d: &Drawing| {
+            d.user_edit_enabled
+                && (include_locked || (!d.locked && !all_locked))
+                && !filter.hides(d)
+        };
         self.history.push_snapshot(
             self.drawings
                 .iter()
                 .enumerate()
-                .filter(|(_, drawing)| {
-                    drawing.user_edit_enabled
-                        && (include_locked || (!drawing.locked && !all_locked))
-                })
+                .filter(|(_, d)| remove(d))
                 .map(|(index, drawing)| (index, drawing.clone()))
                 .collect(),
         );
         let mut removed = Vec::new();
-        for drawing in self
-            .drawings
-            .iter()
-            .filter(|d| d.user_edit_enabled && (include_locked || (!d.locked && !all_locked)))
-        {
+        for drawing in self.drawings.iter().filter(|d| remove(d)) {
             if drawing.saveable {
                 self.notify(DrawingSyncAction::Delete(sync_id(drawing)));
             }
@@ -271,8 +270,7 @@ impl DrawingManager {
         for id in removed {
             self.report(id, DrawingEventKind::Removed);
         }
-        self.drawings
-            .retain(|d| !d.user_edit_enabled || ((d.locked || all_locked) && !include_locked));
+        self.drawings.retain(|d| !remove(d));
         self.cancel_curr_drawing();
         self.selection.deselect_all();
     }
@@ -931,8 +929,11 @@ impl DrawingManager {
     /// `AllLayouts` folders and saveable drawings with no folder scope when the chart has
     /// drawing storage. Chart-only and layout-only folders are unaffected.
     ///
-    /// Filtered drawings are not painted, selectable, draggable or snap targets. Storage
-    /// still receives peer edits and deletions. Toggling neither edits nor saves drawings.
+    /// Filtered drawings are omitted from object lists and bulk removal, and cannot be
+    /// painted, selected, dragged or snapped to. A newly placed text drawing keeps its
+    /// initial editor until placement finishes. Storage still receives peer edits and deletions.
+    /// Toggling neither edits nor saves drawings. Wrap a user toggle in
+    /// [`Chart::user_action`](crate::widget::Chart::user_action) to undo the toggle itself.
     /// The setting survives drawing loads and symbol changes, but is not saved in a layout.
     pub fn set_shared_drawings_hidden(&mut self, hidden: bool) {
         if self.shared_filter.hidden != hidden {
@@ -960,7 +961,7 @@ impl DrawingManager {
     /// added or loaded while locked; [`Self::accepts_user_edits`] tells which drawings the user
     /// can edit. Drawings can still be placed, selected, hidden and reordered, and a text
     /// drawing just placed still takes its first text. [`Self::clear_all_with_locked`] with
-    /// `true` still removes every drawing whose user edits are on. Methods that take drawing
+    /// `true` still removes unfiltered drawings whose user edits are on. Methods that take drawing
     /// ids, such as [`Self::edit_drawing`], [`Self::delete_drawings`] and
     /// [`Self::set_selected_locked`], follow each drawing's own lock only.
     ///
@@ -1064,9 +1065,15 @@ impl DrawingManager {
         Ok(())
     }
 
-    /// Drawings included in host object lists, in drawing-list order.
+    pub(crate) fn unfiltered_drawings(&self) -> impl Iterator<Item = &Drawing> {
+        self.drawings
+            .iter()
+            .filter(|d| !self.shared_filter.hides(d))
+    }
+
+    /// Drawings included in host object lists, excluding filtered scopes, in drawing-list order.
     pub fn listed_drawings(&self) -> impl Iterator<Item = &Drawing> {
-        self.drawings.iter().filter(|drawing| drawing.listed)
+        self.unfiltered_drawings().filter(|d| d.listed)
     }
 
     /// Members of a host-defined group, including hidden and locked drawings.

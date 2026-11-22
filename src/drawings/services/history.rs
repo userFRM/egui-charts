@@ -92,6 +92,23 @@ impl DrawingCommand {
         }
     }
 
+    /// Check both the current drawings and any that the command would restore.
+    fn touches(&self, live: &[Drawing], matches: &impl Fn(&Drawing) -> bool) -> bool {
+        let current = |id| live.iter().any(|d| d.id == id && matches(d));
+        match self {
+            Self::Add(d) | Self::Delete { drawing: d, .. } | Self::Modify { old_state: d, .. } => {
+                matches(d) || current(d.id)
+            }
+            Self::Snapshot { drawings, ids, .. } => {
+                drawings.iter().any(|(_, d)| matches(d))
+                    || live.iter().any(|d| matches(d) && ids.contains(&d.id))
+            }
+            Self::Reorder { layers, .. } => live
+                .iter()
+                .any(|d| matches(d) && layers.iter().any(|&(id, ..)| id == d.id)),
+        }
+    }
+
     /// Shift the bar indices at or after `from` for bars inserted in front of them
     pub(crate) fn shift_bar_indices(&mut self, from: f32, delta: f32) {
         match self {
@@ -205,6 +222,21 @@ impl HistoryService {
 
     fn track_affected(&mut self, command: &DrawingCommand) {
         self.affected_ids = affected(command);
+    }
+
+    /// One chart action replays the entire stack; check it before applying any part of it.
+    pub(crate) fn touches(
+        &self,
+        redo: bool,
+        live: &[Drawing],
+        matches: impl Fn(&Drawing) -> bool,
+    ) -> bool {
+        let stack = if redo {
+            &self.redo_stack
+        } else {
+            &self.undo_stack
+        };
+        stack.iter().any(|command| command.touches(live, &matches))
     }
 
     /// The drawings the next undo, or redo, changes, by ascending id, and whether that step

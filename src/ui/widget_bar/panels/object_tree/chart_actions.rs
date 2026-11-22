@@ -132,8 +132,7 @@ impl ObjectTreePanel {
                 let all_locked = chart.drawings().is_locked();
                 let ids: Vec<_> = chart
                     .drawings()
-                    .drawings
-                    .iter()
+                    .unfiltered_drawings()
                     .filter(|d| {
                         d.folder.starts_with(path)
                             && match action {
@@ -204,8 +203,7 @@ impl ObjectTreePanel {
                 let all_locked = chart.drawings().is_locked();
                 if chart
                     .drawings()
-                    .drawings
-                    .iter()
+                    .unfiltered_drawings()
                     .any(|d| d.id == *id && d.user_edit_enabled && !all_locked)
                 {
                     let _ = chart
@@ -218,8 +216,7 @@ impl ObjectTreePanel {
                 let all_locked = chart.drawings().is_locked();
                 let ids: Vec<_> = chart
                     .drawings()
-                    .drawings
-                    .iter()
+                    .unfiltered_drawings()
                     .filter(|d| d.locked != locked && d.user_edit_enabled && !all_locked)
                     .map(|d| d.id)
                     .collect();

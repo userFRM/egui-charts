@@ -4613,25 +4613,35 @@ mod tests {
         assert_eq!(prices(&charts), [vec![102.0, 108.0, 110.0], vec![102.0]]);
     }
 
-    #[test]
-    fn shared_drawing_filter_follows_peer_moves_and_deletions_without_writing() {
+    fn shared_layouts() -> (
+        Arc<crate::services::document::tests::Revised>,
+        [Chart; 2],
+        [ChartLayout; 2],
+    ) {
         use crate::services::document::tests::Revised;
 
         let host = Arc::new(Revised::default());
-        let mut charts: [Chart; 2] = std::array::from_fn(|_| {
+        let charts = std::array::from_fn(|_| {
             let mut chart = bars(60);
             chart.set_symbol("SAMPLE");
             chart.set_storage(host.clone());
             chart
         });
-        let mut layouts = [ChartLayout::default(), ChartLayout::default()];
-        let mut settle = |charts: &mut [Chart; 2]| {
-            for _ in 0..2 {
-                for (layout, chart) in layouts.iter_mut().zip(&mut *charts) {
-                    frames(layout, std::array::from_mut(chart));
-                }
+        (host, charts, Default::default())
+    }
+
+    fn settle_pair(layouts: &mut [ChartLayout; 2], charts: &mut [Chart; 2]) {
+        for _ in 0..2 {
+            for (layout, chart) in layouts.iter_mut().zip(&mut *charts) {
+                frames(layout, std::array::from_mut(chart));
             }
-        };
+        }
+    }
+
+    #[test]
+    fn shared_drawing_filter_follows_peer_moves_and_deletions_without_writing() {
+        let (host, mut charts, mut layouts) = shared_layouts();
+        let mut settle = |charts: &mut [Chart; 2]| settle_pair(&mut layouts, charts);
         let painted = |chart: &Chart| {
             let manager = chart.drawings();
             let mut prices: Vec<_> = manager
@@ -4662,11 +4672,44 @@ mod tests {
         assert_eq!(painted(&charts[1]), [10.0]);
 
         let revision = host.revision("SAMPLE").unwrap();
-        charts[0].drawings_mut().set_shared_drawings_hidden(true);
+        charts[0].user_action(|c| c.drawings_mut().set_shared_drawings_hidden(true));
         settle(&mut charts);
         assert_eq!(painted(&charts[0]), [9.25, 9.5]);
         assert_eq!(painted(&charts[1]), [10.0]);
         assert_eq!(host.revision("SAMPLE"), Some(revision));
+        for redo in [false, true] {
+            assert!(if redo {
+                charts[0].redo()
+            } else {
+                charts[0].undo()
+            });
+            settle(&mut charts);
+            assert_eq!(painted(&charts[0]).contains(&10.0), !redo);
+            assert_eq!(painted(&charts[1]), [10.0]);
+            assert_eq!(host.revision("SAMPLE"), Some(revision));
+        }
+
+        // A host can also set the filter outside history. A mixed drawing action waits
+        // intact (including a redo of a drawing no longer present) until it is shown.
+        assert!(charts[0].undo()); // show the drawings again
+        charts[0].drawings_mut().set_shared_drawings_hidden(true);
+        assert!(!charts[0].undo());
+        charts[0].drawings_mut().set_shared_drawings_hidden(false);
+        assert!(charts[0].undo()); // undo placement
+        settle(&mut charts);
+        assert!(prices(&charts).iter().all(Vec::is_empty));
+        let empty = host.get("SAMPLE");
+        charts[0].drawings_mut().set_shared_drawings_hidden(true);
+        assert!(!charts[0].redo());
+        settle(&mut charts);
+        assert!(prices(&charts)[1].is_empty());
+        assert_eq!(host.get("SAMPLE"), empty);
+        charts[0].drawings_mut().set_shared_drawings_hidden(false);
+        assert!(charts[0].redo()); // restore placement
+        assert!(charts[0].redo()); // hide the shared line
+        settle(&mut charts);
+        assert_eq!(painted(&charts[0]), [9.25, 9.5]);
+        assert_eq!(painted(&charts[1]), [10.0]);
 
         charts[1].user_action(|chart| move_first(chart, 10.5));
         settle(&mut charts);
@@ -4688,6 +4731,157 @@ mod tests {
         settle(&mut charts);
         assert_eq!(prices(&charts), [vec![9.25, 9.5], vec![]]);
         assert_eq!(painted(&charts[0]), [9.25, 9.5]);
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn shared_drawing_filter_keeps_bulk_tree_edits_local() {
+        use crate::ui::widget_bar::{ObjectTreeAction as Action, ObjectTreePanel, SourceItem};
+
+        let (host, mut charts, mut layouts) = shared_layouts();
+        settle_pair(&mut layouts, &mut charts);
+        let notes = vec!["Notes".to_owned()];
+        let shared = vec!["Shared".to_owned()];
+        charts[1].user_action(|chart| {
+            let filed = draw(chart, 10.5);
+            let root = draw(chart, 10.0);
+            draw(chart, 9.75); // unlocked, unfiled: Remove All would otherwise delete it
+            let m = chart.drawings_mut();
+            assert!(m.move_to_folder(&[filed], &[], &shared));
+            assert!(m.set_folder_sync(&shared, Some(FolderSync::AllLayouts)));
+            m.edit_drawing(root, |d| {
+                d.locked = true;
+                d.visible = false;
+            })
+            .unwrap();
+        });
+        settle_pair(&mut layouts, &mut charts);
+        // The writer and document timestamps may change; the peer's complete records must not.
+        let records = || {
+            let (doc, skipped) = DrawingStorage::from_json(&host.get("SAMPLE").unwrap()).unwrap();
+            assert!(skipped.is_empty());
+            serde_json::to_value(doc.drawings()).unwrap()
+        };
+        let stored = records();
+        charts[0].user_action(|chart| {
+            let note = draw(chart, 9.5);
+            let m = chart.drawings_mut();
+            assert!(m.move_to_folder(&[note], &[], &notes));
+            assert!(m.set_folder_sync(&notes, Some(FolderSync::Chart)));
+        });
+        settle_pair(&mut layouts, &mut charts);
+        charts[0].drawings_mut().set_shared_drawings_hidden(true);
+        let mut tree = ObjectTreePanel::new();
+        tree.state_mut()
+            .folders
+            .extend([notes.clone(), shared.clone()]);
+        for (action, visible, locked) in [
+            (Action::LockAll, true, true),
+            (Action::UnlockAll, true, false),
+            (Action::HideAll, false, false),
+            (Action::ShowAll, true, false),
+            (Action::SetFolderVisible(shared.clone(), false), true, false),
+            (Action::SetFolderLocked(shared, true), true, false),
+            (Action::SetFolderVisible(notes.clone(), false), false, false),
+            (Action::SetFolderLocked(notes.clone(), true), false, true),
+            (Action::SetFolderLocked(notes, false), false, false),
+            (Action::RemoveAllDrawings, false, false),
+        ] {
+            let rows: Vec<_> = charts[0]
+                .drawings()
+                .listed_drawings()
+                .map(|d| SourceItem::drawing(d.id, d.tool_type, d.color32()))
+                .collect();
+            assert_eq!(rows.len(), 1, "{action:?}");
+            assert!(charts[0].user_action(|chart| tree.apply_to_chart(chart, &action, &rows)));
+            settle_pair(&mut layouts, &mut charts);
+            let mut listed = charts[0].drawings().listed_drawings();
+            if action == Action::RemoveAllDrawings {
+                assert!(listed.next().is_none());
+            } else {
+                let note = listed.next().unwrap();
+                assert_eq!(
+                    (note.chart_points[0].price, note.visible, note.locked),
+                    (9.5, visible, locked),
+                    "{action:?}"
+                );
+            }
+            let peer = charts[1].drawings();
+            assert_eq!(prices(&charts)[1], [9.75, 10.0, 10.5], "{action:?}");
+            for d in &peer.drawings {
+                let root = d.chart_points[0].price == 10.0;
+                assert_eq!((d.visible, d.locked), (!root, root), "{action:?}");
+            }
+            assert_eq!(records(), stored, "{action:?}");
+        }
+        assert!(charts[0].undo());
+        settle_pair(&mut layouts, &mut charts);
+        assert_eq!(
+            prices(&charts),
+            [vec![9.5, 9.75, 10.0, 10.5], vec![9.75, 10.0, 10.5]]
+        );
+        assert_eq!(records(), stored);
+    }
+
+    #[test]
+    fn shared_drawing_filter_keeps_first_text_edit_until_commit() {
+        use crate::widget::test_frames::frame;
+        use egui::{Event, Key, Modifiers, PointerButton};
+
+        let (host, mut charts, mut layouts) = shared_layouts();
+        settle_pair(&mut layouts, &mut charts);
+        let chart = &mut charts[0];
+        chart.drawings_mut().set_shared_drawings_hidden(true);
+        let ctx = egui::Context::default();
+        let mut time = 0.0;
+        let mut step = |chart: &mut Chart, events| {
+            time += 0.1;
+            frame(&ctx, chart, time, events);
+        };
+        step(chart, vec![]);
+        chart
+            .drawings_mut()
+            .set_active_tool(Some(DrawingToolType::TextLabel));
+        let pos = chart.get_rendered_price_rect().center();
+        step(chart, vec![Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            step(
+                chart,
+                vec![Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+        }
+        step(chart, vec![]);
+        step(chart, vec![Event::Text("Session high".into())]);
+        step(chart, vec![]);
+        let id = chart.drawings().drawings[0].id;
+        assert!(chart.drawings().painted_text(id, "Session high").is_some());
+        step(
+            chart,
+            vec![Event::Key {
+                key: Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            }],
+        );
+        settle_pair(&mut layouts, &mut charts);
+        let peer = &charts[1].drawings().drawings;
+        assert_eq!(peer.len(), 1);
+        assert_eq!(peer[0].text.as_deref(), Some("Session high"));
+        assert!(charts[0].drawings().painted_range(id).is_none());
+        let (doc, skipped) = DrawingStorage::from_json(&host.get("SAMPLE").unwrap()).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(doc.drawings().len(), 1);
+        assert_eq!(
+            doc.drawings()[0].drawing.text.as_deref(),
+            Some("Session high")
+        );
     }
 
     /// Guards #3436: with drawing storage, a drawing kept on one chart shows on that chart only,

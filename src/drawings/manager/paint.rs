@@ -337,14 +337,14 @@ impl DrawingManager {
             .is_none();
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
-            if self.shared_filter.hides(drawing) {
-                continue;
-            }
-            let preview = self
+            let editor = self
                 .text_editor
                 .as_ref()
-                .filter(|editor| editor.inline && editor.id == drawing.id)
-                .map(|editor| editor.preview(drawing, painter.ctx()));
+                .filter(|e| e.inline && e.id == drawing.id);
+            if self.shared_filter.hides(drawing) && !editor.is_some_and(|e| e.placed) {
+                continue;
+            }
+            let preview = editor.map(|e| e.preview(drawing, painter.ctx()));
             let drawing = preview.as_ref().unwrap_or(drawing);
             let off_pane = drawing.custom_tool.is_none()
                 && drawing
