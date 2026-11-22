@@ -25,7 +25,7 @@ pub(super) fn days_per_bar(timeframe: Timeframe) -> Option<i64> {
 }
 
 /// Bar boundaries for one timeframe, around the clock in UTC by default.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BarClock {
     /// `None` for a clock that matches bars by their exact open time.
     timeframe: Option<Timeframe>,
@@ -334,6 +334,17 @@ impl BarClock {
             }
             at = at.checked_add_signed(TimeDelta::hours(1))?;
         }
+    }
+
+    /// When the bar opening at `open` closes: at its next open, or for a daily, multi-day,
+    /// weekly or monthly bar of a clock with an exchange session when its last trading window
+    /// closes. A bar without a trading window closes at its next open. Bar replay completes
+    /// bars here, and `StudyData::closed_at` reads a longer interval's bars by it.
+    pub(crate) fn bar_close(&self, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let timeframe = self.timeframe?;
+        (self.date_session())
+            .and_then(|_| self.sessions().bar_session_close(open, timeframe, true))
+            .or_else(|| self.next_open(open))
     }
 
     #[cfg(any(feature = "studies", feature = "strategies"))]

@@ -413,9 +413,21 @@ impl KeyboardAction {
                 }
             }
             Self::MaximizeChart => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::Enter)] },
-            Self::CycleChartFocus => const { &[key(Key::Tab)] },
+            Self::CycleChartFocus => {
+                const {
+                    &[
+                        key(Key::Tab),
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::ArrowRight),
+                    ]
+                }
+            }
             Self::CycleChartFocusBack => {
-                const { &[KeyboardShortcut::new(Modifiers::SHIFT, Key::Tab)] }
+                const {
+                    &[
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::Tab),
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::ArrowLeft),
+                    ]
+                }
             }
             Self::DeleteSelectedDrawing => const { &[key(Key::Delete), key(Key::Backspace)] },
             Self::Cancel => const { &[key(Key::Escape)] },
@@ -527,8 +539,8 @@ impl KeyboardAction {
             Self::Cancel => "Esc",
             Self::CompleteDrawing => "Enter",
             Self::ShowKeyboardHelp => "Ctrl+/ / ? / F1",
-            Self::CycleChartFocus => "Tab",
-            Self::CycleChartFocusBack => "Shift+Tab",
+            Self::CycleChartFocus => "Tab / Shift+→",
+            Self::CycleChartFocusBack => "Shift+Tab / Shift+←",
             Self::NextWatchlistSymbol => "↓ / Space",
             Self::PreviousWatchlistSymbol => "↑ / Shift+Space",
             Self::AddToWatchlist => "Alt+W",
