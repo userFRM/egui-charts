@@ -100,7 +100,8 @@ pub enum WatchlistItem {
     Symbol {
         /// Instrument identifier used by the host.
         symbol: String,
-        /// The symbol's colour flag. `WatchlistPanel` keeps it equal in every list.
+        /// The symbol's colour flag. `WatchlistPanel` keeps it equal in every list, and keeps it
+        /// while no list holds the symbol.
         flag: Option<WatchlistFlag>,
     },
     /// A section title grouping the symbols below it, up to the next section.
@@ -118,7 +119,7 @@ fn trimmed(entry: &str) -> &str {
 
 /// Whether `symbol`, already trimmed, can be a list symbol: not empty, without separators or
 /// other control characters, and not a section title.
-fn valid_symbol(symbol: &str) -> bool {
+pub(crate) fn valid_symbol(symbol: &str) -> bool {
     !symbol.is_empty()
         && !symbol.contains(SEPARATORS)
         && !symbol.chars().any(char::is_control)
@@ -153,6 +154,13 @@ pub struct SkippedEntries {
 pub struct Watchlist {
     /// Display name.
     pub name: String,
+    /// The list's identifier, kept through renames and differing between lists of the same name,
+    /// by which a [`Sharing`](crate::services::Sharing) service knows the list. Empty in a new
+    /// list and in lists saved before identifiers existed; `WatchlistPanel` gives every list it
+    /// holds an identifier of its own, replacing an empty one or one an earlier list has. Save
+    /// the lists after loading them so the identifiers persist.
+    #[serde(default)]
+    pub id: String,
     /// Symbols and section headings in display order.
     pub items: Vec<WatchlistItem>,
     /// Whether the user starred the list, which the list menu then shows first.
@@ -246,6 +254,7 @@ impl Watchlist {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            id: String::new(),
             items: Vec::new(),
             favorite: false,
             show_descriptions: false,
@@ -259,7 +268,8 @@ impl Watchlist {
 
     /// A copy named after this list and `taken` names: "Name copy", then "Name copy 2" and so on.
     /// Sections, symbol order, flags, the descriptions, logos, tickers and columns settings and
-    /// widths carry over; the copy is not starred.
+    /// widths carry over; the copy is not starred and has no [`id`](Self::id), so a panel gives it
+    /// one of its own.
     pub fn duplicate<'a>(&self, taken: impl IntoIterator<Item = &'a str>) -> Self {
         let taken: Vec<&str> = taken.into_iter().collect();
         let base = format!("{} copy", self.name);
@@ -269,6 +279,7 @@ impl Watchlist {
             .expect("an unused name exists");
         Self {
             name,
+            id: String::new(),
             favorite: false,
             ..self.clone()
         }

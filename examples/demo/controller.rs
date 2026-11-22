@@ -974,6 +974,18 @@ impl DemoApp {
         {
             app.watchlist.set_active_list(active);
         }
+        if let Some(flags) = cc.storage.and_then(|storage| {
+            eframe::get_value::<Vec<(String, egui_charts::model::WatchlistFlag)>>(
+                storage,
+                "watchlist_unlisted_flags",
+            )
+        }) {
+            app.watchlist.set_unlisted_flags(
+                flags
+                    .into_iter()
+                    .map(|(symbol, flag)| (DemoSymbol::current(&symbol), flag)),
+            );
+        }
         app.watchlist.set_service(app.quotes.clone());
         app.watchlist
             .set_sharing(Arc::new(feeds::ListSharing::default()));
@@ -1890,6 +1902,11 @@ impl eframe::App for DemoApp {
         );
         eframe::set_value(storage, "watchlists", &self.watchlist.lists());
         eframe::set_value(storage, "watchlist_active", &self.watchlist.active_list());
+        eframe::set_value(
+            storage,
+            "watchlist_unlisted_flags",
+            &self.watchlist.unlisted_flags(),
+        );
         eframe::set_value(storage, "alerts", &self.alert_host.engine().alerts());
         eframe::set_value(
             storage,
@@ -4027,8 +4044,12 @@ impl DemoApp {
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
         self.menus
             .set_watchlists(self.watchlist.lists().iter().map(|list| list.name.as_str()));
-        self.menus
-            .set_active_watchlist(Some(self.watchlist.active_list()));
+        self.menus.set_active_watchlist(
+            self.watchlist
+                .flag_filter()
+                .is_none()
+                .then_some(self.watchlist.active_list()),
+        );
         self.hotlists
             .set_watchlists(self.watchlist.lists().iter().map(|list| list.name.as_str()));
         self.menus.set_layout_copies(self.layout_has_other_charts());
@@ -4730,12 +4751,12 @@ impl DemoApp {
             }
             A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
             A::AddToWatchlist => {
-                let symbol = self.chart.symbol().to_owned();
-                let list = self.watchlist.active_list();
-                self.handle_context_action(
-                    ctx,
-                    ChartContextAction::Chart(ContextMenuAction::AddToWatchlist { list, symbol }),
-                );
+                if !self.synthetic_only("Watchlists") {
+                    let symbol = self.chart.symbol().to_owned();
+                    if !self.watchlist.add_symbol(&symbol) {
+                        self.notify(format!("{symbol} is already in that watchlist"));
+                    }
+                }
             }
             A::NextWatchlistSymbol | A::PreviousWatchlistSymbol => {
                 let step = if action == A::NextWatchlistSymbol {
@@ -9699,12 +9720,13 @@ mod tests {
         assert!(!shown.iter().any(|(text, _)| text == "Stop sharing"));
     }
 
-    /// The focused chart adds to the shown list, reports duplicates and restores that list.
+    /// The focused chart adds to the shown list, or flags its symbol while a flag view is shown,
+    /// reports duplicates and restores that list and the flag.
     #[test]
     fn the_shown_watchlist_takes_alt_w_and_survives_a_restart() {
         use eframe::App;
         use egui::{Event, Key, Modifiers};
-        use egui_charts::model::Watchlist;
+        use egui_charts::model::{Watchlist, WatchlistFlag};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
@@ -9723,7 +9745,7 @@ mod tests {
         ui_click(&ctx, size, chart, |ui| {
             app.ui(ui, &mut eframe::Frame::_new_kittest())
         });
-        for duplicate in [false, true] {
+        let alt_w = |app: &mut DemoApp| {
             ui_frame(
                 &ctx,
                 size,
@@ -9746,6 +9768,9 @@ mod tests {
                 ],
                 |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
             );
+        };
+        for duplicate in [false, true] {
+            alt_w(&mut app);
             assert_eq!(app.watchlist.lists()[0].to_text(), "STOCKA");
             assert_eq!(app.watchlist.lists()[1].to_text(), "STOCKB,STOCKC");
             if duplicate {
@@ -9757,6 +9782,17 @@ mod tests {
                 );
             }
         }
+        // In a flag view the key flags the chart symbol instead of adding it to the hidden list.
+        app.watchlist.set_flag_filter(Some(WatchlistFlag::Red));
+        app.open_catalog_symbol("STOCKD");
+        settle(&mut app, &ctx);
+        let chart = app.chart.get_chart_mapping().rect.center();
+        ui_click(&ctx, size, chart, |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        alt_w(&mut app);
+        assert_eq!(app.watchlist.symbols().collect::<Vec<_>>(), ["STOCKD"]);
+        assert_eq!(app.watchlist.lists()[1].to_text(), "STOCKB,STOCKC");
         let mut storage = AppStorage::default();
         app.save(&mut storage);
         let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
@@ -9766,6 +9802,10 @@ mod tests {
         assert_eq!(
             restored.watchlist.symbols().collect::<Vec<_>>(),
             ["STOCKB", "STOCKC"]
+        );
+        assert_eq!(
+            restored.watchlist.unlisted_flags(),
+            [("STOCKD".to_owned(), WatchlistFlag::Red)]
         );
     }
 
