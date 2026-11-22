@@ -9729,8 +9729,10 @@ mod tests {
         use egui::{Event, Key, Modifiers};
         use egui_charts::model::{Watchlist, WatchlistFlag};
         let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-        app.live.set_paused(true);
+        // The demo builds its bars from the clock; a fixed time gives every run the same chart.
+        let now = "2026-11-22T02:05:02Z".parse().unwrap();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DemoApp::new_at(&cc, now, true);
         app.watchlist = WatchlistPanel::new(vec![
             Watchlist::from_text("One", "STOCKA"),
             Watchlist::from_text("Two", "STOCKB"),
@@ -9796,7 +9798,7 @@ mod tests {
         app.save(&mut storage);
         let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
         cc.storage = Some(&storage);
-        let restored = DemoApp::new(&cc);
+        let restored = DemoApp::new_at(&cc, now, true);
         assert_eq!(restored.watchlist.active_list(), 1);
         assert_eq!(
             restored.watchlist.symbols().collect::<Vec<_>>(),
