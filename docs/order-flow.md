@@ -41,6 +41,17 @@ no grouping crosses it.
 History bars newer than everything the trade page reaches draw candles too, so a host should answer
 both pages up to the same time.
 
+The demo's synthetic instruments, TOKENA, TOKENB, STOCKA, STOCKB, STOCKC, STOCKD, INDEXA,
+FOREXA, INDEXFZ2026, INDEXFH2027 and SAMPLE, answer
+[`Datafeed::trades`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.trades)
+and [`Datafeed::depth_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.depth_history)
+for the time before their stream and declare both services. Their executions before the stream
+are re-created from the minute bars `history` returns, so each minute's executions rebuild its
+bar, and their depth columns hold a book quoted one tick around the price of those executions.
+Scrolling a footprint chart or the liquidity heatmap back past the streamed session loads both,
+and the feed answers as far back as its minute history reaches. The columns of INDEXFZ2026 before
+its stream carry no largest orders, since its individual orders there are not known.
+
 <!-- example -->
 
 The source beside the running example supplies candles independently, pushes chronological
