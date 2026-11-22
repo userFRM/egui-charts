@@ -2633,6 +2633,9 @@ impl DemoApp {
             });
         self.drawing_toolbar.state.hide_indicators = self.chart.indicators_hidden();
         self.drawing_toolbar.state.hide_drawings = self.chart.drawings().is_hidden();
+        // Show readout also sets the readout, so the cursor menu switch reads it from the chart.
+        self.drawing_toolbar.state.values_tooltip_on_long_press =
+            self.chart.chart_options().tooltip.enabled;
         // The trading rows show while a broker is connected; their checks follow the Trading tab.
         self.drawing_toolbar
             .set_control_visible(egui_charts::ui::Control::Trading, self.trading.has_broker());
@@ -6577,6 +6580,93 @@ mod tests {
         let restored = app.chart.indicators().next().unwrap().0;
         choose(&mut app, "Hide indicators");
         assert!(!is_visible(&app.chart, restored));
+    }
+
+    /// The cursor menu readout switch shows the chart's readout, which Show readout also sets,
+    /// and one click turns the readout on or off.
+    #[test]
+    fn cursor_menu_readout_switch_follows_show_readout() {
+        use egui::accesskit::{Role, Toggled};
+
+        // One frame of `draw`: the toggled state and centre of the control named `label`.
+        fn control(
+            ctx: &egui::Context,
+            label: &str,
+            draw: impl FnMut(&mut egui::Ui),
+        ) -> (Option<Toggled>, egui::Pos2) {
+            ctx.enable_accesskit();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                draw,
+            );
+            let found = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find_map(|(_, node)| {
+                    (node.role() != Role::Label && node.label() == Some(label)).then(|| {
+                        let bounds = node.bounds().expect("control bounds");
+                        let centre = egui::pos2(
+                            (bounds.x0 + bounds.x1) as f32 * 0.5,
+                            (bounds.y0 + bounds.y1) as f32 * 0.5,
+                        );
+                        (node.toggled(), centre)
+                    })
+                });
+            output.drop_without_applying_deltas();
+            found.unwrap_or_else(|| panic!("missing control: {label}"))
+        }
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        // Opens the cursor menu and reads its readout switch; a click closes the menu.
+        let cursor_switch = |app: &mut DemoApp| {
+            app.drawing_toolbar.state.expanded_category = Some("Cursors".into());
+            egui::Popup::open_id(
+                &ctx,
+                egui::Id::unique(("drawing_toolbar_flyout", "Cursors")),
+            );
+            for _ in 0..2 {
+                ui_frame(&ctx, size, vec![], |ui| {
+                    app.show_drawing_toolbar(ui, app.theme.chart.bg)
+                });
+            }
+            control(&ctx, "Values tooltip on long press", |ui| {
+                app.show_drawing_toolbar(ui, app.theme.chart.bg)
+            })
+        };
+
+        assert!(app.chart.chart_options().tooltip.enabled);
+        let (_, point) = control(&ctx, "Show readout", |ui| app.show_readout_controls(ui));
+        ui_click(&ctx, size, point, |ui| app.show_readout_controls(ui));
+        assert!(!app.chart.chart_options().tooltip.enabled);
+
+        let (state, point) = cursor_switch(&mut app);
+        assert_eq!(state, Some(Toggled::False));
+        ui_click(&ctx, size, point, |ui| {
+            app.show_drawing_toolbar(ui, app.theme.chart.bg)
+        });
+        assert!(app.chart.chart_options().tooltip.enabled);
+
+        let (state, point) = cursor_switch(&mut app);
+        assert_eq!(state, Some(Toggled::True));
+        ui_click(&ctx, size, point, |ui| {
+            app.show_drawing_toolbar(ui, app.theme.chart.bg)
+        });
+        assert!(!app.chart.chart_options().tooltip.enabled);
+        let (state, _) = control(&ctx, "Show readout", |ui| app.show_readout_controls(ui));
+        assert_eq!(state, Some(Toggled::False));
     }
 
     /// Menu picks read settings, restored charts and history instead of host-side flags.
