@@ -4,7 +4,7 @@ use super::Chart;
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
 use crate::drawings::Drawing;
-use crate::drawings::manager::{UnshownDrawingPane, sync_id};
+use crate::drawings::manager::{RemovedDrawingPane, sync_id};
 use crate::drawings::persistence::{
     DrawingStorage, LoadError, SkipReason, SkippedDrawing, StorageError, StoredDrawing, StoredPane,
 };
@@ -13,6 +13,22 @@ use crate::services::document::{Received, StoredDocument, copy_number};
 use crate::services::{ConflictChoice, Revision, Storage, StoreKind};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+
+/// A read can recover an owner removed on this chart, but cannot invent one for a drawing
+/// first seen without its study. Keep that record's pane separately for saves and undo.
+fn read_missing_pane(
+    id: &str,
+    created: i64,
+    pane: &StoredPane,
+    removed: &HashMap<String, RemovedDrawingPane>,
+    unmatched: &mut HashMap<String, (i64, StoredPane)>,
+) -> Option<usize> {
+    if let Some(owner) = removed.get(id).and_then(|old| old.owner_for(created, pane)) {
+        return Some(owner);
+    }
+    unmatched.insert(id.to_owned(), (created, pane.clone()));
+    None
+}
 
 /// What a chart asked its storage about the kept copies of its symbols' drawings.
 #[derive(Default)]
@@ -650,21 +666,19 @@ impl Chart {
             .drawings()
             .iter()
             .map(|record| {
-                let drawing = self.restored_drawing(record, remap);
+                let mut drawing = self.restored_drawing(record, remap);
                 if let Some((id, pane)) = SavedPane::entry(record, drawing.created_at) {
                     panes.insert(id, pane);
                 }
                 if drawing.pane.is_none()
                     && let Some(pane) = &record.pane
                 {
-                    self.drawings.unshown_panes.insert(
-                        record.id.clone(),
-                        UnshownDrawingPane {
-                            created_at: drawing.created_at,
-                            stored_created_at: Some(record.created_at),
-                            owner: None,
-                            pane: pane.clone(),
-                        },
+                    drawing.pane = read_missing_pane(
+                        &record.id,
+                        record.created_at,
+                        pane,
+                        &self.drawings.removed_panes,
+                        &mut self.drawings.unshown_panes,
                     );
                 }
                 drawing
@@ -1140,8 +1154,9 @@ impl Chart {
         let loaded = self.parse_drawing_file(json).map(|(stored, skipped)| {
             let remap = self.written_by_restored_chart(&stored);
             let previous = self.drawings.before_read(true);
-            let skipped = self.apply_drawing_file(&stored, skipped, remap);
+            let skipped = self.apply_drawing_file(&stored, skipped, remap, false);
             self.drawings.keep_across_read(previous);
+            self.remember_read_panes(&stored);
             self.note_legacy(&stored);
             skipped
         });
@@ -1243,9 +1258,9 @@ impl Chart {
             drawings.push(drawing);
             changed = true;
         }
-        let refused = self.replace_drawings(drawings);
-        self.remember_read_panes(&stored);
+        let refused = self.replace_drawings(drawings, false);
         self.drawings.keep_across_read(previous);
+        self.remember_read_panes(&stored);
         self.note_legacy(&stored);
         // The chart's own drawings passed the same check when they were added.
         let skipped: Vec<SkippedDrawing> = refused
@@ -1314,12 +1329,12 @@ impl Chart {
                 .and_then(|panes| panes.get(&key))
                 .filter(|p| p.created_at == d.created_at);
             if let Some(pane) = last.map_or(stored.as_ref(), |p| p.pane.as_ref()) {
-                manager.unshown_panes.insert(
+                manager.removed_panes.insert(
                     key,
-                    UnshownDrawingPane {
+                    RemovedDrawingPane {
                         created_at: d.created_at,
                         stored_created_at: last.map(|p| p.stored_created_at).or(d.created_at),
-                        owner: d.pane,
+                        owner,
                         pane: pane.clone(),
                     },
                 );
@@ -1336,12 +1351,16 @@ impl Chart {
         for at in 0..self.drawings.drawings.len() {
             let d = &self.drawings.drawings[at];
             let Some(id) = &d.stored_id else { continue };
-            if let Some(saved) = panes.get(id)
-                && saved.owner.is_none()
-                && saved.created_at == d.created_at
+            if let Some((created, pane)) = panes.get(id)
+                && Some(*created) == d.created_at
                 && (d.pane.is_none() || self.owner_pane(d).is_none())
+                && !self
+                    .drawings
+                    .removed_panes
+                    .get(id)
+                    .is_some_and(|removed| removed.owns(d))
             {
-                self.drawings.drawings[at].pane = self.stored_pane_owner(&saved.pane);
+                self.drawings.drawings[at].pane = self.stored_pane_owner(pane);
             }
         }
     }
@@ -1356,19 +1375,17 @@ impl Chart {
             .collect();
         self.drawings.unshown_panes.clear();
         if !studies.is_empty() {
-            for d in &self.drawings.drawings {
+            for d in &mut self.drawings.drawings {
                 if d.pane.is_none()
                     && let (Some(id), Some(created)) = (&d.stored_id, d.created_at)
                     && let Some(&pane) = studies.get(&(id.as_str(), created))
                 {
-                    self.drawings.unshown_panes.insert(
-                        id.clone(),
-                        UnshownDrawingPane {
-                            created_at: d.created_at,
-                            stored_created_at: Some(created),
-                            owner: None,
-                            pane: pane.clone(),
-                        },
+                    d.pane = read_missing_pane(
+                        id,
+                        created,
+                        pane,
+                        &self.drawings.removed_panes,
+                        &mut self.drawings.unshown_panes,
                     );
                 }
             }
@@ -1393,12 +1410,15 @@ impl Chart {
         manager: &'a crate::drawings::DrawingManager,
         drawing: &Drawing,
         id: &str,
-    ) -> Option<&'a StoredPane> {
-        let saved = manager.unshown_panes.get(id)?;
-        (saved.created_at == drawing.created_at
-            && saved.owner == drawing.pane
-            && (drawing.pane.is_none() || self.owner_pane(drawing).is_none()))
-        .then_some(&saved.pane)
+    ) -> Option<(&'a StoredPane, Option<i64>)> {
+        if drawing.pane.is_some() {
+            let removed = manager.removed_panes.get(id)?;
+            (removed.owns(drawing) && self.owner_pane(drawing).is_none())
+                .then_some((&removed.pane, removed.stored_created_at))
+        } else {
+            let (created, pane) = manager.unshown_panes.get(id)?;
+            (Some(*created) == drawing.created_at).then_some((pane, Some(*created)))
+        }
     }
 
     pub(super) fn set_record_pane(
@@ -1417,10 +1437,23 @@ impl Chart {
         if let Some(saved) = saved {
             record.created_at = saved.stored_created_at;
         }
-        if let Some(pane) = manager.and_then(|m| self.unshown_pane(m, drawing, &record.id)) {
+        if let Some((pane, created)) =
+            manager.and_then(|m| self.unshown_pane(m, drawing, &record.id))
+        {
+            if let Some(created) = created {
+                record.created_at = created;
+            }
             record.pane = Some(pane.clone());
             // This chart has no owner to remap when the snapshot is restored.
             record.drawing.pane = None;
+        } else if drawing
+            .pane
+            .is_some_and(|owner| manager.is_some_and(|m| m.removed_owners.contains(&owner)))
+            && self.owner_pane(drawing).is_none()
+        {
+            // Never export a removed local study id: on another chart it may name a live study.
+            record.drawing.pane = None;
+            record.pane = saved.and_then(|p| p.pane.clone());
         } else if let Some(saved) = saved
             && self.drawings.shared_filter.hides(drawing)
         {
@@ -1462,10 +1495,12 @@ impl Chart {
             // A later undo can restore an omitted drawing; only a new read replaces the table.
             let panes = store.panes.entry(self.symbol.clone()).or_default();
             for record in drawings.drawings() {
-                if let Some(unshown) = self.drawings.unshown_panes.get_mut(&record.id)
-                    && unshown.created_at == record.drawing.created_at
+                if let Some(removed) = self.drawings.removed_panes.get_mut(&record.id)
+                    && removed.stored_created_at.is_none()
+                    && removed.created_at == record.drawing.created_at
+                    && record.pane.as_ref() == Some(&removed.pane)
                 {
-                    unshown.stored_created_at = Some(record.created_at);
+                    removed.stored_created_at = Some(record.created_at);
                 }
                 if let Some((id, pane)) = SavedPane::entry(record, record.drawing.created_at) {
                     panes.insert(id, pane);

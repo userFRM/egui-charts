@@ -1660,8 +1660,8 @@ fn map_drawing(
     let manager = source.drawings();
     // Only removal while filtered leaves the drawing with an absent owner. A file loaded
     // without its study has no local owner and mirrors as a price-pane drawing.
-    let missing = drawing.pane.is_some() && !manager.unshown_panes.is_empty();
-    if let Some(pane) = missing
+    let missing = drawing.pane.is_some() && !manager.removed_panes.is_empty();
+    if let Some((pane, _)) = missing
         .then(|| sync_id(drawing))
         .and_then(|id| source.unshown_pane(manager, drawing, &id))
     {
@@ -4535,12 +4535,21 @@ mod tests {
     }
 
     #[cfg(feature = "studies")]
-    #[test]
-    fn shared_drawing_filter_keeps_the_peers_pane_across_storage_reads() {
-        use crate::services::document::tests::Revised;
-        use crate::studies::RSI;
+    struct StudyWindows {
+        shared: Arc<crate::services::document::tests::Revised>,
+        charts: [Chart; 2],
+        writer: [Chart; 1],
+        pair: ChartLayout,
+        window: ChartLayout,
+        owners: [SeriesId; 3],
+        id: usize,
+    }
 
-        for peer_has_storage in [false, true] {
+    #[cfg(feature = "studies")]
+    impl StudyWindows {
+        fn new(peer_has_storage: bool) -> Self {
+            use crate::services::document::tests::Revised;
+            use crate::studies::RSI;
             let shared = Arc::new(Revised::default());
             let mut charts = [bars(60), bars(60)];
             let mut writer = [bars(60)];
@@ -4555,8 +4564,9 @@ mod tests {
             let [bridge, peer] = charts
                 .each_mut()
                 .map(|c| c.add_indicator(Box::new(RSI::new(14))));
+            // The bridge's numeric RSI(14) id instead names RSI(7) on the writer.
+            writer[0].add_indicator(Box::new(RSI::new(7)));
             let study = writer[0].add_indicator(Box::new(RSI::new(14)));
-            let peer_pane = charts[1].series_pane(peer).unwrap();
             let mut pair = ChartLayout {
                 mode: super::super::ChartLayoutMode::TwoHorizontal,
                 ..Default::default()
@@ -4572,6 +4582,69 @@ mod tests {
             let id = writer[0].user_action(|c| c.drawings_mut().add_drawing(drawing).unwrap());
             frames(&mut window, &mut writer);
             frames(&mut pair, &mut charts);
+            Self {
+                shared,
+                charts,
+                writer,
+                pair,
+                window,
+                owners: [bridge, peer, study],
+                id,
+            }
+        }
+
+        fn settle(&mut self) {
+            frames(&mut self.pair, &mut self.charts);
+            frames(&mut self.window, &mut self.writer);
+            frames(&mut self.pair, &mut self.charts);
+        }
+
+        fn hide_and_remove(&mut self, owner: SeriesId) {
+            self.charts[0]
+                .drawings_mut()
+                .set_shared_drawings_hidden(true);
+            assert!(self.charts[0].user_action(|c| c.remove_series(owner)));
+            self.settle();
+        }
+
+        fn check_peers(&self, price: f64) {
+            for (chart, owner) in [
+                (&self.charts[1], self.owners[1]),
+                (&self.writer[0], self.owners[2]),
+            ] {
+                let mut lines = chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .filter(|d| d.label.as_deref() == Some("RSI line"));
+                let line = lines.next().expect("one RSI line");
+                assert!(
+                    lines.next().is_none(),
+                    "duplicate RSI line at {price} for {owner:?}"
+                );
+                assert_eq!(line.chart_points[0].price, price);
+                assert_eq!(
+                    chart.drawing_pane(line.id).unwrap(),
+                    chart.series_pane(owner).unwrap()
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn shared_drawing_filter_keeps_the_peers_pane_across_storage_reads() {
+        for peer_has_storage in [false, true] {
+            let StudyWindows {
+                shared,
+                mut charts,
+                mut writer,
+                mut pair,
+                mut window,
+                owners: [bridge, peer, _],
+                id,
+            } = StudyWindows::new(peer_has_storage);
+            let peer_pane = charts[1].series_pane(peer).unwrap();
             let peer_id = charts[1].drawings().drawings[0].id;
             let check = |c: &Chart, pane, price| {
                 let mut lines = c
@@ -4627,6 +4700,99 @@ mod tests {
             shared.put("SAMPLE", &document.to_string());
             frames(&mut pair, &mut charts);
             check(&charts[1], charts[1].main_series_pane(), 9.5);
+        }
+    }
+
+    #[cfg(all(feature = "ui", feature = "studies"))]
+    #[test]
+    fn shared_drawing_filter_keeps_removed_panes_through_copy_undo_and_snapshot_edits() {
+        for scenario in ["kept copy", "different pane in kept copy", "snapshot"] {
+            let mut w = StudyWindows::new(false);
+            let original = shared_records(&w.shared)[0].clone();
+            let expected = if scenario == "snapshot" {
+                let saved = w.charts[0].snapshot().unwrap();
+                assert!(w.charts[0].restore(&saved).unwrap().is_empty());
+                let restored = w.charts[0]
+                    .indicators()
+                    .find(|(_, s)| s.name() == "RSI")
+                    .unwrap()
+                    .0;
+                // Edit between the snapshot restore and the first frame that reads storage.
+                w.charts[0].user_action(|c| move_first(c, 9.5));
+                w.hide_and_remove(restored);
+                9.5
+            } else {
+                w.hide_and_remove(w.owners[0]);
+                let name = "SAMPLE (local copy)";
+                let mut copy: serde_json::Value =
+                    serde_json::from_str(&w.shared.get("SAMPLE").unwrap()).unwrap();
+                copy["drawings"][0]["points"][0]["price"] = 11.5.into();
+                if scenario == "different pane in kept copy" {
+                    copy["drawings"][0]["pane"]["rank"] = 1.into();
+                }
+                w.shared.put(name, &copy.to_string());
+                w.charts[0].list_local_copies();
+                w.settle();
+                w.charts[0].load_local_copy(name);
+                w.settle();
+                assert_eq!(prices(&w.charts)[0], [11.5]);
+                assert!(w.charts[0].undo());
+                w.settle();
+                10.
+            };
+            w.check_peers(expected);
+            w.charts[0].drawings_mut().set_shared_drawings_hidden(false);
+            // Both the first unfiltered write and the subsequent write from the chart
+            // with RSI(7) must store the canonical RSI(14) pane, not the bridge's id.
+            for from_bridge in [true, false] {
+                let c = if from_bridge {
+                    &mut w.charts[0]
+                } else {
+                    &mut w.writer[0]
+                };
+                c.user_action(|c| draw(c, 11.));
+                w.settle();
+                w.check_peers(expected);
+                let written = shared_records(&w.shared);
+                let r = written
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|r| r["id"] == original["id"])
+                    .unwrap();
+                for key in ["pane", "created_at"] {
+                    assert_eq!(
+                        r[key], original[key],
+                        "{key}, {scenario}, bridge={from_bridge}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn shared_drawing_filter_keeps_removed_panes_across_remote_deletion_and_undo() {
+        for remove_study in [false, true] {
+            let mut w = StudyWindows::new(false);
+            w.hide_and_remove(w.owners[0]);
+            w.check_peers(10.);
+            w.writer[0].user_action(|c| {
+                if remove_study {
+                    assert!(c.remove_series(w.owners[2]));
+                } else {
+                    c.drawings_mut().delete_drawing(w.id);
+                }
+            });
+            w.settle();
+            assert!(shared_records(&w.shared).as_array().unwrap().is_empty());
+            assert!(w.charts.iter().all(|c| c.drawings().drawings.is_empty()));
+            assert!(w.writer[0].undo());
+            w.settle();
+            w.check_peers(10.);
+            w.charts[0].drawings_mut().set_shared_drawings_hidden(false);
+            w.settle();
+            w.check_peers(10.);
         }
     }
 

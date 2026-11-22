@@ -11,7 +11,7 @@ use crate::drawings::services::{
 use crate::tokens::DESIGN_TOKENS;
 use egui::epaint::ClippedShape;
 use egui::{Pos2, Rect};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 mod edit;
@@ -237,14 +237,30 @@ impl TextEditState {
     }
 }
 
-/// The pane a drawing uses on peers when its local owner is absent. Retained across writes
-/// and deletes: undo can bring that owner back onto the drawing without a new document read.
-pub(crate) struct UnshownDrawingPane {
+/// The study this chart removed while a shared drawing was hidden. A read can omit the
+/// drawing or a kept copy can replace it, then undo can bring the same drawing back.
+pub(crate) struct RemovedDrawingPane {
     pub(crate) created_at: Option<i64>,
     /// Creation time in storage, including a first write of a locally created drawing.
     pub(crate) stored_created_at: Option<i64>,
-    pub(crate) owner: Option<usize>,
+    pub(crate) owner: usize,
     pub(crate) pane: super::persistence::StoredPane,
+}
+
+impl RemovedDrawingPane {
+    pub(crate) fn owner_for(
+        &self,
+        created_at: i64,
+        pane: &super::persistence::StoredPane,
+    ) -> Option<usize> {
+        (self.stored_created_at == Some(created_at) && &self.pane == pane).then_some(self.owner)
+    }
+
+    pub(crate) fn owns(&self, drawing: &Drawing) -> bool {
+        drawing.pane == Some(self.owner)
+            && (drawing.created_at == self.created_at
+                || drawing.created_at == self.stored_created_at)
+    }
 }
 
 /// Display state of one chart, not part of any drawing or its stored document.
@@ -341,7 +357,9 @@ pub struct DrawingManager {
     /// Removed owners of filtered drawings. Their drawings use the price pane locally until
     /// the owner returns; the layout mirror must never see a change of the drawing's owner.
     pub(crate) removed_owners: Vec<usize>,
-    pub(crate) unshown_panes: std::collections::HashMap<String, UnshownDrawingPane>,
+    pub(crate) removed_panes: HashMap<String, RemovedDrawingPane>,
+    /// Records read without a matching local study, independent of any undoable removal.
+    pub(crate) unshown_panes: HashMap<String, (i64, super::persistence::StoredPane)>,
     pub(crate) pane_clips: std::collections::HashMap<Option<usize>, Rect>,
     /// Editor-only settings must not grow every idle chart's inline state.
     pub(crate) text_editor: Option<Box<TextEditState>>,
@@ -479,6 +497,7 @@ impl DrawingManager {
             pane: None,
             pane_members: vec![None],
             removed_owners: Vec::new(),
+            removed_panes: Default::default(),
             unshown_panes: Default::default(),
             pane_clips: std::collections::HashMap::new(),
             text_editor: None,
@@ -978,7 +997,7 @@ impl DrawingManager {
             unsaved: self.drawings.iter().filter(stays).cloned().collect(),
             identity: self.identity,
             removed_owners: std::mem::take(&mut self.removed_owners),
-            unshown_panes: std::mem::take(&mut self.unshown_panes),
+            removed_panes: std::mem::take(&mut self.removed_panes),
         }
     }
 
@@ -996,11 +1015,12 @@ impl DrawingManager {
             unsaved,
             identity,
             removed_owners,
-            mut unshown_panes,
+            removed_panes,
         } = previous;
         // The same drawings to a layout that mirrors them, as their ids are.
         self.identity = identity;
         self.removed_owners = removed_owners;
+        self.removed_panes = removed_panes;
         self.next_id = self.next_id.max(next_id);
         let read = self.drawings.len();
         let mut taken: HashSet<String> = self.drawings.iter().map(sync_id).collect();
@@ -1019,32 +1039,10 @@ impl DrawingManager {
                 drawing.stored_id = Some(free_stored_id(&drawing, &taken));
                 taken.insert(sync_id(&drawing));
             }
-            if drawing.pane.is_some() && !unshown_panes.is_empty() {
-                let id = sync_id(&drawing);
-                if let Some(saved) = unshown_panes.remove(&id)
-                    && saved.owner == drawing.pane
-                    && saved.created_at == drawing.created_at
-                {
-                    self.unshown_panes.insert(id, saved);
-                }
-            }
             self.drawings.push(drawing);
         }
         let mut fresh = Vec::new();
         for (at, drawing) in self.drawings[..read].iter_mut().enumerate() {
-            // An automatic read is not a local pane move. Restore the removed owner only
-            // for the same stored drawing still in the same unresolved study pane.
-            if drawing.pane.is_none()
-                && let Some(id) = drawing.stored_id.as_ref()
-                && let Some(old) = unshown_panes.get(id)
-                && old.owner.is_some()
-                && let Some(new) = self.unshown_panes.get_mut(id)
-                && new.created_at == old.stored_created_at
-                && new.pane == old.pane
-            {
-                drawing.pane = old.owner;
-                new.owner = old.owner;
-            }
             match drawing.stored_id.as_ref().and_then(|id| ids.get(id)) {
                 Some(id) => drawing.id = *id,
                 None => fresh.push(at),
@@ -1053,6 +1051,48 @@ impl DrawingManager {
         for at in fresh {
             self.drawings[at].id = self.take_id();
         }
+    }
+
+    /// Keep layout links when this chart's own snapshot restores exactly the same stored
+    /// records. Local drawing ids survive; old study ids and pane-removal history do not.
+    pub(crate) fn keep_snapshot_links(&mut self, previous: &Self) {
+        fn key(d: &Drawing) -> Option<(&str, i64)> {
+            Some((d.stored_id.as_deref()?, d.created_at?))
+        }
+        if self.drawings.is_empty() || self.drawings.len() != previous.drawings.len() {
+            return;
+        }
+        if self
+            .drawings
+            .iter()
+            .zip(&previous.drawings)
+            .all(|(d, old)| key(d).is_some_and(|k| Some(k) == key(old)))
+        {
+            for (d, old) in self.drawings.iter_mut().zip(&previous.drawings) {
+                d.id = old.id;
+            }
+        } else {
+            let Some(ids): Option<HashMap<_, _>> = previous
+                .drawings
+                .iter()
+                .map(|d| Some((key(d)?, d.id)))
+                .collect()
+            else {
+                return;
+            };
+            if !self
+                .drawings
+                .iter()
+                .all(|d| key(d).is_some_and(|k| ids.contains_key(&k)))
+            {
+                return;
+            }
+            for d in &mut self.drawings {
+                d.id = ids[&key(d).expect("matched stored drawing")];
+            }
+        }
+        self.identity = previous.identity;
+        self.next_id = self.next_id.max(previous.next_id);
     }
 
     /// A new drawing of `tool` in its default style: the tool's own, recoloured by
@@ -1164,7 +1204,7 @@ pub(crate) struct BeforeRead {
     /// The `DrawingManager::identity` of the manager.
     identity: u64,
     removed_owners: Vec<usize>,
-    unshown_panes: std::collections::HashMap<String, UnshownDrawingPane>,
+    removed_panes: HashMap<String, RemovedDrawingPane>,
 }
 
 /// Coalesces repeated saves and updates of a drawing without reordering them across its delete.

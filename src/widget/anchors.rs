@@ -211,7 +211,13 @@ impl Chart {
         remap: bool,
     ) -> Result<Vec<SkippedDrawing>, LoadError> {
         let (storage, skipped) = self.parse_drawing_file(json)?;
-        Ok(self.apply_drawing_file(&storage, skipped, remap))
+        let own_snapshot = remap
+            && self.keeps_stored_drawings()
+            && self.restored_from == Some(self.data_table_identity)
+            && storage.saved_by == self.restored_from;
+        let skipped = self.apply_drawing_file(&storage, skipped, remap, own_snapshot);
+        self.remember_read_panes(&storage);
+        Ok(skipped)
     }
 
     pub(super) fn parse_drawing_file(
@@ -230,6 +236,7 @@ impl Chart {
         storage: &DrawingStorage,
         mut skipped: Vec<SkippedDrawing>,
         remap: bool,
+        keep_snapshot_links: bool,
     ) -> Vec<SkippedDrawing> {
         let drawings = storage
             .drawings()
@@ -241,14 +248,13 @@ impl Chart {
             .filter(|index| skipped.iter().all(|s| s.index != *index))
             .take(storage.drawings().len())
             .collect();
-        for (at, error) in self.replace_drawings(drawings) {
+        for (at, error) in self.replace_drawings(drawings, keep_snapshot_links) {
             skipped.push(SkippedDrawing {
                 index: read[at],
                 id: Some(storage.drawings()[at].id.clone()),
                 error: SkipReason::Invalid(serde::de::Error::custom(error)),
             });
         }
-        self.remember_read_panes(storage);
         skipped.sort_by_key(|skipped| skipped.index);
         skipped
     }
@@ -259,6 +265,7 @@ impl Chart {
     pub(super) fn replace_drawings(
         &mut self,
         drawings: Vec<Drawing>,
+        keep_snapshot_links: bool,
     ) -> Vec<(usize, &'static str)> {
         self.flush_change_events();
         let mut manager = DrawingManager::new();
@@ -284,6 +291,9 @@ impl Chart {
             .collect();
         manager.events.clear();
         manager.events_dropped = 0;
+        if keep_snapshot_links {
+            manager.keep_snapshot_links(&self.drawings);
+        }
         self.drawings = manager;
         self.history.clear();
         refused
