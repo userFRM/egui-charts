@@ -1025,13 +1025,19 @@ impl ScreenerPanel {
                         .enabled(!missing.is_empty());
                     let button = ui.put(add, button);
                     egui::Popup::menu(&button).show(|ui| {
-                        for column in missing {
-                            if ui.button(l10n::text(ui.ctx(), &column.title)).clicked() {
-                                self.columns.push(column.clone());
-                                changed = true;
-                                ui.close();
-                            }
-                        }
+                        // A host may offer more columns than the window is tall.
+                        egui::ScrollArea::vertical()
+                            .max_height(ui.spacing().combo_height)
+                            .show(ui, |ui| {
+                                for column in missing {
+                                    let text = l10n::text(ui.ctx(), &column.title);
+                                    if ui.button(text).clicked() {
+                                        self.columns.push(column.clone());
+                                        changed = true;
+                                        ui.close();
+                                    }
+                                }
+                            });
                     });
                     for entry in &self.rows {
                         let (rect, response) = row(ui);
