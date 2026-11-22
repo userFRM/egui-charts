@@ -1116,6 +1116,30 @@ impl StudyTemplate {
                 changed = true;
             }
         }
+        // An options profile drew a wall while its Call wall or Put wall input, off by default,
+        // and its line in the style tab were both on, before the line alone switched it. A save
+        // with neither the inputs nor the put/call switch, listed since walls were listed for
+        // every measure, had its walls off.
+        if study == "Options Volume Profile" && declares("expiry") && !declares("call_wall") {
+            for (line, id) in [(3, "call_wall"), (4, "put_wall")] {
+                let saved = self.inputs.iter().find_map(|(saved, value)| match value {
+                    InputValue::Toggle(on) if saved == id => Some(*on),
+                    _ => None,
+                });
+                if let Some(plot) = template.settings.plots.get_mut(line)
+                    && plot.visible
+                    && !saved.unwrap_or(has("put_call"))
+                {
+                    plot.visible = false;
+                    changed = true;
+                }
+            }
+            let listed = template.inputs.len();
+            template
+                .inputs
+                .retain(|(id, _)| id != "call_wall" && id != "put_wall");
+            changed |= template.inputs.len() != listed;
+        }
         // A single candlestick pattern study saved while it drew the bullish, bearish and
         // neutral lines of All Candlestick Patterns, and took the trend rule whatever its rule
         // reads, keeps the style of its side's line and drops a rule it now ignores.
