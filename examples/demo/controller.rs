@@ -6061,7 +6061,7 @@ mod tests {
 
     /// The demo screener's "+", chart view and refresh choice are reachable: an added column heads
     /// its values, the chart view lays the screened symbols out in taller rows, and a picked
-    /// refresh interval replaces the dropdown's label.
+    /// refresh interval replaces the dropdown's label, which the panel shows whole.
     #[test]
     fn demo_screener_columns_charts_and_refresh_are_reachable() {
         let ctx = egui::Context::default();
@@ -6119,6 +6119,24 @@ mod tests {
             painted("Refresh every 10 seconds") && !painted("No auto refresh"),
             "{texts:?}"
         );
+        // A cut label still carries its whole text, so ask the galley whether it was cut.
+        let output = ctx.run_ui(
+            egui::RawInput {
+                time: Some(10.0),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ui| eframe::App::ui(&mut *app, ui, &mut eframe::Frame::_new_kittest()),
+        );
+        let cut = output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text)
+                if text.galley.text() == "Refresh every 10 seconds" && text.galley.elided)
+        });
+        output.drop_without_applying_deltas();
+        assert!(!cut, "the refresh choice is cut short");
     }
 
     /// Row menus update the demo watchlist, and starring a list survives the real settings save

@@ -576,17 +576,6 @@ impl ScreenerPanel {
                     self.view = view;
                 }
             }
-            dropdown(
-                ui,
-                "screener_auto_refresh",
-                self.auto_refresh.label(),
-                |ui| {
-                    for choice in AutoRefresh::ALL {
-                        let text = l10n::text(ui.ctx(), choice.label());
-                        ui.selectable_value(&mut self.auto_refresh, choice, text);
-                    }
-                },
-            );
             if Button::new("Send to watchlist")
                 .enabled(has_rows)
                 .show(ui)
@@ -603,6 +592,19 @@ impl ScreenerPanel {
             {
                 action = ScreenerAction::ExportCsv(self.csv());
             }
+            // Last and sized whole: a narrow panel wraps it under the actions instead of cutting
+            // the choice short.
+            controls::full_dropdown(
+                ui,
+                "screener_auto_refresh",
+                self.auto_refresh.label(),
+                |ui| {
+                    for choice in AutoRefresh::ALL {
+                        let text = l10n::text(ui.ctx(), choice.label());
+                        ui.selectable_value(&mut self.auto_refresh, choice, text);
+                    }
+                },
+            );
         });
         if self.text_query {
             ui.horizontal_wrapped(|ui| {
