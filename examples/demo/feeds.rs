@@ -565,12 +565,15 @@ pub(super) fn screener_sets() -> Vec<ScreenerColumnSet> {
                 column("price", "Price"),
                 column("change_percent", "Chg %"),
                 column("volume", "Volume"),
-                ScreenerColumn::text("exchange", "Exchange", exchanges()),
             ],
         ),
         ScreenerColumnSet::new(
             "Valuation",
-            vec![column("price", "Price"), column("market_cap", "Mkt cap")],
+            vec![
+                column("price", "Price"),
+                column("market_cap", "Mkt cap"),
+                ScreenerColumn::text("exchange", "Exchange", exchanges()),
+            ],
         ),
     ]
 }

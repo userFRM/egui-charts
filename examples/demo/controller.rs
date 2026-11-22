@@ -5990,6 +5990,9 @@ mod tests {
                 .map(|spec| spec.symbol)
                 .collect::<Vec<_>>()
         };
+        // Exchange is a Valuation column, so the filter offers it after switching sets.
+        click(&mut app, "Overview", false);
+        click(&mut app, "Valuation", true);
         click(&mut app, "Price", false);
         click(&mut app, "Exchange", true);
         tick(&mut app, "Choose values", "Crypto");
