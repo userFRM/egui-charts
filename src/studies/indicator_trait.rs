@@ -355,6 +355,15 @@ pub trait Indicator: Send + ConcreteStudy {
         true
     }
 
+    /// Whether the settings dialog offers plot `line` only its visibility and colour: return true
+    /// for a plot the study draws in a look of its own, such as a level it marks with tags. The
+    /// dialog then offers no width, line pattern, plot type, scale tag or latest value line for
+    /// it; stored values of those settings still load and are kept. False by default.
+    fn plot_color_only(&self, line: usize) -> bool {
+        let _ = line;
+        false
+    }
+
     /// Editable alternate colour and width states, separate from the output's main style.
     fn plot_variants(&self, _line: usize) -> Vec<super::PlotVariant> {
         Vec::new()

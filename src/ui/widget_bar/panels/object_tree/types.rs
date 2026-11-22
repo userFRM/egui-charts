@@ -376,7 +376,9 @@ impl SourceItem {
 /// Data Window information (OHLCV at cursor position)
 ///
 /// Displays real-time price data for the bar under the cursor. Build it with
-/// [`Self::from_chart`], [`Self::from_pointer`] or [`Self::new`].
+/// [`Self::from_chart`], [`Self::from_pointer`] or [`Self::new`]. At a whitespace bar, or on a
+/// chart without bars, the prices, volume and changes are NaN and the panel lists the time,
+/// interval, series and studies without value rows, as the status line does.
 ///
 /// ```
 /// use egui_charts::ui::widget_bar::{DataWindowInfo, DataWindowSeries};
@@ -537,11 +539,16 @@ impl DataWindowInfo {
         self
     }
 
-    /// Calculate and set change from previous close
+    /// Calculate and set change from previous close. Without a close or a previous close, such
+    /// as at a whitespace bar, both changes are NaN rather than zero.
     pub fn with_prev_close(mut self, prev: f64) -> Self {
         self.prev_close = prev;
         self.change = self.close - prev;
-        self.change_percent = percent_change(prev, self.close);
+        self.change_percent = if self.change.is_nan() {
+            f64::NAN
+        } else {
+            percent_change(prev, self.close)
+        };
         self
     }
 

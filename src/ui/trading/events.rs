@@ -3,7 +3,7 @@
 
 use super::account_panel::quantity_decimals;
 use super::widgets::side_name;
-use super::{Numbers, Sent, Trading};
+use super::{Numbers, Sent, Trading, changed};
 use crate::chart::TradingLineAction;
 use crate::data::FeedError;
 use crate::localization as l10n;
@@ -204,7 +204,7 @@ impl Trading {
             AccountEvent::Order(order) => {
                 if matches!(&self.pending,
                     Some(TradingLineAction::Cancel(old) | TradingLineAction::Modify(old, _))
-                    if old.id == order.id && old != &order)
+                    if old.id == order.id && changed(old, &order))
                 {
                     self.pending = None;
                 }
@@ -212,16 +212,20 @@ impl Trading {
                 self.orders.retain(|working| working.id != order.id);
                 let asked =
                     order.status != OrderStatus::Working && self.cancelling.remove(&order.id);
+                let price = match order.request.order_type {
+                    OrderType::Market => None,
+                    OrderType::Limit(price) | OrderType::Stop(price) => Some(price),
+                    OrderType::StopLimit { stop, .. } => Some(stop),
+                    // Before it trails, a trailing stop waits at its activation price.
+                    OrderType::TrailingStop { activation, .. } => {
+                        order.trailing_stop.or(activation)
+                    }
+                };
                 if announce
                     && first_order
                     && order.status == OrderStatus::Working
-                    && order.request.order_type != OrderType::Market
+                    && let Some(price) = price
                 {
-                    let price = match order.request.order_type {
-                        OrderType::Limit(price) | OrderType::Stop(price) => price,
-                        OrderType::StopLimit { stop, .. } => stop,
-                        _ => unreachable!(),
-                    };
                     let chart = (self.chart_logo.as_ref()).map_or("", |(chart, _)| chart.as_str());
                     self.notify(
                         toasts,
@@ -265,6 +269,9 @@ impl Trading {
                                 numbers.price(price)
                             }
                             OrderType::StopLimit { stop, .. } => numbers.price(stop),
+                            OrderType::TrailingStop { distance, .. } => {
+                                numbers.trail(ctx, distance)
+                            }
                         };
                         toast.trading = Some(crate::ui_kit::notifications::TradingToast {
                             symbol: request.symbol.clone(),
@@ -558,10 +565,15 @@ fn valid_event(event: &AccountEvent) -> bool {
                     level.price.is_finite() && positive(level.quantity) && finite(level.stop_loss)
                 })
                 && finite(request.stop_loss)
+                && finite(order.trailing_stop)
                 && match request.order_type {
                     OrderType::Market => true,
                     OrderType::Limit(price) | OrderType::Stop(price) => price.is_finite(),
                     OrderType::StopLimit { stop, limit } => stop.is_finite() && limit.is_finite(),
+                    OrderType::TrailingStop {
+                        distance,
+                        activation,
+                    } => distance.is_valid() && finite(activation),
                 }
         }
         AccountEvent::Position(position) => {
@@ -595,6 +607,22 @@ fn order_text(ctx: &egui::Context, request: &OrderRequest, numbers: &Numbers<'_>
     use crate::model::PositionBracket;
     let (english, price, limit) = match (request.position_bracket, request.order_type) {
         (_, OrderType::Market) => ("{side} {quantity} {symbol} at market", None, None),
+        (
+            _,
+            OrderType::TrailingStop {
+                activation: Some(activation),
+                ..
+            },
+        ) => (
+            "{side} {quantity} {symbol} trailing stop {distance} from {price}",
+            Some(activation),
+            None,
+        ),
+        (_, OrderType::TrailingStop { .. }) => (
+            "{side} {quantity} {symbol} trailing stop {distance}",
+            None,
+            None,
+        ),
         (_, OrderType::StopLimit { stop, limit }) => (
             "{side} {quantity} {symbol} stop {price} limit {limit}",
             Some(stop),
@@ -621,6 +649,10 @@ fn order_text(ctx: &egui::Context, request: &OrderRequest, numbers: &Numbers<'_>
     };
     let price_text =
         |value: Option<f64>| value.map(|value| numbers.price(value)).unwrap_or_default();
+    let distance = match request.order_type {
+        OrderType::TrailingStop { distance, .. } => numbers.trail(ctx, distance),
+        _ => String::new(),
+    };
     l10n::format_text(
         ctx,
         english,
@@ -633,6 +665,7 @@ fn order_text(ctx: &egui::Context, request: &OrderRequest, numbers: &Numbers<'_>
             ("symbol", request.symbol.clone()),
             ("price", price_text(price)),
             ("limit", price_text(limit)),
+            ("distance", distance),
         ],
     )
 }
@@ -647,6 +680,7 @@ fn order_name(request: &OrderRequest) -> &'static str {
             OrderType::Limit(_) => "Limit",
             OrderType::Stop(_) => "Stop",
             OrderType::StopLimit { .. } => "Stop limit",
+            OrderType::TrailingStop { .. } => "Trailing stop",
         },
     }
 }
@@ -1643,6 +1677,14 @@ mod tests {
                 Some(PositionBracket::StopLoss),
                 "Stop loss",
             ),
+            (
+                OrderType::TrailingStop {
+                    distance: crate::model::TrailDistance::Price(2.0),
+                    activation: Some(105.0),
+                },
+                None,
+                "Trailing stop",
+            ),
         ] {
             let mut trading = Trading::default();
             trading
@@ -1802,6 +1844,38 @@ mod tests {
                 "a symbol change invalidates confirmation"
             );
         }
+        let trailing = OrderType::TrailingStop {
+            distance: crate::model::TrailDistance::Price(2.0),
+            activation: None,
+        };
+        let mut moved = Order::new(
+            OrderId::new("8"),
+            OrderRequest::new("SYM", OrderSide::Sell, 2.0, trailing),
+            OrderStatus::Working,
+        );
+        moved.trailing_stop = Some(98.0);
+        trading.load_rules("SYM");
+        trading.pending = Some(TradingLineAction::Cancel(moved.clone()));
+        moved.trailing_stop = Some(99.0);
+        trading.apply(
+            &egui::Context::default(),
+            AccountEvent::Order(moved.clone()),
+            &mut Toasts::new(),
+        );
+        assert!(
+            trading.pending.is_some(),
+            "a moving trailing stop preserves confirmation"
+        );
+        moved.filled = 1.0;
+        trading.apply(
+            &egui::Context::default(),
+            AccountEvent::Order(moved),
+            &mut Toasts::new(),
+        );
+        assert!(
+            trading.pending.is_none(),
+            "a fill of a trailing stop invalidates confirmation"
+        );
         trading.sound = Some("Bell".into());
         trading.calculator = Some((egui::Pos2::ZERO, "3".into()));
         trading.set_service(Arc::new(Recorder::default()));

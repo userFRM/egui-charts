@@ -22,7 +22,7 @@ pub(super) use box_zoom::render_box_zoom;
 use egui::{Event, MouseWheelUnit, Pos2, Rect, Response, Ui, Vec2, vec2};
 
 use crate::model::SeriesScale;
-use crate::scales::PriceScale;
+use crate::scales::{PriceScale, PriceTransform};
 use crate::widget::{Chart, PaneId, PaneScale};
 
 /// This frame's wheel scroll in points before egui smooths it: line and page units converted, and
@@ -820,6 +820,10 @@ impl Chart {
                 let map = scale.map(scale.transform(), plot.top(), plot.bottom());
                 let (a, b) = (map.y_to_scale(min_y), map.y_to_scale(max_y));
                 Self::zoom_scale_to_box(scale, a, b, spacing, plot.height());
+                // Kept as values: the next fit converts a range in another mode's units by
+                // value, into the units of the zoomed time range, whose first visible value is
+                // the base of the relative modes.
+                scale.rebase(PriceTransform::default());
                 self.zoom_scales
                     .last_mut()
                     .expect("entry pushed with the zoom history")
@@ -3473,36 +3477,63 @@ mod tests {
         }
     }
 
-    /// The bars and prices inside a zoom box fill the pane on the next frame, also on a price
-    /// scale locked to the bar spacing. The box re-centres the time window, so the relative modes
-    /// rebase on another first visible close than the box was drawn on, and a locked scale takes
-    /// its ratio in the units of that window.
+    /// The bars and values inside a zoom box fill the pane it was drawn in on the next frame: the
+    /// price pane, also on a price scale locked to the bar spacing, or a study pane on its own
+    /// scale. The box re-centres the time window, so the relative modes rebase on another first
+    /// visible close or study value than the box was drawn on, and a locked price scale takes its
+    /// ratio in the units of that window.
     #[test]
     fn box_zoom_fills_the_pane_with_the_selected_bars_and_prices() {
         let lows: Vec<f64> = (0..100).map(|i| 100.0 + i as f64).collect();
         let highs: Vec<f64> = lows.iter().map(|low| low + 1.0).collect();
-        for (mode, locked) in [
-            (PriceScaleMode::Normal, false),
-            (PriceScaleMode::Percentage, false),
-            (PriceScaleMode::Percentage, true),
+        for (in_study_pane, mode, locked) in [
+            (false, PriceScaleMode::Normal, false),
+            (false, PriceScaleMode::Percentage, false),
+            (false, PriceScaleMode::Percentage, true),
+            (true, PriceScaleMode::Percentage, false),
+            (true, PriceScaleMode::IndexedTo100, false),
         ] {
+            let row = format!("study pane {in_study_pane}, {mode:?}, locked {locked}");
             let ctx = egui::Context::default();
             let mut chart = chart(&lows, &highs);
-            chart.apply_series_settings(&SeriesSettings {
-                price_scale_mode: mode,
-                ..SeriesSettings::default()
-            });
+            let id = if in_study_pane {
+                // The closes, 101 to 200, in a pane of their own.
+                chart.add_indicator(Box::new(
+                    crate::studies::CustomIndicator::new("Pane", |bars| {
+                        bars.iter()
+                            .map(|bar| crate::studies::IndicatorValue::Single(bar.close))
+                            .collect()
+                    })
+                    .with_overlay(false),
+                ))
+            } else {
+                chart.apply_series_settings(&SeriesSettings {
+                    price_scale_mode: mode,
+                    ..SeriesSettings::default()
+                });
+                crate::widget::SeriesId::MAIN
+            };
             frame(&ctx, &mut chart, 0.0, Vec::new());
-            let rect = chart.last_rendered_price_rect;
+            let price = chart.last_rendered_price_rect;
+            let pane = chart.series_pane(id).expect("present series");
+            if in_study_pane {
+                chart
+                    .pane_price_scale_mut(pane, crate::model::SeriesScale::Right)
+                    .options_mut()
+                    .mode = mode;
+                frame(&ctx, &mut chart, 0.05, Vec::new());
+            }
             if locked {
                 let spacing = chart.state.time_scale().bar_spacing();
                 chart
                     .state
                     .price_scale_mut()
-                    .set_bar_ratio_locked(true, spacing, rect.height());
+                    .set_bar_ratio_locked(true, spacing, price.height());
             }
-            let before = chart.get_chart_mapping().price;
-            let (y_hi, y_lo) = (rect.top() + 100.0, rect.top() + 200.0);
+            let before = chart.series_price_map(id).expect("drawn pane");
+            let (top, bottom) = before.extent();
+            let rect = Rect::from_x_y_ranges(price.x_range(), top..=bottom);
+            let (y_hi, y_lo) = (top + rect.height() / 4.0, top + rect.height() * 0.6);
             let (hi, lo) = (before.y_to_price(y_hi), before.y_to_price(y_lo));
             let (start, end) = (
                 Pos2::new(rect.right() - 150.0, y_hi),
@@ -3513,7 +3544,17 @@ mod tests {
                 ts.coord_to_idx(x, rect.left(), rect.width())
             };
             let (left, right) = (idx(start.x), idx(end.x));
-            assert!(chart.execute_box_zoom(start, end, rect, rect.width()));
+            if in_study_pane {
+                assert!(
+                    chart.zoom_to_box(start, end, price, price.width(), pane, rect),
+                    "{row}"
+                );
+            } else {
+                assert!(
+                    chart.execute_box_zoom(start, end, price, price.width()),
+                    "{row}"
+                );
+            }
             frame(&ctx, &mut chart, 0.1, Vec::new());
             let ts = chart.state.time_scale();
             let x = |idx| ts.idx_to_coord_precise(idx, rect.left(), rect.width());
@@ -3521,14 +3562,14 @@ mod tests {
             assert!(
                 (x_left - rect.left()).abs() < 0.01
                     && (x_right - (rect.right() - 1.0)).abs() < 0.01,
-                "{mode:?}, locked {locked}: bars {left}..{right} at x {x_left}..{x_right}, pane {rect:?}"
+                "{row}: bars {left}..{right} at x {x_left}..{x_right}, pane {rect:?}"
             );
-            let after = chart.get_chart_mapping().price;
+            let after = chart.series_price_map(id).expect("drawn pane");
             let (top, bottom) = after.extent();
             let (y_hi, y_lo) = (after.price_to_y(hi), after.price_to_y(lo));
             assert!(
                 (y_hi - top).abs() < 0.5 && (y_lo - bottom).abs() < 0.5,
-                "{mode:?}, locked {locked}: {lo}..{hi} at y {y_lo}..{y_hi}, pane {top}..{bottom}"
+                "{row}: {lo}..{hi} at y {y_lo}..{y_hi}, pane {top}..{bottom}"
             );
         }
 
