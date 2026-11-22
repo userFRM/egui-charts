@@ -183,7 +183,7 @@ impl Terminal {
                 }));
             }
             LayoutAction::OpenLayout => self.layouts.chooser = true,
-            LayoutAction::CreateNew => {
+            LayoutAction::CreateNew(_) => {
                 self.new_layout(None);
             }
             LayoutAction::SaveAs(name) => match self.capture_layout() {
@@ -769,7 +769,7 @@ mod tests {
             .chart_mut()
             .user_action(|chart| chart.config_mut().show_grid = false);
         terminal.top_toolbar.layout_menu.autosave = true;
-        layout(&mut terminal, LayoutAction::CreateNew);
+        layout(&mut terminal, LayoutAction::CreateNew("Unnamed".into()));
         // The new layout is one slot with a copy of the active chart; the strip lists both.
         let names: Vec<_> = terminal.layouts.tabs.iter().map(|tab| &*tab.name).collect();
         assert_eq!(names, ["Unnamed", "Unnamed 2"]);

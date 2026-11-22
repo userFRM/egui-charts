@@ -1145,7 +1145,7 @@ impl DrawingManager {
     // === Drawing lifecycle ===
 
     /// `point` with the magnet applied, except for freehand samples, which follow the pointer.
-    fn snap_placement(&self, tool: Option<DrawingToolType>, point: Pos2) -> Pos2 {
+    pub(crate) fn snap_placement(&self, tool: Option<DrawingToolType>, point: Pos2) -> Pos2 {
         if tool
             .is_some_and(|tool| tool.interaction_mode() == DrawingInteractionMode::ContinuousDraw)
         {

@@ -503,8 +503,8 @@ impl AlertsPanel {
         self.desktop = service;
     }
 
-    /// The sound to play when an alert fires, as the user chose it in the alert settings: its
-    /// name, empty for the host's first sound, or `None` when the user turned the sound off.
+    /// The sound to play when an alert whose delivery keeps Sound fires: its name as the user
+    /// chose it in the alert settings, empty for the host's first sound, or `None` to play none.
     pub fn set_sound(&mut self, sound: Option<String>) {
         self.sound_choice = sound;
     }

@@ -192,6 +192,19 @@ impl super::Chart {
         }
         let focused = ctx.memory(|memory| memory.focused());
         let elsewhere = focused.is_some() && focused != self.keyboard.chart_id;
+        // Shift+Left and Shift+Right step a replay, so a replaying chart leaves them to it.
+        let replaying = self.replay_time().is_some();
+        let replay_key = |action, shortcut: egui::KeyboardShortcut| {
+            replaying
+                && matches!(
+                    action,
+                    KeyboardAction::CycleChartFocus | KeyboardAction::CycleChartFocusBack
+                )
+                && matches!(
+                    shortcut.logical_key,
+                    egui::Key::ArrowLeft | egui::Key::ArrowRight
+                )
+        };
         if elsewhere && !egui::Popup::is_any_open(ctx) {
             let text_focused = ctx.text_edit_focused();
             while let Some((action, _)) =
@@ -215,12 +228,14 @@ impl super::Chart {
                 .chart_id
                 .is_some_and(|id| ctx.memory(|memory| memory.had_focus_last_frame(id)))
         {
-            while let Some((action, _)) = self.keyboard.map.consume(ctx, false, |action, _| {
-                matches!(
-                    action,
-                    KeyboardAction::CycleChartFocus | KeyboardAction::CycleChartFocusBack
-                )
-            }) {
+            while let Some((action, _)) =
+                self.keyboard.map.consume(ctx, false, |action, shortcut| {
+                    matches!(
+                        action,
+                        KeyboardAction::CycleChartFocus | KeyboardAction::CycleChartFocusBack
+                    ) && !replay_key(action, shortcut)
+                })
+            {
                 self.keyboard.requests.push(ShortcutRequest::Action(action));
             }
         }
@@ -236,7 +251,9 @@ impl super::Chart {
         while let Some((action, event)) = {
             #[cfg(feature = "drawings")]
             while self.nudge_selected_drawing(ctx) {}
-            self.keyboard.map.consume(ctx, true, |_, _| true)
+            self.keyboard
+                .map
+                .consume(ctx, true, |action, shortcut| !replay_key(action, shortcut))
         } {
             // Drawing edits wait for a drawing drag to end, as undo does: the release records the
             // drag from the state it started in, which an edit meanwhile would no longer lead to.
