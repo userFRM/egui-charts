@@ -66,6 +66,9 @@ pub(crate) struct Run {
     pub bar: usize,
     /// The plot values of the current bar, missing until a plot stores one.
     pub row: Vec<f64>,
+    /// The bytes each value kept between bars holds after the last bar, with where it is
+    /// declared; the front end sets them after each bar.
+    pub kept: Vec<(usize, Span)>,
     pub sites: HashMap<Site, CallSite>,
     occurrences: HashMap<Span, u32>,
     pub clock: Clock,
@@ -272,6 +275,7 @@ impl<P: Program> RunState<P> {
                 ..Columns::default()
             },
             row: vec![f64::NAN; spec.plots.len()],
+            kept: Vec::new(),
             spec,
             bar: 0,
             sites: HashMap::new(),
@@ -339,6 +343,7 @@ impl<P: Program> RunState<P> {
         };
         if start == 0 {
             self.slots = self.program.slots(&inputs, self.run.columns.fed.is_some());
+            self.run.kept.clear();
             self.run.sites.clear();
             self.snapshot = None;
             self.failed = None;
@@ -400,8 +405,14 @@ impl<P: Program> RunState<P> {
                     None => self.program.bar(&mut self.slots),
                 };
                 // A script can catch a stop raised in a callback, so a stop ends the run
-                // whatever the bar returned.
-                if let Some(limit) = with(|run| run.stop).flatten() {
+                // whatever the bar returned. The values the bar keeps count from now on.
+                let limit = with(|run| {
+                    if run.stop.is_none() && run.bytes() > run.clock.limits.memory {
+                        run.stop = Some(Stop::Memory);
+                    }
+                    run.stop
+                });
+                if let Some(limit) = limit.flatten() {
                     let span = result.err().map_or(Span::default(), |error| error.span);
                     stop = Some((limit, span, Some(i)));
                     break;
@@ -481,6 +492,7 @@ impl Run {
             columns: Columns::default(),
             bar: 0,
             row: Vec::new(),
+            kept: Vec::new(),
             sites: HashMap::new(),
             occurrences: HashMap::new(),
             clock: Clock::start(Limits::default()),
@@ -492,9 +504,9 @@ impl Run {
         }
     }
 
-    /// The bytes the study's buffers hold once every bar of the run is calculated: the bars,
-    /// the fed column, the declared series, the plot columns, the helpers and the snapshot's
-    /// copy of the helpers.
+    /// The bytes the study holds once every bar of the run is calculated: the bars, the fed
+    /// column, the declared series, the plot columns, the helpers and the values kept between
+    /// bars, the last two again for the snapshot's copy.
     fn bytes(&self) -> usize {
         let len = self.columns.bars.len();
         let columns = usize::from(self.columns.fed.is_some())
@@ -505,22 +517,23 @@ impl Run {
             .values()
             .map(|site| std::mem::size_of::<CallSite>() + site.kernel.bytes(len))
             .sum();
-        len * (std::mem::size_of::<Bar>() + columns * 8) + 2 * helpers
+        let kept: usize = self.kept.iter().map(|(bytes, _)| bytes).sum();
+        len * (std::mem::size_of::<Bar>() + columns * 8) + 2 * (helpers + kept)
     }
 
-    /// Where the declaration or call site holding the most memory is.
+    /// Where the declaration or call site holding the most memory is, the first of equals.
     fn largest(&self) -> Span {
         let len = self.columns.bars.len();
         let series = self.series_spans.first().map(|span| (len * 8, *span));
-        let helper = self
+        let helpers = self
             .sites
             .iter()
-            .map(|((span, _), site)| (site.kernel.bytes(len), *span))
-            .max_by_key(|(bytes, _)| *bytes);
-        match (series, helper) {
-            (Some(series), Some(helper)) if helper.0 > series.0 => helper.1,
-            (Some(series), _) => series.1,
-            (None, helper) => helper.map(|(_, span)| span).unwrap_or_default(),
-        }
+            .map(|((span, _), site)| (site.kernel.bytes(len), *span));
+        series
+            .into_iter()
+            .chain(helpers)
+            .chain(self.kept.iter().copied())
+            .reduce(|largest, next| if next.0 > largest.0 { next } else { largest })
+            .map_or(Span::default(), |(_, span)| span)
     }
 }

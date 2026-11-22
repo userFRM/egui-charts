@@ -897,14 +897,19 @@ fn fill(cursor: &mut Cursor, collector: &mut Collector) -> Step<Option<usize>> {
     Ok(None)
 }
 
-/// Where the `series` declarations of `source` name their series: the first such declaration
-/// of each name outside comments and strings.
-pub(crate) fn series_spans(source: &str, names: &[SeriesDecl]) -> Vec<Span> {
+/// Where the declarations `keyword NAME` of `source` name each of `names`: the first such
+/// declaration of each name outside comments and strings.
+pub(crate) fn spans<'a>(
+    source: &str,
+    keyword: &str,
+    names: impl IntoIterator<Item = &'a str>,
+) -> Vec<Span> {
+    let names: Vec<_> = names.into_iter().collect();
     let mut found = vec![Span::default(); names.len()];
     let mut previous: Option<&str> = None;
     for (word, span) in words(source) {
-        if previous == Some("series")
-            && let Some(at) = names.iter().position(|series| series.name == word)
+        if previous == Some(keyword)
+            && let Some(at) = names.iter().position(|name| *name == word)
             && found[at] == Span::default()
         {
             found[at] = span;

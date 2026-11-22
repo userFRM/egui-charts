@@ -297,7 +297,7 @@ fn scripts_are_refused_at_their_line_and_column() {
 /// error names its line, column and bar, and later bars are missing.
 #[test]
 fn run_errors_keep_the_bars_before_them() {
-    let fixture = bars(50, 3);
+    let fixture = bars(1001, 3);
     // Column 0 leaves the column unasserted where the engine, not the script, places it.
     for (source, column, bar, fragment) in [
         // The `[` of the offset, counted by hand.
@@ -339,6 +339,14 @@ fn run_errors_keep_the_bars_before_them() {
             0,
             20,
             "no function sleep",
+        ),
+        // An index adds a key without a size check; the state's declaration holds the map.
+        (
+            "state m = 0;\nif bar_index == 0 { m = #{}; }\nlet i = bar_index * 1;\n\
+             m[\"k\" + i] = 1.0;\nplot(\"x\", close);",
+            7,
+            1000,
+            "Size of object map",
         ),
     ] {
         let script = compile(source);
@@ -450,8 +458,8 @@ fn full_recompute_limit_stops_long_runs() {
     }
 }
 
-/// The memory cap counts series buffers and helper windows, and stops a script whose buffers
-/// pass it at the declaration or call holding the most.
+/// The memory cap counts series buffers, helper windows and the values states keep, and stops
+/// a script whose buffers pass it at the declaration or call holding the most.
 #[test]
 fn memory_cap_stops_scripts_whose_buffers_pass_it() {
     let mut source: String = (0..64).map(|i| format!("series s{i} = close;\n")).collect();
@@ -460,9 +468,13 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
     // 100 windows of 1,000 values, counted when created; fails if a window counts only the
     // values it holds so far.
     let windows = "let s = 0.0;\nfor i in 0..100 { s += sma(close, 1000); }\nplot(\"x\", s);";
+    // A state map that gains a key of 9,000 bytes on every bar.
+    let kept = "state m = 0;\nif bar_index == 0 { m = #{}; }\nlet k = \"x\"; k.pad(9000, \"y\");\n\
+                let i = bar_index * 1;\nm[k + i] = 1;\nplot(\"x\", close);";
     for (script, fixture, mib, line) in [
         (source.as_str(), &fixture[..], 16, 1),
         (windows, &fixture[..1000], 1, 2),
+        (kept, &fixture[..1000], 1, 1),
     ] {
         let mut capped = limited(
             script,

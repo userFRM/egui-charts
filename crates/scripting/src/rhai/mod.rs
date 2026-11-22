@@ -8,8 +8,8 @@ pub(crate) mod syntax;
 use crate::ScriptError;
 use crate::runtime::program::{Literal, ScriptSpec, Span};
 use crate::runtime::series::SeriesRef;
-use crate::runtime::{BarError, Program};
-use ::rhai::{AST, Dynamic, Engine, Scope};
+use crate::runtime::{self, BarError, Program};
+use ::rhai::{AST, Array, Blob, Dynamic, Engine, ImmutableString, Map, Scope};
 use egui_charts::studies::{InputKind, InputValue, StudySource};
 use engine::Handle;
 use std::sync::{Arc, Mutex};
@@ -19,6 +19,8 @@ pub(crate) struct Compiled {
     pub name: String,
     pub spec: Arc<ScriptSpec>,
     pub series_spans: Arc<[Span]>,
+    /// Where each `state` declaration is, for size and memory reports.
+    state_spans: Vec<Span>,
     engine: Engine,
     ast: AST,
     source: String,
@@ -54,7 +56,8 @@ pub(crate) fn compile(name: String, source: &str) -> Result<Compiled, ScriptErro
     let (engine, ast, spec) = pass(true, &scope(&spec, &defaults, false, false))?;
     Ok(Compiled {
         name,
-        series_spans: syntax::series_spans(source, &spec.series).into(),
+        series_spans: syntax::spans(source, "series", spec.series.iter().map(|s| &*s.name)).into(),
+        state_spans: syntax::spans(source, "state", spec.states.iter().map(|s| &*s.name)),
         spec: Arc::new(spec),
         engine,
         ast,
@@ -131,14 +134,46 @@ impl Program for Compiled {
         let prefix = scope.len();
         let result = self.engine.run_ast_with_scope(scope, &self.ast);
         scope.rewind(prefix);
-        // A state carries a series' value on this bar, not a handle that would read the next.
-        for state in &self.spec.states {
-            if let Some(value) = scope.get_mut(&state.name)
+        let mut kept = Vec::with_capacity(self.spec.states.len());
+        let mut oversized = None;
+        for (state, &span) in self.spec.states.iter().zip(&self.state_spans) {
+            let Some(value) = scope.get_mut(&state.name) else {
+                continue;
+            };
+            // A state carries a series' value on this bar, not a handle that would read the next.
+            if value.is::<Handle>()
                 && let Some(series) = value.clone().try_cast::<Handle>()
             {
                 *value = Dynamic::from_float(series.value());
             }
+            // Rhai checks a map's size where a function passes it, not where an index adds a key.
+            if let Err(error) = self.engine.ensure_data_size_within_limits(value) {
+                let message = errors::runtime(&error, &self.source).message;
+                oversized.get_or_insert(BarError { message, span });
+            }
+            kept.push((held(value), span));
         }
-        result.map_err(|error| errors::runtime(&error, &self.source))
+        runtime::with(|run| run.kept = kept);
+        result.map_err(|error| errors::runtime(&error, &self.source))?;
+        oversized.map_or(Ok(()), Err)
+    }
+}
+
+/// The bytes `value` holds beyond its own size: the text of strings and keys, and the items of
+/// arrays and maps.
+fn held(value: &Dynamic) -> usize {
+    let item = std::mem::size_of::<Dynamic>();
+    if let Some(text) = value.read_lock::<ImmutableString>() {
+        text.len()
+    } else if let Some(array) = value.read_lock::<Array>() {
+        array.iter().map(|value| item + held(value)).sum()
+    } else if let Some(map) = value.read_lock::<Map>() {
+        map.iter()
+            .map(|(key, value)| key.len() + item + held(value))
+            .sum()
+    } else if let Some(blob) = value.read_lock::<Blob>() {
+        blob.len()
+    } else {
+        0
     }
 }

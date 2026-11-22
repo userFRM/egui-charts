@@ -12,7 +12,8 @@ pub struct Limits {
     pub bar: Duration,
     /// Longest time a full recompute may run; 60 s by default.
     pub full: Duration,
-    /// Most bytes one study's buffers may hold; 256 MiB by default.
+    /// Most bytes one study's buffers and the values its states keep may hold; 256 MiB by
+    /// default.
     pub memory: usize,
 }
 

@@ -222,12 +222,13 @@ previous values meanwhile, and the legend shows the progress, then the last comp
 slow notice from one second on. A live tick recalculates only the newest bar.
 
 `Limits`, set with `Script::with_limits`, bound each study's runs: 500 ms for one bar, 60 s for a
-full recompute and 256 MiB for the study's buffers by default. A run that passes a limit keeps
-none of its bars: the study keeps its previous values, and the legend and `Script::last_error`
-say which limit stopped it and where. It runs again when its inputs change or its bars change
-from the first one on. Whether a run close to a limit finishes depends on the machine and its
-load. A script with long logic on every bar costs time on every bar: on 100,000 bars a restated
-built-in study takes several hundred milliseconds to recompute, off the UI thread.
+full recompute and 256 MiB for the study's buffers and the values its states keep by default. A
+run that passes a limit keeps none of its bars: the study keeps its previous values, and the
+legend and `Script::last_error` say which limit stopped it and where. It runs again when its
+inputs change or its bars change from the first one on. Whether a run close to a limit finishes
+depends on the machine and its load. A script with long logic on every bar costs time on every
+bar: on 100,000 bars a restated built-in study takes several hundred milliseconds to recompute,
+off the UI thread.
 
 `Limits` may gain fields, so a host starts from the defaults and sets the limits it changes:
 
