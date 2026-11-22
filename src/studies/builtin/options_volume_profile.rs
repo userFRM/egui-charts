@@ -306,11 +306,14 @@ impl OptionsVolumeProfile {
     /// 30% of the plot's width, 27% by default. Layout can instead place each upcoming expiration
     /// beside its date on the time scale, on the chosen side, separately or grouped by week or
     /// month. Maximum expirations counts from the nearest, 10 by default. Each group shares the
-    /// strike window and row height, marks its own walls with CW and PW tags in their colours
-    /// that point at their rows, the call wall's just before the rows' base and the put wall's
-    /// past the row's bars, figures and key, and labels its latest date on the time scale while
-    /// Expiration labels is on. Groups mapping to one bar are combined; without chart bars
-    /// no dated profiles are drawn.
+    /// strike window and row height and marks its own walls with half pennants in their colours
+    /// that point along their strikes' lines at their rows, the call wall's above the line and
+    /// the put wall's below it: from before the rows' base and from past the row's bars, figures
+    /// and key, or for gamma exposure from either side of the bar inside the profile. Groups at
+    /// least 40 points wide, a week at the default bar spacing, keep their pennants clear of each
+    /// other's rows and figures. Each group labels its latest date on the time scale while
+    /// Expiration labels is on. Groups mapping to one bar are combined; without chart bars no
+    /// dated profiles are drawn.
     /// Under Through date, Maximum expirations keeps the first N listed expiries on or after the
     /// current day; 0 keeps every listed expiry up to the date. Strikes around price draws the
     /// strikes at the underlying price the expected move uses and the N nearest below and above
@@ -4040,8 +4043,8 @@ mod tests {
 
     /// Each Sides display paints every strike in its own colours at one opacity, with no line
     /// across the profile: an edited Puts colour paints the puts of split bars alone, and puts
-    /// divided by calls keep a colour of their own. With Values on, the wall tags clear every row,
-    /// figure and each other, at either placement.
+    /// divided by calls keep a colour of their own. With Values on, the wall pennants clear every
+    /// row, figure and each other, at either placement.
     #[cfg(feature = "widget")]
     #[test]
     fn options_rows_keep_their_colours_and_walls_clear_their_figures() {
@@ -4141,7 +4144,7 @@ mod tests {
                             Shape::Path(path) if path.closed => {
                                 tags.push(shape.shape.visual_bounding_rect());
                             }
-                            Shape::Text(text) if !["CW", "PW"].contains(&text.galley.text()) => {
+                            Shape::Text(text) => {
                                 figures.push(Rect::from_min_size(text.pos, text.galley.size()));
                             }
                             Shape::Rect(bar) => bars.push(bar.rect),
@@ -4567,41 +4570,27 @@ mod tests {
                         });
                     let shapes = std::mem::take(&mut output.shapes);
                     output.drop_without_applying_deltas();
-                    // The call wall's tag points at its row from 2 before the base; calls
+                    // The call wall's pennant points at its row from 1 before the base; calls
                     // without puts have no put wall.
                     let tags: Vec<_> = shapes
                         .iter()
                         .filter_map(|shape| match &shape.shape {
                             egui::Shape::Path(path) if path.closed => {
-                                Some((path.fill, shape.shape.visual_bounding_rect()))
+                                Some((path.fill, path.points.clone()))
                             }
                             _ => None,
                         })
                         .collect();
-                    let [(fill, tag)] = tags.as_slice() else {
-                        panic!("one tag, got {tags:?}");
+                    let [(fill, points)] = tags.as_slice() else {
+                        panic!("one pennant, got {tags:?}");
                     };
                     assert_eq!(
                         *fill,
                         Color32::from_rgb(41, 98, 255),
                         "the call wall colour"
                     );
-                    let tip = if left { tag.left() } else { tag.right() };
-                    let expected = if left { 202.0 } else { 98.0 };
-                    assert!((tip - expected).abs() < 1e-3, "{tag:?}");
-                    assert!((tag.center().y - 100.0).abs() < 1e-3, "{tag:?}");
-                    let codes: Vec<_> = shapes
-                        .iter()
-                        .filter_map(|shape| match &shape.shape {
-                            egui::Shape::Text(text)
-                                if ["CW", "PW"].contains(&text.galley.text()) =>
-                            {
-                                Some(text.galley.text())
-                            }
-                            _ => None,
-                        })
-                        .collect();
-                    assert_eq!(codes, ["CW"]);
+                    let tip = egui::pos2(if left { 201.0 } else { 99.0 }, 100.0);
+                    assert!(points.contains(&tip), "{points:?}");
                     assert!(
                         !shapes
                             .iter()
@@ -4643,7 +4632,8 @@ mod tests {
                     let tagged = output.shapes.iter().any(|shape| {
                         matches!(
                             &shape.shape,
-                            egui::Shape::Text(text) if text.galley.text() == "CW"
+                            egui::Shape::Path(path)
+                                if path.closed && path.fill == Color32::from_rgb(41, 98, 255)
                         )
                     });
                     output.drop_without_applying_deltas();
@@ -4710,8 +4700,9 @@ mod tests {
 
     /// Expirations a week apart draw adjacent profiles. At either placement, with Values on or
     /// off, for volume and gamma exposure and down to narrow profiles, every wall of every
-    /// profile is tagged at its strike, the call wall just before the base and the put wall past
-    /// its row's bars and figures, and no tag covers its own profile.
+    /// profile is marked at its strike by a pennant that points at its row from 1 point away, the
+    /// call wall's before the row and the put wall's past its bars and figures, and no pennant
+    /// covers the rows or figures of either profile or the other profile's pennants.
     #[cfg(feature = "widget")]
     #[test]
     fn wall_tags_point_at_their_rows_at_every_expiration() {
@@ -4788,7 +4779,7 @@ mod tests {
             200.0,
             false,
         );
-        // The call and put walls of each expiration, and their tags' fills: the opaque wall
+        // The call and put walls of each expiration, and their pennants' fills: the opaque wall
         // colours.
         let strikes = [[110.0, 105.0], [100.0, 110.0]];
         let profile =
@@ -4798,17 +4789,35 @@ mod tests {
             Color32::from_rgb(r, g, b)
         });
         // A profile is 7 bars wide, W: 140 at spacing 20, 42 at 6, the default, and 28 at 4, its
-        // widest row 0.9 W. The put tag's tip lies 2 past what reaches farthest from the base at
-        // its strike: the widest row's figure, which ends 2 short of the far edge, at W - 2 = 138,
-        // or the row's bar at 0.9 W without Values. A net gamma bar of -max at the put strike
-        // spans 0.05 W to 0.5 W from the start, past the zero line at 0.5 W: 0.5 W from a base at
-        // the start and 0.95 W from a base at the end. The call tag's tip lies 2 before the base.
-        for (measure, spacing, values, put_tips) in [
-            (0, 20.0, true, [140.0, 140.0]),
-            (0, 20.0, false, [128.0, 128.0]),
-            (0, 6.0, false, [39.8, 39.8]),
-            (2, 20.0, true, [72.0, 135.0]),
-            (2, 4.0, true, [16.0, 28.6]),
+        // widest row 0.9 W. The tips' offsets from the base are listed by placement, right then
+        // left, profile and wall, call then put. A row starts at the base: the call wall's tip
+        // lies 1 before it and the put wall's 1 past what reaches farthest at its strike, the
+        // widest row's figure, which ends 2 short of the far edge and the 4 left for a pennant, at
+        // W - 6 = 134, or the row's bar at 0.9 W without Values. A net gamma bar runs from the zero
+        // line at 0.5 W to 0.45 W × net / largest net past it, calls to the right: November 13's
+        // call wall bar, 19,500 of 24,000, ends 0.865625 W from the start and November 20's, 14,000
+        // of 19,000, 0.831579 W; each put wall bar ends 0.05 W from the start. Exposure pennants
+        // stay inside their profile, the call wall's before its bar and the zero line and the put
+        // wall's past them, or the other way where that has no room: from the start at 0.5 W - 1
+        // and 0.5 W + 1, from the end at 0.134375 W - 1, 0.168421 W - 1 and 0.95 W + 1, while at
+        // W = 28 November 13's call wall points from past the zero line, 14 + 1, and both put
+        // walls from before it, 14 - 1.
+        for (measure, spacing, values, tips) in [
+            (0, 20.0, true, [[[-1.0, 135.0]; 2]; 2]),
+            (0, 20.0, false, [[[-1.0, 127.0]; 2]; 2]),
+            (0, 6.0, false, [[[-1.0, 38.8]; 2]; 2]),
+            (
+                2,
+                20.0,
+                true,
+                [[[69.0, 71.0]; 2], [[17.8125, 134.0], [22.579, 134.0]]],
+            ),
+            (
+                2,
+                4.0,
+                true,
+                [[[13.0, 15.0]; 2], [[15.0, 13.0], [3.7158, 13.0]]],
+            ),
         ] {
             for left in [false, true] {
                 let case =
@@ -4855,17 +4864,21 @@ mod tests {
                             });
                         let shapes = std::mem::take(&mut output.shapes);
                         output.drop_without_applying_deltas();
-                        let (mut tags, mut codes, mut figures, mut rows) =
-                            ([Vec::new(), Vec::new()], Vec::new(), Vec::new(), Vec::new());
+                        let (mut tags, mut figures, mut rows) =
+                            ([Vec::new(), Vec::new()], Vec::new(), Vec::new());
                         for shape in &shapes {
                             match &shape.shape {
                                 Shape::Path(path) if path.closed => {
                                     let side = fills.iter().position(|&fill| path.fill == fill);
-                                    tags[side.expect("a tag in a wall colour")]
-                                        .push(shape.shape.visual_bounding_rect());
-                                }
-                                Shape::Text(text) if ["CW", "PW"].contains(&text.galley.text()) => {
-                                    codes.push(text.galley.text().to_owned());
+                                    // The tip is the corner with an x of its own.
+                                    let tip = path.points.iter().find(|tip| {
+                                        path.points.iter().filter(|point| point.x == tip.x).count()
+                                            == 1
+                                    });
+                                    tags[side.expect("a pennant in a wall colour")].push((
+                                        *tip.expect("a tip"),
+                                        shape.shape.visual_bounding_rect(),
+                                    ));
                                 }
                                 Shape::Text(text) => {
                                     figures.push(Rect::from_min_size(text.pos, text.galley.size()));
@@ -4874,7 +4887,7 @@ mod tests {
                                 _ => {}
                             }
                         }
-                        (span, plot.right_aligned, tags, codes, figures, rows)
+                        (span, plot.right_aligned, tags, figures, rows)
                     })
                     .collect();
                 assert_eq!(painted.len(), 2, "{case}");
@@ -4882,11 +4895,27 @@ mod tests {
                     (painted[0].0.end - painted[1].0.start).abs() < 1e-3,
                     "{case}: adjacent"
                 );
-                for (index, (span, right_aligned, tags, codes, figures, rows)) in
+                // No pennant covers the other profile's rows, figures or pennants: a call wall's
+                // lies above its strike's line and a put wall's below, so two at one strike touch.
+                for (index, (_, _, tags, _, _)) in painted.iter().enumerate() {
+                    let (_, _, pennants, figures, rows) = &painted[1 - index];
+                    for (_, tag) in tags.iter().flatten() {
+                        assert!(
+                            rows.iter()
+                                .chain(figures)
+                                .all(|other| !tag.intersects(*other))
+                                && pennants.iter().flatten().all(|(_, other)| {
+                                    let overlap = tag.intersect(*other);
+                                    overlap.width() <= 0.0 || overlap.height() <= 0.0
+                                }),
+                            "{case}: {tag:?} clears the other profile"
+                        );
+                    }
+                }
+                for (index, (span, right_aligned, tags, figures, rows)) in
                     painted.iter().enumerate()
                 {
                     assert_eq!(*right_aligned, left, "{case}");
-                    assert_eq!(codes, &["CW", "PW"], "{case}");
                     // Gamma exposure writes no figures.
                     let written = if measure == 0 && values { 3 } else { 0 };
                     assert_eq!(figures.len(), written, "{case}");
@@ -4901,21 +4930,15 @@ mod tests {
                     } else {
                         (span.start, 1.0)
                     };
-                    for (side, tip) in [-2.0, put_tips[usize::from(left)]].into_iter().enumerate() {
-                        let [tag] = tags[side].as_slice() else {
-                            panic!("{case}: one tag on side {side}, got {:?}", tags[side]);
+                    for (side, tip) in tips[usize::from(left)][index].into_iter().enumerate() {
+                        let [(at, tag)] = tags[side].as_slice() else {
+                            panic!("{case}: one pennant on side {side}, got {:?}", tags[side]);
                         };
-                        let y = map.price_to_y(strikes[index][side]);
-                        assert!((tag.center().y - y).abs() < 1e-3, "{case}: {tag:?} at {y}");
-                        // The tag extends from its tip away from the row.
-                        let tip_x = if (side == 0) == left {
-                            tag.left()
-                        } else {
-                            tag.right()
-                        };
+                        let expected =
+                            egui::pos2(base + inward * tip, map.price_to_y(strikes[index][side]));
                         assert!(
-                            (tip_x - (base + inward * tip)).abs() < 1e-3,
-                            "{case}: side {side} {tag:?} tip {tip} from {base}"
+                            at.distance(expected) < 1e-3,
+                            "{case}: side {side} {tag:?} tip {at:?} at {expected:?}"
                         );
                         assert!(
                             rows.iter()

@@ -13,6 +13,13 @@ use std::ops::Range;
 /// opaque colours also leave the price bars beneath them readable.
 const STUDY_ROW_ALPHA: u8 = 163;
 
+// A wall pennant's depth along its row, its height and its gap to what it points at: small enough
+// for the tenth of a dated profile that its rows leave at the default bar spacing, where weekly
+// expirations draw profiles 42 points wide.
+const PENNANT_DEPTH: f32 = 3.0;
+const PENNANT_HEIGHT: f32 = 6.0;
+const PENNANT_GAP: f32 = 1.0;
+
 /// Whether a study's profile measures the bars in view, not a span of its own, so that its point
 /// of control crosses the plot. An options profile measures strikes.
 pub(crate) fn measures_view(profile: &VolumeProfile, strip: bool) -> bool {
@@ -358,6 +365,13 @@ pub(crate) fn paint_profile(
         }
     }
 
+    // Past the figures and the key, room for the put wall's pennant and for the call wall's of the
+    // expiration beside the profile, which points at that profile's base from this far end.
+    let room = if profile.walls.is_some() && walls_visible.contains(&true) {
+        PENNANT_GAP + PENNANT_DEPTH
+    } else {
+        0.0
+    };
     let mut figures = Vec::new();
     if config.show_values && !drawing {
         let formatter = crate::scales::VolumeFormatter {
@@ -402,8 +416,8 @@ pub(crate) fn paint_profile(
             let galley = painter.layout_no_wrap(text, font.clone(), text_color);
             let size = galley.size();
             let (a, b) = (y_at_row(row), y_at_row(row + 1));
-            // Beside its bar, else over the bar's end, 2 short of the span's far edge.
-            let offset = (bar_width(row) + 2.0).min(right - left - 2.0 - size.x);
+            // Beside its bar, else over the bar's end, 2 short of the span's far edge and the room.
+            let offset = (bar_width(row) + 2.0).min(right - left - 2.0 - room - size.x);
             if (a - b).abs() < size.y || offset < 2.0 {
                 continue;
             }
@@ -419,7 +433,14 @@ pub(crate) fn paint_profile(
     }
 
     let key = match &profile.expiry_parts {
-        Some(parts) => paint_expiry_key(painter, &parts.labels, rect, !right_aligned),
+        Some(parts) => {
+            let rect = if right_aligned {
+                rect.with_min_x(rect.min.x + room)
+            } else {
+                rect.with_max_x(rect.max.x - room)
+            };
+            paint_expiry_key(painter, &parts.labels, rect, !right_aligned)
+        }
         None => Vec::new(),
     };
     if !drawing {
@@ -449,13 +470,17 @@ pub(crate) fn paint_profile(
     paint_source_note(painter, profile.source(), rect, note_right, note_color);
 }
 
-/// Marks the call and put walls of a profile drawn at its expiration with short tags in their
-/// colours, CW and PW, each pointing along its strike's row at the row: the call wall's just
-/// before the rows' base, outside the profile, and the put wall's past everything at the
-/// strike's height, that is past how far `reach` gives each row the tag meets reaching from the
-/// base and past each of `taken` there (bars, figures, key lines), 2 points clear of either.
-/// Neither covers its own profile; a profile with no room beside its rows lets a tag lie over a
-/// neighbouring expiration's.
+/// Marks the call and put walls of a profile drawn at its expiration with half pennants in their
+/// colours, the call wall's above its strike's line and the put wall's below it, each pointing
+/// along the line at its row from `PENNANT_GAP` away: the call wall's from before the row and the
+/// put wall's from past everything the profile draws at the pennant's height, that is past how far
+/// `reach` gives each row the pennant meets reaching from the base and past each of `taken` there
+/// (figures, key lines, exposure bars). Rows start at the base, so the call wall's pennant lies
+/// just outside the profile, in the room the expiration beside it leaves past its rows, figures
+/// and key, beside that expiration's put wall pennant at the same strike instead of over it.
+/// Exposure bars grow from the zero line, so an exposure wall's pennant stays inside the profile,
+/// pointing at its row from the other side where its own has no room. Neither covers its own
+/// profile.
 fn paint_option_walls(
     painter: &egui::Painter,
     profile: &VolumeProfile,
@@ -469,7 +494,6 @@ fn paint_option_walls(
     let Some(walls) = &profile.walls else {
         return;
     };
-    let font = egui::FontId::proportional(typography::XS);
     let y_at_row = |row: usize| price_to_y(profile.low + row as f64 * profile.row_height);
     // Offsets from the rows' base grow into the profile.
     let (base, inward) = if right_aligned {
@@ -478,69 +502,77 @@ fn paint_option_walls(
         (span.start, 1.0)
     };
     let x = |offset: f32| base + inward * offset;
-    for (side, code) in ["CW", "PW"].into_iter().enumerate() {
-        let Some(strike) = walls.strikes[side].filter(|_| visible[side]) else {
+    // Whether a pennant, given by its tip's offset and the way it extends from there, away from
+    // its row, lies inside the profile.
+    let inside = |(tip, away): (f32, f32)| {
+        let end = tip + away * PENNANT_DEPTH;
+        tip.min(end) >= 0.0 && tip.max(end) <= span.end - span.start
+    };
+    for (side, strike) in walls.strikes.into_iter().enumerate() {
+        let Some(strike) = strike.filter(|_| visible[side]) else {
             continue;
         };
         let y = price_to_y(strike);
         if !y.is_finite() {
             continue;
         }
-        // Opaque so the code reads over whatever the tag lies on; light text on the default
-        // blue and red, dark on a pale colour, as price tags choose.
-        let [r, g, b, _] = shown_color(painter, walls.colors[side]);
-        let fill = Color32::from_rgb(r, g, b);
-        let text_color = if crate::theme::contrast(Color32::WHITE, fill) >= 2.0 {
-            Color32::WHITE
+        let band = if side == 0 {
+            egui::Rangef::new(y - PENNANT_HEIGHT, y)
         } else {
-            Color32::BLACK
+            egui::Rangef::new(y, y + PENNANT_HEIGHT)
         };
-        let text = crate::localization::text(painter.ctx(), code);
-        let galley = painter.layout_no_wrap(text, font.clone(), text_color);
-        let size = galley.size();
-        let band = egui::Rangef::new(y - size.y * 0.5, y + size.y * 0.5);
-        // The tip's offset and the way the tag extends from it, away from the row.
-        let (tip, away) = if side == 0 {
-            (-2.0, -1.0)
+        // The nearest and farthest offsets of what the profile draws at the pennant's height.
+        let (near, far) = reach
+            .iter()
+            .enumerate()
+            .filter(|&(row, _)| {
+                let (a, b) = (y_at_row(row), y_at_row(row + 1));
+                band.intersects(egui::Rangef::new(a.min(b), a.max(b)))
+            })
+            .map(|(_, &reach)| (0.0, reach))
+            .chain(
+                taken
+                    .iter()
+                    .filter(|rect| band.intersects(rect.y_range()))
+                    .map(|rect| {
+                        let [a, b] = [rect.left(), rect.right()].map(|edge| (edge - base) * inward);
+                        (a.min(b), a.max(b))
+                    }),
+            )
+            .fold((f32::INFINITY, 0.0_f32), |(near, far), (a, b)| {
+                (near.min(a), far.max(b))
+            });
+        // The base where the profile draws nothing there.
+        let near = near.min(far);
+        // The call wall's pennant points at its row from before it, the put wall's from past it.
+        let (before, past) = ((near - PENNANT_GAP, -1.0), (far + PENNANT_GAP, 1.0));
+        let (own, other) = if side == 0 {
+            (before, past)
         } else {
-            let far = reach
-                .iter()
-                .enumerate()
-                .filter(|&(row, _)| {
-                    let (a, b) = (y_at_row(row), y_at_row(row + 1));
-                    band.intersects(egui::Rangef::new(a.min(b), a.max(b)))
-                })
-                .map(|(_, &reach)| reach)
-                .chain(
-                    taken
-                        .iter()
-                        .filter(|rect| band.intersects(rect.y_range()))
-                        .map(|rect| {
-                            if right_aligned {
-                                span.end - rect.left()
-                            } else {
-                                rect.right() - span.start
-                            }
-                        }),
-                )
-                .fold(0.0, f32::max);
-            (far + 2.0, 1.0)
+            (past, before)
         };
-        // A 4 point tip, then the code with 2 points either side.
-        let [tip_x, neck, end] = [tip, tip + away * 4.0, tip + away * (8.0 + size.x)].map(x);
+        let (tip, away) = if profile.exposure.is_some() && !inside(own) && inside(other) {
+            other
+        } else {
+            own
+        };
+        let [tip_x, end] = [tip, tip + away * PENNANT_DEPTH].map(x);
         let mut points = vec![
             Pos2::new(tip_x, y),
-            Pos2::new(neck, band.min),
             Pos2::new(end, band.min),
             Pos2::new(end, band.max),
-            Pos2::new(neck, band.max),
         ];
         // Clockwise on screen, the winding the tessellator prefers.
         if end < tip_x {
             points[1..].reverse();
         }
-        painter.add(egui::Shape::convex_polygon(points, fill, Stroke::NONE));
-        painter.galley(Pos2::new(neck.min(end) + 2.0, band.min), galley, text_color);
+        // Opaque, so that the small mark stands out from the rows' tones.
+        let [r, g, b, _] = shown_color(painter, walls.colors[side]);
+        painter.add(egui::Shape::convex_polygon(
+            points,
+            Color32::from_rgb(r, g, b),
+            Stroke::NONE,
+        ));
     }
 }
 
