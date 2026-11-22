@@ -178,13 +178,7 @@ impl Chart {
                     price,
                 )
             });
-            if let Some(pane) = manager.and_then(|m| self.unshown_pane(m, drawing, &stored.id)) {
-                stored.pane = Some(pane.clone());
-                // This chart has no owner to remap when the snapshot is restored.
-                stored.drawing.pane = None;
-            } else {
-                stored.pane = self.pane_to_store(symbol, drawing, &stored.id);
-            }
+            self.set_record_pane(symbol, drawing, manager, &mut stored);
             storage.add_drawing(stored);
         }
         // Validate all settings too, before a host replaces its last good save.
@@ -216,10 +210,27 @@ impl Chart {
         json: &str,
         remap: bool,
     ) -> Result<Vec<SkippedDrawing>, LoadError> {
-        let (storage, mut skipped) = DrawingStorage::from_json(json)?;
+        let (storage, skipped) = self.parse_drawing_file(json)?;
+        Ok(self.apply_drawing_file(&storage, skipped, remap))
+    }
+
+    pub(super) fn parse_drawing_file(
+        &self,
+        json: &str,
+    ) -> Result<(DrawingStorage, Vec<SkippedDrawing>), LoadError> {
+        let (storage, skipped) = DrawingStorage::from_json(json)?;
         if storage.symbol != self.symbol() {
             return Err(LoadError::OtherSymbol);
         }
+        Ok((storage, skipped))
+    }
+
+    pub(super) fn apply_drawing_file(
+        &mut self,
+        storage: &DrawingStorage,
+        mut skipped: Vec<SkippedDrawing>,
+        remap: bool,
+    ) -> Vec<SkippedDrawing> {
         let drawings = storage
             .drawings()
             .iter()
@@ -237,9 +248,9 @@ impl Chart {
                 error: SkipReason::Invalid(serde::de::Error::custom(error)),
             });
         }
-        self.remember_read_panes(&storage);
+        self.remember_read_panes(storage);
         skipped.sort_by_key(|skipped| skipped.index);
-        Ok(skipped)
+        skipped
     }
 
     /// Replaces the drawings with `drawings`, in their order, keeping the drawing tools, options

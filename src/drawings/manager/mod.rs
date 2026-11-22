@@ -241,6 +241,8 @@ impl TextEditState {
 /// and deletes: undo can bring that owner back onto the drawing without a new document read.
 pub(crate) struct UnshownDrawingPane {
     pub(crate) created_at: Option<i64>,
+    /// Creation time in storage, including a first write of a locally created drawing.
+    pub(crate) stored_created_at: Option<i64>,
     pub(crate) owner: Option<usize>,
     pub(crate) pane: super::persistence::StoredPane,
 }
@@ -962,7 +964,7 @@ impl DrawingManager {
     /// What [`Self::keep_across_read`] needs of the drawings about to be replaced. With
     /// `keep_confined`, the saveable drawings in a top-level folder kept on one chart or in one
     /// layout stay too, as drawing storage does not hold them.
-    pub(crate) fn before_read(&self, keep_confined: bool) -> BeforeRead {
+    pub(crate) fn before_read(&mut self, keep_confined: bool) -> BeforeRead {
         let stays = |d: &&Drawing| !d.saveable || (keep_confined && d.confined());
         BeforeRead {
             // A drawing that stays is in no document read, so its id is no stored id.
@@ -975,6 +977,8 @@ impl DrawingManager {
             next_id: self.next_id,
             unsaved: self.drawings.iter().filter(stays).cloned().collect(),
             identity: self.identity,
+            removed_owners: std::mem::take(&mut self.removed_owners),
+            unshown_panes: std::mem::take(&mut self.unshown_panes),
         }
     }
 
@@ -991,9 +995,12 @@ impl DrawingManager {
             next_id,
             unsaved,
             identity,
+            removed_owners,
+            mut unshown_panes,
         } = previous;
         // The same drawings to a layout that mirrors them, as their ids are.
         self.identity = identity;
+        self.removed_owners = removed_owners;
         self.next_id = self.next_id.max(next_id);
         let read = self.drawings.len();
         let mut taken: HashSet<String> = self.drawings.iter().map(sync_id).collect();
@@ -1012,10 +1019,32 @@ impl DrawingManager {
                 drawing.stored_id = Some(free_stored_id(&drawing, &taken));
                 taken.insert(sync_id(&drawing));
             }
+            if drawing.pane.is_some() && !unshown_panes.is_empty() {
+                let id = sync_id(&drawing);
+                if let Some(saved) = unshown_panes.remove(&id)
+                    && saved.owner == drawing.pane
+                    && saved.created_at == drawing.created_at
+                {
+                    self.unshown_panes.insert(id, saved);
+                }
+            }
             self.drawings.push(drawing);
         }
         let mut fresh = Vec::new();
         for (at, drawing) in self.drawings[..read].iter_mut().enumerate() {
+            // An automatic read is not a local pane move. Restore the removed owner only
+            // for the same stored drawing still in the same unresolved study pane.
+            if drawing.pane.is_none()
+                && let Some(id) = drawing.stored_id.as_ref()
+                && let Some(old) = unshown_panes.get(id)
+                && old.owner.is_some()
+                && let Some(new) = self.unshown_panes.get_mut(id)
+                && new.created_at == old.stored_created_at
+                && new.pane == old.pane
+            {
+                drawing.pane = old.owner;
+                new.owner = old.owner;
+            }
             match drawing.stored_id.as_ref().and_then(|id| ids.get(id)) {
                 Some(id) => drawing.id = *id,
                 None => fresh.push(at),
@@ -1134,6 +1163,8 @@ pub(crate) struct BeforeRead {
     unsaved: Vec<Drawing>,
     /// The `DrawingManager::identity` of the manager.
     identity: u64,
+    removed_owners: Vec<usize>,
+    unshown_panes: std::collections::HashMap<String, UnshownDrawingPane>,
 }
 
 /// Coalesces repeated saves and updates of a drawing without reordering them across its delete.

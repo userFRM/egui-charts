@@ -72,6 +72,8 @@ impl CopyRequest {
 /// The last pane read or written for this drawing, independent of later local study edits.
 struct SavedPane {
     created_at: Option<i64>,
+    /// A locally created drawing has no `created_at` until read, but its record already does.
+    stored_created_at: i64,
     pane: Option<StoredPane>,
 }
 
@@ -82,6 +84,7 @@ impl SavedPane {
                 record.id.clone(),
                 Self {
                     created_at,
+                    stored_created_at: record.created_at,
                     pane: record.pane.clone(),
                 },
             )
@@ -658,6 +661,7 @@ impl Chart {
                         record.id.clone(),
                         UnshownDrawingPane {
                             created_at: drawing.created_at,
+                            stored_created_at: Some(record.created_at),
                             owner: None,
                             pane: pane.clone(),
                         },
@@ -1133,20 +1137,14 @@ impl Chart {
 
     /// Replaces the drawings with the stored ones in `json`.
     fn restore_stored_drawings(&mut self, json: &str) {
-        let stored = DrawingStorage::from_json(json)
-            .ok()
-            .map(|(stored, _)| stored);
-        let remap = stored
-            .as_ref()
-            .is_some_and(|stored| self.written_by_restored_chart(stored));
-        let previous = self.drawings.before_read(true);
-        let loaded = self.load_drawings_remapped(json, remap);
-        if loaded.is_ok() {
+        let loaded = self.parse_drawing_file(json).map(|(stored, skipped)| {
+            let remap = self.written_by_restored_chart(&stored);
+            let previous = self.drawings.before_read(true);
+            let skipped = self.apply_drawing_file(&stored, skipped, remap);
             self.drawings.keep_across_read(previous);
-            if let Some(stored) = &stored {
-                self.note_legacy(stored);
-            }
-        }
+            self.note_legacy(&stored);
+            skipped
+        });
         let refused = match loaded {
             Ok(skipped) if skipped.is_empty() => None,
             Ok(skipped) => Some(LoadError::Skipped(skipped)),
@@ -1246,8 +1244,8 @@ impl Chart {
             changed = true;
         }
         let refused = self.replace_drawings(drawings);
-        self.drawings.keep_across_read(previous);
         self.remember_read_panes(&stored);
+        self.drawings.keep_across_read(previous);
         self.note_legacy(&stored);
         // The chart's own drawings passed the same check when they were added.
         let skipped: Vec<SkippedDrawing> = refused
@@ -1320,6 +1318,7 @@ impl Chart {
                     key,
                     UnshownDrawingPane {
                         created_at: d.created_at,
+                        stored_created_at: last.map(|p| p.stored_created_at).or(d.created_at),
                         owner: d.pane,
                         pane: pane.clone(),
                     },
@@ -1366,6 +1365,7 @@ impl Chart {
                         id.clone(),
                         UnshownDrawingPane {
                             created_at: d.created_at,
+                            stored_created_at: Some(created),
                             owner: None,
                             pane: pane.clone(),
                         },
@@ -1401,24 +1401,35 @@ impl Chart {
         .then_some(&saved.pane)
     }
 
-    pub(super) fn pane_to_store(
+    pub(super) fn set_record_pane(
         &self,
         symbol: &str,
         drawing: &Drawing,
-        id: &str,
-    ) -> Option<StoredPane> {
-        if let Some(saved) = self
+        manager: Option<&crate::drawings::DrawingManager>,
+        record: &mut StoredDrawing,
+    ) {
+        let saved = self
             .drawing_store
             .as_ref()
             .and_then(|store| store.panes.get(symbol))
-            .and_then(|panes| panes.get(id))
-            .filter(|saved| saved.created_at == drawing.created_at)
+            .and_then(|panes| panes.get(&record.id))
+            .filter(|saved| saved.created_at == drawing.created_at);
+        if let Some(saved) = saved {
+            record.created_at = saved.stored_created_at;
+        }
+        if let Some(pane) = manager.and_then(|m| self.unshown_pane(m, drawing, &record.id)) {
+            record.pane = Some(pane.clone());
+            // This chart has no owner to remap when the snapshot is restored.
+            record.drawing.pane = None;
+        } else if let Some(saved) = saved
             && self.drawings.shared_filter.hides(drawing)
         {
-            return saved.pane.clone();
+            record.pane.clone_from(&saved.pane);
+        } else {
+            record.pane = self
+                .owner_pane(drawing)
+                .and_then(|pane| self.stored_pane(pane));
         }
-        self.owner_pane(drawing)
-            .and_then(|pane| self.stored_pane(pane))
     }
 
     /// Writes the shown symbol's drawings if they changed since they were last written.
@@ -1451,6 +1462,11 @@ impl Chart {
             // A later undo can restore an omitted drawing; only a new read replaces the table.
             let panes = store.panes.entry(self.symbol.clone()).or_default();
             for record in drawings.drawings() {
+                if let Some(unshown) = self.drawings.unshown_panes.get_mut(&record.id)
+                    && unshown.created_at == record.drawing.created_at
+                {
+                    unshown.stored_created_at = Some(record.created_at);
+                }
                 if let Some((id, pane)) = SavedPane::entry(record, record.drawing.created_at) {
                     panes.insert(id, pane);
                 } else {

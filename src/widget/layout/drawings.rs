@@ -4534,6 +4534,102 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "studies")]
+    #[test]
+    fn shared_drawing_filter_keeps_the_peers_pane_across_storage_reads() {
+        use crate::services::document::tests::Revised;
+        use crate::studies::RSI;
+
+        for peer_has_storage in [false, true] {
+            let shared = Arc::new(Revised::default());
+            let mut charts = [bars(60), bars(60)];
+            let mut writer = [bars(60)];
+            for c in charts.iter_mut().chain(&mut writer) {
+                c.set_symbol("SAMPLE");
+            }
+            charts[0].set_storage(shared.clone());
+            writer[0].set_storage(shared.clone());
+            if peer_has_storage {
+                charts[1].set_storage(Arc::new(Revised::default()));
+            }
+            let [bridge, peer] = charts
+                .each_mut()
+                .map(|c| c.add_indicator(Box::new(RSI::new(14))));
+            let study = writer[0].add_indicator(Box::new(RSI::new(14)));
+            let peer_pane = charts[1].series_pane(peer).unwrap();
+            let mut pair = ChartLayout {
+                mode: super::super::ChartLayoutMode::TwoHorizontal,
+                ..Default::default()
+            };
+            pair.sync.sync_drawings = true;
+            let mut window = ChartLayout::default();
+            frames(&mut pair, &mut charts);
+            frames(&mut window, &mut writer);
+            let mut drawing = line("RSI line");
+            drawing.pane = Some(study.0);
+            drawing.folder = vec!["Plan".into()];
+            drawing.folder_sync = vec![Some(FolderSync::AllLayouts)];
+            let id = writer[0].user_action(|c| c.drawings_mut().add_drawing(drawing).unwrap());
+            frames(&mut window, &mut writer);
+            frames(&mut pair, &mut charts);
+            let peer_id = charts[1].drawings().drawings[0].id;
+            let check = |c: &Chart, pane, price| {
+                let mut lines = c
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .filter(|d| d.label.as_deref() == Some("RSI line"));
+                let line = lines.next().expect("mirrored RSI line");
+                assert!(lines.next().is_none());
+                assert_eq!(line.id, peer_id);
+                assert_eq!(c.drawing_pane(line.id), Some(pane));
+                assert_eq!(line.chart_points[0].price, price);
+            };
+            let original = shared_records(&shared)[0].clone();
+            assert!(original["pane"].is_object());
+            charts[0].drawings_mut().set_shared_drawings_hidden(true);
+            assert!(charts[0].user_action(|c| c.remove_series(bridge)));
+            frames(&mut pair, &mut charts);
+            check(&charts[1], peer_pane, 10.);
+
+            // An unrelated write replaces the bridge's manager while it is still filtered.
+            writer[0].user_action(|c| draw(c, 11.));
+            frames(&mut window, &mut writer);
+            frames(&mut pair, &mut charts);
+            check(&charts[1], peer_pane, 10.);
+            charts[0].drawings_mut().set_shared_drawings_hidden(false);
+            frames(&mut pair, &mut charts);
+            writer[0].user_action(|c| {
+                c.drawings_mut()
+                    .edit_drawing(id, |d| d.chart_points[0].price = 9.5)
+                    .unwrap()
+            });
+            frames(&mut window, &mut writer);
+            frames(&mut pair, &mut charts);
+            check(&charts[1], peer_pane, 9.5);
+            let mut document: serde_json::Value =
+                serde_json::from_str(&shared.get("SAMPLE").unwrap()).unwrap();
+            let record = document["drawings"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|r| r["id"] == original["id"])
+                .unwrap();
+            assert_eq!(record["pane"], original["pane"]);
+            assert_eq!(record["created_at"], original["created_at"]);
+            // Neither a new drawing under the same id nor a move of the original inherits
+            // the local removal. Both must reach the peer as a price-pane drawing.
+            if peer_has_storage {
+                record["created_at"] = (original["created_at"].as_i64().unwrap() + 1).into();
+            } else {
+                record["pane"]["rank"] = 1.into();
+            }
+            shared.put("SAMPLE", &document.to_string());
+            frames(&mut pair, &mut charts);
+            check(&charts[1], charts[1].main_series_pane(), 9.5);
+        }
+    }
+
     #[cfg(feature = "ui")]
     #[test]
     fn chart_local_placement_stays_private_through_undo_and_redo_until_shared() {
