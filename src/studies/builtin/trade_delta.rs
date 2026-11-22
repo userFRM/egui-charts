@@ -4,6 +4,20 @@ use crate::data::{Footprint, side_delta};
 use crate::model::Bar;
 
 /// One bar's trade-based delta, cumulative delta candle, and rolling totals.
+///
+/// A host that computes its own values for `chart::series::render_trade_delta` starts each one
+/// from [`Default`], a bar without executions, and sets the fields it fills:
+///
+/// ```
+/// use egui_charts::studies::TradeDeltaValue;
+///
+/// let mut value = TradeDeltaValue::default();
+/// assert!(!value.traded);
+/// value.traded = true;
+/// value.delta = 5.0;
+/// value.delta_high = 6.0;
+/// value.delta_low = -1.0;
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct TradeDeltaValue {
