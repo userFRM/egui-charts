@@ -169,6 +169,9 @@ pub(crate) fn engine() -> Engine {
         .set_max_map_size(MAX_MAP_SIZE)
         .set_max_functions(MAX_FUNCTIONS)
         .set_max_variables(MAX_VARIABLES)
+        // The optimizer copies a constant's value into every use, so a constant array read a
+        // thousand times is held a thousand times while the script compiles.
+        .set_optimization_level(::rhai::OptimizationLevel::None)
         // A closure shares what it captures behind locks that sleep on contention, which
         // panics on the web, and one stored in a value it captures is never freed.
         .set_allow_anonymous_fn(false)
