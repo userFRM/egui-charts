@@ -19,6 +19,8 @@ pub(super) struct DemoIdeas {
     /// The entries the user commented on.
     commented: HashSet<String>,
     next: u64,
+    /// The entry shown in full, by its identifier.
+    shown: Option<String>,
 }
 
 impl DemoIdeas {
@@ -55,6 +57,7 @@ impl DemoIdeas {
             feed: vec![idea, video],
             commented: HashSet::new(),
             next: 1,
+            shown: None,
         };
         ideas.panel.add_page(ideas.page(IdeaView::All), true);
         ideas
@@ -174,6 +177,7 @@ impl DemoApp {
                 .chart
                 .drawings_mut()
                 .start_post_insertion(DrawingToolType::Idea, link),
+            IdeasAction::Open(id) => self.ideas.shown = Some(id),
             IdeasAction::Like { id, like } => {
                 self.ideas.react(&id, IdeaRequest::Like, |idea| {
                     if idea.liked != like {
@@ -211,9 +215,60 @@ impl DemoApp {
                 if let Some(post) = self.ideas.feed.iter().find(|post| post.id == id) {
                     self.ideas.panel.set_feed_kind(post.kind);
                 }
+                self.ideas.shown = Some(id);
                 self.open_panel = Some(SidePanel::Ideas);
             }
+            NotificationsAction::OpenRoom(room) => {
+                self.chats.open_room(room);
+                self.open_panel = Some(SidePanel::Chats);
+            }
             _ => {}
+        }
+    }
+
+    /// The feed entry chosen with Open, in full, until the user closes it.
+    pub(super) fn show_idea(&mut self, ctx: &egui::Context) {
+        let Some(id) = &self.ideas.shown else {
+            return;
+        };
+        let Some(idea) = self.ideas.feed.iter().find(|idea| idea.id == *id) else {
+            self.ideas.shown = None;
+            return;
+        };
+        let title = match idea.kind {
+            IdeaKind::ShortPost => "Short post",
+            _ => "Idea",
+        };
+        let mut open = true;
+        egui_charts::ui_kit::modal::Modal::new("idea_view", title)
+            .width(480.0)
+            .show(ctx, &mut open, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    if !idea.title.is_empty() {
+                        ui.label(egui::RichText::new(&idea.title).strong());
+                    }
+                    ui.label(&idea.body);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} \u{b7} {} \u{b7} {} {}",
+                            idea.author,
+                            idea.time.format("%Y-%m-%d %H:%M"),
+                            idea.symbol,
+                            idea.interval
+                        ))
+                        .color(ui.visuals().weak_text_color()),
+                    );
+                    if let Some(uri) = &idea.attachment {
+                        ui.add(
+                            egui::Image::new(uri.as_str())
+                                .alt_text("Attached chart")
+                                .max_width(ui.available_width()),
+                        );
+                    }
+                });
+            });
+        if !open {
+            self.ideas.shown = None;
         }
     }
 }
@@ -222,7 +277,7 @@ impl DemoApp {
 mod tests {
     use super::*;
     use crate::controller::{ScreenshotTarget, TopToolbarAction};
-    use egui_charts::services::NotificationTarget;
+    use egui_charts::services::{Notification, NotificationTarget};
 
     /// Every publishing entry reaches the feed and the corresponding notification opens it.
     #[test]
@@ -261,8 +316,9 @@ mod tests {
             Some(NotificationTarget::Post(id.clone()))
         );
         app.open_panel = None;
-        app.handle_notification(NotificationsAction::OpenPost(id));
+        app.handle_notification(NotificationsAction::OpenPost(id.clone()));
         assert!(app.open_panel == Some(SidePanel::Ideas));
+        assert_eq!(app.ideas.shown.as_deref(), Some(id.as_str()));
         // Opening an image notification selects Short posts rather than leaving an empty Ideas tab.
         let output = ctx.run_ui(Default::default(), |ui| {
             app.ideas.panel.show(ui);
@@ -299,6 +355,70 @@ mod tests {
         draft.attach_chart = false;
         app.publish_idea(&ctx, &draft);
         assert!(app.ideas.feed[0].attachment.is_none());
+    }
+
+    /// Guards the feed's and the notifications' open buttons in the running demo: Open room on a
+    /// chat notification shows that room with its composer, and Open shows the chosen entry in
+    /// full rather than the newest one.
+    #[test]
+    fn open_shows_the_feed_entry_in_full_and_open_room_the_room() {
+        use egui::Role;
+        use egui_kittest::kittest::{NodeT as _, Queryable as _};
+
+        let mut h = super::super::tests::calendar_news_harness(SidePanel::Notifications);
+        let mut entry = Notification::new(Utc::now(), "Message sent to Crypto");
+        entry.target = Some(NotificationTarget::Room("Crypto".into()));
+        h.state_mut().notification_host.publish(entry);
+        h.run_steps(5);
+        // Accessibility clicks: where an entry sits depends on what else the demo shows.
+        h.get_by_role_and_label(Role::Button, "Open room")
+            .click_accesskit();
+        h.run_steps(5);
+        assert!(h.state().open_panel == Some(SidePanel::Chats));
+        h.get_by_role_and_label(Role::TextInput, "Message Crypto");
+
+        let ctx = h.ctx.clone();
+        let mut draft = h.state().ideas.panel.draft().clone();
+        draft.title = "Retest of the weekly high".into();
+        draft.body = "Buyers held the level twice before the close.".into();
+        draft.symbol = "SAMPLE".into();
+        draft.interval = "1m".into();
+        draft.attach_chart = true;
+        h.state_mut().publish_idea(&ctx, &draft);
+        let idea = h.state().ideas.feed[0].clone();
+        assert!(idea.attachment.is_some());
+        // A newer short post, which the Ideas tab hides: Open must show the entry it belongs to.
+        h.state_mut().post_image(&ctx, vec![0], false);
+        h.state_mut().open_panel = Some(SidePanel::Ideas);
+        h.run_steps(5);
+        {
+            let mut node = h.get_by_label("Retest of the weekly high");
+            let open = loop {
+                node = node.parent().expect("the entry has an Open link");
+                if let Some(open) = node.query_all_by_role_and_label(Role::Link, "Open").next() {
+                    break open;
+                }
+            };
+            open.click_accesskit();
+        }
+        h.run_steps(5);
+        let meta = format!(
+            "You \u{b7} {} \u{b7} SAMPLE 1m",
+            idea.time.format("%Y-%m-%d %H:%M")
+        );
+        // The modal's contents are not its accessibility children, so match them by where they sit.
+        let dialog = h.get_by_role_and_label(Role::Dialog, "Idea").rect();
+        let title = "Retest of the weekly high";
+        let body = "Buyers held the level twice before the close.";
+        for label in [title, body, meta.as_str()] {
+            let mut nodes = h.query_all_by_label(label);
+            assert!(
+                nodes.any(|node| dialog.contains_rect(node.rect())),
+                "{label}"
+            );
+        }
+        let image = h.get_by_role_and_label(Role::Image, "Attached chart");
+        assert!(dialog.contains_rect(image.rect()));
     }
 
     /// Guards the demo's answers to the feed controls: a like and the Liked view, a short post

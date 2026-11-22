@@ -66,6 +66,7 @@ impl DataWindowInfo {
         });
         let mut info = Self::new(chart.symbol())
             .with_timeframe(chart.timeframe().map(|tf| tf.as_str()).unwrap_or_default());
+        info.value_name = chart.horizontal_value_name().map(str::to_owned);
         if let Some(instrument) = chart.instrument() {
             info = info.with_instrument(instrument);
         }
@@ -179,7 +180,13 @@ pub fn show_data_window(ui: &mut Ui, data: &DataWindowInfo, expanded: bool) -> b
 
             egui::Grid::new("bar_time").num_columns(2).show(ui, |ui| {
                 if !data.timestamp.is_empty() {
-                    ui.hint_label("Time");
+                    // An unnamed value keeps its column empty and skips the lookup, as the
+                    // chart's readout does.
+                    if let Some(name) = data.value_name.as_deref().filter(|name| !name.is_empty()) {
+                        ui.hint_label(name);
+                    } else {
+                        ui.label("");
+                    }
                     ui.label(l10n::text(ui.ctx(), &data.timestamp));
                     ui.end_row();
                 }
@@ -515,6 +522,103 @@ mod tests {
                 failures.push(format!(
                     "{kind:?}: volume row {volume}, study rows {rows:?}"
                 ));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// The data window names the horizontal value as the chart's readout does: "Time" on a time
+    /// chart and in a readout the host builds, else the horizontal scale's name through the
+    /// translator, and no name for a numeric scale that names nothing, even when the host
+    /// translates the empty text.
+    #[test]
+    fn data_window_names_the_horizontal_value_as_the_readout_does() {
+        use crate::model::{Bar, BarData};
+        use crate::scales::{
+            CustomHorizontalScale, HorizontalScale, MaturityScale, PriceHorizontalScale, key_time,
+        };
+        use std::sync::Arc;
+        let from_chart = |bars: Vec<Bar>, scale: Option<Arc<dyn HorizontalScale>>| {
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_horizontal_scale(scale);
+            DataWindowInfo::from_chart(&chart)
+        };
+        let at = |keys: &[f64]| -> Vec<Bar> {
+            keys.iter()
+                .map(|key| Bar::from_value(key_time(*key).unwrap(), 20.0))
+                .collect()
+        };
+        let mut strikes = PriceHorizontalScale::new(0);
+        strikes.value_name = Some("Strike");
+        let sides = CustomHorizontalScale::new(["Call", "Put"], |key: &&str| (*key).to_owned())
+            .with_value_name("Side");
+        let side_bars = vec![
+            sides.value(&"Call", 20.0).unwrap(),
+            sides.value(&"Put", 20.0).unwrap(),
+        ];
+        let time = chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap();
+        let clock = vec![
+            Bar::from_value(time, 20.0),
+            Bar::from_value(time + chrono::TimeDelta::minutes(1), 20.0),
+        ];
+        // Each readout shows its latest bar: strike 4925, 30 months = 2 * 12 + 6, and "Put".
+        // A time chart's value text depends on today's date, so only its name is checked.
+        let cases: [(DataWindowInfo, &[&str]); 6] = [
+            (
+                from_chart(at(&[4900.0, 4925.0]), Some(Arc::new(strikes))),
+                &["Strike", "4925"],
+            ),
+            (
+                from_chart(
+                    at(&[1.0, 6.0, 30.0]),
+                    Some(Arc::new(MaturityScale::default())),
+                ),
+                &["Maturity", "2Y6M"],
+            ),
+            (
+                from_chart(
+                    at(&[4900.0, 4925.0]),
+                    Some(Arc::new(PriceHorizontalScale::new(0))),
+                ),
+                &["4925"],
+            ),
+            (
+                from_chart(side_bars, Some(Arc::new(sides))),
+                &["Seite", "Put"],
+            ),
+            (from_chart(clock, None), &["Time"]),
+            (
+                DataWindowInfo::new("").with_timestamp("12:00"),
+                &["Time", "12:00"],
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (info, expected) in cases {
+            let ctx = egui::Context::default();
+            crate::localization::set_translator(&ctx, |label| match label {
+                "" => Some("Unexpected name".to_owned()),
+                "Side" => Some("Seite".to_owned()),
+                _ => None,
+            });
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                show_data_window(ui, &info, true);
+            });
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if !text.galley.text().is_empty() => {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            // The value's row follows the title: these charts have no symbol and no interval.
+            let title = texts.iter().position(|text| text == "Data Window").unwrap();
+            let shown = &texts[title + 1..title + 1 + expected.len()];
+            if shown != expected {
+                failures.push(format!("{expected:?}: {texts:?}"));
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
