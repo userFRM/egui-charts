@@ -399,7 +399,7 @@ impl ChartContextMenu {
                 let (price, limit) = match request.order_type {
                     OrderType::Limit(price) | OrderType::Stop(price) => (price, None),
                     OrderType::StopLimit { stop, limit } => (stop, Some(limit)),
-                    OrderType::Market => continue,
+                    OrderType::Market | OrderType::TrailingStop { .. } => continue,
                 };
                 let key = match (request.side, request.order_type) {
                     (OrderSide::Buy, OrderType::Limit(_)) => {

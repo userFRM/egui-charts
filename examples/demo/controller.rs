@@ -1008,12 +1008,7 @@ impl DemoApp {
         app.screener.set_feed(app.live.clone());
         app.hotlists
             .set_refresh_interval(Some(std::time::Duration::from_secs(60)));
-        app.hotlists.set_exchanges(
-            DemoSymbol::catalog()
-                .iter()
-                .map(|spec| spec.exchange.to_owned())
-                .collect::<std::collections::BTreeSet<_>>(),
-        );
+        app.hotlists.set_exchanges(feeds::exchanges());
         app.hotlists
             .set_countries(feeds::COUNTRIES.map(String::from));
         app.hotlists.set_feed(app.live.clone());
@@ -2662,6 +2657,8 @@ impl DemoApp {
         // Show readout also sets the readout, so the cursor menu switch reads it from the chart.
         self.drawing_toolbar.state.values_tooltip_on_long_press =
             self.chart.chart_options().tooltip.enabled;
+        self.drawing_toolbar.state.crosshair_close_snap = self.chart.chart_options().crosshair.mode
+            == egui_charts::config::CrosshairMode::MagnetClose;
         // The trading rows show while a broker is connected; their checks follow the Trading tab.
         self.drawing_toolbar
             .set_control_visible(egui_charts::ui::Control::Trading, self.trading.has_broker());
@@ -2734,6 +2731,19 @@ impl DemoApp {
             _ => {}
         }
         self.user_action(|app| app.handle_drawing_toolbar_edit(action));
+    }
+
+    /// Sets the crosshair mode that the cursor menu's close switch and the drawing magnet
+    /// choose together: closes only while the switch is on, else the magnet's snapping or none.
+    fn set_crosshair_snapping(&mut self, close_only: bool) {
+        use egui_charts::config::CrosshairMode;
+        self.chart.set_crosshair_mode(if close_only {
+            CrosshairMode::MagnetClose
+        } else if self.chart.drawings().options.magnet_mode {
+            CrosshairMode::Magnet
+        } else {
+            CrosshairMode::Normal
+        });
     }
 
     fn handle_drawing_toolbar_edit(&mut self, action: DrawingToolbarAction) {
@@ -2825,6 +2835,10 @@ impl DemoApp {
                     .set_tooltip_enabled(self.drawing_toolbar.state.values_tooltip_on_long_press);
                 return;
             }
+            DrawingToolbarAction::SetCrosshairCloseSnap(on) => {
+                self.set_crosshair_snapping(on);
+                return;
+            }
             _ => {}
         }
 
@@ -2838,12 +2852,9 @@ impl DemoApp {
                 dm.options.strong_magnet = self.drawing_toolbar.state.magnet_type
                     != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
-                let mode = if dm.options.magnet_mode {
-                    egui_charts::config::CrosshairMode::Magnet
-                } else {
-                    egui_charts::config::CrosshairMode::Normal
-                };
-                self.chart.set_crosshair_mode(mode);
+                let close_only = self.chart.chart_options().crosshair.mode
+                    == egui_charts::config::CrosshairMode::MagnetClose;
+                self.set_crosshair_snapping(close_only);
             }
             DrawingToolbarAction::SetSnapToIndicators(enabled) => {
                 dm.options.snap_to_indicators = enabled;
@@ -2853,8 +2864,9 @@ impl DemoApp {
                 dm.options.strong_magnet =
                     kind != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
-                self.chart
-                    .set_crosshair_mode(egui_charts::config::CrosshairMode::Magnet);
+                let close_only = self.chart.chart_options().crosshair.mode
+                    == egui_charts::config::CrosshairMode::MagnetClose;
+                self.set_crosshair_snapping(close_only);
             }
             DrawingToolbarAction::ToggleEraserMode => {
                 let on = !dm.is_eraser_mode();
@@ -5970,6 +5982,82 @@ mod tests {
         );
     }
 
+    /// The demo screener filters its catalog by exchange: the host declares the text column and
+    /// its values, the filter row sends "is" and "is not" with the ticked values, and the feed
+    /// answers the matching symbols.
+    #[test]
+    fn demo_screener_filters_the_catalog_by_exchange() {
+        let ctx = egui::Context::default();
+        let now = "2026-11-18T15:30:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        app.open_panel = Some(SidePanel::Screener);
+        settle(&mut app, &ctx);
+        // The filter row paints before the table and its popups after it, so a control is the
+        // first panel text of its label and a popup choice the last.
+        let click = |app: &mut DemoApp, label: &str, last: bool| {
+            let texts = hotlist_frame(app, &ctx, 10.0, vec![]);
+            let mut found = texts
+                .iter()
+                .filter(|(text, rect)| text == label && rect.left() > 1000.0);
+            let rect = if last { found.last() } else { found.next() };
+            let point = rect
+                .unwrap_or_else(|| panic!("missing {label}: {texts:?}"))
+                .1
+                .center();
+            hotlist_pointer_click(app, &ctx, point, egui::PointerButton::Primary);
+        };
+        let tick = |app: &mut DemoApp, shown: &str, value: &str| {
+            egui::Popup::close_all(&ctx);
+            click(app, shown, false);
+            click(app, value, true);
+            egui::Popup::close_all(&ctx);
+        };
+        // The demo feed answers screens at once; the next frame shows the rows.
+        let shown = |app: &mut DemoApp| {
+            hotlist_frame(app, &ctx, 10.0, vec![]);
+            let texts = hotlist_frame(app, &ctx, 10.0, vec![]);
+            DemoSymbol::catalog()
+                .iter()
+                .filter(|spec| {
+                    texts
+                        .iter()
+                        .any(|(text, rect)| rect.left() > 1000.0 && text == spec.symbol)
+                })
+                .map(|spec| spec.symbol)
+                .collect::<Vec<_>>()
+        };
+        // Exchange is a Valuation column, so the filter offers it after switching sets.
+        click(&mut app, "Overview", false);
+        click(&mut app, "Valuation", true);
+        click(&mut app, "Price", false);
+        click(&mut app, "Exchange", true);
+        tick(&mut app, "Choose values", "Crypto");
+        tick(&mut app, "Crypto", "Forex");
+        click(&mut app, "Add filter", false);
+        let crypto_or_forex: Vec<_> = DemoSymbol::catalog()
+            .iter()
+            .filter(|spec| matches!(spec.exchange, "Crypto" | "Forex"))
+            .map(|spec| spec.symbol)
+            .collect();
+        assert_eq!(shown(&mut app), crypto_or_forex);
+
+        click(&mut app, "Exchange is Crypto, Forex  ×", false);
+        click(&mut app, "is", false);
+        click(&mut app, "is not", true);
+        tick(&mut app, "Choose values", "Crypto");
+        click(&mut app, "Add filter", false);
+        let others: Vec<_> = DemoSymbol::catalog()
+            .iter()
+            .filter(|spec| spec.exchange != "Crypto")
+            .map(|spec| spec.symbol)
+            .collect();
+        assert_eq!(shown(&mut app), others);
+    }
+
     /// Row menus update the demo watchlist, and starring a list survives the real settings save
     /// and restart, including the menu order.
     #[test]
@@ -6608,11 +6696,14 @@ mod tests {
         assert!(!is_visible(&app.chart, restored));
     }
 
-    /// The cursor menu readout switch shows the chart's readout, which Show readout also sets,
-    /// and one click turns the readout on or off.
+    /// The cursor menu switches show the chart's readout, which Show readout also sets, and its
+    /// close-only snapping, which the magnet keeps and the layout saves; one click turns either on
+    /// or off.
     #[test]
-    fn cursor_menu_readout_switch_follows_show_readout() {
+    fn cursor_menu_switches_follow_the_chart() {
         use egui::accesskit::{Role, Toggled};
+        use egui_charts::config::CrosshairMode;
+        use egui_charts::ui::drawing_toolbar::MagnetType;
 
         // One frame of `draw`: the toggled state and centre of the control named `label`.
         fn control(
@@ -6656,8 +6747,8 @@ mod tests {
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         settle(&mut app, &ctx);
         let size = egui::vec2(1440.0, 900.0);
-        // Opens the cursor menu and reads its readout switch; a click closes the menu.
-        let cursor_switch = |app: &mut DemoApp| {
+        // Opens the cursor menu and reads its switch named `label`; a click closes the menu.
+        let cursor_switch = |app: &mut DemoApp, label: &str| {
             app.drawing_toolbar.state.expanded_category = Some("Cursors".into());
             egui::Popup::open_id(
                 &ctx,
@@ -6668,24 +6759,25 @@ mod tests {
                     app.show_drawing_toolbar(ui, app.theme.chart.bg)
                 });
             }
-            control(&ctx, "Values tooltip on long press", |ui| {
+            control(&ctx, label, |ui| {
                 app.show_drawing_toolbar(ui, app.theme.chart.bg)
             })
         };
+        let values = "Values tooltip on long press";
 
         assert!(app.chart.chart_options().tooltip.enabled);
         let (_, point) = control(&ctx, "Show readout", |ui| app.show_readout_controls(ui));
         ui_click(&ctx, size, point, |ui| app.show_readout_controls(ui));
         assert!(!app.chart.chart_options().tooltip.enabled);
 
-        let (state, point) = cursor_switch(&mut app);
+        let (state, point) = cursor_switch(&mut app, values);
         assert_eq!(state, Some(Toggled::False));
         ui_click(&ctx, size, point, |ui| {
             app.show_drawing_toolbar(ui, app.theme.chart.bg)
         });
         assert!(app.chart.chart_options().tooltip.enabled);
 
-        let (state, point) = cursor_switch(&mut app);
+        let (state, point) = cursor_switch(&mut app, values);
         assert_eq!(state, Some(Toggled::True));
         ui_click(&ctx, size, point, |ui| {
             app.show_drawing_toolbar(ui, app.theme.chart.bg)
@@ -6693,6 +6785,87 @@ mod tests {
         assert!(!app.chart.chart_options().tooltip.enabled);
         let (state, _) = control(&ctx, "Show readout", |ui| app.show_readout_controls(ui));
         assert_eq!(state, Some(Toggled::False));
+
+        // Reads the close switch, which must show `before`, then clicks it.
+        let flip_closes = |app: &mut DemoApp, before: Toggled| {
+            let (state, point) = cursor_switch(app, "Snap crosshair to closes");
+            assert_eq!(state, Some(before));
+            ui_click(&ctx, size, point, |ui| {
+                app.show_drawing_toolbar(ui, app.theme.chart.bg)
+            });
+        };
+        // Hovers the high of the bar in the middle of the chart whose close sits furthest below
+        // it, and returns the heights of the crosshair price, that high and that close.
+        let hover_high = |app: &mut DemoApp| {
+            let frame = |app: &mut DemoApp, events| {
+                ui_frame(&ctx, size, events, |ui| {
+                    app.chart.show(ui);
+                    app.drain_chart_events(ui.ctx());
+                });
+            };
+            for _ in 0..3 {
+                frame(app, vec![]);
+            }
+            let map = app.chart.get_chart_mapping();
+            let middle = map.rect.shrink2(map.rect.size() * 0.25);
+            let (x, high, close) = app
+                .chart
+                .state()
+                .shown()
+                .iter()
+                .enumerate()
+                .map(|(index, bar)| {
+                    let x = map.idx_to_x(index);
+                    (x, map.price_to_y(bar.high), map.price_to_y(bar.close))
+                })
+                .filter(|&(x, high, _)| middle.contains(egui::pos2(x, high)))
+                .max_by(|a, b| (a.2 - a.1).total_cmp(&(b.2 - b.1)))
+                .expect("a bar in the middle of the chart");
+            assert!(close - high > 4.0, "{high} {close}");
+            frame(app, vec![egui::Event::PointerMoved(egui::pos2(x, high))]);
+            let price = app.crosshair.clone().expect("hovered").price;
+            (map.price_to_y(price), high, close)
+        };
+        let mode = |app: &DemoApp| app.chart.chart_options().crosshair.mode;
+        // The main close is the only close at a bar, so the switch reads the close, not the high.
+        assert!(app.comparisons.is_empty());
+        app.handle_drawing_toolbar(DrawingToolbarAction::SetMagnetType(MagnetType::Strong));
+        assert_eq!(mode(&app), CrosshairMode::Magnet);
+        let (price, high, _) = hover_high(&mut app);
+        assert!((price - high).abs() < 0.1, "{price} {high}");
+        flip_closes(&mut app, Toggled::False);
+        assert_eq!(mode(&app), CrosshairMode::MagnetClose);
+        let (price, _, close) = hover_high(&mut app);
+        assert!((price - close).abs() < 0.1, "{price} {close}");
+        // Switching the magnet off keeps closes.
+        app.handle_drawing_toolbar(DrawingToolbarAction::ToggleMagnet);
+        assert!(!app.chart.drawings().options.magnet_mode);
+        assert_eq!(mode(&app), CrosshairMode::MagnetClose);
+        let (price, _, close) = hover_high(&mut app);
+        assert!((price - close).abs() < 0.1, "{price} {close}");
+        // The layout saves it, and the switch shows it again once the layout is opened.
+        settle(&mut app, &ctx);
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
+        app.poll_storage(&ctx);
+        app.chart.set_crosshair_mode(CrosshairMode::Normal);
+        app.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::Open(
+            "Unnamed".into(),
+        ));
+        app.poll_storage(&ctx);
+        assert_eq!(mode(&app), CrosshairMode::MagnetClose);
+        // Switched off, the magnet decides again: no snapping while the magnet is off.
+        flip_closes(&mut app, Toggled::True);
+        assert!(!app.chart.drawings().options.magnet_mode);
+        assert_eq!(mode(&app), CrosshairMode::Normal);
+        settle(&mut app, &ctx);
+        let (price, high, _) = hover_high(&mut app);
+        assert!((price - high).abs() < 0.1, "{price} {high}");
+        // A strength picked while the switch is on keeps closes; off again, the magnet snaps.
+        flip_closes(&mut app, Toggled::False);
+        app.handle_drawing_toolbar(DrawingToolbarAction::SetMagnetType(MagnetType::Weak));
+        assert_eq!(mode(&app), CrosshairMode::MagnetClose);
+        flip_closes(&mut app, Toggled::True);
+        assert_eq!(mode(&app), CrosshairMode::Magnet);
     }
 
     /// Menu picks read settings, restored charts and history instead of host-side flags.
@@ -9729,8 +9902,10 @@ mod tests {
         use egui::{Event, Key, Modifiers};
         use egui_charts::model::{Watchlist, WatchlistFlag};
         let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-        app.live.set_paused(true);
+        // The demo builds its bars from the clock; a fixed time gives every run the same chart.
+        let now = "2026-11-22T02:05:02Z".parse().unwrap();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DemoApp::new_at(&cc, now, true);
         app.watchlist = WatchlistPanel::new(vec![
             Watchlist::from_text("One", "STOCKA"),
             Watchlist::from_text("Two", "STOCKB"),
@@ -9784,13 +9959,11 @@ mod tests {
             }
         }
         // In a flag view the key flags the chart symbol instead of adding it to the hidden list.
+        // The chart keeps its focus: a second click this soon is a double click, which opens the
+        // chart settings when the series lies under it.
         app.watchlist.set_flag_filter(Some(WatchlistFlag::Red));
         app.open_catalog_symbol("STOCKD");
         settle(&mut app, &ctx);
-        let chart = app.chart.get_chart_mapping().rect.center();
-        ui_click(&ctx, size, chart, |ui| {
-            app.ui(ui, &mut eframe::Frame::_new_kittest())
-        });
         alt_w(&mut app);
         assert_eq!(app.watchlist.symbols().collect::<Vec<_>>(), ["STOCKD"]);
         assert_eq!(app.watchlist.lists()[1].to_text(), "STOCKB,STOCKC");
@@ -9798,7 +9971,7 @@ mod tests {
         app.save(&mut storage);
         let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
         cc.storage = Some(&storage);
-        let restored = DemoApp::new(&cc);
+        let restored = DemoApp::new_at(&cc, now, true);
         assert_eq!(restored.watchlist.active_list(), 1);
         assert_eq!(
             restored.watchlist.symbols().collect::<Vec<_>>(),

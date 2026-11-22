@@ -240,6 +240,14 @@ impl Default for Trading {
 
 pub(crate) use crate::chart::quantity_text;
 
+/// Whether `new` changes `old` beyond a move of its trailing stop, which the broker pushes on
+/// every tick and which leaves a confirmation or an open dialog about the order valid.
+fn changed(old: &Order, new: &Order) -> bool {
+    let mut moved = old.clone();
+    moved.trailing_stop = new.trailing_stop;
+    moved != *new
+}
+
 impl Trading {
     /// Sets the latest quote of `symbol`, such as the one `WatchlistPanel::quote` holds for the
     /// chart's symbol. While the chart shows `symbol`, the ticket enters a market buy at the
