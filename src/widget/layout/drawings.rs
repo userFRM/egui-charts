@@ -4772,6 +4772,12 @@ mod tests {
         assert_eq!(painted(&charts[0]), [9.25, 9.5]);
     }
 
+    fn shared_records(host: &crate::services::document::tests::Revised) -> serde_json::Value {
+        let (doc, skipped) = DrawingStorage::from_json(&host.get("SAMPLE").unwrap()).unwrap();
+        assert!(skipped.is_empty());
+        serde_json::to_value(doc.drawings()).unwrap()
+    }
+
     #[cfg(feature = "ui")]
     #[test]
     fn shared_drawing_filter_keeps_bulk_tree_edits_local() {
@@ -4796,12 +4802,15 @@ mod tests {
         });
         settle_pair(&mut layouts, &mut charts);
         // The writer and document timestamps may change; the peer's complete records must not.
-        let records = || {
-            let (doc, skipped) = DrawingStorage::from_json(&host.get("SAMPLE").unwrap()).unwrap();
-            assert!(skipped.is_empty());
-            serde_json::to_value(doc.drawings()).unwrap()
+        let stored = shared_records(&host);
+        let layers = |c: &Chart| {
+            c.drawings()
+                .drawings
+                .iter()
+                .map(|d| (d.chart_points[0].price, d.series_layer, d.z_order))
+                .collect::<Vec<_>>()
         };
-        let stored = records();
+        let peer_layers = layers(&charts[1]);
         charts[0].user_action(|chart| {
             let note = draw(chart, 9.5);
             let m = chart.drawings_mut();
@@ -4814,7 +4823,11 @@ mod tests {
         tree.state_mut()
             .folders
             .extend([notes.clone(), shared.clone()]);
+        let note = charts[0].drawings().listed_drawings().next().unwrap().id;
+        let top_series = charts[0].main_series_order().len().checked_sub(1).unwrap();
         for (action, visible, locked) in [
+            (Action::MoveDown(note), true, false),
+            (Action::MoveUp(note), true, false),
             (Action::LockAll, true, true),
             (Action::UnlockAll, true, false),
             (Action::HideAll, false, false),
@@ -4844,6 +4857,13 @@ mod tests {
                     (9.5, visible, locked),
                     "{action:?}"
                 );
+                if matches!(action, Action::MoveDown(_) | Action::MoveUp(_)) {
+                    // A single step crosses the top series, not one of the hidden lines.
+                    assert_eq!(
+                        note.series_layer,
+                        matches!(action, Action::MoveDown(_)).then_some(top_series)
+                    );
+                }
             }
             let peer = charts[1].drawings();
             assert_eq!(prices(&charts)[1], [9.75, 10.0, 10.5], "{action:?}");
@@ -4851,7 +4871,8 @@ mod tests {
                 let root = d.chart_points[0].price == 10.0;
                 assert_eq!((d.visible, d.locked), (!root, root), "{action:?}");
             }
-            assert_eq!(records(), stored, "{action:?}");
+            assert_eq!(layers(&charts[1]), peer_layers, "{action:?}");
+            assert_eq!(shared_records(&host), stored, "{action:?}");
         }
         assert!(charts[0].undo());
         settle_pair(&mut layouts, &mut charts);
@@ -4859,7 +4880,90 @@ mod tests {
             prices(&charts),
             [vec![9.5, 9.75, 10.0, 10.5], vec![9.75, 10.0, 10.5]]
         );
-        assert_eq!(records(), stored);
+        assert_eq!(shared_records(&host), stored);
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn shared_drawing_filter_keeps_same_named_peer_folder_intact() {
+        use crate::ui::widget_bar::{ObjectTreeAction as Action, ObjectTreePanel, SourceItem};
+
+        let (host, mut charts, mut layouts) = shared_layouts();
+        settle_pair(&mut layouts, &mut charts);
+        let plan = vec!["Plan".to_owned()];
+        let archive = vec!["Archive".to_owned()];
+        let place = |c: &mut Chart, path: &[String], scope, price| {
+            c.user_action(|c| {
+                let id = draw(c, price);
+                let m = c.drawings_mut();
+                assert!(m.move_to_folder(&[id], &[], path));
+                assert!(m.set_folder_sync(path, Some(scope)));
+                id
+            })
+        };
+        let local = place(&mut charts[0], &plan, FolderSync::Layout, 9.5);
+        place(&mut charts[0], &archive, FolderSync::Chart, 9.0);
+        settle_pair(&mut layouts, &mut charts);
+        place(&mut charts[1], &plan, FolderSync::AllLayouts, 10.5);
+        settle_pair(&mut layouts, &mut charts);
+        let stored = shared_records(&host);
+        charts[0].drawings_mut().set_shared_drawings_hidden(true);
+        let mut tree = ObjectTreePanel::new();
+        tree.state_mut()
+            .folders
+            .extend([plan.clone(), archive.clone()]);
+        tree.state_mut().select(local);
+        for (action, expected) in [
+            (
+                Action::SetFolderSync(plan.clone(), Some(FolderSync::Chart)),
+                vec!["Plan"],
+            ),
+            (
+                Action::MoveFolder(plan.clone(), archive.clone()),
+                vec!["Archive", "Plan"],
+            ),
+            (
+                Action::CreateFolder(archive, "New".into()),
+                vec!["Archive", "New", "Plan"],
+            ),
+        ] {
+            let rows: Vec<_> = charts[0]
+                .drawings()
+                .listed_drawings()
+                .map(|d| {
+                    let mut row = SourceItem::drawing(d.id, d.tool_type, d.color32());
+                    row.folder.clone_from(&d.folder);
+                    row
+                })
+                .collect();
+            assert!(charts[0].user_action(|c| tree.apply_to_chart(c, &action, &rows)));
+            settle_pair(&mut layouts, &mut charts);
+            let check_peer = |charts: &[Chart; 2]| {
+                assert_eq!(prices(charts)[1], [10.5]);
+                let d = &charts[1].drawings().drawings[0];
+                assert_eq!(d.folder, plan, "{action:?}");
+                assert_eq!(d.folder_sync_mode(), Some(FolderSync::AllLayouts));
+                assert_eq!(shared_records(&host), stored, "{action:?}");
+            };
+            let note = charts[0]
+                .drawings()
+                .listed_drawings()
+                .find(|d| d.id == local)
+                .unwrap();
+            assert_eq!(note.folder, expected, "{action:?}");
+            assert_eq!(note.folder_sync_mode(), Some(FolderSync::Chart));
+            check_peer(&charts);
+            assert!(charts[0].undo());
+            settle_pair(&mut layouts, &mut charts);
+            let note = charts[0]
+                .drawings()
+                .listed_drawings()
+                .find(|d| d.id == local)
+                .unwrap();
+            assert_eq!(note.folder, plan);
+            assert_eq!(note.folder_sync_mode(), Some(FolderSync::Layout));
+            check_peer(&charts);
+        }
     }
 
     #[test]
@@ -4870,7 +4974,8 @@ mod tests {
         let (host, mut charts, mut layouts) = shared_layouts();
         settle_pair(&mut layouts, &mut charts);
         let chart = &mut charts[0];
-        chart.drawings_mut().set_shared_drawings_hidden(true);
+        chart.user_action(|c| c.drawings_mut().set_shared_drawings_hidden(true));
+        chart.user_action(|c| draw(c, 9.5));
         let ctx = egui::Context::default();
         let mut time = 0.0;
         let mut step = |chart: &mut Chart, events| {
@@ -4897,7 +5002,13 @@ mod tests {
         step(chart, vec![]);
         step(chart, vec![Event::Text("Session high".into())]);
         step(chart, vec![]);
-        let id = chart.drawings().drawings[0].id;
+        let id = chart
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.tool_type == DrawingToolType::TextLabel)
+            .unwrap()
+            .id;
         assert!(chart.drawings().painted_text(id, "Session high").is_some());
         step(
             chart,
@@ -4910,17 +5021,61 @@ mod tests {
             }],
         );
         settle_pair(&mut layouts, &mut charts);
-        let peer = &charts[1].drawings().drawings;
-        assert_eq!(peer.len(), 1);
-        assert_eq!(peer[0].text.as_deref(), Some("Session high"));
+        let peer_label = charts[1]
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.tool_type == DrawingToolType::TextLabel)
+            .unwrap();
+        assert_eq!(peer_label.text.as_deref(), Some("Session high"));
         assert!(charts[0].drawings().painted_range(id).is_none());
-        let (doc, skipped) = DrawingStorage::from_json(&host.get("SAMPLE").unwrap()).unwrap();
-        assert!(skipped.is_empty());
-        assert_eq!(doc.drawings().len(), 1);
-        assert_eq!(
-            doc.drawings()[0].drawing.text.as_deref(),
-            Some("Session high")
+        let committed = shared_records(&host);
+        assert!(
+            committed
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["drawing"]["text"] == "Session high")
         );
+        // Undo and redo the text placement (including its first edit), the line and the
+        // filter toggle in order, checking both the peer and the shared document each time.
+        for (redo, count, filtered) in [
+            (false, 1, true),
+            (false, 0, true),
+            (false, 0, false),
+            (true, 0, true),
+            (true, 1, true),
+            (true, 2, true),
+        ] {
+            assert!(if redo {
+                charts[0].redo()
+            } else {
+                charts[0].undo()
+            });
+            settle_pair(&mut layouts, &mut charts);
+            assert_eq!(charts[0].drawings().shared_drawings_hidden(), filtered);
+            let records = shared_records(&host);
+            let records = records.as_array().unwrap();
+            assert_eq!(records.len(), count);
+            assert_eq!(charts[1].drawings().drawings.len(), count);
+            if count == 1 {
+                assert_eq!(prices(&charts)[1], [9.5]);
+                assert_eq!(records[0]["points"][0]["price"], 9.5);
+            } else if count == 2 {
+                assert!(
+                    charts[1]
+                        .drawings()
+                        .drawings
+                        .iter()
+                        .any(|d| d.text.as_deref() == Some("Session high"))
+                );
+                assert!(
+                    records
+                        .iter()
+                        .any(|d| d["drawing"]["text"] == "Session high")
+                );
+            }
+        }
     }
 
     /// Guards #3436: with drawing storage, a drawing kept on one chart shows on that chart only,

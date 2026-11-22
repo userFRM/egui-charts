@@ -1116,7 +1116,7 @@ impl DrawingManager {
     /// Moves `ids` into the folder at `path`, and each of `folders` with its contents under
     /// `path`, as one undo step; an empty `path` is the root. Everything moved follows the
     /// synchronization of its new top-level folder. A folder reaching the root keeps the mode set
-    /// on it, or else the one it followed so far.
+    /// on it, or else the one it followed so far. Filtered drawings do not participate.
     ///
     /// Moves nothing and returns `false` if a folder would enter itself or a descendant, or take
     /// the name of a folder already there.
@@ -1134,15 +1134,16 @@ impl DrawingManager {
             let target = [path, std::slice::from_ref(name)].concat();
             if path.starts_with(folder)
                 || !names.insert(name)
-                || self.drawings.iter().any(|d| d.folder.starts_with(&target))
+                || self
+                    .unfiltered_drawings()
+                    .any(|d| d.folder.starts_with(&target))
             {
                 return false;
             }
         }
         let modes = self.folder_modes(path);
         let moved: Vec<_> = self
-            .drawings
-            .iter()
+            .unfiltered_drawings()
             .filter(|d| ids.contains(&d.id) || folders.iter().any(|f| d.folder.starts_with(f)))
             .map(|d| d.id)
             .collect();
@@ -1169,8 +1170,7 @@ impl DrawingManager {
     fn folder_modes(&self, path: &[String]) -> Vec<Option<FolderSync>> {
         (1..=path.len())
             .map(|depth| {
-                self.drawings
-                    .iter()
+                self.unfiltered_drawings()
                     .filter(|d| d.folder.starts_with(&path[..depth]))
                     .find_map(|d| d.folder_sync.get(depth - 1).copied().flatten())
             })
@@ -1178,14 +1178,13 @@ impl DrawingManager {
     }
 
     /// Sets the synchronization of a top-level folder, which its descendants follow, as one undo
-    /// step. Returns `false` for a nested folder, which follows its top-level folder.
+    /// step, leaving filtered drawings alone. Returns `false` for a nested folder.
     pub fn set_folder_sync(&mut self, folder: &[String], sync: Option<FolderSync>) -> bool {
         if folder.len() != 1 {
             return false;
         }
         let ids: Vec<_> = self
-            .drawings
-            .iter()
+            .unfiltered_drawings()
             .filter(|d| d.folder.starts_with(folder) && d.folder_sync_mode() != sync)
             .map(|d| d.id)
             .collect();

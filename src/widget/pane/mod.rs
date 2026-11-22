@@ -1220,10 +1220,11 @@ impl Chart {
     /// Moves drawing `id` in the draw order of its pane, which holds the pane's series and studies
     /// as well as its drawings: one step over the drawing, series or study drawn just over or
     /// under it, or all the way to the front or the back. Records one undo step and queues the
-    /// changed drawings for saving. Returns `false` for an unknown drawing.
+    /// changed drawings for saving. Filtered drawings do not participate in the move.
+    /// Returns `false` for an unknown or filtered drawing.
     #[cfg(feature = "drawings")]
     pub fn reorder_drawing(&mut self, id: usize, order: VisualOrder) -> bool {
-        if !self.drawings.drawings.iter().any(|d| d.id == id) {
+        if !self.drawings.unfiltered_drawings().any(|d| d.id == id) {
             return false;
         }
         match order {
@@ -1240,9 +1241,12 @@ impl Chart {
         self.sync_panes();
         let pane = self.layer_pane(self.drawings.drawings.iter().find(|d| d.id == id).unwrap());
         let n = self.layer_items(pane).len();
-        let mut mates = crate::drawings::services::in_z_order(&self.drawings.drawings)
+        let mates = self
+            .drawings
+            .unfiltered_drawings()
+            .filter(|d| self.layer_pane(d) == pane);
+        let mut mates = crate::drawings::services::in_z_order(mates)
             .into_iter()
-            .filter(|d| self.layer_pane(d) == pane)
             .peekable();
         let mut sequence = Vec::new();
         for k in 0..n {

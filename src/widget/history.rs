@@ -72,6 +72,9 @@ struct Action {
     drawings_hidden: Option<bool>,
     #[cfg(feature = "drawings")]
     shared_drawings_hidden: Option<bool>,
+    /// Unlike the undoable toggle above, this is the context of the edit, in both directions.
+    #[cfg(feature = "drawings")]
+    recorded_while_filtered: bool,
     #[cfg(feature = "drawings")]
     drawings_locked: Option<bool>,
     event_visibility: Option<crate::model::EventVisibility>,
@@ -437,6 +440,7 @@ impl ChartHistory {
             } else if history.can_undo() {
                 self.push(Action {
                     drawings: history,
+                    recorded_while_filtered: drawings.shared_drawings_hidden(),
                     ..Action::default()
                 });
             }
@@ -562,6 +566,8 @@ impl Chart {
                 drawings_hidden: Some(self.drawings.is_hidden()),
                 #[cfg(feature = "drawings")]
                 shared_drawings_hidden: Some(self.drawings.shared_drawings_hidden()),
+                #[cfg(feature = "drawings")]
+                recorded_while_filtered: self.drawings.shared_drawings_hidden(),
                 #[cfg(feature = "drawings")]
                 drawings_locked: Some(self.drawings.is_locked()),
                 event_visibility: Some(self.event_visibility.clone()),
@@ -787,6 +793,7 @@ impl Chart {
             .is_some()
             .then(|| Action {
                 drawings: std::mem::take(&mut action.drawings),
+                recorded_while_filtered: action.recorded_while_filtered,
                 ..Action::default()
             })
             .filter(|later| later.drawings.can_undo());
@@ -810,8 +817,10 @@ impl Chart {
             HistoryService::with_max_size(0),
         );
         if recorded.can_undo() {
+            let recorded_while_filtered = pending.before.recorded_while_filtered;
             self.history.push(Action {
                 drawings: recorded,
+                recorded_while_filtered,
                 ..Action::default()
             });
         }
@@ -823,6 +832,7 @@ impl Chart {
         if let Some(pending) = &mut self.history.pending {
             let mut recording = HistoryService::with_max_size(0);
             self.drawings.swap_history(&mut recording);
+            pending.before.recorded_while_filtered = self.drawings.shared_drawings_hidden();
             pending.standalone_drawings = recording;
         }
     }
@@ -1062,9 +1072,11 @@ impl Chart {
         #[cfg(feature = "drawings")]
         if self.drawings.shared_drawings_hidden()
             && stack.last().is_some_and(|step| {
-                step.drawings.touches(redo, &self.drawings.drawings, |d| {
-                    self.drawings.shared_filter.hides(d)
-                })
+                !step.recorded_while_filtered
+                    && step.shared_drawings_hidden != Some(false)
+                    && step.drawings.touches(redo, &self.drawings.drawings, |d| {
+                        self.drawings.shared_filter.hides(d)
+                    })
             })
         {
             return false;
@@ -1076,7 +1088,8 @@ impl Chart {
     /// A drawing being placed is cancelled when the step takes away the pane that draws it.
     /// Returns false while a user action or a drawing drag is in progress, or a layout divider
     /// is pressed or dragged; finish it first.
-    /// A step that would change a filtered shared drawing waits until it is shown.
+    /// Steps made with shared drawings filtered remain undoable. An earlier step that would
+    /// change a filtered drawing waits until shared drawings are shown again.
     /// A step that changed the interval restores its view once the bars of that interval have
     /// loaded; a view requested before then, by navigation or a call such as
     /// [`Self::scroll_to_time`], replaces it.
