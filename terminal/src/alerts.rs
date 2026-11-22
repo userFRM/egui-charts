@@ -57,13 +57,13 @@ impl Terminal {
             .map(|list| (list.name.clone(), list.name.clone()))
             .collect();
         let settings = &self.studies.settings.alerts;
-        self.alerts.panel.set_sound(settings.play_sound.then(|| {
-            if settings.sound.is_empty() {
+        self.alerts
+            .panel
+            .set_sound(Some(if settings.sound.is_empty() {
                 self.services.sounds.first().cloned().unwrap_or_default()
             } else {
                 settings.sound.clone()
-            }
-        }));
+            }));
         self.alerts
             .panel
             .set_notification_seconds(settings.notification_seconds as f32);
@@ -437,7 +437,6 @@ mod tests {
             .with_sounds(vec!["Bell".into()], move |name, volume| {
                 played.lock().unwrap().push((name.to_owned(), volume));
             });
-        terminal.studies.settings.alerts.play_sound = true;
         terminal.studies.settings.alerts.sound = "Bell".into();
         terminal.studies.settings.alerts.sound_volume = 0.35;
         let study = terminal.chart_mut().add_indicator(Box::new(SMA::new(2)));

@@ -336,6 +336,17 @@ impl BarClock {
         }
     }
 
+    /// When the bar opening at `open` closes: at its next open, or for a daily, multi-day,
+    /// weekly or monthly bar of a clock with an exchange session when its last trading window
+    /// closes. A bar without a trading window closes at its next open. Bar replay completes
+    /// bars here, and `StudyData::closed_at` reads a longer interval's bars by it.
+    pub(crate) fn bar_close(&self, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let timeframe = self.timeframe?;
+        (self.date_session())
+            .and_then(|_| self.sessions().bar_session_close(open, timeframe, true))
+            .or_else(|| self.next_open(open))
+    }
+
     #[cfg(any(feature = "studies", feature = "strategies"))]
     pub(crate) fn for_timeframe(&self, timeframe: Timeframe) -> Self {
         Self {
