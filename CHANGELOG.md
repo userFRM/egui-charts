@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `DrawingManager::set_shared_drawings_hidden` hides symbol-wide drawings on one chart without hiding its local annotations or changing what peers see. Removing a study while filtered preserves its drawing’s pane on peers through undo and restore. Loading a drawing without its study on an unfiltered chart still mirrors it in the price pane. ([#4082](https://github.com/userFRM/egui-charts/issues/4082))
+
 - A host can set `DrawingManagerOptions::local_placement_folder` on a chart to keep new drawings local from placement through undo and redo. Moving a drawing to a shared folder follows the usual sharing rules. Other charts keep their existing defaults. ([#4046](https://github.com/userFRM/egui-charts/issues/4046))
 
 - Built-in volume footprints can resume a drained trade replay from an in-memory checkpoint. The checkpoint retains price levels and the forming bar's trade allocation; a different row grouping or an unbounded footprint is refused without changing the destination. ([#3911](https://github.com/userFRM/egui-charts/issues/3911))

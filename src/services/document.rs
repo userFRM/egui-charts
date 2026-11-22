@@ -740,6 +740,11 @@ pub(crate) mod tests {
             self.0.lock().unwrap().0.get(name).map(|(d, _)| d.clone())
         }
 
+        #[cfg(feature = "drawings")]
+        pub(crate) fn revision(&self, name: &str) -> Option<u64> {
+            self.0.lock().unwrap().0.get(name).map(|(_, n)| *n)
+        }
+
         /// Deletes `name`, as another client does.
         pub(crate) fn remove(&self, name: &str) {
             self.0.lock().unwrap().0.remove(name);

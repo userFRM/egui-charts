@@ -71,6 +71,11 @@ struct Action {
     #[cfg(feature = "drawings")]
     drawings_hidden: Option<bool>,
     #[cfg(feature = "drawings")]
+    shared_drawings_hidden: Option<bool>,
+    /// Unlike the undoable toggle above, this is the context of the edit, in both directions.
+    #[cfg(feature = "drawings")]
+    recorded_while_filtered: bool,
+    #[cfg(feature = "drawings")]
     drawings_locked: Option<bool>,
     event_visibility: Option<crate::model::EventVisibility>,
     options: Option<ChartOptions>,
@@ -114,6 +119,7 @@ impl Action {
         let drawings_changed = self.drawings.can_undo()
             || self.unshown.is_some()
             || self.drawings_hidden.is_some()
+            || self.shared_drawings_hidden.is_some()
             || self.drawings_locked.is_some();
         #[cfg(not(feature = "drawings"))]
         let drawings_changed = false;
@@ -434,6 +440,7 @@ impl ChartHistory {
             } else if history.can_undo() {
                 self.push(Action {
                     drawings: history,
+                    recorded_while_filtered: drawings.shared_drawings_hidden(),
                     ..Action::default()
                 });
             }
@@ -557,6 +564,10 @@ impl Chart {
                 indicators_hidden: Some(self.indicators_hidden),
                 #[cfg(feature = "drawings")]
                 drawings_hidden: Some(self.drawings.is_hidden()),
+                #[cfg(feature = "drawings")]
+                shared_drawings_hidden: Some(self.drawings.shared_drawings_hidden()),
+                #[cfg(feature = "drawings")]
+                recorded_while_filtered: self.drawings.shared_drawings_hidden(),
                 #[cfg(feature = "drawings")]
                 drawings_locked: Some(self.drawings.is_locked()),
                 event_visibility: Some(self.event_visibility.clone()),
@@ -683,6 +694,10 @@ impl Chart {
             action.drawings_hidden = None;
         }
         #[cfg(feature = "drawings")]
+        if action.shared_drawings_hidden == Some(self.drawings.shared_drawings_hidden()) {
+            action.shared_drawings_hidden = None;
+        }
+        #[cfg(feature = "drawings")]
         if action.drawings_locked == Some(self.drawings.is_locked()) {
             action.drawings_locked = None;
         }
@@ -778,6 +793,7 @@ impl Chart {
             .is_some()
             .then(|| Action {
                 drawings: std::mem::take(&mut action.drawings),
+                recorded_while_filtered: action.recorded_while_filtered,
                 ..Action::default()
             })
             .filter(|later| later.drawings.can_undo());
@@ -801,8 +817,10 @@ impl Chart {
             HistoryService::with_max_size(0),
         );
         if recorded.can_undo() {
+            let recorded_while_filtered = pending.before.recorded_while_filtered;
             self.history.push(Action {
                 drawings: recorded,
+                recorded_while_filtered,
                 ..Action::default()
             });
         }
@@ -814,6 +832,7 @@ impl Chart {
         if let Some(pending) = &mut self.history.pending {
             let mut recording = HistoryService::with_max_size(0);
             self.drawings.swap_history(&mut recording);
+            pending.before.recorded_while_filtered = self.drawings.shared_drawings_hidden();
             pending.standalone_drawings = recording;
         }
     }
@@ -1036,18 +1055,41 @@ impl Chart {
 
     /// Whether a chart user action can be undone (also drives toolbar availability).
     pub fn can_undo(&self) -> bool {
-        !self.history.undo.is_empty()
+        self.can_step_chart_history(false)
     }
 
     /// Whether a chart user action can be redone (also drives toolbar availability).
     pub fn can_redo(&self) -> bool {
-        !self.history.redo.is_empty()
+        self.can_step_chart_history(true)
+    }
+
+    fn can_step_chart_history(&self, redo: bool) -> bool {
+        let stack = if redo {
+            &self.history.redo
+        } else {
+            &self.history.undo
+        };
+        #[cfg(feature = "drawings")]
+        if self.drawings.shared_drawings_hidden()
+            && stack.last().is_some_and(|step| {
+                !step.recorded_while_filtered
+                    && step.shared_drawings_hidden != Some(false)
+                    && step.drawings.touches(redo, &self.drawings.drawings, |d| {
+                        self.drawings.shared_filter.hides(d)
+                    })
+            })
+        {
+            return false;
+        }
+        !stack.is_empty()
     }
 
     /// Undo the most recent chart user action, across drawings, studies and settings.
     /// A drawing being placed is cancelled when the step takes away the pane that draws it.
     /// Returns false while a user action or a drawing drag is in progress, or a layout divider
     /// is pressed or dragged; finish it first.
+    /// Steps made with shared drawings filtered remain undoable. An earlier step that would
+    /// change a filtered drawing waits until shared drawings are shown again.
     /// A step that changed the interval restores its view once the bars of that interval have
     /// loaded; a view requested before then, by navigation or a call such as
     /// [`Self::scroll_to_time`], replaces it.
@@ -1119,7 +1161,7 @@ impl Chart {
     }
 
     fn step_chart_history(&mut self, redo: bool) -> bool {
-        if self.history_blocked() {
+        if self.history_blocked() || !self.can_step_chart_history(redo) {
             return false;
         }
         #[cfg(feature = "drawings")]
@@ -1273,6 +1315,12 @@ impl Chart {
             *hidden = current;
         }
         #[cfg(feature = "drawings")]
+        if let Some(hidden) = &mut action.shared_drawings_hidden {
+            let current = self.drawings.shared_drawings_hidden();
+            self.drawings.set_shared_drawings_hidden(*hidden);
+            *hidden = current;
+        }
+        #[cfg(feature = "drawings")]
         if let Some(locked) = &mut action.drawings_locked {
             let current = self.drawings.is_locked();
             self.drawings.set_locked(*locked);
@@ -1408,6 +1456,9 @@ impl Chart {
                 while self.drawings.undo() {}
             }
             self.drawings.swap_history(&mut action.drawings);
+            if action.panes.is_some() || !action.studies.is_empty() {
+                self.remap_unshown_panes();
+            }
             if let Some(deletion) = &mut action.unshown {
                 self.step_unshown_deletion(deletion, redo);
             }

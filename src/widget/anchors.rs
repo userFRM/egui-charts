@@ -133,6 +133,7 @@ impl Chart {
     /// [`DrawingStorage::saved_by`].
     pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
         self.store_drawings(
+            self.symbol(),
             self.drawings
                 .drawings
                 .iter()
@@ -142,13 +143,19 @@ impl Chart {
 
     pub(super) fn store_drawings<'a>(
         &self,
+        symbol: &str,
         drawings: impl IntoIterator<Item = &'a Drawing>,
     ) -> Result<DrawingStorage, SaveError> {
-        let mut storage = DrawingStorage::new(self.symbol());
+        let mut storage = DrawingStorage::new(symbol);
         storage.timeframe = self
             .timeframe()
             .map(|timeframe| timeframe.as_str().into_owned());
         storage.saved_by = Some(self.data_table_identity);
+        let manager = if symbol == self.symbol() {
+            Some(&self.drawings)
+        } else {
+            self.symbol_drawings.get(symbol).map(|(manager, _)| manager)
+        };
         for drawing in drawings {
             for (at, point) in drawing.chart_points.iter().enumerate() {
                 if point
@@ -171,10 +178,7 @@ impl Chart {
                     price,
                 )
             });
-            // A drawing without an owner is stored for the price pane, wherever that pane is.
-            stored.pane = self
-                .owner_pane(drawing)
-                .and_then(|pane| self.stored_pane(pane));
+            self.set_record_pane(symbol, drawing, manager, &mut stored);
             storage.add_drawing(stored);
         }
         // Validate all settings too, before a host replaces its last good save.
@@ -206,10 +210,34 @@ impl Chart {
         json: &str,
         remap: bool,
     ) -> Result<Vec<SkippedDrawing>, LoadError> {
-        let (storage, mut skipped) = DrawingStorage::from_json(json)?;
+        let (storage, skipped) = self.parse_drawing_file(json)?;
+        let own_snapshot = remap
+            && self.keeps_stored_drawings()
+            && self.restored_from == Some(self.data_table_identity)
+            && storage.saved_by == self.restored_from;
+        let skipped = self.apply_drawing_file(&storage, skipped, remap, own_snapshot);
+        self.remember_read_panes(&storage);
+        Ok(skipped)
+    }
+
+    pub(super) fn parse_drawing_file(
+        &self,
+        json: &str,
+    ) -> Result<(DrawingStorage, Vec<SkippedDrawing>), LoadError> {
+        let (storage, skipped) = DrawingStorage::from_json(json)?;
         if storage.symbol != self.symbol() {
             return Err(LoadError::OtherSymbol);
         }
+        Ok((storage, skipped))
+    }
+
+    pub(super) fn apply_drawing_file(
+        &mut self,
+        storage: &DrawingStorage,
+        mut skipped: Vec<SkippedDrawing>,
+        remap: bool,
+        keep_snapshot_links: bool,
+    ) -> Vec<SkippedDrawing> {
         let drawings = storage
             .drawings()
             .iter()
@@ -220,7 +248,7 @@ impl Chart {
             .filter(|index| skipped.iter().all(|s| s.index != *index))
             .take(storage.drawings().len())
             .collect();
-        for (at, error) in self.replace_drawings(drawings) {
+        for (at, error) in self.replace_drawings(drawings, keep_snapshot_links) {
             skipped.push(SkippedDrawing {
                 index: read[at],
                 id: Some(storage.drawings()[at].id.clone()),
@@ -228,7 +256,7 @@ impl Chart {
             });
         }
         skipped.sort_by_key(|skipped| skipped.index);
-        Ok(skipped)
+        skipped
     }
 
     /// Replaces the drawings with `drawings`, in their order, keeping the drawing tools, options
@@ -237,6 +265,7 @@ impl Chart {
     pub(super) fn replace_drawings(
         &mut self,
         drawings: Vec<Drawing>,
+        keep_snapshot_links: bool,
     ) -> Vec<(usize, &'static str)> {
         self.flush_change_events();
         let mut manager = DrawingManager::new();
@@ -252,6 +281,7 @@ impl Chart {
         manager.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
         manager.eraser_mode = self.drawings.eraser_mode;
         manager.set_hidden(self.drawings.is_hidden());
+        manager.shared_filter = self.drawings.shared_filter;
         manager.set_locked(self.drawings.is_locked());
         manager.curr_timeframe = self.drawings.curr_timeframe.clone();
         let refused = drawings
@@ -261,6 +291,9 @@ impl Chart {
             .collect();
         manager.events.clear();
         manager.events_dropped = 0;
+        if keep_snapshot_links {
+            manager.keep_snapshot_links(&self.drawings);
+        }
         self.drawings = manager;
         self.history.clear();
         refused
