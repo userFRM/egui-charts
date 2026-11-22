@@ -100,11 +100,12 @@ plot("Lower", 30.0);
 fill("Upper", "Lower", color = "#7E57C220");
 ```
 
-The whole text is the program of one bar. Everything Rhai offers for expressions and control
-flow works: `let`, `if` and `else` as statements and expressions, `while`, `loop`, `for i in
-0..n`, `break`, `continue`, `switch`, functions with `fn`, integer and floating-point arithmetic,
-strings, arrays and maps. Functions see only their parameters, so a function that needs a series
-takes it as one: `fn slope(s, n) { (s - s[n]) / n }`.
+The whole text is the program of one bar. Rhai's expressions and control flow work: `let`, `if`
+and `else` as statements and expressions, `while`, `loop`, `for i in 0..n`, `break`,
+`continue`, `switch`, functions with `fn`, integer and floating-point arithmetic, strings, arrays
+and maps. Functions see only their parameters, so a function that needs a series takes it as one:
+`fn slope(s, n) { (s - s[n]) / n }`. There are no anonymous functions or closures: an array
+function such as `filter` takes a declared function as `Fn("name")`.
 
 ## Values
 

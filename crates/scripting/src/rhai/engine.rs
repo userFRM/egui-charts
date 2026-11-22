@@ -169,6 +169,9 @@ pub(crate) fn engine() -> Engine {
         .set_max_map_size(MAX_MAP_SIZE)
         .set_max_functions(MAX_FUNCTIONS)
         .set_max_variables(MAX_VARIABLES)
+        // A closure shares what it captures behind locks that sleep on contention, which
+        // panics on the web, and one stored in a value it captures is never freed.
+        .set_allow_anonymous_fn(false)
         // Code compiled at run time would bypass the declarations.
         .disable_symbol("eval");
     // The standard package's `sleep` blocks the thread, which panics on the web. These come

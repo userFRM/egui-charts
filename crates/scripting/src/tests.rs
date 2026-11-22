@@ -268,6 +268,13 @@ fn scripts_are_refused_at_their_line_and_column() {
         ("plot(\"x\", clse);", 1, 11, "clse is not declared"),
         ("plot(\"x\", eval(\"1\"));", 1, 11, "eval"),
         ("import \"x\" as y;\nplot(\"x\", 1);", 1, 1, "import"),
+        // A closure shares what it captures behind locks that sleep, and can hold itself.
+        (
+            "let a = [1];\nlet f = |x| { a.push(x); true };\nplot(\"x\", 1.0);",
+            2,
+            9,
+            "anonymous functions",
+        ),
     ] {
         let error = Script::compile("Test", source, &IndicatorFactory::new()).unwrap_err();
         assert_eq!(

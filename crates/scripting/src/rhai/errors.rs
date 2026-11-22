@@ -3,13 +3,20 @@
 use super::engine::{NO_HISTORY, span};
 use crate::ScriptError;
 use crate::runtime::BarError;
-use ::rhai::{EvalAltResult, ParseError, ParseErrorType};
+use ::rhai::{EvalAltResult, LexError, ParseError, ParseErrorType};
 
 /// A compile error.
 pub(crate) fn compile(error: &ParseError) -> ScriptError {
     let message = match error.err_type() {
         ParseErrorType::VariableUndefined(name) => {
             format!("{name} is not declared; declare it with let, input, state or series")
+        }
+        ParseErrorType::BadInput(LexError::UnexpectedInput(token))
+            if token == "|" || token == "||" =>
+        {
+            "anonymous functions are not available; declare the function with fn and pass \
+             Fn(\"name\")"
+                .into()
         }
         other => other.to_string(),
     };
