@@ -738,6 +738,13 @@ impl DemoNotifications {
         self.publish(entry);
     }
 
+    /// Logs `title` about the demo's chat room `room`, which the panel offers to open.
+    pub(super) fn notify_room(&self, title: impl Into<String>, room: &str) {
+        let mut entry = Notification::new(Utc::now(), title);
+        entry.target = Some(NotificationTarget::Room(room.to_owned()));
+        self.publish(entry);
+    }
+
     /// Keep supplied headlines quiet on repeated viewport requests.
     pub(super) fn notify_event(&self, symbol: &str, event: &egui_charts::model::TimeScaleEvent) {
         let mut latest = self.2.lock().unwrap_or_else(|e| e.into_inner());
@@ -802,14 +809,15 @@ impl Notifications for DemoNotifications {
 }
 
 /// Two rooms with recent messages, a fixed older backlog, echoes of what the user posts and the
-/// authors the user ignores.
+/// authors the user ignores; each post is also logged as a notification that opens its room.
 pub(super) struct DemoChats(
     Mutex<(Vec<ChatMessage>, Option<Events<ChatEvent>>, Vec<ChatUser>)>,
     Vec<ChatMessage>,
+    Arc<DemoNotifications>,
 );
 
 impl DemoChats {
-    pub(super) fn new(now: DateTime<Utc>) -> Self {
+    pub(super) fn new(now: DateTime<Utc>, notifications: Arc<DemoNotifications>) -> Self {
         let message = |room, author: &str, minutes, text| {
             ChatMessage::new(room, author, now - TimeDelta::minutes(minutes), text)
                 .with_id(format!("{room}-seed-{minutes}"))
@@ -858,19 +866,23 @@ impl DemoChats {
                 Vec::new(),
             )),
             history,
+            notifications,
         )
     }
 
-    /// Posts the user's `text` to `room`, answering the message `to` when set.
+    /// Posts the user's `text` to `room`, answering the message `to` when set, and logs the post
+    /// as a notification that opens the room.
     fn post(&self, room: String, text: String, to: Option<String>, reply: Reply<()>) {
         let mut state = self.0.lock().unwrap();
-        let mut message = ChatMessage::new(room, "You", Utc::now(), text)
+        let mut message = ChatMessage::new(room.clone(), "You", Utc::now(), text)
             .with_id(format!("live-{}", state.0.len()));
         message.reply_to = to;
         if let Some(events) = &state.1 {
             events.push(ChatEvent::Message(message.clone()));
         }
         state.0.push(message);
+        drop(state);
+        self.2.notify_room(format!("Message sent to {room}"), &room);
         reply.send(Ok(()));
     }
 }
@@ -1270,7 +1282,8 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         let now = Utc.with_ymd_and_hms(2026, 11, 21, 12, 0, 0).unwrap();
-        let host = Arc::new(DemoChats::new(now));
+        let notifications = Arc::new(DemoNotifications::default());
+        let host = Arc::new(DemoChats::new(now, notifications.clone()));
         let seeded: Vec<_> = host
             .0
             .lock()
@@ -1338,6 +1351,12 @@ mod tests {
         let (answer, reply) = ReplyReader::new();
         host.send("General".into(), "Hello".into(), reply);
         assert!(answer.take().unwrap().is_ok());
+        let sent = notifications.0.lock().unwrap().0.last().cloned().unwrap();
+        assert_eq!(sent.title, "Message sent to General");
+        assert_eq!(
+            sent.target,
+            Some(NotificationTarget::Room("General".into()))
+        );
         let state = host.0.lock().unwrap();
         let ids: std::collections::HashSet<_> = state
             .0
