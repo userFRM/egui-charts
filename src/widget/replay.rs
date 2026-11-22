@@ -550,22 +550,11 @@ impl Chart {
 
 pub(super) fn completed<'a>(bars: &'a [Bar], clock: &BarClock, time: DateTime<Utc>) -> &'a [Bar] {
     let end = bars.partition_point(|bar| {
-        bar_close(clock, clock.bar_open(bar.time)).map_or(bar.time < time, |end| end <= time)
+        clock
+            .bar_close(clock.bar_open(bar.time))
+            .map_or(bar.time < time, |end| end <= time)
     });
     &bars[..end]
-}
-
-/// When the bar of `clock` opening at `open` closes in bar replay: at its next open, or for a
-/// daily, multi-day, weekly or monthly bar of a clock with an exchange session when its last
-/// trading window closes. A bar without a trading window closes at its next open.
-/// `ReplayController::cutoff` and `seek_cutoff` close bars here too.
-pub(crate) fn bar_close(clock: &BarClock, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    (clock.timeframe())
-        .filter(|timeframe| {
-            clock.has_session() && timeframe.duration_ms() >= Timeframe::Day1.duration_ms()
-        })
-        .and_then(|timeframe| clock.sessions().bar_session_close(open, timeframe, true))
-        .or_else(|| clock.next_open(open))
 }
 
 /// The chart bars that `bars` of the `source` clock build under `chart`, or `None` when they do

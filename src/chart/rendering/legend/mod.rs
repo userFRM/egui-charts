@@ -9,7 +9,7 @@ use quotes::paint_quotes;
 pub(crate) use quotes::quote_prices;
 
 use crate::chart::rendering::StyleColors;
-use crate::chart::rendering::axes::semibold;
+use crate::chart::rendering::axes::{semibold, volume_text};
 use crate::localization as l10n;
 use crate::model::session::MarketSession;
 use crate::model::{Bar, DataStatus, Instrument, Level1Quote, percent_change};
@@ -732,25 +732,12 @@ impl<'a> Legend<'a> {
             {
                 layout.field(
                     &format!("{} ", l10n::text(ui.ctx(), "Vol")),
-                    self.formatters
-                        .volume
-                        .map(|formatter| formatter.format(self.bar.volume))
-                        .unwrap_or_else(|| {
-                            self.instrument
-                                .and_then(|instrument| instrument.volume_decimals)
-                                .map_or_else(
-                                    || {
-                                        crate::scales::StudyFormat::Volume
-                                            .format(self.bar.volume, None)
-                                    },
-                                    |decimals| {
-                                        crate::scales::VolumeFormatter {
-                                            precision: usize::from(decimals),
-                                        }
-                                        .format_with_min_unit_decimals(self.bar.volume, 2)
-                                    },
-                                )
-                        }),
+                    volume_text(
+                        self.bar.volume,
+                        self.instrument
+                            .and_then(|instrument| instrument.volume_decimals),
+                        self.formatters.volume,
+                    ),
                     layout.bar_color(self.bar),
                 );
                 layout.new_row();

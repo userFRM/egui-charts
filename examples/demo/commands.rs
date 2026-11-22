@@ -409,6 +409,7 @@ impl DemoApp {
             "interval" => Some(KeyboardAction::OpenIntervalSearch),
             "data-window" => Some(KeyboardAction::OpenDataWindow),
             "open-layout" => Some(KeyboardAction::OpenLayout),
+            "snapshot" => Some(KeyboardAction::Snapshot),
             _ => None,
         };
         if let Some(action) = shortcut {
@@ -433,7 +434,6 @@ impl DemoApp {
             "symbols" => TopToolbarAction::OpenSymbolSearch,
             "indicators" => TopToolbarAction::OpenIndicators,
             "settings" => TopToolbarAction::OpenSettings,
-            "snapshot" => TopToolbarAction::TakeScreenshot,
             "alert" => TopToolbarAction::CreateAlert,
             "compare" => TopToolbarAction::OpenCompare,
             "fullscreen" => TopToolbarAction::ToggleFullscreen,
@@ -1104,6 +1104,8 @@ mod tests {
                 if let Some(action) = action {
                     app.handle_top_toolbar(&ctx, action);
                 } else {
+                    // Without image publishing the shortcut downloads, as its menu hint shows.
+                    app.top_toolbar.state.can_publish_image = false;
                     app.handle_shortcut_action(&ctx, egui_charts::config::KeyboardAction::Snapshot);
                 }
                 let path = std::env::temp_dir().join(format!("demo-snapshot-{mode:?}.png"));
@@ -1786,6 +1788,182 @@ mod tests {
             f64::from(app.chart.visible_logical_range().unwrap().right)
                 >= app.chart.time_to_index(horizon).unwrap()
         );
+    }
+
+    #[test]
+    fn layout_menu_names_new_layouts_confirms_deletes_and_shares() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        // Create new layout takes its name from the menu's field.
+        click(&mut app, &ctx, "Named layouts");
+        click(&mut app, &ctx, "Create new layout");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![egui::Event::Text("Morning".into())])
+            .drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![enter]).drop_without_applying_deltas();
+        let tabs: Vec<_> = app
+            .layout_tabs
+            .iter()
+            .map(|tab| tab.name.as_str())
+            .collect();
+        assert_eq!(tabs, ["Unnamed", "Morning"]);
+        assert_eq!(app.layout_tabs[app.layout_tab].name, "Morning");
+        assert_eq!(
+            app.top_toolbar.layout_menu.curr_layout.as_deref(),
+            Some("Morning")
+        );
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
+        app.poll_storage(&ctx);
+        assert!(
+            app.top_toolbar
+                .layout_menu
+                .layouts
+                .contains(&"Morning".to_owned())
+        );
+
+        // Its delete asks first, naming the layout and the symbol of its chart.
+        click(&mut app, &ctx, "Named layouts");
+        click_lowest(&mut app, &ctx, "×");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        let output = frame(&mut app, &ctx, vec![]);
+        let texts: Vec<String> = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .filter_map(|(_, node)| node.value().map(str::to_owned))
+            .collect();
+        output.drop_without_applying_deltas();
+        assert!(
+            app.top_toolbar
+                .layout_menu
+                .layouts
+                .contains(&"Morning".to_owned())
+        );
+        assert!(
+            texts.iter().any(|text| text == "Delete Morning?"),
+            "{texts:?}"
+        );
+        let charts = format!("Charts: {}", app.chart.symbol());
+        assert!(texts.contains(&charts), "{texts:?}");
+        click_lowest(&mut app, &ctx, "Delete");
+        app.poll_storage(&ctx);
+        assert!(
+            !app.top_toolbar
+                .layout_menu
+                .layouts
+                .contains(&"Morning".to_owned())
+        );
+
+        // Saved again, it is shared through the switch with the chosen access.
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
+        app.poll_storage(&ctx);
+        click(&mut app, &ctx, "Named layouts");
+        let labels = |app: &mut DemoApp| {
+            let output = frame(app, &ctx, vec![]);
+            let labels: Vec<String> = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .filter_map(|(_, node)| node.label().or(node.value()).map(str::to_owned))
+                .collect();
+            output.drop_without_applying_deltas();
+            labels
+        };
+        assert!(
+            !labels(&mut app).iter().any(|label| label == "Copy link"),
+            "Copy link waits for the layout to be shared"
+        );
+        click_lowest(&mut app, &ctx, "Share layout");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        click_lowest(&mut app, &ctx, "View and copy");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        click_lowest(&mut app, &ctx, "Copy link");
+        let copied = (0..2).find_map(|_| {
+            let output = frame(&mut app, &ctx, vec![]);
+            let copied = output
+                .platform_output
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                    _ => None,
+                });
+            output.drop_without_applying_deltas();
+            copied
+        });
+        assert!(
+            copied
+                .as_deref()
+                .is_some_and(|text| text.starts_with("https://demo.invalid/layout/")),
+            "{copied:?}"
+        );
+        let texts = labels(&mut app);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "Link copied. Recipients can view it and save a copy."),
+            "{texts:?}"
+        );
+    }
+
+    /// Clicks the lowest control labelled `label`: menu rows sit below the toolbar and tab strip.
+    fn click_lowest(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
+        let output = frame(app, ctx, vec![]);
+        let pos = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .and_then(|update| {
+                update
+                    .nodes
+                    .iter()
+                    .filter(|(_, node)| {
+                        node.label() == Some(label) && node.role() != egui::accesskit::Role::Label
+                    })
+                    .filter_map(|(_, node)| node.bounds())
+                    .max_by(|a, b| a.y0.total_cmp(&b.y0))
+            })
+            .map(|rect| {
+                egui::pos2(
+                    (rect.x0 + rect.x1) as f32 * 0.5,
+                    (rect.y0 + rect.y1) as f32 * 0.5,
+                )
+            });
+        output.drop_without_applying_deltas();
+        let pos = pos.unwrap_or_else(|| panic!("missing control: {label}"));
+        for pressed in [true, false] {
+            frame(
+                app,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            )
+            .drop_without_applying_deltas();
+        }
     }
 
     /// The sample overlays reach the public fill renderer with their own size and font, and

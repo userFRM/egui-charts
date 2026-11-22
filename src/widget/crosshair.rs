@@ -119,6 +119,21 @@ impl Chart {
         !valued && !options.ignore_whitespace_indices
     }
 
+    /// The height at which a click places the next drawing anchor, recorded by the price pane
+    /// this frame for a pointer at `pointer_y`.
+    pub(super) fn anchor_crosshair_y(&self, ctx: &egui::Context, pointer_y: f32) -> Option<f32> {
+        #[cfg(feature = "drawings")]
+        if let Some((frame, pointer, y)) = self.drawings.anchor_crosshair
+            && frame == ctx.cumulative_frame_nr()
+            && pointer == pointer_y
+        {
+            return Some(y);
+        }
+        #[cfg(not(feature = "drawings"))]
+        let _ = (ctx, pointer_y);
+        None
+    }
+
     pub(super) fn snap_crosshair(&self, mut pos: Pos2, map: &PriceMap, index: usize) -> Pos2 {
         let mode = self.chart_options.crosshair.mode;
         if !mode.snaps() {

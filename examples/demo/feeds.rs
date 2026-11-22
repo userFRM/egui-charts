@@ -2,7 +2,7 @@
 //! stable, distinct content. A host answers these from its own data vendors.
 
 use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, TimeZone, Utc, Weekday};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use egui_charts::data::{
@@ -12,8 +12,9 @@ use egui_charts::data::{
 };
 use egui_charts::model::{Bar, PostContent, Quote};
 use egui_charts::services::{
-    ChatCapabilities, ChatEvent, ChatMessage, Chats, Events, Notification, NotificationTarget,
-    Notifications, Posts, Quotes, ShareKind, ShareLink, ShareOffer, Sharing,
+    ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, Events, NewChatRoom,
+    NewChatRoomKind, Notification, NotificationTarget, Notifications, Posts, Profile, ProfileEvent,
+    ProfileId, Profiles, Quotes, ShareAccess, ShareKind, ShareLink, ShareOffer, Sharing,
 };
 
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
@@ -737,6 +738,13 @@ impl DemoNotifications {
         self.publish(entry);
     }
 
+    /// Logs `title` about the demo's chat room `room`, which the panel offers to open.
+    pub(super) fn notify_room(&self, title: impl Into<String>, room: &str) {
+        let mut entry = Notification::new(Utc::now(), title);
+        entry.target = Some(NotificationTarget::Room(room.to_owned()));
+        self.publish(entry);
+    }
+
     /// Keep supplied headlines quiet on repeated viewport requests.
     pub(super) fn notify_event(&self, symbol: &str, event: &egui_charts::model::TimeScaleEvent) {
         let mut latest = self.2.lock().unwrap_or_else(|e| e.into_inner());
@@ -800,17 +808,20 @@ impl Notifications for DemoNotifications {
     }
 }
 
-/// Two rooms with recent messages, a fixed older backlog and echoes of what the user posts.
+/// Two rooms with recent messages, a fixed older backlog, echoes of what the user posts and the
+/// authors the user ignores; each post is also logged as a notification that opens its room.
 pub(super) struct DemoChats(
-    Mutex<(Vec<ChatMessage>, Option<Events<ChatEvent>>)>,
+    Mutex<(Vec<ChatMessage>, Option<Events<ChatEvent>>, Vec<ChatUser>)>,
     Vec<ChatMessage>,
+    Arc<DemoNotifications>,
 );
 
 impl DemoChats {
-    pub(super) fn new(now: DateTime<Utc>) -> Self {
-        let message = |room, author, minutes, text| {
+    pub(super) fn new(now: DateTime<Utc>, notifications: Arc<DemoNotifications>) -> Self {
+        let message = |room, author: &str, minutes, text| {
             ChatMessage::new(room, author, now - TimeDelta::minutes(minutes), text)
                 .with_id(format!("{room}-seed-{minutes}"))
+                .with_author_id(author.to_lowercase())
         };
         let history = ["General", "Crypto"]
             .into_iter()
@@ -823,6 +834,7 @@ impl DemoChats {
                         format!("{room} history {n}"),
                     )
                     .with_id(format!("{room}-history-{n}"))
+                    .with_author_id("ana")
                 })
             })
             .collect();
@@ -851,9 +863,27 @@ impl DemoChats {
                     ),
                 ],
                 None,
+                Vec::new(),
             )),
             history,
+            notifications,
         )
+    }
+
+    /// Posts the user's `text` to `room`, answering the message `to` when set, and logs the post
+    /// as a notification that opens the room.
+    fn post(&self, room: String, text: String, to: Option<String>, reply: Reply<()>) {
+        let mut state = self.0.lock().unwrap();
+        let mut message = ChatMessage::new(room.clone(), "You", Utc::now(), text)
+            .with_id(format!("live-{}", state.0.len()));
+        message.reply_to = to;
+        if let Some(events) = &state.1 {
+            events.push(ChatEvent::Message(message.clone()));
+        }
+        state.0.push(message);
+        drop(state);
+        self.2.notify_room(format!("Message sent to {room}"), &room);
+        reply.send(Ok(()));
     }
 }
 
@@ -863,23 +893,69 @@ impl Chats for DemoChats {
         for message in &state.0 {
             events.push(ChatEvent::Message(message.clone()));
         }
+        events.push(ChatEvent::Ignored(state.2.clone()));
         state.1 = Some(events);
     }
 
     fn send(&self, room: String, text: String, reply: Reply<()>) {
+        self.post(room, text, None, reply);
+    }
+
+    fn send_reply(&self, room: String, text: String, to: String, reply: Reply<()>) {
+        self.post(room, text, Some(to), reply);
+    }
+
+    fn link(&self, message: &ChatMessage) -> Option<String> {
+        // shortcut: the demo has no chat server, so its links resolve nowhere; a host returns its own URL.
+        message
+            .id
+            .as_ref()
+            .map(|id| format!("demo://chats/{}/{id}", message.room))
+    }
+
+    fn ignore_user(&self, user: String, ignore: bool, reply: Reply<()>) {
         let mut state = self.0.lock().unwrap();
-        let message = ChatMessage::new(room, "You", Utc::now(), text)
-            .with_id(format!("live-{}", state.0.len()));
-        if let Some(events) = &state.1 {
-            events.push(ChatEvent::Message(message.clone()));
+        state.2.retain(|ignored| ignored.id != user);
+        if ignore {
+            let name = state
+                .0
+                .iter()
+                .find(|message| message.author_id.as_ref() == Some(&user))
+                .map_or_else(|| user.clone(), |message| message.author.clone());
+            state.2.push(ChatUser::new(user, name));
         }
-        state.0.push(message);
+        if let Some(events) = &state.1 {
+            events.push(ChatEvent::Ignored(state.2.clone()));
+        }
         reply.send(Ok(()));
+    }
+
+    /// A direct room is named after the other user, so asking again opens the same room.
+    fn create_room(&self, room: NewChatRoom, reply: Reply<String>) {
+        let (NewChatRoomKind::Direct, [member]) = (room.kind, room.members.as_slice()) else {
+            reply.send(Err(FeedError::NotSupported));
+            return;
+        };
+        let state = self.0.lock().unwrap();
+        let name = self
+            .1
+            .iter()
+            .chain(&state.0)
+            .find(|message| message.author_id.as_ref() == Some(member))
+            .map_or_else(|| member.clone(), |message| message.author.clone());
+        if let Some(events) = &state.1 {
+            events.push(ChatEvent::Room(name.clone()));
+        }
+        reply.send(Ok(name));
     }
 
     fn capabilities(&self) -> ChatCapabilities {
         let mut capabilities = ChatCapabilities::default();
         capabilities.history = true;
+        capabilities.direct_messages = true;
+        capabilities.replies = true;
+        capabilities.links = true;
+        capabilities.ignore_users = true;
         capabilities
     }
 
@@ -914,6 +990,52 @@ impl Chats for DemoChats {
             .iter()
             .map(|message| (*message).clone())
             .collect()));
+    }
+}
+
+/// The profiles of the chat authors, whose follow requests the demo grants at once.
+pub(super) struct DemoProfiles(Mutex<(Vec<Profile>, Option<Events<ProfileEvent>>)>);
+
+impl DemoProfiles {
+    pub(super) fn new() -> Self {
+        let profiles = [
+            ("Ana", "Index futures, mostly around the open."),
+            ("Ravi", "Swing trades in large caps."),
+            ("Lee", "Crypto ranges and their breakouts."),
+            ("Mia", "Hourly charts and patient entries."),
+        ]
+        .into_iter()
+        .map(|(name, bio)| {
+            let mut profile = Profile::new(ProfileId(name.to_lowercase()), name);
+            profile.bio = bio.into();
+            profile
+        })
+        .collect();
+        Self(Mutex::new((profiles, None)))
+    }
+}
+
+impl Profiles for DemoProfiles {
+    fn watch(&self, events: Events<ProfileEvent>) {
+        let mut state = self.0.lock().unwrap();
+        for profile in &state.0 {
+            events.push(ProfileEvent::Upsert(profile.clone()));
+        }
+        state.1 = Some(events);
+    }
+
+    fn follow(&self, id: ProfileId, follow: bool, reply: Reply<()>) {
+        let mut state = self.0.lock().unwrap();
+        let (profiles, events) = &mut *state;
+        let Some(profile) = profiles.iter_mut().find(|profile| profile.id == id) else {
+            reply.send(Err(FeedError::InvalidData("Unknown profile".into())));
+            return;
+        };
+        profile.followed = follow;
+        if let Some(events) = events {
+            events.push(ProfileEvent::Upsert(profile.clone()));
+        }
+        reply.send(Ok(()));
     }
 }
 
@@ -1120,31 +1242,61 @@ pub(super) fn seasonality(bars: &[Bar]) -> Seasonality {
     Seasonality::new(years as u32, summaries)
 }
 
-/// Demo watchlist sharing, with placeholder links kept in memory until revoked.
+/// The demo's sharing of watchlists and layouts: a placeholder link per document, and layouts
+/// shared through the switch with a chosen access until it is turned off.
 #[derive(Default)]
-pub(super) struct ListSharing(Mutex<(usize, HashSet<String>)>);
+pub(super) struct DemoSharing(Mutex<(usize, HashMap<(ShareKind, String), ShareAccess>)>);
 
-impl Sharing for ListSharing {
+impl Sharing for DemoSharing {
     fn offers(&self, kind: ShareKind) -> ShareOffer {
-        let mut offer = ShareOffer::new(kind == ShareKind::Watchlist, false);
-        offer.revoke = offer.link;
+        let mut offer = ShareOffer::new(true, false);
+        // Layouts share through the switch; a watchlist is shared by taking its link.
+        offer.switch = kind == ShareKind::Layout;
+        offer.revoke = !offer.switch;
         offer
     }
     fn shared(&self, kind: ShareKind, name: &str) -> bool {
-        kind == ShareKind::Watchlist && self.0.lock().unwrap().1.contains(name)
+        self.0
+            .lock()
+            .unwrap()
+            .1
+            .contains_key(&(kind, name.to_owned()))
     }
-    fn link(&self, _: ShareKind, name: &str, reply: Reply<ShareLink>) {
+    fn access(&self, kind: ShareKind, name: &str) -> ShareAccess {
+        let state = self.0.lock().unwrap();
+        state
+            .1
+            .get(&(kind, name.to_owned()))
+            .copied()
+            .unwrap_or_default()
+    }
+    fn share(&self, kind: ShareKind, name: &str, access: ShareAccess, reply: Reply<()>) {
+        self.0
+            .lock()
+            .unwrap()
+            .1
+            .insert((kind, name.to_owned()), access);
+        reply.send(Ok(()));
+    }
+    fn link(&self, kind: ShareKind, name: &str, reply: Reply<ShareLink>) {
         let mut state = self.0.lock().unwrap();
         state.0 += 1;
-        state.1.insert(name.to_owned());
+        let n = state.0;
+        let key = (kind, name.to_owned());
+        let (path, access) = if kind == ShareKind::Layout {
+            ("layout", state.1.get(&key).copied().unwrap_or_default())
+        } else {
+            // Taking a watchlist's link shares it view only.
+            ("watchlist", *state.1.entry(key).or_default())
+        };
         // There is no demo server; this reserved domain does not resolve.
         reply.send(Ok(ShareLink::new(
-            format!("https://demo.invalid/watchlist/{}", state.0),
-            false,
+            format!("https://demo.invalid/{path}/{n}"),
+            access == ShareAccess::ViewAndCopy,
         )));
     }
-    fn revoke(&self, _: ShareKind, name: &str, reply: Reply<()>) {
-        self.0.lock().unwrap().1.remove(name);
+    fn revoke(&self, kind: ShareKind, name: &str, reply: Reply<()>) {
+        self.0.lock().unwrap().1.remove(&(kind, name.to_owned()));
         reply.send(Ok(()));
     }
 }
@@ -1160,7 +1312,8 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         let now = Utc.with_ymd_and_hms(2026, 11, 21, 12, 0, 0).unwrap();
-        let host = Arc::new(DemoChats::new(now));
+        let notifications = Arc::new(DemoNotifications::default());
+        let host = Arc::new(DemoChats::new(now, notifications.clone()));
         let seeded: Vec<_> = host
             .0
             .lock()
@@ -1228,6 +1381,12 @@ mod tests {
         let (answer, reply) = ReplyReader::new();
         host.send("General".into(), "Hello".into(), reply);
         assert!(answer.take().unwrap().is_ok());
+        let sent = notifications.0.lock().unwrap().0.last().cloned().unwrap();
+        assert_eq!(sent.title, "Message sent to General");
+        assert_eq!(
+            sent.target,
+            Some(NotificationTarget::Room("General".into()))
+        );
         let state = host.0.lock().unwrap();
         let ids: std::collections::HashSet<_> = state
             .0
@@ -1578,7 +1737,7 @@ mod tests {
         app.activate_chart_slot(0);
         app.live.set_paused(true);
         let now = app.live.now();
-        app.handle_layout_action(LayoutAction::CreateNew);
+        app.handle_layout_action(LayoutAction::CreateNew("Second".into()));
         app.switch_symbol("FOREXA");
         app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "STOCKA")]);
         app.watchlist.set_service(app.quotes.clone());

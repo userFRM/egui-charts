@@ -177,7 +177,7 @@ fn alert_display_enabled() -> bool {
 pub struct AlertDelivery {
     /// Show a popup. Enabled by default.
     pub popup: bool,
-    /// Play the sound chosen in the alert settings, if they turn sound on. Enabled by default.
+    /// Play the sound chosen in the alert settings. Enabled by default.
     pub sound: bool,
     /// Ask the host to send an email to the account's address.
     pub email: bool,

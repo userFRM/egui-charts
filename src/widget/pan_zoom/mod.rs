@@ -732,7 +732,8 @@ impl Chart {
     }
 
     /// Zoom programmatically to a screen rectangle from `start` to `end`, filling the
-    /// viewport with the selected time and price ranges. [`Self::zoom_back`] undoes it.
+    /// viewport with the selected time and price ranges. [`Self::zoom_back`] undoes it. A price
+    /// scale locked to the bar spacing stays locked, at the ratio of the zoomed view.
     ///
     /// Returns `false` if either dimension of the selection is 20 points or less, or if a
     /// corner or the width is non-finite.
@@ -818,8 +819,7 @@ impl Chart {
                 let before = scale.clone();
                 let map = scale.map(scale.transform(), plot.top(), plot.bottom());
                 let (a, b) = (map.y_to_scale(min_y), map.y_to_scale(max_y));
-                let pad = (scale.min_span() - (a - b).abs()).max(0.0) / 2.0;
-                scale.set_range(a.min(b) - pad, a.max(b) + pad);
+                Self::zoom_scale_to_box(scale, a, b, spacing, plot.height());
                 self.zoom_scales
                     .last_mut()
                     .expect("entry pushed with the zoom history")
@@ -844,14 +844,27 @@ impl Chart {
                 .map(|(study, _)| study.as_ref()),
         );
         let (a, b) = (transform.to_scale(p), transform.to_scale(q));
-        let scale = self.state.price_scale_mut();
-        // Widened around its middle to the span zooming stops at.
-        let pad = (scale.min_span() - (a - b).abs()).max(0.0) / 2.0;
-        scale.set_range(a.min(b) - pad, a.max(b) + pad);
+        // The height the frames apply a locked ratio at, which `last_price_map` spans.
+        let height = self.last_rendered_price_rect.height();
+        Self::zoom_scale_to_box(self.state.price_scale_mut(), a, b, spacing, height);
         self.pending_scroll_time = None;
         self.history.clear_view_restore();
 
         true // Zoom successfully applied
+    }
+
+    /// Shows the scale values `a` and `b` of a box-zoom selection, widened around their middle to
+    /// the span zooming stops at. A scale locked to the bar spacing takes the ratio of that range
+    /// at the zoomed bar `spacing` and the plot `height`, at which the frames apply it, so the
+    /// selection fills the plot. A ratio that is not positive and finite, from a plot without
+    /// height, leaves the one `set_range` scaled.
+    fn zoom_scale_to_box(scale: &mut PriceScale, a: f64, b: f64, spacing: f32, height: f32) {
+        let pad = (scale.min_span() - (a - b).abs()).max(0.0) / 2.0;
+        scale.set_range(a.min(b) - pad, a.max(b) + pad);
+        if scale.bar_ratio_locked() {
+            let range = scale.range();
+            scale.set_bar_ratio(Some((range.max - range.min) * f64::from(spacing / height)));
+        }
     }
 
     /// Gives the scales that the box zoom [`Self::zoom_back`] undoes set in a study pane their
@@ -3383,11 +3396,12 @@ mod tests {
         assert!(moved < 150.0, "the drag moves the line down, to {moved}");
     }
 
-    /// Zoom back gives a scale locked to the bar spacing, in the price pane or in the study pane
-    /// the zoom began in, the range and ratio it had: the zoom rescaled the ratio with the
-    /// range, and the frames at the zoomed spacing applied it.
+    /// A box zoom on a scale locked to the bar spacing, in the price pane or in the study pane it
+    /// began in, shows the selection across the plot on the next frame, and zoom back gives the
+    /// scale the range and ratio it had. The frames apply the ratio at the zoomed spacing, so the
+    /// zoom takes the ratio of the selection there; restoring the range would rescale it as a zoom.
     #[test]
-    fn zoom_back_restores_a_scale_locked_to_the_bar_spacing() {
+    fn box_zoom_fills_a_locked_scale_and_zoom_back_restores_it() {
         for in_study_pane in [false, true] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], &[200.0]);
@@ -3427,13 +3441,25 @@ mod tests {
                 let scale = chart.pane_price_scale(pane, key);
                 (scale.range(), scale.bar_ratio())
             };
+            let map = |chart: &Chart| {
+                let scale = chart.pane_price_scale(pane, key);
+                scale.map(scale.transform(), plot.top(), plot.bottom())
+            };
             let (range, ratio) = read(&chart);
             let (start, end) = (
                 plot.center() - egui::vec2(100.0, 20.0),
                 plot.center() + egui::vec2(100.0, 20.0),
             );
+            let before = map(&chart);
+            let (high, low) = (before.y_to_price(start.y), before.y_to_price(end.y));
             assert!(chart.zoom_to_box(start, end, price, price.width(), pane, plot));
             frame(&ctx, &mut chart, 0.2, Vec::new());
+            let after = map(&chart);
+            let (y_high, y_low) = (after.price_to_y(high), after.price_to_y(low));
+            assert!(
+                (y_high - plot.top()).abs() < 0.5 && (y_low - plot.bottom()).abs() < 0.5,
+                "study pane {in_study_pane}: {low}..{high} at y {y_low}..{y_high}, plot {plot:?}"
+            );
             assert!(chart.zoom_back());
             frame(&ctx, &mut chart, 0.3, Vec::new());
             let (back, back_ratio) = read(&chart);
@@ -3447,14 +3473,19 @@ mod tests {
         }
     }
 
-    /// The bars and prices inside a zoom box fill the pane on the next frame. The box re-centres
-    /// the time window, so the relative modes rebase on another first visible close than the box
-    /// was drawn on.
+    /// The bars and prices inside a zoom box fill the pane on the next frame, also on a price
+    /// scale locked to the bar spacing. The box re-centres the time window, so the relative modes
+    /// rebase on another first visible close than the box was drawn on, and a locked scale takes
+    /// its ratio in the units of that window.
     #[test]
     fn box_zoom_fills_the_pane_with_the_selected_bars_and_prices() {
         let lows: Vec<f64> = (0..100).map(|i| 100.0 + i as f64).collect();
         let highs: Vec<f64> = lows.iter().map(|low| low + 1.0).collect();
-        for mode in [PriceScaleMode::Normal, PriceScaleMode::Percentage] {
+        for (mode, locked) in [
+            (PriceScaleMode::Normal, false),
+            (PriceScaleMode::Percentage, false),
+            (PriceScaleMode::Percentage, true),
+        ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&lows, &highs);
             chart.apply_series_settings(&SeriesSettings {
@@ -3463,6 +3494,13 @@ mod tests {
             });
             frame(&ctx, &mut chart, 0.0, Vec::new());
             let rect = chart.last_rendered_price_rect;
+            if locked {
+                let spacing = chart.state.time_scale().bar_spacing();
+                chart
+                    .state
+                    .price_scale_mut()
+                    .set_bar_ratio_locked(true, spacing, rect.height());
+            }
             let before = chart.get_chart_mapping().price;
             let (y_hi, y_lo) = (rect.top() + 100.0, rect.top() + 200.0);
             let (hi, lo) = (before.y_to_price(y_hi), before.y_to_price(y_lo));
@@ -3483,14 +3521,14 @@ mod tests {
             assert!(
                 (x_left - rect.left()).abs() < 0.01
                     && (x_right - (rect.right() - 1.0)).abs() < 0.01,
-                "{mode:?}: bars {left}..{right} at x {x_left}..{x_right}, pane {rect:?}"
+                "{mode:?}, locked {locked}: bars {left}..{right} at x {x_left}..{x_right}, pane {rect:?}"
             );
             let after = chart.get_chart_mapping().price;
             let (top, bottom) = after.extent();
             let (y_hi, y_lo) = (after.price_to_y(hi), after.price_to_y(lo));
             assert!(
                 (y_hi - top).abs() < 0.5 && (y_lo - bottom).abs() < 0.5,
-                "{mode:?}: {lo}..{hi} at y {y_lo}..{y_hi}, pane {top}..{bottom}"
+                "{mode:?}, locked {locked}: {lo}..{hi} at y {y_lo}..{y_hi}, pane {top}..{bottom}"
             );
         }
 

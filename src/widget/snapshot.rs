@@ -1,7 +1,10 @@
 //! A chart's state as a serializable snapshot, and named layouts of charts as versioned
 //! documents.
 
-use super::{Chart, ChartLayoutMode, ChartLayoutSizing, ChartLinkGroups, PaneId, SeriesOptions};
+use super::{
+    Chart, ChartLayoutMode, ChartLayoutSizing, ChartLinkGroups, PaneId, SeriesOptions,
+    trade_profile::TradeProfiles,
+};
 use crate::drawings::persistence::{DrawingStorage, SaveError, SkippedDrawing};
 use crate::model::{
     ChartType, ChartTypeParams, Marker, MarkerOptions, PriceLine, SeriesStyle, Timeframe,
@@ -107,8 +110,12 @@ pub struct SavedPane {
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
 /// the host's feed. Take one with [`Chart::snapshot`] and apply it with [`Chart::restore`].
 /// The trading and alert settings of the settings dialog belong to the host and are not part of
-/// it. Its settings hold the futures data choices, which [`Chart::restore`] records on the chart;
-/// the host reloads its history for them.
+/// it. It keeps the data choices that decide what the feed sends: the extended and overnight
+/// hours, the currency or unit [`conversion`](Self::conversion) and, in its settings, the
+/// dividend adjustment and the futures data choices. [`Chart::restore`] applies the hours, the
+/// conversion and the dividend adjustment as their setters do, so a chart with a feed requests
+/// its data with them, and records the futures data choices on the chart; the host reloads its
+/// history for those.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ChartSnapshot {
@@ -125,10 +132,19 @@ pub struct ChartSnapshot {
     /// Whether overnight hours are requested together with extended hours. False in older saves.
     #[serde(default)]
     pub overnight_hours: bool,
+    /// The currency or unit the chart asks the feed for, as [`Chart::set_conversion`] chose it.
+    /// `None` asks for the instrument's own, also in layouts saved before it was recorded, so
+    /// that restoring one of those clears the chart's conversion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversion: Option<String>,
     /// The chart type.
     pub chart_type: ChartType,
     /// The parameters of the price-based chart types and of the baseline.
     pub chart_type_params: ChartTypeParams,
+    /// The session volume profile's merges and splits with the symbol and calendar they were made
+    /// under, which alone they apply to. Written only when there are any; absent in older layouts.
+    #[serde(default, skip_serializing_if = "TradeProfiles::is_empty")]
+    trade_profile_edits: TradeProfiles,
     /// Whether the main series is drawn.
     pub main_series_visible: bool,
     /// Visibility and style of the main series' alert levels; absent in older layouts.
@@ -211,7 +227,8 @@ pub enum RestoreError {
     },
     /// The saved chart settings are invalid.
     Settings(super::settings::ChartSettingsError),
-    /// The saved panes, scales, series or view are out of range; the text says which.
+    /// The saved panes, scales, series, view or session profile edits are invalid; the text
+    /// says which.
     Layout(&'static str),
     /// The saved drawings cannot be read.
     Drawings(crate::drawings::persistence::LoadError),
@@ -313,8 +330,10 @@ impl Chart {
             interval: self.timeframe,
             extended_hours: self.extended_hours,
             overnight_hours: self.overnight_hours,
+            conversion: self.conversion.clone(),
             chart_type: self.chart_type,
             chart_type_params: self.chart_type_params.clone(),
+            trade_profile_edits: self.trade_profiles.clone(),
             main_series_visible: self.main_series_visible,
             main_series_alerts: self.main_series_style.alerts,
             main_series_display_format: saved_style(self.main_series_style.clone()).display_format,
@@ -418,7 +437,16 @@ impl Chart {
     /// [`StudyTemplate::create`]. Clears undo history and returns the drawings that could not
     /// be read. Fails without changing the chart for an unknown study, a study source that
     /// names no study, no plot of it or itself, a series or study id used twice, invalid
-    /// settings or options, a number that is not finite or an unreadable drawings document.
+    /// settings or options, a number that is not finite, session profile merges or splits the
+    /// chart does not make, such as a split given twice, or an unreadable drawings document.
+    ///
+    /// The merges and splits of the session volume profile
+    /// ([`merge_trade_profile`](Self::merge_trade_profile),
+    /// [`split_trade_profile`](Self::split_trade_profile)) replace the chart's own, so a snapshot
+    /// without any, also one saved before snapshots kept them, shows the natural sessions. They
+    /// apply while the chart shows their symbol on the calendar they were made under: the same
+    /// interval, hours, time zones, instrument trading hours and profile session choice. A chart
+    /// with a feed shows them once the feed has described the restored symbol.
     ///
     /// The added series of the chart are replaced by those of the snapshot, which come back
     /// without bars and under new ids: look each up with
@@ -491,8 +519,10 @@ impl Chart {
         self.set_extended_hours(snapshot.extended_hours);
         self.set_overnight_hours(snapshot.overnight_hours);
         self.set_dividend_adjusted(snapshot.settings.adjust_for_dividends);
+        self.set_conversion(snapshot.conversion.clone());
         self.set_chart_type(snapshot.chart_type);
         self.set_chart_type_params(snapshot.chart_type_params.clone());
+        self.trade_profiles = snapshot.trade_profile_edits.clone();
         self.set_main_series_visible(snapshot.main_series_visible);
         self.main_series_style.alerts = snapshot.main_series_alerts;
         self.main_series_style.display_format = snapshot.main_series_display_format;
@@ -1019,6 +1049,11 @@ fn check(
         .any(|size| !font_sizes.contains(&size))
     {
         return Err(RestoreError::Layout("Font sizes must be between 1 and 256"));
+    }
+    if !snapshot.trade_profile_edits.is_valid() {
+        return Err(RestoreError::Layout(
+            "Invalid session profile merges or splits",
+        ));
     }
     let drawings = match &snapshot.drawings {
         Some(drawings) => {
@@ -2660,6 +2695,38 @@ mod tests {
         assert_eq!(choices(&restored), (false, true));
     }
 
+    /// The currency or unit conversion survives layouts; a layout saved without it restores no
+    /// conversion, also on a chart that had one.
+    #[test]
+    fn layouts_keep_the_conversion() {
+        use crate::widget::{ChartLayoutMode, SavedLayout, test_frames::chart};
+        for conversion in ["EUR", "oz"] {
+            let mut source = chart(&[100.0], &[110.0]);
+            source.set_conversion(Some(conversion.into()));
+            let json = SavedLayout::new(ChartLayoutMode::Single, vec![source.snapshot().unwrap()])
+                .to_json()
+                .unwrap();
+            let mut restored = chart(&[100.0], &[110.0]);
+            restored
+                .restore(&SavedLayout::from_json(&json).unwrap().charts[0])
+                .unwrap();
+            assert_eq!(restored.conversion(), Some(conversion));
+
+            // Saved before snapshots kept it.
+            let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+            older
+                .pointer_mut("/charts/0")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove("conversion")
+                .expect("conversion");
+            let older = SavedLayout::from_json(&older.to_string()).unwrap();
+            restored.restore(&older.charts[0]).unwrap();
+            assert_eq!(restored.conversion(), None, "{conversion} saved before");
+        }
+    }
+
     /// An HLC area layout or template saved before the style held each line and fill restores as
     /// it was drawn: fills in the saved candle colours at alpha round(0.5 * 255) = 128, the close
     /// line in the rising colour at width 4, and no line in the current default colours.
@@ -2846,6 +2913,91 @@ mod tests {
         ] {
             document["main_series_alerts"] = serde_json::from_str(saved).unwrap();
             assert_eq!(restored(document.clone()), loaded, "{saved}");
+        }
+    }
+
+    /// A layout keeps the session volume profile's merges and splits with the symbol and calendar
+    /// they were made under, and restoring it replaces the chart's own. On 144 half-hour bars from
+    /// 2 to 4 January 2024 UTC, merging the first two days and splitting the third at 12:00 gives
+    /// three profiles. A new chart shows them once it has their calendar, here the instrument's
+    /// always-open hours; a layout saved before the edits or without the field restores the daily
+    /// profiles; and a split given twice, which would leave no profile, is refused.
+    #[test]
+    fn layouts_keep_the_session_profile_merges_and_splits() {
+        use crate::model::{Instrument, Session};
+        use chrono::{DateTime, TimeDelta};
+        let at = |day, hour| Utc.with_ymd_and_hms(2024, 1, day, hour, 0, 0).unwrap();
+        let bars: Vec<_> = (0..144)
+            .map(|i| {
+                let time = at(2, 0) + TimeDelta::minutes(30 * i);
+                Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0)
+            })
+            .collect();
+        let new_chart = || {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.set_chart_type(ChartType::SessionVolumeProfile);
+            chart.set_timeframe(Timeframe::Min30);
+            chart
+        };
+        let ranges = |chart: &Chart| chart.trade_profile_ranges().unwrap().ranges().to_vec();
+        let save = |chart: &Chart| {
+            SavedLayout::new(ChartLayoutMode::Single, vec![chart.snapshot().unwrap()])
+                .to_json()
+                .unwrap()
+        };
+        let load = |json: &str| SavedLayout::from_json(json).unwrap().charts[0].clone();
+        // The last profile has no bar after it to end at.
+        let end = DateTime::<Utc>::MAX_UTC;
+        let natural = [at(2, 0)..at(3, 0), at(3, 0)..at(4, 0), at(4, 0)..end];
+        let edited = [at(2, 0)..at(4, 0), at(4, 0)..at(4, 12), at(4, 12)..end];
+        // Hours that are always open keep the UTC days but are part of the calendar.
+        for instrument in [
+            None,
+            Some(Instrument::new("X").with_session(Session::new([]))),
+        ] {
+            let mut source = new_chart();
+            source.set_instrument(instrument.clone());
+            assert_eq!(ranges(&source), natural);
+            let before = save(&source);
+            assert!(source.merge_trade_profile(0));
+            assert!(source.split_trade_profile(1, at(4, 12)));
+            assert_eq!(ranges(&source), edited);
+            let after = save(&source);
+
+            let mut restored = new_chart();
+            restored.restore(&load(&after)).unwrap();
+            if instrument.is_some() {
+                // A feed describes the restored symbol later; until then the calendar differs.
+                assert_eq!(ranges(&restored), natural, "before the instrument arrives");
+                restored.set_instrument(instrument.clone());
+            }
+            assert_eq!(ranges(&restored), edited, "{instrument:?}");
+
+            source.restore(&load(&before)).unwrap();
+            assert_eq!(ranges(&source), natural, "saved before the edits");
+            source.restore(&load(&after)).unwrap();
+            assert_eq!(ranges(&source), edited);
+            let mut twice: serde_json::Value = serde_json::from_str(&after).unwrap();
+            *twice
+                .pointer_mut("/charts/0/trade_profile_edits/splits")
+                .unwrap() = serde_json::json!([at(4, 12), at(4, 12)]);
+            assert!(matches!(
+                source.restore(&load(&twice.to_string())),
+                Err(RestoreError::Layout(
+                    "Invalid session profile merges or splits"
+                ))
+            ));
+            assert_eq!(ranges(&source), edited, "a refused layout changes nothing");
+            let mut older: serde_json::Value = serde_json::from_str(&after).unwrap();
+            older
+                .pointer_mut("/charts/0")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove("trade_profile_edits")
+                .expect("saved edits");
+            source.restore(&load(&older.to_string())).unwrap();
+            assert_eq!(ranges(&source), natural, "saved without the field");
         }
     }
 }
