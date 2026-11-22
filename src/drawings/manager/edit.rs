@@ -166,7 +166,7 @@ impl DrawingManager {
     pub(crate) fn reassign_owner(&mut self, from: usize, to: Option<usize>) {
         let mut before = Vec::new();
         for (index, drawing) in self.drawings.iter_mut().enumerate() {
-            if drawing.pane == Some(from) {
+            if drawing.pane == Some(from) && !self.shared_filter.hides(drawing) {
                 before.push((index, drawing.clone()));
                 drawing.pane = to;
             }

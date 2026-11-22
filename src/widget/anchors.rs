@@ -133,6 +133,7 @@ impl Chart {
     /// [`DrawingStorage::saved_by`].
     pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
         self.store_drawings(
+            self.symbol(),
             self.drawings
                 .drawings
                 .iter()
@@ -142,9 +143,10 @@ impl Chart {
 
     pub(super) fn store_drawings<'a>(
         &self,
+        symbol: &str,
         drawings: impl IntoIterator<Item = &'a Drawing>,
     ) -> Result<DrawingStorage, SaveError> {
-        let mut storage = DrawingStorage::new(self.symbol());
+        let mut storage = DrawingStorage::new(symbol);
         storage.timeframe = self
             .timeframe()
             .map(|timeframe| timeframe.as_str().into_owned());
@@ -171,10 +173,7 @@ impl Chart {
                     price,
                 )
             });
-            // A drawing without an owner is stored for the price pane, wherever that pane is.
-            stored.pane = self
-                .owner_pane(drawing)
-                .and_then(|pane| self.stored_pane(pane));
+            stored.pane = self.pane_to_store(symbol, drawing, &stored.id);
             storage.add_drawing(stored);
         }
         // Validate all settings too, before a host replaces its last good save.

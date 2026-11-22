@@ -29,6 +29,7 @@ impl Chart {
             return Ok(None);
         }
         let storage = self.store_drawings(
+            self.symbol(),
             self.drawings
                 .drawings
                 .iter()

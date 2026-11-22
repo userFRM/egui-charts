@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
-- `DrawingManager::set_shared_drawings_hidden` hides symbol-wide drawings on one chart without hiding its local annotations or changing what peers see. ([#4082](https://github.com/userFRM/egui-charts/issues/4082))
+- `DrawingManager::set_shared_drawings_hidden` hides symbol-wide drawings on one chart without hiding its local annotations or changing what peers see. Editing or removing a study on the filtered chart leaves the peer’s drawing in its original pane, with or without drawing storage. ([#4082](https://github.com/userFRM/egui-charts/issues/4082))
 
 - A host can set `DrawingManagerOptions::local_placement_folder` on a chart to keep new drawings local from placement through undo and redo. Moving a drawing to a shared folder follows the usual sharing rules. Other charts keep their existing defaults. ([#4046](https://github.com/userFRM/egui-charts/issues/4046))
 

@@ -246,6 +246,17 @@ impl Chart {
                         })
                         .map(|id| Some(id.0)),
                 )
+                .chain(
+                    drawing_manager
+                        .removed_owners
+                        .iter()
+                        .copied()
+                        .filter_map(|id| {
+                            (self.series_pane(super::SeriesId(id)).is_none()
+                                && self.pane_index(super::PaneId(id)).is_none())
+                            .then_some(Some(id))
+                        }),
+                )
                 .collect()
         };
         drawing_manager.set_pane(owner, members.clone(), price_rect);

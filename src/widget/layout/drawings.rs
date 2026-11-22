@@ -4942,15 +4942,15 @@ mod tests {
                 );
                 assert_eq!(other, [55.]);
                 let line = |d: &&Drawing| d.chart_points[0].price == 55.0;
+                let local_line = charts[0].drawings().drawings.iter().find(line).unwrap();
+                assert_eq!(local_line.pane, Some(mine.0));
                 assert_eq!(
-                    charts[0]
-                        .drawings()
-                        .drawings
-                        .iter()
-                        .find(line)
-                        .unwrap()
-                        .pane,
-                    restored.then_some(mine.0)
+                    charts[0].drawing_pane(local_line.id),
+                    Some(if restored {
+                        pane
+                    } else {
+                        charts[0].main_series_pane()
+                    })
                 );
                 assert_eq!(charts[1].drawings().drawings[0].pane, Some(peer.0));
                 let written = shared_records(&host);
@@ -4962,6 +4962,142 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn shared_drawing_filter_keeps_the_last_stored_pane_after_study_edits() {
+        use crate::studies::{InputValue, RSI, SMA};
+        use crate::widget::VisualOrder;
+
+        for edit in [
+            "length",
+            "move in",
+            "move out",
+            "order",
+            "swap",
+            "remove above",
+        ] {
+            let (host, mut charts, mut layouts) = shared_layouts();
+            let studies = charts.each_mut().map(|c| {
+                let above = c.add_indicator(Box::new(RSI::new(14)));
+                let owner = c.add_indicator(Box::new(RSI::new(14)));
+                let other = c.add_indicator(Box::new(SMA::new(5)));
+                if matches!(edit, "move out" | "order") {
+                    assert!(c.move_indicator_to_pane(other, owner));
+                }
+                (above, owner, other)
+            });
+            settle_pair(&mut layouts, &mut charts);
+            // Exercise both a pane read from the peer and one first written here.
+            let source = usize::from(edit != "swap");
+            charts[source].user_action(|c| {
+                let id = draw(c, 55.0);
+                assert!(c.move_drawing_to_pane(id, c.series_pane(studies[source].1).unwrap()));
+            });
+            settle_pair(&mut layouts, &mut charts);
+            let before = shared_records(&host);
+            let revision = host.revision("SAMPLE").unwrap();
+            let (above, owner, other) = studies[0];
+            let pane = charts[0].series_pane(owner).unwrap();
+            charts[0].drawings_mut().set_shared_drawings_hidden(true);
+            charts[0].user_action(|c| {
+                match edit {
+                    "length" => c
+                        .indicator_mut(owner)
+                        .unwrap()
+                        .set_input("period", InputValue::Length(21))
+                        .unwrap(),
+                    "move in" => assert!(c.move_indicator_to_pane(other, owner)),
+                    "move out" => assert!(c.move_indicator_to_pane(other, other)),
+                    "order" => assert!(c.reorder_indicator(other, VisualOrder::SendToBack)),
+                    "swap" => assert!(c.swap_panes(c.series_pane(above).unwrap(), pane)),
+                    "remove above" => assert!(c.remove_series(above)),
+                    _ => unreachable!(),
+                }
+                assert_ne!(
+                    serde_json::to_value(c.stored_pane(pane)).unwrap(),
+                    before[0]["pane"],
+                    "{edit}"
+                );
+                let mut note = line("local");
+                note.folder = vec!["Notes".into()];
+                note.folder_sync = vec![Some(FolderSync::Chart)];
+                c.drawings_mut().add_drawing(note).unwrap();
+            });
+            settle_pair(&mut layouts, &mut charts);
+            assert!(
+                host.revision("SAMPLE").unwrap() > revision,
+                "{edit}: filtered chart wrote"
+            );
+            let written = shared_records(&host);
+            assert_eq!(written.as_array().unwrap().len(), 1);
+            for key in ["pane", "points", "id"] {
+                assert_eq!(written[0][key], before[0][key], "{edit}: {key}");
+            }
+            assert_eq!(prices(&charts)[1], [55.]);
+            let peer_line = &charts[1].drawings().drawings[0];
+            assert_eq!(
+                charts[1].drawing_pane(peer_line.id),
+                charts[1].series_pane(studies[1].1),
+                "{edit}"
+            );
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn shared_drawing_filter_keeps_study_removal_local_without_storage() {
+        use crate::studies::RSI;
+        let mut charts = [bars(60), bars(60)];
+        let owners = charts.each_mut().map(|c| {
+            c.set_symbol("SAMPLE");
+            c.add_indicator(Box::new(RSI::new(14)))
+        });
+        let mut layout = ChartLayout {
+            mode: super::super::ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        layout.sync.sync_drawings = true;
+        let mut drawing = line("shared");
+        drawing.folder = vec!["Plan".into()];
+        drawing.folder_sync = vec![Some(FolderSync::AllLayouts)];
+        drawing.pane = Some(owners[1].0);
+        charts[1].user_action(|c| c.drawings_mut().add_drawing(drawing).unwrap());
+        frames(&mut layout, &mut charts);
+        let ids = charts.each_ref().map(|c| c.drawings().drawings[0].id);
+        let panes = std::array::from_fn::<_, 2, _>(|i| charts[i].series_pane(owners[i]).unwrap());
+        charts[0].drawings_mut().set_shared_drawings_hidden(true);
+        for step in 0..3 {
+            match step {
+                0 => assert!(charts[0].user_action(|c| c.remove_series(owners[0]))),
+                1 => assert!(charts[0].undo()),
+                _ => assert!(charts[0].redo()),
+            }
+            frames(&mut layout, &mut charts);
+            let local = if step == 1 {
+                panes[0]
+            } else {
+                charts[0].main_series_pane()
+            };
+            assert_eq!(charts[0].drawing_pane(ids[0]), Some(local));
+            assert_eq!(charts[1].drawing_pane(ids[1]), Some(panes[1]));
+            assert!(
+                charts[1]
+                    .drawings()
+                    .painted_range(ids[1])
+                    .is_some_and(|r| !r.is_empty())
+            );
+        }
+        charts[0].drawings_mut().set_shared_drawings_hidden(false);
+        frames(&mut layout, &mut charts);
+        assert!(
+            charts[0]
+                .drawings()
+                .painted_range(ids[0])
+                .is_some_and(|r| !r.is_empty())
+        );
+        assert_eq!(charts[1].drawing_pane(ids[1]), Some(panes[1]));
     }
 
     #[cfg(feature = "studies")]

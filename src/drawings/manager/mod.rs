@@ -328,6 +328,9 @@ pub struct DrawingManager {
     pane_rect: Rect,
     pane: Option<usize>,
     pane_members: Vec<Option<usize>>,
+    /// Removed owners of filtered drawings. Their drawings use the price pane locally until
+    /// the owner returns; the layout mirror must never see a change of the drawing's owner.
+    pub(crate) removed_owners: Vec<usize>,
     pub(crate) pane_clips: std::collections::HashMap<Option<usize>, Rect>,
     /// Editor-only settings must not grow every idle chart's inline state.
     pub(crate) text_editor: Option<Box<TextEditState>>,
@@ -464,6 +467,7 @@ impl DrawingManager {
             pane_rect: Rect::NOTHING,
             pane: None,
             pane_members: vec![None],
+            removed_owners: Vec::new(),
             pane_clips: std::collections::HashMap::new(),
             text_editor: None,
             finished_text_placement: None,
