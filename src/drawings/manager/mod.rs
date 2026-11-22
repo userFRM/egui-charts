@@ -135,6 +135,12 @@ pub struct DrawingManagerOptions {
     /// Line colour every new drawing takes instead of its tool's own, as RGBA bytes. `None`
     /// (the default) keeps each tool's colour; a default saved for a tool wins over both.
     pub default_color: Option<[u8; 4]>,
+    /// Put newly placed drawings in a top-level [chart-only folder](super::FolderSync::Chart)
+    /// of this name. `None` (the default) leaves them at the root. If the name is already
+    /// used by a non-local folder, use a numbered folder instead of changing its scope.
+    /// Move a drawing out of the folder to share it under the usual rules. Existing
+    /// drawings, including those read from storage, are unaffected.
+    pub local_placement_folder: Option<String>,
     /// Place and move anchors on whole bars (the default). `false` keeps the fractional bar
     /// under the pointer, as freeform tools do; a magnet target keeps its own bar either way.
     pub snap_to_time: bool,
@@ -155,6 +161,7 @@ impl Default for DrawingManagerOptions {
     fn default() -> Self {
         Self {
             default_color: None,
+            local_placement_folder: None,
             snap_to_time: true,
             magnet_mode: false,
             magnet_distance: DESIGN_TOKENS.sizing.drawing.magnet_distance,
@@ -991,10 +998,31 @@ impl DrawingManager {
     }
 
     fn base_drawing(&self, id: usize, tool: DrawingToolType) -> Drawing {
-        match self.options.default_color {
+        let mut drawing = match self.options.default_color {
             Some(color) => Drawing::with_color(id, tool, color),
             None => Drawing::new(id, tool),
+        };
+        if let Some(name) = &self.options.local_placement_folder {
+            use super::FolderSync;
+            let shared_names = || {
+                self.drawings
+                    .iter()
+                    .filter(|d| d.folder_sync_mode() != Some(FolderSync::Chart))
+                    .filter_map(|d| d.folder.first().map(String::as_str))
+            };
+            let folder = if shared_names().any(|taken| taken == name) {
+                let taken: HashSet<_> = shared_names().collect();
+                (2_usize..)
+                    .map(|n| format!("{name} ({n})"))
+                    .find(|candidate| !taken.contains(candidate.as_str()))
+                    .expect("more folder names than drawings")
+            } else {
+                name.clone()
+            };
+            drawing.folder.push(folder);
+            drawing.folder_sync.push(Some(FolderSync::Chart));
         }
+        drawing
     }
 
     /// Saves a visible default under its registered tool id or built-in tool type.
