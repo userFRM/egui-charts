@@ -290,6 +290,7 @@ impl<P: Program> RunState<P> {
     }
 
     /// The fraction of the current run's bars done, readable from any thread.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn progress(&self) -> Arc<AtomicU32> {
         self.progress.clone()
     }
