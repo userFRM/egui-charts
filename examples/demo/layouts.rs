@@ -1684,4 +1684,110 @@ mod tests {
         settle(&mut app, &ctx);
         assert_eq!(counts(&app), [1, 1, 1, 1]);
     }
+
+    /// Lines drawn on the charts a replay covers stay on them, off another layout of the same
+    /// symbol and out of the stored drawings, until the user shares their folder. Once the
+    /// replay has ended, a new line is shared again.
+    #[test]
+    fn lines_drawn_during_replay_stay_on_their_chart_until_shared() {
+        use egui_charts::drawings::persistence::DrawingStorage;
+        use egui_charts::drawings::{DrawingToolType, FolderSync};
+
+        fn place(chart: &mut Chart, price: f32) {
+            chart.user_action(|chart| {
+                chart.drawings_mut().start_drawing_with_coords(
+                    DrawingToolType::HorizontalLine,
+                    egui::pos2(1.0, price),
+                    |x| x,
+                    f64::from,
+                );
+            });
+        }
+        fn prices(chart: &Chart) -> Vec<f64> {
+            let drawings = chart.drawings().drawings.iter();
+            drawings
+                .filter_map(|d| d.chart_points.first().map(|p| p.price))
+                .collect()
+        }
+        /// The prices of the drawings the demo keeps in storage for `symbol`.
+        fn stored(app: &mut DemoApp, symbol: &str) -> Vec<f64> {
+            assert!(app.chart.flush_stored_drawings());
+            for extra in &mut app.extra_charts {
+                assert!(extra.chart.flush_stored_drawings());
+            }
+            let mut saved = super::super::tests::AppStorage::default();
+            app.storage.persist(&mut saved);
+            // The key `DemoStorage::persist` writes its documents under.
+            let documents: std::collections::HashMap<String, String> =
+                eframe::get_value(&saved, "templates").unwrap();
+            documents
+                .get(&format!("Drawings/{symbol}"))
+                .map_or_else(Vec::new, |json| {
+                    let (stored, skipped) = DrawingStorage::from_json(json).unwrap();
+                    assert!(skipped.is_empty(), "{skipped:?}");
+                    stored
+                        .drawings()
+                        .iter()
+                        .filter_map(|d| d.points.first().map(|p| p.price))
+                        .collect()
+                })
+        }
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        app.ensure_chart_slots(ChartLayoutMode::TwoHorizontal);
+        // Another layout of the same symbol, set aside while this one replays.
+        app.new_layout(None, false);
+        app.select_layout(0);
+        settle(&mut app, &ctx);
+        let symbol = app.chart.symbol().to_owned();
+        assert_eq!(app.extra_charts[0].chart.symbol(), symbol);
+        app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() / 2);
+        assert_eq!(app.replay_slots, [0, 1], "the replay covers both charts");
+        place(&mut app.chart, 123.375);
+        settle(&mut app, &ctx);
+        place(&mut app.extra_charts[0].chart, 117.625);
+        settle(&mut app, &ctx);
+        assert!(prices(&app.chart).contains(&123.375));
+        assert!(prices(&app.extra_charts[0].chart).contains(&117.625));
+        let kept = stored(&mut app, &symbol);
+        assert!(
+            !kept.contains(&123.375) && !kept.contains(&117.625),
+            "stored: {kept:?}"
+        );
+        // Showing the other layout ends the replay; the practice lines stay off it.
+        app.select_layout(1);
+        settle(&mut app, &ctx);
+        assert!(app.replay.is_none());
+        let other = prices(&app.chart);
+        assert!(
+            !other.contains(&123.375) && !other.contains(&117.625),
+            "other layout: {other:?}"
+        );
+
+        app.select_layout(0);
+        settle(&mut app, &ctx);
+        assert!(prices(&app.chart).contains(&123.375), "kept on its chart");
+        app.handle_object_tree(
+            ObjectTreeAction::SetFolderSync(vec!["Practice".into()], Some(FolderSync::AllLayouts)),
+            &[],
+        );
+        // Placed after the share, so that it would stay local if the replay had left the
+        // chart's placement folder set.
+        place(&mut app.chart, 131.125);
+        settle(&mut app, &ctx);
+        let kept = stored(&mut app, &symbol);
+        assert!(
+            kept.contains(&123.375) && kept.contains(&131.125) && !kept.contains(&117.625),
+            "stored: {kept:?}"
+        );
+        app.select_layout(1);
+        settle(&mut app, &ctx);
+        let other = prices(&app.chart);
+        assert!(
+            other.contains(&123.375) && other.contains(&131.125) && !other.contains(&117.625),
+            "other layout: {other:?}"
+        );
+    }
 }
