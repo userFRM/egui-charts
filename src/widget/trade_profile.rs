@@ -9,13 +9,41 @@ use chrono::{DateTime, Utc};
 use std::borrow::Cow;
 use std::ops::{Range, RangeInclusive};
 
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct TradeProfiles {
-    /// The symbol and calendar the edits were made under, with the choice that divides its
-    /// sessions further: the extended hours and the segment choices share a calendar.
-    context: Option<(String, BarClock, ProfileSession)>,
+    /// The symbol and calendar the edits were made under, `None` before the first edit.
+    context: Option<EditContext>,
     spans: Vec<RangeInclusive<DateTime<Utc>>>,
     splits: Vec<DateTime<Utc>>,
+}
+
+/// The symbol and calendar edits were made under, with the choice that divides its sessions
+/// further: the extended hours and the segment choices share a calendar.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct EditContext {
+    symbol: String,
+    clock: BarClock,
+    division: ProfileSession,
+}
+
+impl TradeProfiles {
+    /// Whether there are no merges and no splits.
+    #[cfg(feature = "ui")]
+    pub(super) fn is_empty(&self) -> bool {
+        self.spans.is_empty() && self.splits.is_empty()
+    }
+
+    /// Whether these are edits the chart makes: splits in time order, each once, and merged
+    /// spans that end no earlier than they start and neither overlap nor touch. A split given
+    /// twice or out of order leaves no profile to draw, and so no menu to reset it from.
+    #[cfg(feature = "ui")]
+    pub(super) fn is_valid(&self) -> bool {
+        let mut spans: Vec<_> = self.spans.iter().collect();
+        spans.sort_unstable_by_key(|span| *span.start());
+        self.splits.windows(2).all(|pair| pair[0] < pair[1])
+            && spans.iter().all(|span| span.start() <= span.end())
+            && spans.windows(2).all(|pair| pair[0].end() < pair[1].start())
+    }
 }
 
 impl Chart {
@@ -49,7 +77,12 @@ impl Chart {
         };
         let bars = self.bars(SeriesId::MAIN);
         let end = bars.partition_point(|bar| bar.time < pair[1].end);
-        let Some(last) = end.checked_sub(1).and_then(|i| bars.get(i)) else {
+        // Restored splits can leave both profiles without a bar.
+        let Some(last) = end
+            .checked_sub(1)
+            .and_then(|i| bars.get(i))
+            .filter(|bar| bar.time >= pair[0].start)
+        else {
             return false;
         };
         // End at a held bar, so future sessions cannot join this composite accidentally.
@@ -83,7 +116,15 @@ impl Chart {
             return false;
         }
         let end = bars.partition_point(|bar| bar.time < range.end);
-        let span = range.start..=bars[end - 1].time;
+        // A restored split can leave the profile without a bar.
+        let Some(last) = end
+            .checked_sub(1)
+            .and_then(|i| bars.get(i))
+            .filter(|bar| bar.time >= range.start)
+        else {
+            return false;
+        };
+        let span = range.start..=last.time;
         self.prepare_profile_edits();
         // A split needs its original session start even after the first candles are evicted.
         self.retain_profile_span(span);
@@ -102,8 +143,7 @@ impl Chart {
     /// Whether the current symbol and calendar have execution profile merges or splits.
     #[cfg(feature = "ui")]
     pub(crate) fn has_trade_profile_edits(&self) -> bool {
-        self.profile_edits_current()
-            && !(self.trade_profiles.spans.is_empty() && self.trade_profiles.splits.is_empty())
+        self.profile_edits_current() && !self.trade_profiles.is_empty()
     }
 
     /// The calendar that divides the chart into profile sessions, as the settings choose it.
@@ -126,19 +166,20 @@ impl Chart {
 
     fn profile_edits_current(&self) -> bool {
         let (clock, selection) = self.profile_division();
-        self.trade_profiles
-            .context
-            .as_ref()
-            .is_some_and(|(symbol, edited, division)| {
-                symbol == self.symbol() && *edited == clock && division == &*selection
-            })
+        self.trade_profiles.context.as_ref().is_some_and(|edited| {
+            edited.symbol == self.symbol() && edited.clock == clock && edited.division == *selection
+        })
     }
 
     fn prepare_profile_edits(&mut self) {
         if !self.profile_edits_current() {
             self.reset_trade_profile_ranges();
             let (clock, selection) = self.profile_division();
-            let context = (self.symbol().to_owned(), clock, selection.into_owned());
+            let context = EditContext {
+                symbol: self.symbol().to_owned(),
+                clock,
+                division: selection.into_owned(),
+            };
             self.trade_profiles.context = Some(context);
         }
     }

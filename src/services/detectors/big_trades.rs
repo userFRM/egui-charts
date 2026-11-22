@@ -228,7 +228,7 @@ struct Bar {
 
 impl BigTrades {
     /// The detector of a symbol of tick size `tick`, labelling sizes with `volume_decimals`
-    /// decimals, or 2 like the chart's volume readouts.
+    /// decimals, or 2 without them.
     pub(super) fn new(tick: f64, volume_decimals: Option<u8>) -> Self {
         Self {
             tick,
