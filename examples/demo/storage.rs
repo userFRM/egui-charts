@@ -102,7 +102,8 @@ impl super::DemoApp {
                         } else {
                             super::SessionType::RTH
                         };
-                        live.set_view(session, chart.dividend_adjusted());
+                        // restore_layout_groups took the adjustment from the restored conversion.
+                        live.set_view(session, live.view(chart.extended_hours()).1);
                         chart.reload_feed();
                         chart.set_data(
                             egui_charts::widget::SeriesId::MAIN,
@@ -129,10 +130,9 @@ impl super::DemoApp {
                         .chart
                         .bars(egui_charts::widget::SeriesId::MAIN)
                         .to_vec();
-                    self.timeframe_toolbar
-                        .set_session(self.live.view(self.chart.extended_hours()).0);
-                    self.timeframe_toolbar.state.adjust_for_dividends =
-                        self.chart.dividend_adjusted();
+                    let (session, adjusted) = self.live.view(self.chart.extended_hours());
+                    self.timeframe_toolbar.set_session(session);
+                    self.timeframe_toolbar.state.adjust_for_dividends = adjusted;
                     let zone = self
                         .chart
                         .chart_options()
@@ -639,9 +639,9 @@ mod tests {
         use egui_charts::ui::timeframe_toolbar::SessionType;
         use egui_charts::ui::top_toolbar::{CompareAction, TopToolbarAction};
         use egui_charts::widget::ChartLayoutMode;
-        for (mode, session) in [
-            (ChartLayoutMode::Single, SessionType::Full24x7),
-            (ChartLayoutMode::TwoHorizontal, SessionType::RTH),
+        for (mode, session, adjusted) in [
+            (ChartLayoutMode::Single, SessionType::Full24x7, true),
+            (ChartLayoutMode::TwoHorizontal, SessionType::RTH, false),
         ] {
             let ctx = egui::Context::default();
             let mut storage = AppStorage::default();
@@ -673,6 +673,7 @@ mod tests {
             let mut settings =
                 egui_charts::widget::settings::ChartSettingsState::from_chart(&app.chart);
             settings.timezone = "+05:45".into();
+            settings.adjust_for_dividends = adjusted;
             app.apply_chart_settings(settings);
             app.layout.set_sync_group(0, Some("Recovered".into()));
             app.layout.set_detached(mode.chart_count() - 1, true);
@@ -702,6 +703,15 @@ mod tests {
             assert!(app.layout_groups() == saved_groups);
             assert_eq!(app.chart.chart_type(), ChartType::Line);
             assert_eq!(app.timeframe_toolbar.state.session_type, session);
+            // The demo asks for adjusted prices through the conversion it saved with the chart.
+            assert_eq!(
+                (
+                    app.chart.conversion(),
+                    app.timeframe_toolbar.state.adjust_for_dividends,
+                    app.live.view(app.chart.extended_hours()).1,
+                ),
+                (adjusted.then_some("adjusted"), adjusted, adjusted)
+            );
             assert_eq!(app.timeframe_toolbar.state.timezone, "+05:45");
             assert_eq!(
                 app.chart.state().price_scale().options().mode,

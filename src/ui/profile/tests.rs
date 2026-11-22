@@ -112,3 +112,49 @@ fn follow_controls_wait_for_the_host_and_forget_the_previous_account() {
         assert!(h.query_by_label("Old account").is_none());
     }
 }
+
+/// Message shows only where the host offers it, reports the request, and stays available while a
+/// follow request is pending.
+#[test]
+fn message_is_offered_on_request_and_reported_beside_a_pending_follow() {
+    let host = Arc::new(Host::default());
+    let id = ProfileId("ada".into());
+    let mut directory = ProfileDirectory::new();
+    directory.set_service(host.clone());
+    host.events
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .push(ProfileEvent::Upsert(Profile::new(id.clone(), "Ada")));
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(320.0, 400.0))
+        .build_ui_state(
+            |ui, (directory, messaging, asked): &mut (ProfileDirectory, bool, ProfileAction)| {
+                directory.poll(ui.ctx());
+                let action = ProfileCard::new(&id)
+                    .messaging(*messaging)
+                    .show(ui, directory);
+                if action != ProfileAction::None {
+                    *asked = action;
+                }
+            },
+            (directory, false, ProfileAction::None),
+        );
+    h.run_steps(3);
+    h.get_by_label("Ada");
+    assert!(h.query_by_label("Message").is_none());
+    h.state_mut().1 = true;
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "Follow").click();
+    h.run_steps(3);
+    assert!(
+        h.get_by_role_and_label(Role::Button, "Following…")
+            .accesskit_node()
+            .is_disabled()
+    );
+    h.get_by_role_and_label(Role::Button, "Message").click();
+    h.run_steps(3);
+    assert_eq!(h.state().2, ProfileAction::Message);
+    assert_eq!(host.requests.lock().unwrap().len(), 1);
+}
