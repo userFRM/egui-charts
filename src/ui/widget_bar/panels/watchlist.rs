@@ -22,7 +22,6 @@ use crate::data::{CalendarEvent, NewsStory};
 use crate::icons::icons;
 use crate::model::{Instrument, Quote, SymbolType};
 use crate::painting::symbol_mark::paint_symbol_mark;
-use crate::scales::StudyFormat;
 use crate::services::{Listener, Quotes, ShareKind, Sharing};
 use crate::theme::{Theme, ThemeExt};
 use crate::ui::share_controls::ShareControls;
@@ -153,13 +152,16 @@ const GROUPINGS: [(WatchlistGrouping, &str); 6] = [
     (WatchlistGrouping::Currency, "Currency"),
 ];
 
-/// The details of a symbol the wide view groups by, from its instrument.
+/// The details the panel takes from a symbol's instrument: those the wide view groups by and
+/// the decimals of its volumes.
 #[derive(Clone, Debug, Default)]
 struct InstrumentGroups {
     exchange: Option<String>,
     kind: Option<SymbolType>,
     sector: Option<String>,
     currency: Option<String>,
+    /// Decimals of the Vol column, as `Instrument::volume_decimals`.
+    volume_decimals: Option<u8>,
 }
 
 /// A numeric column the host added to the wide view.
@@ -517,8 +519,13 @@ impl WatchlistPanel {
             .insert(symbol.to_owned(), description.into());
     }
 
-    /// Groups `instrument.symbol` in the wide view by its exchange, type, sector or currency.
-    /// A symbol without the detail grouped by, or without an instrument, is listed under Other.
+    /// Takes the details of `instrument.symbol` the panel shows. The wide view groups the symbol
+    /// by its exchange, type, sector or currency; a symbol without the detail grouped by, or
+    /// without an instrument, is listed under Other. The Vol column writes its volumes with the
+    /// instrument's `volume_decimals`, as the chart's volume readouts do: values below 1,000 take
+    /// them, and K, M and B values take two decimals, or the volume decimals when they are more.
+    /// Without them, values below 1,000 have no decimals. A summary row takes the most volume
+    /// decimals among its symbols. Passing the symbol's instrument again replaces these details.
     pub fn set_instrument(&mut self, instrument: &Instrument) {
         self.groups.insert(
             instrument.symbol.clone(),
@@ -527,6 +534,7 @@ impl WatchlistPanel {
                 kind: instrument.symbol_type,
                 sector: instrument.sector.clone(),
                 currency: instrument.currency.clone(),
+                volume_decimals: instrument.volume_decimals,
             },
         );
     }
@@ -1566,6 +1574,11 @@ impl WatchlistPanel {
                         .find(|c| c.name == *name)
                         .map(|c| c.decimals)
                         .unwrap_or(2),
+                    TableColumn::Quote(WatchlistColumn::Volume) => symbols
+                        .iter()
+                        .filter_map(|s| groups.get(*s)?.volume_decimals)
+                        .max()
+                        .unwrap_or(0),
                     TableColumn::Quote(_) => symbols
                         .iter()
                         .filter_map(|s| {
@@ -1780,14 +1793,21 @@ impl WatchlistPanel {
                             }
                             for (at, column) in all_columns.iter().enumerate().skip(1) {
                                 let precision = match column {
-                                    TableColumn::Quote(_) => {
+                                    TableColumn::Quote(quote_column) => {
                                         let Some(quote) = quotes.get(symbol.as_str()) else {
                                             continue;
                                         };
-                                        decimals
-                                            .get(symbol.as_str())
-                                            .copied()
-                                            .unwrap_or_else(|| price_decimals(quote.last))
+                                        if *quote_column == WatchlistColumn::Volume {
+                                            groups
+                                                .get(symbol.as_str())
+                                                .and_then(|details| details.volume_decimals)
+                                                .unwrap_or(0)
+                                        } else {
+                                            decimals
+                                                .get(symbol.as_str())
+                                                .copied()
+                                                .unwrap_or_else(|| price_decimals(quote.last))
+                                        }
                                     }
                                     TableColumn::Host(name) => host_columns
                                         .iter()
@@ -2329,7 +2349,8 @@ fn set_column_width(list: &mut Watchlist, column: &TableColumn, width: Option<f3
     }
 }
 
-/// The text and colour shared by numeric cells and their summaries.
+/// The text and colour shared by numeric cells and their summaries, with the column's
+/// `decimals`: volume decimals in the Vol column, price decimals in other quote columns.
 fn cell_text(
     column: &TableColumn,
     value: Option<f64>,
@@ -2340,7 +2361,9 @@ fn cell_text(
         return ("-".into(), theme.ui.text);
     };
     let text = match column {
-        TableColumn::Quote(WatchlistColumn::Volume) => StudyFormat::Volume.format(value, None),
+        TableColumn::Quote(WatchlistColumn::Volume) => {
+            crate::chart::rendering::axes::volume_text(value, Some(decimals), None)
+        }
         TableColumn::Quote(
             WatchlistColumn::ChangePercent | WatchlistColumn::ExtendedChangePercent,
         ) => format!("{}%", grouped(value, 2, true)),
@@ -4440,6 +4463,81 @@ mod tests {
         for label in ["Energy", "Tech", "Other"] {
             h.get_by_role_and_label(Role::Button, &format!("T:{label}"));
             assert!(painted.contains(&format!("T:{}", label.to_uppercase())));
+        }
+    }
+
+    /// The Vol column and its summaries write volumes with the instrument's volume decimals, and
+    /// keep the plain volume text without them, also after the instrument drops them.
+    #[test]
+    fn volumes_follow_the_instrument_volume_decimals() {
+        use egui_kittest::Harness;
+        // Rows: AAA 0.375, BBB 1,234.5678, CCC 5. Summaries over the three: average
+        // 1,239.9428 / 3 = 413.3142..., median 5, minimum 0.375, maximum 1,234.5678.
+        for (decimals, cells, summary) in [
+            (
+                Some(3),
+                ["0.375", "1.235K", "5.000"],
+                ["413.314", "5.000", "0.375", "1.235K"],
+            ),
+            (
+                Some(1),
+                ["0.4", "1.23K", "5.0"],
+                ["413.3", "5.0", "0.4", "1.23K"],
+            ),
+            (None, ["0", "1.23K", "5"], ["413", "5", "0", "1.23K"]),
+        ] {
+            let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "AAA,BBB,CCC")]);
+            for (symbol, volume) in [("AAA", 0.375), ("BBB", 1234.5678), ("CCC", 5.0)] {
+                let quote = Quote::new(10.0, 9.0, Default::default()).with_volume(volume);
+                panel.set_quote(symbol, quote);
+                // A later instrument replaces the earlier one's decimals.
+                panel.set_instrument(&Instrument::new(symbol).with_volume_decimals(3));
+                let mut instrument = Instrument::new(symbol);
+                instrument.volume_decimals = decimals;
+                panel.set_instrument(&instrument);
+            }
+            panel.set_summary(true);
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(vec2(1000.0, 700.0))
+                .build_ui_state(
+                    |ui, panel: &mut WatchlistPanel| {
+                        panel.show_wide(ui, &WatchlistDetails::default());
+                    },
+                    panel,
+                );
+            h.run();
+            let texts: Vec<String> = h
+                .output()
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            // Wide columns: Last, Chg, Chg%, Vol, Ext, Ext Chg, Ext Chg%. 1 / 9 = 11.11%.
+            for (symbol, volume) in ["AAA", "BBB", "CCC"].into_iter().zip(cells) {
+                let at = texts.iter().position(|t| t == symbol).unwrap();
+                assert_eq!(
+                    texts[at + 1..at + 8],
+                    ["10.00", "+1.00", "+11.11%", volume, "-", "-", "-"],
+                    "{symbol} at {decimals:?}"
+                );
+            }
+            // Summary rows: their label, then the same seven columns.
+            let rows = &texts[texts.len() - 32..];
+            for (row, (label, volume)) in ["Average", "Median", "Minimum", "Maximum"]
+                .into_iter()
+                .zip(summary)
+                .enumerate()
+            {
+                assert_eq!(
+                    rows[row * 8..row * 8 + 8],
+                    [label, "10.00", "+1.00", "+11.11%", volume, "-", "-", "-"],
+                    "{label} at {decimals:?}"
+                );
+            }
         }
     }
 
