@@ -42,6 +42,9 @@ pub struct IndicatorSettingsDialog {
     /// The plots that hold no values, offered without a plot type, scale tag or latest value
     /// line.
     valueless_plots: Vec<usize>,
+    /// The plots offered only a visibility and a colour, which their study draws in a look of
+    /// its own.
+    color_only_plots: Vec<usize>,
     levels: Vec<(f64, &'static str)>,
     gradient_names: Vec<&'static str>,
     tab: Tab,
@@ -132,11 +135,15 @@ impl IndicatorSettingsDialog {
         self.sources.clear();
     }
 
-    /// Reads the plot names, the plots without values and the guide levels of `study`.
+    /// Reads the plot names, the plots without values, the plots offered only a colour and the
+    /// guide levels of `study`.
     fn read_plots(&mut self, study: &dyn Indicator) {
         self.line_names = study.line_names();
         self.valueless_plots = (0..study.line_count())
             .filter(|&line| !study.plot_holds_values(line))
+            .collect();
+        self.color_only_plots = (0..study.line_count())
+            .filter(|&line| study.plot_color_only(line))
             .collect();
         self.levels = study
             .pane()
@@ -439,6 +446,7 @@ impl IndicatorSettingsDialog {
                                 ui.separator();
                             }
                             for (line, plot) in edit.settings.plots.iter_mut().enumerate() {
+                                let color_only = self.color_only_plots.contains(&line);
                                 ui.push_id(line, |ui| {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.checkbox(
@@ -451,99 +459,112 @@ impl IndicatorSettingsDialog {
                                             ),
                                         );
                                         ui.color_edit_button_srgba(&mut plot.color);
-                                        width_picker(ui, &mut plot.width);
-                                    });
-                                    ui.horizontal_wrapped(|ui| {
-                                        pattern_combo(ui, &mut plot.pattern);
-                                        // Zone edges are lines and a plot without values has no
-                                        // last value to tag or extend.
-                                        if self.valueless_plots.contains(&line) {
-                                            return;
+                                        if !color_only {
+                                            width_picker(ui, &mut plot.width);
                                         }
-                                        egui::ComboBox::from_id_salt("plot_type")
-                                            .selected_text(l10n::text(
-                                                ui.ctx(),
-                                                plot.plot_type.name(),
-                                            ))
-                                            .show_ui(ui, |ui| {
-                                                for kind in PlotType::ALL {
-                                                    let label = l10n::text(ui.ctx(), kind.name());
-                                                    // A saved choice stays listed and selected.
-                                                    match kind
-                                                        .incompatibility(
-                                                            self.overlay,
-                                                            self.price_scale,
-                                                        )
-                                                        .filter(|_| kind != plot.plot_type)
-                                                    {
-                                                        Some(reason) => {
-                                                            ui.add_enabled(
-                                                                false,
-                                                                egui::Button::selectable(
-                                                                    false, label,
-                                                                ),
+                                    });
+                                    // A plot drawn in a look of its own takes only its
+                                    // visibility and colour.
+                                    if !color_only {
+                                        ui.horizontal_wrapped(|ui| {
+                                            pattern_combo(ui, &mut plot.pattern);
+                                            // Zone edges are lines and a plot without values has no
+                                            // last value to tag or extend.
+                                            if self.valueless_plots.contains(&line) {
+                                                return;
+                                            }
+                                            egui::ComboBox::from_id_salt("plot_type")
+                                                .selected_text(l10n::text(
+                                                    ui.ctx(),
+                                                    plot.plot_type.name(),
+                                                ))
+                                                .show_ui(ui, |ui| {
+                                                    for kind in PlotType::ALL {
+                                                        let label =
+                                                            l10n::text(ui.ctx(), kind.name());
+                                                        // A saved choice stays listed and selected.
+                                                        match kind
+                                                            .incompatibility(
+                                                                self.overlay,
+                                                                self.price_scale,
                                                             )
-                                                            .on_disabled_hover_text(l10n::text(
-                                                                ui.ctx(),
-                                                                reason,
-                                                            ));
-                                                        }
-                                                        None => {
-                                                            ui.selectable_value(
-                                                                &mut plot.plot_type,
-                                                                kind,
-                                                                label,
-                                                            );
+                                                            .filter(|_| kind != plot.plot_type)
+                                                        {
+                                                            Some(reason) => {
+                                                                ui.add_enabled(
+                                                                    false,
+                                                                    egui::Button::selectable(
+                                                                        false, label,
+                                                                    ),
+                                                                )
+                                                                .on_disabled_hover_text(l10n::text(
+                                                                    ui.ctx(),
+                                                                    reason,
+                                                                ));
+                                                            }
+                                                            None => {
+                                                                ui.selectable_value(
+                                                                    &mut plot.plot_type,
+                                                                    kind,
+                                                                    label,
+                                                                );
+                                                            }
                                                         }
                                                     }
+                                                })
+                                                .response
+                                                .accessible_name(l10n::text(ui.ctx(), "Plot type"));
+                                            let mut tagged =
+                                                !edit.settings.untagged_plots.contains(&line);
+                                            if ui
+                                                .checkbox(
+                                                    &mut tagged,
+                                                    l10n::text(ui.ctx(), "Value on scale"),
+                                                )
+                                                .changed()
+                                            {
+                                                edit.settings
+                                                    .untagged_plots
+                                                    .retain(|&other| other != line);
+                                                if !tagged {
+                                                    edit.settings.untagged_plots.push(line);
                                                 }
-                                            })
-                                            .response
-                                            .accessible_name(l10n::text(ui.ctx(), "Plot type"));
-                                        let mut tagged =
-                                            !edit.settings.untagged_plots.contains(&line);
-                                        if ui
-                                            .checkbox(
-                                                &mut tagged,
-                                                l10n::text(ui.ctx(), "Value on scale"),
-                                            )
-                                            .changed()
-                                        {
-                                            edit.settings
-                                                .untagged_plots
-                                                .retain(|&other| other != line);
-                                            if !tagged {
-                                                edit.settings.untagged_plots.push(line);
                                             }
-                                        }
-                                        let mut price_line =
-                                            edit.settings.price_line_plots.contains(&line);
-                                        if ui
-                                            .checkbox(
-                                                &mut price_line,
-                                                l10n::text(ui.ctx(), "Latest value line"),
-                                            )
-                                            .changed()
-                                        {
-                                            edit.settings
-                                                .price_line_plots
-                                                .retain(|&other| other != line);
-                                            if price_line {
-                                                edit.settings.price_line_plots.push(line);
+                                            let mut price_line =
+                                                edit.settings.price_line_plots.contains(&line);
+                                            if ui
+                                                .checkbox(
+                                                    &mut price_line,
+                                                    l10n::text(ui.ctx(), "Latest value line"),
+                                                )
+                                                .changed()
+                                            {
+                                                edit.settings
+                                                    .price_line_plots
+                                                    .retain(|&other| other != line);
+                                                if price_line {
+                                                    edit.settings.price_line_plots.push(line);
+                                                }
                                             }
-                                        }
-                                    });
-                                    if let Some(variants) =
-                                        edit.settings.plot_variants.get_mut(line)
-                                    {
-                                        for (index, variant) in variants.iter_mut().enumerate() {
-                                            ui.push_id(("variant", index), |ui| {
-                                                ui.horizontal_wrapped(|ui| {
-                                                    ui.label(l10n::text(ui.ctx(), &variant.name));
-                                                    ui.color_edit_button_srgba(&mut variant.color);
-                                                    width_picker(ui, &mut variant.width);
+                                        });
+                                        if let Some(variants) =
+                                            edit.settings.plot_variants.get_mut(line)
+                                        {
+                                            for (index, variant) in variants.iter_mut().enumerate()
+                                            {
+                                                ui.push_id(("variant", index), |ui| {
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        ui.label(l10n::text(
+                                                            ui.ctx(),
+                                                            &variant.name,
+                                                        ));
+                                                        ui.color_edit_button_srgba(
+                                                            &mut variant.color,
+                                                        );
+                                                        width_picker(ui, &mut variant.width);
+                                                    });
                                                 });
-                                            });
+                                            }
                                         }
                                     }
                                     ui.separator();
@@ -3010,32 +3031,66 @@ mod tests {
     /// A plot that only styles zones offers visibility, colour, width and line pattern on the
     /// Style tab, and no plot type, scale tag or latest value line, which would change nothing.
     /// Plots that hold values keep all three. Missed Pivot Levels switched from swings to the
-    /// three periods offers its new third plot the same way.
+    /// three periods offers its new third plot the same way. The call and put walls of an options
+    /// profile offer only their visibility, unticked on a new profile, and their colour.
     #[test]
-    fn zone_plots_offer_only_zone_styles() {
-        use crate::studies::{AutoKeyLevels, Gaps, MissedPivots};
-        use egui::accesskit::Role;
-        use egui_kittest::{Harness, kittest::Queryable};
+    fn plots_offer_only_the_styles_they_use() {
+        use crate::data::{Datafeed, HistoryPage, HistoryRequest, OptionChain, OptionChainQuery};
+        use crate::studies::{AutoKeyLevels, Gaps, MissedPivots, OptionsVolumeProfile};
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::{NodeT, Queryable};
 
-        let combined = ["Daily pivots", "Weekly pivots", "Monthly pivots"];
-        for (study, period, names, holds_values) in [
+        struct Feed;
+        impl Datafeed for Feed {
+            fn history(&self, _: HistoryRequest, reply: crate::data::Reply<HistoryPage>) {
+                reply.send(Ok(HistoryPage::default()));
+            }
+        }
+        let expiry = chrono::Utc::now().date_naive();
+        let query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
+        let chain = OptionChain::new(&Feed, query, || {}).unwrap();
+        let profile = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        const COMBINED: &[&str] = &["Daily pivots", "Weekly pivots", "Monthly pivots"];
+        // The study, its Missed Pivot Levels period, its plot names, how many plots offer a
+        // width and a line pattern, how many a plot type, scale tag and latest value line, the
+        // colour wells, and the plots whose checkbox starts unticked.
+        type Row = (
+            Box<dyn Indicator>,
+            Option<usize>,
+            &'static [&'static str],
+            usize,
+            usize,
+            usize,
+            &'static [&'static str],
+        );
+        let rows: [Row; 6] = [
             (
-                Box::new(MissedPivots::default()) as Box<dyn Indicator>,
+                Box::new(MissedPivots::default()),
                 None,
-                &combined[..],
-                false,
+                COMBINED,
+                3,
+                0,
+                3,
+                &[],
             ),
             (
                 Box::new(MissedPivots::new(10, 10, 0.0, 500)),
                 Some(4),
-                &combined[..],
-                false,
+                COMBINED,
+                3,
+                0,
+                3,
+                &[],
             ),
             (
                 Box::new(Gaps::default()),
                 None,
-                &["Up gaps", "Down gaps"][..],
-                false,
+                &["Up gaps", "Down gaps"],
+                2,
+                0,
+                2,
+                &[],
             ),
             (
                 Box::new(AutoKeyLevels::new()),
@@ -3048,11 +3103,35 @@ mod tests {
                     "Prev Week",
                     "Prev Month",
                     "Custom",
-                ][..],
-                false,
+                ],
+                7,
+                0,
+                7,
+                &[],
             ),
-            (Box::new(SMA::new(2)), None, &["SMA(2)"][..], true),
-        ] {
+            (Box::new(SMA::new(2)), None, &["SMA(2)"], 1, 1, 1, &[]),
+            // Nine plot colours and six bar colours.
+            (
+                Box::new(profile),
+                None,
+                &[
+                    "Put/call",
+                    "Max pain",
+                    "Gamma exposure",
+                    "Call wall",
+                    "Put wall",
+                    "Zero gamma",
+                    "Expected low",
+                    "Expected high",
+                    "Current price",
+                ],
+                7,
+                7,
+                15,
+                &["Call wall", "Put wall"],
+            ),
+        ];
+        for (study, period, names, styled, valued, wells, off) in rows {
             let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
             let id = chart.add_indicator(study);
             let mut dialog = IndicatorSettingsDialog::default();
@@ -3073,22 +3152,30 @@ mod tests {
                     let _ = dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart);
                 });
             harness.run();
-            let plots = names.len();
             for name in names {
                 assert!(harness.query_all_by_label(name).next().is_some(), "{name}");
             }
             let count = |label| harness.query_all_by_label(label).count();
             assert_eq!(
                 harness.query_all_by_role(Role::ColorWell).count(),
-                plots,
+                wells,
                 "{names:?}"
             );
-            assert_eq!(count("Line width"), plots, "{names:?}");
-            assert_eq!(count("Line pattern"), plots, "{names:?}");
-            let offered = if holds_values { plots } else { 0 };
+            assert_eq!(count("Line width"), styled, "{names:?}");
+            assert_eq!(count("Line pattern"), styled, "{names:?}");
             for label in ["Plot type", "Value on scale", "Latest value line"] {
-                assert_eq!(count(label), offered, "{names:?}: {label}");
+                assert_eq!(count(label), valued, "{names:?}: {label}");
             }
+            let unticked: Vec<_> = names
+                .iter()
+                .copied()
+                .filter(|name| {
+                    harness
+                        .query_all_by_role_and_label(Role::CheckBox, name)
+                        .any(|node| node.accesskit_node().toggled() == Some(Toggled::False))
+                })
+                .collect();
+            assert_eq!(unticked, off, "{names:?}");
         }
     }
 }

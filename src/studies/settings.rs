@@ -2272,6 +2272,9 @@ impl Indicator for ConfiguredStudy {
     fn plot_holds_values(&self, line: usize) -> bool {
         self.study.plot_holds_values(line)
     }
+    fn plot_color_only(&self, line: usize) -> bool {
+        self.study.plot_color_only(line)
+    }
     fn level_style(&self, value: f64) -> LineStyle {
         // Levels moved onto one value draw with the pattern of the first visible one.
         self.declared_pane()
