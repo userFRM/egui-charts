@@ -1017,7 +1017,7 @@ impl Trading {
                         }
                         _ => {}
                     }
-                    // A trailing stop takes no exits; its distance is changed on the ticket.
+                    // A trailing stop takes no exits.
                     let trailing = matches!(request.order_type, OrderType::TrailingStop { .. });
                     if brackets && !trailing {
                         let reference = match request.order_type {
