@@ -623,7 +623,7 @@ impl OrderTicket {
     /// The price the order enters at: its limit price, its stop price, or for a market order the
     /// ask of a buy or the bid of a sell, or the last price without them. A trailing stop enters
     /// at its stop where it starts trailing: from the activation price, else the last price.
-    pub(super) fn entry(&self, market: &Market<'_>) -> Option<f64> {
+    fn entry(&self, market: &Market<'_>) -> Option<f64> {
         match self.kind {
             Kind::Market => self.touch(market).or(market.last),
             Kind::Limit | Kind::Stop => Some(self.price),
@@ -677,7 +677,7 @@ impl OrderTicket {
 
     /// Whether the order may carry a take profit and a stop loss: the account takes brackets
     /// and the order is not a trailing stop.
-    pub(super) fn brackets(&self, market: &Market<'_>) -> bool {
+    fn brackets(&self, market: &Market<'_>) -> bool {
         market.capabilities.brackets && self.kind != Kind::TrailingStop
     }
 
