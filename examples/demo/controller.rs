@@ -2013,12 +2013,9 @@ impl eframe::App for DemoApp {
             .watch_detectors(self.live.detectors());
         let sounds = self.order_flow.poll(&ctx, &mut self.toasts);
         if !sounds.is_empty() {
-            self.play_sound(
-                &ctx,
-                DEMO_SOUNDS[0],
-                self.settings_state.alerts.sound_volume,
-                false,
-            );
+            let alerts = &self.settings_state.alerts;
+            let (name, volume) = (alerts.sound.clone(), alerts.sound_volume);
+            self.play_sound(&ctx, &name, volume, false);
         }
         self.feed_market_panels(&ctx);
 

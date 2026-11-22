@@ -283,4 +283,61 @@ mod tests {
             );
         }
     }
+
+    /// Order-flow detections whose rule asks for a sound play the alert sound chosen in the chart
+    /// settings at the alert volume, as price alerts and time and sales filters do.
+    #[test]
+    fn order_flow_detections_with_sound_play_the_alert_sound() {
+        let ctx = egui::Context::default();
+        let now = "2026-11-04T17:30:00Z".parse().unwrap();
+        let mut app = super::super::DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        // The chart subscribes to its feed, which tracks the symbol, on its first frames.
+        super::super::tests::settle(&mut app, &ctx);
+        assert!(app.audio.voices.is_empty());
+        app.settings_state.alerts.sound = "Bell".into();
+        app.settings_state.alerts.sound_volume = 0.35;
+        let detectors = app.live.detectors();
+        let mut settings = detectors.settings();
+        settings.big_trades.enabled = true;
+        settings.big_trades.alert = true;
+        settings.big_trades.sound = true;
+        settings.big_trades.rule.threshold = egui_charts::services::Threshold::Fixed(10.0);
+        detectors.set_settings(settings);
+        let time = app.live.now();
+        let fill = egui_charts::model::Tick::new(time, 100.0, 50.0, None);
+        let event = egui_charts::data::MarketEvent::Trade(fill);
+        detectors.push(app.chart.symbol(), time, &event);
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ui| eframe::App::ui(&mut *app, ui, &mut eframe::Frame::_new_kittest()),
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(app.audio.voices.len(), 1);
+        let mut reader = app
+            .audio
+            .engine
+            .as_ref()
+            .unwrap()
+            .try_acquire_reader()
+            .unwrap();
+        let mut output = vec![0.0; SAMPLE_RATE as usize];
+        reader.read_pcm_frames_into(&mut output).unwrap();
+        let expected = samples("Bell", 0.35);
+        for (index, (actual, expected)) in output.iter().zip(&expected).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1e-5,
+                "sample {index}: {actual}, expected {expected}"
+            );
+        }
+    }
 }
