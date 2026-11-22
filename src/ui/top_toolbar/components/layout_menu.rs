@@ -327,10 +327,9 @@ impl LayoutMenu {
 
     /// Renames the current layout to `name` by saving `layout`, the current layout, under it
     /// and then deleting the old one. With [`set_sharing`](Self::set_sharing), the sharing of a
-    /// layout the service reports shared is first moved through
-    /// [`Sharing::rename`](crate::services::Sharing::rename). The old layout is deleted only once
-    /// the service no longer reports it shared, so a service that cannot move the sharing keeps
-    /// the old layout, still shared.
+    /// layout the service reports shared is first moved through [`Sharing::rename`]. The old
+    /// layout is deleted only once the service no longer reports it shared, so a service that
+    /// cannot move the sharing keeps the old layout, still shared.
     pub fn rename(&mut self, name: &str, layout: &SavedLayout) {
         if name.trim().is_empty() {
             self.error = Some("Enter a layout name".into());
