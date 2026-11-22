@@ -145,12 +145,16 @@ pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLabels, TPOLetter,
     TPOProfile, TPOProfilePeriod, derive_tick_size, to_tpo_profiles,
 };
+pub(crate) use trading::rounding_tolerance;
+#[cfg(feature = "widget")]
+pub(crate) use trading::settled;
 pub use trading::{
     Account, BalanceChange, Capabilities, ClosedPosition, Execution, JournalEntry, Order, OrderId,
     OrderPreview, OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket,
     TakeProfitLevel, TimeInForce, TradingRules, TrailDistance,
 };
-pub(crate) use trading::{rounding_tolerance, settled, trailed, trailing_stop};
+#[cfg(feature = "strategies")]
+pub(crate) use trading::{trailed, trailing_stop};
 
 pub use watchlist::{SkippedEntries, Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
 
