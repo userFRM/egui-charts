@@ -47,8 +47,8 @@ pub struct ImageExportOptions {
     /// Include the symbol above the chart.
     pub include_title: bool,
     /// Include the export time above the chart, written as the chart writes times, with its
-    /// date format, clock and locale, to the second on every interval, followed by the name of
-    /// the chart's time zone.
+    /// date format, clock and locale, with seconds on every interval unless the time scale hides
+    /// them, followed by the name of the chart's time zone.
     pub include_timestamp: bool,
     /// Draw the symbol watermark and every host watermark set with [`Chart::set_watermark`]
     /// or [`Chart::set_pane_watermark`], as they show on screen, independently of the title and
