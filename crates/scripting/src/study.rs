@@ -66,8 +66,26 @@ pub(crate) fn build(script: &Script) -> CustomIndicator {
     study
 }
 
-/// Calculate `script` on `bars` with its default inputs on this thread.
+/// Calculate `script` on `bars` with its default inputs, natively on a thread whose stack fits
+/// the deepest scripts, which the caller's may not.
 pub(crate) fn check(script: &Script, bars: &[Bar]) -> Result<(), ScriptError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let result = std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("script check".into())
+            .stack_size(crate::runtime::worker::STACK)
+            .spawn_scoped(scope, || calculate(script, bars))
+            .ok()
+            .and_then(|thread| thread.join().ok())
+            .unwrap_or_else(|| crate::runtime::lost().result.map(|_| ()))
+    });
+    #[cfg(target_arch = "wasm32")]
+    let result = calculate(script, bars);
+    result
+}
+
+/// Calculate `script` on `bars` with its default inputs on this thread.
+fn calculate(script: &Script, bars: &[Bar]) -> Result<(), ScriptError> {
     let compiled = &script.compiled;
     let mut state = RunState::new(
         compiled.clone(),

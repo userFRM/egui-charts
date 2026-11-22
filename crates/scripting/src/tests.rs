@@ -298,8 +298,13 @@ fn scripts_are_refused_at_their_line_and_column() {
 #[test]
 fn run_errors_keep_the_bars_before_them() {
     let fixture = bars(1001, 3);
+    // As deep as the limits admit: calls 32 deep, each nesting calls as deep as a function may,
+    // which needs about 5 MiB of stack in a debug build.
+    let deep = (0..11).fold("f(n - 1)".to_owned(), |inner, _| format!("max(1, {inner})"));
+    let deep = format!("fn f(n) {{ if n > 0 {{ {deep} }} else {{ 0 }} }} plot(\"x\", f(40));");
     // Column 0 leaves the column unasserted where the engine, not the script, places it.
     for (source, column, bar, fragment) in [
+        (deep.as_str(), 0, 0, "more than 32 deep"),
         // The `[` of the offset, counted by hand.
         (
             "plot(\"x\", if bar_index == 20 { close[-1] } else { close });",

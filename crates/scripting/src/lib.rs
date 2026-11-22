@@ -68,8 +68,9 @@ impl Script {
     }
 
     /// Calculate on `bars` with the default inputs and return the first runtime error or limit
-    /// stop, so a host can refuse a script before it replaces the study on a chart. Runs on the
-    /// calling thread, for headless hosts and tests.
+    /// stop, so a host can refuse a script before it replaces the study on a chart. Blocks the
+    /// calling thread, for headless hosts and tests; natively the calculation runs on a thread
+    /// of its own, whose stack fits the deepest scripts.
     pub fn check(&self, bars: &[Bar]) -> Result<(), ScriptError> {
         study::check(self, bars)
     }

@@ -12,6 +12,11 @@ use std::sync::{
     mpsc,
 };
 
+/// The stack of a thread that runs a script. The deepest scripts the limits admit need about
+/// 5 MiB in a debug build and under 1 MiB in a release build, the web's default.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const STACK: usize = 16 << 20;
+
 /// Where a request stands.
 pub(crate) enum Poll {
     Running(f32),
@@ -47,6 +52,7 @@ impl Runner {
         let (finished, outcomes) = mpsc::channel();
         let spawned = std::thread::Builder::new()
             .name("script study".into())
+            .stack_size(STACK)
             .spawn(move || {
                 for request in received {
                     state.begin(request);
