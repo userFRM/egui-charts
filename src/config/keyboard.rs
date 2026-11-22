@@ -193,8 +193,9 @@ pub enum KeyboardAction {
     /// Show the previous symbol of the active watchlist (Up or Shift+Space), as
     /// [`NextWatchlistSymbol`](Self::NextWatchlistSymbol) does the next one.
     PreviousWatchlistSymbol,
-    /// Add the chart symbol to the active watchlist (Alt+W). The host receives a shortcut
-    /// request and answers with `WatchlistPanel::add_symbol`, which refuses duplicates.
+    /// Add the chart symbol to the shown watchlist (Alt+W): the active list, or while a flag view
+    /// is shown that flag. The host receives a shortcut request and answers with
+    /// `WatchlistPanel::add_symbol`, which refuses duplicates.
     AddToWatchlist,
 
     // Trading
@@ -412,9 +413,21 @@ impl KeyboardAction {
                 }
             }
             Self::MaximizeChart => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::Enter)] },
-            Self::CycleChartFocus => const { &[key(Key::Tab)] },
+            Self::CycleChartFocus => {
+                const {
+                    &[
+                        key(Key::Tab),
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::ArrowRight),
+                    ]
+                }
+            }
             Self::CycleChartFocusBack => {
-                const { &[KeyboardShortcut::new(Modifiers::SHIFT, Key::Tab)] }
+                const {
+                    &[
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::Tab),
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::ArrowLeft),
+                    ]
+                }
             }
             Self::DeleteSelectedDrawing => const { &[key(Key::Delete), key(Key::Backspace)] },
             Self::Cancel => const { &[key(Key::Escape)] },
@@ -526,8 +539,8 @@ impl KeyboardAction {
             Self::Cancel => "Esc",
             Self::CompleteDrawing => "Enter",
             Self::ShowKeyboardHelp => "Ctrl+/ / ? / F1",
-            Self::CycleChartFocus => "Tab",
-            Self::CycleChartFocusBack => "Shift+Tab",
+            Self::CycleChartFocus => "Tab / Shift+→",
+            Self::CycleChartFocusBack => "Shift+Tab / Shift+←",
             Self::NextWatchlistSymbol => "↓ / Space",
             Self::PreviousWatchlistSymbol => "↑ / Shift+Space",
             Self::AddToWatchlist => "Alt+W",

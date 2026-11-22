@@ -974,15 +974,28 @@ impl DemoApp {
         {
             app.watchlist.set_active_list(active);
         }
+        if let Some(flags) = cc.storage.and_then(|storage| {
+            eframe::get_value::<Vec<(String, egui_charts::model::WatchlistFlag)>>(
+                storage,
+                "watchlist_unlisted_flags",
+            )
+        }) {
+            app.watchlist.set_unlisted_flags(
+                flags
+                    .into_iter()
+                    .map(|(symbol, flag)| (DemoSymbol::current(&symbol), flag)),
+            );
+        }
         app.watchlist.set_service(app.quotes.clone());
-        app.watchlist
-            .set_sharing(Arc::new(feeds::ListSharing::default()));
+        let sharing = Arc::new(feeds::DemoSharing::default());
+        app.watchlist.set_sharing(sharing.clone());
         app.watchlist.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.alert_evaluator.set_storage(app.storage.clone());
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
         app.symbol_details.set_storage(app.storage.clone());
         app.top_toolbar.layout_menu.set_storage(app.storage.clone());
+        app.top_toolbar.layout_menu.set_sharing(sharing);
         app.highlights.set_feed(app.live.clone());
         app.news.set_feed(app.live.clone());
         for panel in [&mut app.news, &mut app.highlights] {
@@ -1354,6 +1367,40 @@ impl DemoApp {
             .any(|alert| alert.status == egui_charts::model::AlertStatus::Active)
         {
             ctx.request_repaint_after(delay.min(std::time::Duration::from_secs(1)));
+        }
+    }
+
+    /// Hands the alerts panel the chosen sound, zone and price, delivers the triggers of the
+    /// host's engine and opens what a trigger popup asked for.
+    fn poll_alerts(&mut self, ctx: &egui::Context) {
+        self.alerts
+            .set_sound(Some(self.settings_state.alerts.sound.clone()));
+        self.alerts.set_timezone(
+            self.timeframe_toolbar
+                .state
+                .timezone
+                .parse()
+                .unwrap_or_default(),
+        );
+        self.alerts.set_price(
+            self.chart.symbol(),
+            self.chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .rev()
+                .find(|bar| !bar.is_whitespace())
+                .map(|bar| bar.close),
+            self.chart
+                .instrument()
+                .and_then(|instrument| instrument.tick_size),
+        );
+        self.alerts.poll(ctx, &mut self.toasts);
+        self.monitor_alerts(ctx);
+        self.alerts.poll(ctx, &mut self.toasts);
+        match self.alerts.take_popup_action() {
+            AlertPanelAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+            AlertPanelAction::EditAlert(alert) => self.edit_alert(*alert),
+            _ => {}
         }
     }
 
@@ -1856,6 +1903,11 @@ impl eframe::App for DemoApp {
         );
         eframe::set_value(storage, "watchlists", &self.watchlist.lists());
         eframe::set_value(storage, "watchlist_active", &self.watchlist.active_list());
+        eframe::set_value(
+            storage,
+            "watchlist_unlisted_flags",
+            &self.watchlist.unlisted_flags(),
+        );
         eframe::set_value(storage, "alerts", &self.alert_host.engine().alerts());
         eframe::set_value(
             storage,
@@ -1899,36 +1951,7 @@ impl eframe::App for DemoApp {
         for error in self.images.poll(&ctx, &mut self.chart, self.layout_slot) {
             self.notify(error);
         }
-        let alerts = &self.settings_state.alerts;
-        self.alerts
-            .set_sound(alerts.play_sound.then(|| alerts.sound.clone()));
-        self.alerts.set_timezone(
-            self.timeframe_toolbar
-                .state
-                .timezone
-                .parse()
-                .unwrap_or_default(),
-        );
-        self.alerts.set_price(
-            self.chart.symbol(),
-            self.chart
-                .bars(SeriesId::MAIN)
-                .iter()
-                .rev()
-                .find(|bar| !bar.is_whitespace())
-                .map(|bar| bar.close),
-            self.chart
-                .instrument()
-                .and_then(|instrument| instrument.tick_size),
-        );
-        self.alerts.poll(&ctx, &mut self.toasts);
-        self.monitor_alerts(&ctx);
-        self.alerts.poll(&ctx, &mut self.toasts);
-        match self.alerts.take_popup_action() {
-            AlertPanelAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
-            AlertPanelAction::EditAlert(alert) => self.edit_alert(*alert),
-            _ => {}
-        }
+        self.poll_alerts(&ctx);
         self.symbol_details.poll(&ctx);
         self.highlights.poll(&ctx);
         self.news.poll(&ctx);
@@ -3233,7 +3256,8 @@ impl DemoApp {
 
     /// Publishes the quotes the watchlist subscribed to through the demo's quote service, and
     /// passes the chart symbol's quote on to the details panel and the order ticket. Feeds time
-    /// and sales the executions of the live feed and reports matching filters as notifications.
+    /// and sales the executions of the live feed and plays the alert sound for matching size
+    /// filters with sound.
     fn feed_market_panels(&mut self, ctx: &egui::Context) {
         let timezone: egui_charts::model::TimezoneId = self
             .timeframe_toolbar
@@ -3250,7 +3274,7 @@ impl DemoApp {
         if let Some(own) = &self.own_data {
             let (symbol, timeframe) = (self.chart.symbol(), self.chart.timeframe());
             let tape = own.feed.drain_tape(symbol, timeframe);
-            self.feed_time_and_sales(tape);
+            self.feed_time_and_sales(ctx, tape);
             return;
         }
         // The simulation clock rather than the wall clock, which the pause freezes: a paused
@@ -3343,29 +3367,19 @@ impl DemoApp {
             self.highlights.refresh();
         }
         let tape = self.live.drain_tape();
-        self.feed_time_and_sales(tape);
+        self.feed_time_and_sales(ctx, tape);
     }
 
     /// Lists `tape`, the trades the chart's feed received since the last frame, in time and
-    /// sales, notifies a size filter that matched, and formats the panel for the chart's
-    /// instrument and the chosen zone.
-    fn feed_time_and_sales(&mut self, tape: Vec<Tick>) {
+    /// sales, plays the alert sound once when a size filter with sound matched, and formats the
+    /// panel for the chart's instrument and the chosen zone.
+    fn feed_time_and_sales(&mut self, ctx: &egui::Context, tape: Vec<Tick>) {
         let instrument = self.chart.instrument();
         // As the price scale writes it: the instrument's decimals, else those of its tick size.
         let decimals = instrument.and_then(egui_charts::scales::instrument_price_precision);
-        let mut alert = None;
+        let mut matched = false;
         for trade in tape {
-            if self.time_and_sales.push(trade.clone()).is_some() {
-                alert = Some(trade);
-            }
-        }
-        if let Some(trade) = alert {
-            self.toasts.info(format!(
-                "Size filter matched on fill: {} at {:.*}",
-                trade.size,
-                usize::from(decimals.unwrap_or(2)),
-                trade.price
-            ));
+            matched |= self.time_and_sales.push(trade).is_some();
         }
         let config = &mut self.time_and_sales.config;
         config.price_decimals = decimals;
@@ -3376,6 +3390,11 @@ impl DemoApp {
             .timezone
             .parse()
             .unwrap_or_default();
+        if matched {
+            let alerts = &self.settings_state.alerts;
+            let (name, volume) = (alerts.sound.clone(), alerts.sound_volume);
+            self.play_sound(ctx, &name, volume, false);
+        }
     }
 
     /// Saves exported `text` to `file` in the temporary directory, or downloads it on the web.
@@ -4026,8 +4045,12 @@ impl DemoApp {
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
         self.menus
             .set_watchlists(self.watchlist.lists().iter().map(|list| list.name.as_str()));
-        self.menus
-            .set_active_watchlist(Some(self.watchlist.active_list()));
+        self.menus.set_active_watchlist(
+            self.watchlist
+                .flag_filter()
+                .is_none()
+                .then_some(self.watchlist.active_list()),
+        );
         self.hotlists
             .set_watchlists(self.watchlist.lists().iter().map(|list| list.name.as_str()));
         self.menus.set_layout_copies(self.layout_has_other_charts());
@@ -4729,12 +4752,12 @@ impl DemoApp {
             }
             A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
             A::AddToWatchlist => {
-                let symbol = self.chart.symbol().to_owned();
-                let list = self.watchlist.active_list();
-                self.handle_context_action(
-                    ctx,
-                    ChartContextAction::Chart(ContextMenuAction::AddToWatchlist { list, symbol }),
-                );
+                if !self.synthetic_only("Watchlists") {
+                    let symbol = self.chart.symbol().to_owned();
+                    if !self.watchlist.add_symbol(&symbol) {
+                        self.notify(format!("{symbol} is already in that watchlist"));
+                    }
+                }
             }
             A::NextWatchlistSymbol | A::PreviousWatchlistSymbol => {
                 let step = if action == A::NextWatchlistSymbol {
@@ -9698,12 +9721,13 @@ mod tests {
         assert!(!shown.iter().any(|(text, _)| text == "Stop sharing"));
     }
 
-    /// The focused chart adds to the shown list, reports duplicates and restores that list.
+    /// The focused chart adds to the shown list, or flags its symbol while a flag view is shown,
+    /// reports duplicates and restores that list and the flag.
     #[test]
     fn the_shown_watchlist_takes_alt_w_and_survives_a_restart() {
         use eframe::App;
         use egui::{Event, Key, Modifiers};
-        use egui_charts::model::Watchlist;
+        use egui_charts::model::{Watchlist, WatchlistFlag};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
@@ -9722,7 +9746,7 @@ mod tests {
         ui_click(&ctx, size, chart, |ui| {
             app.ui(ui, &mut eframe::Frame::_new_kittest())
         });
-        for duplicate in [false, true] {
+        let alt_w = |app: &mut DemoApp| {
             ui_frame(
                 &ctx,
                 size,
@@ -9745,6 +9769,9 @@ mod tests {
                 ],
                 |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
             );
+        };
+        for duplicate in [false, true] {
+            alt_w(&mut app);
             assert_eq!(app.watchlist.lists()[0].to_text(), "STOCKA");
             assert_eq!(app.watchlist.lists()[1].to_text(), "STOCKB,STOCKC");
             if duplicate {
@@ -9756,6 +9783,17 @@ mod tests {
                 );
             }
         }
+        // In a flag view the key flags the chart symbol instead of adding it to the hidden list.
+        app.watchlist.set_flag_filter(Some(WatchlistFlag::Red));
+        app.open_catalog_symbol("STOCKD");
+        settle(&mut app, &ctx);
+        let chart = app.chart.get_chart_mapping().rect.center();
+        ui_click(&ctx, size, chart, |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        alt_w(&mut app);
+        assert_eq!(app.watchlist.symbols().collect::<Vec<_>>(), ["STOCKD"]);
+        assert_eq!(app.watchlist.lists()[1].to_text(), "STOCKB,STOCKC");
         let mut storage = AppStorage::default();
         app.save(&mut storage);
         let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
@@ -9765,6 +9803,10 @@ mod tests {
         assert_eq!(
             restored.watchlist.symbols().collect::<Vec<_>>(),
             ["STOCKB", "STOCKC"]
+        );
+        assert_eq!(
+            restored.watchlist.unlisted_flags(),
+            [("STOCKD".to_owned(), WatchlistFlag::Red)]
         );
     }
 
@@ -14056,6 +14098,40 @@ mod tests {
             }
             app.alerts.poll(&ctx, &mut app.toasts);
             assert_eq!(app.alerts.log().len(), 2, "period {period}");
+        }
+    }
+
+    /// An alert created with the dialog's defaults requests the alert sound chosen in the chart
+    /// settings when it fires, with no other switch; one with Sound unticked requests none.
+    #[test]
+    fn alerts_from_the_dialog_request_the_alert_sound_only_with_sound_ticked() {
+        let ctx = egui::Context::default();
+        // A fixed time keeps the generated feed the same on every run.
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-04T17:30:00Z".parse().unwrap(),
+            false,
+        );
+        app.live.set_paused(true);
+        finish_feed(&app.live);
+        app.apply_session();
+        app.settings_state.alerts.sound = "Bell".into();
+        for sound in [true, false] {
+            app.open_alert(None);
+            let mut alert = app.alert_dialog.alert.clone();
+            // The dialog ticks Sound for a new alert.
+            assert!(alert.delivery.sound);
+            alert.delivery.sound = sound;
+            // Every close is above zero, so the alert fires once.
+            alert.condition = AlertCondition::Above(0.0);
+            let fired = app.alerts.log().len();
+            app.alerts.save(alert);
+            for _ in 0..4 {
+                finish_feed(&app.alert_live);
+                app.poll_alerts(&ctx);
+            }
+            assert_eq!(app.alerts.log().len(), fired + 1, "sound={sound}");
+            assert_eq!(app.alerts.take_sound(), sound.then(|| "Bell".to_owned()));
         }
     }
 
