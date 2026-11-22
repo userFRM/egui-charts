@@ -12,8 +12,9 @@ pub struct Limits {
     pub bar: Duration,
     /// Longest time a full recompute may run; 60 s by default.
     pub full: Duration,
-    /// Most bytes one study's buffers and the values its states keep may hold; 256 MiB by
-    /// default.
+    /// Most bytes one study's buffers and its script's values may hold; 256 MiB by default. One
+    /// bar may allocate past it until its time limit ends it, as the
+    /// [crate documentation](crate#limits) says.
     pub memory: usize,
 }
 

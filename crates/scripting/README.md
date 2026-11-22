@@ -222,14 +222,15 @@ the web, which has no threads, each call runs whole bars for 4 ms. The chart kee
 previous values meanwhile, and the legend shows the progress, then the last compute time, with a
 slow notice from one second on. A live tick recalculates only the newest bar.
 
-`Limits`, set with `Script::with_limits`, bound each study's runs: 500 ms for one bar, 60 s for a
-full recompute and 256 MiB for the study's buffers and the values its states keep by default. A
-run that passes a limit keeps none of its bars: the study keeps its previous values, and the
-legend and `Script::last_error` say which limit stopped it and where. It runs again when its
-inputs change or its bars change from the first one on. Whether a run close to a limit finishes
-depends on the machine and its load. A script with long logic on every bar costs time on every
-bar: on 100,000 bars a restated built-in study takes several hundred milliseconds to recompute,
-off the UI thread.
+`Limits`, set with `Script::with_limits`, bound each study's runs: by default 500 ms for one bar,
+60 s for a full recompute and 256 MiB for the study's buffers and its script's values. Values count
+with the room they hold: those the states keep after each bar, and inside a bar, every
+256 operations, those in the variables of the running function and of the calls waiting on it. A run
+that passes a limit keeps none of its bars: the study keeps its previous values, and the legend and
+`Script::last_error` say which limit stopped it and where. It runs again when its inputs change or
+its bars change from the first one on. Whether a run close to a limit finishes depends on the
+machine and its load. A script with long logic on every bar costs time on every bar: on 100,000 bars
+a restated built-in study takes several hundred milliseconds to recompute, off the UI thread.
 
 `Limits` may gain fields, so a host starts from the defaults and sets the limits it changes:
 
@@ -245,11 +246,22 @@ let script = Script::compile("Close", "plot(\"Close\", close);", &IndicatorFacto
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-The size of what a script builds is limited too: strings to 10,000 bytes, arrays to 10,000 items,
-maps to 1,000 entries, 256 variables in scope, 64 functions and calls 32 deep, 6 deep on the web.
-Natively scripts run on threads of 16 MiB, and the deepest scripts these limits admit need under
-6 MiB of it in a debug build. On the web they run on the page's thread, whose stack is 1 MiB in a
-wasm32 build with the default linker settings; there the deepest scripts need under 800 KiB in a
-debug build, measured in Chrome and Firefox.
+The size of what a script builds is limited too: strings to 10,000 bytes, arrays to 10,000 items
+and maps to 1,000 entries, counting those of the arrays and maps nested in them, 256 variables in
+scope, 64 functions and calls 32 deep. A value is held to these sizes where it is built, assigned
+with an operator or returned by a function, and at each count of the variables, which catches one
+grown by index, as in `a[i] = b`. Natively scripts run on threads of 32 MiB, and the deepest value
+these limits admit, built and compared in the deepest call, needs under 16 MiB of it in a debug
+build. On the web they run on the page's thread, whose stack is 1 MiB in a wasm32 build with the
+default linker settings, so there arrays hold up to 200 items, maps 50 entries and calls go 6
+deep; the deepest value in the deepest call needs under 900 KiB there in a debug build, measured in
+Chrome and Firefox.
+
+Inside one bar the memory limit has a gap: a value that no variable holds yet, such as the
+arguments of a call while they are evaluated or the results `map` collects, is not counted. So one
+bar may allocate past the memory limit until its time limit ends it: under the default limits up to
+about 480 MiB in a release build in the package's measurements, and more on a machine that
+allocates faster. A host that runs scripts it does not trust caps the memory of the process they
+run in itself.
 
 A script has no `import`, no `eval`, no clock and no output: it reaches nothing outside itself.
