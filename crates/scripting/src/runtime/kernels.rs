@@ -13,6 +13,8 @@ pub(crate) enum Kernel {
         kind: WindowKind,
         period: usize,
         window: VecDeque<f64>,
+        /// The missing inputs in `window`, so a missing input costs no scan of it.
+        missing: usize,
     },
     /// A recursive average seeded by the mean of the first `seed` finite inputs.
     Average {
@@ -58,6 +60,7 @@ impl Kernel {
             kind,
             period,
             window: VecDeque::new(),
+            missing: 0,
         };
         let average = |seed, alpha| Self::Average {
             seed,
@@ -115,12 +118,16 @@ impl Kernel {
                 kind,
                 period,
                 window,
+                missing,
             } => {
-                if window.len() == *period {
-                    window.pop_front();
+                if window.len() == *period && window.pop_front().is_some_and(|v| !v.is_finite()) {
+                    *missing -= 1;
                 }
                 window.push_back(x);
-                if window.len() < *period || !window.iter().all(|v| v.is_finite()) {
+                if !x.is_finite() {
+                    *missing += 1;
+                }
+                if window.len() < *period || *missing > 0 {
                     return f64::NAN;
                 }
                 let len = window.len() as f64;

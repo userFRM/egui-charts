@@ -184,11 +184,22 @@ fn math_helpers_follow_f64_and_propagate_missing_values() {
 }
 
 /// The update contract `is_incremental` promises: appended bars, a changed last bar and a
-/// change deep in history give the values of a fresh calculation.
+/// change deep in history give the values of a fresh calculation, and an appended bar settles
+/// within a second.
 #[test]
 fn updates_equal_full_calculations() {
-    let fixture = with_gaps(600, 2);
-    for (title, source) in examples() {
+    let mut rows: Vec<_> = examples()
+        .iter()
+        .map(|&(title, source)| (title, source, with_gaps(600, 2), 300))
+        .collect();
+    // The appended bar steps the call over the 20,000 bars it skipped.
+    rows.push((
+        "skipped call",
+        "if bar_index < 20000 || bar_index == 40000 {\n    plot(\"x\", sma(close, 20000));\n}",
+        bars(40_001, 2),
+        40_000,
+    ));
+    for (title, source, fixture, start) in rows {
         let script = compile(source);
         let fresh = |bars: &[Bar]| calculated(&script, bars).values().columns().to_vec();
         let same_as_fresh = |study: &CustomIndicator, bars: &[Bar], step: &str| {
@@ -206,12 +217,18 @@ fn updates_equal_full_calculations() {
                 .iter()
                 .all(|line| line.len() == fixture.len())
         );
-        let mut bars = fixture[..300].to_vec();
+        let mut bars = fixture[..start].to_vec();
         let mut study = calculated(&script, &bars);
-        for bar in &fixture[300..] {
+        for bar in &fixture[start..] {
             bars.push(bar.clone());
+            let started = std::time::Instant::now();
             study.update(&bars, bars.len() - 1);
             settle(&mut study, &bars);
+            let took = started.elapsed();
+            assert!(
+                took < Duration::from_secs(1),
+                "{title}: appended bar took {took:?}"
+            );
         }
         same_as_fresh(&study, &bars, "appended");
         for close in [101.5, 98.25] {
