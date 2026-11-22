@@ -629,14 +629,13 @@ impl OrderTicket {
             Kind::Limit | Kind::Stop => Some(self.price),
             Kind::StopLimit => Some(self.limit),
             Kind::TrailingStop => {
-                let start = if self.activation.0 {
-                    Some(self.activation.1)
-                } else {
-                    market.last
-                };
                 let order_type = self.trailing(market).ok()?;
+                // The activation as sent, on the tick, so that it starts the trail at once.
+                let OrderType::TrailingStop { activation, .. } = order_type else {
+                    return None;
+                };
                 order_type
-                    .trail(self.side, None, start?)
+                    .trail(self.side, None, activation.or(market.last)?)
                     .map(|(_, stop)| stop)
             }
         }
@@ -1702,9 +1701,10 @@ mod tests {
                 true,
                 Ok((trailing(Price(1.25), None), 10.0)),
             ),
+            // The activation snaps to 98, where the buy's stop starts: 98 + 1.47 rounds to 99.5.
             (
                 (TrailUnit::Percent, 1.5),
-                Some(98.0),
+                Some(98.1),
                 false,
                 true,
                 Ok((trailing(Percent(1.5), Some(98.0)), 10.0)),
