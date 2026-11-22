@@ -8,6 +8,10 @@ use egui_charts::studies::{
 };
 use std::time::Duration;
 
+// `wasm-pack test --chrome` skips a suite left on its default, Node.js.
+#[cfg(target_arch = "wasm32")]
+wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
 /// `n` one-minute bars from 2026-01-02 00:00 UTC of a xorshift random walk around 100.
 fn bars(n: usize, seed: u64) -> Vec<Bar> {
     let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
