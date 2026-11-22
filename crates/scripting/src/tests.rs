@@ -411,7 +411,15 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
     let message = stopped(settle(&mut capped, &fixture));
     assert!(message.contains("memory limit"), "{message}");
     assert!(message.contains("at line"), "{message}");
-    let mut study = compile(&source).study();
+    // The default memory limit, and no time limit a slow or busy machine could reach.
+    let mut study = limited(
+        &source,
+        Limits {
+            full: Duration::from_secs(3600),
+            ..Limits::default()
+        },
+    )
+    .study();
     study.calculate(&fixture);
     assert!(matches!(
         settle(&mut study, &fixture),
