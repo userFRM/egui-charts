@@ -15,16 +15,24 @@ enum Operation {
     Copy(String),
     Revoke(String),
     Share(String, ShareAccess),
+    /// The old and the new name.
+    Rename(String, String),
 }
 
 impl Operation {
-    /// The document the operation is made on.
+    /// The document the operation is made on: a rename's new name.
     fn document(&self) -> &str {
         let (Self::Link(document)
         | Self::Copy(document)
         | Self::Revoke(document)
-        | Self::Share(document, _)) = self;
+        | Self::Share(document, _)
+        | Self::Rename(_, document)) = self;
         document
+    }
+
+    /// Whether the operation is made on the document `name`; a rename on both of its names.
+    fn is_on(&self, name: &str) -> bool {
+        self.document() == name || matches!(self, Self::Rename(old, _) if old == name)
     }
 }
 
@@ -35,6 +43,7 @@ enum Outcome {
     Copy(String),
     Revoked,
     Shared(ShareAccess),
+    Renamed,
     Failed(FeedError),
 }
 
@@ -62,12 +71,34 @@ impl ShareControls {
         self.sharing = Some(sharing);
     }
 
-    /// Whether the rows offer Stop sharing for the document `name`: the service offers revoking
-    /// and reports it shared.
-    pub(crate) fn can_stop_sharing(&self, kind: ShareKind, name: &str) -> bool {
+    /// Whether the service reports the document `name` shared.
+    pub(crate) fn shared(&self, kind: ShareKind, name: &str) -> bool {
         self.sharing
             .as_ref()
-            .is_some_and(|sharing| sharing.offers(kind).revoke && sharing.shared(kind, name))
+            .is_some_and(|sharing| sharing.shared(kind, name))
+    }
+
+    /// Whether the document `name` must not be deleted: the service reports it shared, or an
+    /// operation on it waits for the service's answer. Its link would outlive it.
+    pub(crate) fn blocks_delete(&self, kind: ShareKind, name: &str) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|operation| operation.is_on(name))
+            || self.shared(kind, name)
+    }
+
+    /// Whether an operation waits for the service's answer. The controls take one at a time.
+    pub(crate) fn busy(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Asks the service to move the sharing of `old` to `new`, its new name.
+    pub(crate) fn rename(&mut self, kind: ShareKind, old: &str, new: &str) {
+        let Some(sharing) = self.sharing.clone() else {
+            return;
+        };
+        self.pending = Some(Operation::Rename(old.to_owned(), new.to_owned()));
+        sharing.rename(kind, old, new, self.inbox.reply(0));
     }
 
     /// Takes the host's answer, copying a link to the clipboard. Returns the saved copy's name.
@@ -99,6 +130,13 @@ impl ShareControls {
                         Err(error) => Outcome::Failed(error),
                     },
                 ),
+                Operation::Rename(..) => answer.downcast::<Result<(), FeedError>>().map_or_else(
+                    |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
+                    |answer| match *answer {
+                        Ok(()) => Outcome::Renamed,
+                        Err(error) => Outcome::Failed(error),
+                    },
+                ),
                 Operation::Share(_, access) => {
                     answer.downcast::<Result<(), FeedError>>().map_or_else(
                         |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
@@ -125,21 +163,28 @@ impl ShareControls {
     }
 
     /// Shows the rows the service offers for the document `name`, then the progress or result of
-    /// the last operation on it. Shows nothing without offers, shared state or a revoke result.
-    /// Returns true when Save a copy was chosen, so the caller can keep the document as it was.
+    /// the last operation on it. Shows nothing without offers, shared state or a revoke or rename
+    /// under way or answered. Returns true when Save a copy was chosen, so the caller can keep the
+    /// document as it was.
     pub(crate) fn show(&mut self, ui: &mut Ui, kind: ShareKind, name: &str) -> bool {
         let Some(sharing) = self.sharing.clone() else {
             return false;
         };
         let offer = sharing.offers(kind);
         let shared = sharing.shared(kind, name);
-        // Keep the host's revoke answer visible after shared state disappears.
-        let revoked = self.last.as_ref().is_some_and(
-            |(operation, _)| matches!(operation, Operation::Revoke(document) if document == name),
+        // Keep the host's revoke or rename answer, and the wait for it, visible after shared
+        // state disappears.
+        let answered = self.last.as_ref().is_some_and(|(operation, _)| {
+            matches!(
+                operation,
+                Operation::Revoke(document) | Operation::Rename(_, document) if document == name
+            )
+        });
+        let waiting = matches!(
+            &self.pending,
+            Some(Operation::Revoke(document) | Operation::Rename(_, document)) if document == name
         );
-        let revoking =
-            matches!(&self.pending, Some(Operation::Revoke(document)) if document == name);
-        if !offer.link && !offer.copy && !offer.switch && !shared && !revoked && !revoking {
+        if !offer.link && !offer.copy && !offer.switch && !shared && !answered && !waiting {
             return false;
         }
         ui.separator();
@@ -242,6 +287,7 @@ impl ShareControls {
                         Operation::Copy(_) => "Saving a copy…",
                         Operation::Revoke(_) => "Stopping sharing…",
                         Operation::Share(..) => "Sharing…",
+                        Operation::Rename(..) => "Keeping it shared…",
                     },
                 ),
             ))
@@ -276,17 +322,32 @@ impl ShareControls {
                             },
                         ),
                     ),
+                    Outcome::Renamed => (
+                        false,
+                        l10n::text(ui.ctx(), "Still shared under the new name"),
+                    ),
                     Outcome::Failed(error) => (
                         true,
-                        l10n::format_text(
-                            ui.ctx(),
-                            if matches!(operation, Operation::Revoke(_)) {
-                                "Could not stop sharing: {0}"
-                            } else {
-                                "Could not share: {0}"
-                            },
-                            &[("0", error.to_string())],
-                        ),
+                        match operation {
+                            // The old document stays, shared, beside the renamed one.
+                            Operation::Rename(old, _) => l10n::format_text(
+                                ui.ctx(),
+                                "{name} is still shared, so it was kept: {error}",
+                                &[
+                                    ("name", old.as_str()),
+                                    ("error", error.to_string().as_str()),
+                                ],
+                            ),
+                            _ => l10n::format_text(
+                                ui.ctx(),
+                                if matches!(operation, Operation::Revoke(_)) {
+                                    "Could not stop sharing: {0}"
+                                } else {
+                                    "Could not share: {0}"
+                                },
+                                &[("0", error.to_string())],
+                            ),
+                        },
                     ),
                 })
             })
@@ -303,10 +364,59 @@ impl ShareControls {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::data::Reply;
     use crate::services::ShareOffer;
+
+    /// Shares documents through the switch or by link: `share` and `revoke` answer at once and
+    /// change `shared`, and a link waits in `link` for the test to answer. `rename` moves the
+    /// sharing when `moves`, holding its answer in `held` when `hold`, and otherwise answers
+    /// `FeedError::NotSupported` as the default does.
+    #[derive(Default)]
+    pub(crate) struct Shares {
+        pub(crate) offer: ShareOffer,
+        pub(crate) shared: std::sync::Mutex<std::collections::BTreeSet<String>>,
+        pub(crate) link: std::sync::Mutex<Option<Reply<ShareLink>>>,
+        pub(crate) moves: bool,
+        pub(crate) hold: bool,
+        pub(crate) held: std::sync::Mutex<Option<Reply<()>>>,
+    }
+
+    impl Sharing for Shares {
+        fn offers(&self, _: ShareKind) -> ShareOffer {
+            self.offer
+        }
+        fn shared(&self, _: ShareKind, document: &str) -> bool {
+            self.shared.lock().unwrap().contains(document)
+        }
+        fn share(&self, _: ShareKind, document: &str, _: ShareAccess, reply: Reply<()>) {
+            self.shared.lock().unwrap().insert(document.to_owned());
+            reply.send(Ok(()));
+        }
+        fn revoke(&self, _: ShareKind, document: &str, reply: Reply<()>) {
+            self.shared.lock().unwrap().remove(document);
+            reply.send(Ok(()));
+        }
+        fn link(&self, _: ShareKind, _: &str, reply: Reply<ShareLink>) {
+            *self.link.lock().unwrap() = Some(reply);
+        }
+        fn rename(&self, _: ShareKind, document: &str, renamed: &str, reply: Reply<()>) {
+            if !self.moves {
+                return reply.send(Err(FeedError::NotSupported));
+            }
+            let mut shared = self.shared.lock().unwrap();
+            if shared.remove(document) {
+                shared.insert(renamed.to_owned());
+            }
+            drop(shared);
+            if self.hold {
+                *self.held.lock().unwrap() = Some(reply);
+            } else {
+                reply.send(Ok(()));
+            }
+        }
+    }
 
     /// Shares layouts as view-only links that cannot be copied, and rejects watchlists.
     struct Host;
@@ -565,6 +675,9 @@ mod tests {
                 Operation::Revoke(ref name) => host.revoke(kind, name, controls.inbox.reply(0)),
                 Operation::Share(ref name, access) => {
                     host.share(kind, name, access, controls.inbox.reply(0))
+                }
+                Operation::Rename(ref old, ref new) => {
+                    host.rename(kind, old, new, controls.inbox.reply(0))
                 }
             }
             let mut copied = None;

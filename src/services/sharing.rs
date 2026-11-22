@@ -83,15 +83,19 @@ impl ShareOffer {
 
 /// Sharing a layout or watchlist, supplied by a host that has accounts and somewhere to keep
 /// shared documents. The library owns neither: it shows the controls the host offers and reports
-/// the host's answers. It shows shared state and can ask the host to stop sharing. Without a
-/// service the layout menu and the watchlist panel offer no sharing.
+/// the host's answers. It shows shared state and can ask the host to stop sharing. A document
+/// that [`shared`](Self::shared) reports shared, or that has an operation waiting for its answer,
+/// cannot be deleted from the menus: offer [`ShareOffer::revoke`] or [`ShareOffer::switch`] with
+/// it, so the user can stop sharing first. Without a service the layout menu and the watchlist
+/// panel offer no sharing.
 ///
 /// Methods are called on the UI thread and return at once; answer through the [`Reply`] you were
 /// given, from any thread, runtime or browser task. Answer an error, such as
 /// [`FeedError::Other`](crate::data::FeedError::Other) with the reason, to reject an operation:
 /// the menu shows it. The methods that act on one document name it by `document`: a layout by
-/// its name, a watchlist by its [`Watchlist::id`](crate::model::Watchlist::id), which stays
-/// through renames and differs between lists of the same name.
+/// its name, which [`rename`](Self::rename) moves to the new name when the layout menu renames
+/// it, a watchlist by its [`Watchlist::id`](crate::model::Watchlist::id), which stays through
+/// renames and differs between lists of the same name.
 pub trait Sharing: MaybeSend + 'static {
     /// Which operations to offer for `kind`. The default offers none.
     fn offers(&self, kind: ShareKind) -> ShareOffer {
@@ -128,6 +132,19 @@ pub trait Sharing: MaybeSend + 'static {
     /// default.
     fn share(&self, kind: ShareKind, document: &str, access: ShareAccess, reply: Reply<()>) {
         let _ = (kind, document, access);
+        reply.send(Err(crate::data::FeedError::NotSupported));
+    }
+
+    /// Moves the sharing of `document` of `kind` to `renamed`, its new name, with its link and
+    /// access. Answer success once [`shared`](Self::shared) reports `renamed` shared and
+    /// `document` not, or an error, leaving `document` shared, for the menu to display. The
+    /// layout menu calls it when the user renames a layout the service reports shared, after
+    /// saving the layout under its new name and before deleting the old one, which it keeps while
+    /// `shared` reports it shared. Watchlists keep their
+    /// [`Watchlist::id`](crate::model::Watchlist::id) through renames, so the watchlist panel
+    /// never calls it. Unsupported by default.
+    fn rename(&self, kind: ShareKind, document: &str, renamed: &str, reply: Reply<()>) {
+        let _ = (kind, document, renamed);
         reply.send(Err(crate::data::FeedError::NotSupported));
     }
 

@@ -79,7 +79,8 @@ enum Request {
     Open(String),
     /// The name, the document and the edit count it holds.
     Save(String, String, u64),
-    /// Saving under the second name, then deleting the first; the document and its edit count.
+    /// Saving under the second name; the document and its edit count. The first name is deleted
+    /// once its sharing, if any, has moved.
     Rename(String, String, String, u64),
     Delete(String),
     /// Reading a layout to name its charts before it is deleted.
@@ -122,10 +123,16 @@ pub struct LayoutMenu {
     new_name: String,
     /// The layout whose delete waits for the user's confirmation.
     deleting: Option<Deleting>,
+    /// The layer and frame the contents were last shown in: a frame without them, or another
+    /// layer, means the menu was closed.
+    shown_at: Option<(egui::LayerId, u64)>,
     storage: Option<Arc<dyn Storage>>,
     inbox: Arc<Inbox>,
     pending: Option<Request>,
     requests: VecDeque<Request>,
+    /// Renames whose old layout waits to be deleted: the old and new names, and whether the
+    /// sharing service was asked to move the old one's sharing.
+    renamed: VecDeque<(String, String, bool)>,
     /// The revisions the layouts were read or written at, and the writes the host refused.
     revisions: Revisions,
     /// The edit count of the unsaved layout of each refused write.
@@ -193,10 +200,12 @@ impl LayoutMenu {
             focus_name: false,
             new_name: String::new(),
             deleting: None,
+            shown_at: None,
             storage: None,
             inbox: Arc::default(),
             pending: None,
             requests: VecDeque::new(),
+            renamed: VecDeque::new(),
             revisions: Revisions::new(StoreKind::Layouts),
             refused_edits: HashMap::new(),
             failing: false,
@@ -220,6 +229,7 @@ impl LayoutMenu {
         self.inbox = Arc::default();
         self.requests.clear();
         self.pending = None;
+        self.renamed.clear();
         self.revisions = Revisions::new(StoreKind::Layouts);
         self.refused_edits.clear();
         self.layouts.clear();
@@ -230,14 +240,25 @@ impl LayoutMenu {
         self.request(Request::List);
     }
 
-    /// Offers copy-link and save-a-copy on the current stored layout, as `sharing` reports them.
-    /// A saved copy is read back from the [`Storage`] given to [`set_storage`](Self::set_storage),
-    /// where the host writes it.
+    /// Offers the sharing rows `sharing` reports, such as Copy link, Save a copy or the Share
+    /// layout switch, on the current stored layout. A saved copy is read back from the
+    /// [`Storage`] given to [`set_storage`](Self::set_storage), where the host writes it. Delete
+    /// stays disabled for a layout the service reports shared or that has a sharing request
+    /// waiting for an answer. A rename moves a shared layout's sharing before the old name is
+    /// deleted; see [`rename`](Self::rename).
     pub fn set_sharing(&mut self, sharing: Arc<dyn Sharing>) {
         self.share.set_service(sharing);
     }
 
     fn request(&mut self, request: Request) {
+        // A later request on the old layout of a rename decides that layout in place of the rename.
+        if let Request::Open(name)
+        | Request::Save(name, ..)
+        | Request::Rename(_, name, ..)
+        | Request::Delete(name) = &request
+        {
+            self.renamed.retain(|(old, ..)| old != name);
+        }
         self.requests.push_back(request);
         self.send_next();
     }
@@ -305,7 +326,10 @@ impl LayoutMenu {
     }
 
     /// Renames the current layout to `name` by saving `layout`, the current layout, under it
-    /// and then deleting the old one.
+    /// and then deleting the old one. With [`set_sharing`](Self::set_sharing), the sharing of a
+    /// layout the service reports shared is first moved through [`Sharing::rename`]. The old
+    /// layout is deleted only once the service no longer reports it shared, so a service that
+    /// cannot move the sharing keeps the old layout, still shared.
     pub fn rename(&mut self, name: &str, layout: &SavedLayout) {
         if name.trim().is_empty() {
             self.error = Some("Enter a layout name".into());
@@ -343,6 +367,8 @@ impl LayoutMenu {
         if self.share.poll(ctx).is_some() {
             self.request(Request::List);
         }
+        self.follow_renames();
+        self.send_next();
         let storage = self.storage.clone()?;
         let mut opened = None;
         for (name, settled) in self.revisions.poll(&*storage, ctx) {
@@ -497,10 +523,11 @@ impl LayoutMenu {
                                     *starred = name.clone();
                                 }
                                 if old != name {
-                                    self.requests.push_front(Request::Delete(old));
+                                    self.renamed.push_back((old, name.clone(), false));
                                 }
                                 self.kept(&name, edits);
                                 self.insert(name);
+                                self.follow_renames();
                             }
                             Written::Refused(_) => {
                                 // Another client wrote a layout of the new name, which the
@@ -599,6 +626,29 @@ impl LayoutMenu {
     fn insert(&mut self, name: String) {
         if let Err(at) = self.layouts.binary_search(&name) {
             self.layouts.insert(at, name);
+        }
+    }
+
+    /// Deletes the old layout of each finished rename once the sharing service no longer reports
+    /// it shared, first asking the service to move a shared one's sharing to the new name. Waits
+    /// while a sharing operation is under way. Queues the deletes; the caller sends them.
+    fn follow_renames(&mut self) {
+        while !self.share.busy() {
+            let Some((old, new, asked)) = self.renamed.front_mut() else {
+                return;
+            };
+            if !*asked && self.share.shared(ShareKind::Layout, old) {
+                *asked = true;
+                self.share.rename(ShareKind::Layout, old, new);
+                continue;
+            }
+            let Some((old, ..)) = self.renamed.pop_front() else {
+                return;
+            };
+            // A layout the service still shares is kept: its link would outlive it.
+            if !self.share.shared(ShareKind::Layout, &old) {
+                self.requests.push_front(Request::Delete(old));
+            }
         }
     }
 
@@ -855,7 +905,9 @@ impl LayoutMenu {
         action
     }
 
-    /// Named layout menu contents, shared with the save dropdown.
+    /// Named layout menu contents, shared with the save dropdown. A frame without the contents,
+    /// or the contents shown in another layer, counts as closing the menu: a name being entered
+    /// and a delete waiting for confirmation are dropped.
     pub fn show_menu(&mut self, ui: &mut Ui) -> LayoutAction {
         let height =
             (ui.ctx().content_rect().bottom() - ui.next_widget_position().y - 16.0).max(0.0);
@@ -869,6 +921,19 @@ impl LayoutMenu {
     }
 
     fn show_contents(&mut self, ui: &mut Ui) -> LayoutAction {
+        // A frame without the menu, or another popup showing it, closed it: the naming and a
+        // delete waiting for confirmation end with it.
+        let here = (ui.layer_id(), ui.ctx().cumulative_frame_nr());
+        if self
+            .shown_at
+            .is_some_and(|(layer, frame)| layer != here.0 || frame + 1 < here.1)
+        {
+            self.editing = None;
+            self.focus_name = false;
+            self.new_name.clear();
+            self.deleting = None;
+        }
+        self.shown_at = Some(here);
         let width = self
             .config
             .menu_width
@@ -951,9 +1016,20 @@ impl LayoutMenu {
             self.autosave = !self.autosave;
         }
         if let Some(naming) = self.editing {
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.new_name).desired_width(ui.available_width()),
-            );
+            let label = ui.label(l10n::text(
+                ui.ctx(),
+                match naming {
+                    Naming::Rename => "New name",
+                    Naming::SaveAs => "Name of the copy",
+                    Naming::Create => "New layout name",
+                },
+            ));
+            let response = ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.new_name)
+                        .desired_width(ui.available_width()),
+                )
+                .labelled_by(label.id);
             // The click that opened the field can take the focus away again within its frame,
             // so the request repeats until the field has it.
             self.focus_name |= save_as || rename || create;
@@ -1021,9 +1097,17 @@ impl LayoutMenu {
                     &[("charts", charts.join(", "))],
                 ));
             }
+            // A deleted layout's link could not be revoked from the menu any more.
+            let kept = self.share.blocks_delete(ShareKind::Layout, &deleting.name);
             let (mut confirm, mut cancel) = (false, false);
             ui.horizontal(|ui| {
-                confirm = ui.button(l10n::text(ui.ctx(), "Delete")).clicked();
+                confirm = ui
+                    .add_enabled(!kept, egui::Button::new(l10n::text(ui.ctx(), "Delete")))
+                    .on_disabled_hover_text(l10n::text(
+                        ui.ctx(),
+                        "Stop sharing the layout before deleting it",
+                    ))
+                    .clicked();
                 cancel = ui.button(l10n::text(ui.ctx(), "Cancel")).clicked();
             });
             if confirm {
@@ -1214,6 +1298,7 @@ impl ListItemContent for MenuRow<'_> {
 mod tests {
     use super::*;
     use crate::data::Reply;
+    use crate::ui::share_controls::tests::Shares;
     use std::collections::BTreeMap;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1252,6 +1337,38 @@ mod tests {
             self.0.lock().unwrap().remove(name);
             reply.send(Ok(()));
         }
+    }
+
+    /// The menu of the current layout `A`, stored in the returned host and shared through
+    /// `shares`, shown once its list was read.
+    fn shared_menu(shares: Arc<Shares>) -> (Arc<Host>, egui_kittest::Harness<'static, LayoutMenu>) {
+        let layout = SavedLayout {
+            mode: crate::widget::ChartLayoutMode::TwoHorizontal,
+            charts: Vec::new(),
+            sizing: None,
+            link_groups: None,
+        };
+        let host = Arc::new(Host::default());
+        host.0
+            .lock()
+            .unwrap()
+            .insert("A".into(), layout.to_json().unwrap());
+        let mut menu = LayoutMenu::new();
+        menu.set_storage(host.clone());
+        menu.set_sharing(shares);
+        menu.curr_layout = Some("A".into());
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(320.0, 600.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, menu: &mut LayoutMenu| {
+                    menu.poll(ui.ctx());
+                    menu.show_menu(ui);
+                },
+                menu,
+            );
+        h.run();
+        (host, h)
     }
 
     #[test]
@@ -1611,6 +1728,156 @@ mod tests {
                 assert_eq!(h.state().0.layouts, ["B"]);
                 assert!(!host.0.lock().unwrap().contains_key("A"));
             }
+        }
+    }
+
+    /// Delete waits, saying why, while the layout is shared through the switch or its link is on
+    /// its way, and is offered again once that ends.
+    #[test]
+    fn deleting_waits_while_the_layout_is_shared_or_its_link_is_pending() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        for switch in [false, true] {
+            let mut offer = crate::services::ShareOffer::new(!switch, false);
+            offer.switch = switch;
+            let shares = Arc::new(Shares {
+                offer,
+                ..Default::default()
+            });
+            let (_, mut h) = shared_menu(shares.clone());
+            let share = if switch { "Share layout" } else { "Copy link" };
+            h.get_by_label(share).click();
+            h.run();
+            h.get_by_label("×").click();
+            h.run();
+            assert!(
+                h.get_by_label("Delete").accesskit_node().is_disabled(),
+                "{share}"
+            );
+            h.get_by_label("Delete").hover();
+            h.run_steps(4);
+            assert!(
+                h.query_by_label("Stop sharing the layout before deleting it")
+                    .is_some(),
+                "{share}"
+            );
+            // Stopping sharing, or the answer to the link, lets the layout go.
+            if switch {
+                h.get_by_label(share).click();
+            } else {
+                let link = shares.link.lock().unwrap().take().unwrap();
+                link.send(Err(FeedError::Other("offline".into())));
+            }
+            h.run();
+            assert!(
+                !h.get_by_label("Delete").accesskit_node().is_disabled(),
+                "{share}"
+            );
+        }
+    }
+
+    /// A rename moves the sharing of a shared layout before the old layout is deleted, keeps the
+    /// old layout, still shared, when the service cannot move it, and asks nothing for a layout
+    /// that is not shared.
+    #[test]
+    fn renaming_a_shared_layout_keeps_it_shared() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let moved = "Still shared under the new name";
+        let kept = "A is still shared, so it was kept: not supported";
+        let layout = SavedLayout {
+            mode: crate::widget::ChartLayoutMode::Single,
+            charts: Vec::new(),
+            sizing: None,
+            link_groups: None,
+        };
+        // Whether `A` is shared first, the service holds its answer and moves the sharing, and the
+        // layouts stored and shared afterwards, with the status shown.
+        for (share, hold, moves, stored, shared, status) in [
+            (true, false, true, &["B"][..], &["B"][..], Some(moved)),
+            (true, false, false, &["A", "B"][..], &["A"][..], Some(kept)),
+            (false, false, false, &["B"][..], &[][..], None),
+            (true, true, true, &["B"][..], &["B"][..], Some(moved)),
+        ] {
+            let shares = Arc::new(Shares {
+                offer: crate::services::ShareOffer {
+                    switch: true,
+                    ..Default::default()
+                },
+                moves,
+                hold,
+                ..Default::default()
+            });
+            let (host, mut h) = shared_menu(shares.clone());
+            let stored_now = || host.0.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+            if share {
+                h.get_by_label("Share layout").click();
+                h.run();
+            }
+            h.state_mut().rename("B", &layout);
+            h.run();
+            if hold {
+                assert_eq!(
+                    stored_now(),
+                    ["A", "B"],
+                    "the old layout waits for the answer"
+                );
+                assert!(h.query_by_label("Keeping it shared…").is_some());
+                shares.held.lock().unwrap().take().unwrap().send(Ok(()));
+                h.run();
+            }
+            assert_eq!(stored_now(), stored);
+            let sharing: Vec<_> = shares.shared.lock().unwrap().iter().cloned().collect();
+            assert_eq!(sharing, shared);
+            let on = h.get_by_label("Share layout").accesskit_node().toggled();
+            assert_eq!(on == Some(egui::accesskit::Toggled::True), shared == ["B"]);
+            for text in [moved, kept] {
+                assert_eq!(
+                    h.query_by_label(text).is_some(),
+                    status == Some(text),
+                    "{text}"
+                );
+            }
+        }
+    }
+
+    /// Each naming action names its field, and closing the menu ends the naming and a delete
+    /// waiting for confirmation, so the menu opens again without them.
+    #[test]
+    fn closing_the_menu_cancels_naming_and_a_pending_delete() {
+        use egui_kittest::kittest::Queryable;
+        for (entry, role, label) in [
+            ("Create new layout", Role::TextInput, "New layout name"),
+            ("Save layout as…", Role::TextInput, "Name of the copy"),
+            ("Rename…", Role::TextInput, "New name"),
+            ("×", Role::Label, "Delete A?"),
+        ] {
+            let mut menu = LayoutMenu::new();
+            menu.layouts = vec!["A".into()];
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(320.0, 600.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, menu: &mut LayoutMenu| {
+                        menu.show(ui);
+                    },
+                    menu,
+                );
+            h.run();
+            h.get_by_label("Named layouts").click();
+            h.run();
+            h.get_by_label(entry).click();
+            h.run();
+            assert!(h.query_by_role_and_label(role, label).is_some(), "{entry}");
+            h.key_press(egui::Key::Escape);
+            h.run();
+            assert!(
+                h.query_by_label("Save layout").is_none(),
+                "Escape closes it"
+            );
+            h.get_by_label("Named layouts").click();
+            h.run();
+            assert!(h.query_by_label("Save layout").is_some());
+            assert!(h.query_by_role_and_label(role, label).is_none(), "{entry}");
+            assert!(h.query_by_role(Role::TextInput).is_none(), "{entry}");
         }
     }
 
