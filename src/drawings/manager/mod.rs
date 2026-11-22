@@ -11,7 +11,7 @@ use crate::drawings::services::{
 use crate::tokens::DESIGN_TOKENS;
 use egui::epaint::ClippedShape;
 use egui::{Pos2, Rect};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 mod edit;
@@ -237,6 +237,54 @@ impl TextEditState {
     }
 }
 
+/// The study this chart removed while a shared drawing was hidden. A read can omit the
+/// drawing or a kept copy can replace it, then undo can bring the same drawing back.
+pub(crate) struct RemovedDrawingPane {
+    pub(crate) created_at: Option<i64>,
+    /// Creation time in storage, including a first write of a locally created drawing.
+    pub(crate) stored_created_at: Option<i64>,
+    pub(crate) owner: usize,
+    pub(crate) pane: super::persistence::StoredPane,
+}
+
+impl RemovedDrawingPane {
+    pub(crate) fn owner_for(
+        &self,
+        created_at: i64,
+        pane: &super::persistence::StoredPane,
+    ) -> Option<usize> {
+        (self.stored_created_at == Some(created_at) && &self.pane == pane).then_some(self.owner)
+    }
+
+    pub(crate) fn owns(&self, drawing: &Drawing) -> bool {
+        drawing.pane == Some(self.owner)
+            && (drawing.created_at == self.created_at
+                || drawing.created_at == self.stored_created_at)
+    }
+}
+
+/// Display state of one chart, not part of any drawing or its stored document.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SharedDrawingFilter {
+    hidden: bool,
+    pub(crate) symbol_storage: bool,
+}
+
+impl SharedDrawingFilter {
+    pub(crate) fn hides(self, drawing: &Drawing) -> bool {
+        self.hidden
+            && match drawing.folder_sync_mode() {
+                Some(super::FolderSync::AllLayouts) => true,
+                Some(_) => false,
+                None => self.symbol_storage && drawing.saveable,
+            }
+    }
+
+    fn selectable(self, drawing: &Drawing) -> bool {
+        drawing.selectable && !self.hides(drawing)
+    }
+}
+
 /// Central coordinator for chart drawings.
 ///
 /// `DrawingManager` owns the list of completed drawings and the in-progress
@@ -306,6 +354,12 @@ pub struct DrawingManager {
     pane_rect: Rect,
     pane: Option<usize>,
     pane_members: Vec<Option<usize>>,
+    /// Removed owners of filtered drawings. Their drawings use the price pane locally until
+    /// the owner returns; the layout mirror must never see a change of the drawing's owner.
+    pub(crate) removed_owners: Vec<usize>,
+    pub(crate) removed_panes: HashMap<String, RemovedDrawingPane>,
+    /// Records read without a matching local study, independent of any undoable removal.
+    pub(crate) unshown_panes: HashMap<String, (i64, super::persistence::StoredPane)>,
     pub(crate) pane_clips: std::collections::HashMap<Option<usize>, Rect>,
     /// Editor-only settings must not grow every idle chart's inline state.
     pub(crate) text_editor: Option<Box<TextEditState>>,
@@ -332,9 +386,14 @@ pub struct DrawingManager {
     covers: Mutex<Vec<(Pos2, usize)>>,
     /// Nearby bar and overlay points, refreshed by the chart before pointer handling.
     pub(crate) snap_targets: Vec<Pos2>,
-    /// While a drawing tool is active over the price pane: the frame, the pointer height and the
-    /// height a click there gives the next anchor, which the price pane's crosshair shows.
+    /// While a drawing tool is active or a drawing is dragged over the price pane: the frame, the
+    /// pointer height and the height at which a click there places the next anchor or the drag
+    /// puts the dragged point, which the price pane's crosshair shows.
     pub(crate) anchor_crosshair: Option<(u64, f32, f32)>,
+    /// The height at which the last drag update put the dragged handle or grabbed point, while
+    /// that height sets the drawing's prices; the price pane's crosshair shows it. The chart
+    /// clears it before each pane's pointer handling.
+    pub(crate) drag_crosshair: Option<f32>,
 
     /// Manager configuration (colors, snapping, handles).
     pub options: DrawingManagerOptions,
@@ -369,6 +428,7 @@ pub struct DrawingManager {
     pub(crate) eraser_mode: bool,
     /// Whether every drawing is hidden as a group; see [`Self::set_hidden`].
     hidden: bool,
+    pub(crate) shared_filter: SharedDrawingFilter,
     /// Whether every drawing is locked as a group; see [`Self::set_locked`].
     locked: bool,
 
@@ -441,6 +501,9 @@ impl DrawingManager {
             pane_rect: Rect::NOTHING,
             pane: None,
             pane_members: vec![None],
+            removed_owners: Vec::new(),
+            removed_panes: Default::default(),
+            unshown_panes: Default::default(),
             pane_clips: std::collections::HashMap::new(),
             text_editor: None,
             finished_text_placement: None,
@@ -454,6 +517,7 @@ impl DrawingManager {
             covers: Mutex::new(Vec::new()),
             snap_targets: Vec::new(),
             anchor_crosshair: None,
+            drag_crosshair: None,
             options: DrawingManagerOptions::default(),
             dragging_handle: None,
             drag_old_state: None,
@@ -467,6 +531,7 @@ impl DrawingManager {
             curr_timeframe: String::from("1D"),
             eraser_mode: false,
             hidden: false,
+            shared_filter: SharedDrawingFilter::default(),
             locked: false,
             pending_sync: Arc::new(Mutex::new(Vec::new())),
             sync_enabled: true,
@@ -536,28 +601,38 @@ impl DrawingManager {
         if self.hidden {
             return;
         }
-        self.selection.select_all(
-            ids.into_iter()
-                .filter(|id| self.drawings.iter().any(|d| d.id == *id && d.selectable)),
-        );
+        self.selection.select_all(ids.into_iter().filter(|id| {
+            self.drawings
+                .iter()
+                .any(|d| d.id == *id && self.shared_filter.selectable(d))
+        }));
     }
 
     /// Selected live drawing ids, in drawing-list order.
     pub fn selected_ids(&self) -> impl Iterator<Item = usize> + '_ {
         self.drawings
             .iter()
-            .filter(|d| d.selectable && self.selection.is_selected(d.id))
+            .filter(|d| self.shared_filter.selectable(d) && self.selection.is_selected(d.id))
             .map(|d| d.id)
     }
 
     /// Whether a drawing belongs to the current selection.
     pub fn is_selected(&self, id: usize) -> bool {
-        self.drawings.iter().any(|d| d.id == id && d.selectable) && self.selection.is_selected(id)
+        self.selection.is_selected(id)
+            && self
+                .drawings
+                .iter()
+                .any(|d| d.id == id && self.shared_filter.selectable(d))
     }
 
     /// Toggle a live drawing in the selection, retaining the other selected drawings.
     pub fn toggle_selection(&mut self, id: usize) {
-        if !self.hidden && self.drawings.iter().any(|d| d.id == id && d.selectable) {
+        if !self.hidden
+            && self
+                .drawings
+                .iter()
+                .any(|d| d.id == id && self.shared_filter.selectable(d))
+        {
             self.selection.toggle(id);
         }
     }
@@ -581,7 +656,9 @@ impl DrawingManager {
             .iter()
             .enumerate()
             .filter(|(_, d)| {
-                d.selectable && self.selection.is_selected(d.id) && self.accepts_user_edits(d)
+                self.shared_filter.selectable(d)
+                    && self.selection.is_selected(d.id)
+                    && self.accepts_user_edits(d)
             })
             .map(|(index, d)| (index, d.clone()))
             .collect();
@@ -912,7 +989,7 @@ impl DrawingManager {
     /// What [`Self::keep_across_read`] needs of the drawings about to be replaced. With
     /// `keep_confined`, the saveable drawings in a top-level folder kept on one chart or in one
     /// layout stay too, as drawing storage does not hold them.
-    pub(crate) fn before_read(&self, keep_confined: bool) -> BeforeRead {
+    pub(crate) fn before_read(&mut self, keep_confined: bool) -> BeforeRead {
         let stays = |d: &&Drawing| !d.saveable || (keep_confined && d.confined());
         BeforeRead {
             // A drawing that stays is in no document read, so its id is no stored id.
@@ -925,6 +1002,8 @@ impl DrawingManager {
             next_id: self.next_id,
             unsaved: self.drawings.iter().filter(stays).cloned().collect(),
             identity: self.identity,
+            removed_owners: std::mem::take(&mut self.removed_owners),
+            removed_panes: std::mem::take(&mut self.removed_panes),
         }
     }
 
@@ -941,9 +1020,13 @@ impl DrawingManager {
             next_id,
             unsaved,
             identity,
+            removed_owners,
+            removed_panes,
         } = previous;
         // The same drawings to a layout that mirrors them, as their ids are.
         self.identity = identity;
+        self.removed_owners = removed_owners;
+        self.removed_panes = removed_panes;
         self.next_id = self.next_id.max(next_id);
         let read = self.drawings.len();
         let mut taken: HashSet<String> = self.drawings.iter().map(sync_id).collect();
@@ -974,6 +1057,48 @@ impl DrawingManager {
         for at in fresh {
             self.drawings[at].id = self.take_id();
         }
+    }
+
+    /// Keep layout links when this chart's own snapshot restores exactly the same stored
+    /// records. Local drawing ids survive; old study ids and pane-removal history do not.
+    pub(crate) fn keep_snapshot_links(&mut self, previous: &Self) {
+        fn key(d: &Drawing) -> Option<(&str, i64)> {
+            Some((d.stored_id.as_deref()?, d.created_at?))
+        }
+        if self.drawings.is_empty() || self.drawings.len() != previous.drawings.len() {
+            return;
+        }
+        if self
+            .drawings
+            .iter()
+            .zip(&previous.drawings)
+            .all(|(d, old)| key(d).is_some_and(|k| Some(k) == key(old)))
+        {
+            for (d, old) in self.drawings.iter_mut().zip(&previous.drawings) {
+                d.id = old.id;
+            }
+        } else {
+            let Some(ids): Option<HashMap<_, _>> = previous
+                .drawings
+                .iter()
+                .map(|d| Some((key(d)?, d.id)))
+                .collect()
+            else {
+                return;
+            };
+            if !self
+                .drawings
+                .iter()
+                .all(|d| key(d).is_some_and(|k| ids.contains_key(&k)))
+            {
+                return;
+            }
+            for d in &mut self.drawings {
+                d.id = ids[&key(d).expect("matched stored drawing")];
+            }
+        }
+        self.identity = previous.identity;
+        self.next_id = self.next_id.max(previous.next_id);
     }
 
     /// A new drawing of `tool` in its default style: the tool's own, recoloured by
@@ -1084,6 +1209,8 @@ pub(crate) struct BeforeRead {
     unsaved: Vec<Drawing>,
     /// The `DrawingManager::identity` of the manager.
     identity: u64,
+    removed_owners: Vec<usize>,
+    removed_panes: HashMap<String, RemovedDrawingPane>,
 }
 
 /// Coalesces repeated saves and updates of a drawing without reordering them across its delete.
@@ -1877,6 +2004,57 @@ mod tests {
         }
 
         assert_eq!(manager.hit_test(click), Some(11));
+    }
+
+    #[test]
+    fn shared_drawing_filter_removes_only_shared_targets() {
+        let mut m = DrawingManager::new();
+        m.options.magnet_mode = true;
+        let [local_id, shared_id] = [(false, 100.0), (true, 150.0)].map(|(shared, y)| {
+            let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+            line.stored_id = Some(format!("line-{y}"));
+            line.chart_points.push(ChartPoint::new(50.0, y));
+            if shared {
+                line.folder.push("Shared".into());
+                line.folder_sync
+                    .push(Some(crate::drawings::FolderSync::AllLayouts));
+            }
+            m.add_synced_drawing(line).unwrap()
+        });
+        m.update_all_screen_coords(|x| x, |y| y as f32, 1.0);
+        let local = Pos2::new(50.0, 100.0);
+        let shared = Pos2::new(50.0, 150.0);
+        let near = shared + egui::vec2(2.0, 1.0);
+        let tags = |m: &DrawingManager| {
+            m.axis_tags(Rect::EVERYTHING, egui::Color32::WHITE, &[], 0, None)
+                .filter_map(|tag| match tag {
+                    DrawingAxisTag::Price { price, .. } => Some(price),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(tags(&m), [100.0, 150.0]);
+        assert_eq!(m.hit_test(shared), Some(shared_id));
+        assert_eq!(m.snap_point(near, &m.drawings), shared);
+        m.select_drawings([local_id, shared_id]);
+        m.set_shared_drawings_hidden(true);
+        m.toggle_selection(shared_id);
+        assert_eq!(m.selected_ids().collect::<Vec<_>>(), [local_id]);
+        assert_eq!(tags(&m), [100.0]);
+        assert_eq!(m.hit_test(local), Some(local_id));
+        assert_eq!(m.hit_test(shared), None);
+        assert_eq!(m.snap_point(near, &m.drawings), near);
+        m.start_drag_body(shared_id, shared);
+        m.update_drag_handle(
+            local,
+            |x| x,
+            f64::from,
+            |p, from, to| p + f64::from(to - from),
+        );
+        m.end_drag_handle();
+        m.set_shared_drawings_hidden(false);
+        assert_eq!(tags(&m), [100.0, 150.0]);
+        assert!(m.pending_sync.lock().unwrap().is_empty());
     }
 
     /// The magnet snaps to a drawing anchor within the default distance, excluding members of

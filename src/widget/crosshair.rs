@@ -119,8 +119,8 @@ impl Chart {
         !valued && !options.ignore_whitespace_indices
     }
 
-    /// The height at which a click places the next drawing anchor, recorded by the price pane
-    /// this frame for a pointer at `pointer_y`.
+    /// The height at which a click places the next drawing anchor, or a drag puts the dragged
+    /// point, recorded by the price pane this frame for a pointer at `pointer_y`.
     pub(super) fn anchor_crosshair_y(&self, ctx: &egui::Context, pointer_y: f32) -> Option<f32> {
         #[cfg(feature = "drawings")]
         if let Some((frame, pointer, y)) = self.drawings.anchor_crosshair

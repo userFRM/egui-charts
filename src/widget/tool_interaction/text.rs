@@ -29,6 +29,7 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize, placed: bool) 
             // Typing the first text of a drawing just placed is part of placing it.
             && if placed { d.accepts_user_edits() } else { manager.accepts_user_edits(d) }
             && d.is_visible_on_timeframe(&manager.curr_timeframe)
+            && (placed || !manager.shared_filter.hides(d))
     }) else {
         return;
     };
@@ -252,6 +253,7 @@ pub(super) fn show_editor(
                 manager.accepts_user_edits(d)
             }
             && d.is_visible_on_timeframe(&manager.curr_timeframe)
+            && (editor.placed || !manager.shared_filter.hides(d))
     }) else {
         return;
     };

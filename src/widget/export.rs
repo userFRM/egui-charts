@@ -820,6 +820,7 @@ impl Chart {
             chart.drawings.drawings = self.drawings.drawings.clone();
             chart.drawings.curr_timeframe = self.drawings.curr_timeframe.clone();
             chart.drawings.set_hidden(self.drawings.is_hidden());
+            chart.drawings.shared_filter = self.drawings.shared_filter;
         }
         chart.marks = self.marks.clone();
         chart.marker_options = self.marker_options;
