@@ -20,6 +20,10 @@ use std::sync::Arc;
 /// beginning with a book snapshot. Checkpoint before the next execution after a minute or 1 MiB.
 const CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 
+/// The chart-only folder that keeps drawings placed on a replaying chart off the live charts
+/// of its symbol until the user shares it.
+const PRACTICE_FOLDER: &str = "Practice";
+
 /// A replay move held while the replay trading prompt asks about the account.
 pub(super) enum ReplayMove {
     /// A step back or a jump to the start from the replay bar.
@@ -1069,9 +1073,11 @@ impl DemoApp {
                 self.trading.set_service(self.paper.clone());
             }
             self.chart.set_replay_time(None);
+            self.chart.drawings_mut().options.local_placement_folder = None;
             restore_conversion(&mut self.chart, &self.live);
             for extra in &mut self.extra_charts {
                 extra.chart.set_replay_time(None);
+                extra.chart.drawings_mut().options.local_placement_folder = None;
                 restore_conversion(&mut extra.chart, &extra.live);
             }
             self.replay_updated = None;
@@ -1169,6 +1175,11 @@ impl DemoApp {
         charts.insert(source, &mut self.chart);
         self.layout
             .set_replay_time(&mut charts, source, scope, Some(time));
+        for (slot, chart) in charts.iter_mut().enumerate() {
+            // Practice drawings stay on the replayed chart until the user shares their folder.
+            chart.drawings_mut().options.local_placement_folder =
+                slots.contains(&slot).then(|| PRACTICE_FOLDER.to_owned());
+        }
         self.replay_slots = slots;
         if let Some(bar) = replay.visible_bars().last() {
             paper.set_replay_time(Some(bar.time));

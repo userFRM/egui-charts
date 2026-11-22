@@ -1811,7 +1811,7 @@ mod tests {
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
         frame(&mut app, &ctx, vec![egui::Event::Text("Morning".into())])
             .drop_without_applying_deltas();
-        frame(&mut app, &ctx, vec![enter]).drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![enter.clone()]).drop_without_applying_deltas();
         let tabs: Vec<_> = app
             .layout_tabs
             .iter()
@@ -1921,6 +1921,34 @@ mod tests {
                 .any(|text| text == "Link copied. Recipients can view it and save a copy."),
             "{texts:?}"
         );
+
+        // Renamed, it stays shared under its new name with the access chosen above.
+        click_lowest(&mut app, &ctx, "Rename…");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![egui::Event::Text(" plan".into())])
+            .drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![enter]).drop_without_applying_deltas();
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        }
+        assert_eq!(app.layout_tabs[app.layout_tab].name, "Morning plan");
+        assert!(app.layout_is_saved("Morning plan") && !app.layout_is_saved("Morning"));
+        click(&mut app, &ctx, "Named layouts");
+        let output = frame(&mut app, &ctx, vec![]);
+        let nodes = &output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes;
+        let on = |label: &str| {
+            nodes.iter().any(|(_, node)| {
+                node.label() == Some(label)
+                    && node.toggled() == Some(egui::accesskit::Toggled::True)
+            })
+        };
+        assert!(on("Share layout") && on("View and copy"));
+        output.drop_without_applying_deltas();
     }
 
     /// Clicks the lowest control labelled `label`: menu rows sit below the toolbar and tab strip.
