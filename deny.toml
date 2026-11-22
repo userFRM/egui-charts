@@ -12,6 +12,8 @@ ignore = [
     # unmaintained with no successor release; moving to another time library is a separate change.
     { id = "RUSTSEC-2026-0543", reason = "chrono 0.4.45 unmaintained notice; no patched release, replacement is a separate change" },
     { id = "RUSTSEC-2026-0555", reason = "chrono-tz 0.10.4 unmaintained notice; no patched release, replacement is a separate change" },
+    # rhai, the script engine of crates/scripting, depends on smartstring whatever its features.
+    { id = "RUSTSEC-2026-0249", reason = "smartstring 1.0.1 via rhai 1.27 in crates/scripting; unmaintained notice, no rhai release without it" },
 ]
 
 [licenses]
