@@ -13,12 +13,12 @@ pub(crate) use live::same_bars;
 
 use crate::data::StudyDataRequest;
 use crate::model::range_bar::price_path;
-use crate::model::rounding_tolerance;
 use crate::model::same_currency;
 use crate::model::{
     Bar, BarClock, BarData, ChartType, EquityRange, OrderSide, OrderType, StrategyExit,
     StrategyReport, StrategyTrade, Timeframe,
 };
+use crate::model::{rounding_tolerance, trailed, trailing_stop};
 
 /// The default entry size, converted to units at the execution price.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -488,7 +488,8 @@ impl StrategyContext<'_> {
 
     /// Places an entry of `quantity` on `side`. Against an open position on the other side it
     /// closes that position first, then opens `quantity` on `side`; on the same side it adds.
-    /// Pass `None` to use the settings' order size, calculated when the order fills.
+    /// Pass `None` to use the settings' order size, calculated when the order fills. Trailing stop
+    /// entries are ignored; [`exit_trailing`](Self::exit_trailing) trails exits.
     pub fn entry(
         &mut self,
         id: impl Into<String>,
@@ -500,6 +501,7 @@ impl StrategyContext<'_> {
             OrderType::Market => true,
             OrderType::Limit(price) | OrderType::Stop(price) => price.is_finite(),
             OrderType::StopLimit { stop, limit } => stop.is_finite() && limit.is_finite(),
+            OrderType::TrailingStop { .. } => false,
         };
         if finite {
             self.place(id.into(), quantity.into(), Kind::Entry(side, order_type));
@@ -1187,23 +1189,6 @@ pub(super) fn valid_bar(bar: &Bar) -> bool {
         && bar.high >= bar.open.max(bar.close)
 }
 
-/// Best price since reaching `level`, in direction `s` (1 long, -1 short).
-fn trailed(
-    best: Option<f64>,
-    level: f64,
-    s: f64,
-    points: impl IntoIterator<Item = f64>,
-) -> Option<f64> {
-    points.into_iter().fold(best, |best, point| match best {
-        Some(best) => Some(if s * (point - best) > 0.0 {
-            point
-        } else {
-            best
-        }),
-        None => (s * (point - level) >= 0.0).then_some(point),
-    })
-}
-
 /// The side of an exit from `position`, `None` while flat.
 fn exit_side(position: f64) -> Option<OrderSide> {
     if position > 0.0 {
@@ -1726,7 +1711,7 @@ impl<'a> Run<'a> {
                 }
                 let (average, s) = (self.average_price(), sign(side));
                 let trail = trailed(order.best, average + s * activation, s, [start])
-                    .map(|best| best - s * offset)
+                    .map(|best| trailing_stop(best, s, offset))
                     .filter(|level| level.is_finite());
                 let fixed = stop_loss.map(|loss| average - s * loss);
                 // Both are stops on the exit side; the nearer one is reached first.
