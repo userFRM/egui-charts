@@ -3,6 +3,7 @@
 use crate::localization as l10n;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use egui::{Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
@@ -76,9 +77,11 @@ struct SavedScreen {
 /// or removes it, and the "+" after the last heading adds any column of the host's sets; picking
 /// a set again restores its columns. The user shows the rows as a table or as one small chart per
 /// symbol of its last 60 daily closes, which the panel asks [`Datafeed::history`] for while the
-/// rows are on screen. With [`set_universes`](Self::set_universes) the user also picks the market
-/// to screen, and with [`set_text_query`](Self::set_text_query) describes the screen in words,
-/// which the feed interprets in [`Datafeed::screen_text`] and explains above the rows.
+/// rows are on screen, and can have the shown panel ask the feed again every 10 seconds or every
+/// minute, keeping the rows and the pages already loaded until the answer. With
+/// [`set_universes`](Self::set_universes) the user also picks the market to screen, and with
+/// [`set_text_query`](Self::set_text_query) describes the screen in words, which the feed
+/// interprets in [`Datafeed::screen_text`] and explains above the rows.
 /// [`set_storage`](Self::set_storage) lets the user save, rename, load and delete named screens,
 /// each with its columns and view. Each change asks the feed again, which filters, sorts and
 /// limits, and only the answer to the latest request is shown. A full answer offers the next page
@@ -110,6 +113,12 @@ pub struct ScreenerPanel {
     columns: Vec<ScreenerColumn>,
     /// How the rows show.
     view: View,
+    /// How often the shown panel asks again by itself.
+    auto_refresh: AutoRefresh,
+    /// The input time of the latest answer, from which the timer counts.
+    answered_at: Option<f64>,
+    /// Rows asked for by the open request, which decides whether a full answer offers more.
+    limit: usize,
     draft: Draft,
     feed: Option<Arc<dyn Datafeed>>,
     /// The latest answer and the columns it answers.
@@ -151,6 +160,9 @@ impl std::fmt::Debug for ScreenerPanel {
             .field("descending", &self.descending)
             .field("columns", &self.columns)
             .field("view", &self.view)
+            .field("auto_refresh", &self.auto_refresh)
+            .field("answered_at", &self.answered_at)
+            .field("limit", &self.limit)
             .field("draft", &self.draft)
             .field("rows", &self.rows)
             .field("answered", &self.answered)
@@ -191,6 +203,9 @@ impl ScreenerPanel {
             descending: true,
             columns,
             view: View::Table,
+            auto_refresh: AutoRefresh::Never,
+            answered_at: None,
+            limit: LIMIT,
             draft: Draft {
                 column: 0,
                 comparison: Comparison::Above,
@@ -305,22 +320,24 @@ impl ScreenerPanel {
 
     /// Ask the feed again, such as when the host's data changed.
     pub fn refresh(&mut self) {
-        self.ask(0);
+        self.ask(0, LIMIT);
     }
 
     /// Ask for the page after the rows shown, of the same screen.
     fn load_more(&mut self) {
-        self.ask(self.rows.len());
+        self.ask(self.rows.len(), LIMIT);
     }
 
-    fn ask(&mut self, offset: usize) {
+    fn ask(&mut self, offset: usize, limit: usize) {
         let Some(feed) = &self.feed else {
             return;
         };
         self.request += 1;
         self.loading = true;
         self.appending = offset > 0;
-        let query = self.query(offset);
+        self.limit = limit;
+        let mut query = self.query(offset);
+        query.limit = limit;
         if self.text.is_empty() {
             feed.screen(query, self.inbox.reply(self.request));
         } else {
@@ -407,6 +424,7 @@ impl ScreenerPanel {
         self.chart_inbox
             .set_waker(move || repaint.request_repaint());
         self.saved.poll(ctx);
+        let now = ctx.input(|i| i.time);
         if self.saved.ready()
             && let Some(old) = self.renaming.take()
             && self.saved.error.is_none()
@@ -418,6 +436,7 @@ impl ScreenerPanel {
                 continue;
             }
             self.loading = false;
+            self.answered_at = Some(now);
             let answer = match answer.downcast::<Result<Vec<ScreenerRow>, FeedError>>() {
                 Ok(rows) => (*rows).map(|rows| ScreenerTextAnswer::new(rows, "")),
                 Err(answer) => *answer
@@ -426,7 +445,7 @@ impl ScreenerPanel {
             };
             match answer {
                 Ok(answer) => {
-                    self.more = answer.rows.len() >= LIMIT;
+                    self.more = answer.rows.len() >= self.limit;
                     if self.appending {
                         self.rows.extend(answer.rows);
                     } else {
@@ -557,6 +576,17 @@ impl ScreenerPanel {
                     self.view = view;
                 }
             }
+            dropdown(
+                ui,
+                "screener_auto_refresh",
+                self.auto_refresh.label(),
+                |ui| {
+                    for choice in AutoRefresh::ALL {
+                        let text = l10n::text(ui.ctx(), choice.label());
+                        ui.selectable_value(&mut self.auto_refresh, choice, text);
+                    }
+                },
+            );
             if Button::new("Send to watchlist")
                 .enabled(has_rows)
                 .show(ui)
@@ -1042,6 +1072,20 @@ impl ScreenerPanel {
         }
         if changed {
             self.refresh();
+        } else if let (Some(interval), Some(at)) = (self.auto_refresh.interval(), self.answered_at)
+            && !self.loading
+            && !matches!(self.error, Some(FeedError::NotSupported))
+        {
+            let now = ui.input(|i| i.time);
+            // A clock behind the answer, or NaN, waits a full interval.
+            let elapsed = Duration::try_from_secs_f64((now - at).max(0.0)).unwrap_or(Duration::MAX);
+            let wait = interval.saturating_sub(elapsed);
+            if wait.is_zero() {
+                // Keep the pages on screen: ask from the first row for as many rows as they hold.
+                self.ask(0, self.rows.len().div_ceil(LIMIT).max(1) * LIMIT);
+            } else {
+                ui.ctx().request_repaint_after(wait);
+            }
         }
         action
     }
@@ -1085,6 +1129,34 @@ enum View {
 impl View {
     fn is_table(&self) -> bool {
         *self == Self::Table
+    }
+}
+
+/// How often the shown screener asks the feed again by itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AutoRefresh {
+    Never,
+    TenSeconds,
+    Minute,
+}
+
+impl AutoRefresh {
+    const ALL: [Self; 3] = [Self::Never, Self::TenSeconds, Self::Minute];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Never => "No auto refresh",
+            Self::TenSeconds => "Refresh every 10 seconds",
+            Self::Minute => "Refresh every minute",
+        }
+    }
+
+    fn interval(self) -> Option<Duration> {
+        match self {
+            Self::Never => None,
+            Self::TenSeconds => Some(Duration::from_secs(10)),
+            Self::Minute => Some(Duration::from_secs(60)),
+        }
     }
 }
 
@@ -1693,5 +1765,88 @@ mod tests {
         }
         let bars = (0..=60).map(|day| bar(day, day as f64)).collect();
         assert_eq!(closes(bars), (1..=60).map(f64::from).collect::<Vec<_>>());
+    }
+
+    /// Guards the timed refresh: with every 10 seconds chosen, the shown panel asks the current
+    /// screen again once 10 seconds have passed since the last answer, never with a request open
+    /// or while hidden, and for every page on screen so the loaded rows stay; shown again after
+    /// the interval, it asks at once.
+    #[test]
+    fn auto_refresh_asks_again_while_shown_and_keeps_loaded_pages() {
+        type Shown<'a> = Harness<'a, (ScreenerPanel, bool)>;
+        // The first request is open, so the spinner repaints: step instead of settling.
+        fn choose(h: &mut Shown<'_>, label: &str) {
+            h.get_all_by_label(label).last().unwrap().click();
+            h.run_steps(2);
+        }
+        fn at(h: &mut Shown<'_>, time: f64) {
+            h.input_mut().time = Some(time);
+            h.step();
+        }
+        let feed = Arc::new(Feed::default());
+        let mut panel = ScreenerPanel::new(sets());
+        panel.set_feed(feed.clone());
+        let mut h = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, (panel, shown): &mut (ScreenerPanel, bool)| {
+                    panel.poll(ui.ctx());
+                    if *shown {
+                        _ = panel.show(ui);
+                    }
+                },
+                (panel, true),
+            );
+        let answers = std::cell::Cell::new(0);
+        let answer = |rows: usize| {
+            let (query, reply) = feed.rows.lock().unwrap().pop().unwrap();
+            let row = |i| ScreenerRow::new(format!("S{i}"), vec!["1".into()]);
+            reply.send(Ok((0..rows).map(row).collect()));
+            answers.set(answers.get() + 1);
+            query
+        };
+        let asked = || answers.get() + feed.rows.lock().unwrap().len();
+        choose(&mut h, "No auto refresh");
+        choose(&mut h, "Refresh every 10 seconds");
+        let first = answer(LIMIT);
+        at(&mut h, 10.0);
+        assert_eq!(asked(), 1);
+        h.state_mut().0.load_more();
+        answer(3);
+        at(&mut h, 12.0);
+        assert_eq!((h.state().0.rows.len(), asked()), (LIMIT + 3, 2));
+        at(&mut h, 21.9);
+        assert_eq!(asked(), 2, "asked before the interval passed");
+        at(&mut h, 22.0);
+        assert_eq!(asked(), 3);
+        let latest = feed.rows.lock().unwrap().last().unwrap().0.clone();
+        assert_eq!((latest.offset, latest.limit), (0, 2 * LIMIT));
+        assert_eq!(
+            ScreenerQuery {
+                limit: LIMIT,
+                ..latest
+            },
+            first
+        );
+        assert_eq!(
+            h.state().0.rows.len(),
+            LIMIT + 3,
+            "rows kept until the answer"
+        );
+        at(&mut h, 30.0);
+        assert_eq!(asked(), 3, "asked with a request open");
+        answer(LIMIT + 3);
+        at(&mut h, 30.5);
+        assert_eq!(
+            (h.state().0.rows.len(), h.state().0.more),
+            (LIMIT + 3, false)
+        );
+        h.state_mut().1 = false;
+        at(&mut h, 40.6);
+        at(&mut h, 100.0);
+        assert_eq!(asked(), 3, "asked while hidden");
+        h.state_mut().1 = true;
+        at(&mut h, 100.1);
+        assert_eq!(asked(), 4);
     }
 }
