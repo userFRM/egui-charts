@@ -122,6 +122,9 @@ pub struct LayoutMenu {
     new_name: String,
     /// The layout whose delete waits for the user's confirmation.
     deleting: Option<Deleting>,
+    /// The layer and frame the contents were last shown in: a frame without them, or another
+    /// layer, means the menu was closed.
+    shown_at: Option<(egui::LayerId, u64)>,
     storage: Option<Arc<dyn Storage>>,
     inbox: Arc<Inbox>,
     pending: Option<Request>,
@@ -193,6 +196,7 @@ impl LayoutMenu {
             focus_name: false,
             new_name: String::new(),
             deleting: None,
+            shown_at: None,
             storage: None,
             inbox: Arc::default(),
             pending: None,
@@ -855,7 +859,9 @@ impl LayoutMenu {
         action
     }
 
-    /// Named layout menu contents, shared with the save dropdown.
+    /// Named layout menu contents, shared with the save dropdown. A frame without the contents,
+    /// or the contents shown in another layer, counts as closing the menu: a name being entered
+    /// and a delete waiting for confirmation are dropped.
     pub fn show_menu(&mut self, ui: &mut Ui) -> LayoutAction {
         let height =
             (ui.ctx().content_rect().bottom() - ui.next_widget_position().y - 16.0).max(0.0);
@@ -869,6 +875,19 @@ impl LayoutMenu {
     }
 
     fn show_contents(&mut self, ui: &mut Ui) -> LayoutAction {
+        // A frame without the menu, or another popup showing it, closed it: the naming and a
+        // delete waiting for confirmation end with it.
+        let here = (ui.layer_id(), ui.ctx().cumulative_frame_nr());
+        if self
+            .shown_at
+            .is_some_and(|(layer, frame)| layer != here.0 || frame + 1 < here.1)
+        {
+            self.editing = None;
+            self.focus_name = false;
+            self.new_name.clear();
+            self.deleting = None;
+        }
+        self.shown_at = Some(here);
         let width = self
             .config
             .menu_width
@@ -951,9 +970,20 @@ impl LayoutMenu {
             self.autosave = !self.autosave;
         }
         if let Some(naming) = self.editing {
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.new_name).desired_width(ui.available_width()),
-            );
+            let label = ui.label(l10n::text(
+                ui.ctx(),
+                match naming {
+                    Naming::Rename => "New name",
+                    Naming::SaveAs => "Name of the copy",
+                    Naming::Create => "New layout name",
+                },
+            ));
+            let response = ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.new_name)
+                        .desired_width(ui.available_width()),
+                )
+                .labelled_by(label.id);
             // The click that opened the field can take the focus away again within its frame,
             // so the request repeats until the field has it.
             self.focus_name |= save_as || rename || create;
@@ -1611,6 +1641,48 @@ mod tests {
                 assert_eq!(h.state().0.layouts, ["B"]);
                 assert!(!host.0.lock().unwrap().contains_key("A"));
             }
+        }
+    }
+
+    /// Each naming action names its field, and closing the menu ends the naming and a delete
+    /// waiting for confirmation, so the menu opens again without them.
+    #[test]
+    fn closing_the_menu_cancels_naming_and_a_pending_delete() {
+        use egui_kittest::kittest::Queryable;
+        for (entry, role, label) in [
+            ("Create new layout", Role::TextInput, "New layout name"),
+            ("Save layout as…", Role::TextInput, "Name of the copy"),
+            ("Rename…", Role::TextInput, "New name"),
+            ("×", Role::Label, "Delete A?"),
+        ] {
+            let mut menu = LayoutMenu::new();
+            menu.layouts = vec!["A".into()];
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(320.0, 600.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, menu: &mut LayoutMenu| {
+                        menu.show(ui);
+                    },
+                    menu,
+                );
+            h.run();
+            h.get_by_label("Named layouts").click();
+            h.run();
+            h.get_by_label(entry).click();
+            h.run();
+            assert!(h.query_by_role_and_label(role, label).is_some(), "{entry}");
+            h.key_press(egui::Key::Escape);
+            h.run();
+            assert!(
+                h.query_by_label("Save layout").is_none(),
+                "Escape closes it"
+            );
+            h.get_by_label("Named layouts").click();
+            h.run();
+            assert!(h.query_by_label("Save layout").is_some());
+            assert!(h.query_by_role_and_label(role, label).is_none(), "{entry}");
+            assert!(h.query_by_role(Role::TextInput).is_none(), "{entry}");
         }
     }
 
