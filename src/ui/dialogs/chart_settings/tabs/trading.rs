@@ -64,7 +64,7 @@ impl SettingsDialog {
         sound_controls(
             ui,
             "Play sound for executions",
-            &mut trading.play_execution_sound,
+            Some(&mut trading.play_execution_sound),
             &mut trading.execution_sound,
             &mut trading.execution_sound_volume,
             &self.execution_sounds,
@@ -192,8 +192,8 @@ impl SettingsDialog {
                 let alerts = &mut self.settings.alerts;
                 sound_controls(
                     ui,
-                    "Play sound for alerts",
-                    &mut alerts.play_sound,
+                    "Alert sound",
+                    None,
                     &mut alerts.sound,
                     &mut alerts.sound_volume,
                     &self.execution_sounds,
@@ -260,21 +260,45 @@ impl SettingsDialog {
     }
 }
 
+/// A choice of `sounds` with a volume and a Test sound button. With `enabled`, a checkbox
+/// labelled `label`, shown even without sounds, turns them on; without it, `label` names the row
+/// and they stay enabled.
 fn sound_controls(
     ui: &mut Ui,
     label: &str,
-    enabled: &mut bool,
+    enabled: Option<&mut bool>,
     sound: &mut String,
     volume: &mut f32,
     sounds: &[String],
     preview: &mut Option<(String, f32)>,
 ) {
-    styled_checkbox(ui, enabled, label, ui.active_theme().ui.text);
+    let text = ui.active_theme().ui.text;
+    let on = match enabled {
+        Some(enabled) => {
+            styled_checkbox(ui, enabled, label, text);
+            *enabled
+        }
+        // Without a sound to choose, there is no row to name.
+        None if sounds.is_empty() => return,
+        None => {
+            // The height and spacing of a styled_checkbox row, so both tabs line up.
+            ui.horizontal(|ui| {
+                ui.set_min_height(42.0);
+                ui.label(
+                    RichText::new(l10n::text(ui.ctx(), label))
+                        .size(ui.active_theme().text.title)
+                        .color(text),
+                );
+            });
+            ui.add_space(ui.active_theme().spacing.sm);
+            true
+        }
+    };
     let Some(first) = sounds.first() else { return };
     if sound.is_empty() {
         sound.clone_from(first);
     }
-    ui.add_enabled_ui(*enabled, |ui| {
+    ui.add_enabled_ui(on, |ui| {
         ui.horizontal(|ui| {
             ui.combo_select(label, sound, sounds.iter().cloned(), Clone::clone);
             ui.visuals_mut().widgets.inactive.bg_fill = ui.active_theme().ui.border_control;
