@@ -796,7 +796,7 @@ mod tests {
             app.poll_storage(&ctx);
             app.handle_layout_action(
                 egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction::CreateNew(
-                    "Fresh".into(),
+                    "Unnamed".into(),
                 ),
             );
             assert!(
