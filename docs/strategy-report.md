@@ -212,9 +212,11 @@ fn render(ui: &mut egui::Ui, panel: &mut StrategyReportPanel) {
             // trade_index addresses the original report, including skipped input rows.
             let _ = selection;
         }
-        StrategyReportAction::ExportCsv(csv) => {
-            // The host may save or download this string. This example copies it.
-            ui.ctx().copy_text(csv);
+        StrategyReportAction::ExportCsv { filename, content } => {
+            // The host may save or download `content` under the suggested `filename`.
+            // This example copies it.
+            let _ = filename;
+            ui.ctx().copy_text(content);
         }
         _ => {}
     }
@@ -251,7 +253,10 @@ below the equity before its entry, from entry to exit (to the chart's end while 
 equity chart's scale. It needs the excursions of the list of trades and is hidden without them.
 The virtualized trade list uses entry-time order, keeps equal-time
 trades in input order, filters to the range's trades and shows fill prices, net profit,
-cumulative profit, fees, labels and excursions. Cumulative profit adds the net profit of the
+cumulative profit, fees, labels and excursions. Fill prices show at least the report's
+`price_decimals`, which a backtest takes from its price increment, and more where a price has
+them; quantities show their own decimals, up to eight. Neither shows binary rounding digits, and
+the trade markers write them the same way. The trades CSV keeps full precision. Cumulative profit adds the net profit of the
 listed trades closed in the range, in list order up to and including the row. An open trade
 has an empty cell and adds nothing, as does a trade that closes at or after the range's end,
 which the range counts as open like the Summary.
@@ -266,7 +271,7 @@ Export trades CSV writes valid trades using
 empty when unavailable, and the same quoting and UTC timestamps. The last column,
 `cumulative_profit`, is the whole run's running total of `profit` in row order, empty on an
 open trade, which adds nothing, and when the total is not finite. Export summary CSV returns
-[`StrategyReportAction::ExportSummaryCsv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyReportAction.html#variant.ExportSummaryCsv) with a suggested file name and the whole-run metrics and
+[`StrategyReportAction::ExportSummaryCsv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyReportAction.html#variant.ExportSummaryCsv) with the whole-run metrics and
 properties, as [`StrategyReport::summary_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.summary_csv) writes them: a dot as the decimal
 separator, no thousands separator, and an empty cell for an unavailable value. Percent
 values keep 15 significant decimal digits, so a rate of `0.07` reads `7`, and a zero is
@@ -276,6 +281,11 @@ including negative numbers, are unchanged. The summary CSV ends with a `side` co
 `all`, `long` or `short` on trade figures, with one row per side in that order, and empty
 on whole-run figures and properties. Largest position uses the unit `quantity` and holding
 times use `bars`.
+Both export actions carry a suggested file name, such as
+`First_run_2_EUR___USD_1min_trades_2026-11-21_14-03-07.csv`: the run's name, symbol and
+interval, `trades` or `summary`, and the local time of the export to the second, with every
+character other than an ASCII letter, a digit, `-` or `_` replaced by `_`. Two exports of one
+run within the same second get the same name.
 
 With `ui` and `strategies`, [`StrategyTester`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyTester.html)
 keeps the engine and strategy of a completed Run. As `show` receives new closed bars, it

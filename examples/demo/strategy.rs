@@ -336,8 +336,8 @@ impl DemoApp {
                 self.strategy_trade = Some(trade.trade_index);
                 self.refresh_strategy_signals();
             }
-            StrategyReportAction::ExportCsv(csv) => self.save_text("strategy-trades.csv", &csv),
-            StrategyReportAction::ExportSummaryCsv { filename, content } => {
+            StrategyReportAction::ExportCsv { filename, content }
+            | StrategyReportAction::ExportSummaryCsv { filename, content } => {
                 self.save_text(&filename, &content)
             }
             _ => {}
@@ -428,6 +428,7 @@ impl Signals for ReportSignals {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
     use egui::{Event, FullOutput, PointerButton, Pos2, RawInput, Rect, Shape};
 
     fn source(slope: f64, count: usize) -> Vec<Bar> {
@@ -998,16 +999,58 @@ mod tests {
                     if r.fill == theme.ui.accent.linear_multiply(0.12)
                         && r.rect.height() == app.chart.get_chart_mapping().rect.height()))
                 );
-                let export = text_at(&output, "Export trades CSV");
-                output.drop_without_applying_deltas();
-                click(&mut app, export);
                 let comparison = report.comparison(&bars[bars.len() - 122..bars.len() - 1]);
                 assert!(comparison.excursions.iter().any(Option::is_some));
-                assert_eq!(
-                    std::fs::read_to_string(std::env::temp_dir().join("strategy-trades.csv"))
-                        .unwrap(),
-                    report.trades_csv_with_excursions(&comparison)
-                );
+                // Each export is saved under the library's name for the run, the kind and the second.
+                assert!(report.symbol.bytes().all(|b| b.is_ascii_alphanumeric()));
+                let mut output = output;
+                let mut paths = Vec::new();
+                for (label, kind, content) in [
+                    (
+                        "Export trades CSV",
+                        "trades",
+                        report.trades_csv_with_excursions(&comparison),
+                    ),
+                    (
+                        "Export summary CSV",
+                        "summary",
+                        report.summary_csv(&report.performance(), &comparison),
+                    ),
+                ] {
+                    let export = text_at(&output, label);
+                    output.drop_without_applying_deltas();
+                    let before = chrono::Local::now()
+                        .naive_local()
+                        .with_nanosecond(0)
+                        .unwrap();
+                    click(&mut app, export);
+                    let after = chrono::Local::now().naive_local();
+                    let message = &app.toasts.toasts().last().unwrap().message;
+                    let path = std::path::PathBuf::from(
+                        message
+                            .strip_prefix("Export successful: ")
+                            .unwrap_or_else(|| panic!("{message}")),
+                    );
+                    assert_eq!(path.parent(), Some(std::env::temp_dir().as_path()));
+                    let prefix = format!(
+                        "20-bar_holds__synthetic_data__{}_{}_{kind}_",
+                        report.symbol, report.timeframe
+                    );
+                    let name = path.file_name().unwrap().to_str().unwrap();
+                    let stamp = name
+                        .strip_prefix(&prefix)
+                        .and_then(|rest| rest.strip_suffix(".csv"))
+                        .unwrap_or_else(|| panic!("{name}"));
+                    let time =
+                        chrono::NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d_%H-%M-%S").unwrap();
+                    assert!((before..=after).contains(&time), "{name}");
+                    assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+                    std::fs::remove_file(&path).unwrap();
+                    paths.push(path);
+                    output = frame(&mut app, vec![]);
+                }
+                output.drop_without_applying_deltas();
+                assert_ne!(paths[0], paths[1]);
                 app.execute_search_command(&ctx, "backtest");
                 assert!(app.strategy_trade.is_none());
                 let replacement = app.strategy_report.report().unwrap().clone();
@@ -1047,7 +1090,6 @@ mod tests {
                 );
                 assert!(live_marker(&output), "live analytics marker remains");
                 output.drop_without_applying_deltas();
-                std::fs::remove_file(std::env::temp_dir().join("strategy-trades.csv")).unwrap();
             }
         }
     }

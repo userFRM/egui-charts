@@ -197,9 +197,10 @@ pub trait HorizontalScale: Send + Sync {
         false
     }
 
-    /// The name of the horizontal value in the floating readout, such as `"Strike"`, which the
-    /// chart passes through its translator, or `None` to show the value without a name. The
-    /// default names a time scale's value `"Time"` and leaves a numeric scale's unnamed.
+    /// The name of the horizontal value in the floating readout and in the data window
+    /// (`DataWindowInfo::value_name`, requires `ui`), such as `"Strike"`, which both pass
+    /// through the chart's translator, or `None` to show the value without a name. The default
+    /// names a time scale's value `"Time"` and leaves a numeric scale's unnamed.
     fn value_name(&self) -> Option<&str> {
         (!self.is_numeric()).then_some("Time")
     }

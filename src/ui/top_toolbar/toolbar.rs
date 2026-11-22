@@ -678,6 +678,13 @@ impl TopToolbar {
                                         .size(11.0)
                                         .color(crate::ui_kit::section::menu_heading_color(&theme)),
                                 );
+                                // Hosts bind the snapshot shortcut to Copy link while they can
+                                // publish images, and to Download image otherwise.
+                                let shortcut_action = if self.state.can_publish_image {
+                                    TopToolbarAction::CopyImageLink
+                                } else {
+                                    TopToolbarAction::TakeScreenshot
+                                };
                                 for (label, icon, value, available) in [
                                     (
                                         "Download image",
@@ -717,8 +724,7 @@ impl TopToolbar {
                                         ui,
                                         LabelContent::new(label).with_icon(icon).icon_size(17.0),
                                     );
-                                    // Hosts bind the snapshot shortcut to this entry's action.
-                                    if value == TopToolbarAction::TakeScreenshot
+                                    if value == shortcut_action
                                         && let Some(hint) = &hint
                                     {
                                         ui.painter().text(
@@ -1822,6 +1828,32 @@ mod tests {
                         },
                     ])
                     .2;
+                }
+                if slot == S::Screenshot {
+                    // The shortcut's keys share a row only with the entry hosts bind it to.
+                    let hint =
+                        snapshot_shortcut_hint(&ctx, &egui::FontId::proportional(14.0)).unwrap();
+                    let hint = labels.iter().find(|(text, _)| *text == hint).unwrap().1;
+                    let entry = if publishing {
+                        "Copy link"
+                    } else {
+                        "Download image"
+                    };
+                    let entries = [
+                        "Download image",
+                        "Copy image",
+                        "Open in new tab",
+                        "Copy link",
+                        "Post image",
+                    ];
+                    // Entries scrolled out of the menu are not painted.
+                    for (name, at) in labels
+                        .iter()
+                        .filter(|(name, _)| entries.contains(&name.as_str()))
+                    {
+                        let on_row = (at.y - hint.y).abs() < 8.0;
+                        assert_eq!(on_row, name == entry, "{label}: {name}");
+                    }
                 }
                 let pos = labels
                     .iter()
