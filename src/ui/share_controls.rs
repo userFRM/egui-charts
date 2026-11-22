@@ -17,6 +17,17 @@ enum Operation {
     Share(String, ShareAccess),
 }
 
+impl Operation {
+    /// The document the operation is made on.
+    fn document(&self) -> &str {
+        let (Self::Link(document)
+        | Self::Copy(document)
+        | Self::Revoke(document)
+        | Self::Share(document, _)) = self;
+        document
+    }
+}
+
 /// What the last operation came to, for the document it was made on.
 #[derive(Debug)]
 enum Outcome {
@@ -49,6 +60,14 @@ impl ShareControls {
         self.pending = None;
         self.last = None;
         self.sharing = Some(sharing);
+    }
+
+    /// Whether the rows offer Stop sharing for the document `name`: the service offers revoking
+    /// and reports it shared.
+    pub(crate) fn can_stop_sharing(&self, kind: ShareKind, name: &str) -> bool {
+        self.sharing
+            .as_ref()
+            .is_some_and(|sharing| sharing.offers(kind).revoke && sharing.shared(kind, name))
     }
 
     /// Takes the host's answer, copying a link to the clipboard. Returns the saved copy's name.
@@ -209,7 +228,11 @@ impl ShareControls {
             sharing.revoke(kind, name, self.inbox.reply(0));
             ui.ctx().request_repaint();
         }
-        let status = if let Some(pending) = &self.pending {
+        let status = if let Some(pending) = self
+            .pending
+            .as_ref()
+            .filter(|pending| pending.document() == name)
+        {
             Some((
                 false,
                 l10n::text(
@@ -224,11 +247,7 @@ impl ShareControls {
             ))
         } else {
             self.last.as_ref().and_then(|(operation, outcome)| {
-                let (Operation::Link(shared)
-                | Operation::Copy(shared)
-                | Operation::Revoke(shared)
-                | Operation::Share(shared, _)) = operation;
-                (shared == name).then(|| match outcome {
+                (operation.document() == name).then(|| match outcome {
                     Outcome::Link(link) => (
                         false,
                         l10n::text(

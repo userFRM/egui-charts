@@ -8,7 +8,7 @@ use crate::data::{MaybeSend, Reply};
 pub enum ShareKind {
     /// A named chart layout, as kept in [`StoreKind::Layouts`](super::StoreKind::Layouts).
     Layout,
-    /// A watchlist, by its name.
+    /// A watchlist, by its [`Watchlist::id`](crate::model::Watchlist::id).
     Watchlist,
 }
 
@@ -89,7 +89,9 @@ impl ShareOffer {
 /// Methods are called on the UI thread and return at once; answer through the [`Reply`] you were
 /// given, from any thread, runtime or browser task. Answer an error, such as
 /// [`FeedError::Other`](crate::data::FeedError::Other) with the reason, to reject an operation:
-/// the menu shows it. The documents are the ones the host already holds under `name`.
+/// the menu shows it. The methods that act on one document name it by `document`: a layout by
+/// its name, a watchlist by its [`Watchlist::id`](crate::model::Watchlist::id), which stays
+/// through renames and differs between lists of the same name.
 pub trait Sharing: MaybeSend + 'static {
     /// Which operations to offer for `kind`. The default offers none.
     fn offers(&self, kind: ShareKind) -> ShareOffer {
@@ -97,50 +99,51 @@ pub trait Sharing: MaybeSend + 'static {
         ShareOffer::default()
     }
 
-    /// Whether `name` of `kind` is currently shared by link. Menus read this every frame,
+    /// Whether `document` of `kind` is currently shared by link. Menus read this every frame,
     /// so answer from memory. The default reports no shared state.
-    fn shared(&self, kind: ShareKind, name: &str) -> bool {
-        let _ = (kind, name);
+    fn shared(&self, kind: ShareKind, document: &str) -> bool {
+        let _ = (kind, document);
         false
     }
 
-    /// Revokes the link for `name` of `kind`. Answer success once [`shared`](Self::shared)
+    /// Revokes the link for `document` of `kind`. Answer success once [`shared`](Self::shared)
     /// reports false, or an error for the menu to display. Unsupported by default.
-    fn revoke(&self, kind: ShareKind, name: &str, reply: Reply<()>) {
-        let _ = (kind, name);
+    fn revoke(&self, kind: ShareKind, document: &str, reply: Reply<()>) {
+        let _ = (kind, document);
         reply.send(Err(crate::data::FeedError::NotSupported));
     }
 
-    /// What the recipients of the shared document `name` of `kind` may do. Read every frame the
+    /// What the recipients of the shared `document` of `kind` may do. Read every frame the
     /// menu is open while [`ShareOffer::switch`] is offered and [`shared`](Self::shared) reports
     /// the document shared, so answer from memory. The default is [`ShareAccess::ViewOnly`].
-    fn access(&self, kind: ShareKind, name: &str) -> ShareAccess {
-        let _ = (kind, name);
+    fn access(&self, kind: ShareKind, document: &str) -> ShareAccess {
+        let _ = (kind, document);
         ShareAccess::ViewOnly
     }
 
-    /// Shares the document `name` of `kind` with `access`, or changes the access of a document
+    /// Shares `document` of `kind` with `access`, or changes the access of a document
     /// already shared. Answer success once [`shared`](Self::shared) reports it shared and
     /// [`access`](Self::access) reports `access`, or an error for the menu to display. Links
     /// answered by [`link`](Self::link) afterwards say whether a copy is allowed. Unsupported by
     /// default.
-    fn share(&self, kind: ShareKind, name: &str, access: ShareAccess, reply: Reply<()>) {
-        let _ = (kind, name, access);
+    fn share(&self, kind: ShareKind, document: &str, access: ShareAccess, reply: Reply<()>) {
+        let _ = (kind, document, access);
         reply.send(Err(crate::data::FeedError::NotSupported));
     }
 
-    /// A view-only link to the document `name` of `kind`. The library copies the link to the
-    /// clipboard and tells the user whether a recipient may save a copy.
-    fn link(&self, kind: ShareKind, name: &str, reply: Reply<ShareLink>) {
-        let _ = (kind, name);
+    /// A view-only link to `document` of `kind`. The library copies the link to the clipboard
+    /// and tells the user whether a recipient may save a copy.
+    fn link(&self, kind: ShareKind, document: &str, reply: Reply<ShareLink>) {
+        let _ = (kind, document);
         reply.send(Err(crate::data::FeedError::NotSupported));
     }
 
-    /// Saves a copy of the document `name` of `kind` for the user and answers the copy's name.
-    /// A layout copy is read back from [`Storage`](super::Storage), so the host writes it
-    /// there; a watchlist copy is added to the panel's lists under the answered name.
-    fn copy(&self, kind: ShareKind, name: &str, reply: Reply<String>) {
-        let _ = (kind, name);
+    /// Saves a copy of `document` of `kind` for the user and answers the copy's name. A layout
+    /// copy is read back from [`Storage`](super::Storage), so the host writes it there; a
+    /// watchlist copy is added to the panel's lists under the answered name, with an id of its
+    /// own.
+    fn copy(&self, kind: ShareKind, document: &str, reply: Reply<String>) {
+        let _ = (kind, document);
         reply.send(Err(crate::data::FeedError::NotSupported));
     }
 }
