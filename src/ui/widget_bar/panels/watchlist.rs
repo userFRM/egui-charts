@@ -4487,7 +4487,7 @@ mod tests {
             (None, ["0", "1.23K", "5"], ["413", "5", "0", "1.23K"]),
         ] {
             let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "AAA,BBB,CCC")]);
-            for (symbol, volume) in [("AAA", 0.375), ("BBB", 1_234.5678), ("CCC", 5.0)] {
+            for (symbol, volume) in [("AAA", 0.375), ("BBB", 1234.5678), ("CCC", 5.0)] {
                 let quote = Quote::new(10.0, 9.0, Default::default()).with_volume(volume);
                 panel.set_quote(symbol, quote);
                 // A later instrument replaces the earlier one's decimals.
