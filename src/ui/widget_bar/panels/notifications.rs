@@ -27,7 +27,8 @@ pub enum NotificationsAction {
     SelectSymbol(String),
     /// Show the profile an entry is about.
     OpenProfile(ProfileId),
-    /// Show the chat room an entry is about.
+    /// Show the chat room an entry is about, by the host's identifier, such as with
+    /// [`ChatsPanel::open_room`](crate::ui::widget_bar::ChatsPanel::open_room).
     OpenRoom(String),
     /// Show the idea or post an entry is about, by the host's identifier, as the ideas panel's
     /// [`IdeasAction::Open`](crate::ui::ideas::IdeasAction::Open) does.
