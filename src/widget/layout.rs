@@ -5217,9 +5217,10 @@ mod tests {
         assert_eq!((layout.maximized(), layout.active()), (None, 3));
     }
 
-    /// Tab follows slot order, wraps, skips detached slots and transfers both maximization and
-    /// canvas focus without changing the synchronized UTC span. A host draining first cannot
-    /// take layout keys; a lone chart still yields them.
+    /// Tab and Shift+Right follow slot order, wrap, skip detached slots and transfer both
+    /// maximization and canvas focus without changing the synchronized UTC span. A host draining
+    /// first cannot take layout keys; a lone chart still yields them. During a replay Shift+Right
+    /// and Shift+Left stay with the replay transport.
     #[test]
     fn tab_and_shift_tab_move_between_the_shown_charts() {
         type Row = (
@@ -5229,25 +5230,35 @@ mod tests {
             &'static [usize],
             Option<usize>,
             usize,
-            bool,
+            Press,
             bool,
             (usize, Option<usize>),
         );
+        #[derive(Clone, Copy, PartialEq)]
+        enum Press {
+            Tab,
+            BackTab,
+            ShiftRight,
+            ShiftLeft,
+            /// Shift+Right while the active chart replays.
+            ReplayShiftRight,
+        }
         use ChartLayoutMode::{Four, Single, Tabs};
-        let rows: [Row; 14] = [
-            ("next", Four, 4, &[], None, 1, true, false, (2, None)),
+        use Press::{BackTab, ReplayShiftRight, ShiftLeft, ShiftRight, Tab};
+        let rows: [Row; 21] = [
+            ("next", Four, 4, &[], None, 1, Tab, false, (2, None)),
+            ("wrap forward", Four, 4, &[], None, 3, Tab, false, (0, None)),
             (
-                "wrap forward",
+                "wrap back",
                 Four,
                 4,
                 &[],
                 None,
-                3,
-                true,
+                0,
+                BackTab,
                 false,
-                (0, None),
+                (3, None),
             ),
-            ("wrap back", Four, 4, &[], None, 0, false, false, (3, None)),
             (
                 "skip detached",
                 Four,
@@ -5255,7 +5266,7 @@ mod tests {
                 &[2],
                 None,
                 1,
-                true,
+                Tab,
                 false,
                 (3, None),
             ),
@@ -5266,11 +5277,11 @@ mod tests {
                 &[2],
                 None,
                 3,
-                false,
+                BackTab,
                 false,
                 (1, None),
             ),
-            ("tab preset", Tabs, 4, &[], None, 3, true, false, (0, None)),
+            ("tab preset", Tabs, 4, &[], None, 3, Tab, false, (0, None)),
             (
                 "maximized",
                 Four,
@@ -5278,7 +5289,7 @@ mod tests {
                 &[],
                 Some(2),
                 2,
-                true,
+                Tab,
                 false,
                 (3, Some(3)),
             ),
@@ -5289,7 +5300,7 @@ mod tests {
                 &[],
                 Some(0),
                 0,
-                false,
+                BackTab,
                 false,
                 (3, Some(3)),
             ),
@@ -5300,7 +5311,7 @@ mod tests {
                 &[],
                 None,
                 1,
-                true,
+                Tab,
                 true,
                 (2, None),
             ),
@@ -5311,7 +5322,7 @@ mod tests {
                 &[],
                 None,
                 3,
-                true,
+                Tab,
                 true,
                 (0, None),
             ),
@@ -5322,7 +5333,7 @@ mod tests {
                 &[0, 1, 3],
                 None,
                 2,
-                true,
+                Tab,
                 false,
                 (2, None),
             ),
@@ -5333,11 +5344,11 @@ mod tests {
                 &[],
                 Some(5),
                 0,
-                true,
+                Tab,
                 true,
                 (1, None),
             ),
-            ("one chart", Single, 2, &[], None, 0, true, false, (0, None)),
+            ("one chart", Single, 2, &[], None, 0, Tab, false, (0, None)),
             (
                 "one supplied chart",
                 Four,
@@ -5345,14 +5356,91 @@ mod tests {
                 &[],
                 None,
                 0,
+                Tab,
                 true,
-                true,
+                (0, None),
+            ),
+            (
+                "Shift+Right",
+                Four,
+                4,
+                &[],
+                None,
+                0,
+                ShiftRight,
+                false,
+                (1, None),
+            ),
+            (
+                "Shift+Left wraps",
+                Four,
+                4,
+                &[],
+                None,
+                0,
+                ShiftLeft,
+                false,
+                (3, None),
+            ),
+            (
+                "maximized Shift+Right",
+                Four,
+                4,
+                &[],
+                Some(0),
+                0,
+                ShiftRight,
+                false,
+                (1, Some(1)),
+            ),
+            (
+                "maximized Shift+Left",
+                Four,
+                4,
+                &[],
+                Some(0),
+                0,
+                ShiftLeft,
+                false,
+                (3, Some(3)),
+            ),
+            (
+                "Shift+Right steps the replay",
+                Four,
+                4,
+                &[],
+                None,
+                0,
+                ReplayShiftRight,
+                false,
+                (0, None),
+            ),
+            (
+                "one chart Shift+Left",
+                Single,
+                2,
+                &[],
+                None,
+                0,
+                ShiftLeft,
+                false,
+                (0, None),
+            ),
+            (
+                "one chart replay",
+                Single,
+                2,
+                &[],
+                None,
+                0,
+                ReplayShiftRight,
+                false,
                 (0, None),
             ),
         ];
         for (
             discard_input,
-            (row, mode, supplied, detached, maximized, start, forward, host_first, expected),
+            (row, mode, supplied, detached, maximized, start, press, host_first, expected),
         ) in [false, true]
             .into_iter()
             .flat_map(|discard| rows.map(|row| (discard, row)))
@@ -5371,14 +5459,20 @@ mod tests {
                 layout.set_detached(*slot, true);
             }
             layout.set_active(start);
-            let modifiers = if forward {
-                egui::Modifiers::NONE
-            } else {
-                egui::Modifiers::SHIFT
+            if press == ReplayShiftRight {
+                let time = DateTime::from_timestamp(1_700_000_000 + 60 * 80, 0);
+                charts[start].set_replay_time(time);
+            }
+            let (key, modifiers) = match press {
+                Tab => (egui::Key::Tab, egui::Modifiers::NONE),
+                BackTab => (egui::Key::Tab, egui::Modifiers::SHIFT),
+                ShiftRight | ReplayShiftRight => (egui::Key::ArrowRight, egui::Modifiers::SHIFT),
+                ShiftLeft => (egui::Key::ArrowLeft, egui::Modifiers::SHIFT),
             };
             let mut requests = Vec::new();
             let mut time = 0.0;
             let mut discarded = false;
+            let mut left_for_replay = false;
             let mut frame = |layout: &mut ChartLayout, charts: &mut Vec<Chart>, pressed| {
                 time += 0.1;
                 let source = layout.active();
@@ -5391,7 +5485,7 @@ mod tests {
                             vec![
                                 Event::ModifiersChanged(modifiers),
                                 Event::Key {
-                                    key: egui::Key::Tab,
+                                    key,
                                     physical_key: None,
                                     pressed: true,
                                     repeat: false,
@@ -5424,6 +5518,8 @@ mod tests {
                                 response
                             },
                         );
+                        // The replay transport reads its keys after the layout.
+                        left_for_replay |= ui.input_mut(|input| input.consume_key(modifiers, key));
                     },
                 )
                 .drop_without_applying_deltas();
@@ -5474,21 +5570,23 @@ mod tests {
                     "{row}, discard={discard_input}: canvas focus"
                 );
             }
+            assert_eq!(
+                left_for_replay,
+                press == ReplayShiftRight,
+                "{row}, discard={discard_input}: key left for the replay transport"
+            );
             for chart in &mut charts {
                 requests.extend(chart.take_shortcut_requests());
             }
-            if count > 1 {
-                assert!(
-                    requests.is_empty(),
-                    "{row}: layout keys reached the host: {requests:?}"
-                );
-            } else {
-                assert_eq!(
-                    requests,
-                    [ShortcutRequest::Action(KeyboardAction::CycleChartFocus)],
-                    "{row}"
-                );
-            }
+            let host: &[_] = match press {
+                _ if count > 1 => &[],
+                ReplayShiftRight => &[],
+                Tab | ShiftRight => &[ShortcutRequest::Action(KeyboardAction::CycleChartFocus)],
+                BackTab | ShiftLeft => {
+                    &[ShortcutRequest::Action(KeyboardAction::CycleChartFocusBack)]
+                }
+            };
+            assert_eq!(requests, host, "{row}: requests that reached the host");
         }
     }
 
