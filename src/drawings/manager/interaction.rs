@@ -814,6 +814,14 @@ impl DrawingManager {
                         (pos.y - self.pane_rect.top()) / self.pane_rect.height(),
                     ]);
                 }
+                // A drawing moved in time from a pane it only reaches keeps its prices, and a
+                // regression trend or anchored VWAP takes them from its bars.
+                self.drag_crosshair = (self.pane_members.contains(&drawing.pane)
+                    && !matches!(
+                        drawing.tool_type,
+                        DrawingToolType::RegressionTrend | DrawingToolType::AnchoredVWAP
+                    ))
+                .then_some(snapped.y);
             }
         }
     }
