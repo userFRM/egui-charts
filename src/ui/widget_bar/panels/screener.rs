@@ -10,8 +10,8 @@ use super::ROW_HEIGHT;
 use super::controls::{self, cell, dropdown, row};
 use crate::data::inbox::Inbox;
 use crate::data::{
-    Datafeed, FeedError, ScreenerColumnKind, ScreenerColumnSet, ScreenerCondition, ScreenerFilter,
-    ScreenerQuery, ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
+    Datafeed, FeedError, ScreenerColumn, ScreenerColumnKind, ScreenerColumnSet, ScreenerCondition,
+    ScreenerFilter, ScreenerQuery, ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
 };
 use crate::icons::icons;
 use crate::services::{ConflictChoice, Storage, StoreKind};
@@ -24,6 +24,8 @@ use crate::ui_kit::{EmptyState, LoadingIndicator, PanelHeader};
 
 /// Rows asked for at most.
 const LIMIT: usize = 200;
+/// Width kept free at the right of the table for the "+" that adds a column.
+const ADD_WIDTH: f32 = 28.0;
 
 /// An action the host performs for the screener.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -51,19 +53,25 @@ struct SavedScreen {
     sort_by: Option<String>,
     descending: bool,
     text: String,
+    /// The ids of the columns shown, in order, or `None` in screens saved before columns could be
+    /// shaped, which show their set's columns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    columns: Option<Vec<String>>,
 }
 
 /// A screener fed by the host's [`Datafeed::screen`].
 ///
 /// The host gives the column sets; the user picks one, adds filters on its columns and sorts by
-/// a column by clicking its heading. With [`set_universes`](Self::set_universes) the user also
+/// a column by clicking its heading. A heading's menu sorts by its column, moves it left or right
+/// or removes it, and the "+" after the last heading adds any column of the host's sets; picking
+/// a set again restores its columns. With [`set_universes`](Self::set_universes) the user also
 /// picks the market to screen, and with [`set_text_query`](Self::set_text_query) describes the
 /// screen in words, which the feed interprets in [`Datafeed::screen_text`] and explains above the
 /// rows. [`set_storage`](Self::set_storage) lets the user save, rename, load and delete named
-/// screens. Each change asks the feed again, which filters, sorts and limits, and only the answer
-/// to the latest request is shown. A full answer offers the next page of the same screen. The
-/// chosen criteria stay through loading, failures, paging and export. Call [`poll`](Self::poll)
-/// each frame, then [`show`](Self::show) while the panel is open.
+/// screens, each with its columns. Each change asks the feed again, which filters, sorts and
+/// limits, and only the answer to the latest request is shown. A full answer offers the next page
+/// of the same screen. The chosen criteria stay through loading, failures, paging and export.
+/// Call [`poll`](Self::poll) each frame, then [`show`](Self::show) while the panel is open.
 pub struct ScreenerPanel {
     sets: Vec<ScreenerColumnSet>,
     set: usize,
@@ -86,11 +94,13 @@ pub struct ScreenerPanel {
     filters: Vec<ScreenerFilter>,
     sort_by: Option<String>,
     descending: bool,
+    /// The columns shown and asked for, in order: the chosen set's until the user shapes them.
+    columns: Vec<ScreenerColumn>,
     draft: Draft,
     feed: Option<Arc<dyn Datafeed>>,
-    /// The latest answer and the set it was asked with.
+    /// The latest answer and the columns it answers.
     rows: Vec<ScreenerRow>,
-    answered: usize,
+    answered: Vec<ScreenerColumn>,
     error: Option<FeedError>,
     loading: bool,
     inbox: Arc<Inbox>,
@@ -118,6 +128,7 @@ impl std::fmt::Debug for ScreenerPanel {
             .field("filters", &self.filters)
             .field("sort_by", &self.sort_by)
             .field("descending", &self.descending)
+            .field("columns", &self.columns)
             .field("draft", &self.draft)
             .field("rows", &self.rows)
             .field("answered", &self.answered)
@@ -131,6 +142,9 @@ impl std::fmt::Debug for ScreenerPanel {
 impl ScreenerPanel {
     /// A screener of `sets`, showing the first, without a feed.
     pub fn new(sets: Vec<ScreenerColumnSet>) -> Self {
+        let columns = sets
+            .first()
+            .map_or_else(Vec::new, |set| set.columns.clone());
         Self {
             sets,
             set: 0,
@@ -150,6 +164,7 @@ impl ScreenerPanel {
             filters: Vec::new(),
             sort_by: None,
             descending: true,
+            columns,
             draft: Draft {
                 column: 0,
                 comparison: Comparison::Above,
@@ -159,7 +174,7 @@ impl ScreenerPanel {
             },
             feed: None,
             rows: Vec::new(),
-            answered: 0,
+            answered: Vec::new(),
             error: None,
             loading: false,
             inbox: Arc::default(),
@@ -223,14 +238,37 @@ impl ScreenerPanel {
             universe: self.universe.clone(),
             text: self.text.clone(),
             offset,
-            columns: self.sets.get(self.set).map_or_else(Vec::new, |set| {
-                set.columns.iter().map(|column| column.id.clone()).collect()
-            }),
+            columns: self
+                .columns
+                .iter()
+                .map(|column| column.id.clone())
+                .collect(),
             filters: self.filters.clone(),
             sort_by: self.sort_by.clone(),
             descending: self.descending,
             limit: LIMIT,
         }
+    }
+
+    /// Every column of the host's sets, each id once, first occurrence first, in set order.
+    fn offered(&self) -> Vec<ScreenerColumn> {
+        let mut offered: Vec<ScreenerColumn> = Vec::new();
+        for column in self.sets.iter().flat_map(|set| &set.columns) {
+            if !offered.iter().any(|c| c.id == column.id) {
+                offered.push(column.clone());
+            }
+        }
+        offered
+    }
+
+    /// Show the set at `index` with its own columns.
+    fn pick_set(&mut self, index: usize) {
+        self.set = index;
+        self.columns = self
+            .sets
+            .get(index)
+            .map_or_else(Vec::new, |set| set.columns.clone());
+        self.draft.column = 0;
     }
 
     /// Ask the feed again, such as when the host's data changed.
@@ -269,6 +307,12 @@ impl ScreenerPanel {
             sort_by: self.sort_by.clone(),
             descending: self.descending,
             text: self.text.clone(),
+            columns: Some(
+                self.columns
+                    .iter()
+                    .map(|column| column.id.clone())
+                    .collect(),
+            ),
         }
     }
 
@@ -285,8 +329,30 @@ impl ScreenerPanel {
             ));
             return;
         };
-        self.set = set;
-        self.draft.column = 0;
+        let set_columns = &self.sets[set].columns;
+        let columns = match &saved.columns {
+            None => set_columns.clone(),
+            Some(ids) => {
+                let offered = self.offered();
+                let mut columns = Vec::new();
+                for id in ids {
+                    // The saved set's own column first, so a title it gives an id survives.
+                    let Some(column) = set_columns.iter().chain(&offered).find(|c| &c.id == id)
+                    else {
+                        self.saved.error = Some(l10n::format_text(
+                            ctx,
+                            "The column {name} is not available",
+                            &[("name", id.as_str())],
+                        ));
+                        return;
+                    };
+                    columns.push(column.clone());
+                }
+                columns
+            }
+        };
+        self.pick_set(set);
+        self.columns = columns;
         self.universe = saved.universe;
         self.filters = saved.filters;
         self.sort_by = saved.sort_by;
@@ -330,7 +396,7 @@ impl ScreenerPanel {
                         self.rows = answer.rows;
                         self.explanation = answer.explanation;
                     }
-                    self.answered = self.set;
+                    self.answered = self.columns.clone();
                     self.error = None;
                 }
                 Err(error) => {
@@ -351,12 +417,8 @@ impl ScreenerPanel {
     /// embedded quotes doubled.
     fn csv(&self) -> String {
         let field = |text: &str| format!("\"{}\"", text.replace('"', "\"\""));
-        let titles = self
-            .sets
-            .get(self.answered)
-            .map_or(&[][..], |set| &set.columns);
         let mut csv = std::iter::once(field("Symbol"))
-            .chain(titles.iter().map(|column| field(&column.title)))
+            .chain(self.answered.iter().map(|column| field(&column.title)))
             .collect::<Vec<_>>()
             .join(",");
         csv.push_str("\r\n");
@@ -386,23 +448,31 @@ impl ScreenerPanel {
                 .show(ui);
             return action;
         };
-        let (name, columns) = (set.name.clone(), set.columns.clone());
+        let name = set.name.clone();
+        let columns = self.columns.clone();
+        let offered = self.offered();
+        // A removed column's filter keeps its title.
         let title = |id: &str| {
             columns
                 .iter()
+                .chain(&offered)
                 .find(|column| column.id == id)
                 .map_or(id.to_owned(), |column| column.title.clone())
         };
         ui.horizontal_wrapped(|ui| {
-            let before = self.set;
+            let mut picked = None;
             dropdown(ui, "screener_set", &name, |ui| {
                 for (index, set) in self.sets.iter().enumerate() {
-                    ui.selectable_value(&mut self.set, index, l10n::text(ui.ctx(), &set.name));
+                    let text = l10n::text(ui.ctx(), &set.name);
+                    if ui.selectable_label(index == self.set, text).clicked() {
+                        picked = Some(index);
+                    }
                 }
             });
-            if self.set != before {
+            // Picking the chosen set again restores its columns.
+            if let Some(index) = picked {
+                self.pick_set(index);
                 changed = true;
-                self.draft.column = 0;
             }
             if !self.universes.is_empty() {
                 let before = self.universe.clone();
@@ -693,20 +763,19 @@ impl ScreenerPanel {
             None => {}
         }
         let mut more = false;
-        let shown = self
-            .sets
-            .get(self.answered)
-            .map_or(&[][..], |set| &set.columns);
+        let shown = &self.answered;
         if !self.rows.is_empty() {
             egui::ScrollArea::both()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    let width = ui.available_width().max(80.0 + shown.len() as f32 * 60.0);
+                    let width = ui
+                        .available_width()
+                        .max(80.0 + shown.len() as f32 * 60.0 + ADD_WIDTH);
                     ui.set_min_width(width);
                     let columns = |rect: egui::Rect| {
                         let symbol = 80.0;
-                        let number = (width - symbol) / shown.len().max(1) as f32;
+                        let number = (width - symbol - ADD_WIDTH) / shown.len().max(1) as f32;
                         std::iter::once(rect.with_max_x(rect.left() + symbol))
                             .chain((0..shown.len()).map(|i| {
                                 rect.with_min_x(rect.left() + symbol + i as f32 * number)
@@ -748,10 +817,9 @@ impl ScreenerPanel {
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
                         });
-                        if response
-                            .on_hover_text(l10n::text(ui.ctx(), "Sort by this column"))
-                            .clicked()
-                        {
+                        let response =
+                            response.on_hover_text(l10n::text(ui.ctx(), "Sort by this column"));
+                        if response.clicked() {
                             if sorted {
                                 self.descending = !self.descending;
                             } else {
@@ -760,7 +828,67 @@ impl ScreenerPanel {
                             }
                             changed = true;
                         }
+                        response.context_menu(|ui| {
+                            // By id: the headings show the answered columns, which differ from
+                            // the shown ones while an answer is pending.
+                            let at = self.columns.iter().position(|c| c.id == column.id);
+                            let last = self.columns.len().saturating_sub(1);
+                            let entry = |ui: &mut Ui, label: &str, enabled: bool| {
+                                let text = l10n::text(ui.ctx(), label);
+                                ui.add_enabled(enabled, egui::Button::new(text)).clicked()
+                            };
+                            let down = entry(ui, "Sort descending", true);
+                            let up = entry(ui, "Sort ascending", true);
+                            let left = entry(ui, "Move left", at.is_some_and(|at| at > 0));
+                            let right = entry(ui, "Move right", at.is_some_and(|at| at < last));
+                            let remove = entry(ui, "Remove column", at.is_some());
+                            if down || up {
+                                self.sort_by = Some(column.id.clone());
+                                self.descending = down;
+                            }
+                            if let Some(at) = at
+                                && (left || right || remove)
+                            {
+                                if left {
+                                    self.columns.swap(at, at - 1);
+                                } else if right {
+                                    self.columns.swap(at, at + 1);
+                                } else {
+                                    self.columns.remove(at);
+                                    if self.sort_by.as_ref() == Some(&column.id) {
+                                        self.sort_by = None;
+                                    }
+                                }
+                                self.draft.column = 0;
+                            }
+                            if down || up || left || right || remove {
+                                changed = true;
+                                ui.close();
+                            }
+                        });
                     }
+                    let missing: Vec<&ScreenerColumn> = offered
+                        .iter()
+                        .filter(|column| !self.columns.iter().any(|c| c.id == column.id))
+                        .collect();
+                    let add = egui::Rect::from_min_size(
+                        egui::pos2(header.right() - ADD_WIDTH, header.top()),
+                        vec2(ADD_WIDTH, ROW_HEIGHT),
+                    );
+                    let button = Button::new("+")
+                        .small()
+                        .tooltip("Add column")
+                        .enabled(!missing.is_empty());
+                    let button = ui.put(add, button);
+                    egui::Popup::menu(&button).show(|ui| {
+                        for column in missing {
+                            if ui.button(l10n::text(ui.ctx(), &column.title)).clicked() {
+                                self.columns.push(column.clone());
+                                changed = true;
+                                ui.close();
+                            }
+                        }
+                    });
                     for entry in &self.rows {
                         let (rect, response) = row(ui);
                         let cells = columns(rect);
@@ -822,7 +950,7 @@ impl Comparison {
 /// The filter being written.
 #[derive(Debug)]
 struct Draft {
-    /// The column, by its index within the shown set.
+    /// The column, by its index within the shown columns.
     column: usize,
     comparison: Comparison,
     /// The number, or the lower end of a range.
@@ -863,7 +991,7 @@ fn describe(ctx: &egui::Context, column: &str, condition: &ScreenerCondition) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{HistoryPage, HistoryRequest, Reply, ScreenerColumn};
+    use crate::data::{HistoryPage, HistoryRequest, Reply};
     use egui_kittest::{
         Harness,
         kittest::{NodeT, Queryable},
@@ -942,7 +1070,7 @@ mod tests {
             vec!["1,234.50".into(), "Acme \"Co\"".into()],
         )]));
         panel.poll(&egui::Context::default());
-        panel.set = 1;
+        panel.pick_set(1);
         assert_eq!(
             panel.csv(),
             "\"Symbol\",\"Price\",\"Name\"\r\n\"A\"\"B\",\"1,234.50\",\"Acme \"\"Co\"\"\"\r\n"
@@ -972,7 +1100,7 @@ mod tests {
         ]);
         assert_eq!(panel.universe.as_deref(), Some("stock"));
         panel.universe = Some("coin".into());
-        panel.set = 1;
+        panel.pick_set(1);
         panel.text = "cheap and liquid".into();
         panel.filters.extend([
             ScreenerFilter::new("volume", ScreenerCondition::Below(5.0)),
@@ -1054,6 +1182,23 @@ mod tests {
             [ScreenerFilter::new("price", ScreenerCondition::Above(10.0))]
         );
         assert_eq!(serde_json::to_string(&saved).unwrap(), BEFORE);
+        // They restore with their set's columns, also in a panel showing another set.
+        documents.0.lock().unwrap().insert(
+            "Old".into(),
+            format!(r#"{{"version":1,"template":{BEFORE}}}"#),
+        );
+        let mut old = ScreenerPanel::new(sets());
+        old.pick_set(1);
+        old.set_storage(documents.clone());
+        for _ in 0..4 {
+            old.poll(&ctx);
+        }
+        old.load_screen(&ctx, "Old");
+        let query = old.query(0);
+        assert_eq!(
+            (query.columns, query.filters),
+            (vec!["price".to_owned()], saved.filters)
+        );
     }
 
     /// A text column's filter offers "is" and "is not" over the host's values and no number; a
@@ -1133,5 +1278,108 @@ mod tests {
         type_into(&mut h, "From", "inf");
         type_into(&mut h, "To", "1");
         assert!(h.get_by_label("Add filter").accesskit_node().is_disabled());
+    }
+
+    /// Guards the shaped columns of a screen: a heading's menu moves and removes its column and
+    /// the "+" adds any column of the host's sets, each change reaching the query at once;
+    /// removing the sorted column drops the sort, a saved screen restores the shaped columns in a
+    /// new panel, and picking the set again restores its own columns.
+    #[test]
+    fn header_menu_and_plus_shape_the_query_columns_and_saved_screens() {
+        // A control paints before the headings and a menu entry after them, so the last node of
+        // a label is the heading or the entry.
+        fn press(h: &mut Harness<'_, ScreenerPanel>, label: &str) {
+            h.get_all_by_label(label).last().unwrap().click();
+            h.run();
+        }
+        fn heading_menu(h: &mut Harness<'_, ScreenerPanel>, heading: &str) {
+            h.get_all_by_role_and_label(egui::Role::Button, heading)
+                .last()
+                .unwrap()
+                .click_secondary();
+            h.run();
+        }
+        let sets = || {
+            vec![
+                ScreenerColumnSet::new(
+                    "Overview",
+                    vec![
+                        ScreenerColumn::new("price", "Price"),
+                        ScreenerColumn::new("change", "Chg %"),
+                    ],
+                ),
+                ScreenerColumnSet::new("Volume", vec![ScreenerColumn::new("volume", "Vol")]),
+            ]
+        };
+        let ctx = egui::Context::default();
+        let feed = Arc::new(Feed::default());
+        let documents = Arc::new(Documents::default());
+        let mut panel = ScreenerPanel::new(sets());
+        panel.set_storage(documents.clone());
+        panel.set_feed(feed.clone());
+        // Answers the latest screen with one row of the asked ids, so the headings follow it.
+        let answer = || {
+            let (query, reply) = feed.rows.lock().unwrap().pop().unwrap();
+            reply.send(Ok(vec![ScreenerRow::new("AAA", query.columns.clone())]));
+            query
+        };
+        assert_eq!(answer().columns, ["price", "change"]);
+        let mut h = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, panel: &mut ScreenerPanel| {
+                    panel.poll(ui.ctx());
+                    _ = panel.show(ui);
+                },
+                panel,
+            );
+        h.run();
+
+        heading_menu(&mut h, "Chg %");
+        press(&mut h, "Move left");
+        assert_eq!(answer().columns, ["change", "price"]);
+        h.run();
+        heading_menu(&mut h, "Price");
+        assert!(h.get_by_label("Move right").accesskit_node().is_disabled());
+        press(&mut h, "Remove column");
+        assert_eq!(answer().columns, ["change"]);
+        h.run();
+        press(&mut h, "+");
+        // Only the columns not shown are offered, a removed one among them.
+        h.get_by_label("Price");
+        press(&mut h, "Vol");
+        assert_eq!(answer().columns, ["change", "volume"]);
+        h.run();
+        heading_menu(&mut h, "Vol");
+        press(&mut h, "Sort ascending");
+        let shaped = answer();
+        assert_eq!(
+            (shaped.sort_by.as_deref(), shaped.descending),
+            (Some("volume"), false)
+        );
+        h.run();
+
+        let screen = h.state().saved_screen();
+        h.state_mut().saved.save("Shaped", screen).unwrap();
+        h.run();
+        let mut restored = ScreenerPanel::new(sets());
+        restored.set_storage(documents.clone());
+        for _ in 0..4 {
+            restored.poll(&ctx);
+        }
+        restored.load_screen(&ctx, "Shaped");
+        assert_eq!(restored.query(0), shaped);
+
+        heading_menu(&mut h, "Vol");
+        press(&mut h, "Remove column");
+        let query = answer();
+        assert_eq!(
+            (query.columns, query.sort_by),
+            (vec!["change".to_owned()], None)
+        );
+        h.run();
+        press(&mut h, "Overview");
+        press(&mut h, "Overview");
+        assert_eq!(answer().columns, ["price", "change"]);
     }
 }
