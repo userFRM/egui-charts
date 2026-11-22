@@ -4045,9 +4045,12 @@ impl Chart {
                     .map(|local| start_idx + local)
                     .filter(|index| Some(self.state.shown()[*index].time) == crosshair_time);
                 let snapped = if price_rect.contains(hover_pos) {
-                    index.map_or(hover_pos, |index| {
-                        self.snap_crosshair(hover_pos, &price_map, index)
-                    })
+                    match self.anchor_crosshair_y(ui.ctx(), hover_pos.y) {
+                        Some(y) => Pos2::new(hover_pos.x, y),
+                        None => index.map_or(hover_pos, |index| {
+                            self.snap_crosshair(hover_pos, &price_map, index)
+                        }),
+                    }
                 } else {
                     hover_pos
                 };
@@ -4359,7 +4362,9 @@ impl Chart {
             if let Some((pos, tag)) = self.axis_hover.filter(|(pos, _)| {
                 show_price_button && price_rect.contains(*pos) && !volume_rect.contains(*pos)
             }) {
-                let price = if self.chart_options.crosshair.mode.snaps()
+                let price = if let Some(y) = self.anchor_crosshair_y(ui.ctx(), pos.y) {
+                    price_map.y_to_price(y)
+                } else if self.chart_options.crosshair.mode.snaps()
                     && let Some(index) = coords
                         .local_idx_at_x(pos.x, visible_data.len())
                         .filter(|index| Some(visible_data[*index].time) == crosshair_time)
