@@ -384,14 +384,22 @@ impl SourceItem {
 /// let mut info = DataWindowInfo::new("XAUUSD").with_ohlcv(2400.0, 2410.0, 2395.0, 2405.0, 9.0);
 /// let value = Some("5,000.00".to_owned());
 /// info.series.push(DataWindowSeries::new("SPX", egui::Color32::GOLD, value));
+/// // A readout built for a strike scale names its value as that scale does.
+/// info.value_name = Some("Strike".to_owned());
 /// ```
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct DataWindowInfo {
     /// Symbol name (e.g., "XAUUSD")
     pub symbol: String,
     /// Timestamp at cursor position
     pub timestamp: String,
+    /// The name the data window gives [`Self::timestamp`], the horizontal value: the chart's
+    /// [`HorizontalScale::value_name`](crate::scales::HorizontalScale::value_name), which
+    /// [`Self::from_chart`] and [`Self::from_pointer`] fill and the panel passes through the
+    /// translator, as the chart's readout does. `Some("Time")` by default, as on a time chart;
+    /// `None` or an empty name shows the value without a name.
+    pub value_name: Option<String>,
     /// Timeframe (e.g., "1m", "1H", "1D")
     pub timeframe: String,
     /// Open price
@@ -431,6 +439,34 @@ pub struct DataWindowInfo {
     pub series: Vec<DataWindowSeries>,
     /// Visible study plots at the same bar as the OHLCV values.
     pub studies: Vec<crate::chart::rendering::StudyValue>,
+}
+
+impl Default for DataWindowInfo {
+    /// An empty readout whose horizontal value is named "Time", as on a time chart.
+    fn default() -> Self {
+        Self {
+            symbol: String::new(),
+            timestamp: String::new(),
+            value_name: Some("Time".to_owned()),
+            timeframe: String::new(),
+            open: 0.0,
+            high: 0.0,
+            low: 0.0,
+            close: 0.0,
+            volume: 0.0,
+            volume_hidden: false,
+            change: 0.0,
+            change_percent: 0.0,
+            volume_precision: None,
+            prev_close: 0.0,
+            price_decimals: None,
+            formatted_prices: None,
+            formatted_volume: None,
+            formatted_change: None,
+            series: Vec::new(),
+            studies: Vec::new(),
+        }
+    }
 }
 
 /// An added series' row in the data window.
