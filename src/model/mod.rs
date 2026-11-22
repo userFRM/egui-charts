@@ -156,6 +156,8 @@ pub use trading::{
 #[cfg(feature = "strategies")]
 pub(crate) use trading::{trailed, trailing_stop};
 
+#[cfg(feature = "ui")]
+pub(crate) use watchlist::valid_symbol;
 pub use watchlist::{SkippedEntries, Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
 
 #[cfg(test)]
