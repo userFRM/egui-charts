@@ -306,10 +306,10 @@ impl OptionsVolumeProfile {
     /// 30% of the plot's width, 27% by default. Layout can instead place each upcoming expiration
     /// beside its date on the time scale, on the chosen side, separately or grouped by week or
     /// month. Maximum expirations counts from the nearest, 10 by default. Each group shares the
-    /// strike window and row height, names its own walls inside its profile, past their rows' bars
-    /// and figures where there is room and otherwise over the bars near their base, leaving out a
-    /// label with no room clear of the figures, and labels its latest date on the time scale
-    /// while Expiration labels is on. Groups mapping to one bar are combined; without chart bars
+    /// strike window and row height, marks its own walls with CW and PW tags in their colours
+    /// that point at their rows, the call wall's just before the rows' base and the put wall's
+    /// past the row's bars, figures and key, and labels its latest date on the time scale while
+    /// Expiration labels is on. Groups mapping to one bar are combined; without chart bars
     /// no dated profiles are drawn.
     /// Under Through date, Maximum expirations keeps the first N listed expiries on or after the
     /// current day; 0 keeps every listed expiry up to the date. Strikes around price draws the
@@ -4040,8 +4040,8 @@ mod tests {
 
     /// Each Sides display paints every strike in its own colours at one opacity, with no line
     /// across the profile: an edited Puts colour paints the puts of split bars alone, and puts
-    /// divided by calls keep a colour of their own. With Values on, the walls are named clear of
-    /// every figure and of each other, at either placement.
+    /// divided by calls keep a colour of their own. With Values on, the wall tags clear every row,
+    /// figure and each other, at either placement.
     #[cfg(feature = "widget")]
     #[test]
     fn options_rows_keep_their_colours_and_walls_clear_their_figures() {
@@ -4128,32 +4128,39 @@ mod tests {
                         "{case}: {rows:?}"
                     );
                     assert!(
-                        !shapes.iter().any(|shape| matches!(
-                            &shape.shape,
-                            Shape::LineSegment { .. } | Shape::Path(_)
-                        )),
+                        !shapes.iter().any(|shape| match &shape.shape {
+                            Shape::LineSegment { .. } => true,
+                            Shape::Path(path) => !path.closed,
+                            _ => false,
+                        }),
                         "{case}: no line across the profile"
                     );
-                    let (walls, figures): (Vec<_>, Vec<_>) = shapes
-                        .iter()
-                        .filter_map(|shape| match &shape.shape {
-                            Shape::Text(text) => Some((
-                                wall_colors.contains(&text.fallback_color),
-                                Rect::from_min_size(text.pos, text.galley.size()),
-                            )),
-                            _ => None,
-                        })
-                        .partition(|(wall, _)| *wall);
-                    assert_eq!(walls.len(), 2, "{case}");
-                    for (_, wall) in &walls {
+                    let (mut tags, mut figures, mut bars) = (Vec::new(), Vec::new(), Vec::new());
+                    for shape in &shapes {
+                        match &shape.shape {
+                            Shape::Path(path) if path.closed => {
+                                tags.push(shape.shape.visual_bounding_rect());
+                            }
+                            Shape::Text(text) if !["CW", "PW"].contains(&text.galley.text()) => {
+                                figures.push(Rect::from_min_size(text.pos, text.galley.size()));
+                            }
+                            Shape::Rect(bar) => bars.push(bar.rect),
+                            _ => {}
+                        }
+                    }
+                    assert_eq!(tags.len(), 2, "{case}");
+                    for tag in &tags {
                         assert!(
-                            figures.iter().all(|(_, figure)| !wall.intersects(*figure)),
-                            "{case}: wall {wall:?} clears {figures:?}"
+                            figures
+                                .iter()
+                                .chain(&bars)
+                                .all(|other| !tag.intersects(*other)),
+                            "{case}: tag {tag:?} clears {figures:?} and {bars:?}"
                         );
                     }
                     assert!(
-                        !walls[0].1.intersects(walls[1].1),
-                        "{case}: walls clear each other"
+                        !tags[0].intersects(tags[1]),
+                        "{case}: tags clear each other"
                     );
                 }
             }
@@ -4560,31 +4567,41 @@ mod tests {
                         });
                     let shapes = std::mem::take(&mut output.shapes);
                     output.drop_without_applying_deltas();
-                    let label = shapes
+                    // The call wall's tag points at its row from 2 before the base; calls
+                    // without puts have no put wall.
+                    let tags: Vec<_> = shapes
                         .iter()
-                        .find_map(|shape| match &shape.shape {
-                            egui::Shape::Text(text) if text.galley.text() == "Call wall" => {
-                                Some(text)
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Path(path) if path.closed => {
+                                Some((path.fill, shape.shape.visual_bounding_rect()))
                             }
                             _ => None,
                         })
-                        .expect("the profile's own wall is labelled");
-                    let label_end = if left {
-                        label.pos.x + label.galley.size().x
-                    } else {
-                        label.pos.x
+                        .collect();
+                    let [(fill, tag)] = tags.as_slice() else {
+                        panic!("one tag, got {tags:?}");
                     };
-                    // The widest bar reaches 90, leaving no room past it inside the span, so the
-                    // label lies over it 4 from the base; the zero ratio has no bar.
-                    let expected = if left { 196.0 } else { 104.0 };
-                    assert!((label_end - expected).abs() < 1e-3);
                     assert_eq!(
-                        label.fallback_color,
-                        study.plot_style(3).color,
-                        "labelled in the call wall colour"
+                        *fill,
+                        Color32::from_rgb(41, 98, 255),
+                        "the call wall colour"
                     );
-                    assert!(!shapes.iter().any(|shape| matches!(&shape.shape,
-                    egui::Shape::Text(text) if text.galley.text() == "Put wall")));
+                    let tip = if left { tag.left() } else { tag.right() };
+                    let expected = if left { 202.0 } else { 98.0 };
+                    assert!((tip - expected).abs() < 1e-3, "{tag:?}");
+                    assert!((tag.center().y - 100.0).abs() < 1e-3, "{tag:?}");
+                    let codes: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text)
+                                if ["CW", "PW"].contains(&text.galley.text()) =>
+                            {
+                                Some(text.galley.text())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(codes, ["CW"]);
                     assert!(
                         !shapes
                             .iter()
@@ -4605,6 +4622,10 @@ mod tests {
                 );
                 let coords = crate::chart::coords::ChartMapping::new(rect, 10.0, 0, 60, 0.0, map);
                 let mut configured = crate::studies::ConfiguredStudy::new(Box::new(study.clone()));
+                assert!(
+                    !configured.plot_style(3).visible,
+                    "new profiles start without walls"
+                );
                 for shown in [false, true] {
                     let mut settings = configured.settings();
                     settings.plots[3].visible = shown;
@@ -4619,14 +4640,16 @@ mod tests {
                             &coords,
                         );
                     });
-                    let labelled = output.shapes.iter().any(|shape| {
+                    let tagged = output.shapes.iter().any(|shape| {
                         matches!(
                             &shape.shape,
-                            egui::Shape::Text(text) if text.galley.text() == "Call wall"
+                            egui::Shape::Text(text) if text.galley.text() == "CW"
                         )
                     });
                     output.drop_without_applying_deltas();
-                    assert_eq!(labelled, shown, "the wall follows its plot's visibility");
+                    assert_eq!(tagged, shown, "the wall follows its plot's visibility");
+                    // Each expiration marks its own walls, which the legend does not list.
+                    assert!(!configured.legend_lines().contains(&3));
                 }
                 let color = Color32::from_rgb(210, 80, 40);
                 let mut settings = configured.settings();
@@ -4685,14 +4708,13 @@ mod tests {
         assert_eq!(merged[1].profile.up(), [28.0]);
     }
 
-    /// Expirations a week apart draw adjacent profiles. At either placement, with both walls and
-    /// Values on, each profile writes its wall labels and figures inside its own span, clear of
-    /// the other profile's rows and figures, a label with no room past its row lying over the
-    /// row's bar near its base. An exposure wall is named above its line only where the label
-    /// fits the span.
+    /// Expirations a week apart draw adjacent profiles. At either placement, with Values on or
+    /// off, for volume and gamma exposure and down to narrow profiles, every wall of every
+    /// profile is tagged at its strike, the call wall just before the base and the put wall past
+    /// its row's bars and figures, and no tag covers its own profile.
     #[cfg(feature = "widget")]
     #[test]
-    fn wall_labels_stay_inside_their_expirations_profile() {
+    fn wall_tags_point_at_their_rows_at_every_expiration() {
         use crate::model::Timeframe;
         use crate::scales::{PriceMap, PriceRange, PriceTransform};
         use InputValue::{Choice, Toggle};
@@ -4766,12 +4788,31 @@ mod tests {
             200.0,
             false,
         );
-        // A profile is 7 bars wide: 140 at spacing 20, 28 at spacing 4. At 140 the widest bar
-        // takes 126, so no wall label fits past its row and each lies over its bars, 4 from
-        // their base; an exposure label fits at 140 but not at 28.
-        for (measure, spacing, labels) in [(0, 20.0, 2), (2, 20.0, 2), (2, 4.0, 0)] {
+        // The call and put walls of each expiration, and their tags' fills: the opaque wall
+        // colours.
+        let strikes = [[110.0, 105.0], [100.0, 110.0]];
+        let profile =
+            OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.to_vec()).unwrap();
+        let fills = [3, 4].map(|line| {
+            let [r, g, b, _] = profile.plot_style(line).color.to_srgba_unmultiplied();
+            Color32::from_rgb(r, g, b)
+        });
+        // A profile is 7 bars wide, W: 140 at spacing 20, 42 at 6, the default, and 28 at 4, its
+        // widest row 0.9 W. The put tag's tip lies 2 past what reaches farthest from the base at
+        // its strike: the widest row's figure, which ends 2 short of the far edge, at W - 2 = 138,
+        // or the row's bar at 0.9 W without Values. A net gamma bar of -max at the put strike
+        // spans 0.05 W to 0.5 W from the start, past the zero line at 0.5 W: 0.5 W from a base at
+        // the start and 0.95 W from a base at the end. The call tag's tip lies 2 before the base.
+        for (measure, spacing, values, put_tips) in [
+            (0, 20.0, true, [140.0, 140.0]),
+            (0, 20.0, false, [128.0, 128.0]),
+            (0, 6.0, false, [39.8, 39.8]),
+            (2, 20.0, true, [72.0, 135.0]),
+            (2, 4.0, true, [16.0, 28.6]),
+        ] {
             for left in [false, true] {
-                let case = format!("measure {measure}, spacing {spacing}, left {left}");
+                let case =
+                    format!("measure {measure}, spacing {spacing}, values {values}, left {left}");
                 let mut study =
                     OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.to_vec())
                         .unwrap();
@@ -4780,12 +4821,12 @@ mod tests {
                     ("layout", Choice(1)),
                     ("placement", Choice(usize::from(left))),
                     ("measure", Choice(measure)),
-                    ("show_values", Toggle(true)),
+                    ("show_values", Toggle(values)),
                 ] {
                     study.set_input(id, value).unwrap();
                 }
                 study.calculate(&bars);
-                // Base index 30 keeps indices 6 to 26 inside the plot at both spacings.
+                // Base index 30 keeps indices 6 to 26 inside the plot at every spacing.
                 let coords =
                     crate::chart::coords::ChartMapping::new(rect, spacing, 0, 30, 0.0, map);
                 let painted: Vec<_> = study
@@ -4814,23 +4855,26 @@ mod tests {
                             });
                         let shapes = std::mem::take(&mut output.shapes);
                         output.drop_without_applying_deltas();
-                        let (mut walls, mut figures, mut rows) =
-                            (Vec::new(), Vec::new(), Vec::new());
+                        let (mut tags, mut codes, mut figures, mut rows) =
+                            ([Vec::new(), Vec::new()], Vec::new(), Vec::new(), Vec::new());
                         for shape in &shapes {
                             match &shape.shape {
+                                Shape::Path(path) if path.closed => {
+                                    let side = fills.iter().position(|&fill| path.fill == fill);
+                                    tags[side.expect("a tag in a wall colour")]
+                                        .push(shape.shape.visual_bounding_rect());
+                                }
+                                Shape::Text(text) if ["CW", "PW"].contains(&text.galley.text()) => {
+                                    codes.push(text.galley.text().to_owned());
+                                }
                                 Shape::Text(text) => {
-                                    let at = Rect::from_min_size(text.pos, text.galley.size());
-                                    if ["Call wall", "Put wall"].contains(&text.galley.text()) {
-                                        walls.push(at);
-                                    } else {
-                                        figures.push(at);
-                                    }
+                                    figures.push(Rect::from_min_size(text.pos, text.galley.size()));
                                 }
                                 Shape::Rect(row) => rows.push(row.rect),
                                 _ => {}
                             }
                         }
-                        (span, plot.right_aligned, walls, figures, rows)
+                        (span, plot.right_aligned, tags, codes, figures, rows)
                     })
                     .collect();
                 assert_eq!(painted.len(), 2, "{case}");
@@ -4838,37 +4882,47 @@ mod tests {
                     (painted[0].0.end - painted[1].0.start).abs() < 1e-3,
                     "{case}: adjacent"
                 );
-                for (index, (span, right_aligned, walls, figures, _)) in painted.iter().enumerate()
+                for (index, (span, right_aligned, tags, codes, figures, rows)) in
+                    painted.iter().enumerate()
                 {
-                    assert_eq!(walls.len(), labels, "{case}");
+                    assert_eq!(*right_aligned, left, "{case}");
+                    assert_eq!(codes, &["CW", "PW"], "{case}");
                     // Gamma exposure writes no figures.
-                    assert_eq!(figures.len(), if measure == 0 { 3 } else { 0 }, "{case}");
-                    for text in walls.iter().chain(figures) {
+                    let written = if measure == 0 && values { 3 } else { 0 };
+                    assert_eq!(figures.len(), written, "{case}");
+                    for figure in figures {
                         assert!(
-                            span.start <= text.left() && text.right() <= span.end,
-                            "{case}: {text:?} inside {span:?}"
+                            span.start <= figure.left() && figure.right() <= span.end,
+                            "{case}: {figure:?} inside {span:?}"
                         );
                     }
-                    let (_, _, _, other_figures, other_rows) = &painted[1 - index];
-                    for wall in walls {
+                    let (base, inward) = if left {
+                        (span.end, -1.0)
+                    } else {
+                        (span.start, 1.0)
+                    };
+                    for (side, tip) in [-2.0, put_tips[usize::from(left)]].into_iter().enumerate() {
+                        let [tag] = tags[side].as_slice() else {
+                            panic!("{case}: one tag on side {side}, got {:?}", tags[side]);
+                        };
+                        let y = map.price_to_y(strikes[index][side]);
+                        assert!((tag.center().y - y).abs() < 1e-3, "{case}: {tag:?} at {y}");
+                        // The tag extends from its tip away from the row.
+                        let tip_x = if (side == 0) == left {
+                            tag.left()
+                        } else {
+                            tag.right()
+                        };
                         assert!(
-                            other_figures
-                                .iter()
-                                .chain(other_rows)
-                                .all(|shape| !wall.intersects(*shape)),
-                            "{case}: {wall:?} clears the other profile"
+                            (tip_x - (base + inward * tip)).abs() < 1e-3,
+                            "{case}: side {side} {tag:?} tip {tip} from {base}"
                         );
-                        if measure == 0 {
-                            let base = if *right_aligned {
-                                span.end - 4.0 - wall.width()
-                            } else {
-                                span.start + 4.0
-                            };
-                            assert!(
-                                (wall.left() - base).abs() < 1e-3,
-                                "{case}: {wall:?} near its base"
-                            );
-                        }
+                        assert!(
+                            rows.iter()
+                                .chain(figures)
+                                .all(|other| !tag.intersects(*other)),
+                            "{case}: {tag:?} clears its own profile"
+                        );
                     }
                 }
             }

@@ -133,6 +133,18 @@ pub(crate) fn paint_profile(
         };
     if profile.exposure.is_some() {
         paint_exposure(painter, profile, config, span.clone(), share, price_to_y);
+        // The tags clear the bars and the zero line the bars grow from.
+        let taken: Vec<Rect> = if profile.walls.is_some() {
+            let zero = (span.start + span.end) * 0.5;
+            let (a, b) = (price_to_y(profile.low()), price_to_y(profile.high()));
+            exposure_rects(profile, config.display, span.clone(), share, price_to_y)
+                .into_iter()
+                .map(|(_, rect, _)| rect)
+                .chain([Rect::from_x_y_ranges(zero..=zero, a.min(b)..=a.max(b))])
+                .collect()
+        } else {
+            Vec::new()
+        };
         paint_option_walls(
             painter,
             profile,
@@ -140,8 +152,8 @@ pub(crate) fn paint_profile(
             right_aligned,
             price_to_y,
             walls_visible,
-            None,
-            Vec::new(),
+            &[],
+            &taken,
         );
         return;
     }
@@ -154,8 +166,8 @@ pub(crate) fn paint_profile(
                 right_aligned,
                 price_to_y,
                 walls_visible,
-                Some(&[]),
-                Vec::new(),
+                &[],
+                &[],
             );
         }
         return;
@@ -421,8 +433,8 @@ pub(crate) fn paint_profile(
             right_aligned,
             price_to_y,
             walls_visible,
-            Some(&reach),
-            [key, figures].concat(),
+            &reach,
+            &[key, figures].concat(),
         );
     }
     // A study's span often starts at the pane's left edge, under the chart legend, so a study whose
@@ -437,15 +449,13 @@ pub(crate) fn paint_profile(
     paint_source_note(painter, profile.source(), rect, note_right, note_color);
 }
 
-/// Marks the call and put walls of a profile drawn at its expiration in their colours.
-/// Without `reach`, for exposure bars that grow both ways from the span's centre, a wall is a
-/// line across the span with its label above the line's start where the label fits the span.
-/// Otherwise the label alone names it, centred on the strike, at the first place that fits
-/// inside the span, 2 points short of its far end, and covers none of `taken` at that height
-/// (figures, key lines, the other wall's label): past what `reach` gives for every row its height
-/// meets (how far from the base that row's bar reaches) and past `taken` there, else over the
-/// rows' bars 4 points from their base, else past one of `taken` there. Where none fits, the
-/// label is left out.
+/// Marks the call and put walls of a profile drawn at its expiration with short tags in their
+/// colours, CW and PW, each pointing along its strike's row at the row: the call wall's just
+/// before the rows' base, outside the profile, and the put wall's past everything at the
+/// strike's height, that is past how far `reach` gives each row the tag meets reaching from the
+/// base and past each of `taken` there (bars, figures, key lines), 2 points clear of either.
+/// Neither covers its own profile; a profile with no room beside its rows lets a tag lie over a
+/// neighbouring expiration's.
 fn paint_option_walls(
     painter: &egui::Painter,
     profile: &VolumeProfile,
@@ -453,86 +463,84 @@ fn paint_option_walls(
     right_aligned: bool,
     price_to_y: &dyn Fn(f64) -> f32,
     visible: [bool; 2],
-    reach: Option<&[f32]>,
-    mut taken: Vec<Rect>,
+    reach: &[f32],
+    taken: &[Rect],
 ) {
     let Some(walls) = &profile.walls else {
         return;
     };
     let font = egui::FontId::proportional(typography::XS);
     let y_at_row = |row: usize| price_to_y(profile.low + row as f64 * profile.row_height);
-    for (side, label) in ["Call wall", "Put wall"].into_iter().enumerate() {
+    // Offsets from the rows' base grow into the profile.
+    let (base, inward) = if right_aligned {
+        (span.end, -1.0)
+    } else {
+        (span.start, 1.0)
+    };
+    let x = |offset: f32| base + inward * offset;
+    for (side, code) in ["CW", "PW"].into_iter().enumerate() {
         let Some(strike) = walls.strikes[side].filter(|_| visible[side]) else {
             continue;
         };
-        let [r, g, b, a] = walls.colors[side];
-        let color = Color32::from_rgba_unmultiplied(r, g, b, a);
         let y = price_to_y(strike);
         if !y.is_finite() {
             continue;
         }
-        let text = crate::localization::text(painter.ctx(), label);
-        let galley = painter.layout_no_wrap(text, font.clone(), color);
+        // Opaque so the code reads over whatever the tag lies on; light text on the default
+        // blue and red, dark on a pale colour, as price tags choose.
+        let [r, g, b, _] = shown_color(painter, walls.colors[side]);
+        let fill = Color32::from_rgb(r, g, b);
+        let text_color = if crate::theme::contrast(Color32::WHITE, fill) >= 2.0 {
+            Color32::WHITE
+        } else {
+            Color32::BLACK
+        };
+        let text = crate::localization::text(painter.ctx(), code);
+        let galley = painter.layout_no_wrap(text, font.clone(), text_color);
         let size = galley.size();
-        let room = span.end - span.start;
-        let Some(reach) = reach else {
-            painter.hline(span.start..=span.end, y, Stroke::new(1.0, color));
-            if size.x + 4.0 <= room {
-                let (x, align) = if right_aligned {
-                    (span.end - 2.0, egui::Align2::RIGHT_BOTTOM)
-                } else {
-                    (span.start + 2.0, egui::Align2::LEFT_BOTTOM)
-                };
-                let rect = align.anchor_size(Pos2::new(x, y - 2.0), size);
-                painter.galley(rect.min, galley, color);
-            }
-            continue;
-        };
         let band = egui::Rangef::new(y - size.y * 0.5, y + size.y * 0.5);
-        // Offsets from the rows' base: where a rectangle ends, and the label at an offset.
-        let beyond = |rect: &Rect| {
-            if right_aligned {
-                span.end - rect.left()
-            } else {
-                rect.right() - span.start
-            }
+        // The tip's offset and the way the tag extends from it, away from the row.
+        let (tip, away) = if side == 0 {
+            (-2.0, -1.0)
+        } else {
+            let far = reach
+                .iter()
+                .enumerate()
+                .filter(|&(row, _)| {
+                    let (a, b) = (y_at_row(row), y_at_row(row + 1));
+                    band.intersects(egui::Rangef::new(a.min(b), a.max(b)))
+                })
+                .map(|(_, &reach)| reach)
+                .chain(
+                    taken
+                        .iter()
+                        .filter(|rect| band.intersects(rect.y_range()))
+                        .map(|rect| {
+                            if right_aligned {
+                                span.end - rect.left()
+                            } else {
+                                rect.right() - span.start
+                            }
+                        }),
+                )
+                .fold(0.0, f32::max);
+            (far + 2.0, 1.0)
         };
-        let at = |offset: f32| {
-            let x = if right_aligned {
-                span.end - offset - size.x
-            } else {
-                span.start + offset
-            };
-            Rect::from_min_size(Pos2::new(x, band.min), size)
-        };
-        let near: Vec<Rect> = taken
-            .iter()
-            .copied()
-            .filter(|rect| band.intersects(rect.y_range()))
-            .collect();
-        let far = reach
-            .iter()
-            .enumerate()
-            .filter(|&(row, _)| {
-                let (a, b) = (y_at_row(row), y_at_row(row + 1));
-                band.intersects(egui::Rangef::new(a.min(b), a.max(b)))
-            })
-            .map(|(_, &reach)| reach)
-            .chain(near.iter().map(beyond))
-            .fold(0.0, f32::max);
-        let mut past: Vec<f32> = near.iter().map(|rect| beyond(rect) + 4.0).collect();
-        past.sort_by(f32::total_cmp);
-        let Some(rect) = [far + 4.0, 4.0]
-            .into_iter()
-            .chain(past)
-            .filter(|&offset| offset + size.x <= room - 2.0)
-            .map(at)
-            .find(|rect| !near.iter().any(|other| other.intersects(*rect)))
-        else {
-            continue;
-        };
-        taken.push(rect);
-        painter.galley(rect.min, galley, color);
+        // A 4 point tip, then the code with 2 points either side.
+        let [tip_x, neck, end] = [tip, tip + away * 4.0, tip + away * (8.0 + size.x)].map(x);
+        let mut points = vec![
+            Pos2::new(tip_x, y),
+            Pos2::new(neck, band.min),
+            Pos2::new(end, band.min),
+            Pos2::new(end, band.max),
+            Pos2::new(neck, band.max),
+        ];
+        // Clockwise on screen, the winding the tessellator prefers.
+        if end < tip_x {
+            points[1..].reverse();
+        }
+        painter.add(egui::Shape::convex_polygon(points, fill, Stroke::NONE));
+        painter.galley(Pos2::new(neck.min(end) + 2.0, band.min), galley, text_color);
     }
 }
 
