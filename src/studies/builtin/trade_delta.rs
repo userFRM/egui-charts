@@ -7,6 +7,9 @@ use crate::model::Bar;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct TradeDeltaValue {
+    /// Whether any execution counted in this bar. A bar without executions has zero delta and
+    /// range, and `chart::series::render_trade_delta` draws nothing for it.
+    pub traded: bool,
     /// Buy minus sell volume in this bar.
     pub delta: f64,
     /// Highest running delta of this bar's executions, starting from zero: zero or more.
@@ -27,7 +30,8 @@ pub struct TradeDeltaValue {
     pub rolling_delta: f64,
 }
 
-/// Computes one value per supplied bar, with zero delta for bars without executions.
+/// Computes one value per supplied bar. A bar without executions has
+/// [`traded`](TradeDeltaValue::traded) `false` and zero delta.
 ///
 /// `reset(i, bar)` marks the start of a host-defined session or period; the first bar always
 /// starts at zero. Rolling totals cover the last `rolling.max(1)` displayed bars and continue
@@ -71,6 +75,7 @@ pub fn trade_delta(
         }
         let close = side_delta(ask, bid);
         let value = TradeDeltaValue {
+            traded: flow.is_some(),
             delta,
             delta_high,
             delta_low,
