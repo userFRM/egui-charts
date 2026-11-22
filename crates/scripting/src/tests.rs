@@ -313,6 +313,19 @@ fn run_errors_keep_the_bars_before_them() {
             "series d = ...",
         ),
         ("plot(\"x\", \"text\");", 11, 0, "holds numbers; got string"),
+        // The standard package's sleep blocks the thread, and this argument panics in it.
+        (
+            "plot(\"x\", if bar_index == 20 { sleep(1e20); close } else { close });",
+            32,
+            20,
+            "no function sleep",
+        ),
+        (
+            "plot(\"x\", if bar_index == 20 { call(Fn(\"sleep\"), 1e20); close } else { close });",
+            0,
+            20,
+            "no function sleep",
+        ),
     ] {
         let script = compile(source);
         let error = script.check(&fixture).unwrap_err();

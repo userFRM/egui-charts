@@ -171,6 +171,14 @@ pub(crate) fn engine() -> Engine {
         .set_max_variables(MAX_VARIABLES)
         // Code compiled at run time would bypass the declarations.
         .disable_symbol("eval");
+    // The standard package's `sleep` blocks the thread, which panics on the web. These come
+    // first in every lookup, a function pointer's included, so a script has no such function.
+    engine.register_fn("sleep", |_: INT| -> Result<()> {
+        Err("no function sleep takes (int)".into())
+    });
+    engine.register_fn("sleep", |_: FLOAT| -> Result<()> {
+        Err("no function sleep takes (number)".into())
+    });
     // Rhai's count restarts in each callback of a function such as `filter`, from a copy it then
     // drops, so the run counts the calls itself.
     engine.on_progress(|_| {
