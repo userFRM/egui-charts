@@ -65,12 +65,9 @@ impl Clock {
         self.bar_started = None;
     }
 
-    /// The check of a bar's `operations`-th operation: every [`OPERATIONS_PER_CHECK`]
-    /// operations it reads the clock against both time limits.
-    pub fn operation(&mut self, operations: u64) -> Option<Stop> {
-        if !operations.is_multiple_of(OPERATIONS_PER_CHECK) {
-            return None;
-        }
+    /// The check of both time limits inside a bar, made every [`OPERATIONS_PER_CHECK`]
+    /// operations.
+    pub fn check(&mut self) -> Option<Stop> {
         let now = Instant::now();
         let started = *self.bar_started.get_or_insert(now);
         if now.duration_since(started) > self.limits.bar || self.limits.bar.is_zero() {

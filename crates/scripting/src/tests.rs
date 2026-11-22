@@ -342,28 +342,40 @@ fn stopped(calculation: Option<Calculation>) -> String {
     }
 }
 
-/// The one-bar limit stops the newest bar and reports its line and bar.
+/// The one-bar limit stops the newest bar and reports its line and bar, for work in the bar
+/// and in the callbacks of array functions.
 #[test]
 fn one_bar_limit_stops_the_newest_bar_at_its_line() {
-    let script = limited(
-        "plot(\"x\", close);\nif bar_index == 49 { let i = 0; loop { i += 1; } }",
-        Limits {
-            bar: Duration::from_millis(50),
-            ..Limits::default()
-        },
-    );
     let fixture = bars(50, 4);
-    let mut study = script.study();
-    study.calculate(&fixture[..49]);
-    assert!(matches!(
-        settle(&mut study, &fixture[..49]),
-        Some(Calculation::Done(_))
-    ));
-    study.update(&fixture, 49);
-    let message = stopped(settle(&mut study, &fixture));
-    assert!(message.contains("for one bar"), "{message}");
-    let error = script.last_error().expect("the stop is reported");
-    assert_eq!((error.line, error.bar), (2, Some(49)), "{error}");
+    for source in [
+        "plot(\"x\", close);\nif bar_index == 49 { let i = 0; loop { i += 1; } }",
+        // 4 million callbacks, each counted by Rhai from a copy of the count that it drops.
+        "plot(\"x\", close);\nfn never(y) { false } \
+         fn inner(x) { let b = []; b.pad(2000, 0); b.filter(Fn(\"never\")).len() > 0 } \
+         if bar_index == 49 { let a = []; a.pad(2000, 0); a.filter(Fn(\"inner\")); }",
+    ] {
+        let script = limited(
+            source,
+            Limits {
+                bar: Duration::from_millis(50),
+                ..Limits::default()
+            },
+        );
+        let mut study = script.study();
+        study.calculate(&fixture[..49]);
+        assert!(
+            matches!(
+                settle(&mut study, &fixture[..49]),
+                Some(Calculation::Done(_))
+            ),
+            "{source}"
+        );
+        study.update(&fixture, 49);
+        let message = stopped(settle(&mut study, &fixture));
+        assert!(message.contains("for one bar"), "{source}: {message}");
+        let error = script.last_error().expect("the stop is reported");
+        assert_eq!((error.line, error.bar), (2, Some(49)), "{source}: {error}");
+    }
 }
 
 /// The full-recompute limit stops runs of short bars between bars, and runs of long bars inside

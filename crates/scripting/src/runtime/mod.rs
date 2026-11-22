@@ -69,6 +69,8 @@ pub(crate) struct Run {
     pub sites: HashMap<Site, CallSite>,
     occurrences: HashMap<Span, u32>,
     pub clock: Clock,
+    /// The operations run so far.
+    operations: u64,
     /// The limit that stopped the run, set by the checks.
     pub stop: Option<Stop>,
     cancel: Option<Arc<AtomicBool>>,
@@ -86,14 +88,16 @@ impl Run {
         *count - 1
     }
 
-    /// The check of a bar's operation count against the time limits, and whether the study
-    /// was dropped meanwhile.
-    pub fn operation(&mut self, operations: u64) -> bool {
-        if self.stop.is_none() {
-            self.stop = self.clock.operation(operations).or_else(|| {
-                (operations.is_multiple_of(limits::OPERATIONS_PER_CHECK) && self.cancelled())
-                    .then_some(Stop::Cancelled)
-            });
+    /// The check of an operation, callbacks' included: every
+    /// [`OPERATIONS_PER_CHECK`](limits::OPERATIONS_PER_CHECK) operations against the time
+    /// limits and whether the study was dropped meanwhile.
+    pub fn operation(&mut self) -> bool {
+        self.operations += 1;
+        if self.stop.is_none() && self.operations.is_multiple_of(limits::OPERATIONS_PER_CHECK) {
+            self.stop = self
+                .clock
+                .check()
+                .or_else(|| self.cancelled().then_some(Stop::Cancelled));
         }
         self.stop.is_some()
     }
@@ -271,6 +275,7 @@ impl<P: Program> RunState<P> {
             sites: HashMap::new(),
             occurrences: HashMap::new(),
             clock: Clock::start(limits),
+            operations: 0,
             stop: None,
             cancel,
             series_spans,
@@ -474,6 +479,7 @@ impl Run {
             sites: HashMap::new(),
             occurrences: HashMap::new(),
             clock: Clock::start(Limits::default()),
+            operations: 0,
             stop: None,
             cancel: None,
             series_spans: Arc::from(Vec::new()),

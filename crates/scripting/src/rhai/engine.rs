@@ -171,11 +171,10 @@ pub(crate) fn engine() -> Engine {
         .set_max_variables(MAX_VARIABLES)
         // Code compiled at run time would bypass the declarations.
         .disable_symbol("eval");
-    engine.on_progress(|operations| {
-        if !operations.is_multiple_of(runtime::limits::OPERATIONS_PER_CHECK) {
-            return None;
-        }
-        runtime::with(|run| run.operation(operations))
+    // Rhai's count restarts in each callback of a function such as `filter`, from a copy it then
+    // drops, so the run counts the calls itself.
+    engine.on_progress(|_| {
+        runtime::with(runtime::Run::operation)
             .unwrap_or(false)
             .then_some(::rhai::Dynamic::UNIT)
     });
