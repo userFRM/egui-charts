@@ -27,6 +27,7 @@ pub struct CursorStateData {
     pub current_cursor: CursorType,
     pub eraser_mode: bool,
     pub values_tooltip: bool,
+    pub close_snap: bool,
 }
 
 impl CursorStateData {
@@ -681,6 +682,7 @@ impl DrawingToolbar {
                     current_cursor: self.state.current_cursor_type,
                     eraser_mode: self.state.eraser_mode_enabled,
                     values_tooltip: self.state.values_tooltip_on_long_press,
+                    close_snap: self.state.crosshair_close_snap,
                 },
             );
         });
@@ -782,6 +784,7 @@ impl DrawingToolbar {
                 self.state.values_tooltip_on_long_press = !self.state.values_tooltip_on_long_press;
             }
             A::SetSnapToIndicators(enabled) => self.state.snap_to_indicators = *enabled,
+            A::SetCrosshairCloseSnap(enabled) => self.state.crosshair_close_snap = *enabled,
             A::SetMagnetType(kind) => {
                 self.state.magnet_type = *kind;
                 self.state.magnet_mode = true;
