@@ -105,6 +105,10 @@ pub enum DrawingToolbarAction {
     ZoomOut,
     /// Toggle values tooltip on long press
     ToggleValuesTooltip,
+    /// Switch close-only crosshair snapping on or off, from the cursor menu. Hosts set
+    /// [`CrosshairMode::MagnetClose`](crate::config::CrosshairMode::MagnetClose) while it is on,
+    /// and the mode their magnet implies when it is off.
+    SetCrosshairCloseSnap(bool),
     /// Lock or unlock every drawing as a group, keeping each drawing's own lock. Apply the
     /// requested `ToolbarState::lock_all` with
     /// [`DrawingManager::set_locked`](crate::drawings::DrawingManager::set_locked).

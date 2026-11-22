@@ -96,6 +96,10 @@ pub struct ToolbarState {
     pub glyph_picker: super::GlyphPicker,
     /// Whether to show values tooltip on long press
     pub values_tooltip_on_long_press: bool,
+    /// Whether the cursor menu's Snap crosshair to closes switch is on. Hosts set it before
+    /// showing the toolbar from whether the chart's crosshair mode is
+    /// [`CrosshairMode::MagnetClose`](crate::config::CrosshairMode::MagnetClose).
+    pub crosshair_close_snap: bool,
     /// Whether eraser mode is currently active
     pub eraser_mode_enabled: bool,
     /// Whether all drawings are locked; the lock button shows it.
@@ -171,6 +175,7 @@ impl Default for ToolbarState {
             search_query: String::new(),
             glyph_picker: Default::default(),
             values_tooltip_on_long_press: true, // Default: enabled
+            crosshair_close_snap: false,
             eraser_mode_enabled: false,
             lock_all: false,
             hide_drawings: false,

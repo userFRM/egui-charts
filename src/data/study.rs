@@ -74,19 +74,39 @@ pub struct StudyChart {
 impl<'a> StudyData<'a> {
     /// Index of the bar containing `time`, retaining missing price intervals as gaps.
     /// For metrics, the latest point at or before `time`, held until the next publication.
+    /// On chart bars shorter than a day, which [`chart`](Self::chart) dates, `time` is an instant,
+    /// and a daily or longer history the chart keeps for a symbol whose instrument has a time
+    /// zone but no session holds the instants of each date in that zone. A longer chart bar's
+    /// time, and a time read without a chart, is the date it carries.
     pub fn bar_at(&self, time: DateTime<Utc>) -> Option<usize> {
+        match &self.chart {
+            Some(chart) => self.bar_on(&chart.clock, time),
+            None => self.bar_on(&self.clock, time),
+        }
+    }
+
+    /// [`bar_at`](Self::bar_at) on chart bars of `clock`, whatever [`chart`](Self::chart) holds.
+    pub(crate) fn bar_on(&self, clock: &BarClock, time: DateTime<Utc>) -> Option<usize> {
         if self.request.metric.is_some() {
             return self
                 .bars
                 .partition_point(|bar| bar.time <= time)
                 .checked_sub(1);
         }
-        let open = self.clock.bar_open(time);
+        // An instant of a chart bar shorter than a day joins the bar of its date in the
+        // history's zone; session histories keep their calendar dates here.
+        let intraday = (clock.timeframe())
+            .is_some_and(|chart| chart.duration_ms() < Timeframe::Day1.duration_ms());
+        let open = if intraday && !self.clock.has_session() {
+            self.clock.instant_open(time)
+        } else {
+            self.clock.bar_open(time)
+        };
         let at = self
             .bars
             .partition_point(|bar| self.clock.bar_open(bar.time) <= open)
             .checked_sub(1)?;
-        self.clock.same_bar(self.bars[at].time, time).then_some(at)
+        (self.clock.bar_open(self.bars[at].time) == open).then_some(at)
     }
 
     /// Index of the latest bar closed when the chart bar at `time` closes, as the chart shows
@@ -94,13 +114,16 @@ impl<'a> StudyData<'a> {
     /// chart bars before read the hour before. Against a longer interval, a daily or longer bar
     /// of a clock with an exchange session closes with its last trading window, and so does a
     /// daily or longer chart bar, so a day reaches the bar that ends its session and a week the
-    /// week's last trading day. [`chart`](Self::chart) dates the chart bars; without it, `time`
-    /// is taken as the close. Pass `developing` for the chart's latest bar, which is still
-    /// forming: it reads the newest bar, which may change with each feed update, unless the
-    /// chart waits for interval close, when a bar of an interval longer than the chart's counts
-    /// only once it has closed by that chart bar's open. A gap holds the bar before it. A metric
-    /// reads the latest point published before the close. [`bar_at`](Self::bar_at) returns the
-    /// bar containing `time` instead, also while it is open.
+    /// week's last trading day. A daily or longer history the chart keeps for a symbol whose
+    /// instrument has a time zone but no session closes at the midnight in that zone that ends
+    /// its last date, so in UTC-5 a day reaches the hourly chart bar that opens at 04:00 UTC.
+    /// [`chart`](Self::chart) dates the chart bars; without it, `time` is taken as the close. Pass
+    /// `developing` for the chart's latest bar, which is still forming: it reads the newest bar,
+    /// which may change with each feed update, unless the chart waits for interval close, when a
+    /// bar of an interval longer than the chart's counts only once it has closed by that chart
+    /// bar's open. A gap holds the bar before it. A metric reads the latest point published before
+    /// the close. [`bar_at`](Self::bar_at) returns the bar containing `time` instead, also while
+    /// it is open.
     ///
     /// ```
     /// use chrono::{DateTime, Duration};
@@ -301,6 +324,51 @@ mod tests {
                 read,
                 "{timeframe} at {time}"
             );
+        }
+    }
+
+    /// Guards #4083: on a symbol that trades in UTC-5 without a session, the daily bar holding an
+    /// instant of an hourly chart bar is that of the instant's local date, while a daily chart
+    /// bar's time, and a time read without a chart, is the date it carries.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn zoned_days_hold_the_instants_of_their_local_date() {
+        let zone = TimezoneId::fixed_offset(-5 * 3600).unwrap();
+        let t = |rfc3339: &str| rfc3339.parse::<DateTime<Utc>>().unwrap();
+        let days: Vec<Bar> = [
+            "2024-03-12T00:00:00Z",
+            "2024-03-13T00:00:00Z",
+            "2024-03-14T00:00:00Z",
+        ]
+        .iter()
+        .map(|stamp| Bar::new(t(stamp), 1.0, 1.0, 1.0, 1.0, 1.0))
+        .collect();
+        // The chart's interval, a chart bar's time and the bar holding it.
+        #[rustfmt::skip]
+        let rows = [
+            // 21:00 on 14 March and 23:00 on 11 March in UTC-5.
+            (Some(Timeframe::Hour1), "2024-03-15T02:00:00Z", Some(2)),
+            (Some(Timeframe::Hour1), "2024-03-12T04:00:00Z", None),
+            (Some(Timeframe::Day1), "2024-03-13T00:00:00Z", Some(1)),
+            (None, "2024-03-13T00:00:00Z", Some(1)),
+        ];
+        for (chart, time, held) in rows {
+            let history = StudyData {
+                request: StudyDataRequest {
+                    symbol: String::new(),
+                    timeframe: Some(Timeframe::Day1),
+                    metric: None,
+                },
+                bars: &days,
+                clock: BarClock::new(Timeframe::Day1).with_trading_zone(zone.clone()),
+                instrument: None,
+                timeframe: Timeframe::Day1,
+                chart: chart.map(|interval| StudyChart {
+                    clock: BarClock::new(interval),
+                    wait_for_close: true,
+                }),
+            };
+            assert_eq!(history.bar_at(t(time)), held, "{chart:?} at {time}");
         }
     }
 }

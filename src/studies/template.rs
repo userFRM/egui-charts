@@ -944,7 +944,10 @@ impl StudyTemplate {
                 }
             }
             // Multi-Range Delta ranges included their largest size before they excluded their
-            // limit. The next larger number keeps each saved range counting the sizes it did.
+            // limit. The smallest number above that size with one more decimal place, 9.1 for 9,
+            // keeps each saved range counting the sizes it counted that are written to that
+            // precision and stays short; where that rounds back to the size, the next larger
+            // number keeps the range exact.
             "Multi-Range Delta"
                 if !declares("max0") && ["max0", "max1", "max2"].into_iter().any(has) =>
             {
@@ -954,7 +957,12 @@ impl StudyTemplate {
                         if let InputValue::Number(max) = value
                             && *max < f64::MAX
                         {
-                            *max = max.next_up();
+                            let text = max.to_string();
+                            let point = if text.contains('.') { "" } else { "." };
+                            *max = match format!("{text}{point}1").parse::<f64>() {
+                                Ok(limit) if limit > *max => limit,
+                                _ => max.next_up(),
+                            };
                         }
                     }
                 }
@@ -1107,6 +1115,30 @@ impl StudyTemplate {
                 template.inputs.push(("ratio_color".to_owned(), puts));
                 changed = true;
             }
+        }
+        // An options profile drew a wall while its Call wall or Put wall input, off by default,
+        // and its line in the style tab were both on, before the line alone switched it. A save
+        // with neither the inputs nor the put/call switch, listed since walls were listed for
+        // every measure, had its walls off.
+        if study == "Options Volume Profile" && declares("expiry") && !declares("call_wall") {
+            for (line, id) in [(3, "call_wall"), (4, "put_wall")] {
+                let saved = self.inputs.iter().find_map(|(saved, value)| match value {
+                    InputValue::Toggle(on) if saved == id => Some(*on),
+                    _ => None,
+                });
+                if let Some(plot) = template.settings.plots.get_mut(line)
+                    && plot.visible
+                    && !saved.unwrap_or(has("put_call"))
+                {
+                    plot.visible = false;
+                    changed = true;
+                }
+            }
+            let listed = template.inputs.len();
+            template
+                .inputs
+                .retain(|(id, _)| id != "call_wall" && id != "put_wall");
+            changed |= template.inputs.len() != listed;
         }
         // A single candlestick pattern study saved while it drew the bullish, bearish and
         // neutral lines of All Candlestick Patterns, and took the trend rule whatever its rule
@@ -1824,8 +1856,8 @@ mod tests {
     /// A template restores the inputs it holds whatever the study's default has become, with every
     /// line it showed, and an input it lacks takes the value the saved inputs had before the
     /// study offered it. Values outside a narrowed input range load clamped to that range.
-    /// Multi-Range Delta ranges saved with an inclusive largest size restore with the limit just
-    /// above it.
+    /// Multi-Range Delta ranges saved with an inclusive largest size restore with the smallest
+    /// limit above it that has one more decimal place, and their names write it.
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
         use InputValue::{Choice, Length, Number, Text, Toggle};
@@ -2121,7 +2153,8 @@ mod tests {
                     ("as_drawings", Toggle(true)),
                 ],
             ),
-            // Saved while each range included its largest size: the limit is the next number up.
+            // Saved while each range included its largest size: the limit is the smallest number
+            // above it with one more decimal place.
             (
                 "Multi-Range Delta",
                 vec![
@@ -2134,15 +2167,36 @@ mod tests {
                 ],
                 vec![
                     ("min0", Number(0.0)),
-                    ("limit0", Number(9.000000000000002)),
+                    ("limit0", Number(9.1)),
                     ("min1", Number(10.0)),
-                    ("limit1", Number(99.00000000000001)),
+                    ("limit1", Number(99.1)),
                     ("min2", Number(100.0)),
                     ("limit2", Number(f64::MAX)),
                 ],
             ),
         ];
         let factory = IndicatorFactory::new();
+        // A study saved with the former default largest sizes 9 and 99 writes the limits it
+        // restores as briefly (#4064).
+        let multi_range = StudyTemplate {
+            name: "Multi-Range Delta".to_owned(),
+            inputs: vec![
+                ("max0".to_owned(), Number(9.0)),
+                ("max1".to_owned(), Number(99.0)),
+            ],
+            settings: factory.create("Multi-Range Delta").unwrap().settings(),
+            visible: true,
+            scale: None,
+            metric: None,
+        };
+        assert_eq!(
+            multi_range.create().unwrap().line_names(),
+            [
+                "Delta [0, 9.1) lots",
+                "Delta [10, 99.1) lots",
+                "Delta [100, ∞) lots"
+            ]
+        );
         let periods = (0..7).map(|period| {
             (
                 "Vol Profile Periodic",

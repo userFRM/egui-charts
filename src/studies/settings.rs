@@ -1419,7 +1419,7 @@ impl Indicator for ConfiguredStudy {
         let mut aligned = IndicatorValues::new();
         self.aligned_bars.clear();
         for (at, bar) in data.iter().enumerate() {
-            let output = source.bar_at(bar.time).and_then(|_| {
+            let output = source.bar_on(&self.clock, bar.time).and_then(|_| {
                 source.closed_on(
                     &self.clock,
                     self.wait_for_close,
@@ -2272,6 +2272,9 @@ impl Indicator for ConfiguredStudy {
     fn plot_holds_values(&self, line: usize) -> bool {
         self.study.plot_holds_values(line)
     }
+    fn plot_color_only(&self, line: usize) -> bool {
+        self.study.plot_color_only(line)
+    }
     fn level_style(&self, value: f64) -> LineStyle {
         // Levels moved onto one value draw with the pattern of the first visible one.
         self.declared_pane()
@@ -2889,25 +2892,28 @@ mod tests {
     /// Automatic volume units follow the instrument, while a chosen precision wins. With
     /// three decimals, 0.375 stays fractional and 1234.5 / 1000 rounds to 1.234 in binary;
     /// without metadata the same values keep their former 0 and 1.23K text. At 0 volume
-    /// decimals the units keep two decimals: 1.23K. Order flow studies in volume units follow
-    /// the same rule: 1,234.5678 / 1,000 = 1.2345678 reads 1.235K at three volume decimals and
-    /// 1.23K at 0 or without them.
+    /// decimals the units keep two decimals: 1.23K. 1,234,567,890 / 10^9 = 1.23456789 reads
+    /// 1.23B, 1.235B at three decimals and 1.2B at a chosen one. Order flow studies in volume
+    /// units follow the same rule on every line and axis mark: 1,234.5678 / 1,000 = 1.2345678
+    /// reads 1.235K at three volume decimals and 1.23K at 0 or without them, 2,500,000 reads
+    /// 2.500M and 2.50M.
     #[test]
     fn volume_units_follow_the_instrument_volume_decimals() {
         use crate::data::OrderFlowKind;
         use crate::studies::OrderFlowStudy;
-        type Row = (Option<u8>, Option<usize>, Option<usize>, [&'static str; 2]);
+        type Row = (Option<u8>, Option<usize>, Option<usize>, [&'static str; 3]);
         let rows: [Row; 4] = [
-            (None, None, None, ["0", "1.23K"]),
-            (Some(3), None, Some(3), ["0.375", "1.234K"]),
-            (Some(3), Some(1), Some(1), ["0.4", "1.2K"]),
-            (Some(0), None, Some(0), ["0", "1.23K"]),
+            (None, None, None, ["0", "1.23K", "1.23B"]),
+            (Some(3), None, Some(3), ["0.375", "1.234K", "1.235B"]),
+            (Some(3), Some(1), Some(1), ["0.4", "1.2K", "1.2B"]),
+            (Some(0), None, Some(0), ["0", "1.23K", "1.23B"]),
         ];
         let mut wrong = Vec::new();
         for (decimals, chosen, precision, expected) in rows {
             for study in [
                 Box::new(super::super::Volume::default()) as Box<dyn Indicator>,
                 Box::new(super::super::OnBalanceVolume::default()),
+                Box::new(super::super::CumulativeVolumeIndex::default()),
             ] {
                 let name = study.name().to_owned();
                 let mut study = ConfiguredStudy::new(study);
@@ -2917,7 +2923,7 @@ mod tests {
                 let mut instrument = Instrument::new("COIN");
                 instrument.volume_decimals = decimals;
                 study.set_instrument(Some(&instrument));
-                let values = [0.375, 1234.5];
+                let values = [0.375, 1234.5, 1_234_567_890.0];
                 let got = (
                     study.precision(),
                     values.map(|value| study.format_value(value)),
@@ -2935,7 +2941,11 @@ mod tests {
                 }
             }
         }
-        for (decimals, expected) in [(None, "1.23K"), (Some(0), "1.23K"), (Some(3), "1.235K")] {
+        for (decimals, expected) in [
+            (None, ["1.23K", "2.50M"]),
+            (Some(0), ["1.23K", "2.50M"]),
+            (Some(3), ["1.235K", "2.500M"]),
+        ] {
             for study in [
                 OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
                     min: 0.0,
@@ -2962,16 +2972,17 @@ mod tests {
                 let mut instrument = Instrument::new("COIN");
                 instrument.volume_decimals = decimals;
                 study.set_instrument(Some(&instrument));
-                let value = 1234.5678;
-                let mut got = vec![study.format_plot_value(0, value)];
-                // Trade Rate writes only its volume line in volume units.
-                if study.value_format() == crate::scales::StudyFormat::Volume {
+                for (value, expected) in [1234.5678, 2_500_000.0].into_iter().zip(expected) {
+                    // The axis labels its marks with `format_value`.
+                    let mut got: Vec<_> = (0..study.line_count().min(3))
+                        .map(|line| study.format_plot_value(line, value))
+                        .collect();
                     got.push(study.format_value(value));
-                }
-                if got.iter().any(|text| text != expected) {
-                    wrong.push(format!(
-                        "{name}, {decimals:?}: got {got:?}, want {expected}"
-                    ));
+                    if got.iter().any(|text| text != expected) {
+                        wrong.push(format!(
+                            "{name}, {decimals:?}: got {got:?}, want {expected}"
+                        ));
+                    }
                 }
             }
         }
