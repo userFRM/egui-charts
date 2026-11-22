@@ -1,19 +1,22 @@
 //! A screener table of the rows the feed finds for the user's filters, universe and description.
 
 use crate::localization as l10n;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use egui::{Sense, Ui, vec2};
+use egui::{Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
 use super::ROW_HEIGHT;
 use super::controls::{self, cell, dropdown, row};
 use crate::data::inbox::Inbox;
 use crate::data::{
-    Datafeed, FeedError, ScreenerColumn, ScreenerColumnKind, ScreenerColumnSet, ScreenerCondition,
-    ScreenerFilter, ScreenerQuery, ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
+    Datafeed, FeedError, HistoryPage, HistoryRequest, ScreenerColumn, ScreenerColumnKind,
+    ScreenerColumnSet, ScreenerCondition, ScreenerFilter, ScreenerQuery, ScreenerRow,
+    ScreenerTextAnswer, ScreenerUniverse,
 };
 use crate::icons::icons;
+use crate::model::{Bar, Timeframe};
 use crate::services::{ConflictChoice, Storage, StoreKind};
 use crate::theme::ThemeExt;
 use crate::ui::dialogs::templates::TemplateStore;
@@ -26,6 +29,10 @@ use crate::ui_kit::{EmptyState, LoadingIndicator, PanelHeader};
 const LIMIT: usize = 200;
 /// Width kept free at the right of the table for the "+" that adds a column.
 const ADD_WIDTH: f32 = 28.0;
+/// Daily closes in each small chart, about three months of trading days.
+const CHART_BARS: usize = 60;
+/// Height of a row in chart view.
+const CHART_ROW_HEIGHT: f32 = 48.0;
 
 /// An action the host performs for the screener.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -57,6 +64,9 @@ struct SavedScreen {
     /// shaped, which show their set's columns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     columns: Option<Vec<String>>,
+    /// How the rows show; a table in screens saved before the chart view.
+    #[serde(default, skip_serializing_if = "View::is_table")]
+    view: View,
 }
 
 /// A screener fed by the host's [`Datafeed::screen`].
@@ -64,11 +74,13 @@ struct SavedScreen {
 /// The host gives the column sets; the user picks one, adds filters on its columns and sorts by
 /// a column by clicking its heading. A heading's menu sorts by its column, moves it left or right
 /// or removes it, and the "+" after the last heading adds any column of the host's sets; picking
-/// a set again restores its columns. With [`set_universes`](Self::set_universes) the user also
-/// picks the market to screen, and with [`set_text_query`](Self::set_text_query) describes the
-/// screen in words, which the feed interprets in [`Datafeed::screen_text`] and explains above the
-/// rows. [`set_storage`](Self::set_storage) lets the user save, rename, load and delete named
-/// screens, each with its columns. Each change asks the feed again, which filters, sorts and
+/// a set again restores its columns. The user shows the rows as a table or as one small chart per
+/// symbol of its last 60 daily closes, which the panel asks [`Datafeed::history`] for while the
+/// rows are on screen. With [`set_universes`](Self::set_universes) the user also picks the market
+/// to screen, and with [`set_text_query`](Self::set_text_query) describes the screen in words,
+/// which the feed interprets in [`Datafeed::screen_text`] and explains above the rows.
+/// [`set_storage`](Self::set_storage) lets the user save, rename, load and delete named screens,
+/// each with its columns and view. Each change asks the feed again, which filters, sorts and
 /// limits, and only the answer to the latest request is shown. A full answer offers the next page
 /// of the same screen. The chosen criteria stay through loading, failures, paging and export.
 /// Call [`poll`](Self::poll) each frame, then [`show`](Self::show) while the panel is open.
@@ -96,6 +108,8 @@ pub struct ScreenerPanel {
     descending: bool,
     /// The columns shown and asked for, in order: the chosen set's until the user shapes them.
     columns: Vec<ScreenerColumn>,
+    /// How the rows show.
+    view: View,
     draft: Draft,
     feed: Option<Arc<dyn Datafeed>>,
     /// The latest answer and the columns it answers.
@@ -105,6 +119,13 @@ pub struct ScreenerPanel {
     loading: bool,
     inbox: Arc<Inbox>,
     request: u64,
+    /// The small chart of each shown symbol, in chart view.
+    sparks: HashMap<String, Spark>,
+    /// Counts the first-page answers, so each one asks the shown charts again once.
+    generation: u64,
+    /// Answers to the charts' history requests, keyed by `Spark::request`.
+    chart_inbox: Arc<Inbox>,
+    chart_request: u64,
 }
 
 impl std::fmt::Debug for ScreenerPanel {
@@ -129,12 +150,16 @@ impl std::fmt::Debug for ScreenerPanel {
             .field("sort_by", &self.sort_by)
             .field("descending", &self.descending)
             .field("columns", &self.columns)
+            .field("view", &self.view)
             .field("draft", &self.draft)
             .field("rows", &self.rows)
             .field("answered", &self.answered)
             .field("error", &self.error)
             .field("loading", &self.loading)
             .field("request", &self.request)
+            .field("sparks", &self.sparks)
+            .field("generation", &self.generation)
+            .field("chart_request", &self.chart_request)
             .finish_non_exhaustive()
     }
 }
@@ -165,6 +190,7 @@ impl ScreenerPanel {
             sort_by: None,
             descending: true,
             columns,
+            view: View::Table,
             draft: Draft {
                 column: 0,
                 comparison: Comparison::Above,
@@ -179,12 +205,18 @@ impl ScreenerPanel {
             loading: false,
             inbox: Arc::default(),
             request: 0,
+            sparks: HashMap::new(),
+            generation: 0,
+            chart_inbox: Arc::default(),
+            chart_request: 0,
         }
     }
 
     /// Ask `feed` for rows from now on, starting at once.
     pub fn set_feed(&mut self, feed: Arc<dyn Datafeed>) {
         self.feed = Some(feed);
+        // Another feed's closes are not this one's.
+        self.sparks.clear();
         self.refresh();
     }
 
@@ -313,6 +345,7 @@ impl ScreenerPanel {
                     .map(|column| column.id.clone())
                     .collect(),
             ),
+            view: self.view,
         }
     }
 
@@ -353,6 +386,7 @@ impl ScreenerPanel {
         };
         self.pick_set(set);
         self.columns = columns;
+        self.view = saved.view;
         self.universe = saved.universe;
         self.filters = saved.filters;
         self.sort_by = saved.sort_by;
@@ -369,6 +403,9 @@ impl ScreenerPanel {
     pub fn poll(&mut self, ctx: &egui::Context) {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
+        let repaint = ctx.clone();
+        self.chart_inbox
+            .set_waker(move || repaint.request_repaint());
         self.saved.poll(ctx);
         if self.saved.ready()
             && let Some(old) = self.renaming.take()
@@ -395,6 +432,11 @@ impl ScreenerPanel {
                     } else {
                         self.rows = answer.rows;
                         self.explanation = answer.explanation;
+                        // A new screen asks the shown charts again once.
+                        self.generation += 1;
+                        let rows = &self.rows;
+                        self.sparks
+                            .retain(|symbol, _| rows.iter().any(|row| &row.symbol == symbol));
                     }
                     self.answered = self.columns.clone();
                     self.error = None;
@@ -410,6 +452,18 @@ impl ScreenerPanel {
                 }
             }
             self.appending = false;
+        }
+        for (key, answer) in self.chart_inbox.drain().answers {
+            let Some(spark) = self.sparks.values_mut().find(|spark| spark.request == key) else {
+                continue;
+            };
+            spark.closes = match *answer
+                .downcast::<Result<HistoryPage, FeedError>>()
+                .expect("daily closes")
+            {
+                Ok(page) => closes(page.bars),
+                Err(_) => Vec::new(),
+            };
         }
     }
 
@@ -492,6 +546,16 @@ impl ScreenerPanel {
                     }
                 });
                 changed |= self.universe != before;
+            }
+            for (view, label) in [(View::Table, "Table"), (View::Chart, "Chart")] {
+                if Button::new(label)
+                    .small()
+                    .selected(self.view == view)
+                    .show(ui)
+                    .clicked()
+                {
+                    self.view = view;
+                }
             }
             if Button::new("Send to watchlist")
                 .enabled(has_rows)
@@ -763,8 +827,58 @@ impl ScreenerPanel {
             None => {}
         }
         let mut more = false;
+        let mut wanted: Vec<String> = Vec::new();
         let shown = &self.answered;
-        if !self.rows.is_empty() {
+        if !self.rows.is_empty() && self.view == View::Chart {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for entry in &self.rows {
+                        let (rect, response) = ui.allocate_exact_size(
+                            vec2(ui.available_width(), CHART_ROW_HEIGHT),
+                            Sense::click(),
+                        );
+                        if response.hovered() {
+                            ui.painter().rect_filled(rect, 0.0, theme.ui.btn_bg_hover);
+                        }
+                        let symbol = rect.with_max_x(rect.left() + 80.0).shrink2(vec2(6.0, 0.0));
+                        cell(ui, symbol, &entry.symbol, false, theme.ui.text);
+                        let spark = self.sparks.get(&entry.symbol);
+                        // Only rows on screen ask, once per screen answer.
+                        if ui.is_rect_visible(rect)
+                            && spark.is_none_or(|spark| spark.generation != self.generation)
+                            && !wanted.contains(&entry.symbol)
+                        {
+                            wanted.push(entry.symbol.clone());
+                        }
+                        if let Some(spark) = spark
+                            && let [first, .., last] = spark.closes.as_slice()
+                        {
+                            let color = if last > first {
+                                theme.chart.candle_up
+                            } else if last < first {
+                                theme.chart.candle_down
+                            } else {
+                                theme.ui.text_secondary
+                            };
+                            let plot = rect.with_min_x(rect.left() + 80.0).shrink2(vec2(6.0, 8.0));
+                            let line = sparkline(&spark.closes, plot);
+                            ui.painter().add(Shape::line(line, Stroke::new(1.5, color)));
+                        }
+                        let translated_label = l10n::text(ui.ctx(), &entry.symbol);
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
+                        });
+                        if response.clicked() {
+                            action = ScreenerAction::SelectSymbol(entry.symbol.clone());
+                        }
+                    }
+                    if self.more && !self.loading {
+                        more = Button::new("Show more").show(ui).clicked();
+                    }
+                });
+        } else if !self.rows.is_empty() {
             egui::ScrollArea::both()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -912,6 +1026,17 @@ impl ScreenerPanel {
                     }
                 });
         }
+        for symbol in wanted {
+            let Some(feed) = &self.feed else { break };
+            self.chart_request += 1;
+            feed.history(
+                HistoryRequest::new(symbol.clone(), Timeframe::Day1, CHART_BARS),
+                self.chart_inbox.reply(self.chart_request),
+            );
+            let spark = self.sparks.entry(symbol).or_default();
+            spark.generation = self.generation;
+            spark.request = self.chart_request;
+        }
         if more {
             self.load_more();
         }
@@ -945,6 +1070,33 @@ impl Comparison {
             Self::IsNot => "is not",
         }
     }
+}
+
+/// How the screener shows its rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum View {
+    /// One row of values per symbol.
+    #[default]
+    Table,
+    /// One small chart of recent daily closes per symbol.
+    Chart,
+}
+
+impl View {
+    fn is_table(&self) -> bool {
+        *self == Self::Table
+    }
+}
+
+/// The small chart of one symbol.
+#[derive(Debug, Default)]
+struct Spark {
+    /// Daily closes, oldest first; empty until answered, or when the feed has none.
+    closes: Vec<f64>,
+    /// The `ScreenerPanel::generation` they were last asked for.
+    generation: u64,
+    /// The latest request for them; answers to older ones are dropped.
+    request: u64,
 }
 
 /// The filter being written.
@@ -988,10 +1140,58 @@ fn describe(ctx: &egui::Context, column: &str, condition: &ScreenerCondition) ->
     }
 }
 
+/// The finite closes of `bars` in time order, the last of several bars at one time winning as on
+/// the chart, keeping the newest `CHART_BARS`.
+fn closes(mut bars: Vec<Bar>) -> Vec<f64> {
+    bars.retain(|bar| bar.close.is_finite());
+    // A stable sort, so the later of two bars at one time stays after the earlier.
+    bars.sort_by_key(|bar| bar.time);
+    bars.dedup_by(|later, earlier| {
+        let same = later.time == earlier.time;
+        if same {
+            std::mem::swap(later, earlier);
+        }
+        same
+    });
+    let skip = bars.len().saturating_sub(CHART_BARS);
+    bars[skip..].iter().map(|bar| bar.close).collect()
+}
+
+/// Where `closes` run across `rect`, evenly spaced, the lowest at the bottom and the highest at
+/// the top; equal closes run through the middle. Fewer than two closes give no line.
+fn sparkline(closes: &[f64], rect: Rect) -> Vec<Pos2> {
+    if closes.len() < 2 {
+        return Vec::new();
+    }
+    let (low, high) = closes
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), &close| {
+            (low.min(close), high.max(close))
+        });
+    // Halves keep the range finite for closes near the ends of f64.
+    let range = high / 2.0 - low / 2.0;
+    let step = rect.width() / (closes.len() - 1) as f32;
+    closes
+        .iter()
+        .enumerate()
+        .map(|(index, &close)| {
+            let share = if range > 0.0 {
+                ((close / 2.0 - low / 2.0) / range) as f32
+            } else {
+                0.5
+            };
+            pos2(
+                rect.left() + index as f32 * step,
+                rect.bottom() - share * rect.height(),
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{HistoryPage, HistoryRequest, Reply};
+    use crate::data::Reply;
     use egui_kittest::{
         Harness,
         kittest::{NodeT, Queryable},
@@ -1002,6 +1202,8 @@ mod tests {
     struct Feed {
         rows: Mutex<Vec<(ScreenerQuery, Reply<Vec<ScreenerRow>>)>>,
         text: Mutex<Vec<(ScreenerQuery, Reply<ScreenerTextAnswer>)>>,
+        /// Each history request, with its reply until answered.
+        histories: Mutex<Vec<(HistoryRequest, Option<Reply<HistoryPage>>)>>,
     }
 
     #[derive(Default)]
@@ -1025,8 +1227,8 @@ mod tests {
     }
 
     impl Datafeed for Feed {
-        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
-            reply.send(Err(FeedError::NotSupported));
+        fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            self.histories.lock().unwrap().push((request, Some(reply)));
         }
         fn screen(&self, query: ScreenerQuery, reply: Reply<Vec<ScreenerRow>>) {
             self.rows.lock().unwrap().push((query, reply));
@@ -1034,6 +1236,39 @@ mod tests {
         fn screen_text(&self, query: ScreenerQuery, reply: Reply<ScreenerTextAnswer>) {
             self.text.lock().unwrap().push((query, reply));
         }
+    }
+
+    /// The panel, polled and shown each frame.
+    fn harness(panel: ScreenerPanel) -> Harness<'static, ScreenerPanel> {
+        Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, panel: &mut ScreenerPanel| {
+                    panel.poll(ui.ctx());
+                    _ = panel.show(ui);
+                },
+                panel,
+            )
+    }
+
+    /// Clicks the last node labelled `label`. A control paints before the headings and a menu
+    /// entry after them, so that is the heading or the entry.
+    fn press(h: &mut Harness<'_, ScreenerPanel>, label: &str) {
+        h.get_all_by_label(label).last().unwrap().click();
+        h.run();
+    }
+
+    /// A daily bar `day` days after 2026-01-01, closing at `close`.
+    fn bar(day: i64, close: f64) -> Bar {
+        let time: chrono::DateTime<chrono::Utc> = "2026-01-01T00:00:00Z".parse().unwrap();
+        Bar::new(
+            time + chrono::TimeDelta::days(day),
+            close,
+            close,
+            close,
+            close,
+            0.0,
+        )
     }
 
     /// Guards what the feed is asked and what leaves the panel: the query names the shown set's
@@ -1182,13 +1417,15 @@ mod tests {
             [ScreenerFilter::new("price", ScreenerCondition::Above(10.0))]
         );
         assert_eq!(serde_json::to_string(&saved).unwrap(), BEFORE);
-        // They restore with their set's columns, also in a panel showing another set.
+        // They restore with their set's columns as a table, also in a panel showing another set
+        // and view.
         documents.0.lock().unwrap().insert(
             "Old".into(),
             format!(r#"{{"version":1,"template":{BEFORE}}}"#),
         );
         let mut old = ScreenerPanel::new(sets());
         old.pick_set(1);
+        old.view = View::Chart;
         old.set_storage(documents.clone());
         for _ in 0..4 {
             old.poll(&ctx);
@@ -1196,8 +1433,8 @@ mod tests {
         old.load_screen(&ctx, "Old");
         let query = old.query(0);
         assert_eq!(
-            (query.columns, query.filters),
-            (vec!["price".to_owned()], saved.filters)
+            (query.columns, query.filters, old.view),
+            (vec!["price".to_owned()], saved.filters, View::Table)
         );
     }
 
@@ -1286,12 +1523,6 @@ mod tests {
     /// new panel, and picking the set again restores its own columns.
     #[test]
     fn header_menu_and_plus_shape_the_query_columns_and_saved_screens() {
-        // A control paints before the headings and a menu entry after them, so the last node of
-        // a label is the heading or the entry.
-        fn press(h: &mut Harness<'_, ScreenerPanel>, label: &str) {
-            h.get_all_by_label(label).last().unwrap().click();
-            h.run();
-        }
         fn heading_menu(h: &mut Harness<'_, ScreenerPanel>, heading: &str) {
             h.get_all_by_role_and_label(egui::Role::Button, heading)
                 .last()
@@ -1324,15 +1555,7 @@ mod tests {
             query
         };
         assert_eq!(answer().columns, ["price", "change"]);
-        let mut h = Harness::builder()
-            .with_context_setup(egui_extras::install_image_loaders)
-            .build_ui_state(
-                |ui, panel: &mut ScreenerPanel| {
-                    panel.poll(ui.ctx());
-                    _ = panel.show(ui);
-                },
-                panel,
-            );
+        let mut h = harness(panel);
         h.run();
 
         heading_menu(&mut h, "Chg %");
@@ -1358,6 +1581,11 @@ mod tests {
             (Some("volume"), false)
         );
         h.run();
+        press(&mut h, "Chart");
+        assert!(
+            feed.rows.lock().unwrap().is_empty(),
+            "a view switch asks no screen"
+        );
 
         let screen = h.state().saved_screen();
         h.state_mut().saved.save("Shaped", screen).unwrap();
@@ -1368,8 +1596,9 @@ mod tests {
             restored.poll(&ctx);
         }
         restored.load_screen(&ctx, "Shaped");
-        assert_eq!(restored.query(0), shaped);
+        assert_eq!((restored.query(0), restored.view), (shaped, View::Chart));
 
+        press(&mut h, "Table");
         heading_menu(&mut h, "Vol");
         press(&mut h, "Remove column");
         let query = answer();
@@ -1381,5 +1610,88 @@ mod tests {
         press(&mut h, "Overview");
         press(&mut h, "Overview");
         assert_eq!(answer().columns, ["price", "change"]);
+    }
+
+    /// Guards how the chart view loads its lines: each shown row asks for its symbol's last 60
+    /// daily closes once per screen answer, not every frame and not again on a view switch; an
+    /// answer reaches its own row in time order, a failure leaves the row without a line, and a
+    /// new screen answer asks again.
+    #[test]
+    fn chart_view_asks_each_rows_closes_once_per_answer() {
+        let feed = Arc::new(Feed::default());
+        let mut panel = ScreenerPanel::new(sets());
+        panel.set_feed(feed.clone());
+        let answer = || {
+            let (_, reply) = feed.rows.lock().unwrap().pop().unwrap();
+            let row = |symbol: &str| ScreenerRow::new(symbol, vec!["1".into()]);
+            reply.send(Ok(vec![row("AAA"), row("BBB")]));
+        };
+        let asked = || {
+            let histories = feed.histories.lock().unwrap();
+            histories
+                .iter()
+                .map(|(request, _)| request.clone())
+                .collect::<Vec<_>>()
+        };
+        let reply = |index: usize, page: Result<HistoryPage, FeedError>| {
+            let reply = feed.histories.lock().unwrap()[index].1.take().unwrap();
+            reply.send(page);
+        };
+        answer();
+        let mut h = harness(panel);
+        h.run();
+        assert!(asked().is_empty(), "a table asks no closes");
+        press(&mut h, "Chart");
+        let daily = |symbol: &str| HistoryRequest::new(symbol, Timeframe::Day1, 60);
+        assert_eq!(asked(), [daily("AAA"), daily("BBB")]);
+        reply(
+            0,
+            Ok(HistoryPage::new(vec![bar(2, 2.0), bar(1, 1.0)], false)),
+        );
+        reply(1, Err(FeedError::NotSupported));
+        h.run();
+        assert_eq!(h.state().sparks["AAA"].closes, [1.0, 2.0]);
+        assert!(h.state().sparks["BBB"].closes.is_empty());
+        press(&mut h, "Table");
+        press(&mut h, "Chart");
+        assert_eq!(asked().len(), 2, "asked again without a new answer");
+        h.state_mut().refresh();
+        answer();
+        h.run();
+        assert_eq!(asked().len(), 4);
+    }
+
+    /// Guards the small chart's line against what feeds send: pages in any order, two bars at one
+    /// time (the later in the page wins, as on the chart), closes that are not finite, flat runs,
+    /// the ends of f64, and more bars than a chart holds (the newest stay).
+    #[test]
+    fn small_charts_sort_drop_and_scale_closes() {
+        type Row<'a> = (&'a [(i64, f64)], &'a [(f32, f32)]);
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 10.0));
+        let (max, inf) = (f64::MAX, f64::INFINITY);
+        let rows: [Row; 6] = [
+            (
+                &[(2, 3.0), (1, 1.0), (2, 5.0), (3, f64::NAN)],
+                &[(0.0, 10.0), (100.0, 0.0)],
+            ),
+            (
+                &[(1, 2.0), (2, 2.0), (3, 2.0)],
+                &[(0.0, 5.0), (50.0, 5.0), (100.0, 5.0)],
+            ),
+            (&[(1, 7.0)], &[]),
+            (&[], &[]),
+            (
+                &[(1, -max), (2, 0.0), (3, max)],
+                &[(0.0, 10.0), (50.0, 5.0), (100.0, 0.0)],
+            ),
+            (&[(1, inf), (2, -inf)], &[]),
+        ];
+        for (page, points) in rows {
+            let bars = page.iter().map(|&(day, close)| bar(day, close)).collect();
+            let line: Vec<Pos2> = points.iter().map(|&(x, y)| pos2(x, y)).collect();
+            assert_eq!(sparkline(&closes(bars), rect), line, "{page:?}");
+        }
+        let bars = (0..=60).map(|day| bar(day, day as f64)).collect();
+        assert_eq!(closes(bars), (1..=60).map(f64::from).collect::<Vec<_>>());
     }
 }
