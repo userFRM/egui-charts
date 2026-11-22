@@ -25,7 +25,7 @@ pub(super) fn days_per_bar(timeframe: Timeframe) -> Option<i64> {
 }
 
 /// Bar boundaries for one timeframe, around the clock in UTC by default.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BarClock {
     /// `None` for a clock that matches bars by their exact open time.
     timeframe: Option<Timeframe>,
