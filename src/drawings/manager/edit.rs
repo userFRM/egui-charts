@@ -941,6 +941,9 @@ impl DrawingManager {
     /// Toggling neither edits nor saves drawings. Wrap a user toggle in
     /// [`Chart::user_action`](crate::widget::Chart::user_action) to undo the toggle itself.
     /// The setting survives drawing loads and symbol changes, but is not saved in a layout.
+    /// On a filtered chart with storage, an unfiled saveable drawing is filtered as soon as
+    /// it is added. Set [`Drawing::folder`] and [`Drawing::folder_sync`] before adding it;
+    /// [`Self::move_to_folder`] and [`Self::set_folder_sync`] skip filtered drawings.
     pub fn set_shared_drawings_hidden(&mut self, hidden: bool) {
         if self.shared_filter.hidden != hidden {
             self.shared_filter.hidden = hidden;

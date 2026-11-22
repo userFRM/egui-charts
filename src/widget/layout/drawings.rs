@@ -4883,6 +4883,129 @@ mod tests {
         assert_eq!(shared_records(&host), stored);
     }
 
+    #[cfg(feature = "studies")]
+    #[test]
+    fn shared_drawing_filter_keeps_a_removed_studys_line_in_storage() {
+        use crate::drawings::Drawing;
+        use crate::studies::RSI;
+
+        for remove_pane in [false, true] {
+            let (host, mut charts, mut layouts) = shared_layouts();
+            let [mine, peer] = charts
+                .each_mut()
+                .map(|c| c.add_indicator(Box::new(RSI::new(14))));
+            settle_pair(&mut layouts, &mut charts);
+            let pane = charts[0].series_pane(mine).unwrap();
+            // Removing the study must still delete its local drawing. That deletion also
+            // forces a write from the chart on which the peer's drawing is hidden.
+            charts[0].user_action(|c| {
+                let id = draw(c, 45.0);
+                assert!(c.move_drawing_to_pane(id, pane));
+                let path = ["Notes".to_owned()];
+                assert!(c.drawings_mut().move_to_folder(&[id], &[], &path));
+                assert!(
+                    c.drawings_mut()
+                        .set_folder_sync(&path, Some(FolderSync::Chart))
+                );
+            });
+            settle_pair(&mut layouts, &mut charts);
+            charts[1].user_action(|c| {
+                let id = draw(c, 55.0);
+                assert!(c.move_drawing_to_pane(id, c.series_pane(peer).unwrap()));
+            });
+            settle_pair(&mut layouts, &mut charts);
+            let before = shared_records(&host);
+            let stored_line = &before[0];
+            assert!(stored_line["pane"].is_object());
+            charts[0].drawings_mut().set_shared_drawings_hidden(true);
+            for step in 0..3 {
+                match step {
+                    0 => assert!(charts[0].user_action(|c| if remove_pane {
+                        c.remove_pane(pane)
+                    } else {
+                        c.remove_series(mine)
+                    })),
+                    1 => assert!(charts[0].undo()),
+                    _ => assert!(charts[0].redo()),
+                }
+                settle_pair(&mut layouts, &mut charts);
+                let restored = step == 1;
+                assert_eq!(charts[0].series_pane(mine), restored.then_some(pane));
+                let [local, other] = prices(&charts);
+                assert_eq!(
+                    local.as_slice(),
+                    if restored {
+                        &[45., 55.][..]
+                    } else {
+                        &[55.][..]
+                    }
+                );
+                assert_eq!(other, [55.]);
+                let line = |d: &&Drawing| d.chart_points[0].price == 55.0;
+                assert_eq!(
+                    charts[0]
+                        .drawings()
+                        .drawings
+                        .iter()
+                        .find(line)
+                        .unwrap()
+                        .pane,
+                    restored.then_some(mine.0)
+                );
+                assert_eq!(charts[1].drawings().drawings[0].pane, Some(peer.0));
+                let written = shared_records(&host);
+                assert_eq!(written.as_array().unwrap().len(), 1);
+                // Numeric study ids belong to the writer; the stored study identity, the
+                // drawing's own id and the anchors must still describe the peer's RSI line.
+                for key in ["pane", "id", "points", "created_at", "modified_at"] {
+                    assert_eq!(written[0][key], stored_line[key], "{key}, step {step}");
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn shared_drawing_filter_leaves_the_peers_series_layer_alone() {
+        use crate::studies::SMA;
+        use crate::widget::VisualOrder;
+
+        let (host, mut charts, mut layouts) = shared_layouts();
+        charts[1].add_indicator(Box::new(SMA::new(5)));
+        settle_pair(&mut layouts, &mut charts);
+        let below = charts[1].user_action(|c| {
+            let id = draw(c, 10.5);
+            assert!(c.reorder_drawing(id, VisualOrder::SendBackward));
+            c.drawings().drawings[0].series_layer.unwrap()
+        });
+        settle_pair(&mut layouts, &mut charts);
+        let stored = shared_records(&host);
+        assert_eq!(stored[0]["drawing"]["series_layer"], below);
+        charts[0].drawings_mut().set_shared_drawings_hidden(true);
+        for step in 0..3 {
+            match step {
+                0 => {
+                    charts[0].user_action(|c| {
+                        c.add_indicator(Box::new(SMA::new(5)));
+                    });
+                }
+                1 => assert!(charts[0].undo()),
+                _ => assert!(charts[0].redo()),
+            }
+            settle_pair(&mut layouts, &mut charts);
+            assert_eq!(
+                charts[0]
+                    .indicators()
+                    .any(|(_, study)| study.name() == "SMA"),
+                step != 1
+            );
+            for c in &charts {
+                assert_eq!(c.drawings().drawings[0].series_layer, Some(below));
+            }
+            assert_eq!(shared_records(&host), stored);
+        }
+    }
+
     #[cfg(feature = "ui")]
     #[test]
     fn shared_drawing_filter_keeps_same_named_peer_folder_intact() {
@@ -4893,38 +5016,50 @@ mod tests {
         let plan = vec!["Plan".to_owned()];
         let archive = vec!["Archive".to_owned()];
         let place = |c: &mut Chart, path: &[String], scope, price| {
-            c.user_action(|c| {
-                let id = draw(c, price);
-                let m = c.drawings_mut();
-                assert!(m.move_to_folder(&[id], &[], path));
-                assert!(m.set_folder_sync(path, Some(scope)));
-                id
-            })
+            let mut d = line("");
+            d.chart_points = vec![ChartPoint::new(2.0, price), ChartPoint::new(4.0, price)];
+            d.folder = path.to_owned();
+            d.folder_sync = vec![Some(scope)];
+            c.user_action(|c| c.drawings_mut().add_drawing(d).unwrap())
         };
-        let local = place(&mut charts[0], &plan, FolderSync::Layout, 9.5);
-        place(&mut charts[0], &archive, FolderSync::Chart, 9.0);
+        // Load the hidden peer folder first so an unfiltered folder-mode lookup picks it.
         settle_pair(&mut layouts, &mut charts);
         place(&mut charts[1], &plan, FolderSync::AllLayouts, 10.5);
         settle_pair(&mut layouts, &mut charts);
         let stored = shared_records(&host);
+        let local = place(&mut charts[0], &plan, FolderSync::Layout, 9.5);
+        let archived = place(&mut charts[0], &archive, FolderSync::Chart, 9.0);
+        settle_pair(&mut layouts, &mut charts);
         charts[0].drawings_mut().set_shared_drawings_hidden(true);
         let mut tree = ObjectTreePanel::new();
         tree.state_mut()
             .folders
             .extend([plan.clone(), archive.clone()]);
         tree.state_mut().select(local);
-        for (action, expected) in [
+        for (action, id, expected, scope) in [
+            (
+                Action::MoveToFolder(vec![archived], plan.clone()),
+                archived,
+                vec!["Plan"],
+                FolderSync::Layout,
+            ),
             (
                 Action::SetFolderSync(plan.clone(), Some(FolderSync::Chart)),
+                local,
                 vec!["Plan"],
+                FolderSync::Chart,
             ),
             (
                 Action::MoveFolder(plan.clone(), archive.clone()),
+                local,
                 vec!["Archive", "Plan"],
+                FolderSync::Chart,
             ),
             (
-                Action::CreateFolder(archive, "New".into()),
+                Action::CreateFolder(archive.clone(), "New".into()),
+                local,
                 vec!["Archive", "New", "Plan"],
+                FolderSync::Chart,
             ),
         ] {
             let rows: Vec<_> = charts[0]
@@ -4948,20 +5083,25 @@ mod tests {
             let note = charts[0]
                 .drawings()
                 .listed_drawings()
-                .find(|d| d.id == local)
+                .find(|d| d.id == id)
                 .unwrap();
             assert_eq!(note.folder, expected, "{action:?}");
-            assert_eq!(note.folder_sync_mode(), Some(FolderSync::Chart));
+            assert_eq!(note.folder_sync_mode(), Some(scope));
             check_peer(&charts);
             assert!(charts[0].undo());
             settle_pair(&mut layouts, &mut charts);
             let note = charts[0]
                 .drawings()
                 .listed_drawings()
-                .find(|d| d.id == local)
+                .find(|d| d.id == id)
                 .unwrap();
-            assert_eq!(note.folder, plan);
-            assert_eq!(note.folder_sync_mode(), Some(FolderSync::Layout));
+            let (path, scope) = if id == local {
+                (&plan, FolderSync::Layout)
+            } else {
+                (&archive, FolderSync::Chart)
+            };
+            assert_eq!(&note.folder, path);
+            assert_eq!(note.folder_sync_mode(), Some(scope));
             check_peer(&charts);
         }
     }

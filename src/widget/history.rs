@@ -1456,6 +1456,9 @@ impl Chart {
                 while self.drawings.undo() {}
             }
             self.drawings.swap_history(&mut action.drawings);
+            if action.panes.is_some() || !action.studies.is_empty() {
+                self.remap_unshown_panes();
+            }
             if let Some(deletion) = &mut action.unshown {
                 self.step_unshown_deletion(deletion, redo);
             }

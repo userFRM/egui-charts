@@ -1245,6 +1245,75 @@ impl Chart {
         }
     }
 
+    /// Before removing a pane or one of its members, keep its filtered drawings as if this
+    /// chart had read them without the study. This is a local owner change, not a drawing edit.
+    pub(super) fn keep_filtered_pane(
+        &mut self,
+        pane: super::PaneId,
+        member: Option<super::SeriesId>,
+    ) {
+        if !self.drawings.shared_drawings_hidden() {
+            return;
+        }
+        let whole_pane =
+            member.is_none_or(|id| pane != self.main_series_pane() && self.study_ids.contains(&id));
+        let members = whole_pane.then(|| self.pane_series(pane));
+        let filter = self.drawings.shared_filter;
+        let keep = |d: &Drawing| {
+            filter.hides(d)
+                && d.pane.is_some_and(|owner| {
+                    member.is_some_and(|id| owner == id.0)
+                        || members.as_ref().is_some_and(|ids| {
+                            owner == pane.0 || ids.contains(&super::SeriesId(owner))
+                        })
+                })
+        };
+        let Some(first) = self.drawings.drawings.iter().position(&keep) else {
+            return;
+        };
+        let pane = self.stored_pane(pane);
+        let mut unshown = self.drawing_store.as_mut().zip(pane).map(|(store, pane)| {
+            (
+                store.unshown_panes.entry(self.symbol.clone()).or_default(),
+                pane,
+            )
+        });
+        for d in self.drawings.drawings[first..]
+            .iter_mut()
+            .filter(|d| keep(d))
+        {
+            if let Some((unshown, pane)) = &mut unshown {
+                let key = d.stored_id.get_or_insert_with(|| d.id.to_string());
+                let created = *d
+                    .created_at
+                    .get_or_insert_with(|| chrono::Utc::now().timestamp_millis());
+                unshown.insert(key.clone(), (created, pane.clone()));
+            }
+            d.pane = None;
+        }
+    }
+
+    /// An undo can restore the study, or a redo remove it again, without rereading storage.
+    pub(super) fn remap_unshown_panes(&mut self) {
+        let Some(panes) = self
+            .drawing_store
+            .as_ref()
+            .and_then(|s| s.unshown_panes.get(&self.symbol))
+        else {
+            return;
+        };
+        for at in 0..self.drawings.drawings.len() {
+            let d = &self.drawings.drawings[at];
+            let Some(id) = &d.stored_id else { continue };
+            if let Some((created, stored)) = panes.get(id)
+                && (d.pane.is_none() || self.owner_pane(d).is_none())
+                && Some(*created) == d.created_at
+            {
+                self.drawings.drawings[at].pane = self.stored_pane_owner(stored);
+            }
+        }
+    }
+
     /// Keeps the stored pane of each drawing in `stored` whose study this chart does not show,
     /// which it shows in the price pane, so that it is written back in that pane.
     fn keep_unshown_panes(&mut self, stored: Option<&DrawingStorage>) {
