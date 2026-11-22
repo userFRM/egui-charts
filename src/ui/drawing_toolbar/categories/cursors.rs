@@ -5,6 +5,7 @@
 //! - Dot (simple dot cursor)
 //! - Arrow (pointer arrow)
 //! - Eraser
+//! - Switches: values tooltip on long press, snap crosshair to closes
 
 use crate::drawings::DrawingToolType;
 use crate::icons::{Icon, icons};
@@ -81,18 +82,23 @@ impl CursorsCategory {
             return DrawingToolbarAction::None;
         };
         let values_label = "Values tooltip on long press";
+        let close_label = "Snap crosshair to closes";
 
         let theme = ui.active_theme();
         let font = egui::FontId::proportional(16.0);
-        let width = ui
-            .painter()
-            .layout_no_wrap(
-                l10n::text(ui.ctx(), values_label),
-                egui::FontId::proportional(14.0),
-                theme.ui.text,
-            )
-            .size()
-            .x
+        let width = [values_label, close_label]
+            .into_iter()
+            .map(|label| {
+                ui.painter()
+                    .layout_no_wrap(
+                        l10n::text(ui.ctx(), label),
+                        egui::FontId::proportional(14.0),
+                        theme.ui.text,
+                    )
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max)
             + 64.0;
         ui.set_min_width(width);
         let mut action = DrawingToolbarAction::None;
@@ -214,59 +220,68 @@ impl CursorsCategory {
             }
         }
         ui.separator();
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::click());
-        ui.painter().text(
-            rect.left_center() + egui::vec2(8.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            l10n::text(ui.ctx(), values_label),
-            egui::FontId::proportional(14.0),
-            theme.ui.text,
-        );
-        let switch = egui::Rect::from_center_size(
-            rect.right_center() - egui::vec2(24.0, 0.0),
-            egui::vec2(38.0, 20.0),
-        );
-        ui.painter().rect_filled(
-            switch,
-            10,
-            if state.values_tooltip {
-                theme.ui.text
-            } else {
-                theme.ui.border_control
-            },
-        );
-        let knob_x = if state.values_tooltip {
-            switch.right() - 10.0
-        } else {
-            switch.left() + 10.0
-        };
-        ui.painter().circle_filled(
-            egui::pos2(knob_x, switch.center().y),
-            7.0,
-            theme.ui.panel_bg,
-        );
-        let translated_label = l10n::text(ui.ctx(), values_label);
-        response.widget_info(|| {
-            egui::WidgetInfo::selected(
-                egui::Role::Switch,
-                response.enabled(),
-                state.values_tooltip,
-                &translated_label,
-            )
-        });
-        if response.has_focus() {
-            ui.painter().rect_stroke(
-                rect.shrink(2.0),
-                6,
-                egui::Stroke::new(2.0, crate::styles::focus::focus_ring_color(ui)),
-                egui::StrokeKind::Inside,
-            );
-            response.scroll_to_me(None);
-        }
-        if response.clicked() {
+        if switch_row(ui, width, values_label, state.values_tooltip) {
             action = DrawingToolbarAction::ToggleValuesTooltip;
+        }
+        if switch_row(ui, width, close_label, state.close_snap) {
+            action = DrawingToolbarAction::SetCrosshairCloseSnap(!state.close_snap);
         }
         action
     }
+}
+
+/// Show a cursor menu switch row named `label`, painted on while `on`; returns whether it was
+/// clicked.
+fn switch_row(ui: &mut Ui, width: f32, label: &str, on: bool) -> bool {
+    let theme = ui.active_theme();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::click());
+    let translated_label = l10n::text(ui.ctx(), label);
+    ui.painter().text(
+        rect.left_center() + egui::vec2(8.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        &translated_label,
+        egui::FontId::proportional(14.0),
+        theme.ui.text,
+    );
+    let switch = egui::Rect::from_center_size(
+        rect.right_center() - egui::vec2(24.0, 0.0),
+        egui::vec2(38.0, 20.0),
+    );
+    ui.painter().rect_filled(
+        switch,
+        10,
+        if on {
+            theme.ui.text
+        } else {
+            theme.ui.border_control
+        },
+    );
+    let knob_x = if on {
+        switch.right() - 10.0
+    } else {
+        switch.left() + 10.0
+    };
+    ui.painter().circle_filled(
+        egui::pos2(knob_x, switch.center().y),
+        7.0,
+        theme.ui.panel_bg,
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::Role::Switch,
+            response.enabled(),
+            on,
+            &translated_label,
+        )
+    });
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect.shrink(2.0),
+            6,
+            egui::Stroke::new(2.0, crate::styles::focus::focus_ring_color(ui)),
+            egui::StrokeKind::Inside,
+        );
+        response.scroll_to_me(None);
+    }
+    response.clicked()
 }
