@@ -7,7 +7,6 @@ use crate::localization as l10n;
 use egui::{RichText, Ui};
 
 use crate::icons::icons;
-use crate::scales::VolumeFormatter;
 use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;
 
@@ -321,14 +320,10 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
                 ui.label(l10n::text(
                     ui.ctx(),
                     data.formatted_volume.clone().unwrap_or_else(|| {
-                        data.volume_precision.map_or_else(
-                            || format_volume(data.volume),
-                            |decimals| {
-                                VolumeFormatter {
-                                    precision: usize::from(decimals),
-                                }
-                                .format_with_min_unit_decimals(data.volume, 2)
-                            },
+                        crate::chart::rendering::axes::volume_text(
+                            data.volume,
+                            data.volume_precision,
+                            None,
                         )
                     }),
                 ));
@@ -349,15 +344,6 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
             );
             ui.end_row();
         });
-}
-
-/// Format volume with K/M/B suffixes
-fn format_volume(volume: f64) -> String {
-    if volume == 0.0 {
-        return "\u{2014}".to_string();
-    }
-
-    crate::scales::StudyFormat::Volume.format(volume, None)
 }
 
 /// Whether `data` has values to list: a whitespace bar has none, as its open, high, low, close
@@ -553,7 +539,7 @@ mod tests {
     /// At a whitespace bar under the crosshair, between two bars with values, the data window
     /// lists the bar's time and interval and no price, volume or change, as the status line
     /// does: read from the chart, from the pointer event, or by a host from the event's bar.
-    /// A chart without bars lists no values either.
+    /// A chart without bars lists no values either, while a bar that traded nothing reads 0.
     #[test]
     fn data_window_lists_no_values_at_a_whitespace_bar() {
         use crate::model::{Bar, BarData, Timeframe};
@@ -580,10 +566,12 @@ mod tests {
             let title = texts.iter().position(|text| text == "Data Window").unwrap();
             texts[title + 1..].to_vec()
         };
-        // 100 daily bars opening at 100 and closing at 101; bar 50 holds its slot without values.
+        // 100 daily bars opening at 100 and closing at 101; bar 49 traded nothing and bar 50
+        // holds its slot without values.
         let mut chart = chart(&[100.0], &[101.0]);
         chart.set_timeframe(Timeframe::Day1);
         let mut bars = chart.bars(SeriesId::MAIN).to_vec();
+        bars[49].volume = 0.0;
         bars[50] = Bar::whitespace(bars[50].time);
         chart.set_data(SeriesId::MAIN, bars.clone());
         let ctx = egui::Context::default();
@@ -600,6 +588,10 @@ mod tests {
             .is_none_or(|head| head != ["Time", time.as_str(), "Interval", "1D", "O", "100.00"])
         {
             failures.push(format!("bar 49: {valued:?}"));
+        }
+        // A traded bar without volume reads 0, as the legend writes it; a dash means no value.
+        if !valued.windows(2).any(|pair| pair == ["Vol", "0"]) {
+            failures.push(format!("bar 49 volume: {valued:?}"));
         }
         frame(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(at(50))]);
         let pointer = chart
@@ -745,33 +737,5 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
-    }
-
-    #[test]
-    fn test_format_volume() {
-        use crate::scales::StudyFormat::*;
-        for (format, value, precision, expected) in [
-            (Volume, 1_500_000_000.0, None, "1.50B"),
-            (Volume, 2_500_000.0, None, "2.50M"),
-            (Volume, 3_500.0, None, "3.50K"),
-            (Volume, 500.0, None, "500"),
-            (Volume, -12_345_678.0, None, "-12.35M"),
-            (Volume, 0.0, Some(2), "0.00"),
-            (Volume, 1_234.0, Some(3), "1.234K"),
-            (Price, 1.23456, Some(5), "1.23456"),
-            (Price, -37.625, Some(3), "-37.625"),
-            (Percent, 5.125, None, "5.12%"),
-            (Percent, -2.5, Some(1), "-2.5%"),
-            (Fixed(4), 0.0004, None, "0.0004"),
-            (Fixed(4), 1.25, Some(1), "1.2"),
-            (Fixed(usize::MAX), 1.0, None, "1.000000000000"),
-            (Volume, f64::NAN, None, "-"),
-            (Percent, f64::INFINITY, None, "-"),
-        ] {
-            assert_eq!(format.format(value, precision), expected, "{format:?}");
-            if format == Volume && value > 0.0 && precision.is_none() {
-                assert_eq!(format_volume(value), expected);
-            }
-        }
     }
 }
