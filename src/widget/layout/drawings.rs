@@ -1658,7 +1658,9 @@ fn map_drawing(
 ) -> Option<Drawing> {
     let mut copy = drawing.clone();
     let manager = source.drawings();
-    let missing = !manager.unshown_panes.is_empty();
+    // Only removal while filtered leaves the drawing with an absent owner. A file loaded
+    // without its study has no local owner and mirrors as a price-pane drawing.
+    let missing = drawing.pane.is_some() && !manager.unshown_panes.is_empty();
     if let Some(pane) = missing
         .then(|| sync_id(drawing))
         .and_then(|id| source.unshown_pane(manager, drawing, &id))
@@ -5242,6 +5244,78 @@ mod tests {
                 "the old id now belongs to the surviving RSI(7)"
             );
             check(&mut fresh);
+        }
+    }
+
+    #[cfg(all(feature = "studies", feature = "ui"))]
+    #[test]
+    fn shared_drawing_filter_off_mirrors_an_unmatched_loaded_line_in_the_price_pane() {
+        use crate::studies::RSI;
+
+        let mut author = bars(60);
+        author.set_symbol("SAMPLE");
+        let rsi = author.add_indicator(Box::new(RSI::new(14)));
+        let line = draw(&mut author, 10.);
+        assert!(author.move_drawing_to_pane(line, author.series_pane(rsi).unwrap()));
+        let file = author.save_drawings().unwrap().to_json().unwrap();
+        let layout = || {
+            let mut layout = ChartLayout {
+                mode: super::super::ChartLayoutMode::TwoHorizontal,
+                ..Default::default()
+            };
+            layout.sync.sync_drawings = true;
+            layout
+        };
+        let check = |charts: &[Chart; 2], price| {
+            for chart in charts {
+                let [line] = chart.drawings().drawings.as_slice() else {
+                    panic!("expected exactly one mirrored line");
+                };
+                assert_eq!(chart.drawing_pane(line.id), Some(chart.main_series_pane()));
+                assert!(line.chart_points.iter().all(|p| p.price == price));
+            }
+        };
+        let edit = |chart: &mut Chart, price| {
+            let id = chart.drawings().drawings[0].id;
+            chart.user_action(|c| {
+                c.drawings_mut()
+                    .edit_drawing(id, |d| {
+                        for p in &mut d.chart_points {
+                            p.price = price;
+                        }
+                    })
+                    .unwrap()
+            });
+        };
+        for peer_has_rsi in [false, true] {
+            let mut charts = [bars(60), bars(60)];
+            for chart in &mut charts {
+                chart.set_symbol("SAMPLE");
+            }
+            charts[0].add_indicator(Box::new(RSI::new(7)));
+            if peer_has_rsi {
+                charts[1].add_indicator(Box::new(RSI::new(14)));
+            }
+            let mut pair = layout();
+            frames(&mut pair, &mut charts);
+            assert!(charts[0].load_drawings(&file).unwrap().is_empty());
+            frames(&mut pair, &mut charts);
+            check(&charts, 10.);
+            edit(&mut charts[1], 10.25);
+            frames(&mut pair, &mut charts);
+            check(&charts, 10.25);
+
+            let saved = charts.each_ref().map(|c| c.snapshot().unwrap());
+            let mut restored = [bars(60), bars(60)];
+            for (c, snapshot) in restored.iter_mut().zip(&saved) {
+                assert!(c.restore(snapshot).unwrap().is_empty());
+            }
+            let mut restarted = layout();
+            frames(&mut restarted, &mut restored);
+            check(&restored, 10.25);
+            edit(&mut restored[0], 9.75);
+            frames(&mut restarted, &mut restored);
+            check(&restored, 9.75);
         }
     }
 
