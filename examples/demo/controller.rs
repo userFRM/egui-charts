@@ -9782,13 +9782,11 @@ mod tests {
             }
         }
         // In a flag view the key flags the chart symbol instead of adding it to the hidden list.
+        // The chart keeps its focus: a second click this soon is a double click, which opens the
+        // chart settings when the series lies under it.
         app.watchlist.set_flag_filter(Some(WatchlistFlag::Red));
         app.open_catalog_symbol("STOCKD");
         settle(&mut app, &ctx);
-        let chart = app.chart.get_chart_mapping().rect.center();
-        ui_click(&ctx, size, chart, |ui| {
-            app.ui(ui, &mut eframe::Frame::_new_kittest())
-        });
         alt_w(&mut app);
         assert_eq!(app.watchlist.symbols().collect::<Vec<_>>(), ["STOCKD"]);
         assert_eq!(app.watchlist.lists()[1].to_text(), "STOCKB,STOCKC");
