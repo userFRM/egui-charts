@@ -4525,6 +4525,79 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "ui")]
+    #[test]
+    fn chart_local_placement_stays_private_through_undo_and_redo_until_shared() {
+        use crate::services::document::tests::Revised;
+
+        let host = Arc::new(Revised::default());
+        let mut charts: [Chart; 2] = std::array::from_fn(|_| {
+            let mut chart = bars(60);
+            chart.set_symbol("SAMPLE");
+            chart.set_storage(host.clone());
+            chart
+        });
+        let mut layouts = [ChartLayout::default(), ChartLayout::default()];
+        let mut settle = |charts: &mut [Chart; 2]| {
+            for _ in 0..3 {
+                for (layout, chart) in layouts.iter_mut().zip(&mut *charts) {
+                    frames(layout, std::array::from_mut(chart));
+                }
+            }
+        };
+        let place = |chart: &mut Chart, price| {
+            chart.user_action(|chart| {
+                chart.drawings_mut().start_drawing_with_coords(
+                    DrawingToolType::HorizontalLine,
+                    egui::pos2(2.0, price),
+                    |x| x,
+                    f64::from,
+                );
+            });
+        };
+        charts[0].drawings_mut().options.local_placement_folder = Some("Notes".into());
+        settle(&mut charts);
+        place(&mut charts[0], 104.0);
+        let mut check_private = |charts: &mut [Chart; 2], local: &[f64]| {
+            settle(charts);
+            let [mine, other] = prices(charts);
+            assert_eq!(mine, local);
+            assert!(other.is_empty(), "visible on the other chart: {other:?}");
+            if let Some(json) = host.get("SAMPLE") {
+                let (stored, skipped) = DrawingStorage::from_json(&json).unwrap();
+                assert!(skipped.is_empty() && stored.drawings().is_empty());
+            }
+        };
+        check_private(&mut charts, &[104.0]);
+        assert!(charts[0].undo());
+        check_private(&mut charts, &[]);
+        assert!(charts[0].redo());
+        check_private(&mut charts, &[104.0]);
+
+        // Explicit sharing takes effect. It must not make the next placement shared.
+        charts[0].user_action(|chart| {
+            assert!(
+                chart
+                    .drawings_mut()
+                    .set_folder_sync(&["Notes".to_owned()], Some(FolderSync::AllLayouts))
+            );
+        });
+        settle(&mut charts);
+        assert_eq!(prices(&charts), [vec![104.0], vec![104.0]]);
+        place(&mut charts[0], 108.0);
+        settle(&mut charts);
+        assert_eq!(prices(&charts), [vec![104.0, 108.0], vec![104.0]]);
+        let shared = charts[1].drawings().drawings[0].id;
+        charts[1].user_action(|chart| chart.drawings_mut().delete_drawing(shared));
+        settle(&mut charts);
+        assert_eq!(prices(&charts), [vec![108.0], vec![]]);
+
+        // Same symbol, no opt-in: placement on the other chart still goes to both.
+        place(&mut charts[1], 102.0);
+        settle(&mut charts);
+        assert_eq!(prices(&charts), [vec![102.0, 108.0], vec![102.0]]);
+    }
+
     /// Guards #3436: with drawing storage, a drawing kept on one chart shows on that chart only,
     /// one kept in the layout on the charts of that layout only, and one shared across layouts on
     /// every chart of the symbol, also after the layouts are saved and opened again on new charts
