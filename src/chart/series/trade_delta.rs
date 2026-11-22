@@ -20,8 +20,11 @@ pub enum TradeDeltaStyle {
 /// Draws exact delta values using the supplied pane's mapping and colours.
 /// `values` has the same global bar indices as the price chart. The host fits the pane's
 /// scale, including zero, to `delta` (histogram), `delta_low` to `delta_high` (bar candles)
-/// or `low` to `high` (cumulative candles). A bar whose delta is zero or more is drawn in
-/// `buy`, otherwise in `sell`.
+/// or `low` to `high` (cumulative candles). A bar without executions, whose
+/// [`traded`](TradeDeltaValue::traded) is `false`, is not drawn. Histograms and bar candles draw
+/// a bar whose delta is above zero in `buy` and any other in `sell`, so a balanced bar sells;
+/// cumulative candles draw a bar whose delta is zero or more in `buy`, so an unchanged total
+/// keeps buying.
 pub fn render_trade_delta(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -44,8 +47,14 @@ pub fn render_trade_delta(
         .min(values.len());
     let half_width = (mapping.bar_spacing * 0.35).max(0.5);
     for (i, value) in values.iter().enumerate().take(end).skip(first) {
+        if !value.traded {
+            continue;
+        }
         let x = mapping.idx_to_x(i);
-        let color = if value.delta >= 0.0 { buy } else { sell };
+        // A balanced bar sells; an unchanged cumulative total keeps buying, as the studies paint.
+        let buying = value.delta > 0.0
+            || (value.delta == 0.0 && style == TradeDeltaStyle::CumulativeCandles);
+        let color = if buying { buy } else { sell };
         let (open, close, wick) = match style {
             TradeDeltaStyle::Histogram => (0.0, value.delta, None),
             TradeDeltaStyle::BarCandles => {
@@ -88,11 +97,14 @@ mod tests {
     use egui::{Context, LayerId, Pos2, Shape, vec2};
 
     /// Bar 0 buys 4. Bar 1 buys 5, sells 8 and buys 5: running delta 5, -3, 2 from a cumulative
-    /// 4. On a -16..16 pane 128 points tall a delta `p` is drawn at `y = 64 - 4p`.
+    /// 4. Bar 2 buys 6 and sells 6, a balanced bar from a cumulative 6, and bar 3 has no
+    /// executions. On a -16..16 pane 128 points tall a delta `p` is drawn at `y = 64 - 4p`. The
+    /// per-bar styles paint the balanced bar in the selling colour and the cumulative candles its
+    /// unchanged total in the buying colour; no style draws bar 3 (#4065).
     #[test]
     fn bar_candles_span_the_bar_range_from_zero_beside_histogram_and_cumulative_candles() {
         let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
-        let bars: Vec<_> = (0..2)
+        let bars: Vec<_> = (0..4)
             .map(|i| {
                 Bar::new(
                     start + TimeDelta::minutes(i),
@@ -110,6 +122,8 @@ mod tests {
             (60, 5.0, OrderSide::Buy),
             (61, 8.0, OrderSide::Sell),
             (62, 5.0, OrderSide::Buy),
+            (120, 6.0, OrderSide::Buy),
+            (121, 6.0, OrderSide::Sell),
         ] {
             footprint
                 .push(&Tick::new(
@@ -129,45 +143,42 @@ mod tests {
             128.0,
             false,
         );
-        let mapping = ChartMapping::new(rect, 20.0, 0, 1, 0.0, price);
+        let mapping = ChartMapping::new(rect, 20.0, 0, 3, 0.0, price);
+        let (g, r) = (Color32::GREEN, Color32::RED);
         for (style, wicks, bodies) in [
             (
                 TradeDeltaStyle::Histogram,
                 vec![],
-                vec![(48.0, 64.0), (56.0, 64.0)],
+                vec![(48.0, 64.0, g), (56.0, 64.0, g), (64.0, 65.0, r)],
             ),
-            // Bar 1 from 0 to 2, wick from 5 to -3, although earlier bars left 4.
+            // Bar 1 from 0 to 2, wick from 5 to -3, although earlier bars left 4. Bar 2 from 0
+            // to 0, wick from 6 to 0.
             (
                 TradeDeltaStyle::BarCandles,
-                vec![(48.0, 64.0), (44.0, 76.0)],
-                vec![(48.0, 64.0), (56.0, 64.0)],
+                vec![(48.0, 64.0, g), (44.0, 76.0, g), (40.0, 64.0, r)],
+                vec![(48.0, 64.0, g), (56.0, 64.0, g), (64.0, 65.0, r)],
             ),
-            // Bar 1 from 4 to 6, wick from 9 to 1.
+            // Bar 1 from 4 to 6, wick from 9 to 1. Bar 2 from 6 to 6, wick from 12 to 6.
             (
                 TradeDeltaStyle::CumulativeCandles,
-                vec![(48.0, 64.0), (28.0, 60.0)],
-                vec![(48.0, 64.0), (40.0, 48.0)],
+                vec![(48.0, 64.0, g), (28.0, 60.0, g), (16.0, 40.0, g)],
+                vec![(48.0, 64.0, g), (40.0, 48.0, g), (40.0, 41.0, g)],
             ),
         ] {
             let ctx = Context::default();
             let output = ctx.run_ui(Default::default(), |_| {
                 let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
-                render_trade_delta(
-                    &painter,
-                    &mapping,
-                    &values,
-                    style,
-                    Color32::GREEN,
-                    Color32::RED,
-                );
+                render_trade_delta(&painter, &mapping, &values, style, g, r);
             });
             let (mut drawn_wicks, mut drawn_bodies) = (Vec::new(), Vec::new());
             for shape in &output.shapes {
                 match &shape.shape {
-                    Shape::LineSegment { points, .. } => {
-                        drawn_wicks.push((points[0].y, points[1].y))
+                    Shape::LineSegment { points, stroke } => {
+                        drawn_wicks.push((points[0].y, points[1].y, stroke.color))
                     }
-                    Shape::Rect(body) => drawn_bodies.push((body.rect.top(), body.rect.bottom())),
+                    Shape::Rect(body) => {
+                        drawn_bodies.push((body.rect.top(), body.rect.bottom(), body.fill))
+                    }
                     _ => {}
                 }
             }
