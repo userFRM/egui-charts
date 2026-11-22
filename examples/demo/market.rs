@@ -11,7 +11,7 @@ use egui_charts::model::{Level1Quote, OrderBook, OrderBookLevel, OrderSide};
 use std::collections::BTreeMap;
 
 /// Price levels quoted on each side.
-const DEPTH: i64 = 200;
+pub const DEPTH: i64 = 200;
 
 pub struct Market {
     symbol: String,
