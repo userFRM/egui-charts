@@ -250,6 +250,11 @@ fn updates_equal_full_calculations() {
 /// syntax error.
 #[test]
 fn scripts_are_refused_at_their_line_and_column() {
+    let choices = (0..65).map(|i| format!("\"c{i}\"")).collect::<Vec<_>>();
+    let choices = format!(
+        "input c = choice(\"C\", \"c0\", [{}]);\nplot(\"x\", 1.0);",
+        choices.join(", ")
+    );
     for (source, line, column, fragment) in [
         // The `)` where the operand belongs.
         ("plot(\"x\", close +);", 1, 18, "Unexpected ')'"),
@@ -298,6 +303,13 @@ fn scripts_are_refused_at_their_line_and_column() {
             1,
             54,
             "curry",
+        ),
+        // The 65th choice, as the declaration walks its tokens again for each one.
+        (
+            choices.as_str(),
+            1,
+            choices.find("\"c64\"").unwrap() + 1,
+            "at most 64 choices",
         ),
     ] {
         let error = Script::compile("Test", source, &IndicatorFactory::new()).unwrap_err();

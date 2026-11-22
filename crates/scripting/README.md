@@ -178,7 +178,8 @@ and checked when the script compiles, before any bar runs.
 - `fill(A, B, color = "#...", inverted = "#...");` fills the band between two plots, named by
   title, or numbers. The plots come before the fill.
 
-A script declares at most 32 inputs, 64 states and 64 series.
+A script declares at most 32 inputs, 64 states and 64 series, and a choice input lists at most 64
+choices.
 
 ## Helpers
 

@@ -26,6 +26,8 @@ pub(crate) const MAX_PLOTS: usize = 32;
 pub(crate) const MAX_INPUTS: usize = 32;
 pub(crate) const MAX_SERIES: usize = 64;
 pub(crate) const MAX_STATES: usize = 64;
+/// Most choices a choice input may list: a declaration walks its tokens again for each one.
+const MAX_CHOICES: usize = 64;
 
 /// The names every script reads, in the order the scope holds them after `na`.
 pub(crate) const PRICES: [(&str, SeriesRef); 10] = [
@@ -644,6 +646,11 @@ fn choice_list(cursor: &mut Cursor) -> Step<Vec<String>> {
     cursor.symbol("[")?;
     let mut choices = Vec::new();
     loop {
+        if choices.len() == MAX_CHOICES {
+            return Err(Stop::Fail(format!(
+                "a choice input lists at most {MAX_CHOICES} choices"
+            )));
+        }
         let choice = cursor.literal()?;
         let choice = expect(&choice, "choices are strings", text)?;
         if cursor.at_end() && choices.contains(&choice) {
