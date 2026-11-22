@@ -343,16 +343,28 @@ fn stopped(calculation: Option<Calculation>) -> String {
 }
 
 /// The one-bar limit stops the newest bar and reports its line and bar, for work in the bar
-/// and in the callbacks of array functions.
+/// and in the callbacks of array functions, a stop the script catches included.
 #[test]
 fn one_bar_limit_stops_the_newest_bar_at_its_line() {
     let fixture = bars(50, 4);
-    for source in [
-        "plot(\"x\", close);\nif bar_index == 49 { let i = 0; loop { i += 1; } }",
+    for (source, line) in [
+        (
+            "plot(\"x\", close);\nif bar_index == 49 { let i = 0; loop { i += 1; } }",
+            2,
+        ),
         // 4 million callbacks, each counted by Rhai from a copy of the count that it drops.
-        "plot(\"x\", close);\nfn never(y) { false } \
-         fn inner(x) { let b = []; b.pad(2000, 0); b.filter(Fn(\"never\")).len() > 0 } \
-         if bar_index == 49 { let a = []; a.pad(2000, 0); a.filter(Fn(\"inner\")); }",
+        (
+            "plot(\"x\", close);\nfn never(y) { false } \
+             fn inner(x) { let b = []; b.pad(2000, 0); b.filter(Fn(\"never\")).len() > 0 } \
+             if bar_index == 49 { let a = []; a.pad(2000, 0); a.filter(Fn(\"inner\")); }",
+            2,
+        ),
+        // A stop in a callback reaches the script as a catchable error and leaves no position.
+        (
+            "plot(\"x\", close);\nfn spin(x) { loop {} } \
+             if bar_index == 49 { try { [1].map(Fn(\"spin\")); } catch {} }",
+            0,
+        ),
     ] {
         let script = limited(
             source,
@@ -374,7 +386,11 @@ fn one_bar_limit_stops_the_newest_bar_at_its_line() {
         let message = stopped(settle(&mut study, &fixture));
         assert!(message.contains("for one bar"), "{source}: {message}");
         let error = script.last_error().expect("the stop is reported");
-        assert_eq!((error.line, error.bar), (2, Some(49)), "{source}: {error}");
+        assert_eq!(
+            (error.line, error.bar),
+            (line, Some(49)),
+            "{source}: {error}"
+        );
     }
 }
 

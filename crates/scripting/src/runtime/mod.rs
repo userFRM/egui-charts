@@ -102,12 +102,14 @@ impl Run {
         self.stop.is_some()
     }
 
-    /// The bar loop's check against the full-recompute limit and for a dropped study.
+    /// The bar loop's check against the full-recompute limit and for a dropped study, keeping
+    /// a stop already reached.
     fn check_bars(&mut self) -> Option<Stop> {
-        self.stop = self
-            .clock
-            .bars()
-            .or_else(|| self.cancelled().then_some(Stop::Cancelled));
+        self.stop = self.stop.or_else(|| {
+            self.clock
+                .bars()
+                .or_else(|| self.cancelled().then_some(Stop::Cancelled))
+        });
         self.stop
     }
 
@@ -397,15 +399,18 @@ impl<P: Program> RunState<P> {
                     Some(_) => Ok(()),
                     None => self.program.bar(&mut self.slots),
                 };
+                // A script can catch a stop raised in a callback, so a stop ends the run
+                // whatever the bar returned.
+                if let Some(limit) = with(|run| run.stop).flatten() {
+                    let span = result.err().map_or(Span::default(), |error| error.span);
+                    stop = Some((limit, span, Some(i)));
+                    break;
+                }
                 match result {
                     Ok(()) => {
                         with(|run| flight.rows.extend_from_slice(&run.row));
                     }
                     Err(error) => {
-                        if let Some(limit) = with(|run| run.stop).flatten() {
-                            stop = Some((limit, error.span, Some(i)));
-                            break;
-                        }
                         self.failed = Some(i);
                         flight.error = Some(ScriptError::at(error.message, error.span, Some(i)));
                         flight.rows.extend(std::iter::repeat_n(f64::NAN, width));
