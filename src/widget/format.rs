@@ -51,6 +51,18 @@ impl Chart {
         }
     }
 
+    /// The name the readouts give the horizontal value that [`Self::format_time`] writes: the
+    /// [horizontal scale](Self::set_horizontal_scale)'s
+    /// [`value_name`](crate::scales::HorizontalScale::value_name), else "Time", as the time
+    /// scale names it.
+    #[cfg(feature = "ui")]
+    pub(crate) fn horizontal_value_name(&self) -> Option<&str> {
+        match &self.horizontal_scale {
+            Some(scale) => scale.value_name(),
+            None => Some("Time"),
+        }
+    }
+
     /// The chart's clock: the replay time while replaying, else the server time from
     /// [`set_server_time`](Self::set_server_time) or the feed, when known.
     pub(super) fn chart_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {

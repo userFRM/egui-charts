@@ -193,8 +193,9 @@ pub enum KeyboardAction {
     /// Show the previous symbol of the active watchlist (Up or Shift+Space), as
     /// [`NextWatchlistSymbol`](Self::NextWatchlistSymbol) does the next one.
     PreviousWatchlistSymbol,
-    /// Add the chart symbol to the active watchlist (Alt+W). The host receives a shortcut
-    /// request and answers with `WatchlistPanel::add_symbol`, which refuses duplicates.
+    /// Add the chart symbol to the shown watchlist (Alt+W): the active list, or while a flag view
+    /// is shown that flag. The host receives a shortcut request and answers with
+    /// `WatchlistPanel::add_symbol`, which refuses duplicates.
     AddToWatchlist,
 
     // Trading
