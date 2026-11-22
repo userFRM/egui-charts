@@ -1280,7 +1280,12 @@ mod tests {
             repeat: false,
             modifiers,
         };
-        for (modifiers, expected) in [(Modifiers::NONE, 1), (Modifiers::SHIFT, 0)] {
+        for (pressed, modifiers, expected) in [
+            (Key::Tab, Modifiers::NONE, 1),
+            (Key::Tab, Modifiers::SHIFT, 0),
+            (Key::ArrowRight, Modifiers::SHIFT, 1),
+            (Key::ArrowLeft, Modifiers::SHIFT, 0),
+        ] {
             app.time_and_sales.push(egui_charts::model::Tick::new(
                 chrono::Utc::now(),
                 987.65,
@@ -1289,7 +1294,7 @@ mod tests {
             ));
             frame(
                 &mut app,
-                vec![Event::ModifiersChanged(modifiers), key(Key::Tab, modifiers)],
+                vec![Event::ModifiersChanged(modifiers), key(pressed, modifiers)],
             );
             assert_eq!(app.layout_slot, expected);
             assert_eq!(app.layout.saved_link_groups(), memberships);

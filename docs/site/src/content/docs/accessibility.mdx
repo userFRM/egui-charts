@@ -15,7 +15,8 @@ continue through the remaining controls and out of the chart. **Escape** cancels
 the current interaction; it is not a substitute for Tab to leave the chart.
 
 In a `ChartLayout` showing more than one chart, **Tab** and **Shift+Tab** move to
-the next and previous chart instead, wrapping at the ends. A host that needs them
+the next and previous chart instead, wrapping at the ends, as do **Shift+Right**
+and **Shift+Left** while the active chart is not replaying. A host that needs them
 to leave the layout removes the `CycleChartFocus` and `CycleChartFocusBack`
 bindings through
 [`shortcuts_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.shortcuts_mut).
