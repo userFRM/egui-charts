@@ -1419,7 +1419,7 @@ impl Indicator for ConfiguredStudy {
         let mut aligned = IndicatorValues::new();
         self.aligned_bars.clear();
         for (at, bar) in data.iter().enumerate() {
-            let output = source.bar_at(bar.time).and_then(|_| {
+            let output = source.bar_on(&self.clock, bar.time).and_then(|_| {
                 source.closed_on(
                     &self.clock,
                     self.wait_for_close,

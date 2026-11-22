@@ -170,8 +170,9 @@ impl<const RATIO: bool, const VOLUME: bool> Indicator for MarketBreadth<RATIO, V
                 .bars
                 .iter()
                 .map(|bar| {
+                    // An advancing bar's time, read on its own bars: a pair shares one date.
                     let other = declining
-                        .bar_at(bar.time)
+                        .bar_on(&advancing.clock, bar.time)
                         .map(|at| declining.bars[at].close)?;
                     if !bar.close.is_finite() || !other.is_finite() || (RATIO && other == 0.0) {
                         return None;
