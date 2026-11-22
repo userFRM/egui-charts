@@ -369,7 +369,7 @@ impl Indicator for OrderFlowStudy {
         match self.kind {
             OrderFlowKind::BookBalance { .. }
             | OrderFlowKind::Spread
-            | OrderFlowKind::TradeRate { .. }
+            | OrderFlowKind::TradeRate { volume: false, .. }
             | OrderFlowKind::AggressorRate { .. } => StudyFormat::Fixed(2),
             OrderFlowKind::LevelsExecuted { .. }
             | OrderFlowKind::LevelsTradedThrough { .. }
