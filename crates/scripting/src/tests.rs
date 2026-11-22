@@ -326,15 +326,27 @@ fn scripts_are_refused_at_their_line_and_column() {
     }
 }
 
+/// A script as deep as the limits admit: the top level nests calls as deep as it may around a
+/// function that calls itself until the call limit stops it, each call nested in its body as
+/// deep as a function may.
+fn deepest() -> String {
+    let nest = |depth, inner: &str| {
+        (0..depth).fold(inner.to_owned(), |inner, _| format!("max(1, {inner})"))
+    };
+    format!(
+        "fn f(n) {{ if n > 0 {{ {} }} else {{ 0 }} }} plot(\"x\", {});",
+        nest(11, "f(n - 1)"),
+        nest(28, "f(40)")
+    )
+}
+
 /// Done when 4 of #3631 for runtime errors: the bars before an error keep their values, the
 /// error names its line, column and bar, and later bars are missing.
 #[test]
 fn run_errors_keep_the_bars_before_them() {
     let fixture = bars(1001, 3);
-    // As deep as the limits admit: calls 32 deep, each nesting calls as deep as a function may,
-    // which needs about 5 MiB of stack in a debug build.
-    let deep = (0..11).fold("f(n - 1)".to_owned(), |inner, _| format!("max(1, {inner})"));
-    let deep = format!("fn f(n) {{ if n > 0 {{ {deep} }} else {{ 0 }} }} plot(\"x\", f(40));");
+    // Needs under 6 MiB of stack in a debug build.
+    let deep = deepest();
     // Column 0 leaves the column unasserted where the engine, not the script, places it.
     for (source, column, bar, fragment) in [
         (deep.as_str(), 0, 0, "more than 32 deep"),
@@ -620,6 +632,16 @@ fn history_reads_reach_the_first_loaded_bar() {
             "{source}"
         );
     }
+}
+
+/// On the web a script runs on the page's thread, whose stack holds the deepest script until the
+/// call limit stops it.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen_test::wasm_bindgen_test]
+fn web_deepest_script_stops_at_the_call_limit() {
+    let error = compile(&deepest()).check(&bars(2, 3)).unwrap_err();
+    assert_eq!(error.bar, Some(0), "{error}");
+    assert!(error.message.contains("more than 6 deep"), "{error}");
 }
 
 /// On the web a run proceeds in time slices over several calls instead of freezing the page.

@@ -12,8 +12,8 @@ use std::sync::{
     mpsc,
 };
 
-/// The stack of a thread that runs a script. The deepest scripts the limits admit need about
-/// 5 MiB in a debug build and under 1 MiB in a release build, the web's default.
+/// The stack of a thread that runs a script. The deepest scripts the limits admit need under
+/// 6 MiB in a debug build.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const STACK: usize = 16 << 20;
 

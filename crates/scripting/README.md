@@ -246,8 +246,10 @@ let script = Script::compile("Close", "plot(\"Close\", close);", &IndicatorFacto
 ```
 
 The size of what a script builds is limited too: strings to 10,000 bytes, arrays to 10,000 items,
-maps to 1,000 entries, 256 variables in scope, 64 functions and calls 32 deep. The deepest scripts
-these limits admit need under 1 MiB of stack in a release build, the web's default, and about
-5 MiB in a debug build; natively scripts run on threads of 16 MiB.
+maps to 1,000 entries, 256 variables in scope, 64 functions and calls 32 deep, 6 deep on the web.
+Natively scripts run on threads of 16 MiB, and the deepest scripts these limits admit need under
+6 MiB of it in a debug build. On the web they run on the page's thread, whose stack is 1 MiB in a
+wasm32 build with the default linker settings; there the deepest scripts need under 800 KiB in a
+debug build, measured in Chrome and Firefox.
 
 A script has no `import`, no `eval`, no clock and no output: it reaches nothing outside itself.

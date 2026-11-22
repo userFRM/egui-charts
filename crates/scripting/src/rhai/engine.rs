@@ -7,7 +7,12 @@ use ::rhai::{Engine, EvalAltResult, FLOAT, INT, NativeCallContext, Position};
 use chrono::{Datelike, Timelike};
 
 /// Deepest nesting of script function calls.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const MAX_CALL_LEVELS: usize = 32;
+/// Deepest nesting of script function calls on the web, where scripts run on the page's thread:
+/// its 1 MiB stack holds the deepest scripts this far in a debug build, with a quarter to spare.
+#[cfg(target_arch = "wasm32")]
+pub(crate) const MAX_CALL_LEVELS: usize = 6;
 /// Deepest nesting of expressions, at the top level and in functions.
 pub(crate) const MAX_EXPR_DEPTHS: (usize, usize) = (64, 32);
 /// Longest string, in bytes.
