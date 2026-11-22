@@ -424,8 +424,11 @@ preserve them, and only trades at or after the page's exclusive cutoff continue 
 Vol Profile VR, FR, Session, Periodic, Anchored and Auto Anchored each return a footprint
 source from [`Indicator::order_flow_inputs`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.order_flow_inputs). Where it holds the executions of a profile's bars,
 the profile sums them, in rows of whole ticks: the Height input rounded to whole ticks, at least
-one, or the traded ticks over Row count, rounded up, with rows counted from multiples of their
-height as the volume footprint groups them and widened where that would exceed Row count. A
+one; with Whole ticks per row, the traded ticks over Row count rounded down or up, whichever lays
+rows on multiples of their height closer to Row count, the taller on a tie, as the session volume
+profile chart type lays out Number of rows; otherwise the traded ticks over Row count, rounded
+up, with rows counted from multiples of their height as the volume footprint groups them and
+widened where that would exceed Row count. A
 profile whose executions start after its first bar sums those held and is noted "Partial
 executions". A profile without executions, one calculated on another interval, and one whose bars
 do not each hold their own executions, as on price-based chart types, keep the estimate from
