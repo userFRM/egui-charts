@@ -88,9 +88,3 @@ pub(crate) fn quantity_text(
         .and_then(|formatter| formatter.quantity(symbol, quantity))
         .unwrap_or_else(|| grouped(quantity, quantity_decimals(quantity), false))
 }
-
-/// `quantity` at 15 significant digits, the most an f64 writes faithfully, so a computed
-/// 0.3 - 0.1 reaches the host's formatter as 0.2, not 0.19999999999999998.
-pub(super) fn settled(quantity: f64) -> f64 {
-    format!("{quantity:.14e}").parse().unwrap_or(quantity)
-}

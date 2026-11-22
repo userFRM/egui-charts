@@ -7,11 +7,11 @@ use egui::{Sense, Ui, vec2};
 use serde::{Deserialize, Serialize};
 
 use super::ROW_HEIGHT;
-use super::controls::{cell, dropdown, row};
+use super::controls::{self, cell, dropdown, row};
 use crate::data::inbox::Inbox;
 use crate::data::{
-    Datafeed, FeedError, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery, ScreenerRow,
-    ScreenerTextAnswer, ScreenerUniverse,
+    Datafeed, FeedError, ScreenerColumnKind, ScreenerColumnSet, ScreenerCondition, ScreenerFilter,
+    ScreenerQuery, ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
 };
 use crate::icons::icons;
 use crate::services::{ConflictChoice, Storage, StoreKind};
@@ -86,8 +86,7 @@ pub struct ScreenerPanel {
     filters: Vec<ScreenerFilter>,
     sort_by: Option<String>,
     descending: bool,
-    /// The filter being written: its column within the set, comparison and value text.
-    draft: (usize, ScreenerOp, FilterWidget),
+    draft: Draft,
     feed: Option<Arc<dyn Datafeed>>,
     /// The latest answer and the set it was asked with.
     rows: Vec<ScreenerRow>,
@@ -151,11 +150,13 @@ impl ScreenerPanel {
             filters: Vec::new(),
             sort_by: None,
             descending: true,
-            draft: (
-                0,
-                ScreenerOp::Above,
-                FilterWidget::new().placeholder("Value"),
-            ),
+            draft: Draft {
+                column: 0,
+                comparison: Comparison::Above,
+                value: FilterWidget::new().placeholder("Value"),
+                upper: FilterWidget::new().placeholder("To"),
+                values: Vec::new(),
+            },
             feed: None,
             rows: Vec::new(),
             answered: 0,
@@ -285,7 +286,7 @@ impl ScreenerPanel {
             return;
         };
         self.set = set;
-        self.draft.0 = 0;
+        self.draft.column = 0;
         self.universe = saved.universe;
         self.filters = saved.filters;
         self.sort_by = saved.sort_by;
@@ -401,7 +402,7 @@ impl ScreenerPanel {
             });
             if self.set != before {
                 changed = true;
-                self.draft.0 = 0;
+                self.draft.column = 0;
             }
             if !self.universes.is_empty() {
                 let before = self.universe.clone();
@@ -542,44 +543,97 @@ impl ScreenerPanel {
         }
         if !columns.is_empty() {
             ui.horizontal_wrapped(|ui| {
-                let (column, op, value) = &mut self.draft;
-                *column = (*column).min(columns.len() - 1);
+                let draft = &mut self.draft;
+                draft.column = draft.column.min(columns.len() - 1);
+                let offered = match &columns[draft.column].kind {
+                    ScreenerColumnKind::Text(values) => {
+                        if !draft.values.iter().map(|(code, _)| code).eq(values) {
+                            draft.values =
+                                values.iter().map(|code| (code.clone(), false)).collect();
+                        }
+                        &Comparison::TEXT[..]
+                    }
+                    ScreenerColumnKind::Number => &Comparison::NUMBER[..],
+                };
+                if !offered.contains(&draft.comparison) {
+                    draft.comparison = offered[0];
+                }
                 dropdown(
                     ui,
                     "screener_filter_column",
-                    &columns[*column].title,
+                    &columns[draft.column].title,
                     |ui| {
                         for (index, entry) in columns.iter().enumerate() {
-                            ui.selectable_value(column, index, l10n::text(ui.ctx(), &entry.title));
+                            ui.selectable_value(
+                                &mut draft.column,
+                                index,
+                                l10n::text(ui.ctx(), &entry.title),
+                            );
                         }
                     },
                 );
-                dropdown(ui, "screener_filter_op", op_label(*op), |ui| {
-                    for entry in [ScreenerOp::Above, ScreenerOp::Below] {
-                        ui.selectable_value(op, entry, l10n::text(ui.ctx(), op_label(entry)));
+                dropdown(ui, "screener_filter_op", draft.comparison.label(), |ui| {
+                    for entry in offered {
+                        ui.selectable_value(
+                            &mut draft.comparison,
+                            *entry,
+                            l10n::text(ui.ctx(), entry.label()),
+                        );
                     }
                 });
-                ui.allocate_ui(vec2(128.0, 28.0), |ui| {
-                    value.show(ui);
-                });
-                let parsed = value
-                    .query()
-                    .trim()
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|v| v.is_finite());
+                match draft.comparison {
+                    Comparison::Above | Comparison::Below => {
+                        draft.value = std::mem::take(&mut draft.value).placeholder("Value");
+                        ui.allocate_ui(vec2(128.0, 28.0), |ui| draft.value.show(ui));
+                    }
+                    Comparison::Between => {
+                        draft.value = std::mem::take(&mut draft.value).placeholder("From");
+                        ui.allocate_ui(vec2(128.0, 28.0), |ui| draft.value.show(ui));
+                        ui.allocate_ui(vec2(128.0, 28.0), |ui| draft.upper.show(ui));
+                    }
+                    Comparison::Is | Comparison::IsNot => controls::choices(
+                        ui,
+                        "screener_filter_values",
+                        "Choose values",
+                        "{count} values",
+                        &mut draft.values,
+                    ),
+                }
+                let number = |field: &FilterWidget| {
+                    field
+                        .query()
+                        .trim()
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|v| v.is_finite())
+                };
+                let ticked = controls::chosen(&draft.values);
+                let condition = match draft.comparison {
+                    Comparison::Above => number(&draft.value).map(ScreenerCondition::Above),
+                    Comparison::Below => number(&draft.value).map(ScreenerCondition::Below),
+                    Comparison::Between => number(&draft.value)
+                        .zip(number(&draft.upper))
+                        .map(|(a, b)| ScreenerCondition::Between(a.min(b), a.max(b))),
+                    Comparison::Is => (!ticked.is_empty()).then_some(ScreenerCondition::Is(ticked)),
+                    Comparison::IsNot => {
+                        (!ticked.is_empty()).then_some(ScreenerCondition::IsNot(ticked))
+                    }
+                };
                 if Button::new("Add filter")
-                    .enabled(parsed.is_some())
+                    .enabled(condition.is_some())
                     .show(ui)
                     .clicked()
-                    && let Some(number) = parsed
+                    && let Some(condition) = condition
                 {
-                    self.filters.push(ScreenerFilter {
-                        column: columns[*column].id.clone(),
-                        op: *op,
-                        value: number,
-                    });
-                    value.clear();
+                    self.filters.push(ScreenerFilter::new(
+                        columns[draft.column].id.clone(),
+                        condition,
+                    ));
+                    draft.value.clear();
+                    draft.upper.clear();
+                    for (_, on) in &mut draft.values {
+                        *on = false;
+                    }
                     changed = true;
                 }
             });
@@ -588,10 +642,8 @@ impl ScreenerPanel {
         ui.horizontal_wrapped(|ui| {
             for (index, filter) in self.filters.iter().enumerate() {
                 let text = format!(
-                    "{} {} {}  ×",
-                    title(&filter.column),
-                    op_label(filter.op),
-                    filter.value
+                    "{}  ×",
+                    describe(ui.ctx(), &title(&filter.column), &filter.condition)
                 );
                 if Button::new(text)
                     .small()
@@ -685,7 +737,8 @@ impl ScreenerPanel {
                                 .paint_at(ui, icon);
                             rect.set_right(icon.left() - 2.0);
                         }
-                        cell(ui, rect, &column.title, true, theme.ui.text_secondary);
+                        let right = !matches!(column.kind, ScreenerColumnKind::Text(_));
+                        cell(ui, rect, &column.title, right, theme.ui.text_secondary);
                         let response = ui.interact(
                             cells[index + 1],
                             ui.scope_id().with(("sort", &column.id)),
@@ -712,8 +765,11 @@ impl ScreenerPanel {
                         let (rect, response) = row(ui);
                         let cells = columns(rect);
                         cell(ui, cells[0], &entry.symbol, false, theme.ui.text);
-                        for (rect, value) in cells.iter().skip(1).zip(&entry.values) {
-                            cell(ui, *rect, value, true, theme.ui.text);
+                        for ((rect, value), column) in
+                            cells.iter().skip(1).zip(&entry.values).zip(shown)
+                        {
+                            let right = !matches!(column.kind, ScreenerColumnKind::Text(_));
+                            cell(ui, *rect, value, right, theme.ui.text);
                         }
                         let translated_label = l10n::text(ui.ctx(), &entry.symbol);
                         response.widget_info(|| {
@@ -738,10 +794,69 @@ impl ScreenerPanel {
     }
 }
 
-fn op_label(op: ScreenerOp) -> &'static str {
-    match op {
-        ScreenerOp::Above => ">",
-        ScreenerOp::Below => "<",
+/// A comparison the filter row offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Comparison {
+    Above,
+    Below,
+    Between,
+    Is,
+    IsNot,
+}
+
+impl Comparison {
+    const NUMBER: [Self; 3] = [Self::Above, Self::Below, Self::Between];
+    const TEXT: [Self; 2] = [Self::Is, Self::IsNot];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Above => ">",
+            Self::Below => "<",
+            Self::Between => "between",
+            Self::Is => "is",
+            Self::IsNot => "is not",
+        }
+    }
+}
+
+/// The filter being written.
+#[derive(Debug)]
+struct Draft {
+    /// The column, by its index within the shown set.
+    column: usize,
+    comparison: Comparison,
+    /// The number, or the lower end of a range.
+    value: FilterWidget,
+    /// The upper end of a range.
+    upper: FilterWidget,
+    /// The values of the drafted text column, ticked or not.
+    values: Vec<(String, bool)>,
+}
+
+/// How a filter reads on its chip, such as "Price > 10" or "Exchange is NYSE, NASDAQ".
+fn describe(ctx: &egui::Context, column: &str, condition: &ScreenerCondition) -> String {
+    match condition {
+        ScreenerCondition::Above(value) => format!("{column} > {value}"),
+        ScreenerCondition::Below(value) => format!("{column} < {value}"),
+        ScreenerCondition::Between(from, to) => l10n::format_text(
+            ctx,
+            "{column} between {from} and {to}",
+            &[
+                ("column", column.to_owned()),
+                ("from", from.to_string()),
+                ("to", to.to_string()),
+            ],
+        ),
+        ScreenerCondition::Is(values) => l10n::format_text(
+            ctx,
+            "{column} is {values}",
+            &[("column", column.to_owned()), ("values", values.join(", "))],
+        ),
+        ScreenerCondition::IsNot(values) => l10n::format_text(
+            ctx,
+            "{column} is not {values}",
+            &[("column", column.to_owned()), ("values", values.join(", "))],
+        ),
     }
 }
 
@@ -749,7 +864,10 @@ fn op_label(op: ScreenerOp) -> &'static str {
 mod tests {
     use super::*;
     use crate::data::{HistoryPage, HistoryRequest, Reply, ScreenerColumn};
-    use egui_kittest::{Harness, kittest::Queryable};
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
     use std::sync::Mutex;
 
     #[derive(Default)]
@@ -807,11 +925,9 @@ mod tests {
             ),
             ScreenerColumnSet::new("Volume", vec![ScreenerColumn::new("volume", "Vol")]),
         ]);
-        panel.filters.push(ScreenerFilter {
-            column: "price".into(),
-            op: ScreenerOp::Above,
-            value: 10.0,
-        });
+        panel
+            .filters
+            .push(ScreenerFilter::new("price", ScreenerCondition::Above(10.0)));
         panel.sort_by = Some("price".into());
         panel.set_feed(feed.clone());
         let (query, reply) = feed.rows.lock().unwrap().pop().unwrap();
@@ -858,11 +974,11 @@ mod tests {
         panel.universe = Some("coin".into());
         panel.set = 1;
         panel.text = "cheap and liquid".into();
-        panel.filters.push(ScreenerFilter {
-            column: "volume".into(),
-            op: ScreenerOp::Below,
-            value: 5.0,
-        });
+        panel.filters.extend([
+            ScreenerFilter::new("volume", ScreenerCondition::Below(5.0)),
+            ScreenerFilter::new("volume", ScreenerCondition::Between(1.0, 4.5)),
+            ScreenerFilter::new("volume", ScreenerCondition::IsNot(vec!["OTC".into()])),
+        ]);
         panel.sort_by = Some("volume".into());
         panel.descending = false;
         panel.set_feed(feed.clone());
@@ -929,5 +1045,93 @@ mod tests {
         }
         let names: Vec<_> = documents.0.lock().unwrap().keys().cloned().collect();
         assert_eq!(names, ["Cheaper"]);
+
+        // Screens saved before conditions carried ranges and text read and write unchanged.
+        const BEFORE: &str = r#"{"universe":null,"set":"Overview","filters":[{"column":"price","op":"Above","value":10.0}],"sort_by":null,"descending":true,"text":""}"#;
+        let saved: SavedScreen = serde_json::from_str(BEFORE).unwrap();
+        assert_eq!(
+            saved.filters,
+            [ScreenerFilter::new("price", ScreenerCondition::Above(10.0))]
+        );
+        assert_eq!(serde_json::to_string(&saved).unwrap(), BEFORE);
+    }
+
+    /// A text column's filter offers "is" and "is not" over the host's values and no number; a
+    /// number column's offers a range. The query and the chips carry the ticked values in the
+    /// order offered and the range from its smaller end, and a bound that is not a finite number
+    /// adds nothing.
+    #[test]
+    fn text_conditions_and_ranges_reach_the_query_and_the_chips() {
+        // The feed never answers, so the spinner keeps repainting: step instead of settling.
+        fn click(h: &mut Harness<'_, ScreenerPanel>, label: &str) {
+            h.get_by_label(label).click();
+            h.run_steps(4);
+        }
+        fn type_into(h: &mut Harness<'_, ScreenerPanel>, label: &str, text: &str) {
+            h.get_by_label(label).focus();
+            h.run_steps(4);
+            h.get_by_label(label).type_text(text);
+            h.run_steps(4);
+        }
+        let feed = Arc::new(Feed::default());
+        let mut panel = ScreenerPanel::new(vec![ScreenerColumnSet::new(
+            "Overview",
+            vec![
+                ScreenerColumn::new("price", "Price"),
+                ScreenerColumn::text(
+                    "exchange",
+                    "Exchange",
+                    ["NYSE", "NASDAQ", "LSE"].map(String::from),
+                ),
+            ],
+        )]);
+        panel.set_feed(feed.clone());
+        let mut h = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(|ui, panel: &mut ScreenerPanel| _ = panel.show(ui), panel);
+        h.run_steps(4);
+        click(&mut h, "Price");
+        click(&mut h, "Exchange");
+        assert!(h.query_by_label("Value").is_none());
+        click(&mut h, "is");
+        assert!(h.query_by_label(">").is_none() && h.query_by_label("between").is_none());
+        click(&mut h, "is not");
+        for value in ["NASDAQ", "NYSE"] {
+            if h.query_by_role_and_label(egui::Role::CheckBox, value)
+                .is_none()
+            {
+                let shown = if value == "NASDAQ" {
+                    "Choose values"
+                } else {
+                    "NASDAQ"
+                };
+                click(&mut h, shown);
+            }
+            h.get_by_role_and_label(egui::Role::CheckBox, value).click();
+            h.run_steps(4);
+        }
+        click(&mut h, "Add filter");
+        let last = |feed: &Feed| feed.rows.lock().unwrap().last().unwrap().0.filters.clone();
+        let is_not = ScreenerFilter::new(
+            "exchange",
+            ScreenerCondition::IsNot(vec!["NYSE".into(), "NASDAQ".into()]),
+        );
+        assert_eq!(last(&feed), std::slice::from_ref(&is_not));
+        h.get_by_label("Exchange is not NYSE, NASDAQ  ×");
+
+        click(&mut h, "Exchange");
+        click(&mut h, "Price");
+        click(&mut h, ">");
+        click(&mut h, "between");
+        type_into(&mut h, "From", "20");
+        type_into(&mut h, "To", "10.5");
+        click(&mut h, "Add filter");
+        let between = ScreenerFilter::new("price", ScreenerCondition::Between(10.5, 20.0));
+        assert_eq!(last(&feed), [is_not, between]);
+        h.get_by_label("Price between 10.5 and 20  ×");
+
+        type_into(&mut h, "From", "inf");
+        type_into(&mut h, "To", "1");
+        assert!(h.get_by_label("Add filter").accesskit_node().is_disabled());
     }
 }

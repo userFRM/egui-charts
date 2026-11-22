@@ -13,7 +13,7 @@ use history::Paging;
 
 pub(super) use crate::chart::quantity_decimals;
 
-use super::Trading;
+use super::{Trading, changed};
 use crate::model::{
     BalanceChange, ClosedPosition, Execution, JournalEntry, Order, OrderId, OrderRequest,
     OrderStatus, OrderType, Position,
@@ -423,6 +423,7 @@ fn kind(order_type: &OrderType) -> &'static str {
         OrderType::Limit(_) => "Limit",
         OrderType::Stop(_) => "Stop",
         OrderType::StopLimit { .. } => "Stop Limit",
+        OrderType::TrailingStop { .. } => "Trailing Stop",
     }
 }
 
@@ -446,7 +447,7 @@ impl AccountPanel {
             && self
                 .editing
                 .as_ref()
-                .is_some_and(|(old, _)| old.id == order.id && old != order)
+                .is_some_and(|(old, _)| old.id == order.id && changed(old, order))
         {
             self.editing = None;
         }
@@ -1019,6 +1020,19 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
             panel.record(&event);
             assert!(panel.editing.is_none());
         }
+        let mut trailing = order.clone();
+        trailing.request.order_type = OrderType::TrailingStop {
+            distance: crate::model::TrailDistance::Price(2.0),
+            activation: None,
+        };
+        trailing.trailing_stop = Some(98.0);
+        panel.editing = Some((trailing.clone(), trailing.request.clone()));
+        trailing.trailing_stop = Some(99.0);
+        panel.record(&AccountEvent::Order(trailing));
+        assert!(
+            panel.editing.is_some(),
+            "a moving trailing stop keeps the dialog"
+        );
         panel.clear();
         assert!(panel.fills.executions.is_empty());
     }
