@@ -4,7 +4,7 @@ use super::document::{Received, StoredDocument};
 use super::{ConflictChoice, Storage, StoreKind};
 use crate::config::shortcut_map::{ShortcutMap, canonical};
 use crate::config::{CursorType, DrawingSort, DrawingToolType};
-use crate::model::{ChartType, ReplaySession, Timeframe, Watchlist};
+use crate::model::{ChartType, ReplaySession, Timeframe, Watchlist, WatchlistFlag};
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -88,6 +88,13 @@ pub struct UserSettings {
     /// The index of the last shown watchlist. Older documents read zero. Restore it with
     /// `WatchlistPanel::set_active_list`, which ignores an index past the last list.
     pub active_watchlist: usize,
+    /// The watchlist flags of symbols that none of `watchlists` holds, in the order the flag views
+    /// show them. Save `WatchlistPanel::unlisted_flags` and restore them with
+    /// `WatchlistPanel::set_unlisted_flags` after building the panel. Older documents read none,
+    /// and an entry this release cannot read, such as one with a flag a newer release added, is
+    /// left out.
+    #[serde(deserialize_with = "known_items")]
+    pub unlisted_flags: Vec<(String, WatchlistFlag)>,
     /// The market heatmap's universe, size metric and colour metric.
     pub market_heatmap: MarketHeatmapSelection,
     /// The replay position to resume, with the interval its history was fetched at. A position
