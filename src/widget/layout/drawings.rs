@@ -4613,6 +4613,83 @@ mod tests {
         assert_eq!(prices(&charts), [vec![102.0, 108.0, 110.0], vec![102.0]]);
     }
 
+    #[test]
+    fn shared_drawing_filter_follows_peer_moves_and_deletions_without_writing() {
+        use crate::services::document::tests::Revised;
+
+        let host = Arc::new(Revised::default());
+        let mut charts: [Chart; 2] = std::array::from_fn(|_| {
+            let mut chart = bars(60);
+            chart.set_symbol("SAMPLE");
+            chart.set_storage(host.clone());
+            chart
+        });
+        let mut layouts = [ChartLayout::default(), ChartLayout::default()];
+        let mut settle = |charts: &mut [Chart; 2]| {
+            for _ in 0..2 {
+                for (layout, chart) in layouts.iter_mut().zip(&mut *charts) {
+                    frames(layout, std::array::from_mut(chart));
+                }
+            }
+        };
+        let painted = |chart: &Chart| {
+            let manager = chart.drawings();
+            let mut prices: Vec<_> = manager
+                .drawings
+                .iter()
+                .filter(|d| manager.painted_range(d.id).is_some_and(|r| !r.is_empty()))
+                .map(|d| d.chart_points[0].price)
+                .collect();
+            prices.sort_by(f64::total_cmp);
+            prices
+        };
+        settle(&mut charts);
+        charts[0].user_action(|chart| {
+            for (folder, scope, price) in [
+                ("Notes", FolderSync::Chart, 9.25),
+                ("Layout", FolderSync::Layout, 9.5),
+            ] {
+                let id = draw(chart, price);
+                let path = [folder.to_owned()];
+                assert!(chart.drawings_mut().move_to_folder(&[id], &[], &path));
+                assert!(chart.drawings_mut().set_folder_sync(&path, Some(scope)));
+            }
+            draw(chart, 10.0);
+        });
+        settle(&mut charts);
+        assert_eq!(prices(&charts), [vec![9.25, 9.5, 10.0], vec![10.0]]);
+        assert_eq!(painted(&charts[0]), [9.25, 9.5, 10.0]);
+        assert_eq!(painted(&charts[1]), [10.0]);
+
+        let revision = host.revision("SAMPLE").unwrap();
+        charts[0].drawings_mut().set_shared_drawings_hidden(true);
+        settle(&mut charts);
+        assert_eq!(painted(&charts[0]), [9.25, 9.5]);
+        assert_eq!(painted(&charts[1]), [10.0]);
+        assert_eq!(host.revision("SAMPLE"), Some(revision));
+
+        charts[1].user_action(|chart| move_first(chart, 10.5));
+        settle(&mut charts);
+        assert_eq!(prices(&charts)[0], [9.25, 9.5, 10.5]);
+        assert_eq!(painted(&charts[0]), [9.25, 9.5]);
+        let moved = host.revision("SAMPLE").unwrap();
+        assert!(moved > revision);
+        charts[0].drawings_mut().set_shared_drawings_hidden(false);
+        settle(&mut charts);
+        assert_eq!(painted(&charts[0]), [9.25, 9.5, 10.5]);
+        assert_eq!(host.revision("SAMPLE"), Some(moved));
+
+        charts[0].drawings_mut().set_shared_drawings_hidden(true);
+        let shared = charts[1].drawings().drawings[0].id;
+        charts[1].user_action(|chart| chart.drawings_mut().delete_drawing(shared));
+        settle(&mut charts);
+        assert!(charts[0].drawings().shared_drawings_hidden());
+        charts[0].drawings_mut().set_shared_drawings_hidden(false);
+        settle(&mut charts);
+        assert_eq!(prices(&charts), [vec![9.25, 9.5], vec![]]);
+        assert_eq!(painted(&charts[0]), [9.25, 9.5]);
+    }
+
     /// Guards #3436: with drawing storage, a drawing kept on one chart shows on that chart only,
     /// one kept in the layout on the charts of that layout only, and one shared across layouts on
     /// every chart of the symbol, also after the layouts are saved and opened again on new charts

@@ -252,6 +252,7 @@ impl Chart {
         manager.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
         manager.eraser_mode = self.drawings.eraser_mode;
         manager.set_hidden(self.drawings.is_hidden());
+        manager.shared_filter = self.drawings.shared_filter;
         manager.set_locked(self.drawings.is_locked());
         manager.curr_timeframe = self.drawings.curr_timeframe.clone();
         let refused = drawings

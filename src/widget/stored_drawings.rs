@@ -415,6 +415,7 @@ impl Chart {
     /// automatic storage, call `chart.drawings_mut().set_sync_enabled(true)` after attaching it.
     pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
         self.drawings.set_sync_enabled(false);
+        self.drawings.shared_filter.symbol_storage = true;
         for (manager, _) in self.symbol_drawings.values_mut() {
             manager.set_sync_enabled(false);
         }

@@ -236,6 +236,28 @@ impl TextEditState {
     }
 }
 
+/// Display state of one chart, not part of any drawing or its stored document.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SharedDrawingFilter {
+    hidden: bool,
+    pub(crate) symbol_storage: bool,
+}
+
+impl SharedDrawingFilter {
+    pub(crate) fn hides(self, drawing: &Drawing) -> bool {
+        self.hidden
+            && match drawing.folder_sync_mode() {
+                Some(super::FolderSync::AllLayouts) => true,
+                Some(_) => false,
+                None => self.symbol_storage && drawing.saveable,
+            }
+    }
+
+    fn selectable(self, drawing: &Drawing) -> bool {
+        drawing.selectable && !self.hides(drawing)
+    }
+}
+
 /// Central coordinator for chart drawings.
 ///
 /// `DrawingManager` owns the list of completed drawings and the in-progress
@@ -368,6 +390,7 @@ pub struct DrawingManager {
     pub(crate) eraser_mode: bool,
     /// Whether every drawing is hidden as a group; see [`Self::set_hidden`].
     hidden: bool,
+    pub(crate) shared_filter: SharedDrawingFilter,
     /// Whether every drawing is locked as a group; see [`Self::set_locked`].
     locked: bool,
 
@@ -466,6 +489,7 @@ impl DrawingManager {
             curr_timeframe: String::from("1D"),
             eraser_mode: false,
             hidden: false,
+            shared_filter: SharedDrawingFilter::default(),
             locked: false,
             pending_sync: Arc::new(Mutex::new(Vec::new())),
             sync_enabled: true,
@@ -535,28 +559,38 @@ impl DrawingManager {
         if self.hidden {
             return;
         }
-        self.selection.select_all(
-            ids.into_iter()
-                .filter(|id| self.drawings.iter().any(|d| d.id == *id && d.selectable)),
-        );
+        self.selection.select_all(ids.into_iter().filter(|id| {
+            self.drawings
+                .iter()
+                .any(|d| d.id == *id && self.shared_filter.selectable(d))
+        }));
     }
 
     /// Selected live drawing ids, in drawing-list order.
     pub fn selected_ids(&self) -> impl Iterator<Item = usize> + '_ {
         self.drawings
             .iter()
-            .filter(|d| d.selectable && self.selection.is_selected(d.id))
+            .filter(|d| self.shared_filter.selectable(d) && self.selection.is_selected(d.id))
             .map(|d| d.id)
     }
 
     /// Whether a drawing belongs to the current selection.
     pub fn is_selected(&self, id: usize) -> bool {
-        self.drawings.iter().any(|d| d.id == id && d.selectable) && self.selection.is_selected(id)
+        self.selection.is_selected(id)
+            && self
+                .drawings
+                .iter()
+                .any(|d| d.id == id && self.shared_filter.selectable(d))
     }
 
     /// Toggle a live drawing in the selection, retaining the other selected drawings.
     pub fn toggle_selection(&mut self, id: usize) {
-        if !self.hidden && self.drawings.iter().any(|d| d.id == id && d.selectable) {
+        if !self.hidden
+            && self
+                .drawings
+                .iter()
+                .any(|d| d.id == id && self.shared_filter.selectable(d))
+        {
             self.selection.toggle(id);
         }
     }
@@ -580,7 +614,9 @@ impl DrawingManager {
             .iter()
             .enumerate()
             .filter(|(_, d)| {
-                d.selectable && self.selection.is_selected(d.id) && self.accepts_user_edits(d)
+                self.shared_filter.selectable(d)
+                    && self.selection.is_selected(d.id)
+                    && self.accepts_user_edits(d)
             })
             .map(|(index, d)| (index, d.clone()))
             .collect();
@@ -1867,6 +1903,57 @@ mod tests {
         }
 
         assert_eq!(manager.hit_test(click), Some(11));
+    }
+
+    #[test]
+    fn shared_drawing_filter_removes_only_shared_targets() {
+        let mut m = DrawingManager::new();
+        m.options.magnet_mode = true;
+        let [local_id, shared_id] = [(false, 100.0), (true, 150.0)].map(|(shared, y)| {
+            let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+            line.stored_id = Some(format!("line-{y}"));
+            line.chart_points.push(ChartPoint::new(50.0, y));
+            if shared {
+                line.folder.push("Shared".into());
+                line.folder_sync
+                    .push(Some(crate::drawings::FolderSync::AllLayouts));
+            }
+            m.add_synced_drawing(line).unwrap()
+        });
+        m.update_all_screen_coords(|x| x, |y| y as f32, 1.0);
+        let local = Pos2::new(50.0, 100.0);
+        let shared = Pos2::new(50.0, 150.0);
+        let near = shared + egui::vec2(2.0, 1.0);
+        let tags = |m: &DrawingManager| {
+            m.axis_tags(Rect::EVERYTHING, egui::Color32::WHITE, &[], 0, None)
+                .filter_map(|tag| match tag {
+                    DrawingAxisTag::Price { price, .. } => Some(price),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(tags(&m), [100.0, 150.0]);
+        assert_eq!(m.hit_test(shared), Some(shared_id));
+        assert_eq!(m.snap_point(near, &m.drawings), shared);
+        m.select_drawings([local_id, shared_id]);
+        m.set_shared_drawings_hidden(true);
+        m.toggle_selection(shared_id);
+        assert_eq!(m.selected_ids().collect::<Vec<_>>(), [local_id]);
+        assert_eq!(tags(&m), [100.0]);
+        assert_eq!(m.hit_test(local), Some(local_id));
+        assert_eq!(m.hit_test(shared), None);
+        assert_eq!(m.snap_point(near, &m.drawings), near);
+        m.start_drag_body(shared_id, shared);
+        m.update_drag_handle(
+            local,
+            |x| x,
+            f64::from,
+            |p, from, to| p + f64::from(to - from),
+        );
+        m.end_drag_handle();
+        m.set_shared_drawings_hidden(false);
+        assert_eq!(tags(&m), [100.0, 150.0]);
+        assert!(m.pending_sync.lock().unwrap().is_empty());
     }
 
     /// The magnet snaps to a drawing anchor within the default distance, excluding members of

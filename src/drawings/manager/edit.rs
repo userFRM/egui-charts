@@ -115,7 +115,9 @@ impl DrawingManager {
         let ids: Vec<_> = self
             .drawings
             .iter()
-            .filter(|d| d.selectable && self.selection.is_selected(d.id) && differs(d))
+            .filter(|d| {
+                self.shared_filter.selectable(d) && self.selection.is_selected(d.id) && differs(d)
+            })
             .map(|d| d.id)
             .collect();
         // Visibility and the lock take no part in validation, so the edit is never refused.
@@ -822,7 +824,9 @@ impl DrawingManager {
 
     /// Whether the drawing is visible on this interval and its group is shown.
     pub(crate) fn shows(&self, drawing: &Drawing) -> bool {
-        !self.hidden && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+        !self.hidden
+            && !self.shared_filter.hides(drawing)
+            && drawing.is_visible_on_timeframe(&self.curr_timeframe)
     }
 
     pub(crate) fn owns_pane(&self, drawing: &Drawing) -> bool {
@@ -921,6 +925,32 @@ impl DrawingManager {
     /// Whether [`Self::set_hidden`] hides every drawing.
     pub fn is_hidden(&self) -> bool {
         self.hidden
+    }
+
+    /// Hides symbol-wide drawings on this chart only. Off by default. This includes
+    /// `AllLayouts` folders and saveable drawings with no folder scope when the chart has
+    /// drawing storage. Chart-only and layout-only folders are unaffected.
+    ///
+    /// Filtered drawings are not painted, selectable, draggable or snap targets. Storage
+    /// still receives peer edits and deletions. Toggling neither edits nor saves drawings.
+    /// The setting survives drawing loads and symbol changes, but is not saved in a layout.
+    pub fn set_shared_drawings_hidden(&mut self, hidden: bool) {
+        if self.shared_filter.hidden != hidden {
+            self.shared_filter.hidden = hidden;
+            if hidden {
+                self.selection.cancel_area();
+                for d in &self.drawings {
+                    if self.shared_filter.hides(d) {
+                        self.selection.deselect(d.id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether [`Self::set_shared_drawings_hidden`] filters symbol-wide drawings.
+    pub fn shared_drawings_hidden(&self) -> bool {
+        self.shared_filter.hidden
     }
 
     // === Group lock ===

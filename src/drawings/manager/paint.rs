@@ -337,6 +337,9 @@ impl DrawingManager {
             .is_none();
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
+            if self.shared_filter.hides(drawing) {
+                continue;
+            }
             let preview = self
                 .text_editor
                 .as_ref()
