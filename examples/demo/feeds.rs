@@ -1243,7 +1243,8 @@ pub(super) fn seasonality(bars: &[Bar]) -> Seasonality {
 }
 
 /// The demo's sharing of watchlists and layouts: a placeholder link per document, and layouts
-/// shared through the switch with a chosen access until it is turned off.
+/// shared through the switch with a chosen access until it is turned off. A renamed layout stays
+/// shared under its new name.
 #[derive(Default)]
 pub(super) struct DemoSharing(Mutex<(usize, HashMap<(ShareKind, String), ShareAccess>)>);
 
@@ -1276,6 +1277,14 @@ impl Sharing for DemoSharing {
             .unwrap()
             .1
             .insert((kind, name.to_owned()), access);
+        reply.send(Ok(()));
+    }
+    fn rename(&self, kind: ShareKind, name: &str, renamed: &str, reply: Reply<()>) {
+        let mut state = self.0.lock().unwrap();
+        if let Some(access) = state.1.remove(&(kind, name.to_owned())) {
+            state.1.insert((kind, renamed.to_owned()), access);
+        }
+        drop(state);
         reply.send(Ok(()));
     }
     fn link(&self, kind: ShareKind, name: &str, reply: Reply<ShareLink>) {
