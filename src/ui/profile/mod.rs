@@ -18,13 +18,16 @@ use egui::{RichText, Ui};
 ///
 /// ```
 /// use egui_charts::services::{ProfileDirectory, ProfileId};
-/// use egui_charts::ui::profile::ProfileCard;
+/// use egui_charts::ui::profile::{ProfileAction, ProfileCard};
 ///
 /// let mut directory = ProfileDirectory::new(); // Attach the host with set_service.
 /// let selected = ProfileId("ada".into());
 /// # egui::__run_test_ui(|ui| {
 /// directory.poll(ui.ctx());
-/// ProfileCard::new(&selected).show(ui, &mut directory);
+/// let action = ProfileCard::new(&selected).messaging(true).show(ui, &mut directory);
+/// if action == ProfileAction::Message {
+///     // Start or open the direct chat, as ChatsPanel::start_direct does.
+/// }
 /// # });
 /// ```
 ///
@@ -32,21 +35,45 @@ use egui::{RichText, Ui};
 #[derive(Debug)]
 pub struct ProfileCard<'a> {
     id: &'a ProfileId,
+    messaging: bool,
+}
+
+/// What the user asked of the host on a profile card.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProfileAction {
+    /// Nothing was asked.
+    None,
+    /// Start or open a direct chat with the profile's user, such as with
+    /// [`ChatsPanel::start_direct`](crate::ui::widget_bar::ChatsPanel::start_direct).
+    Message,
 }
 
 impl<'a> ProfileCard<'a> {
     /// Shows the profile with this host identifier, or an unavailable state until it is pushed.
     pub fn new(id: &'a ProfileId) -> Self {
-        Self { id }
+        Self {
+            id,
+            messaging: false,
+        }
+    }
+
+    /// Offers a Message button beside Follow when `available`; hidden by default. Turn it on
+    /// where the host's chats allow direct messages to this user.
+    pub fn messaging(mut self, available: bool) -> Self {
+        self.messaging = available;
+        self
     }
 
     /// Draws the latest details, follow control and any pending request or host failure.
     /// A failed request keeps the reported follow state and may be retried or dismissed.
-    pub fn show(self, ui: &mut Ui, directory: &mut ProfileDirectory) {
+    /// Returns what the user asked of the host.
+    pub fn show(self, ui: &mut Ui, directory: &mut ProfileDirectory) -> ProfileAction {
         let Some(profile) = directory.profile(self.id) else {
             EmptyState::new("Profile unavailable").show(ui);
-            return;
+            return ProfileAction::None;
         };
+        let mut action = ProfileAction::None;
         let theme = ui.active_theme();
         let operation = directory.operation(self.id);
         let pending = operation.is_some_and(|op| op.status == FollowStatus::Pending);
@@ -106,6 +133,9 @@ impl<'a> ProfileCard<'a> {
                     if pending {
                         ui.spinner();
                     }
+                    if self.messaging && Button::new("Message").show(ui).clicked() {
+                        action = ProfileAction::Message;
+                    }
                 });
                 if let Some(operation) = operation
                     && let FollowStatus::Failed(message) = &operation.status
@@ -120,6 +150,7 @@ impl<'a> ProfileCard<'a> {
         } else if dismiss {
             directory.dismiss(self.id);
         }
+        action
     }
 }
 

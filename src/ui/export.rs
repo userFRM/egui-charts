@@ -48,7 +48,8 @@ fn is_raster(format: ExportFormat) -> bool {
     matches!(format, ExportFormat::Png | ExportFormat::Clipboard)
 }
 
-/// The largest width and height in points the size fields allow at `pixels_per_point`.
+/// The largest layout width and height in points at `pixels_per_point`, so the output stays
+/// within 7680 by 4320 pixels.
 fn max_size(pixels_per_point: u32) -> [u32; 2] {
     [7680 / pixels_per_point, 4320 / pixels_per_point]
 }
@@ -172,8 +173,10 @@ impl Default for ExportConfig {
 ///
 /// The dialog offers:
 /// - Format selection among the formats the host offers: PNG, SVG, CSV and Clipboard
-/// - Image size, with the chart's or layout's size and a proportion lock, pixel density, scope,
-///   title, timestamp, watermark, crosshair, overlays and transparent background
+/// - Image size in output pixels, which the dialog divides by the pixel density for
+///   [`ImageExportOptions::size`](crate::widget::ImageExportOptions::size), with the chart's or
+///   layout's size and a proportion lock, pixel density, scope, title, timestamp, watermark,
+///   crosshair, overlays and transparent background
 /// - File save path entry
 ///
 /// Call [`set_chart_size`](Self::set_chart_size) and [`set_layout_size`](Self::set_layout_size)
@@ -462,21 +465,28 @@ impl ExportDialog {
                     ui.label(l10n::text(ui.ctx(), "Image size"));
                     ui.horizontal_wrapped(|ui| {
                         let size = &mut self.config.image.size;
-                        let width_changed = ui
-                            .add(
-                                egui::DragValue::new(&mut size[0])
-                                    .range(100..=max[0])
-                                    .suffix(l10n::text(ui.ctx(), " px")),
-                            )
-                            .changed();
+                        // The fields show output pixels; the options keep the layout in points.
+                        let mut pixels = size.map(|side| side * ppp);
+                        ui.add(
+                            egui::DragValue::new(&mut pixels[0])
+                                .range(100 * ppp..=max[0] * ppp)
+                                .speed(ppp)
+                                .update_while_editing(false)
+                                .suffix(l10n::text(ui.ctx(), " px")),
+                        );
                         ui.label("×");
-                        let height_changed = ui
-                            .add(
-                                egui::DragValue::new(&mut size[1])
-                                    .range(100..=max[1])
-                                    .suffix(l10n::text(ui.ctx(), " px")),
-                            )
-                            .changed();
+                        ui.add(
+                            egui::DragValue::new(&mut pixels[1])
+                                .range(100 * ppp..=max[1] * ppp)
+                                .speed(ppp)
+                                .update_while_editing(false)
+                                .suffix(l10n::text(ui.ctx(), " px")),
+                        );
+                        let edited =
+                            pixels.map(|side| (f64::from(side) / f64::from(ppp)).round() as u32);
+                        let width_changed = edited[0] != size[0];
+                        let height_changed = edited[1] != size[1];
+                        *size = edited;
                         changed |= width_changed || height_changed;
                         if let Some(ratio) = self.proportion {
                             if width_changed {
@@ -859,8 +869,10 @@ mod tests {
         assert_eq!(dialog.config.format, ExportFormat::Clipboard);
     }
 
-    /// Guards #3596: image choices reach the request and survive reopening, and layout scope
-    /// is requested only while the host offers it and the format is an image.
+    /// Guards #3596 and #3961: image choices reach the request and survive reopening, layout
+    /// scope is requested only while the host offers it and the format is an image, and the size
+    /// fields hold the output pixels at every density, as the output size beside the density
+    /// shows, while SVG keeps the document size in points.
     #[test]
     fn image_choices_reach_the_request_and_survive_reopening() {
         use egui::accesskit::Role;
@@ -906,28 +918,37 @@ mod tests {
                     .set_value_accesskit(value);
                 h.run_steps(2);
             };
+        let fields = |h: &Harness<'_, (ExportDialog, Option<ExportConfig>)>| {
+            h.get_all_by_role(Role::SpinButton)
+                .map(|field| field.accesskit_node().numeric_value().unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(fields(&h), [1440.0, 900.0]);
         click(&mut h, "Overlays");
         assert!(!h.state().0.config.image.include_foreground);
         click(&mut h, "2×");
         assert_eq!(h.state().0.config.image.pixel_density, PixelDensity::Two);
         h.get_by_label("2880 × 1800 px");
+        assert_eq!(fields(&h), [2880.0, 1800.0]);
         click(&mut h, "Whole layout");
         assert_eq!(h.state().0.config.scope, ExportScope::Layout);
         click(&mut h, "Current size");
         assert_eq!(h.state().0.config.image.size, [1900, 1000]);
         click(&mut h, "Keep proportions");
-        edit(&mut h, 0, 951.0);
+        edit(&mut h, 0, 1901.0);
         assert_eq!(h.state().0.config.image.size, [951, 501]);
-        edit(&mut h, 0, 950.0);
+        assert_eq!(fields(&h), [1902.0, 1002.0]);
+        h.get_by_label("1902 × 1002 px");
+        edit(&mut h, 0, 1900.0);
         assert_eq!(h.state().0.config.image.size, [950, 500]);
-        edit(&mut h, 1, 300.0);
+        edit(&mut h, 1, 600.0);
         assert_eq!(h.state().0.config.image.size, [570, 300]);
-        edit(&mut h, 0, 100.0);
+        edit(&mut h, 0, 200.0);
         assert_eq!(h.state().0.config.image.size, [190, 100]);
         click(&mut h, "This chart");
         click(&mut h, "Current size");
         assert_eq!(h.state().0.config.image.size, [1203, 612]);
-        edit(&mut h, 0, 601.0);
+        edit(&mut h, 0, 1202.0);
         assert_eq!(h.state().0.config.image.size, [601, 306]);
         click(&mut h, "Whole layout");
         click(&mut h, "Cancel");
@@ -987,16 +1008,35 @@ mod tests {
         h.state_mut().0.mark_success();
         click(&mut h, "PNG");
         click(&mut h, "Keep proportions");
-        edit(&mut h, 0, 3000.0);
-        edit(&mut h, 1, 2000.0);
+        edit(&mut h, 0, 6000.0);
+        edit(&mut h, 1, 4000.0);
         click(&mut h, "3×");
         assert_eq!(h.state().0.config.image.size, [2160, 1440]);
+        assert_eq!(fields(&h), [6480.0, 4320.0]);
+        let width = h.get_all_by_role(Role::SpinButton).next().unwrap();
+        assert_eq!(width.accesskit_node().max_numeric_value(), Some(7680.0));
+        width.click();
+        h.run_steps(2);
+        for digit in ["7", "0", "0", "0"] {
+            h.event(egui::Event::Text(digit.into()));
+            h.run_steps(1);
+        }
+        // Enter applies the typed width and exports with it.
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state_mut().1.take().unwrap().image.size, [2333, 1440]);
+        assert_eq!(h.state().0.config.image.size, [2333, 1440]);
+        assert_eq!(fields(&h), [6999.0, 4320.0]);
+        h.state_mut().0.mark_success();
         click(&mut h, "SVG");
+        assert_eq!(fields(&h), [2333.0, 1440.0]);
         assert!(h.query_by_label("2×").is_none());
         h.get_by_label("Overlays");
         assert_eq!(h.state().0.config.image.pixel_density, PixelDensity::Three);
         click(&mut h, "Clipboard");
         h.get_by_label("3×");
+        assert_eq!(fields(&h), [6999.0, 4320.0]);
+        h.get_by_label("6999 × 4320 px");
         for size in [
             egui::vec2(f32::NAN, 100.0),
             egui::vec2(100.0, f32::INFINITY),

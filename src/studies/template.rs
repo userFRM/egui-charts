@@ -943,6 +943,22 @@ impl StudyTemplate {
                     plot.visible = false;
                 }
             }
+            // Multi-Range Delta ranges included their largest size before they excluded their
+            // limit. The next larger number keeps each saved range counting the sizes it did.
+            "Multi-Range Delta"
+                if !declares("max0") && ["max0", "max1", "max2"].into_iter().any(has) =>
+            {
+                for (id, value) in &mut template.inputs {
+                    if let Some(index) = id.strip_prefix("max") {
+                        *id = format!("limit{index}");
+                        if let InputValue::Number(max) = value
+                            && *max < f64::MAX
+                        {
+                            *max = max.next_up();
+                        }
+                    }
+                }
+            }
             // Zig Zag took deviations from 0 up, and drew no labels and stopped at its last pivot
             // before either had a setting; the automatic drawings share its deviation.
             "ZigZag"
@@ -1071,6 +1087,24 @@ impl StudyTemplate {
                     plot_type: crate::studies::PlotType::Line,
                 });
                 template.settings.untagged_plots.push(8);
+                changed = true;
+            }
+        }
+        // An options profile drew puts divided by calls in its puts colour before they had one
+        // of their own.
+        if study == "Options Volume Profile" && declares("ratio_color") && !has("ratio_color") {
+            let puts = template
+                .inputs
+                .iter()
+                .find_map(|(id, value)| (id == "put_color").then_some(value))
+                .or_else(|| {
+                    own.iter()
+                        .find(|input| input.id == "put_color")
+                        .map(|input| &input.default)
+                })
+                .cloned();
+            if let Some(puts) = puts {
+                template.inputs.push(("ratio_color".to_owned(), puts));
                 changed = true;
             }
         }
@@ -1790,6 +1824,8 @@ mod tests {
     /// A template restores the inputs it holds whatever the study's default has become, with every
     /// line it showed, and an input it lacks takes the value the saved inputs had before the
     /// study offered it. Values outside a narrowed input range load clamped to that range.
+    /// Multi-Range Delta ranges saved with an inclusive largest size restore with the limit just
+    /// above it.
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
         use InputValue::{Choice, Length, Number, Text, Toggle};
@@ -2083,6 +2119,26 @@ mod tests {
                     ("show_developing", Toggle(false)),
                     ("projections", Toggle(true)),
                     ("as_drawings", Toggle(true)),
+                ],
+            ),
+            // Saved while each range included its largest size: the limit is the next number up.
+            (
+                "Multi-Range Delta",
+                vec![
+                    ("min0", Number(0.0)),
+                    ("max0", Number(9.0)),
+                    ("min1", Number(10.0)),
+                    ("max1", Number(99.0)),
+                    ("min2", Number(100.0)),
+                    ("max2", Number(f64::MAX)),
+                ],
+                vec![
+                    ("min0", Number(0.0)),
+                    ("limit0", Number(9.000000000000002)),
+                    ("min1", Number(10.0)),
+                    ("limit1", Number(99.00000000000001)),
+                    ("min2", Number(100.0)),
+                    ("limit2", Number(f64::MAX)),
                 ],
             ),
         ];
