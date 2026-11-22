@@ -2,7 +2,25 @@ use crate::{localization as l10n, theme::ThemeExt, ui_kit::EmptyState};
 use chrono::{DateTime, Utc};
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, Ui, vec2};
 
-/// Plot timestamps on a shared time axis. Multiply values by `scale` before plotting and labelling.
+/// A trade's largest open profit and loss, drawn on the equity chart in account units before
+/// `scale`.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct TradeMark {
+    /// Entry time. Marks are clamped to the chart's time span.
+    pub(super) entry: DateTime<Utc>,
+    /// Exit time, or `None` while the trade is open in the range; an open mark reaches the
+    /// chart's last time.
+    pub(super) exit: Option<DateTime<Utc>>,
+    /// Equity at the last point before the entry, or at the first point when there is none.
+    pub(super) base: f64,
+    /// The trade's MFE: the run-up mark rises this far above `base`.
+    pub(super) run_up: f64,
+    /// The trade's MAE: the drawdown mark falls this far below `base`.
+    pub(super) drawdown: f64,
+}
+
+/// Plot timestamps on a shared time axis. Multiply values and marks by `scale` before plotting
+/// and labelling. `hover` adds tooltip lines for the time of the hovered `values` point.
 pub(super) fn show(
     ui: &mut Ui,
     values: &[(DateTime<Utc>, f64)],
@@ -10,11 +28,30 @@ pub(super) fn show(
     color: Color32,
     height: f32,
     scale: f64,
+    marks: &[TradeMark],
+    hover: impl FnOnce(&mut Ui, DateTime<Utc>),
 ) {
     if values.is_empty() && comparison.is_empty() {
         EmptyState::new("No usable equity curve").show(ui);
         return;
     }
+    // Base, top and bottom of each mark after scaling; a mark with an end that is not finite is
+    // left out of drawing and of the axis.
+    let marks: Vec<_> = marks
+        .iter()
+        .map(|m| {
+            let base = m.base * scale;
+            (
+                m,
+                [
+                    base,
+                    (m.base + m.run_up) * scale,
+                    (m.base - m.drawdown) * scale,
+                ],
+            )
+        })
+        .filter(|(_, ends)| ends.iter().all(|v| v.is_finite()))
+        .collect();
     let theme = ui.active_theme();
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width().max(1.0), height), Sense::hover());
@@ -25,8 +62,15 @@ pub(super) fn show(
     let all = || values.iter().chain(comparison);
     let first = all().map(|p| p.0).min().unwrap();
     let last = all().map(|p| p.0).max().unwrap();
-    let low = all().map(|p| p.1 * scale).fold(f64::INFINITY, f64::min);
-    let high = all().map(|p| p.1 * scale).fold(f64::NEG_INFINITY, f64::max);
+    let ends = || marks.iter().flat_map(|(_, ends)| ends.iter().copied());
+    let low = all()
+        .map(|p| p.1 * scale)
+        .chain(ends())
+        .fold(f64::INFINITY, f64::min);
+    let high = all()
+        .map(|p| p.1 * scale)
+        .chain(ends())
+        .fold(f64::NEG_INFINITY, f64::max);
     if !low.is_finite() || !high.is_finite() {
         EmptyState::new("No usable equity curve").show(ui);
         return;
@@ -111,6 +155,24 @@ pub(super) fn show(
             theme.ui.text_muted,
         );
     }
+    for (mark, [base, top, bottom]) in &marks {
+        let x = |t: DateTime<Utc>| point(t.clamp(first, last), *base).x;
+        let x0 = x(mark.entry);
+        let x1 = x(mark.exit.unwrap_or(last)).max(x0 + 2.0);
+        let y = |v: f64| point(first, v).y;
+        for (end, positive, fill) in [
+            (*top, mark.run_up > 0.0, theme.ui.success),
+            (*bottom, mark.drawdown > 0.0, theme.ui.error),
+        ] {
+            if positive {
+                painter.rect_filled(
+                    Rect::from_two_pos(Pos2::new(x0, y(*base)), Pos2::new(x1, y(end))),
+                    0.0,
+                    fill.gamma_multiply(0.35),
+                );
+            }
+        }
+    }
     for (curve, stroke) in [
         (values, Stroke::new(1.8, color)),
         (comparison, Stroke::new(1.5, theme.ui.warning)),
@@ -143,16 +205,21 @@ pub(super) fn show(
             plot.y_range(),
             Stroke::new(1.0, theme.ui.text_muted),
         );
+        let line = |ui: &mut Ui, label: &str, (t, v): (DateTime<Utc>, f64)| {
+            let v = v * scale;
+            ui.label(format!(
+                "{}: {v:.2} · {} UTC",
+                l10n::text(ui.ctx(), label),
+                t.format("%Y-%m-%d %H:%M:%S%.f")
+            ));
+        };
         response.on_hover_ui(|ui| {
-            for (label, curve) in [("Value", values), ("Buy-and-hold", comparison)] {
-                if let Some((t, v)) = nearest(curve) {
-                    let v = v * scale;
-                    ui.label(format!(
-                        "{}: {v:.2} · {} UTC",
-                        l10n::text(ui.ctx(), label),
-                        t.format("%Y-%m-%d %H:%M:%S%.f")
-                    ));
-                }
+            if let Some(hovered) = nearest(values) {
+                line(ui, "Value", hovered);
+                hover(ui, hovered.0);
+            }
+            if let Some(hovered) = nearest(comparison) {
+                line(ui, "Buy-and-hold", hovered);
             }
         });
     }
