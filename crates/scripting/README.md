@@ -228,6 +228,20 @@ from the first one on. Whether a run close to a limit finishes depends on the ma
 load. A script with long logic on every bar costs time on every bar: on 100,000 bars a restated
 built-in study takes several hundred milliseconds to recompute, off the UI thread.
 
+`Limits` may gain fields, so a host starts from the defaults and sets the limits it changes:
+
+```rust
+use egui_charts::studies::IndicatorFactory;
+use egui_charts_scripting::{Limits, Script};
+use std::time::Duration;
+
+let mut limits = Limits::default();
+limits.bar = Duration::from_millis(100);
+let script = Script::compile("Close", "plot(\"Close\", close);", &IndicatorFactory::new())?
+    .with_limits(limits);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 The size of what a script builds is limited too: strings to 10,000 bytes, arrays to 10,000 items,
 maps to 1,000 entries, 256 variables in scope, 64 functions and calls 32 deep.
 
