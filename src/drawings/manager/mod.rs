@@ -324,6 +324,9 @@ pub struct DrawingManager {
     covers: Mutex<Vec<(Pos2, usize)>>,
     /// Nearby bar and overlay points, refreshed by the chart before pointer handling.
     pub(crate) snap_targets: Vec<Pos2>,
+    /// While a drawing tool is active over the price pane: the frame, the pointer height and the
+    /// height a click there gives the next anchor, which the price pane's crosshair shows.
+    pub(crate) anchor_crosshair: Option<(u64, f32, f32)>,
 
     /// Manager configuration (colors, snapping, handles).
     pub options: DrawingManagerOptions,
@@ -442,6 +445,7 @@ impl DrawingManager {
             painted: Mutex::new(Vec::new()),
             covers: Mutex::new(Vec::new()),
             snap_targets: Vec::new(),
+            anchor_crosshair: None,
             options: DrawingManagerOptions::default(),
             dragging_handle: None,
             drag_old_state: None,

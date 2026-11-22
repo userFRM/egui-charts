@@ -8,6 +8,10 @@ use crate::theme::ThemeExt;
 use egui::Color32;
 
 /// Crosshair mode
+///
+/// While a drawing tool is active, the price pane's crosshair shows where a click places the next
+/// anchor instead, following the drawing magnet options (`DrawingManagerOptions`) and their Ctrl
+/// or Command inversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum CrosshairMode {

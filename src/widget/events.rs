@@ -960,10 +960,14 @@ impl Chart {
                 pane_index(self.main_series_pane()),
             )
         } else if plot.contains(pos) {
-            let snapped = bar_at.map_or(pos, |index| {
-                self.snap_crosshair(pos, &self.last_price_map, index)
+            let y = self.anchor_crosshair_y(ui.ctx(), pos.y).unwrap_or_else(|| {
+                bar_at
+                    .map_or(pos, |index| {
+                        self.snap_crosshair(pos, &self.last_price_map, index)
+                    })
+                    .y
             });
-            let price = self.last_price_map.y_to_price(snapped.y);
+            let price = self.last_price_map.y_to_price(y);
             (SeriesId::MAIN, price, pane_index(self.main_series_pane()))
         } else {
             return None;
