@@ -6059,9 +6059,10 @@ mod tests {
         assert_eq!(shown(&mut app), others);
     }
 
-    /// The demo screener's "+", chart view and refresh choice are reachable: an added column heads
-    /// its values, the chart view lays the screened symbols out in taller rows, and a picked
-    /// refresh interval replaces the dropdown's label, which the panel shows whole.
+    /// The demo screener's "+", heading menu, chart view and refresh choice are reachable: an added
+    /// column heads its values, a heading's menu removes its column, the chart view lays the
+    /// screened symbols out in taller rows, and a picked refresh interval replaces the dropdown's
+    /// label, which the panel shows whole.
     #[test]
     fn demo_screener_columns_charts_and_refresh_are_reachable() {
         let ctx = egui::Context::default();
@@ -6094,6 +6095,24 @@ mod tests {
                 .any(|(text, rect)| rect.top() > heading.bottom()
                     && (rect.right() - heading.right()).abs() < 2.0
                     && text.ends_with(['K', 'M', 'B', 'T'])),
+            "{texts:?}"
+        );
+
+        // A right-aligned heading is painted from its right end, which the frame helper reports
+        // as the left edge, so the click goes just inside that end.
+        let change = texts
+            .iter()
+            .find(|(text, _)| text == "Chg %")
+            .unwrap_or_else(|| panic!("no Chg % heading: {texts:?}"))
+            .1
+            .left_center()
+            - egui::vec2(2.0, 0.0);
+        hotlist_pointer_click(&mut app, &ctx, change, egui::PointerButton::Secondary);
+        screener_click(&mut app, &ctx, "Remove column", true);
+        let texts = panel(&mut app);
+        assert!(
+            texts.iter().any(|(text, _)| text == "Mkt cap")
+                && !texts.iter().any(|(text, _)| text == "Chg %"),
             "{texts:?}"
         );
 
