@@ -924,6 +924,7 @@ fn equity_tooltip_names_the_last_closed_trade() {
         h.get_by_label("Cumulative profit: 10.00");
         // Before the first close no trade is named.
         hover(&mut h, 1);
+        h.get_by_label("Value: 1010.00 · 1970-01-02 00:00:00 UTC");
         assert!(h.query_by_label_contains("Trade 1").is_none());
         // From day 3 the range lists only the short, as its first trade.
         type_from(&mut h, "1970-01-04");
