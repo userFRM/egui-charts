@@ -81,6 +81,13 @@ impl<const RATIO: bool, const VOLUME: bool> Indicator for MarketBreadth<RATIO, V
     fn desc(&self) -> &str {
         "Market breadth from host-supplied advancing and declining series"
     }
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        if VOLUME && !RATIO {
+            crate::scales::StudyFormat::Volume
+        } else {
+            crate::scales::StudyFormat::Fixed(2)
+        }
+    }
     fn inputs(&self) -> Vec<StudyInput> {
         let defaults = Self::default();
         vec![
