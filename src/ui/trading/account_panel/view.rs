@@ -415,6 +415,7 @@ impl Trading {
                 OrderType::Limit(limit) => (Some(limit), None),
                 OrderType::Stop(stop) => (None, Some(stop)),
                 OrderType::StopLimit { stop, limit } => (Some(limit), Some(stop)),
+                OrderType::TrailingStop { .. } => (None, order.trailing_stop),
                 _ => (None, None),
             };
             let mut cells = vec![
@@ -1016,7 +1017,9 @@ impl Trading {
                         }
                         _ => {}
                     }
-                    if brackets {
+                    // A trailing stop takes no exits; its distance is changed on the ticket.
+                    let trailing = matches!(request.order_type, OrderType::TrailingStop { .. });
+                    if brackets && !trailing {
                         let reference = match request.order_type {
                             OrderType::Limit(p) | OrderType::Stop(p) => p,
                             OrderType::StopLimit { limit, .. } => limit,

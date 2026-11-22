@@ -1689,6 +1689,90 @@ mod tests {
         }
     }
 
+    /// The demo's paper account offers trailing stops: one placed from the ticket's Trailing
+    /// tab starts 10 ticks behind the price and follows the price when it moves its way.
+    #[test]
+    fn a_trailing_stop_is_placed_from_the_ticket_and_follows_the_price() {
+        use egui_charts::model::{OrderRequest, OrderSide, OrderType};
+        let ctx = egui::Context::default();
+        let now = "2026-10-23T15:00:00Z".parse().unwrap();
+        let mut app = super::super::DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        app.switch_symbol("TOKENA");
+        app.trading.set_service(app.paper.clone());
+        app.trading.display.instant_orders = true;
+        demo_frame(&mut app, &ctx, vec![]);
+        let price = app.live.quote(now).unwrap().last;
+        app.paper.set_price("TOKENA", price);
+        let reference = LiveFeed::new("TOKENA", now);
+        super::super::tests::finish_feed(&reference);
+        reference.set_paused(false);
+        let (at, trigger) = (1..=40)
+            .find_map(|step| {
+                let at = now + TimeDelta::milliseconds(step * 100);
+                reference.advance(at);
+                let next = reference.quote(at)?.last;
+                (next != price).then_some((at, next))
+            })
+            .expect("the price moves");
+        // The side whose stop the move carries along: a sell trails a rise, a buy a fall.
+        let (side, s) = if trigger > price {
+            (OrderSide::Sell, 1.0)
+        } else {
+            (OrderSide::Buy, -1.0)
+        };
+        app.trading
+            .open_ticket(OrderRequest::new("TOKENA", side, 1.0, OrderType::Market));
+        let click = |app: &mut super::super::DemoApp, found: &dyn Fn(&str) -> bool| {
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = demo_frame(app, &ctx, vec![]);
+            }
+            let point = texts
+                .iter()
+                .find(|(text, _)| found(text))
+                .expect("the control")
+                .1
+                .center();
+            let press = [true, false].map(|pressed| egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            demo_frame(app, &ctx, vec![egui::Event::PointerMoved(point)]);
+            demo_frame(app, &ctx, press.to_vec());
+        };
+        click(&mut app, &|text| text == "Trailing");
+        click(&mut app, &|text| text.contains("TOKENA TRAIL 10 ticks"));
+        // The working order's tick size and stop, as the account saves them.
+        let working = |app: &super::super::DemoApp| {
+            let saved = serde_json::to_value(app.paper.save()).unwrap();
+            let order = &saved["working"][0];
+            let ticks = &order["request"]["order_type"]["TrailingStop"]["distance"]["Ticks"];
+            assert_eq!(ticks["ticks"], 10, "{saved}");
+            let tick = ticks["tick_size"].as_f64().unwrap();
+            (tick, order["trailing_stop"].as_f64().expect("the stop"))
+        };
+        let near = |actual: f64, expected: f64, tick: f64| {
+            assert!(
+                (actual - expected).abs() < tick * 1e-6,
+                "{actual} != {expected}"
+            );
+        };
+        let (tick, stop) = working(&app);
+        near(stop, price - s * 10.0 * tick, tick);
+        super::super::tests::finish_feed(&app.live);
+        app.live.set_paused(false);
+        app.live.advance(at);
+        demo_frame(&mut app, &ctx, vec![]);
+        let (_, moved) = working(&app);
+        near(moved, trigger - s * 10.0 * tick, tick);
+    }
+
     #[test]
     fn paper_orders_fill_after_switching_away_and_stay_frozen_during_replay() {
         use egui_charts::model::Watchlist;
