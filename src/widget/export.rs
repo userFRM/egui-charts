@@ -46,7 +46,9 @@ pub struct ImageExportOptions {
     pub size: [u32; 2],
     /// Include the symbol above the chart.
     pub include_title: bool,
-    /// Include the export time in the chart's time zone above the chart.
+    /// Include the export time above the chart, written as the chart writes times, with its
+    /// date format, clock and locale, to the second on every interval, followed by the name of
+    /// the chart's time zone.
     pub include_timestamp: bool,
     /// Draw the symbol watermark and every host watermark set with [`Chart::set_watermark`]
     /// or [`Chart::set_pane_watermark`], as they show on screen, independently of the title and
@@ -261,6 +263,24 @@ impl Chart {
                 .with_timezone(&zone.to_tz().unwrap_or(crate::model::TimezoneId::utc()))
                 .to_rfc3339(),
         }
+    }
+
+    /// The export time above an image: the date and clock with seconds as the chart writes
+    /// times, also on daily bars, in its display zone and followed by the zone's name, as the
+    /// bottom toolbar's clock names it.
+    fn header_time(&self, time: DateTime<Utc>) -> String {
+        let zone = self.display_timezone();
+        let name = match &zone {
+            crate::scales::TimezoneMode::Local => crate::model::TimezoneId::fixed_offset(
+                time.with_timezone(&chrono::Local)
+                    .offset()
+                    .local_minus_utc(),
+            )
+            .unwrap_or_default(),
+            zone => zone.to_tz().unwrap_or_default(),
+        };
+        let clock = self.time_formatter_in(zone).format_crosshair(time, 1);
+        format!("{clock} {name}")
     }
 
     /// Exports all loaded source bars, the close of each visible added series and visible study
@@ -551,7 +571,7 @@ impl Chart {
         image_ctx.set_fonts(ctx.fonts(|fonts| fonts.definitions().clone()));
         let timestamp = options
             .include_timestamp
-            .then(|| self.export_time(Utc::now()));
+            .then(|| self.header_time(Utc::now()));
         let title = options.include_title.then(|| self.symbol().to_owned());
         let mut input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -1638,6 +1658,74 @@ mod tests {
             ..base.clone()
         });
         assert!(!transparent.contains(&bg), "background was retained");
+        // The header writes the export time as the chart writes times, to the second on
+        // daily bars too, in the chart's zone, which it names: #4063.
+        for (zone, offset, use_24_hour, locale, timeframe, date_format, expected) in [
+            (
+                crate::scales::TimezoneMode::Utc,
+                0,
+                true,
+                None,
+                Some(crate::model::Timeframe::Min1),
+                "%d.%m.%Y",
+                "%d.%m.%Y %H:%M:%S UTC",
+            ),
+            (
+                crate::scales::TimezoneMode::Timezone("-03:30".parse().unwrap()),
+                -210,
+                false,
+                None,
+                None,
+                "%d.%m.%Y",
+                "%d.%m.%Y %I:%M:%S %p -03:30",
+            ),
+            (
+                crate::scales::TimezoneMode::Utc,
+                0,
+                true,
+                Some("de"),
+                Some(crate::model::Timeframe::Week1),
+                "%a %d.%m.%Y",
+                "%a %d.%m.%Y %H:%M:%S UTC",
+            ),
+        ] {
+            chart.chart_options.time_scale.timezone = zone;
+            chart.chart_options.time_scale.use_24_hour = use_24_hour;
+            chart.set_locale(locale.map(str::to_owned));
+            chart.timeframe = timeframe;
+            chart.set_date_format(Some(date_format.to_owned()));
+            let before = Utc::now();
+            let header = chart
+                .export_svg(
+                    &ctx,
+                    &ImageExportOptions {
+                        include_timestamp: true,
+                        ..base.clone()
+                    },
+                )
+                .unwrap();
+            let after = Utc::now();
+            // Every second the export may have read, written by chrono in the row's zone.
+            let texts: Vec<_> = (before.timestamp()..=after.timestamp())
+                .map(|second| {
+                    let wall = DateTime::from_timestamp(second, 0).unwrap()
+                        + chrono::Duration::minutes(offset);
+                    #[cfg(feature = "locales")]
+                    if locale.is_some() {
+                        return wall
+                            .format_localized(expected, chrono::Locale::de_DE)
+                            .to_string();
+                    }
+                    wall.format(expected).to_string()
+                })
+                .collect();
+            assert!(
+                texts
+                    .iter()
+                    .any(|text| header.contains(&format!(">{text}</text>"))),
+                "{texts:?}"
+            );
+        }
         let callback = |ui: &mut egui::Ui, _: &mut Chart| {
             ui.painter().add(egui::PaintCallback {
                 rect: ui.max_rect(),
