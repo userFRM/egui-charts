@@ -551,11 +551,15 @@ impl Trading {
                 formatter: self.formatter.as_deref(),
                 tick_size: tick,
             };
-            let order = Order::new(
+            let mut order = Order::new(
                 OrderId::new("projected"),
                 request.clone(),
                 OrderStatus::Working,
             );
+            // Where a trailing stop's stop starts, as the broker would set it now.
+            order.trailing_stop = last
+                .and_then(|last| request.order_type.trail(request.side, None, last))
+                .map(|(_, stop)| stop);
             let lines = ui
                 .push_id("projected_order", |ui| {
                     render_trading_lines(ui, &mapping, [&order], [], &options)
@@ -895,6 +899,26 @@ fn describe(
             (OrderSide::Sell, OrderType::StopLimit { .. }) => {
                 "SELL {quantity} {symbol} stop {stop} limit {limit}"
             }
+            (
+                OrderSide::Buy,
+                OrderType::TrailingStop {
+                    activation: Some(_),
+                    ..
+                },
+            ) => "BUY {quantity} {symbol} trailing stop {distance} from {price}",
+            (
+                OrderSide::Sell,
+                OrderType::TrailingStop {
+                    activation: Some(_),
+                    ..
+                },
+            ) => "SELL {quantity} {symbol} trailing stop {distance} from {price}",
+            (OrderSide::Buy, OrderType::TrailingStop { .. }) => {
+                "BUY {quantity} {symbol} trailing stop {distance}"
+            }
+            (OrderSide::Sell, OrderType::TrailingStop { .. }) => {
+                "SELL {quantity} {symbol} trailing stop {distance}"
+            }
             (OrderSide::Buy, _) => "BUY {quantity} {symbol} at market",
             (OrderSide::Sell, _) => "SELL {quantity} {symbol} at market",
         };
@@ -912,6 +936,19 @@ fn describe(
                     values[1],
                     ("stop", price(stop).as_str()),
                     ("limit", price(limit).as_str()),
+                ],
+            ),
+            OrderType::TrailingStop {
+                distance,
+                activation,
+            } => l10n::format_text(
+                ctx,
+                key,
+                &[
+                    values[0],
+                    values[1],
+                    ("distance", numbers.trail(ctx, distance).as_str()),
+                    ("price", activation.map(price).unwrap_or_default().as_str()),
                 ],
             ),
             _ => l10n::format_text(ctx, key, &values),

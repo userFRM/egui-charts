@@ -113,7 +113,7 @@ impl Eq for LazyTradingDates {}
 /// Daily session provider for an exchange: a day starts at each session open of its trading
 /// hours, in its time zone, so bars outside the hours stay with the session before them.
 /// Without trading hours a day starts at midnight in the time zone.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExchangeSessionProvider {
     time_zone: TimezoneId,
     calendar_zone: Option<TimezoneId>,
@@ -121,6 +121,7 @@ pub struct ExchangeSessionProvider {
     timeframe: Timeframe,
     local_zone: bool,
     /// The trading dates of bars of several days, found on first use.
+    #[serde(skip)]
     trading_dates: LazyTradingDates,
 }
 
