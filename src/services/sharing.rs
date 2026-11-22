@@ -83,8 +83,11 @@ impl ShareOffer {
 
 /// Sharing a layout or watchlist, supplied by a host that has accounts and somewhere to keep
 /// shared documents. The library owns neither: it shows the controls the host offers and reports
-/// the host's answers. It shows shared state and can ask the host to stop sharing. Without a
-/// service the layout menu and the watchlist panel offer no sharing.
+/// the host's answers. It shows shared state and can ask the host to stop sharing. A document
+/// that [`shared`](Self::shared) reports shared, or that has an operation waiting for its answer,
+/// cannot be deleted from the menus: offer [`ShareOffer::revoke`] or [`ShareOffer::switch`] with
+/// it, so the user can stop sharing first. Without a service the layout menu and the watchlist
+/// panel offer no sharing.
 ///
 /// Methods are called on the UI thread and return at once; answer through the [`Reply`] you were
 /// given, from any thread, runtime or browser task. Answer an error, such as

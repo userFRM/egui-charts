@@ -234,9 +234,11 @@ impl LayoutMenu {
         self.request(Request::List);
     }
 
-    /// Offers copy-link and save-a-copy on the current stored layout, as `sharing` reports them.
-    /// A saved copy is read back from the [`Storage`] given to [`set_storage`](Self::set_storage),
-    /// where the host writes it.
+    /// Offers the sharing rows `sharing` reports, such as Copy link, Save a copy or the Share
+    /// layout switch, on the current stored layout. A saved copy is read back from the
+    /// [`Storage`] given to [`set_storage`](Self::set_storage), where the host writes it. Delete
+    /// stays disabled for a layout the service reports shared or that has a sharing request
+    /// waiting for an answer.
     pub fn set_sharing(&mut self, sharing: Arc<dyn Sharing>) {
         self.share.set_service(sharing);
     }
@@ -1051,9 +1053,17 @@ impl LayoutMenu {
                     &[("charts", charts.join(", "))],
                 ));
             }
+            // A deleted layout's link could not be revoked from the menu any more.
+            let kept = self.share.blocks_delete(ShareKind::Layout, &deleting.name);
             let (mut confirm, mut cancel) = (false, false);
             ui.horizontal(|ui| {
-                confirm = ui.button(l10n::text(ui.ctx(), "Delete")).clicked();
+                confirm = ui
+                    .add_enabled(!kept, egui::Button::new(l10n::text(ui.ctx(), "Delete")))
+                    .on_disabled_hover_text(l10n::text(
+                        ui.ctx(),
+                        "Stop sharing the layout before deleting it",
+                    ))
+                    .clicked();
                 cancel = ui.button(l10n::text(ui.ctx(), "Cancel")).clicked();
             });
             if confirm {
@@ -1244,6 +1254,7 @@ impl ListItemContent for MenuRow<'_> {
 mod tests {
     use super::*;
     use crate::data::Reply;
+    use crate::ui::share_controls::tests::Shares;
     use std::collections::BTreeMap;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1282,6 +1293,38 @@ mod tests {
             self.0.lock().unwrap().remove(name);
             reply.send(Ok(()));
         }
+    }
+
+    /// The menu of the current layout `A`, stored in the returned host and shared through
+    /// `shares`, shown once its list was read.
+    fn shared_menu(shares: Arc<Shares>) -> (Arc<Host>, egui_kittest::Harness<'static, LayoutMenu>) {
+        let layout = SavedLayout {
+            mode: crate::widget::ChartLayoutMode::TwoHorizontal,
+            charts: Vec::new(),
+            sizing: None,
+            link_groups: None,
+        };
+        let host = Arc::new(Host::default());
+        host.0
+            .lock()
+            .unwrap()
+            .insert("A".into(), layout.to_json().unwrap());
+        let mut menu = LayoutMenu::new();
+        menu.set_storage(host.clone());
+        menu.set_sharing(shares);
+        menu.curr_layout = Some("A".into());
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(320.0, 600.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, menu: &mut LayoutMenu| {
+                    menu.poll(ui.ctx());
+                    menu.show_menu(ui);
+                },
+                menu,
+            );
+        h.run();
+        (host, h)
     }
 
     #[test]
@@ -1641,6 +1684,50 @@ mod tests {
                 assert_eq!(h.state().0.layouts, ["B"]);
                 assert!(!host.0.lock().unwrap().contains_key("A"));
             }
+        }
+    }
+
+    /// Delete waits, saying why, while the layout is shared through the switch or its link is on
+    /// its way, and is offered again once that ends.
+    #[test]
+    fn deleting_waits_while_the_layout_is_shared_or_its_link_is_pending() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        for switch in [false, true] {
+            let mut offer = crate::services::ShareOffer::new(!switch, false);
+            offer.switch = switch;
+            let shares = Arc::new(Shares {
+                offer,
+                ..Default::default()
+            });
+            let (_, mut h) = shared_menu(shares.clone());
+            let share = if switch { "Share layout" } else { "Copy link" };
+            h.get_by_label(share).click();
+            h.run();
+            h.get_by_label("×").click();
+            h.run();
+            assert!(
+                h.get_by_label("Delete").accesskit_node().is_disabled(),
+                "{share}"
+            );
+            h.get_by_label("Delete").hover();
+            h.run_steps(4);
+            assert!(
+                h.query_by_label("Stop sharing the layout before deleting it")
+                    .is_some(),
+                "{share}"
+            );
+            // Stopping sharing, or the answer to the link, lets the layout go.
+            if switch {
+                h.get_by_label(share).click();
+            } else {
+                let link = shares.link.lock().unwrap().take().unwrap();
+                link.send(Err(FeedError::Other("offline".into())));
+            }
+            h.run();
+            assert!(
+                !h.get_by_label("Delete").accesskit_node().is_disabled(),
+                "{share}"
+            );
         }
     }
 

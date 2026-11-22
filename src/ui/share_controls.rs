@@ -62,12 +62,20 @@ impl ShareControls {
         self.sharing = Some(sharing);
     }
 
-    /// Whether the rows offer Stop sharing for the document `name`: the service offers revoking
-    /// and reports it shared.
-    pub(crate) fn can_stop_sharing(&self, kind: ShareKind, name: &str) -> bool {
+    /// Whether the service reports the document `name` shared.
+    pub(crate) fn shared(&self, kind: ShareKind, name: &str) -> bool {
         self.sharing
             .as_ref()
-            .is_some_and(|sharing| sharing.offers(kind).revoke && sharing.shared(kind, name))
+            .is_some_and(|sharing| sharing.shared(kind, name))
+    }
+
+    /// Whether the document `name` must not be deleted: the service reports it shared, or an
+    /// operation on it waits for the service's answer. Its link would outlive it.
+    pub(crate) fn blocks_delete(&self, kind: ShareKind, name: &str) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|operation| operation.document() == name)
+            || self.shared(kind, name)
     }
 
     /// Takes the host's answer, copying a link to the clipboard. Returns the saved copy's name.
@@ -303,10 +311,39 @@ impl ShareControls {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::data::Reply;
     use crate::services::ShareOffer;
+
+    /// Shares documents through the switch or by link: `share` and `revoke` answer at once and
+    /// change `shared`, and a link waits in `link` for the test to answer.
+    #[derive(Default)]
+    pub(crate) struct Shares {
+        pub(crate) offer: ShareOffer,
+        pub(crate) shared: std::sync::Mutex<std::collections::BTreeSet<String>>,
+        pub(crate) link: std::sync::Mutex<Option<Reply<ShareLink>>>,
+    }
+
+    impl Sharing for Shares {
+        fn offers(&self, _: ShareKind) -> ShareOffer {
+            self.offer
+        }
+        fn shared(&self, _: ShareKind, document: &str) -> bool {
+            self.shared.lock().unwrap().contains(document)
+        }
+        fn share(&self, _: ShareKind, document: &str, _: ShareAccess, reply: Reply<()>) {
+            self.shared.lock().unwrap().insert(document.to_owned());
+            reply.send(Ok(()));
+        }
+        fn revoke(&self, _: ShareKind, document: &str, reply: Reply<()>) {
+            self.shared.lock().unwrap().remove(document);
+            reply.send(Ok(()));
+        }
+        fn link(&self, _: ShareKind, _: &str, reply: Reply<ShareLink>) {
+            *self.link.lock().unwrap() = Some(reply);
+        }
+    }
 
     /// Shares layouts as view-only links that cannot be copied, and rejects watchlists.
     struct Host;

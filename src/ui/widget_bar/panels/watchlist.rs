@@ -614,7 +614,8 @@ impl WatchlistPanel {
     /// [`ShareKind::Watchlist`] by the list's [`Watchlist::id`]. A saved copy holds the list as it
     /// was when Save a copy was chosen, whatever its name or place when the host answers, and is
     /// added under the name the host answers, with an id of its own; like a duplicate, it is not
-    /// starred. [`poll`](Self::poll) receives the answers.
+    /// starred. [`poll`](Self::poll) receives the answers. Delete list stays disabled while the
+    /// service reports the active list shared or a sharing request for it waits for an answer.
     pub fn set_sharing(&mut self, sharing: Arc<dyn Sharing>) {
         self.share.set_service(sharing);
         self.copy_source = None;
@@ -1066,12 +1067,12 @@ impl WatchlistPanel {
                     ui.close();
                 }
                 // A deleted list's link could not be revoked from the panel any more.
-                let stoppable = share.can_stop_sharing(ShareKind::Watchlist, &lists[*active].id);
+                let kept = share.blocks_delete(ShareKind::Watchlist, &lists[*active].id);
                 let mut delete = ui.add_enabled(
-                    flag_filter.is_none() && lists.len() > 1 && !stoppable,
+                    flag_filter.is_none() && lists.len() > 1 && !kept,
                     egui::Button::new(l10n::text(ui.ctx(), "Delete list")),
                 );
-                if stoppable {
+                if kept {
                     delete = delete.on_disabled_hover_text(l10n::text(
                         ui.ctx(),
                         "Stop sharing the list before deleting it",
@@ -3140,6 +3141,72 @@ mod tests {
         h.get_by_label("Renamed").click();
         h.run();
         assert!(!h.get_by_label("Delete list").accesskit_node().is_disabled());
+    }
+
+    /// Delete list waits, saying why, while the list is shared through the switch of a host that
+    /// offers no Stop sharing or its link is on its way, and is offered again once that ends.
+    #[test]
+    fn delete_list_waits_while_the_list_is_shared_or_its_link_is_pending() {
+        use crate::ui::share_controls::tests::Shares;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        for switch in [false, true] {
+            let mut offer = crate::services::ShareOffer::new(!switch, false);
+            offer.switch = switch;
+            let shares = Arc::new(Shares {
+                offer,
+                ..Default::default()
+            });
+            let mut panel = WatchlistPanel::new(vec![
+                Watchlist::from_text("Main", "A"),
+                Watchlist::from_text("Other", "B"),
+            ]);
+            panel.set_sharing(shares.clone());
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(vec2(300.0, 800.0))
+                .build_ui_state(
+                    |ui, panel: &mut WatchlistPanel| {
+                        panel.poll(ui.ctx());
+                        panel.show(ui);
+                    },
+                    panel,
+                );
+            let share = if switch { "Share list" } else { "Copy link" };
+            // Opens the list menu, which holds Delete list.
+            let deletable = |h: &mut Harness<'_, WatchlistPanel>| {
+                h.get_by_label("Main").click();
+                h.run();
+                !h.get_by_label("Delete list").accesskit_node().is_disabled()
+            };
+            h.get_by_label("More").click();
+            h.run();
+            h.get_by_label(share).click();
+            h.run();
+            assert!(!deletable(&mut h), "{share}");
+            h.get_by_label("Delete list").hover();
+            h.run_steps(4);
+            assert!(
+                h.query_by_label("Stop sharing the list before deleting it")
+                    .is_some(),
+                "{share}"
+            );
+            h.key_press(egui::Key::Escape);
+            h.run();
+            // Stopping sharing, or the answer to the link, lets the list go.
+            if switch {
+                h.get_by_label("More").click();
+                h.run();
+                h.get_by_label(share).click();
+            } else {
+                let link = shares.link.lock().unwrap().take().unwrap();
+                link.send(Err(crate::data::FeedError::Other("offline".into())));
+            }
+            h.run();
+            assert!(deletable(&mut h), "{share}");
+        }
     }
 
     /// Equal section titles collapse separately, and rename, move, undo, heading drag and
