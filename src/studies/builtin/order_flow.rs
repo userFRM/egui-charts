@@ -208,7 +208,13 @@ impl OrderFlowStudy {
                             self.values.set_value(2, at, f64::NAN);
                         }
                         if self.delta.is_some() && self.candle_style {
-                            let plot = 1 + usize::from(row[0] < 0.0);
+                            // A zero bar delta sells; an unchanged cumulative total keeps buying.
+                            let down = if self.delta == Some(true) {
+                                row[0] < 0.0
+                            } else {
+                                row[0] <= 0.0
+                            };
+                            let plot = 1 + usize::from(down);
                             self.values.set_value(plot, at, close);
                             self.candles.push(StudyCandle {
                                 bars: at..at + 1,
@@ -503,11 +509,11 @@ impl Indicator for OrderFlowStudy {
             OrderFlowKind::SizeDelta { ranges } => {
                 return ranges
                     .iter()
-                    .map(|[min, max]| {
-                        if *max == f64::MAX {
-                            format!("Delta [{min}, ∞] lots")
+                    .map(|[min, limit]| {
+                        if *limit == f64::MAX {
+                            format!("Delta [{min}, ∞) lots")
                         } else {
-                            format!("Delta [{min}, {max}] lots")
+                            format!("Delta [{min}, {limit}) lots")
                         }
                     })
                     .collect();
@@ -704,17 +710,17 @@ impl Indicator for OrderFlowStudy {
                 let mut inputs: Vec<_> = ranges
                     .iter()
                     .enumerate()
-                    .flat_map(|(i, [min, max])| {
+                    .flat_map(|(i, [min, limit])| {
                         [
                             size(
                                 &format!("min{i}"),
-                                format!("Range {} smallest size", i + 1),
+                                format!("Range {} smallest size (included)", i + 1),
                                 *min,
                             ),
                             size(
-                                &format!("max{i}"),
-                                format!("Range {} largest size", i + 1),
-                                *max,
+                                &format!("limit{i}"),
+                                format!("Range {} size limit (excluded)", i + 1),
+                                *limit,
                             ),
                         ]
                     })
@@ -903,10 +909,14 @@ impl Indicator for OrderFlowStudy {
         }
         match (&mut self.kind, id, value) {
             (OrderFlowKind::SizeDelta { ranges }, id, InputValue::Number(v)) => {
-                let index = id[3..]
+                let (bound, index) = match id.strip_prefix("min") {
+                    Some(index) => (0, index),
+                    None => (1, id.trim_start_matches("limit")),
+                };
+                let index = index
                     .parse::<usize>()
                     .map_err(|_| crate::studies::StudyError::invalid_input(id))?;
-                ranges[index][usize::from(id.starts_with("max"))] = v;
+                ranges[index][bound] = v;
             }
             (OrderFlowKind::FlowSum { bars }, "bars", InputValue::Length(v)) => *bars = v,
             (OrderFlowKind::FilteredCvd { min, .. }, "min", InputValue::Number(v)) => *min = v,
@@ -1064,7 +1074,7 @@ mod tests {
         ]);
         let clock = BarClock::new(Timeframe::Min1);
         // Rows: (level, ask, ask trades, bid, bid trades); footprint (min_delta, max_delta); CVD
-        // [delta, high, low]; Multi-Range Delta over [0, 49], [50, ∞] and [20, 20].
+        // [delta, high, low]; Multi-Range Delta over [0, 50), [50, ∞) and [20, 21).
         #[rustfmt::skip]
         let cases = [
             ("per fill only the single 50-lot sell reaches 50", false, [50.0, f64::MAX],
@@ -1086,7 +1096,7 @@ mod tests {
             let mut studies = [
                 OrderFlowStudy::new(OrderFlowKind::FilteredCvd { min, max }),
                 OrderFlowStudy::new(OrderFlowKind::SizeDelta {
-                    ranges: [[0.0, 49.0], [50.0, f64::MAX], [20.0, 20.0]],
+                    ranges: [[0.0, 50.0], [50.0, f64::MAX], [20.0, 21.0]],
                 }),
             ];
             for study in &mut studies {
@@ -1497,21 +1507,55 @@ mod tests {
         }
     }
 
-    /// Hand sums over the bars filled above. Size ranges include both bounds (the 100 buy
-    /// is in the last), a window over the empty bar is a gap as is the warm-up, and a
-    /// cumulative sum carries over the gap.
+    /// The factory's default ranges count executions of 9.5, 10, 99.5 and 100 lots in one range
+    /// each (#4008). Then hand sums over the bars filled above: a range includes its smallest
+    /// size and excludes its limit (the 100 buy is in the last), a window over the empty bar is
+    /// a gap as is the warm-up, and a cumulative sum carries over the gap.
     #[test]
     fn size_ranges_rolling_sums_and_filtered_cvd_follow_the_same_trades() {
+        use OrderSide::{Buy, Sell};
         let mut data = bars();
+        // The default ranges meet at 10 and 100 lots, so 10 counts only in the second and 100
+        // only in the third, and minute 5 sums to its delta, 9.5 + 99.5 - 5 = 104.
+        let mut defaults = crate::studies::IndicatorFactory::new()
+            .create("Multi-Range Delta")
+            .unwrap();
+        let input = defaults.order_flow_inputs()[0].clone();
+        let clock = BarClock::new(Timeframe::Min1);
+        for (minute, trades) in [
+            (0, &[(9.5, Buy)][..]),
+            (1, &[(10.0, Buy)]),
+            (3, &[(99.5, Buy)]),
+            (4, &[(100.0, Buy)]),
+            (5, &[(9.5, Buy), (99.5, Buy), (5.0, Sell)]),
+        ] {
+            for (second, &(size, side)) in (0..).zip(trades) {
+                let at = start() + TimeDelta::minutes(minute) + TimeDelta::seconds(second);
+                input.push_trade(&clock, &Tick::new(at, 100.0, size, Some(side)));
+            }
+        }
+        defaults.calculate(&data);
+        assert_eq!(
+            format!("{:?}", defaults.values().columns()),
+            format!(
+                "{:?}",
+                [
+                    [9.5, 0.0, NAN, 0.0, 0.0, 4.5],
+                    [0.0, 10.0, NAN, 99.5, 0.0, 99.5],
+                    [0.0, 0.0, NAN, 0.0, 100.0, 0.0],
+                ]
+            )
+        );
+
         let mut study = OrderFlowStudy::new(OrderFlowKind::SizeDelta {
-            ranges: [[0.0, 9.0], [10.0, 99.0], [100.0, f64::MAX]],
+            ranges: [[0.0, 10.0], [10.0, 100.0], [100.0, f64::MAX]],
         });
         assert_eq!(
             study.line_names(),
             [
-                "Delta [0, 9] lots",
-                "Delta [10, 99] lots",
-                "Delta [100, ∞] lots"
+                "Delta [0, 10) lots",
+                "Delta [10, 100) lots",
+                "Delta [100, ∞) lots"
             ]
         );
         fill(&study);
@@ -2204,6 +2248,36 @@ mod tests {
             ));
         }
         assert_eq!(results, [(10_000.0, false, true), (10.0, true, true)]);
+    }
+
+    /// A bar with a buy of 5 and a sell of 5 is a down candle in Execution Delta, as Volume Delta
+    /// paints it, and the next bar's +5 an up candle; the cumulative form keeps an unchanged
+    /// total up (#4009). Hand values: minute 0 runs +5 then 0, so (0, 5, 0, 0); minute 1 opens
+    /// at the total of 0 in both forms, so (0, 5, 0, 5).
+    #[test]
+    fn execution_delta_paints_a_balanced_bar_down_unless_cumulative() {
+        use OrderSide::{Buy, Sell};
+        for (cumulative, balanced) in [(true, "Up"), (false, "Down")] {
+            let mut study = OrderFlowStudy::execution_delta(cumulative);
+            push(&study, 0, &[(5.0, Some(Buy)), (5.0, Some(Sell))]);
+            push(&study, 1, &[(5.0, Some(Buy))]);
+            study.calculate(&bars());
+            let names = study.line_names();
+            let candles: Vec<_> = (study.candles().iter())
+                .map(|c| {
+                    let b = &c.bar;
+                    ([b.open, b.high, b.low, b.close], names[c.plot].as_str())
+                })
+                .collect();
+            assert_eq!(
+                candles,
+                [
+                    ([0.0, 5.0, 0.0, 0.0], balanced),
+                    ([0.0, 5.0, 0.0, 5.0], "Up")
+                ],
+                "cumulative {cumulative}"
+            );
+        }
     }
 
     /// Executions +5, -8, +5 reach 5, -3, 2. A cumulative candle adds the previous
