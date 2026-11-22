@@ -85,7 +85,17 @@ impl ScalesTab {
             ui.end_row();
 
             ui.label(l10n::text(ui.ctx(), "Alert colour"));
-            SymbolTab::color_picker(ui, &mut settings.alerts.color);
+            let mut shown = settings.alerts.color.unwrap_or(settings.chart_alert_color);
+            if SymbolTab::color_picker(ui, &mut shown) {
+                settings.alerts.color = Some(shown);
+            }
+            let mut custom = settings.alerts.color.is_some();
+            if ui
+                .checkbox(&mut custom, l10n::text(ui.ctx(), "Custom"))
+                .changed()
+            {
+                settings.alerts.color = custom.then_some(shown);
+            }
             ui.end_row();
         });
     }

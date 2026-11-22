@@ -428,6 +428,7 @@ mod tests {
                 clock: BarClock::new(Timeframe::Day1),
                 instrument: None,
                 timeframe: Timeframe::Day1,
+                chart: None,
             })
             .collect();
         study.update_data(chart, from, &sources);

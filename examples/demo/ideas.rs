@@ -1,16 +1,23 @@
 //! The demo's ideas: a composer and an in-memory feed for ideas and posted chart images.
 
-use chrono::Utc;
+use std::collections::HashSet;
+
+use chrono::{TimeDelta, Utc};
 use egui_charts::drawings::DrawingToolType;
-use egui_charts::ui::ideas::{Idea, IdeaDraft, IdeaKind, IdeaPage, IdeasAction, IdeasPanel};
+use egui_charts::ui::ideas::{
+    Idea, IdeaDirection, IdeaDraft, IdeaKind, IdeaPage, IdeaRequest, IdeaView, IdeasAction,
+    IdeasPanel,
+};
 use egui_charts::ui::widget_bar::NotificationsAction;
 
 use super::{DemoApp, ExportFormat, SidePanel};
 
-/// Ideas and posts published in this session, newest first.
+/// Ideas and posts published in this session, newest first, then two seeded examples.
 pub(super) struct DemoIdeas {
     pub(super) panel: IdeasPanel,
     feed: Vec<Idea>,
+    /// The entries the user commented on.
+    commented: HashSet<String>,
     next: u64,
 }
 
@@ -19,28 +26,86 @@ impl DemoIdeas {
         let mut panel = IdeasPanel::new();
         panel.set_publishing(true);
         panel.set_browsing(true);
-        Self {
+        panel.set_reactions(true);
+        let now = Utc::now();
+        let mut idea = Idea::new(
+            "demo-seed-idea",
+            IdeaKind::Idea,
+            "Price closed above the three-week range on rising volume.",
+            "Demo analyst",
+            now - TimeDelta::hours(3),
+        );
+        idea.title = "Range breakout".into();
+        idea.direction = IdeaDirection::Long;
+        idea.tags = vec!["breakout".into(), "INDEXA".into()];
+        idea.symbol = "INDEXA".into();
+        idea.interval = "1D".into();
+        let mut video = Idea::new(
+            "demo-seed-video",
+            IdeaKind::Video,
+            "A walkthrough of the first hour of the session.",
+            "Demo analyst",
+            now - TimeDelta::hours(5),
+        );
+        video.title = "Reading the open".into();
+        video.symbol = "INDEXA".into();
+        video.interval = "5min".into();
+        let mut ideas = Self {
             panel,
-            feed: Vec::new(),
+            feed: vec![idea, video],
+            commented: HashSet::new(),
             next: 1,
-        }
+        };
+        ideas.panel.add_page(ideas.page(IdeaView::All), true);
+        ideas
     }
 
     fn add(&mut self, idea: Idea) {
         self.feed.insert(0, idea);
+        self.panel.add_page(self.page(self.panel.view()), true);
+    }
+
+    /// The whole feed of `view`, as one page.
+    fn page(&self, view: IdeaView) -> IdeaPage {
         let mut page = IdeaPage::default();
-        page.items = self.feed.clone();
-        self.panel.add_page(page, true);
+        page.items = self
+            .feed
+            .iter()
+            .filter(|idea| match view {
+                IdeaView::Liked => idea.liked,
+                IdeaView::Commented => self.commented.contains(&idea.id),
+                IdeaView::Followed => idea.followed,
+                _ => true,
+            })
+            .cloned()
+            .collect();
+        page.view = view;
+        page
+    }
+
+    /// Applies `change` to the entry `id` and answers `request` at once.
+    fn react(&mut self, id: &str, request: IdeaRequest, change: impl FnOnce(&mut Idea)) {
+        match self.feed.iter_mut().find(|idea| idea.id == id) {
+            Some(idea) => {
+                change(idea);
+                let idea = idea.clone();
+                self.panel.request_succeeded(request, idea);
+            }
+            None => self.panel.request_failed(id, request, "Unknown idea"),
+        }
     }
 }
 
 impl DemoApp {
     fn publish_idea(&mut self, ctx: &egui::Context, draft: &IdeaDraft) {
         let id = format!("demo-{}", self.ideas.next);
-        let mut idea = Idea::new(&id, IdeaKind::Idea, &draft.body, "You", Utc::now());
+        let mut idea = Idea::new(&id, draft.kind, &draft.body, "You", Utc::now());
         idea.title = draft.title.clone();
         idea.symbol = draft.symbol.clone();
         idea.interval = draft.interval.clone();
+        idea.direction = draft.direction;
+        idea.tags = draft.tags.clone();
+        idea.public = draft.public;
         if draft.attach_chart {
             match self.export_image_bytes(ctx, &Default::default(), ExportFormat::Png, false) {
                 Ok(png) => {
@@ -57,8 +122,12 @@ impl DemoApp {
         self.ideas.next += 1;
         self.ideas.add(idea);
         self.ideas.panel.publish_succeeded(&id, None);
-        self.notification_host
-            .notify_post(format!("Idea published: {}", draft.title), &id);
+        let title = if draft.kind == IdeaKind::ShortPost {
+            "Post published".to_owned()
+        } else {
+            format!("Idea published: {}", draft.title)
+        };
+        self.notification_host.notify_post(title, &id);
     }
 
     pub(super) fn post_image(
@@ -105,6 +174,32 @@ impl DemoApp {
                 .chart
                 .drawings_mut()
                 .start_post_insertion(DrawingToolType::Idea, link),
+            IdeasAction::Like { id, like } => {
+                self.ideas.react(&id, IdeaRequest::Like, |idea| {
+                    if idea.liked != like {
+                        idea.liked = like;
+                        idea.likes = if like {
+                            idea.likes.saturating_add(1)
+                        } else {
+                            idea.likes.saturating_sub(1)
+                        };
+                    }
+                });
+            }
+            IdeasAction::Comment { id, .. } => {
+                self.ideas.commented.insert(id.clone());
+                self.ideas.react(&id, IdeaRequest::Comment, |idea| {
+                    idea.comments = idea.comments.saturating_add(1);
+                });
+            }
+            IdeasAction::Follow { id, follow } => {
+                self.ideas
+                    .react(&id, IdeaRequest::Follow, |idea| idea.followed = follow);
+            }
+            IdeasAction::ShowView(view) => {
+                let page = self.ideas.page(view);
+                self.ideas.panel.add_page(page, true);
+            }
             _ => {}
         }
     }
@@ -140,6 +235,12 @@ mod tests {
         assert!(app.open_panel == Some(SidePanel::Ideas));
         app.handle_top_toolbar(&ctx, TopToolbarAction::Publish);
         assert!(app.open_panel.is_none());
+        // The snapshot shortcut runs Copy link, the entry the snapshot menu shows its keys on.
+        app.handle_shortcut_action(&ctx, egui_charts::config::KeyboardAction::Snapshot);
+        assert!(matches!(
+            app.screenshot_requested,
+            Some((ScreenshotTarget::Post { copy_link: true }, ..))
+        ));
         for (action, expected) in [
             (TopToolbarAction::PostImage, false),
             (TopToolbarAction::CopyImageLink, true),
@@ -169,6 +270,8 @@ mod tests {
         let attached = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Chart attached")));
         output.drop_without_applying_deltas();
         assert!(attached);
+        // The Short posts tab publishes a short post; the Ideas tab publishes an idea.
+        app.ideas.panel.set_feed_kind(IdeaKind::Idea);
         app.publish_idea(&ctx, &app.ideas.panel.draft().clone());
         assert_eq!(app.ideas.feed[0].kind, IdeaKind::Idea);
         let id = app.ideas.feed[0].id.clone();
@@ -196,5 +299,95 @@ mod tests {
         draft.attach_chart = false;
         app.publish_idea(&ctx, &draft);
         assert!(app.ideas.feed[0].attachment.is_none());
+    }
+
+    /// Guards the demo's answers to the feed controls: a like and the Liked view, a short post
+    /// without a title, an idea's direction and tags, and the seeded video on its own tab.
+    #[test]
+    fn social_controls_reach_the_demo_feed() {
+        use egui::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let ctx = egui::Context::default();
+        let app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(420.0, 1600.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, app: &mut Box<DemoApp>| {
+                    let symbol = app.state.symbol.clone();
+                    let interval = app.state.timeframe.as_str();
+                    app.ideas.panel.set_context(symbol, interval);
+                    let action = app.ideas.panel.show(ui);
+                    app.handle_ideas(ui.ctx(), action);
+                },
+                app,
+            );
+        h.run();
+        h.get_by_label("Range breakout");
+        h.get_by_role_and_label(Role::Button, "Like").click();
+        h.run();
+        h.get_by_role_and_label(Role::Button, "Unlike");
+        h.get_by_label("Likes: 1 \u{b7} Comments: 0");
+        h.get_by_role_and_label(Role::Button, "Liked").click();
+        h.run();
+        h.get_by_label("Range breakout");
+        h.get_by_role_and_label(Role::Button, "Videos").click();
+        h.run();
+        assert!(h.query_by_label("Reading the open").is_none());
+        h.get_by_role_and_label(Role::Button, "All").click();
+        h.run();
+        h.get_by_label("Reading the open");
+
+        let body = |h: &mut Harness<'_, Box<DemoApp>>, text: &str| {
+            h.get_by(|node| node.placeholder() == Some("What is your idea?"))
+                .focus();
+            h.run();
+            h.get_by(|node| node.placeholder() == Some("What is your idea?"))
+                .type_text(text);
+            h.run();
+        };
+        h.get_by_role_and_label(Role::Button, "Short posts").click();
+        h.run();
+        h.get_by_label("Attach chart image").click();
+        body(&mut h, "Quick note");
+        h.get_by_role_and_label(Role::Button, "Publish").click();
+        h.run();
+        let post = &h.state().ideas.feed[0];
+        assert_eq!(
+            (post.kind, post.title.as_str(), post.body.as_str()),
+            (IdeaKind::ShortPost, "", "Quick note")
+        );
+
+        h.get_by_role_and_label(Role::Button, "Ideas").click();
+        h.run();
+        h.get_by(|node| node.placeholder() == Some("Title")).focus();
+        h.run();
+        h.get_by(|node| node.placeholder() == Some("Title"))
+            .type_text("Higher low");
+        body(&mut h, "Buyers stepped in again.");
+        h.get_by_role_and_label(Role::Button, "Long").click();
+        h.get_by(|node| node.placeholder() == Some("Tags, separated by commas"))
+            .focus();
+        h.run();
+        h.get_by(|node| node.placeholder() == Some("Tags, separated by commas"))
+            .type_text("trend");
+        h.run();
+        h.get_by_role_and_label(Role::Button, "Publish").click();
+        h.run();
+        let idea = &h.state().ideas.feed[0];
+        assert_eq!(
+            (
+                idea.kind,
+                idea.title.as_str(),
+                idea.direction,
+                idea.tags.clone()
+            ),
+            (
+                IdeaKind::Idea,
+                "Higher low",
+                IdeaDirection::Long,
+                vec!["trend".to_owned()]
+            )
+        );
     }
 }
