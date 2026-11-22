@@ -491,19 +491,19 @@ impl Run {
         let helpers: usize = self
             .sites
             .values()
-            .map(|site| std::mem::size_of::<CallSite>() + site.kernel.bytes())
+            .map(|site| std::mem::size_of::<CallSite>() + site.kernel.bytes(len))
             .sum();
         len * (std::mem::size_of::<Bar>() + columns * 8) + 2 * helpers
     }
 
     /// Where the declaration or call site holding the most memory is.
     fn largest(&self) -> Span {
-        let len = self.columns.bars.len() * 8;
-        let series = self.series_spans.first().map(|span| (len, *span));
+        let len = self.columns.bars.len();
+        let series = self.series_spans.first().map(|span| (len * 8, *span));
         let helper = self
             .sites
             .iter()
-            .map(|((span, _), site)| (site.kernel.bytes(), *span))
+            .map(|((span, _), site)| (site.kernel.bytes(len), *span))
             .max_by_key(|(bytes, _)| *bytes);
         match (series, helper) {
             (Some(series), Some(helper)) if helper.0 > series.0 => helper.1,

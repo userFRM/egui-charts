@@ -50,13 +50,14 @@ pub(crate) enum WindowKind {
 
 impl Kernel {
     /// The kernel of helper `name` with length `length`, which is at least 0; lengths of 0
-    /// count as 1 except for `change`, as in `helpers`.
+    /// count as 1 except for `change`, as in `helpers`. Its window grows with the bars it is
+    /// fed, so a length beyond the bars costs only the bars.
     pub fn new(name: &str, length: usize) -> Self {
         let period = length.max(1);
         let window = |kind| Self::Window {
             kind,
             period,
-            window: VecDeque::with_capacity(period),
+            window: VecDeque::new(),
         };
         let average = |seed, alpha| Self::Average {
             seed,
@@ -81,7 +82,7 @@ impl Kernel {
             "lowest" => rolling(false),
             "change" => Self::Change {
                 period: length,
-                window: VecDeque::with_capacity(length + 1),
+                window: VecDeque::new(),
             },
             "crossover" => Self::Cross {
                 direction: Ordering::Greater,
@@ -95,11 +96,13 @@ impl Kernel {
         }
     }
 
-    /// The bytes the kernel holds beyond its own size.
-    pub fn bytes(&self) -> usize {
-        match self {
-            Self::Window { window, .. } | Self::Change { window, .. } => window.capacity() * 8,
-            Self::Rolling { window, .. } => window.capacity() * 16,
+    /// The bytes the kernel holds beyond its own size once fed `bars` bars: its window keeps
+    /// at most one value a bar.
+    pub fn bytes(&self, bars: usize) -> usize {
+        match *self {
+            Self::Window { period, .. } => period.min(bars) * 8,
+            Self::Change { period, .. } => period.saturating_add(1).min(bars) * 8,
+            Self::Rolling { period, .. } => period.min(bars) * 16,
             Self::Average { .. } | Self::Cross { .. } => 0,
         }
     }
@@ -187,14 +190,14 @@ impl Kernel {
                 window.front().map_or(empty, |&(_, best)| best)
             }
             Self::Change { period, window } => {
-                window.push_back(x);
-                if window.len() > *period + 1 {
+                // Keeps the last `period + 1` inputs; `period + 1` itself overflows for the
+                // longest lengths on 32-bit targets.
+                if window.len() > *period {
                     window.pop_front();
                 }
+                window.push_back(x);
                 match window.front() {
-                    Some(&old)
-                        if window.len() == *period + 1 && x.is_finite() && old.is_finite() =>
-                    {
+                    Some(&old) if window.len() > *period && x.is_finite() && old.is_finite() => {
                         x - old
                     }
                     _ => f64::NAN,

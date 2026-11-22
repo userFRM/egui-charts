@@ -99,7 +99,9 @@ fn restated_studies_match_native_bar_for_bar() {
             // Fails if the optimizer folds an input's default into the program.
             (relative_strength.to_owned(), Some(5), rsi(5, &fixture)),
         ];
-        for n in [1, 2, 14] {
+        // The last length is far beyond the bars: a window allocated by its length up front
+        // aborts the process.
+        for n in [1, 2, 14, 1e12 as usize] {
             for (name, expected) in [
                 ("sma", helpers::sma(&closes, n)),
                 ("ema", helpers::ema(&closes, n)),
@@ -393,24 +395,34 @@ fn full_recompute_limit_stops_long_runs() {
     }
 }
 
-/// The memory cap counts series buffers and stops a script whose buffers pass it.
+/// The memory cap counts series buffers and helper windows, and stops a script whose buffers
+/// pass it at the declaration or call holding the most.
 #[test]
 fn memory_cap_stops_scripts_whose_buffers_pass_it() {
     let mut source: String = (0..64).map(|i| format!("series s{i} = close;\n")).collect();
     source += "plot(\"x\", s0);";
     let fixture = bars(100_000, 6);
-    let mut capped = limited(
-        &source,
-        Limits {
-            memory: 16 << 20,
-            ..Limits::default()
-        },
-    )
-    .study();
-    capped.calculate(&fixture);
-    let message = stopped(settle(&mut capped, &fixture));
-    assert!(message.contains("memory limit"), "{message}");
-    assert!(message.contains("at line"), "{message}");
+    // 100 windows of 1,000 values, counted when created; fails if a window counts only the
+    // values it holds so far.
+    let windows = "let s = 0.0;\nfor i in 0..100 { s += sma(close, 1000); }\nplot(\"x\", s);";
+    for (script, fixture, mib, line) in [
+        (source.as_str(), &fixture[..], 16, 1),
+        (windows, &fixture[..1000], 1, 2),
+    ] {
+        let mut capped = limited(
+            script,
+            Limits {
+                memory: mib << 20,
+                ..Limits::default()
+            },
+        )
+        .study();
+        capped.calculate(fixture);
+        assert_eq!(
+            stopped(settle(&mut capped, fixture)),
+            format!("memory limit of {mib} MiB reached at line {line}")
+        );
+    }
     // The default memory limit, and no time limit a slow or busy machine could reach.
     let mut study = limited(
         &source,
