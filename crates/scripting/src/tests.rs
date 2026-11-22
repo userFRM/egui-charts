@@ -398,6 +398,13 @@ fn run_errors_keep_the_bars_before_them() {
             1000,
             "Size of object map",
         ),
+        // The same in one bar: the count of the running values holds a local map to the limit.
+        (
+            "let m = #{}; let i = 0; loop { m[\"k\" + i] = 1; i += 1; } plot(\"x\", 1.0);",
+            0,
+            0,
+            "Size of object map",
+        ),
     ] {
         let script = compile(source);
         let error = script.check(&fixture).unwrap_err();
@@ -508,8 +515,10 @@ fn full_recompute_limit_stops_long_runs() {
     }
 }
 
-/// The memory cap counts series buffers, helper windows and the values states keep, and stops
-/// a script whose buffers pass it at the declaration or call holding the most.
+/// The memory cap counts series buffers, helper windows, the values states keep and the values
+/// a bar holds while it runs at every call level, and stops a script whose buffers pass it at the
+/// declaration or call holding the most, or at the line running when the bar's own values hold
+/// more.
 #[test]
 fn memory_cap_stops_scripts_whose_buffers_pass_it() {
     let mut source: String = (0..64).map(|i| format!("series s{i} = close;\n")).collect();
@@ -521,10 +530,30 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
     // A state map that gains a key of 9,000 bytes on every bar.
     let kept = "state m = 0;\nif bar_index == 0 { m = #{}; }\nlet k = \"x\"; k.pad(9000, \"y\");\n\
                 let i = bar_index * 1;\nm[k + i] = 1;\nplot(\"x\", close);";
+    // A state whose arrays keep their room after `clear`, 144 KB more on every bar.
+    let room = "state s = 0;\nstate n = 0;\nif n == 0 { s = []; s.pad(1000, []); }\n\
+                s[n].pad(9000, 0);\ns[n].clear();\nn += 1;\nplot(\"x\", s.len());";
+    // The same in one bar, held by a local array.
+    let bar = "let s = []; s.pad(1000, []);\n\
+               for j in 0..1000 { s[j].pad(9000, 0); s[j].clear(); }\nplot(\"x\", s.len());";
+    // Strings cut short keep their room too, 8 KB each.
+    let cut = "let v = [];\n\
+               for j in 0..400 { let t = \"x\"; t.pad(8000, \"y\"); t.truncate(24); v.push(t); }\n\
+               plot(\"x\", v.len());";
+    // 4 MB at each call level, below the limit at each and above it from the third on; a stop
+    // inside a function is reported at the call the bar is running.
+    let levels = "fn hold(n) {\n\
+                  let v = []; v.pad(256, []); for j in 0..256 { v[j].pad(1000, 0); v[j].clear(); }\n\
+                  if n > 0 { hold(n - 1) + v.len() } else { v.len() }\n\
+                  }\nplot(\"x\", hold(8));";
     for (script, fixture, mib, line) in [
         (source.as_str(), &fixture[..], 16, 1),
         (windows, &fixture[..1000], 1, 2),
         (kept, &fixture[..1000], 1, 1),
+        (room, &fixture[..300], 64, 1),
+        (bar, &fixture[..1], 16, 2),
+        (cut, &fixture[..1], 2, 2),
+        (levels, &fixture[..1], 8, 5),
     ] {
         let mut capped = limited(
             script,

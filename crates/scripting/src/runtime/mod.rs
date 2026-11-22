@@ -74,6 +74,15 @@ pub(crate) struct Run {
     pub clock: Clock,
     /// The operations run so far.
     operations: u64,
+    /// Whether the values of the running scope are due to be counted, once per clock read.
+    due: bool,
+    /// The bytes the values of each call level's scope held at its last count on this bar, and
+    /// those of them outside the states, the running level last. A caller's scope is out of
+    /// reach while it waits, and unchanged, so its last count stands for it.
+    levels: Vec<(usize, usize)>,
+    /// The bytes the values of the running scope outside the states held when their count
+    /// stopped the run, for its report.
+    running: usize,
     /// The limit that stopped the run, set by the checks.
     pub stop: Option<Stop>,
     cancel: Option<Arc<AtomicBool>>,
@@ -101,6 +110,30 @@ impl Run {
                 .clock
                 .check()
                 .or_else(|| self.cancelled().then_some(Stop::Cancelled));
+            self.due = self.stop.is_none();
+        }
+        self.stop.is_some()
+    }
+
+    /// Whether the front end is to count the values of the scope running at call level `level`
+    /// now, which it does once after each clock read. The counts of deeper levels, whose calls
+    /// have returned, are dropped.
+    pub fn count_due(&mut self, level: usize) -> bool {
+        self.levels.truncate(level + 1);
+        std::mem::take(&mut self.due)
+    }
+
+    /// The count of the values of the scope running at call level `level`, `bytes` in all,
+    /// `outside` of them outside the states: a stop at the memory limit when the study holds
+    /// more with them and the last counts of its callers' scopes in place of the values kept
+    /// after the last bar, which the snapshot's copy may still hold.
+    pub fn count(&mut self, level: usize, bytes: usize, outside: usize) -> bool {
+        self.levels.resize(level, (0, 0));
+        self.levels.push((bytes, outside));
+        let bytes = self.levels.iter().map(|(bytes, _)| bytes).sum();
+        if self.stop.is_none() && self.holding(bytes) > self.clock.limits.memory {
+            self.stop = Some(Stop::Memory);
+            self.running = self.levels.iter().map(|(_, outside)| outside).sum();
         }
         self.stop.is_some()
     }
@@ -122,6 +155,7 @@ impl Run {
         self.bar = bar;
         self.row.fill(f64::NAN);
         self.occurrences.clear();
+        self.levels.clear();
         self.clock.next_bar();
         for column in &mut self.columns.declared {
             column.push(f64::NAN);
@@ -282,6 +316,9 @@ impl<P: Program> RunState<P> {
             occurrences: HashMap::new(),
             clock: Clock::start(limits),
             operations: 0,
+            due: false,
+            levels: Vec::new(),
+            running: 0,
             stop: None,
             cancel,
             series_spans,
@@ -353,6 +390,7 @@ impl<P: Program> RunState<P> {
         self.run.sites_counted = self.run.sites.len();
         self.run.clock = Clock::start(self.run.clock.limits);
         self.run.stop = None;
+        self.run.running = 0;
         self.progress.store(0f32.to_bits(), Ordering::Relaxed);
         self.flight = Some(Flight {
             start,
@@ -433,7 +471,7 @@ impl<P: Program> RunState<P> {
         flight.took += began.elapsed();
         if let Some((limit, span, bar)) = stop {
             let span = if limit == Stop::Memory {
-                self.run.largest()
+                self.run.largest(span)
             } else {
                 span
             };
@@ -497,6 +535,9 @@ impl Run {
             occurrences: HashMap::new(),
             clock: Clock::start(Limits::default()),
             operations: 0,
+            due: false,
+            levels: Vec::new(),
+            running: 0,
             stop: None,
             cancel: None,
             series_spans: Arc::from(Vec::new()),
@@ -508,6 +549,12 @@ impl Run {
     /// column, the declared series, the plot columns, the helpers and the values kept between
     /// bars, the last two again for the snapshot's copy.
     fn bytes(&self) -> usize {
+        self.holding(self.kept.iter().map(|(bytes, _)| bytes).sum())
+    }
+
+    /// [`bytes`](Self::bytes) with `values` bytes in the values a bar runs on in place of the
+    /// kept ones, which the snapshot's copy may still hold.
+    fn holding(&self, values: usize) -> usize {
         let len = self.columns.bars.len();
         let columns = usize::from(self.columns.fed.is_some())
             + self.spec.series.len()
@@ -518,21 +565,25 @@ impl Run {
             .map(|site| std::mem::size_of::<CallSite>() + site.kernel.bytes(len))
             .sum();
         let kept: usize = self.kept.iter().map(|(bytes, _)| bytes).sum();
-        len * (std::mem::size_of::<Bar>() + columns * 8) + 2 * (helpers + kept)
+        len * (std::mem::size_of::<Bar>() + columns * 8) + 2 * helpers + kept + values
     }
 
-    /// Where the declaration or call site holding the most memory is, the first of equals.
-    fn largest(&self) -> Span {
+    /// Where the declaration or call site holding the most memory is, the first of equals, or
+    /// `running`, where the bar was when the count of its running values stopped it, if those
+    /// held more.
+    fn largest(&self, running: Span) -> Span {
         let len = self.columns.bars.len();
         let series = self.series_spans.first().map(|span| (len * 8, *span));
         let helpers = self
             .sites
             .iter()
             .map(|((span, _), site)| (site.kernel.bytes(len), *span));
+        let values = (self.running > 0).then_some((self.running, running));
         series
             .into_iter()
             .chain(helpers)
             .chain(self.kept.iter().copied())
+            .chain(values)
             .reduce(|largest, next| if next.0 > largest.0 { next } else { largest })
             .map_or(Span::default(), |(_, span)| span)
     }

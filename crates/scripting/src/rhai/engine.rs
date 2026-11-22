@@ -199,6 +199,10 @@ pub(crate) fn engine() -> Engine {
             .unwrap_or(false)
             .then_some(::rhai::Dynamic::UNIT)
     });
+    // The values of the running scope are counted at a variable read, where they are in reach.
+    // Rhai marks `on_var` as an interface that may change, through a deprecation note.
+    #[allow(deprecated)]
+    engine.on_var(|_, _, context| super::count(&context).map(|()| None));
 
     engine.register_type_with_name::<Handle>("series");
     binary!(series engine, "+", |a: f64, b: f64| a + b);
