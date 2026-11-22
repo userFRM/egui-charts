@@ -439,8 +439,8 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
     ));
 }
 
-/// A stopped run keeps the previous output, and the study runs again on an input change, not on
-/// a tick.
+/// A stopped run keeps the previous output, and the study runs again on an input change, one made
+/// while the run was stopping included, not on a tick.
 #[test]
 fn stopped_runs_keep_the_previous_output_until_inputs_change() {
     let script = limited(
@@ -483,6 +483,17 @@ fn stopped_runs_keep_the_previous_output_until_inputs_change() {
         Some(Calculation::Done(_))
     ));
     assert!(same(study.values().line(0), &differences(&fixture)));
+
+    // A change made while a run that stops is in flight, or as its stop arrives, runs once it
+    // stops, as typing a length in the settings dialog passes through values that stop.
+    study.set_input("slow", InputValue::Toggle(true)).unwrap();
+    study.update(&fixture, 0);
+    study.set_input("slow", InputValue::Toggle(false)).unwrap();
+    study.update(&fixture, 0);
+    assert!(matches!(
+        settle(&mut study, &fixture),
+        Some(Calculation::Done(_))
+    ));
 }
 
 /// History reads reach the first loaded bar, with no lookback limit.

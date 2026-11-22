@@ -190,7 +190,6 @@ impl ScriptState {
             Err(error) => {
                 // The run keeps nothing, so the next one starts from bar 0.
                 self.reset = true;
-                self.changed = None;
                 let mut message = error.message.clone();
                 if error.line > 0 {
                     message += &format!(" at line {}", error.line);
@@ -231,14 +230,15 @@ impl Resume for ScriptState {
                 Poll::Running(done) => return Calculation::Running(done),
                 Poll::Done(outcome) => {
                     let calculation = self.install(outcome, values);
-                    if self.changed.is_none() || matches!(calculation, Calculation::Stopped(_)) {
+                    if self.changed.is_none() {
                         return calculation;
                     }
                 }
             }
         }
         // A stopped study runs again only when its inputs change or its bars change from the
-        // first one on, not on every tick.
+        // first one on, not on every tick. Such a change recorded while the stopped run was in
+        // flight starts its run in this call, since the chart stops asking once a study stops.
         if let Some(Calculation::Stopped(message)) = &self.last
             && !inputs_changed
             && self.changed != Some(0)
