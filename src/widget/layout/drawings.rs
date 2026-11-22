@@ -4585,17 +4585,32 @@ mod tests {
         settle(&mut charts);
         assert_eq!(prices(&charts), [vec![104.0], vec![104.0]]);
         place(&mut charts[0], 108.0);
+        place(&mut charts[0], 110.0);
         settle(&mut charts);
-        assert_eq!(prices(&charts), [vec![104.0, 108.0], vec![104.0]]);
+        for (price, folder, scope) in [
+            (104.0, "Notes", FolderSync::AllLayouts),
+            (108.0, "Notes (2)", FolderSync::Chart),
+            (110.0, "Notes (2)", FolderSync::Chart),
+        ] {
+            let line = charts[0]
+                .drawings()
+                .drawings
+                .iter()
+                .find(|d| d.chart_points[0].price == price)
+                .unwrap();
+            assert_eq!(line.folder, [folder], "line at {price}");
+            assert_eq!(line.folder_sync_mode(), Some(scope), "line at {price}");
+        }
+        assert_eq!(prices(&charts)[1], [104.0]);
         let shared = charts[1].drawings().drawings[0].id;
         charts[1].user_action(|chart| chart.drawings_mut().delete_drawing(shared));
         settle(&mut charts);
-        assert_eq!(prices(&charts), [vec![108.0], vec![]]);
+        assert_eq!(prices(&charts), [vec![108.0, 110.0], vec![]]);
 
         // Same symbol, no opt-in: placement on the other chart still goes to both.
         place(&mut charts[1], 102.0);
         settle(&mut charts);
-        assert_eq!(prices(&charts), [vec![102.0, 108.0], vec![102.0]]);
+        assert_eq!(prices(&charts), [vec![102.0, 108.0, 110.0], vec![102.0]]);
     }
 
     /// Guards #3436: with drawing storage, a drawing kept on one chart shows on that chart only,
