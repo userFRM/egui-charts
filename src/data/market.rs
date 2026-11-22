@@ -260,7 +260,8 @@ impl CalendarEvent {
     }
 }
 
-/// A column the screener shows, filters and sorts by.
+/// A column the screener shows, filters and sorts by. Its [`kind`](Self::kind) decides the
+/// conditions a filter on it offers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ScreenerColumn {
@@ -268,16 +269,50 @@ pub struct ScreenerColumn {
     pub id: String,
     /// The heading, such as `"Chg %"`.
     pub title: String,
+    /// What the column holds; numbers unless set.
+    pub kind: ScreenerColumnKind,
 }
 
 impl ScreenerColumn {
-    /// The column `id` headed `title`.
+    /// The number column `id` headed `title`.
     pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             title: title.into(),
+            kind: ScreenerColumnKind::Number,
         }
     }
+
+    /// The text column `id` headed `title`, filtered by the `values` the feed uses.
+    ///
+    /// ```
+    /// use egui_charts::data::{ScreenerColumn, ScreenerColumnKind};
+    ///
+    /// let column = ScreenerColumn::text("exchange", "Exchange", ["NYSE".into(), "NASDAQ".into()]);
+    /// assert_eq!(column.kind, ScreenerColumnKind::Text(vec!["NYSE".into(), "NASDAQ".into()]));
+    /// ```
+    pub fn text(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        values: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self {
+            kind: ScreenerColumnKind::Text(values.into_iter().collect()),
+            ..Self::new(id, title)
+        }
+    }
+}
+
+/// What a screener column holds, which decides the conditions its filters offer.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum ScreenerColumnKind {
+    /// Numbers, filtered above, below or between values.
+    #[default]
+    Number,
+    /// Text, filtered as one of or none of these values, in the values the feed uses, such as
+    /// exchange codes or sectors. The user picks from them in the order given.
+    Text(Vec<String>),
 }
 
 /// A named set of columns the user switches between, such as `"Overview"` or `"Performance"`.
@@ -321,14 +356,24 @@ impl ScreenerUniverse {
     }
 }
 
-/// How a screener filter compares a column's value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// What a screener filter requires of a column's value.
+///
+/// Saved screens keep conditions as `"op"` and `"value"`, so screens saved with only `Above` and
+/// `Below` read the same as before.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", content = "value")]
 #[non_exhaustive]
-pub enum ScreenerOp {
-    /// Greater than the filter's value.
-    Above,
-    /// Less than the filter's value.
-    Below,
+pub enum ScreenerCondition {
+    /// A number greater than this one.
+    Above(f64),
+    /// A number less than this one.
+    Below(f64),
+    /// A number from the first to the second, both included. The panel sends the smaller first.
+    Between(f64, f64),
+    /// Text equal to one of these values.
+    Is(Vec<String>),
+    /// Text equal to none of these values.
+    IsNot(Vec<String>),
 }
 
 /// One condition every row must meet.
@@ -337,26 +382,24 @@ pub enum ScreenerOp {
 pub struct ScreenerFilter {
     /// The [`ScreenerColumn::id`] compared.
     pub column: String,
-    /// Comparison applied to the selected column.
-    pub op: ScreenerOp,
-    /// Comparison threshold.
-    pub value: f64,
+    /// What the column's value must meet.
+    #[serde(flatten)]
+    pub condition: ScreenerCondition,
 }
 
 impl ScreenerFilter {
-    /// Rows whose `column` compares to `value` as `op` says.
+    /// Rows whose `column` meets `condition`.
     ///
     /// ```
-    /// use egui_charts::data::{ScreenerFilter, ScreenerOp};
+    /// use egui_charts::data::{ScreenerCondition, ScreenerFilter};
     ///
-    /// let filter = ScreenerFilter::new("price", ScreenerOp::Above, 10.0);
-    /// assert_eq!(filter.column, "price");
+    /// let filter = ScreenerFilter::new("exchange", ScreenerCondition::Is(vec!["NYSE".into()]));
+    /// assert_eq!(filter.column, "exchange");
     /// ```
-    pub fn new(column: impl Into<String>, op: ScreenerOp, value: f64) -> Self {
+    pub fn new(column: impl Into<String>, condition: ScreenerCondition) -> Self {
         Self {
             column: column.into(),
-            op,
-            value,
+            condition,
         }
     }
 }
@@ -392,11 +435,11 @@ impl ScreenerQuery {
     /// answers, and the other fields to describe, filter, sort and page the screen.
     ///
     /// ```
-    /// use egui_charts::data::{ScreenerFilter, ScreenerOp, ScreenerQuery};
+    /// use egui_charts::data::{ScreenerCondition, ScreenerFilter, ScreenerQuery};
     ///
     /// let mut query = ScreenerQuery::new(200);
     /// query.columns = vec!["price".into(), "change_percent".into()];
-    /// query.filters.push(ScreenerFilter::new("price", ScreenerOp::Above, 10.0));
+    /// query.filters.push(ScreenerFilter::new("price", ScreenerCondition::Above(10.0)));
     /// assert_eq!(query.offset, 0);
     /// ```
     pub fn new(limit: usize) -> Self {

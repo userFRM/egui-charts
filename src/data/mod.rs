@@ -84,8 +84,8 @@ pub(crate) use footprint::{FootprintState, PackedFootprintState};
 pub use footprint_view::{FootprintBarView, FootprintBars, FootprintRows, FootprintSource};
 pub use market::{
     CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
-    NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,
-    ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
+    NewsStory, ScreenerColumn, ScreenerColumnKind, ScreenerColumnSet, ScreenerCondition,
+    ScreenerFilter, ScreenerQuery, ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
 };
 pub use option_chain::{
     OptionChain, OptionChainQuery, OptionChainSink, OptionExposure, OptionExposureHandle,
