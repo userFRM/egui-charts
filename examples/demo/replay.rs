@@ -614,7 +614,8 @@ impl DemoApp {
             } else {
                 SessionType::RTH
             };
-            if live.view(extended).0 != session {
+            // The restored conversion may hold another dividend adjustment than the view.
+            if live.view(extended) != (session, adjusted) {
                 live.set_view(session, adjusted);
                 chart.reload_feed();
                 chart.set_instrument(Some(live.instrument()));
@@ -829,8 +830,8 @@ impl DemoApp {
             _ => {}
         }
         match self.replay_results.show(ctx) {
-            StrategyReportAction::ExportCsv(csv) => self.save_text("replay-trades.csv", &csv),
-            StrategyReportAction::ExportSummaryCsv { filename, content } => {
+            StrategyReportAction::ExportCsv { filename, content }
+            | StrategyReportAction::ExportSummaryCsv { filename, content } => {
                 self.save_text(&filename, &content);
             }
             _ => {}

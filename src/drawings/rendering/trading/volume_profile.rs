@@ -2573,6 +2573,7 @@ mod tests {
             clock: BarClock::new(Timeframe::Sec1),
             instrument: None,
             timeframe: Timeframe::Sec1,
+            chart: None,
         }];
         let four_ticks = VolumeProfileConfig::default()
             .with_row_ticks(Some(4))
@@ -2783,6 +2784,7 @@ mod tests {
             clock: BarClock::new(Timeframe::Sec1),
             instrument: None,
             timeframe: Timeframe::Sec1,
+            chart: None,
         }];
         let instrument = Instrument::new("TEST")
             .with_tick_size(0.01)
@@ -3020,6 +3022,7 @@ mod tests {
                 clock: BarClock::new(Timeframe::Min1),
                 instrument: None,
                 timeframe: Timeframe::Min1,
+                chart: None,
             }];
             let view = ChartView {
                 instrument: Some(&instrument),

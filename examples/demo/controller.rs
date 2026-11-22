@@ -48,8 +48,10 @@ mod study_editor;
 #[path = "templates.rs"]
 mod templates;
 use egui_charts::services::StoreKind;
+use egui_charts::services::{ChatUser, ProfileDirectory, ProfileId};
 use egui_charts::studies::StudyTemplateSet;
 use egui_charts::ui::dialogs::templates::TemplateDialog;
+use egui_charts::ui::profile::{ProfileAction, ProfileCard};
 #[path = "feeds.rs"]
 mod feeds;
 #[cfg(target_arch = "wasm32")]
@@ -483,6 +485,9 @@ pub struct DemoApp {
     notifications: NotificationsPanel,
     notification_host: Arc<feeds::DemoNotifications>,
     chats: ChatsPanel,
+    /// The chat authors' profiles, and the one whose card is open.
+    profiles: ProfileDirectory,
+    profile_open: Option<ProfileId>,
     ideas: ideas::DemoIdeas,
     products: ProductsPanel,
 
@@ -864,6 +869,8 @@ impl DemoApp {
             notifications: NotificationsPanel::new(),
             notification_host,
             chats: ChatsPanel::new(),
+            profiles: ProfileDirectory::new(),
+            profile_open: None,
             ideas: ideas::DemoIdeas::new(),
             products: ProductsPanel::new(vec![
                 product(
@@ -998,8 +1005,13 @@ impl DemoApp {
             .set_countries(feeds::COUNTRIES.map(String::from));
         app.hotlists.set_feed(app.live.clone());
         app.notifications.set_service(app.notification_host.clone());
-        app.chats
-            .set_service(Arc::new(feeds::DemoChats::new(chrono::Utc::now())));
+        app.chats.set_service(Arc::new(feeds::DemoChats::new(
+            chrono::Utc::now(),
+            app.notification_host.clone(),
+        )));
+        app.chats.set_profiles(true);
+        app.profiles
+            .set_service(Arc::new(feeds::DemoProfiles::new()));
         app.calendar
             .set_countries(feeds::COUNTRIES.iter().map(|code| code.to_string()));
         app.calendar
@@ -1535,6 +1547,7 @@ impl DemoApp {
         let _ = self.keyboard_shortcuts.show_for_chart(ctx, &self.chart);
         self.show_interval_entry(ctx);
         self.show_open_layout(ctx);
+        self.show_idea(ctx);
 
         // Export dialog (screenshot / CSV).
         match self.export_dialog.show(ctx) {
@@ -1932,6 +1945,10 @@ impl eframe::App for DemoApp {
         self.hotlists.poll(&ctx);
         self.notifications.poll(&ctx);
         self.chats.poll(&ctx);
+        self.profiles.poll(&ctx);
+        if let Some(user) = self.chats.take_profile_request() {
+            self.profile_open = Some(ProfileId(user.id));
+        }
         self.widget_bar.set_notification_cnt(
             RightBarIcon::Notifications,
             self.notifications.unread() as u32,
@@ -2069,6 +2086,7 @@ impl eframe::App for DemoApp {
         self.show_dialogs(&ctx);
         self.show_watchlist_import(&ctx);
         self.show_wide_watchlist(&ctx);
+        self.show_profile(&ctx);
 
         // Transient status notice.
         self.show_notice(ui);
@@ -2618,6 +2636,9 @@ impl DemoApp {
             });
         self.drawing_toolbar.state.hide_indicators = self.chart.indicators_hidden();
         self.drawing_toolbar.state.hide_drawings = self.chart.drawings().is_hidden();
+        // Show readout also sets the readout, so the cursor menu switch reads it from the chart.
+        self.drawing_toolbar.state.values_tooltip_on_long_press =
+            self.chart.chart_options().tooltip.enabled;
         // The trading rows show while a broker is connected; their checks follow the Trading tab.
         self.drawing_toolbar
             .set_control_visible(egui_charts::ui::Control::Trading, self.trading.has_broker());
@@ -3222,6 +3243,7 @@ impl DemoApp {
             .unwrap_or_default();
         self.calendar.set_timezone(timezone.clone());
         self.news.set_timezone(timezone.clone());
+        self.chats.set_timezone(timezone.clone());
         self.highlights.set_timezone(timezone.clone());
         self.symbol_details.set_timezone(timezone.clone());
         self.hotlists.set_timezone(timezone);
@@ -3481,6 +3503,35 @@ impl DemoApp {
         }
         if import || !open {
             self.watchlist_import = None;
+        }
+    }
+
+    /// The card of the chat author the user asked for; Message opens a direct chat with them.
+    fn show_profile(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.profile_open.clone() else {
+            return;
+        };
+        let mut open = true;
+        let mut action = ProfileAction::None;
+        egui::Window::new("Profile")
+            .open(&mut open)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                action = ProfileCard::new(&id)
+                    .messaging(true)
+                    .show(ui, &mut self.profiles);
+            });
+        if action == ProfileAction::Message {
+            let name = self
+                .profiles
+                .profile(&id)
+                .map_or_else(|| id.0.clone(), |profile| profile.name.clone());
+            self.chats.start_direct(ChatUser::new(id.0, name));
+            self.open_panel = Some(SidePanel::Chats);
+            open = false;
+        }
+        if !open {
+            self.profile_open = None;
         }
     }
 
@@ -3847,12 +3898,7 @@ impl DemoApp {
                     let series = self.chart.series_settings().alerts;
                     let chart_wide = &self.settings_state.alerts;
                     if chart_wide.show_alerts && series.visible {
-                        let color =
-                            if series.color != egui_charts::model::SeriesAlerts::default().color {
-                                series.color
-                            } else {
-                                chart_wide.alert_color
-                            };
+                        let color = series.color.unwrap_or(chart_wide.alert_color);
                         let decimals = self
                             .chart
                             .instrument()
@@ -4270,9 +4316,11 @@ impl DemoApp {
             ContextMenuAction::OpenSettings => {
                 self.open_chart_settings_dialog();
             }
-            ContextMenuAction::OpenSeriesSettings => self
-                .series_settings
-                .open(SeriesId::MAIN, self.chart.series_settings()),
+            ContextMenuAction::OpenSeriesSettings => {
+                let mut settings = self.chart.series_settings();
+                settings.chart_alert_color = self.settings_state.alerts.alert_color;
+                self.series_settings.open(SeriesId::MAIN, settings);
+            }
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::ApplyIndicatorsToLayout => {
@@ -4666,7 +4714,15 @@ impl DemoApp {
                 self.interval_focus = true;
             }
             A::GoToDate => self.date_picker.open_for_chart(&self.chart),
-            A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
+            A::Snapshot => {
+                // Run the entry the snapshot menu shows the shortcut beside.
+                let action = if self.top_toolbar.state.can_publish_image {
+                    TopToolbarAction::CopyImageLink
+                } else {
+                    TopToolbarAction::TakeScreenshot
+                };
+                self.handle_top_toolbar(ctx, action);
+            }
             A::SaveLayout => self.handle_top_toolbar(ctx, TopToolbarAction::Save),
             A::OpenLayout => {
                 self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::OpenLayout)
@@ -5029,7 +5085,7 @@ mod tests {
     use egui_charts::ui::dialogs::DrawingProps;
     use egui_kittest::{Harness, kittest::Queryable};
 
-    fn calendar_news_harness(panel: SidePanel) -> Harness<'static, Box<DemoApp>> {
+    pub(super) fn calendar_news_harness(panel: SidePanel) -> Harness<'static, Box<DemoApp>> {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new_at(
             &eframe::CreationContext::_new_kittest(ctx.clone()),
@@ -5313,6 +5369,44 @@ mod tests {
         h.state_mut().open_panel = Some(SidePanel::Notifications);
         h.run_steps(5);
         h.get_by_label("Rates alert");
+    }
+
+    /// Guards the demo's chat author menu: Reply answers the message through the demo host, View
+    /// profile opens the author's card, and its Message opens a direct chat with them.
+    #[test]
+    fn chat_author_profile_messages_them_in_the_demo() {
+        use egui::Role;
+        let mut h = calendar_news_harness(SidePanel::Chats);
+        h.run_steps(5);
+        let author_menu = |h: &mut Harness<'static, Box<DemoApp>>, entry: &str| {
+            h.get_all_by_role_and_label(Role::Button, "Ana")
+                .last()
+                .unwrap()
+                .click();
+            h.run_steps(3);
+            h.get_by_role_and_label(Role::Button, entry).click();
+            h.run_steps(3);
+        };
+        author_menu(&mut h, "Reply");
+        h.get_by_label("Replying to Ana");
+        h.get_by(|node| node.placeholder() == Some("Message General"))
+            .focus();
+        h.run_steps(2);
+        h.get_by(|node| node.placeholder() == Some("Message General"))
+            .type_text("Agreed");
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::Button, "Send").click();
+        h.run_steps(5);
+        h.get_by_label("Ana: Volume looks light ahead of the CPI release.");
+
+        author_menu(&mut h, "View profile");
+        h.get_by_label("Index futures, mostly around the open.");
+        h.get_by_role_and_label(Role::Button, "Message").click();
+        h.run_steps(5);
+        assert!(h.state().open_panel == Some(SidePanel::Chats));
+        assert!(h.state().profile_open.is_none());
+        h.get_by_role_and_label(Role::Button, "Ana");
+        assert!(h.query_by_label("Agreed").is_none());
     }
 
     #[test]
@@ -6489,6 +6583,93 @@ mod tests {
         let restored = app.chart.indicators().next().unwrap().0;
         choose(&mut app, "Hide indicators");
         assert!(!is_visible(&app.chart, restored));
+    }
+
+    /// The cursor menu readout switch shows the chart's readout, which Show readout also sets,
+    /// and one click turns the readout on or off.
+    #[test]
+    fn cursor_menu_readout_switch_follows_show_readout() {
+        use egui::accesskit::{Role, Toggled};
+
+        // One frame of `draw`: the toggled state and centre of the control named `label`.
+        fn control(
+            ctx: &egui::Context,
+            label: &str,
+            draw: impl FnMut(&mut egui::Ui),
+        ) -> (Option<Toggled>, egui::Pos2) {
+            ctx.enable_accesskit();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                draw,
+            );
+            let found = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find_map(|(_, node)| {
+                    (node.role() != Role::Label && node.label() == Some(label)).then(|| {
+                        let bounds = node.bounds().expect("control bounds");
+                        let centre = egui::pos2(
+                            (bounds.x0 + bounds.x1) as f32 * 0.5,
+                            (bounds.y0 + bounds.y1) as f32 * 0.5,
+                        );
+                        (node.toggled(), centre)
+                    })
+                });
+            output.drop_without_applying_deltas();
+            found.unwrap_or_else(|| panic!("missing control: {label}"))
+        }
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        // Opens the cursor menu and reads its readout switch; a click closes the menu.
+        let cursor_switch = |app: &mut DemoApp| {
+            app.drawing_toolbar.state.expanded_category = Some("Cursors".into());
+            egui::Popup::open_id(
+                &ctx,
+                egui::Id::unique(("drawing_toolbar_flyout", "Cursors")),
+            );
+            for _ in 0..2 {
+                ui_frame(&ctx, size, vec![], |ui| {
+                    app.show_drawing_toolbar(ui, app.theme.chart.bg)
+                });
+            }
+            control(&ctx, "Values tooltip on long press", |ui| {
+                app.show_drawing_toolbar(ui, app.theme.chart.bg)
+            })
+        };
+
+        assert!(app.chart.chart_options().tooltip.enabled);
+        let (_, point) = control(&ctx, "Show readout", |ui| app.show_readout_controls(ui));
+        ui_click(&ctx, size, point, |ui| app.show_readout_controls(ui));
+        assert!(!app.chart.chart_options().tooltip.enabled);
+
+        let (state, point) = cursor_switch(&mut app);
+        assert_eq!(state, Some(Toggled::False));
+        ui_click(&ctx, size, point, |ui| {
+            app.show_drawing_toolbar(ui, app.theme.chart.bg)
+        });
+        assert!(app.chart.chart_options().tooltip.enabled);
+
+        let (state, point) = cursor_switch(&mut app);
+        assert_eq!(state, Some(Toggled::True));
+        ui_click(&ctx, size, point, |ui| {
+            app.show_drawing_toolbar(ui, app.theme.chart.bg)
+        });
+        assert!(!app.chart.chart_options().tooltip.enabled);
+        let (state, _) = control(&ctx, "Show readout", |ui| app.show_readout_controls(ui));
+        assert_eq!(state, Some(Toggled::False));
     }
 
     /// Menu picks read settings, restored charts and history instead of host-side flags.
@@ -9273,7 +9454,11 @@ mod tests {
                     Some(egui_charts::drawings::DrawingToolType::TrendLine)
                 ),
                 "Undo" => assert!(app.chart.drawings().drawings.is_empty()),
-                "Take a snapshot" => assert!(app.screenshot_requested.is_some()),
+                // The row shows the snapshot shortcut's keys and runs what they run.
+                "Take a snapshot" => assert!(matches!(
+                    app.screenshot_requested,
+                    Some((ScreenshotTarget::Post { copy_link: true }, ..))
+                )),
                 "Toggle percent scale" => assert_eq!(
                     app.chart.state().price_scale().options().mode,
                     egui_charts::scales::PriceScaleMode::Percentage
@@ -13543,8 +13728,11 @@ mod tests {
         ));
         app.alerts.set_service(app.alert_host.clone());
         app.alerts.poll(&ctx, &mut app.toasts);
-        let default = egui_charts::model::SeriesAlerts::default().color;
-        assert!(painted(&mut app, &ctx, default));
+        let orange = egui::Color32::from_rgb(255, 152, 0);
+        let blue = egui::Color32::from_rgb(0, 0, 255);
+        let purple = egui::Color32::from_rgb(156, 39, 176);
+        assert!(painted(&mut app, &ctx, orange));
+        assert!(!painted(&mut app, &ctx, blue));
         app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
         assert!(app.series_settings.is_open);
         app.series_settings.active_tab = SeriesSettingsTab::ScalesAndLines;
@@ -13572,14 +13760,26 @@ mod tests {
         });
         assert!(!app.series_settings.settings.alerts.visible);
         apply(&mut app, &ctx);
-        assert!(!painted(&mut app, &ctx, default));
-        app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
-        app.series_settings.settings.alerts.visible = true;
-        let color = egui::Color32::from_rgb(156, 39, 176);
-        app.series_settings.settings.alerts.color = color;
-        apply(&mut app, &ctx);
-        assert!(painted(&mut app, &ctx, color));
-        assert!(!painted(&mut app, &ctx, default));
+        assert!(!painted(&mut app, &ctx, orange));
+        for (chart_wide, own, drawn, not_drawn) in [
+            (orange, Some(purple), purple, orange),
+            // A colour picked equal to the default is the series' own.
+            (blue, Some(orange), orange, blue),
+            // A series without its own colour follows the chart settings.
+            (blue, None, blue, orange),
+        ] {
+            app.settings_state.alerts.alert_color = chart_wide;
+            app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
+            assert_eq!(app.series_settings.settings.chart_alert_color, chart_wide);
+            app.series_settings.settings.alerts.visible = true;
+            app.series_settings.settings.alerts.color = own;
+            apply(&mut app, &ctx);
+            assert!(painted(&mut app, &ctx, drawn), "{own:?} on {chart_wide:?}");
+            assert!(
+                !painted(&mut app, &ctx, not_drawn),
+                "{own:?} on {chart_wide:?}"
+            );
+        }
     }
 
     #[test]

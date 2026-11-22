@@ -550,6 +550,7 @@ fn dialogs_expose_titles_and_label_their_fields() {
             &[
                 (Role::ComboBox, "Scale mode"),
                 (Role::CheckBox, "Invert scale"),
+                (Role::CheckBox, "Custom"),
             ],
         ),
         (

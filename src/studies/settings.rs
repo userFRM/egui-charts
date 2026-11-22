@@ -935,6 +935,12 @@ impl ConfiguredStudy {
                     .any(|input| matches!(input.kind, super::InputKind::AutoTimeframe(_)))))
     }
 
+    /// Whether the study has the Wait for interval close input: with the Interval input, or for
+    /// histories of its own that it reads as closed ([`Indicator::offers_wait_for_close`]).
+    fn offers_wait(&self) -> bool {
+        self.runs_on_other_bars() || self.study.offers_wait_for_close()
+    }
+
     /// Whether the study reads one source, or only the chart symbol's bars on an interval it
     /// can calculate on, without order flow, metrics or a Symbol input of its own. A study whose
     /// outputs cannot follow never qualifies. `own` holds the wrapped study's inputs. A chosen
@@ -1161,7 +1167,7 @@ impl Indicator for ConfiguredStudy {
             );
         }
         if self.runs_on_other_bars() {
-            inputs.extend([
+            inputs.push(
                 StudyInput::new(
                     "calculation_timeframe",
                     "Interval",
@@ -1169,6 +1175,10 @@ impl Indicator for ConfiguredStudy {
                     InputKind::Timeframe,
                 )
                 .with_default(InputValue::Timeframe(None)),
+            );
+        }
+        if self.offers_wait() {
+            inputs.push(
                 StudyInput::new(
                     "wait_for_close",
                     "Wait for interval close",
@@ -1176,7 +1186,7 @@ impl Indicator for ConfiguredStudy {
                     InputKind::Toggle,
                 )
                 .with_default(InputValue::Toggle(true)),
-            ]);
+            );
         }
         for input in &mut inputs {
             if let Some((_, value)) = self.input_defaults.iter().find(|(id, _)| *id == input.id)
@@ -1201,7 +1211,8 @@ impl Indicator for ConfiguredStudy {
         }
         if match id {
             "calculation_symbol" => self.runs_on_other_symbol(&self.study.inputs()),
-            "calculation_timeframe" | "wait_for_close" => self.runs_on_other_bars(),
+            "calculation_timeframe" => self.runs_on_other_bars(),
+            "wait_for_close" => self.offers_wait(),
             _ => false,
         } {
             let schema = self
@@ -1336,7 +1347,15 @@ impl Indicator for ConfiguredStudy {
             if self.study.data_requests().is_empty() {
                 self.update(data, from);
             } else {
-                self.study.update_data(data, from, sources);
+                let chart = super::StudyChart {
+                    clock: self.clock.clone(),
+                    wait_for_close: self.wait_for_close,
+                };
+                let sources: Vec<_> = sources
+                    .iter()
+                    .map(|source| source.read_on(&chart))
+                    .collect();
+                self.study.update_data(data, from, &sources);
             }
             return;
         }
@@ -1360,6 +1379,11 @@ impl Indicator for ConfiguredStudy {
         self.study.set_instrument(source.instrument);
         self.study.set_timeframe(source.timeframe);
         self.study.set_bar_clock(&source.clock);
+        // The study's own histories are read on the calculation bars, whose latest is forming.
+        let chart = super::StudyChart {
+            clock: source.clock.clone(),
+            wait_for_close: self.wait_for_close,
+        };
         self.spans = spans_of(data, &self.clock, source);
         if let Some(visible) = &self.visible {
             self.study
@@ -1369,7 +1393,11 @@ impl Indicator for ConfiguredStudy {
         if read.is_empty() {
             self.update_price(source.bars, 0);
         } else if read.iter().all(|(own, made)| own == made) {
-            self.study.update_data(source.bars, 0, sources);
+            let sources: Vec<_> = sources
+                .iter()
+                .map(|history| history.read_on(&chart))
+                .collect();
+            self.study.update_data(source.bars, 0, &sources);
         } else {
             // The study finds each history under its own request.
             let histories: Vec<_> = read
@@ -1382,6 +1410,7 @@ impl Indicator for ConfiguredStudy {
                         clock: history.clock.clone(),
                         instrument: history.instrument,
                         timeframe: history.timeframe,
+                        chart: Some(chart.clone()),
                     })
                 })
                 .collect();
@@ -1390,21 +1419,13 @@ impl Indicator for ConfiguredStudy {
         let mut aligned = IndicatorValues::new();
         self.aligned_bars.clear();
         for (at, bar) in data.iter().enumerate() {
-            let forming_higher = at + 1 == data.len()
-                && self.wait_for_close
-                && self
-                    .clock
-                    .timeframe()
-                    .is_some_and(|tf| source.timeframe.duration_ms() > tf.duration_ms());
-            let close = if forming_higher {
-                bar.time
-            } else {
-                self.clock
-                    .next_open(self.clock.bar_open(bar.time))
-                    .unwrap_or(bar.time)
-            };
             let output = source.bar_at(bar.time).and_then(|_| {
-                source.output_at(close, !self.wait_for_close && at + 1 == data.len())
+                source.closed_on(
+                    &self.clock,
+                    self.wait_for_close,
+                    bar.time,
+                    at + 1 == data.len(),
+                )
             });
             self.aligned_bars.push(output);
             let values: Vec<_> = (0..self.study.line_count())
@@ -2567,6 +2588,7 @@ mod tests {
                     clock: BarClock::new(interval),
                     instrument: None,
                     timeframe: interval,
+                    chart: None,
                 }],
             );
             let listed = study
@@ -2688,6 +2710,7 @@ mod tests {
             clock: BarClock::new(timeframe),
             instrument: Some(&usd),
             timeframe,
+            chart: None,
         };
         study.update_data(
             &chart,
@@ -2749,6 +2772,7 @@ mod tests {
             clock: BarClock::new(timeframe),
             instrument: None,
             timeframe,
+            chart: None,
         };
         let chart = [flat(at(11, 0), 1.0)];
         study.update_data(
@@ -3284,6 +3308,7 @@ mod tests {
                 clock: BarClock::new(Timeframe::Hour1),
                 instrument: None,
                 timeframe: Timeframe::Hour1,
+                chart: None,
             };
             study.update_data(&bars, 0, &[source]);
             let other = kinds(&study);
@@ -3417,6 +3442,7 @@ mod tests {
             clock: crate::model::BarClock::new(request.timeframe.unwrap()),
             instrument: None,
             timeframe: request.timeframe.unwrap(),
+            chart: None,
         };
         study.update_data(
             &chart,
@@ -3607,6 +3633,7 @@ mod tests {
                     clock: BarClock::new(interval),
                     instrument: None,
                     timeframe: interval,
+                    chart: None,
                 }],
             );
             assert_eq!(
@@ -3787,6 +3814,7 @@ mod tests {
                     clock: crate::model::BarClock::new(source_interval),
                     instrument: None,
                     timeframe: source_interval,
+                    chart: None,
                 };
                 study.update_data(&chart, 0, &[data]);
                 study
@@ -3860,6 +3888,7 @@ mod tests {
                             clock: crate::model::BarClock::new(source_interval),
                             instrument: None,
                             timeframe: source_interval,
+                            chart: None,
                         }],
                     );
                     let rect =
@@ -4005,6 +4034,7 @@ mod tests {
                 clock: crate::model::BarClock::new(interval.unwrap_or(Timeframe::Hour1)),
                 instrument: None,
                 timeframe: interval.unwrap_or(Timeframe::Hour1),
+                chart: None,
             };
             study.update_data(chart, 0, std::slice::from_ref(&source));
             let candles = |study: &ConfiguredStudy| {
@@ -4034,6 +4064,7 @@ mod tests {
                     bars: &[],
                     request: source.request.clone(),
                     clock: source.clock.clone(),
+                    chart: None,
                     ..source
                 }],
             );
@@ -4115,6 +4146,7 @@ mod tests {
                 clock: BarClock::new(Timeframe::Min5),
                 instrument: None,
                 timeframe: Timeframe::Min5,
+                chart: None,
             }],
         );
         assert_eq!(study.alert_outputs(), [(0, "Zoned".into())]);
@@ -4248,6 +4280,7 @@ mod tests {
                     clock: BarClock::new(timeframe),
                     instrument: host.then_some(&suggested),
                     timeframe,
+                    chart: None,
                 };
                 let replies = [
                     reply(bars(Timeframe::Day1), &days[..], Timeframe::Day1),
