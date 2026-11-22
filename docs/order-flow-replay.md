@@ -26,7 +26,7 @@ writing a browser file. Replace the in-memory input with the host's recording st
 production. [Execution coverage](order-flow.md#try-execution-coverage-and-depth-loss) shows
 what happens when only part of the history is retained.
 
-If a playback chart shares drawing storage with a live chart, set `chart.drawings_mut().options.local_placement_folder = Some("Practice".into())` before placing a drawing. New annotations then stay on that chart, including through undo and redo. To share one, move it to a shared folder in the Object Tree. This option changes neither existing drawings nor placement on other charts.
+If a playback chart shares drawing storage with a live chart, set `chart.drawings_mut().options.local_placement_folder = Some("Practice".into())` before placing a drawing. New annotations, also pasted or cloned ones, then stay on that chart, including through undo and redo. To share one, move it to a shared folder in the Object Tree. This option changes neither existing drawings nor placement on other charts.
 
 Give every [`ReplayEvent`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.ReplayEvent.html) a symbol, observation time and merge sequence. A symbol's time and sequence pair must be unique, including across trades, quotes and book messages. Equal instants across symbols share one clock and are ordered by sequence, then symbol. Payload times and symbols must agree with the envelope. Book snapshot and delta sequence numbers stay separate from the merge sequence and follow the live depth contract.
 

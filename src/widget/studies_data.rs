@@ -135,6 +135,9 @@ fn clock(
             .unwrap_or_else(crate::model::TimezoneId::utc);
         if timeframe.duration_ms() < Timeframe::Day1.duration_ms() {
             clock = clock.with_timezone(zone.clone());
+        } else if instrument.session.is_none() && instrument.time_zone.is_some() {
+            // Without session hours, the zone's midnights end the symbol's dates.
+            clock = clock.with_trading_zone(zone.clone());
         }
         if let Some(session) = &instrument.session {
             clock = clock.with_session_hours(zone, session.clone(), extended, overnight);
@@ -2956,19 +2959,21 @@ pub(super) mod tests {
         }
     }
 
-    /// Guards #3925 and #4020: a custom study reads a history of a longer interval as each
-    /// chart bar knew it, through `StudyData::closed_at`, and the chart's Wait for interval
-    /// close, offered on by default, decides whether the latest bar reads the developing bar.
-    /// Rows: a study with an interval input of its own that offers the input, a study reading
-    /// another symbol, which has it because the chart can calculate it on another interval, and
-    /// that study calculated through the Interval input on bars of the chart's symbol at the
-    /// history's interval, which date its history instead. The first three read hours on a
-    /// 30-minute chart. The others trade 09:30 to 16:00 UTC on weekdays: a day reaches an hourly
-    /// chart on the 15:30 bar that ends its session, and a week reaches a daily chart on Friday.
+    /// Guards #3925, #4020 and #4083: a custom study reads a history of a longer interval as each
+    /// chart bar knew it, through `StudyData::closed_at`, and the chart's Wait for interval close,
+    /// offered on by default, decides whether the latest bar reads the developing bar. Rows: a
+    /// study with an interval input of its own that offers the input, a study reading another
+    /// symbol, which has it because the chart can calculate it on another interval, and that study
+    /// calculated through the Interval input on bars of the chart's symbol at the history's
+    /// interval, which date its history instead. The first three read hours on a 30-minute chart.
+    /// The next three trade 09:30 to 16:00 UTC on weekdays: a day reaches an hourly chart on the
+    /// 15:30 bar that ends its session, and a week reaches a daily chart on Friday. The last two
+    /// trade around the clock in UTC-5 without a session: a day, dated at midnight UTC, reaches an
+    /// hourly chart on the 04:00 UTC bar that ends at its local midnight.
     #[test]
     fn custom_study_reads_closed_bars_of_a_longer_interval() {
         use crate::model::Timeframe::{Day1, Hour1, Min30, Week1};
-        use crate::model::{Session, SessionWindow};
+        use crate::model::{Session, SessionWindow, TimezoneId};
         use crate::studies::{CustomIndicator, IndicatorValue, InputKind, StudyInput};
         use chrono::Weekday::{Fri, Mon, Thu, Tue, Wed};
         type Requests = fn(&[StudyInput]) -> Vec<StudyDataRequest>;
@@ -2980,6 +2985,7 @@ pub(super) mod tests {
             &'static str,
             bool,
             Timeframe,
+            bool,
         );
         fn other(inputs: &[StudyInput], timeframe: Timeframe) -> Vec<StudyDataRequest> {
             match &inputs[0].value {
@@ -3019,16 +3025,23 @@ pub(super) mod tests {
         };
         // The study's input and requests, whether it offers Wait for interval close, the
         // history's symbol, whether the chart calculates the study on bars of the history's
-        // interval, and the chart's interval, which picks the bars below.
+        // interval, the chart's interval, which picks the bars below, and whether the symbols
+        // trade in UTC-5 without a session.
         #[rustfmt::skip]
-        let rows: [Row; 6] = [
-            ("own interval", interval(Hour1), own, true, "MAIN", false, Min30),
-            ("other symbol", other_symbol(), hourly, false, "OTHER", false, Min30),
-            ("other symbol on hourly bars", other_symbol(), hourly, false, "OTHER", true, Min30),
-            ("own interval on a session", interval(Day1), own, true, "MAIN", false, Hour1),
+        let rows: [Row; 8] = [
+            ("own interval", interval(Hour1), own, true, "MAIN", false, Min30, false),
+            ("other symbol", other_symbol(), hourly, false, "OTHER", false, Min30, false),
+            ("other symbol on hourly bars", other_symbol(), hourly, false, "OTHER", true, Min30,
+                false),
+            ("own interval on a session", interval(Day1), own, true, "MAIN", false, Hour1, false),
             ("other symbol on daily bars of a session", other_symbol(), daily, false, "OTHER", true,
-                Hour1),
-            ("own interval of weeks on a session", interval(Week1), own, true, "MAIN", false, Day1),
+                Hour1, false),
+            ("own interval of weeks on a session", interval(Week1), own, true, "MAIN", false, Day1,
+                false),
+            ("other symbol in a zone without a session", other_symbol(), daily, false, "OTHER",
+                false, Hour1, true),
+            ("other symbol on daily bars in a zone without a session", other_symbol(), daily, false,
+                "OTHER", true, Hour1, true),
         ];
         let hm = |hour, minute| chrono::NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
         let session = Session::new([SessionWindow::new(
@@ -3049,12 +3062,14 @@ pub(super) mod tests {
                 .map(|(&time, &price)| Bar::new(time, price, price, price, price, 1.0))
                 .collect()
         };
-        for (case, input, requests, offers_wait, symbol, calculated, chart_interval) in rows {
+        let zone = TimezoneId::fixed_offset(-5 * 3600).unwrap();
+        for (case, input, requests, offers_wait, symbol, calculated, chart_interval, zoned) in rows
+        {
             // The chart's bar times, the history's interval and bar times, and how many chart
             // bars show no value, 10.5 and 20.5 while Wait for interval close is on.
             let (times, history_interval, history_times, counts): (Vec<_>, _, Vec<_>, [usize; 3]) =
-                match chart_interval {
-                    Min30 => (
+                match (chart_interval, zoned) {
+                    (Min30, _) => (
                         (0..6)
                             .map(|n| DateTime::UNIX_EPOCH + Duration::minutes(30 * n))
                             .collect(),
@@ -3064,8 +3079,19 @@ pub(super) mod tests {
                             .collect(),
                         [1, 2, 3],
                     ),
+                    // Hours from 05:00 UTC on 12 March, local midnight in UTC-5, for three days;
+                    // a day closes at the next local midnight with its 04:00 UTC bar.
+                    (Hour1, true) => {
+                        let first = march(&[12], "05:00:00")[0];
+                        (
+                            (0..72).map(|hour| first + Duration::hours(hour)).collect(),
+                            Day1,
+                            march(&[12, 13, 14], "00:00:00"),
+                            [23, 24, 25],
+                        )
+                    }
                     // 09:30 to 15:30 on 12 to 14 March; a day closes at 16:00 with its 15:30 bar.
-                    Hour1 => (
+                    (Hour1, false) => (
                         march(&[12, 13, 14], "09:30:00")
                             .into_iter()
                             .flat_map(|open| (0..7).map(move |hour| open + Duration::hours(hour)))
@@ -3082,9 +3108,10 @@ pub(super) mod tests {
                         [4, 5, 2],
                     ),
                 };
-            let instrument = |symbol: &str| {
-                (chart_interval != Min30)
-                    .then(|| Instrument::new(symbol).with_session(session.clone()))
+            let instrument = |symbol: &str| match (chart_interval, zoned) {
+                (_, true) => Some(Instrument::new(symbol).with_time_zone(zone.clone())),
+                (Min30, false) => None,
+                _ => Some(Instrument::new(symbol).with_session(session.clone())),
             };
             let mut study = CustomIndicator::new(case, |_| Vec::new())
                 .with_inputs(vec![input], move |bars, inputs, _, histories| {

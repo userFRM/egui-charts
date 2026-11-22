@@ -4,7 +4,9 @@
 //! total of advancing minus declining issues. The volume index applies that same running
 //! difference to advancing and declining volume. Each input bar's close carries the count
 //! or volume, not the trading volume of an index instrument. Missing pairs and zero ratio
-//! denominators have no value; a missing pair leaves the running total unchanged.
+//! denominators have no value; a missing pair leaves the running total unchanged. A chart bar on
+//! a date without advancing or declining bars, such as a weekend on a round-the-clock chart,
+//! shows the value of the latest closed breadth bar.
 
 use crate::model::Bar;
 use crate::studies::palette;
@@ -80,6 +82,13 @@ impl<const RATIO: bool, const VOLUME: bool> Indicator for MarketBreadth<RATIO, V
     }
     fn desc(&self) -> &str {
         "Market breadth from host-supplied advancing and declining series"
+    }
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        if VOLUME && !RATIO {
+            crate::scales::StudyFormat::Volume
+        } else {
+            crate::scales::StudyFormat::Fixed(2)
+        }
     }
     fn inputs(&self) -> Vec<StudyInput> {
         let defaults = Self::default();
@@ -170,8 +179,9 @@ impl<const RATIO: bool, const VOLUME: bool> Indicator for MarketBreadth<RATIO, V
                 .bars
                 .iter()
                 .map(|bar| {
+                    // An advancing bar's time, read on its own bars: a pair shares one date.
                     let other = declining
-                        .bar_at(bar.time)
+                        .bar_on(&advancing.clock, bar.time)
                         .map(|at| declining.bars[at].close)?;
                     if !bar.close.is_finite() || !other.is_finite() || (RATIO && other == 0.0) {
                         return None;
@@ -196,13 +206,17 @@ impl<const RATIO: bool, const VOLUME: bool> Indicator for MarketBreadth<RATIO, V
         self.values.truncate(from);
         let clock = self.clock.as_ref().unwrap_or(&advancing.clock);
         for (at, bar) in data.iter().enumerate().skip(from) {
-            let value = advancing
-                .bar_at(bar.time)
-                .and_then(|_| {
-                    advancing.closed_on(clock, self.wait_for_close, bar.time, at + 1 == data.len())
-                })
-                .and_then(|at| self.source_values[at])
-                .unwrap_or(f64::NAN);
+            // A date with a declining bar but no advancing bar has no pair. A chart bar on a
+            // date without breadth bars holds the latest closed one, as the history reads it.
+            let unpaired =
+                advancing.bar_at(bar.time).is_none() && declining.bar_at(bar.time).is_some();
+            let value = if unpaired {
+                None
+            } else {
+                advancing.closed_on(clock, self.wait_for_close, bar.time, at + 1 == data.len())
+            }
+            .and_then(|at| self.source_values[at])
+            .unwrap_or(f64::NAN);
             self.values.push_lines(&[value]);
         }
     }
@@ -240,6 +254,8 @@ mod tests {
     use crate::model::{BarClock, Timeframe};
     use chrono::{DateTime, Duration};
 
+    /// Guards #4086: a chart bar on a date without breadth bars holds the latest closed breadth
+    /// value, while a date with only one of the two series keeps no value.
     #[test]
     fn breadth_uses_paired_market_values_and_skips_missing_observations() {
         let bars = |values: &[Option<f64>]| {
@@ -278,6 +294,12 @@ mod tests {
                 [Some(30.0), Some(70.0), Some(50.0), None, Some(20.0)],
                 [Some(10.0), Some(20.0), Some(0.0), Some(5.0), Some(5.0)],
                 [Some(20.0), Some(70.0), Some(120.0), None, Some(135.0)],
+            ),
+            (
+                "Advance/Decline Line",
+                [Some(10.0), Some(14.0), Some(8.0), None, Some(5.0)],
+                [Some(4.0), Some(7.0), Some(0.0), None, Some(10.0)],
+                [Some(6.0), Some(13.0), Some(21.0), Some(21.0), Some(16.0)],
             ),
         ] {
             for stamp in [0, 6] {
@@ -327,7 +349,9 @@ mod tests {
                     .collect();
                 study.set_bar_clock(&BarClock::new("12h".parse().unwrap()));
                 study.update_data(&half_days, 0, &sources);
-                // Daily values become available on the second half-day; the missing day stays empty.
+                // Daily values become available on the second half-day. Day 3 holds day 2 when
+                // neither series has a bar and stays empty when only one does; the half-day
+                // after the last breadth bar holds day 4.
                 let aligned = [
                     None,
                     expected[0],
@@ -335,11 +359,11 @@ mod tests {
                     expected[1],
                     expected[1],
                     expected[2],
-                    None,
-                    None,
+                    expected[3],
+                    expected[3],
                     expected[2],
                     expected[4],
-                    None,
+                    expected[4],
                 ];
                 let actual: Vec<_> = (0..11).map(|at| study.values().value(0, at)).collect();
                 assert_eq!(actual, aligned, "{name} confirmed intervals");
