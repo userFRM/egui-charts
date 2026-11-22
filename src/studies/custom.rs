@@ -27,13 +27,16 @@
 //! ```
 //!
 //! The closure is shared behind an [`Arc`], so a clone computes exactly what
-//! the original does.
+//! the original does. A study whose calculation resumes from its last bars, or runs away from
+//! the UI thread, implements [`Resume`] instead and is set with
+//! [`CustomIndicator::with_resume`].
 
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Type alias for the custom calculation closure.
 ///
@@ -54,6 +57,110 @@ pub type DataRequestsFn =
 
 /// Per-bar colour callback, receiving the output line, source bar and calculated columns.
 pub type PlotColorFn = Arc<dyn Fn(usize, usize, &IndicatorValues) -> Option<Color32> + Send + Sync>;
+
+/// The calculation of a custom study that resumes from its last bars instead of starting over,
+/// and may run away from the UI thread. Set it with [`CustomIndicator::with_resume`].
+///
+/// A running sum of closes that resumes from its last bar:
+///
+/// ```
+/// use egui_charts::model::Bar;
+/// use egui_charts::studies::{
+///     Calculation, CustomIndicator, Indicator, IndicatorValues, Resume, ResumeRun,
+/// };
+/// use std::time::Duration;
+///
+/// #[derive(Clone, Default)]
+/// struct RunningSum {
+///     // The sum after each bar calculated so far.
+///     sums: Vec<f64>,
+/// }
+/// impl Resume for RunningSum {
+///     fn resume(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation {
+///         let from = run.from.min(self.sums.len());
+///         self.sums.truncate(from);
+///         values.truncate(from);
+///         for bar in &run.data[from..] {
+///             let sum = self.sums.last().copied().unwrap_or(0.0) + bar.close;
+///             self.sums.push(sum);
+///             values.push_lines(&[sum]);
+///         }
+///         Calculation::Done(Duration::ZERO)
+///     }
+/// }
+///
+/// let bar = |close: f64| Bar::new(chrono::DateTime::UNIX_EPOCH, close, close, close, close, 1.0);
+/// let mut bars = vec![bar(1.0), bar(2.0)];
+/// let mut study = CustomIndicator::new("Sum", |_| Vec::new()).with_resume(RunningSum::default());
+/// study.calculate(&bars);
+/// bars.push(bar(4.0));
+/// study.update(&bars, 2);
+/// bars[2] = bar(5.0);
+/// study.update(&bars, 2);
+/// let mut fresh = study.clone();
+/// fresh.calculate(&bars);
+/// assert_eq!(format!("{:?}", study.values()), format!("{:?}", fresh.values()));
+/// assert_eq!(study.values().value(0, 2), Some(8.0));
+/// assert_eq!(study.calculation(), Some(Calculation::Done(Duration::ZERO)));
+/// ```
+pub trait Resume: Send + Sync {
+    /// Bring `values` up to date for `run.data`, given that `run.data[..run.from]` is unchanged
+    /// since the previous call (the contract of [`Indicator::update`]), and say how far it got.
+    /// [`Calculation::Running`] leaves `values` as an earlier call left them, and
+    /// [`Calculation::Stopped`] as they were before the calculation that stopped: the chart
+    /// keeps drawing them, and while the calculation runs it calls again on a later frame with
+    /// the latest bars.
+    fn resume(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation;
+}
+
+/// What a [`Resume::resume`] call works on.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct ResumeRun<'a> {
+    /// The chart's bars.
+    pub data: &'a [Bar],
+    /// The first bar that may differ from the previous call.
+    pub from: usize,
+    /// The study's current inputs.
+    pub inputs: &'a [super::StudyInput],
+    /// The column the chart feeds into the `source` input, if any.
+    pub source: Option<&'a [f64]>,
+    /// The histories the study requested, in request order.
+    pub histories: &'a [super::StudyData<'a>],
+}
+
+/// How far a study's calculation has come, for the chart and its legend.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Calculation {
+    /// The values are up to date; the calculation took this long.
+    Done(Duration),
+    /// The calculation runs elsewhere; the fraction of its bars done.
+    Running(f32),
+    /// The calculation stopped before its end and the values are the previous ones; why.
+    Stopped(String),
+}
+
+/// A [`Resume`] that [`CustomIndicator`] can clone.
+trait ResumeBox: Send + Sync {
+    fn resume_box(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation;
+    fn clone_box(&self) -> Box<dyn ResumeBox>;
+}
+
+impl<R: Resume + Clone + 'static> ResumeBox for R {
+    fn resume_box(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation {
+        self.resume(run, values)
+    }
+    fn clone_box(&self) -> Box<dyn ResumeBox> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn ResumeBox> {
+    fn clone(&self) -> Self {
+        self.as_ref().clone_box()
+    }
+}
 
 /// An indicator defined at runtime via a calculation closure.
 ///
@@ -80,6 +187,8 @@ pub struct CustomIndicator {
     offsets: Vec<isize>,
     fills: Vec<super::StudyFill>,
     plot_color: Option<PlotColorFn>,
+    resume: Option<Box<dyn ResumeBox>>,
+    calculation: Option<Calculation>,
 }
 
 impl std::fmt::Debug for CustomIndicator {
@@ -123,6 +232,8 @@ impl CustomIndicator {
             offsets: Vec::new(),
             fills: Vec::new(),
             plot_color: None,
+            resume: None,
+            calculation: None,
         }
     }
 
@@ -250,6 +361,17 @@ impl CustomIndicator {
         self
     }
 
+    /// Calculate with `resume` instead of the per-bar closures, from the last bars on. The study
+    /// then updates on every tick ([`Indicator::is_incremental`]), keeps drawing its values
+    /// while a calculation runs or after one stopped, also after an input edit, and reports
+    /// each call's result through [`Indicator::calculation`].
+    pub fn with_resume(mut self, resume: impl Resume + Clone + 'static) -> Self {
+        self.resume = Some(Box::new(resume));
+        self.calculation = None;
+        self.values.clear();
+        self
+    }
+
     /// Set a human-readable description (used in tooltips).
     pub fn with_description(mut self, desc: impl Into<String>) -> Self {
         self.desc = desc.into();
@@ -346,6 +468,28 @@ impl CustomIndicator {
             })
     }
 
+    /// Runs the [`Resume`], if set, and returns whether it ran.
+    fn resume(
+        &mut self,
+        data: &[Bar],
+        from: usize,
+        source: Option<&[f64]>,
+        histories: &[super::StudyData<'_>],
+    ) -> bool {
+        let Some(resume) = &mut self.resume else {
+            return false;
+        };
+        let run = ResumeRun {
+            data,
+            from,
+            inputs: &self.inputs,
+            source,
+            histories,
+        };
+        self.calculation = Some(resume.resume_box(run, &mut self.values));
+        true
+    }
+
     fn run(&mut self, data: &[Bar], fed: Option<&[f64]>, histories: &[super::StudyData<'_>]) {
         self.values = match &self.input_calculate_fn {
             Some(calculate) => {
@@ -386,7 +530,10 @@ impl Indicator for CustomIndicator {
             return Err(crate::studies::StudyError::invalid_input(id));
         }
         input.value = value;
-        self.values.clear();
+        // A resumed calculation keeps drawing its values until the next one replaces them.
+        if self.resume.is_none() {
+            self.values.clear();
+        }
         Ok(())
     }
 
@@ -444,7 +591,23 @@ impl Indicator for CustomIndicator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.run(data, None, &[]);
+        if !self.resume(data, 0, None, &[]) {
+            self.run(data, None, &[]);
+        }
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        if !self.resume(data, from, None, &[]) {
+            self.run(data, None, &[]);
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        self.resume.is_some()
+    }
+
+    fn calculation(&self) -> Option<Calculation> {
+        self.calculation.clone()
     }
 
     fn source(&self) -> Option<super::StudySource> {
@@ -465,11 +628,16 @@ impl Indicator for CustomIndicator {
         self.wait_for_close
     }
 
-    fn update_data(&mut self, data: &[Bar], _from: usize, sources: &[super::StudyData<'_>]) {
-        self.run(data, None, sources);
+    fn update_data(&mut self, data: &[Bar], from: usize, sources: &[super::StudyData<'_>]) {
+        if !self.resume(data, from, None, sources) {
+            self.run(data, None, sources);
+        }
     }
 
-    fn update_source(&mut self, data: &[Bar], _from: usize, source: &[f64]) {
+    fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
+        if self.resume(data, from, Some(source), &[]) {
+            return;
+        }
         if self.input_calculate_fn.is_some() {
             self.run(data, Some(source), &[]);
         } else {

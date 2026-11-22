@@ -1509,6 +1509,9 @@ impl Indicator for ConfiguredStudy {
             && self.source() == self.study.source()
             && self.study.is_incremental()
     }
+    fn calculation(&self) -> Option<super::Calculation> {
+        self.study.calculation()
+    }
     fn remove_oldest_bars(&mut self, count: usize) -> bool {
         // These outputs index the evicted bars too.
         let indexed = !self.candles().is_empty()

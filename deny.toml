@@ -20,6 +20,12 @@ allow = [
     "BSD-3-Clause", "BSL-1.0", "CDLA-Permissive-2.0", "ISC", "MIT", "OFL-1.1", "Ubuntu-font-1.0",
     "Unicode-3.0", "Unlicense", "Zlib",
 ]
+exceptions = [
+    # rhai, the script engine of crates/scripting, stores its identifiers in smartstring.
+    { crate = "smartstring", allow = ["MPL-2.0"] },
+    # rhai hashes with ahash, whose compile-time seed comes from const-random through tiny-keccak.
+    { crate = "tiny-keccak", allow = ["CC0-1.0"] },
+]
 
 # The unpublished demo is checked for its dependencies' licences.
 [licenses.private]

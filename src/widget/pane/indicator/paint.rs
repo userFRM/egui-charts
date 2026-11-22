@@ -525,6 +525,14 @@ impl IndicatorPane {
                 format(text_color),
             );
         }
+        if let Some((text, color)) =
+            crate::chart::rendering::calculation_text(ctx, indicator, muted)
+        {
+            if !job.text.is_empty() {
+                job.append(" ", 0.0, format(text_color));
+            }
+            job.append(&text, 0.0, format(color));
+        }
         if !self.config.inputs.is_empty() {
             if !job.text.is_empty() {
                 job.append(" ", 0.0, format(text_color));

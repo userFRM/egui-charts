@@ -103,7 +103,7 @@ pub use stepper::Stepper;
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub use builtin::*;
-pub use custom::CustomIndicator;
+pub use custom::{Calculation, CustomIndicator, Resume, ResumeRun};
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub use factory::IndicatorFactory;
