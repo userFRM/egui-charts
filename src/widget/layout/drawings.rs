@@ -1657,7 +1657,14 @@ fn map_drawing(
     replaces: bool,
 ) -> Option<Drawing> {
     let mut copy = drawing.clone();
-    if drawing.pane.is_some() {
+    let manager = source.drawings();
+    let missing = !manager.unshown_panes.is_empty();
+    if let Some(pane) = missing
+        .then(|| sync_id(drawing))
+        .and_then(|id| source.unshown_pane(manager, drawing, &id))
+    {
+        copy.pane = Some(target.stored_pane_owner(pane)?);
+    } else if drawing.pane.is_some() {
         // Study ids are local to each chart, so the copy goes to the corresponding pane.
         let pane = source
             .owner_pane(drawing)
@@ -5047,13 +5054,101 @@ mod tests {
 
     #[cfg(feature = "studies")]
     #[test]
+    fn shared_drawing_filter_restores_the_original_pane_after_a_write_and_undo() {
+        use crate::studies::{InputValue, RSI};
+
+        for setup in ["never filtered", "removed", "length changed"] {
+            let (host, mut charts, mut layouts) = shared_layouts();
+            // The removed local id would name RSI(7), not RSI(14), on the peer.
+            let mine = (setup != "never filtered")
+                .then(|| charts[0].add_indicator(Box::new(RSI::new(14))));
+            let local_seven = charts[0].add_indicator(Box::new(RSI::new(7)));
+            let peer_seven = charts[1].add_indicator(Box::new(RSI::new(7)));
+            let peer_rsi = charts[1].add_indicator(Box::new(RSI::new(14)));
+            settle_pair(&mut layouts, &mut charts);
+            charts[1].user_action(|c| {
+                let id = draw(c, 55.);
+                assert!(c.move_drawing_to_pane(id, c.series_pane(peer_rsi).unwrap()));
+            });
+            settle_pair(&mut layouts, &mut charts);
+            let original = shared_records(&host)[0].clone();
+            let local = charts[0].drawings().drawings[0].id;
+            if let Some(mine) = mine {
+                charts[0].drawings_mut().set_shared_drawings_hidden(true);
+                if setup == "removed" {
+                    assert!(charts[0].user_action(|c| c.remove_series(mine)));
+                    charts[0].drawings_mut().set_shared_drawings_hidden(false);
+                } else {
+                    charts[0].user_action(|c| {
+                        c.indicator_mut(mine)
+                            .unwrap()
+                            .set_input("period", InputValue::Length(21))
+                            .unwrap()
+                    });
+                }
+            }
+            if setup != "length changed" {
+                assert_eq!(
+                    charts[0].drawing_pane(local),
+                    Some(charts[0].main_series_pane())
+                );
+            }
+            for op in ["delete", "clear", "move"] {
+                if setup == "length changed" && op != "delete" {
+                    continue;
+                }
+                charts[0].user_action(|c| match op {
+                    "delete" => c.drawings_mut().delete_drawing(local),
+                    "clear" => c.drawings_mut().clear_all(),
+                    _ => {
+                        assert!(c.move_drawing_to_pane(local, c.series_pane(local_seven).unwrap()))
+                    }
+                });
+                settle_pair(&mut layouts, &mut charts);
+                if op == "move" {
+                    let target = charts[1].series_pane(peer_seven).unwrap();
+                    assert_eq!(
+                        charts[1].drawing_pane(charts[1].drawings().drawings[0].id),
+                        Some(target)
+                    );
+                    assert_eq!(
+                        shared_records(&host)[0]["pane"],
+                        serde_json::to_value(charts[1].stored_pane(target)).unwrap()
+                    );
+                } else {
+                    assert!(charts[1].drawings().drawings.is_empty(), "{setup}: {op}");
+                    assert!(shared_records(&host).as_array().unwrap().is_empty());
+                }
+                assert!(charts[0].undo());
+                settle_pair(&mut layouts, &mut charts);
+                let written = shared_records(&host);
+                assert_eq!(written.as_array().unwrap().len(), 1);
+                for key in ["pane", "id", "points", "created_at"] {
+                    assert_eq!(written[0][key], original[key], "{setup}: {op}: {key}");
+                }
+                assert_eq!(prices(&charts)[1], [55.]);
+                assert_eq!(
+                    charts[1].drawing_pane(charts[1].drawings().drawings[0].id),
+                    charts[1].series_pane(peer_rsi)
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
     fn shared_drawing_filter_keeps_study_removal_local_without_storage() {
         use crate::studies::RSI;
         let mut charts = [bars(60), bars(60)];
+        // Restore allocates the surviving study's pane before the study. Reserve one id
+        // on the original chart so its removed study gets the surviving study's future id.
+        let prior = charts[0].add_pane();
+        assert!(charts[0].remove_pane(prior));
         let owners = charts.each_mut().map(|c| {
             c.set_symbol("SAMPLE");
             c.add_indicator(Box::new(RSI::new(14)))
         });
+        charts[0].add_indicator(Box::new(RSI::new(7)));
         let mut layout = ChartLayout {
             mode: super::super::ChartLayoutMode::TwoHorizontal,
             ..Default::default()
@@ -5098,6 +5193,56 @@ mod tests {
                 .is_some_and(|r| !r.is_empty())
         );
         assert_eq!(charts[1].drawing_pane(ids[1]), Some(panes[1]));
+        let original = charts[1].save_drawings().unwrap();
+        let original = &original.drawings()[0];
+        charts[0].user_action(|c| c.drawings_mut().delete_drawing(ids[0]));
+        frames(&mut layout, &mut charts);
+        assert!(charts[1].drawings().drawings.is_empty());
+        assert!(charts[0].undo());
+        frames(&mut layout, &mut charts);
+        assert_eq!(charts[1].drawings().drawings.len(), 1);
+        assert_eq!(
+            charts[1].drawing_pane(charts[1].drawings().drawings[0].id),
+            Some(panes[1])
+        );
+        let saved = charts[0].save_drawings().unwrap();
+        assert_eq!(saved.drawings()[0].pane, original.pane);
+        assert_eq!(saved.drawings()[0].drawing.pane, None);
+        let json = saved.to_json().unwrap();
+        #[cfg(feature = "ui")]
+        let snapshot = charts[0].snapshot().unwrap();
+        assert!(charts[0].load_drawings(&json).unwrap().is_empty());
+        let check = |chart: &mut Chart| {
+            frames(&mut ChartLayout::default(), std::array::from_mut(chart));
+            let id = chart.drawings().drawings[0].id;
+            assert_eq!(chart.drawing_pane(id), Some(chart.main_series_pane()));
+            assert!(
+                chart
+                    .drawings()
+                    .painted_range(id)
+                    .is_some_and(|r| !r.is_empty())
+            );
+            assert_eq!(
+                chart.save_drawings().unwrap().drawings()[0].pane,
+                original.pane
+            );
+        };
+        check(&mut charts[0]);
+        #[cfg(feature = "ui")]
+        {
+            let mut fresh = bars(60);
+            assert!(fresh.restore(&snapshot).unwrap().is_empty());
+            assert_eq!(
+                fresh
+                    .indicators()
+                    .find(|(_, study)| study.name() == "RSI")
+                    .unwrap()
+                    .0,
+                owners[0],
+                "the old id now belongs to the surviving RSI(7)"
+            );
+            check(&mut fresh);
+        }
     }
 
     #[cfg(feature = "studies")]

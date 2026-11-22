@@ -237,6 +237,14 @@ impl TextEditState {
     }
 }
 
+/// The pane a drawing uses on peers when its local owner is absent. Retained across writes
+/// and deletes: undo can bring that owner back onto the drawing without a new document read.
+pub(crate) struct UnshownDrawingPane {
+    pub(crate) created_at: Option<i64>,
+    pub(crate) owner: Option<usize>,
+    pub(crate) pane: super::persistence::StoredPane,
+}
+
 /// Display state of one chart, not part of any drawing or its stored document.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SharedDrawingFilter {
@@ -331,6 +339,7 @@ pub struct DrawingManager {
     /// Removed owners of filtered drawings. Their drawings use the price pane locally until
     /// the owner returns; the layout mirror must never see a change of the drawing's owner.
     pub(crate) removed_owners: Vec<usize>,
+    pub(crate) unshown_panes: std::collections::HashMap<String, UnshownDrawingPane>,
     pub(crate) pane_clips: std::collections::HashMap<Option<usize>, Rect>,
     /// Editor-only settings must not grow every idle chart's inline state.
     pub(crate) text_editor: Option<Box<TextEditState>>,
@@ -468,6 +477,7 @@ impl DrawingManager {
             pane: None,
             pane_members: vec![None],
             removed_owners: Vec::new(),
+            unshown_panes: Default::default(),
             pane_clips: std::collections::HashMap::new(),
             text_editor: None,
             finished_text_placement: None,

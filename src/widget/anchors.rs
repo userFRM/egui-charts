@@ -151,6 +151,11 @@ impl Chart {
             .timeframe()
             .map(|timeframe| timeframe.as_str().into_owned());
         storage.saved_by = Some(self.data_table_identity);
+        let manager = if symbol == self.symbol() {
+            Some(&self.drawings)
+        } else {
+            self.symbol_drawings.get(symbol).map(|(manager, _)| manager)
+        };
         for drawing in drawings {
             for (at, point) in drawing.chart_points.iter().enumerate() {
                 if point
@@ -173,7 +178,13 @@ impl Chart {
                     price,
                 )
             });
-            stored.pane = self.pane_to_store(symbol, drawing, &stored.id);
+            if let Some(pane) = manager.and_then(|m| self.unshown_pane(m, drawing, &stored.id)) {
+                stored.pane = Some(pane.clone());
+                // This chart has no owner to remap when the snapshot is restored.
+                stored.drawing.pane = None;
+            } else {
+                stored.pane = self.pane_to_store(symbol, drawing, &stored.id);
+            }
             storage.add_drawing(stored);
         }
         // Validate all settings too, before a host replaces its last good save.
@@ -226,6 +237,7 @@ impl Chart {
                 error: SkipReason::Invalid(serde::de::Error::custom(error)),
             });
         }
+        self.remember_read_panes(&storage);
         skipped.sort_by_key(|skipped| skipped.index);
         Ok(skipped)
     }
