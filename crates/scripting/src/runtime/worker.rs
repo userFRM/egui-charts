@@ -12,10 +12,11 @@ use std::sync::{
     mpsc,
 };
 
-/// The stack of a thread that runs a script. The deepest scripts the limits admit need under
-/// 6 MiB in a debug build.
+/// The stack of a thread that runs a script, reserved but only used as deep as the script goes.
+/// The deepest value the limits admit, built and compared in the deepest call they admit, needs
+/// under 16 MiB in a debug build.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) const STACK: usize = 16 << 20;
+pub(crate) const STACK: usize = 32 << 20;
 
 /// Where a request stands.
 pub(crate) enum Poll {

@@ -187,6 +187,28 @@ fn math_helpers_follow_f64_and_propagate_missing_values() {
     }
 }
 
+/// Arrays and maps compare and write as Rhai's own `==` and `to_string` do, which the engine
+/// replaces to keep the stack flat: item by item, nested ones included, with keys in order.
+#[test]
+fn arrays_and_maps_compare_and_write_as_rhai_does() {
+    for (expression, expected) in [
+        (r#"[1, [2.5, "a"]] == [1, [2.5, "a"]]"#, true),
+        (r#"[1, [2.5, "a"]] != [1, [2.5, "b"]]"#, true),
+        (r#"[1, "a"] == [1, 2]"#, false),
+        ("#{a: [1], b: #{c: ()}} == #{b: #{c: ()}, a: [1]}", true),
+        ("#{a: 1} == #{b: 1}", false),
+        (
+            r#"`${[1, "a", [2.5, ()], #{b: [true], a: #{}}]}` == "[1, \"a\", [2.5, ()], #{\"a\": #{}, \"b\": [true]}]""#,
+            true,
+        ),
+    ] {
+        let source = format!("plot(\"x\", if {expression} {{ 1.0 }} else {{ 0.0 }});");
+        let study = calculated(&compile(&source), &bars(1, 3));
+        let expected = if expected { 1.0 } else { 0.0 };
+        assert_eq!(study.values().line(0), [expected], "{expression}");
+    }
+}
+
 /// The update contract `is_incremental` promises: appended bars, a changed last bar and a
 /// change deep in history give the values of a fresh calculation, and an appended bar settles
 /// within a second.
@@ -327,16 +349,16 @@ fn scripts_are_refused_at_their_line_and_column() {
 }
 
 /// A script as deep as the limits admit: the top level nests calls as deep as it may around a
-/// function that calls itself until the call limit stops it, each call nested in its body as
-/// deep as a function may.
-fn deepest() -> String {
+/// function that calls itself `calls` times, each call nested in its body as deep as a function
+/// may, and runs `bottom` in the last call.
+fn deepest(calls: usize, bottom: &str) -> String {
     let nest = |depth, inner: &str| {
         (0..depth).fold(inner.to_owned(), |inner, _| format!("max(1, {inner})"))
     };
     format!(
-        "fn f(n) {{ if n > 0 {{ {} }} else {{ 0 }} }} plot(\"x\", {});",
+        "fn f(n) {{ if n > 0 {{ {} }} else {{ {bottom} }} }} plot(\"x\", {});",
         nest(11, "f(n - 1)"),
-        nest(28, "f(40)")
+        nest(28, &format!("f({calls})"))
     )
 }
 
@@ -346,7 +368,7 @@ fn deepest() -> String {
 fn run_errors_keep_the_bars_before_them() {
     let fixture = bars(1001, 3);
     // Needs under 6 MiB of stack in a debug build.
-    let deep = deepest();
+    let deep = deepest(40, "0");
     // Column 0 leaves the column unasserted where the engine, not the script, places it.
     for (source, column, bar, fragment) in [
         (deep.as_str(), 0, 0, "more than 32 deep"),
@@ -668,9 +690,32 @@ fn history_reads_reach_the_first_loaded_bar() {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen_test::wasm_bindgen_test]
 fn web_deepest_script_stops_at_the_call_limit() {
-    let error = compile(&deepest()).check(&bars(2, 3)).unwrap_err();
+    let error = compile(&deepest(40, "0")).check(&bars(2, 3)).unwrap_err();
     assert_eq!(error.bar, Some(0), "{error}");
     assert!(error.message.contains("more than 6 deep"), "{error}");
+}
+
+/// On the web the stack also holds the deepest value the size limits admit in the deepest call the
+/// call limit admits: compared, written, and written to JSON as deep there as a function may nest
+/// an expression, which needs the most.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen_test::wasm_bindgen_test]
+fn web_deepest_value_fits_in_the_deepest_call() {
+    use crate::rhai::engine::{MAX_ARRAY_SIZE, MAX_CALL_LEVELS, MAX_MAP_SIZE};
+    // One entry is left for the map the value is written to JSON in.
+    let maps = MAX_MAP_SIZE - 1;
+    // `#{}`, then `#{"x": ` and `}` for each map and `[` and `]` for each array.
+    let written = 3 + 8 * maps + 2 * MAX_ARRAY_SIZE;
+    let json = (0..11).fold("#{y: a}.to_json().len()".to_owned(), |inner, _| {
+        format!("max(1, {inner})")
+    });
+    let bottom = format!(
+        "let a = #{{}}; for i in 0..{maps} {{ a = #{{x: a}}; }} \
+         for i in 0..{MAX_ARRAY_SIZE} {{ a = [a]; }} let b = a; \
+         if a != b || `${{a}}`.len() != {written} {{ throw \"unequal or miswritten\"; }} {json}"
+    );
+    let checked = compile(&deepest(MAX_CALL_LEVELS - 1, &bottom)).check(&bars(1, 3));
+    assert!(checked.is_ok(), "{checked:?}");
 }
 
 /// On the web a run proceeds in time slices over several calls instead of freezing the page.

@@ -3,8 +3,12 @@
 
 use crate::runtime::{self, program::Span, series::SeriesRef};
 use ::rhai::packages::{Package, StandardPackage};
-use ::rhai::{Engine, EvalAltResult, FLOAT, INT, NativeCallContext, Position};
+use ::rhai::{
+    Array, Dynamic, Engine, EvalAltResult, FLOAT, INT, ImmutableString, Map, NativeCallContext,
+    Position,
+};
 use chrono::{Datelike, Timelike};
+use std::fmt::Write;
 
 /// Deepest nesting of script function calls.
 #[cfg(not(target_arch = "wasm32"))]
@@ -17,10 +21,21 @@ pub(crate) const MAX_CALL_LEVELS: usize = 6;
 pub(crate) const MAX_EXPR_DEPTHS: (usize, usize) = (64, 32);
 /// Longest string, in bytes.
 pub(crate) const MAX_STRING_SIZE: usize = 10_000;
-/// Longest array.
+/// Longest array, counting the items of the arrays in it.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const MAX_ARRAY_SIZE: usize = 10_000;
-/// Largest map.
+/// Longest array on the web. Rhai copies, drops and measures a nested value with a call per level,
+/// so this limit and the map limit, which count nested items, also bound how deep a value nests:
+/// the page's 1 MiB stack holds the deepest value they admit, written to JSON as deep in the
+/// deepest call as a script may nest an expression, with an eighth to spare in a debug build.
+#[cfg(target_arch = "wasm32")]
+pub(crate) const MAX_ARRAY_SIZE: usize = 200;
+/// Largest map, counting the entries of the maps in it.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const MAX_MAP_SIZE: usize = 1_000;
+/// Largest map on the web, for the stack as [`MAX_ARRAY_SIZE`].
+#[cfg(target_arch = "wasm32")]
+pub(crate) const MAX_MAP_SIZE: usize = 50;
 /// Most script functions.
 pub(crate) const MAX_FUNCTIONS: usize = 64;
 /// Most variables in scope at once.
@@ -203,6 +218,29 @@ pub(crate) fn engine() -> Engine {
     // Rhai marks `on_var` as an interface that may change, through a deprecation note.
     #[allow(deprecated)]
     engine.on_var(|_, _, context| super::count(&context).map(|()| None));
+    // Rhai compares and writes arrays and maps through the engine at every level of nesting, a
+    // few kilobytes of stack each, so a value nested a few hundred deep overflows the stack.
+    // These come first in every lookup and reach the engine only for the other items.
+    engine.register_fn("==", |context: NativeCallContext, a: Array, b: Array| {
+        equal(&context, a.into(), b.into())
+    });
+    engine.register_fn("!=", |context: NativeCallContext, a: Array, b: Array| {
+        equal(&context, a.into(), b.into()).map(|equal| !equal)
+    });
+    engine.register_fn("==", |context: NativeCallContext, a: Map, b: Map| {
+        equal(&context, a.into(), b.into())
+    });
+    engine.register_fn("!=", |context: NativeCallContext, a: Map, b: Map| {
+        equal(&context, a.into(), b.into()).map(|equal| !equal)
+    });
+    for name in ["print", "to_string", "debug", "to_debug"] {
+        engine.register_fn(name, |context: NativeCallContext, array: Array| {
+            written(&context, array.into())
+        });
+        engine.register_fn(name, |context: NativeCallContext, map: Map| {
+            written(&context, map.into())
+        });
+    }
 
     engine.register_type_with_name::<Handle>("series");
     binary!(series engine, "+", |a: f64, b: f64| a + b);
@@ -311,6 +349,122 @@ pub(crate) fn engine() -> Engine {
     time(&mut engine, "hour", |time| i64::from(time.hour()));
     time(&mut engine, "minute", |time| i64::from(time.minute()));
     engine
+}
+
+/// Whether `a` equals `b` as Rhai's `==` says: arrays and maps of equal items in the same order,
+/// other values by the engine's `==`. Items of different types without an `==` are unequal in an
+/// array and an error in a map. The levels are kept on a list, so the stack stays flat however
+/// deep the values nest.
+fn equal(context: &NativeCallContext, a: Dynamic, b: Dynamic) -> Result<bool> {
+    enum Level {
+        Array(std::vec::IntoIter<Dynamic>, std::vec::IntoIter<Dynamic>),
+        Map(<Map as IntoIterator>::IntoIter, Map),
+    }
+    let mut levels = Vec::new();
+    let mut next = Some((a, b, true));
+    while let Some((mut a, mut b, fallback)) = next {
+        if a.is_array() && b.is_array() {
+            let (a, b) = (a.cast::<Array>(), b.cast::<Array>());
+            if a.len() != b.len() {
+                return Ok(false);
+            }
+            levels.push(Level::Array(a.into_iter(), b.into_iter()));
+        } else if a.is_map() && b.is_map() {
+            let (a, b) = (a.cast::<Map>(), b.cast::<Map>());
+            if a.len() != b.len() {
+                return Ok(false);
+            }
+            levels.push(Level::Map(a.into_iter(), b));
+        } else {
+            match context.call_native_fn_raw("==", true, &mut [&mut a, &mut b]) {
+                Ok(equal) if equal.as_bool().unwrap_or(false) => {}
+                Ok(_) => return Ok(false),
+                Err(error)
+                    if fallback
+                        && a.type_id() != b.type_id()
+                        && matches!(&*error, EvalAltResult::ErrorFunctionNotFound(signature, _)
+                            if signature.starts_with("==")) =>
+                {
+                    return Ok(false);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        // The next pair of items, from the innermost level with items left.
+        next = loop {
+            match levels.last_mut() {
+                None => break None,
+                Some(Level::Array(a, b)) => {
+                    if let Some((a, b)) = a.next().zip(b.next()) {
+                        break Some((a, b, true));
+                    }
+                }
+                Some(Level::Map(a, b)) => {
+                    if let Some((key, a)) = a.next() {
+                        let Some(b) = b.remove(&key) else {
+                            return Ok(false);
+                        };
+                        break Some((a, b, false));
+                    }
+                }
+            }
+            levels.pop();
+        };
+    }
+    Ok(true)
+}
+
+/// What `print`, `to_string`, `debug` and `to_debug` give for an array or a map, written as Rhai
+/// writes it, the items of other types by the engine's `to_debug`. The levels are kept on a list,
+/// so the stack stays flat however deep the value nests.
+fn written(context: &NativeCallContext, value: Dynamic) -> ImmutableString {
+    enum Level {
+        Array(std::vec::IntoIter<Dynamic>, &'static str),
+        Map(<Map as IntoIterator>::IntoIter, &'static str),
+    }
+    let engine = context.engine();
+    let mut text = String::new();
+    let mut levels = Vec::new();
+    let mut next = Some(value);
+    while let Some(mut value) = next {
+        if value.is_array() {
+            text.push('[');
+            levels.push(Level::Array(value.cast::<Array>().into_iter(), ""));
+        } else if value.is_map() {
+            text.push_str("#{");
+            levels.push(Level::Map(value.cast::<Map>().into_iter(), ""));
+        } else {
+            match context.call_native_fn_raw("to_debug", true, &mut [&mut value]) {
+                Ok(written) if written.is_string() => {
+                    text.push_str(&written.into_immutable_string().unwrap_or_default());
+                }
+                Ok(other) => text.push_str(engine.map_type_name(other.type_name())),
+                Err(_) => text.push_str(engine.map_type_name(&format!("{value:?}"))),
+            }
+        }
+        // The next item, from the innermost level with items left, after its separator.
+        next = loop {
+            match levels.last_mut() {
+                None => break None,
+                Some(Level::Array(items, separator)) => {
+                    if let Some(item) = items.next() {
+                        text.push_str(std::mem::replace(separator, ", "));
+                        break Some(item);
+                    }
+                    text.push(']');
+                }
+                Some(Level::Map(items, separator)) => {
+                    if let Some((key, item)) = items.next() {
+                        let _ = write!(text, "{}{key:?}: ", std::mem::replace(separator, ", "));
+                        break Some(item);
+                    }
+                    text.push('}');
+                }
+            }
+            levels.pop();
+        };
+    }
+    text.into()
 }
 
 /// What a value without history says when a script reads an earlier bar of it.
