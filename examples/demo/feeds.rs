@@ -2,7 +2,7 @@
 //! stable, distinct content. A host answers these from its own data vendors.
 
 use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, TimeZone, Utc, Weekday};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use egui_charts::data::{
@@ -14,7 +14,7 @@ use egui_charts::model::{Bar, PostContent, Quote};
 use egui_charts::services::{
     ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, Events, NewChatRoom,
     NewChatRoomKind, Notification, NotificationTarget, Notifications, Posts, Profile, ProfileEvent,
-    ProfileId, Profiles, Quotes, ShareKind, ShareLink, ShareOffer, Sharing,
+    ProfileId, Profiles, Quotes, ShareAccess, ShareKind, ShareLink, ShareOffer, Sharing,
 };
 
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
@@ -1272,31 +1272,61 @@ pub(super) fn seasonality(bars: &[Bar]) -> Seasonality {
     Seasonality::new(years as u32, summaries)
 }
 
-/// Demo watchlist sharing, with placeholder links kept in memory until revoked.
+/// The demo's sharing of watchlists and layouts: a placeholder link per document, and layouts
+/// shared through the switch with a chosen access until it is turned off.
 #[derive(Default)]
-pub(super) struct ListSharing(Mutex<(usize, HashSet<String>)>);
+pub(super) struct DemoSharing(Mutex<(usize, HashMap<(ShareKind, String), ShareAccess>)>);
 
-impl Sharing for ListSharing {
+impl Sharing for DemoSharing {
     fn offers(&self, kind: ShareKind) -> ShareOffer {
-        let mut offer = ShareOffer::new(kind == ShareKind::Watchlist, false);
-        offer.revoke = offer.link;
+        let mut offer = ShareOffer::new(true, false);
+        // Layouts share through the switch; a watchlist is shared by taking its link.
+        offer.switch = kind == ShareKind::Layout;
+        offer.revoke = !offer.switch;
         offer
     }
     fn shared(&self, kind: ShareKind, name: &str) -> bool {
-        kind == ShareKind::Watchlist && self.0.lock().unwrap().1.contains(name)
+        self.0
+            .lock()
+            .unwrap()
+            .1
+            .contains_key(&(kind, name.to_owned()))
     }
-    fn link(&self, _: ShareKind, name: &str, reply: Reply<ShareLink>) {
+    fn access(&self, kind: ShareKind, name: &str) -> ShareAccess {
+        let state = self.0.lock().unwrap();
+        state
+            .1
+            .get(&(kind, name.to_owned()))
+            .copied()
+            .unwrap_or_default()
+    }
+    fn share(&self, kind: ShareKind, name: &str, access: ShareAccess, reply: Reply<()>) {
+        self.0
+            .lock()
+            .unwrap()
+            .1
+            .insert((kind, name.to_owned()), access);
+        reply.send(Ok(()));
+    }
+    fn link(&self, kind: ShareKind, name: &str, reply: Reply<ShareLink>) {
         let mut state = self.0.lock().unwrap();
         state.0 += 1;
-        state.1.insert(name.to_owned());
+        let n = state.0;
+        let key = (kind, name.to_owned());
+        let (path, access) = if kind == ShareKind::Layout {
+            ("layout", state.1.get(&key).copied().unwrap_or_default())
+        } else {
+            // Taking a watchlist's link shares it view only.
+            ("watchlist", *state.1.entry(key).or_default())
+        };
         // There is no demo server; this reserved domain does not resolve.
         reply.send(Ok(ShareLink::new(
-            format!("https://demo.invalid/watchlist/{}", state.0),
-            false,
+            format!("https://demo.invalid/{path}/{n}"),
+            access == ShareAccess::ViewAndCopy,
         )));
     }
-    fn revoke(&self, _: ShareKind, name: &str, reply: Reply<()>) {
-        self.0.lock().unwrap().1.remove(name);
+    fn revoke(&self, kind: ShareKind, name: &str, reply: Reply<()>) {
+        self.0.lock().unwrap().1.remove(&(kind, name.to_owned()));
         reply.send(Ok(()));
     }
 }
@@ -1737,7 +1767,7 @@ mod tests {
         app.activate_chart_slot(0);
         app.live.set_paused(true);
         let now = app.live.now();
-        app.handle_layout_action(LayoutAction::CreateNew);
+        app.handle_layout_action(LayoutAction::CreateNew("Second".into()));
         app.switch_symbol("FOREXA");
         app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "STOCKA")]);
         app.watchlist.set_service(app.quotes.clone());

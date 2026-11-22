@@ -281,13 +281,14 @@ impl Chart {
         // A strong snap keeps the actual OHLC even beyond a manual price range.
         let strong_magnet =
             drawing_manager.magnet_enabled() && drawing_manager.options.strong_magnet;
-        let y_to_price = |y: f32| -> f64 {
-            price_map.y_to_price(if strong_magnet {
+        let anchor_y = |y: f32| {
+            if strong_magnet {
                 y
             } else {
                 y.clamp(price_rect.min.y, price_rect.max.y)
-            })
+            }
         };
+        let y_to_price = |y: f32| -> f64 { price_map.y_to_price(anchor_y(y)) };
         let translate_price = |price, from, to| price_map.translate_price(price, from, to);
 
         // Update all drawings' screen coords before rendering (handles pan/zoom)
@@ -305,10 +306,11 @@ impl Chart {
             } else {
                 None
             };
+        let snap_pointer = press
+            .or_else(|| response.interact_pointer_pos())
+            .or_else(|| response.hover_pos());
         if drawing_manager.magnet_enabled()
-            && let Some(pointer) = press
-                .or_else(|| response.interact_pointer_pos())
-                .or_else(|| response.hover_pos())
+            && let Some(pointer) = snap_pointer
         {
             let distance = drawing_manager.options.magnet_distance;
             let bars = self.state.shown();
@@ -408,6 +410,17 @@ impl Chart {
                     }
                 }
             }
+        }
+        // The price pane's crosshair shows the height a click there gives the next anchor,
+        // whatever the crosshair mode.
+        if pane.is_none() {
+            let tool = drawing_manager.active_tool.filter(|tool| !tool.is_cursor());
+            drawing_manager.anchor_crosshair = tool
+                .zip(snap_pointer.filter(|pointer| price_rect.contains(*pointer)))
+                .map(|(tool, pointer)| {
+                    let y = drawing_manager.snap_placement(Some(tool), pointer).y;
+                    (ui.ctx().cumulative_frame_nr(), pointer.y, anchor_y(y))
+                });
         }
 
         // Handle drawing interaction
@@ -1869,6 +1882,123 @@ mod tests {
             "(main series moved into the study's pane, strong magnet, first anchor price, \
              anchor below the painted level) observed {observed:?} expected price 151.22 and 0 \
              below in every row"
+        );
+    }
+
+    /// With a drawing tool active, the price pane's crosshair, as drawn and as reported to the
+    /// host, reads the price a click there gives the next anchor: the weak magnet snaps only
+    /// within its distance, Ctrl inverts the magnet, and study values count only while Snap to
+    /// indicators is on, whatever the crosshair mode.
+    #[test]
+    fn crosshair_reads_the_price_the_next_anchor_takes() {
+        use crate::config::CrosshairMode;
+        use crate::studies::{CustomIndicator, IndicatorValue, StudyScale};
+        use crate::widget::{ChartEvent, SeriesId};
+        use egui::Pos2;
+
+        let round = |price: f64| (price * 100.0).round() / 100.0;
+        let mut observed = Vec::new();
+        for (case, magnet, strong, ctrl, snap_to_indicators, price, below) in [
+            ("weak, far", true, false, false, true, 101.0, 0.0),
+            ("weak, near", true, false, false, true, 105.0, 5.0),
+            ("strong", true, true, false, true, 101.0, 0.0),
+            ("strong, Ctrl", true, true, true, true, 101.0, 0.0),
+            ("off, Ctrl", false, true, true, true, 101.0, 0.0),
+            ("indicators off", true, true, false, false, 101.0, 0.0),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[90.0], &[110.0]);
+            chart.config_mut().show_volume = false;
+            chart.add_indicator(Box::new(
+                CustomIndicator::new("Level", |bars| {
+                    bars.iter().map(|_| IndicatorValue::Single(105.0)).collect()
+                })
+                .with_overlay(true)
+                .with_scale(StudyScale::Main),
+            ));
+            let options = &mut chart.drawings_mut().options;
+            options.magnet_mode = magnet;
+            options.strong_magnet = strong;
+            options.snap_to_indicators = snap_to_indicators;
+            chart.drawings_mut().update_snap_options();
+            // As the demo sets it for its magnet buttons.
+            chart.set_crosshair_mode(if magnet {
+                CrosshairMode::Magnet
+            } else {
+                CrosshairMode::Normal
+            });
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.get_chart_mapping();
+            let (first, last) = chart.state.visible_range();
+            let pointer = Pos2::new(
+                map.idx_to_x((first + last) / 2) + 2.0,
+                map.price_to_y(price) + below,
+            );
+            let modifiers = if ctrl {
+                Modifiers::CTRL
+            } else {
+                Modifiers::NONE
+            };
+            let button = |pressed| Event::PointerButton {
+                pos: pointer,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            chart
+                .drawings_mut()
+                .set_active_tool(Some(DrawingToolType::HorizontalLine));
+            chart.drain_events().for_each(drop);
+            frame(
+                &ctx,
+                &mut chart,
+                1.1,
+                vec![
+                    Event::ModifiersChanged(modifiers),
+                    Event::PointerMoved(pointer),
+                ],
+            );
+            let crosshair = chart
+                .drain_events()
+                .filter_map(|event| match event {
+                    ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                    _ => None,
+                })
+                .last()
+                .expect("the hover moves the crosshair");
+            assert_eq!(crosshair.series, SeriesId::MAIN, "{case}");
+            let painted = chart.last_crosshair.and_then(|(_, price)| price);
+            for (time, pressed) in [(1.2, true), (1.3, false)] {
+                frame(
+                    &ctx,
+                    &mut chart,
+                    time,
+                    vec![Event::ModifiersChanged(modifiers), button(pressed)],
+                );
+            }
+            let anchor = chart.drawings().drawings[0].chart_points[0].price;
+            observed.push((
+                case,
+                round(crosshair.price),
+                painted.map(round),
+                round(anchor),
+            ));
+        }
+        // The level at 105 is 5.4 px from the near pointer, within the weak magnet's 20 px, and
+        // four price units, far more than 20 px, from a pointer at 101. The strong magnet takes
+        // the nearest of 90, 105 and 110.
+        let expected = [
+            ("weak, far", 101.0, Some(101.0), 101.0),
+            ("weak, near", 105.0, Some(105.0), 105.0),
+            ("strong", 105.0, Some(105.0), 105.0),
+            ("strong, Ctrl", 101.0, Some(101.0), 101.0),
+            ("off, Ctrl", 105.0, Some(105.0), 105.0),
+            ("indicators off", 110.0, Some(110.0), 110.0),
+        ];
+        assert!(
+            observed == expected,
+            "(case, crosshair event price, painted crosshair price, anchor price) observed \
+             {observed:?} expected {expected:?}"
         );
     }
 

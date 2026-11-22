@@ -307,7 +307,7 @@ mod tests {
         assert!(!app.state.replay_active);
         assert!(notified(&app, "Replay: available on synthetic data only."));
         let tabs = app.layout_tabs.len();
-        app.handle_layout_action(LayoutAction::CreateNew);
+        app.handle_layout_action(LayoutAction::CreateNew("Other".into()));
         assert_eq!(app.layout_tabs.len(), tabs);
         assert!(notified(&app, "Layouts: available on synthetic data only."));
         // A symbol outside the profile is refused. One of the profile is asked of its service.
