@@ -135,7 +135,7 @@ pub struct DrawingManagerOptions {
     /// Line colour every new drawing takes instead of its tool's own, as RGBA bytes. `None`
     /// (the default) keeps each tool's colour; a default saved for a tool wins over both.
     pub default_color: Option<[u8; 4]>,
-    /// Put drawings placed, pasted or cloned on this chart in a top-level
+    /// Put new drawings and copies made by paste, clone or Ctrl/Command-drag in a top-level
     /// [chart-only folder](super::FolderSync::Chart) of this name. `None` (the default) leaves
     /// new drawings at the root and copies in their original's folder. If the name is already
     /// used by a non-local folder, use a numbered folder instead of changing its scope.
@@ -1126,7 +1126,7 @@ impl DrawingManager {
         drawing
     }
 
-    /// Moves a drawing placed on this chart now, by a tool, a paste or a clone, into the
+    /// Moves a newly placed drawing or copy into the
     /// top-level chart-only folder that [`DrawingManagerOptions::local_placement_folder`] names,
     /// numbered when a folder shared beyond this chart already has the name. Without the option
     /// the drawing keeps its folder.
