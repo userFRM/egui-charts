@@ -1,5 +1,7 @@
 //! The order ticket's panel: its header, tabs and menu, and the button that sends the order.
 
+use std::collections::BTreeMap;
+
 use super::{
     Action, Market, OrderPreset, OrderTicket, Tab, confirmation, levels_accepted, order_quantity,
     summary,
@@ -11,7 +13,7 @@ use crate::scales::decimals;
 use crate::theme::ThemeExt;
 use crate::ui::connection_status::show_connection_status_with_label;
 use crate::ui::trading::widgets::{SECTION_TITLE_SIZE, hit, side_fill, side_name, text, track};
-use crate::ui_kit::buttons::IconButton;
+use crate::ui_kit::buttons::{ButtonSize, IconButton};
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
 use egui::{
     Align, Align2, ImageSource, Label, Layout, Rect, RichText, Role, Sense, Ui, UiBuilder,
@@ -26,7 +28,7 @@ impl OrderTicket {
         &mut self,
         ui: &mut Ui,
         market: &Market<'_>,
-        presets: &mut Vec<OrderPreset>,
+        presets: &mut BTreeMap<String, Vec<OrderPreset>>,
         one_click: &mut bool,
         compact: &mut bool,
     ) -> Option<Action> {
@@ -186,7 +188,7 @@ impl OrderTicket {
         &mut self,
         ui: &mut Ui,
         market: &Market<'_>,
-        presets: &mut Vec<OrderPreset>,
+        presets: &mut BTreeMap<String, Vec<OrderPreset>>,
         one_click: &mut bool,
         compact: &mut bool,
     ) {
@@ -248,7 +250,7 @@ impl OrderTicket {
         &mut self,
         ui: &mut Ui,
         market: &Market<'_>,
-        presets: &mut Vec<OrderPreset>,
+        presets: &mut BTreeMap<String, Vec<OrderPreset>>,
         one_click: &mut bool,
         compact: &mut bool,
     ) {
@@ -264,50 +266,170 @@ impl OrderTicket {
             ));
         ui.separator();
         ui.weak(l10n::text(ui.ctx(), "Presets"));
-        if presets.is_empty() {
+        let mut saved = presets.remove(market.account).unwrap_or_default();
+        if saved.is_empty() {
             ui.weak(l10n::text(ui.ctx(), "No presets saved"));
         }
+        if self
+            .renaming
+            .as_ref()
+            .is_some_and(|(old, _)| !saved.iter().any(|p| &p.name == old))
+        {
+            self.renaming = None;
+        }
         let mut remove = None;
-        for (index, preset) in presets.iter().enumerate() {
+        let mut rename = None;
+        let mut cancel_rename = false;
+        for (index, preset) in saved.iter().enumerate() {
             ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(false, l10n::text(ui.ctx(), &preset.name))
-                    .clicked()
+                if let Some((old, name)) = &mut self.renaming
+                    && old == &preset.name
                 {
-                    self.apply(preset);
-                }
-                if ui
-                    .small_button("✕")
-                    .on_hover_text(l10n::text(ui.ctx(), "Delete preset"))
-                    .clicked()
-                {
-                    remove = Some(index);
+                    ui.add(
+                        egui::TextEdit::singleline(name)
+                            .hint_text(old.as_str())
+                            .desired_width(120.0),
+                    )
+                    .accessible_name(l10n::text(ui.ctx(), "New name"));
+                    let name = name.trim();
+                    let allowed = !name.is_empty()
+                        && name != old.as_str()
+                        && !saved.iter().any(|p| p.name == name);
+                    if ui
+                        .add_enabled(allowed, egui::Button::new(l10n::text(ui.ctx(), "Rename")))
+                        .clicked()
+                    {
+                        rename = Some((index, name.to_owned()));
+                    }
+                    cancel_rename = ui.button(l10n::text(ui.ctx(), "Cancel")).clicked();
+                } else {
+                    if ui.selectable_label(false, preset.name.as_str()).clicked() {
+                        self.apply(preset, market);
+                    }
+                    if IconButton::new(&icons::PENCIL)
+                        .size(ButtonSize::SM)
+                        .tooltip("Rename preset")
+                        .show(ui)
+                        .accessible_name(l10n::text(ui.ctx(), "Rename preset"))
+                        .clicked()
+                    {
+                        self.renaming = Some((preset.name.clone(), String::new()));
+                    }
+                    if IconButton::new(&icons::TRASH)
+                        .size(ButtonSize::SM)
+                        .tooltip("Delete preset")
+                        .show(ui)
+                        .accessible_name(l10n::text(ui.ctx(), "Delete preset"))
+                        .clicked()
+                    {
+                        remove = Some(index);
+                    }
                 }
             });
         }
-        if let Some(index) = remove {
-            presets.remove(index);
+        if let Some((index, name)) = rename {
+            saved[index].name = name;
+            self.renaming = None;
         }
+        if cancel_rename {
+            self.renaming = None;
+        }
+        if let Some(index) = remove {
+            saved.remove(index);
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.weak(l10n::text(ui.ctx(), "Keep in preset"));
+            for (value, label, name) in [
+                (
+                    &mut self.preset_fields.quantity,
+                    "Quantity",
+                    "Keep quantity",
+                ),
+                (&mut self.preset_fields.exits, "Exits", "Keep exits"),
+                (
+                    &mut self.preset_fields.order_type,
+                    "Order type",
+                    "Keep order type",
+                ),
+                (
+                    &mut self.preset_fields.time_in_force,
+                    "Time in force",
+                    "Keep time in force",
+                ),
+            ] {
+                ui.checkbox(value, l10n::text(ui.ctx(), label))
+                    .accessible_name(l10n::text(ui.ctx(), name));
+            }
+        });
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.preset_name)
                     .hint_text(l10n::text(ui.ctx(), "Preset name"))
                     .desired_width(120.0),
-            );
+            )
+            .accessible_name(l10n::text(ui.ctx(), "Preset name"));
             let name = self.preset_name.trim();
+            let exists = saved.iter().any(|p| p.name == name);
+            let fields = self.preset_fields;
             if ui
                 .add_enabled(
-                    !name.is_empty(),
+                    !name.is_empty()
+                        && (exists || saved.len() < 10)
+                        && self.replacing.is_none()
+                        && (fields.quantity
+                            || fields.exits
+                            || fields.order_type
+                            || fields.time_in_force),
                     egui::Button::new(l10n::text(ui.ctx(), "Save")),
                 )
                 .clicked()
             {
                 let preset = self.preset(ui.ctx(), name.to_owned(), market);
-                presets.retain(|existing| existing.name != preset.name);
-                presets.push(preset);
-                self.preset_name.clear();
+                if exists {
+                    self.replacing = Some(preset);
+                } else {
+                    saved.push(preset);
+                    self.preset_name.clear();
+                }
             }
         });
+        if saved.len() >= 10 {
+            ui.weak(l10n::text(
+                ui.ctx(),
+                "You can save up to 10 presets per account",
+            ));
+        }
+        if let Some(preset) = &self.replacing {
+            ui.label(l10n::format_text(
+                ui.ctx(),
+                "Replace the preset {name}?",
+                &[("name", &preset.name)],
+            ));
+            let exists = saved.iter().position(|p| p.name == preset.name);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        exists.is_some() || saved.len() < 10,
+                        egui::Button::new(l10n::text(ui.ctx(), "Replace")),
+                    )
+                    .clicked()
+                {
+                    let preset = self.replacing.take().unwrap();
+                    if let Some(index) = exists {
+                        saved[index] = preset;
+                    } else {
+                        saved.push(preset);
+                    }
+                    self.preset_name.clear();
+                }
+                if ui.button(l10n::text(ui.ctx(), "Cancel")).clicked() {
+                    self.replacing = None;
+                }
+            });
+        }
+        if !saved.is_empty() {
+            presets.insert(market.account.to_owned(), saved);
+        }
     }
 
     /// The Order and DOM switch.
@@ -360,6 +482,7 @@ impl OrderTicket {
             changed.quantity = request.quantity;
             changed.order_type = request.order_type;
             changed.time_in_force = request.time_in_force;
+            changed.expires = request.expires;
             // An account without bracket support keeps the working order's own exits.
             if market.capabilities.brackets {
                 changed.take_profit = request.take_profit;
@@ -488,6 +611,257 @@ mod tests {
         Capabilities, Order, OrderId, OrderRequest, OrderSide, OrderType, TimeInForce, TradingRules,
     };
     use egui::pos2;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    #[test]
+    fn preset_names_are_shown_as_typed() {
+        let rules = TradingRules::new("ES");
+        let market = super::super::tests::market(&rules);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, (ticket, presets): &mut (OrderTicket, BTreeMap<String, Vec<OrderPreset>>)| {
+                    ticket.more(ui, &market, presets, &mut false, &mut false);
+                },
+                (
+                    OrderTicket::default(),
+                    BTreeMap::from([("".into(), vec![OrderPreset::new("Market", 1.0)])]),
+                ),
+            );
+        crate::localization::set_translator(&harness.ctx, |key| {
+            (key == "Market").then(|| "Markt".to_owned())
+        });
+        harness.run();
+        assert!(harness.query_by_label("Market").is_some());
+        assert!(harness.query_by_label("Markt").is_none());
+    }
+
+    /// Presets follow the account, replacement waits and keeps its position, and rename changes
+    /// only the name. Saving a new name at ten presets is disabled while replacement still works.
+    #[test]
+    fn presets_belong_to_their_account_ask_before_replacing_and_keep_fields_on_rename() {
+        use super::super::{Bracket, BracketMode, Kind, PresetLevel, PresetSizing};
+        let rules = TradingRules::new("ES");
+        let mut harness = egui_kittest::Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .with_size(vec2(700.0, 900.0))
+            .build_ui_state(
+                |ui,
+                 (ticket, presets, account): &mut (
+                    OrderTicket,
+                    BTreeMap<String, Vec<OrderPreset>>,
+                    &'static str,
+                )| {
+                    let mut market = super::super::tests::market(&rules);
+                    market.account = account;
+                    ticket.more(ui, &market, presets, &mut false, &mut false);
+                },
+                (
+                    OrderTicket {
+                        quantity: 2.0,
+                        preset_name: "Scalp".into(),
+                        ..OrderTicket::default()
+                    },
+                    BTreeMap::new(),
+                    "stocks",
+                ),
+            );
+        harness.run();
+        harness.state_mut().0.preset_fields = super::super::PresetFields {
+            quantity: false,
+            exits: false,
+            order_type: false,
+            time_in_force: false,
+        };
+        harness.run();
+        assert!(harness.get_by_label("Save").accesskit_node().is_disabled());
+        harness.state_mut().0.preset_fields = super::super::PresetFields::default();
+        harness.run();
+        harness.get_by_label("Save").click();
+        harness.run();
+        assert_eq!(harness.state().1["stocks"][0].quantity, 2.0);
+        harness.state_mut().2 = "crypto";
+        harness.run();
+        assert!(harness.query_by_label("Scalp").is_none());
+        harness.get_by_label("No presets saved");
+        assert!(!harness.state().1.contains_key("crypto"));
+        harness.state_mut().2 = "stocks";
+        harness
+            .state_mut()
+            .1
+            .get_mut("stocks")
+            .unwrap()
+            .push(OrderPreset::new("Other", 1.0));
+        harness.state_mut().0.quantity = 5.0;
+        harness.state_mut().0.preset_name = "Scalp".into();
+        harness.run();
+        harness.get_by_label("Save").click();
+        harness.run();
+        assert_eq!(harness.state().1["stocks"][0].quantity, 2.0);
+        harness.get_by_label("Cancel").click();
+        harness.run();
+        assert_eq!(harness.state().1["stocks"][0].quantity, 2.0);
+        harness.get_by_label("Save").click();
+        harness.run();
+        harness.get_by_label("Replace").click();
+        harness.run();
+        assert_eq!(
+            harness.state().1["stocks"]
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Scalp", "Other"]
+        );
+        assert_eq!(harness.state().1["stocks"][0].quantity, 5.0);
+        let mut kept = harness.state().1["stocks"][0].clone();
+        kept.sizing = Some(PresetSizing::RiskPercent(1.0));
+        kept.order_type = Some(Kind::Limit);
+        kept.take_profit = Some(Bracket::new(BracketMode::Ticks, 8.0));
+        kept.take_profit_levels = vec![PresetLevel::new(
+            Bracket::new(BracketMode::Ticks, 16.0),
+            50.0,
+        )];
+        kept.first_level_stop_loss = Some(Bracket::new(BracketMode::Ticks, 4.0));
+        harness.state_mut().1.get_mut("stocks").unwrap()[0] = kept.clone();
+        harness.state_mut().1.get_mut("stocks").unwrap().remove(1);
+        harness.run();
+        harness.get_by_label("Rename preset").click();
+        harness.run();
+        harness.get_by_label("New name").focus();
+        harness.run();
+        harness.get_by_label("New name").type_text("Swing");
+        harness.run();
+        harness.get_by_label("Rename").click();
+        harness.run();
+        kept.name = "Swing".into();
+        assert_eq!(harness.state().1["stocks"], [kept.clone()]);
+        harness
+            .state_mut()
+            .1
+            .get_mut("stocks")
+            .unwrap()
+            .extend((1..10).map(|i| OrderPreset::new(format!("Other {i}"), 1.0)));
+        harness.state_mut().0.preset_name = "Eleventh".into();
+        harness.run();
+        assert!(harness.get_by_label("Save").accesskit_node().is_disabled());
+        harness.state_mut().0.preset_name = "Swing".into();
+        harness.run();
+        assert!(!harness.get_by_label("Save").accesskit_node().is_disabled());
+        harness.state_mut().1.get_mut("stocks").unwrap().truncate(1);
+        harness.run();
+        harness.get_by_label("Rename preset").click();
+        harness.run();
+        harness
+            .state_mut()
+            .1
+            .get_mut("stocks")
+            .unwrap()
+            .push(OrderPreset::new("Other", 1.0));
+        harness.get_by_label("New name").focus();
+        harness.run();
+        harness.get_by_label("New name").type_text("Other");
+        harness.run();
+        assert!(
+            harness
+                .get_by_label("Rename")
+                .accesskit_node()
+                .is_disabled()
+        );
+        harness.get_by_label("Cancel").click();
+        harness.run();
+        harness.state_mut().1.get_mut("stocks").unwrap().truncate(1);
+        harness.run();
+        harness.get_by_label("Delete preset").click();
+        harness.run();
+        assert!(!harness.state().1.contains_key("stocks"));
+    }
+
+    /// The broker rules control visibility, and a wall time at UTC-5 reaches the broker at UTC.
+    #[test]
+    fn good_till_date_expiry_is_entered_in_the_charts_zone() {
+        let mut rules = TradingRules::new("ES");
+        rules.time_in_force.push(TimeInForce::GoodTillDate);
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(340.0, 1200.0))
+            .with_accessibility_check(false)
+            .build_ui_state(
+                |ui, (ticket, rules): &mut (OrderTicket, TradingRules)| {
+                    let mut market = super::super::tests::market(rules);
+                    market.timezone = crate::scales::TimezoneMode::Timezone(
+                        crate::model::TimezoneId::fixed_offset(-5 * 3600).unwrap(),
+                    );
+                    ticket.show(ui, &market, &mut BTreeMap::new(), &mut false, &mut false);
+                },
+                (
+                    OrderTicket {
+                        symbol: "ES".into(),
+                        time_in_force: TimeInForce::GoodTillDate,
+                        ..OrderTicket::default()
+                    },
+                    rules,
+                ),
+            );
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::Role::TextInput, "Expiry")
+            .focus();
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::Role::TextInput, "Expiry")
+            .type_text("2026-12-01 16:00");
+        harness.run();
+        let (ticket, rules) = harness.state();
+        let market = super::super::tests::market(rules);
+        assert_eq!(
+            ticket.request(&harness.ctx, &market).unwrap().expires,
+            Some("2026-12-01T21:00:00Z".parse().unwrap())
+        );
+        harness.state_mut().1.time_in_force = vec![TimeInForce::Day];
+        harness.run();
+        assert!(harness.query_by_label("Expiry").is_none());
+        assert_eq!(harness.state().0.time_in_force, TimeInForce::Day);
+    }
+
+    /// Without the account's capability the ticket shows no trailing stop; with it, the
+    /// Trailing tab offers the distance and the activation price and sends a trailing stop.
+    #[test]
+    fn the_trailing_tab_needs_the_capability() {
+        let rules = TradingRules::new("ES");
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for accepted in [false, true] {
+                let mut harness = egui_kittest::Harness::builder()
+                    .allow_missing_glyphs()
+                    .with_size(vec2(340.0, 1200.0))
+                    .with_accessibility_check(false)
+                    .build_ui_state(
+                        |ui, (ticket, accepted): &mut (OrderTicket, bool)| {
+                            let mut market = super::super::tests::market(&rules);
+                            market.capabilities.trailing_stop = *accepted;
+                            ticket.show(ui, &market, &mut BTreeMap::new(), &mut false, &mut false);
+                        },
+                        (
+                            OrderTicket {
+                                symbol: "ES".into(),
+                                ..OrderTicket::default()
+                            },
+                            accepted,
+                        ),
+                    );
+                crate::theme::apply_to_egui(&harness.ctx, &theme);
+                harness.run();
+                if !accepted {
+                    assert!(harness.query_by_label("Trailing").is_none());
+                    continue;
+                }
+                harness.get_by_label("Trailing").click();
+                harness.run();
+                harness.get_by_label("Trailing distance");
+                harness.get_by_role_and_label(egui::Role::Switch, "Activation price");
+                harness.get_by_label("Buy 1 ES TRAIL 10 ticks");
+            }
+        }
+    }
 
     #[test]
     fn short_tickets_keep_order_controls_reachable() {
@@ -539,6 +913,8 @@ mod tests {
                     last_fill: None,
                     pnl_unit: crate::chart::PnlUnit::Money,
                     logo: None,
+                    account: "",
+                    timezone: crate::scales::TimezoneMode::Utc,
                 };
                 ticket.tab = tab;
                 let mut visible_submit = false;
@@ -566,7 +942,13 @@ mod tests {
                             ..Default::default()
                         },
                         |ui| {
-                            ticket.show(ui, &market, &mut vec![], &mut false, &mut false);
+                            ticket.show(
+                                ui,
+                                &market,
+                                &mut std::collections::BTreeMap::new(),
+                                &mut false,
+                                &mut false,
+                            );
                         },
                     );
                     for shape in &output.shapes {
@@ -593,7 +975,13 @@ mod tests {
                         OrderType::Limit(price),
                     ));
                     ctx.run_ui(egui::RawInput::default(), |ui| {
-                        ticket.show(ui, &market, &mut vec![], &mut false, &mut false);
+                        ticket.show(
+                            ui,
+                            &market,
+                            &mut std::collections::BTreeMap::new(),
+                            &mut false,
+                            &mut false,
+                        );
                     })
                     .drop_without_applying_deltas();
                     assert_eq!(
@@ -645,6 +1033,8 @@ mod tests {
             last_fill: None,
             pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
+            account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         let cases = [
             ("Bid size", "99.50", "ctrl", false, true, None),
@@ -745,6 +1135,7 @@ mod tests {
                 offline: market.offline.clone(),
                 ladder: market.ladder.clone(),
                 highlights: market.highlights.clone(),
+                timezone: market.timezone.clone(),
                 ..market
             };
             let mut ticket = OrderTicket {
@@ -765,7 +1156,15 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| action = ticket.show(ui, &market, &mut vec![], &mut one_click, &mut false),
+                    |ui| {
+                        action = ticket.show(
+                            ui,
+                            &market,
+                            &mut std::collections::BTreeMap::new(),
+                            &mut one_click,
+                            &mut false,
+                        )
+                    },
                 );
                 let labels: Vec<_> = output
                     .shapes
@@ -872,22 +1271,28 @@ mod tests {
     fn ladder_tags_open_their_order_for_one_modification() {
         use crate::chart::TradingLineAction;
         use crate::model::{OrderStatus, PositionBracket};
-        for (gesture, modify) in [
-            ("tab-double-click", true),
-            ("double-click", true),
-            ("menu", true),
-            ("double-click", false),
-            ("menu", false),
+        for (gesture, modify, expiry) in [
+            ("tab-double-click", true, false),
+            ("double-click", true, false),
+            ("menu", true, false),
+            ("double-click", false, false),
+            ("menu", false, false),
+            ("double-click", true, true),
         ] {
             let ctx = egui::Context::default();
             ctx.all_styles_mut(|style| {
                 style.interaction.tooltip_delay = 0.0;
                 style.interaction.show_tooltips_only_when_still = false;
             });
-            let rules = TradingRules::new("ES");
+            let mut rules = TradingRules::new("ES");
+            rules.time_in_force.push(TimeInForce::GoodTillDate);
             let mut request = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Limit(99.5));
             request.position_bracket = Some(PositionBracket::TakeProfit);
             request.take_profit = Some(110.0);
+            if expiry {
+                request.time_in_force = TimeInForce::GoodTillDate;
+                request.expires = Some("2026-12-01T21:00:00Z".parse().unwrap());
+            }
             let order = Order::new(OrderId::new("bid"), request, OrderStatus::Working);
             let orders = [order.clone()];
             let market = Market {
@@ -921,6 +1326,9 @@ mod tests {
                 last_fill: None,
                 pnl_unit: crate::chart::PnlUnit::Money,
                 logo: None,
+
+                account: "",
+                timezone: crate::scales::TimezoneMode::Utc,
             };
             let mut ticket = OrderTicket {
                 open: true,
@@ -943,7 +1351,15 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| action = ticket.show(ui, market, &mut vec![], &mut true, &mut false),
+                    |ui| {
+                        action = ticket.show(
+                            ui,
+                            market,
+                            &mut std::collections::BTreeMap::new(),
+                            &mut true,
+                            &mut false,
+                        )
+                    },
                 );
                 let labels: Vec<_> = output
                     .shapes
@@ -1033,6 +1449,9 @@ mod tests {
                 None
             );
             ticket.quantity = 2.0;
+            if expiry {
+                ticket.expires = Some("2026-12-01T22:00:00Z".parse().unwrap());
+            }
             let labels = frame(&mut ticket, &market, vec![]).1;
             let send = find(&labels, "Modify order");
             frame(&mut ticket, &market, vec![egui::Event::PointerMoved(send)]);
@@ -1040,6 +1459,9 @@ mod tests {
             let action = frame(&mut ticket, &market, vec![click(send, false)]).0;
             let mut changed = order.request.clone();
             changed.quantity = 2.0;
+            if expiry {
+                changed.expires = Some("2026-12-01T22:00:00Z".parse().unwrap());
+            }
             assert_eq!(
                 action,
                 Some(Action::Confirm(Box::new(TradingLineAction::Modify(

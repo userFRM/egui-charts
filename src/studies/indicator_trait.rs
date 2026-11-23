@@ -8,6 +8,28 @@ use crate::model::Bar;
 use crate::studies::IndicatorValues;
 use egui::Color32;
 
+// All existing Indicator implementations (including borrowed and unsized ones) receive
+// this private supertrait. Only chart-owned 'static instances are inspected. Erasing the
+// *conversion function*, rather than coercing an arbitrary ?Sized self into dyn Any, keeps
+// that blanket implementation unconstrained. No study can override its concrete identity.
+pub(crate) trait ConcreteStudy {
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    fn concrete_study(&self, cast: &dyn std::any::Any) -> Option<&dyn std::any::Any>
+    where
+        Self: 'static;
+}
+
+impl<T: ?Sized> ConcreteStudy for T {
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    fn concrete_study(&self, cast: &dyn std::any::Any) -> Option<&dyn std::any::Any>
+    where
+        Self: 'static,
+    {
+        cast.downcast_ref::<fn(&T) -> &dyn std::any::Any>()
+            .map(|cast| cast(self))
+    }
+}
+
 /// The output value of an indicator at a single bar position.
 ///
 /// An owned row for constructing or exporting [`IndicatorValues`](super::IndicatorValues).
@@ -177,7 +199,11 @@ pub struct StudyPane {
 ///     inverted_color: None,
 /// };
 /// ```
-pub trait Indicator: Send {
+#[expect(
+    private_bounds,
+    reason = "blanket-implemented for every type; not a host extension point"
+)]
+pub trait Indicator: Send + ConcreteStudy {
     /// Sparse projected price bands, with fractional endpoints in future whitespace.
     fn projections(&self) -> &[super::StudyProjection] {
         &[]
@@ -319,6 +345,25 @@ pub trait Indicator: Send {
         false
     }
 
+    /// Whether plot `line` holds per-bar values. Return false for a plot that only styles the
+    /// study's [`zones`](Self::zones): their edges are lines whatever the plot type, and a plot
+    /// without values puts no tag on the price scale and draws no latest value line, so the
+    /// settings dialog offers such a plot only its visibility, colour, width and line pattern.
+    /// True by default.
+    fn plot_holds_values(&self, line: usize) -> bool {
+        let _ = line;
+        true
+    }
+
+    /// Whether the settings dialog offers plot `line` only its visibility and colour: return true
+    /// for a plot the study draws in a look of its own, such as a level it marks with tags. The
+    /// dialog then offers no width, line pattern, plot type, scale tag or latest value line for
+    /// it; stored values of those settings still load and are kept. False by default.
+    fn plot_color_only(&self, line: usize) -> bool {
+        let _ = line;
+        false
+    }
+
     /// Editable alternate colour and width states, separate from the output's main style.
     fn plot_variants(&self, _line: usize) -> Vec<super::PlotVariant> {
         Vec::new()
@@ -346,6 +391,29 @@ pub trait Indicator: Send {
     fn plot_offset(&self, line: usize) -> isize {
         let _ = line;
         0
+    }
+
+    /// Whether everything drawn under the current inputs is plots, their shapes, bands and
+    /// fills, all of which an offset moves bar for bar. A study without a
+    /// [`source`](Self::source) offers Offset while this holds. Return true only when it reads
+    /// the chart's bars alone and draws no markers, labels, zones, projections, tables,
+    /// candles, profiles or drawings. False by default.
+    fn draws_only_plots(&self) -> bool {
+        false
+    }
+
+    /// Whether everything the study draws can follow a calculation on another symbol or interval:
+    /// plots, bands, fills, markers, zones, candles and profiles, which a chart places on its
+    /// own bars that share their time. Return false for a study that can draw drawings,
+    /// [`labels`](Self::labels), [`projections`](Self::projections) or
+    /// [`price_segments`](Self::price_segments) under any of its inputs, or whose output the
+    /// chart draws from its own bars or symbol, such as a [`tpo`](Self::tpo) profile. Such a
+    /// study offers no Symbol, Interval or Wait for interval close input, and restoring it drops
+    /// saved values of them. The answer must not depend on the inputs, so that saved inputs
+    /// restore in any order. True by default; while a study that returns true runs on other
+    /// bars, its drawings, labels, projections and price segments are not drawn.
+    fn draws_on_other_bars(&self) -> bool {
+        true
     }
 
     /// Optional per-bar colour, overriding the plot colour at a source bar.
@@ -393,52 +461,63 @@ pub trait Indicator: Send {
         self.values().value(line, source)
     }
 
+    /// Names of the declared alert conditions, in the order
+    /// [`alert_condition`](Self::alert_condition) numbers them, such as `"Trend change"`.
+    /// The alert dialog lists them after the outputs as `"{study}: {condition}"`, translating
+    /// the condition when shown. Keep indices stable across settings changes and releases.
+    /// None by default.
+    ///
+    /// A host study can declare a condition and construct an alert on it:
+    ///
+    /// ```
+    /// use egui_charts::model::{Alert, AlertCondition, AlertSource, Bar};
+    /// use egui_charts::studies::{Indicator, IndicatorValues};
+    ///
+    /// #[derive(Clone, Default)]
+    /// struct PositiveClose { values: IndicatorValues }
+    /// impl Indicator for PositiveClose {
+    ///     fn name(&self) -> &str { "Positive close" }
+    ///     fn calculate(&mut self, bars: &[Bar]) {
+    ///         self.values = IndicatorValues::new();
+    ///         for bar in bars {
+    ///             self.values.push_lines(&[bar.close]);
+    ///         }
+    ///     }
+    ///     fn values(&self) -> &IndicatorValues { &self.values }
+    ///     fn alert_conditions(&self) -> Vec<String> { vec!["Close above zero".into()] }
+    ///     fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+    ///         match condition {
+    ///             0 => self.values.value(0, bar).map(|v| v > 0.0),
+    ///             _ => None,
+    ///         }
+    ///     }
+    /// #   fn colors(&self) -> Vec<ecolor::Color32> { vec![ecolor::Color32::YELLOW] }
+    /// #   fn set_colors(&mut self, _: Vec<ecolor::Color32>) {}
+    /// #   fn set_visible(&mut self, _: bool) {}
+    /// #   fn clone_box(&self) -> Box<dyn Indicator> { Box::new(self.clone()) }
+    /// }
+    /// let mut study = PositiveClose::default();
+    /// study.calculate(&[Bar::new(chrono::DateTime::UNIX_EPOCH, 1.0, 1.0, 1.0, 1.0, 1.0)]);
+    /// assert_eq!(study.alert_conditions(), ["Close above zero"]);
+    /// assert_eq!(study.alert_condition(0, 0), Some(true));
+    /// let mut alert = Alert::new("SAMPLE", AlertCondition::Holds);
+    /// alert.source = AlertSource::StudyCondition { id: "3".into(), condition: 0 };
+    /// assert!(alert.is_valid());
+    /// ```
+    fn alert_conditions(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Whether a declared condition holds at a source bar, independent of plot displacement.
+    /// Returns `None` for an unknown condition, a missing bar or an undefined condition,
+    /// including warm-up. An alert counts `None` as not holding.
+    fn alert_condition(&self, _condition: usize, _bar: usize) -> Option<bool> {
+        None
+    }
+
     /// Current applied presentation, initialized from the study's own defaults.
     fn settings(&self) -> super::StudySettings {
-        let (levels, fill_between_levels, level_fill_color) =
-            super::settings::declared_levels(self);
-        super::StudySettings {
-            show_legend_values: true,
-            user_edit_enabled: Some(self.user_edit_enabled()),
-            help_url: self.help_url().map(str::to_owned),
-            plots: (0..self.line_count())
-                .map(|line| self.plot_style(line))
-                .collect(),
-            precision: self.precision(),
-            hidden_intervals: Vec::new(),
-            timeframe_visibility: crate::model::TimeframeVisibility::all(),
-            levels,
-            fill_between_levels,
-            level_fill_color,
-            mfi_auto_range: false,
-            untagged_plots: (0..self.line_count())
-                .filter(|&line| !self.plot_tagged(line))
-                .collect(),
-            price_line_plots: (0..self.line_count())
-                .filter(|&line| self.plot_price_line(line))
-                .collect(),
-            plot_variants: (0..self.line_count())
-                .map(|line| self.plot_variants(line))
-                .collect(),
-            gradients: self
-                .gradients()
-                .iter()
-                .map(|fill| super::GradientStyle {
-                    colors: fill.colors,
-                    visible: true,
-                })
-                .collect(),
-            background: self.background(),
-            background_visible: true,
-            fills: self
-                .fills()
-                .iter()
-                .map(|fill| super::FillStyle {
-                    inverted_color: fill.inverted_color,
-                    ..super::FillStyle::new(fill.color)
-                })
-                .collect(),
-        }
+        super::settings::declared_settings(self)
     }
 
     /// Capture editable inputs and presentation without copying calculated values.
@@ -595,11 +674,24 @@ pub trait Indicator: Send {
     /// Interval and Wait for interval close inputs, otherwise offered to source-aware studies,
     /// studies that request nothing, and studies without an interval input of their own that
     /// request only price bars of other symbols or of the chart's interval, which they read on the
-    /// Interval as on a chart of it. On another interval it passes every request on with the
+    /// Interval as on a chart of it, but never to a study with an
+    /// [`InputKind::AutoTimeframe`](super::InputKind::AutoTimeframe) input, whose interval
+    /// follows the chart. On another interval it passes every request on with the
     /// start [`data_start`](Indicator::data_start) states. The default, `false`, keeps a study
     /// that requests other histories, such as the chart symbol's bars of a stated interval or
     /// metrics, on the chart's interval.
     fn requests_allow_other_intervals(&self) -> bool {
+        false
+    }
+
+    /// Whether a [`ConfiguredStudy`](super::ConfiguredStudy) offers this study the Wait for
+    /// interval close input, on by default, for the histories it requests and reads with
+    /// [`StudyData::closed_at`](super::StudyData::closed_at), also when it has an interval
+    /// input of its own. The chart passes the setting with each history in
+    /// [`StudyData::chart`](super::StudyData::chart). A study the chart can calculate on
+    /// another interval is offered the input in any case. The default, `false`, offers it no
+    /// other way.
+    fn offers_wait_for_close(&self) -> bool {
         false
     }
 
@@ -631,6 +723,9 @@ pub trait Indicator: Send {
     }
 
     /// Current editable inputs. A host study can supply the same schema as built-ins.
+    /// The chart adds inputs of its own after these under the ids `plot_offset`,
+    /// `calculation_symbol`, `calculation_timeframe` and `wait_for_close`; where it adds one, an
+    /// edit by that id reaches the chart's input, so give the study's inputs other ids.
     fn inputs(&self) -> Vec<super::StudyInput> {
         Vec::new()
     }
@@ -726,6 +821,15 @@ pub trait Indicator: Send {
         self.calculate(data);
     }
 
+    /// The state of a calculation that may run away from the UI thread; `None`, the default,
+    /// for studies that finish inside [`calculate`](Indicator::calculate) and
+    /// [`update`](Indicator::update). While it is [`Running`](super::Calculation::Running) the
+    /// chart keeps drawing the study's values and updates it again on the next frame; the
+    /// legends show the progress, the last compute time or why it stopped.
+    fn calculation(&self) -> Option<super::Calculation> {
+        None
+    }
+
     /// Whether live updates avoid recomputing unaffected history. Causal studies do work
     /// independent of the series length; studies that redraw earlier legs or periods also
     /// revisit the bars whose output changes. Earlier corrections may recompute in full.
@@ -791,11 +895,18 @@ pub trait Indicator: Send {
     }
 
     /// Candle bodies and wicks, rendered in place of line plots when nonempty.
-    /// Each candle takes its plot's colour, or [`plot_color`](Self::plot_color) of that plot
-    /// at the candle's first source bar when that returns one. Source ranges and OHLCV remain
-    /// available to hosts for per-bar readouts.
+    /// Each candle takes its plot's colour, or [`candle_color`](Self::candle_color) when
+    /// that returns one. Source ranges and OHLCV remain available to hosts for per-bar readouts.
     fn candles(&self) -> &[super::StudyCandle] {
         &[]
+    }
+
+    /// Optional colour of the candle at `index` in [`candles`](Self::candles), overriding its
+    /// plot colour. Defaults to [`plot_color`](Self::plot_color) at its first source bar.
+    /// A study mapping candle geometry to other bars can retain that source colour here.
+    fn candle_color(&self, index: usize) -> Option<Color32> {
+        let candle = self.candles().get(index)?;
+        self.plot_color(candle.plot, candle.bars.start)
     }
 
     /// Whether each of [`candles`](Self::candles) is painted as a block filled in its plot
@@ -876,6 +987,15 @@ pub trait Indicator: Send {
     /// Draw [`labels`](Self::labels) on the main price chart, even when the study has its
     /// own pane. Label prices use the main series' scale. Off by default.
     fn labels_on_price(&self) -> bool {
+        false
+    }
+
+    /// Keep the plots, their fills and the [`projections`](Self::projections) on the main price
+    /// chart when the study has its own pane, using the main series' price scale. Its pane then
+    /// shows the [`table`](Self::table) and legend alone, without a value axis. The price scale
+    /// fits the plots as it fits an overlay's. They are selected from the study's pane. On the
+    /// price pane the study uses its chosen scale as other overlays do. Off by default.
+    fn plots_on_price(&self) -> bool {
         false
     }
 
@@ -1054,6 +1174,14 @@ pub trait Indicator: Send {
     /// continue to use `clone_box`.
     fn clone_for_export(&self) -> Box<dyn Indicator> {
         self.clone_box()
+    }
+}
+
+#[cfg(all(feature = "widget", feature = "studies"))]
+impl dyn Indicator {
+    pub(crate) fn concrete<T: 'static>(&self) -> Option<&T> {
+        let cast: fn(&T) -> &dyn std::any::Any = |value| value;
+        ConcreteStudy::concrete_study(self, &cast)?.downcast_ref()
     }
 }
 

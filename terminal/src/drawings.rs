@@ -17,7 +17,7 @@ use egui_charts::ui::drawing_toolbar::{
     DrawingToolbar, DrawingToolbarAction, DrawingToolbarDomainState, MagnetType,
 };
 use egui_charts::ui::floating_toolbar::FloatingSelectionToolbar;
-use egui_charts::ui::widget_bar::panels::object_tree::{
+use egui_charts::ui::widget_bar::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem, show_data_window,
 };
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBarAction};
@@ -1256,19 +1256,16 @@ mod tests {
             [242, 54, 69, 255]
         );
         assert!(!terminal.chart().can_undo(), "one undo step for the colour");
-        for (tool, filled) in [
-            (DrawingToolType::TrendLine, false),
-            (DrawingToolType::Rect, true),
-            (DrawingToolType::TextLabel, false),
+        for (tool, filled, color) in [
+            (DrawingToolType::TrendLine, false, "#F23645"),
+            (DrawingToolType::Rect, true, "#F23645"),
+            (DrawingToolType::TextLabel, false, "#2962FF"),
         ] {
             let drawing = &mut terminal.chart_mut().drawings_mut().drawings[0];
             drawing.tool_type = tool;
             drawing.fill_color = Some([0, 255, 0, 85]);
             let shown = frame(&mut terminal, SIZE, vec![]);
-            assert!(
-                shown.text_at("#F23645").is_some(),
-                "current colour: {tool:?}"
-            );
+            assert!(shown.text_at(color).is_some(), "current colour: {tool:?}");
             assert_eq!(
                 shown.text_at("#00FF00").is_some(),
                 filled,

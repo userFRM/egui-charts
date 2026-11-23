@@ -115,8 +115,9 @@ pub struct SourceItem {
     pub visible: bool,
     /// Is locked (drawings only - prevents modification)
     pub locked: bool,
-    /// Whether the user can edit the drawing, copied from
-    /// [`crate::drawings::Drawing::user_edit_enabled`]. Off, the row offers no lock toggle and
+    /// Whether the user can edit the drawing: [`crate::drawings::Drawing::user_edit_enabled`],
+    /// and off while every drawing is locked
+    /// ([`crate::drawings::DrawingManager::is_locked`]). Off, the row offers no lock toggle and
     /// no delete. Non-drawing rows ignore this field.
     pub user_edit_enabled: bool,
     /// Is selected in the tree
@@ -151,7 +152,7 @@ impl SourceItem {
     ///
     /// ```
     /// use egui_charts::drawings::DrawingToolType;
-    /// use egui_charts::ui::widget_bar::panels::object_tree::SourceItem;
+    /// use egui_charts::ui::widget_bar::SourceItem;
     ///
     /// let mut item = SourceItem::drawing(7, DrawingToolType::TrendLine, egui::Color32::GOLD);
     /// item.locked = true;
@@ -186,7 +187,8 @@ impl SourceItem {
     }
 
     /// A drawing row with the chart's tool name, the drawing's label, colour, visibility,
-    /// lock, layer, folder and synchronisation, and the panes it can move to.
+    /// lock, layer, folder and synchronisation, whether the user can edit it, and the panes it
+    /// can move to.
     pub fn for_drawing(chart: &crate::widget::Chart, drawing: &crate::drawings::Drawing) -> Self {
         let mut item =
             Self::drawing(drawing.id, drawing.tool_type, drawing.color32()).with_panes(chart);
@@ -194,6 +196,7 @@ impl SourceItem {
         item.label = drawing.label.clone();
         item.visible = drawing.visible;
         item.locked = drawing.locked;
+        item.user_edit_enabled = drawing.user_edit_enabled && !chart.drawings().is_locked();
         item.z_index = drawing.z_order;
         item.folder = drawing.folder.clone();
         item.folder_sync = drawing.folder_sync_mode();
@@ -329,6 +332,16 @@ impl SourceItem {
         }
     }
 
+    /// The row's text: the label the user gave as saved, otherwise the library's name through
+    /// the host translator.
+    pub(super) fn shown_name(&self, ctx: &egui::Context) -> String {
+        if self.label.is_some() {
+            self.full_display_name()
+        } else {
+            crate::localization::text(ctx, self.full_display_name())
+        }
+    }
+
     /// Set custom label
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
@@ -363,22 +376,32 @@ impl SourceItem {
 /// Data Window information (OHLCV at cursor position)
 ///
 /// Displays real-time price data for the bar under the cursor. Build it with
-/// [`Self::from_chart`], [`Self::from_pointer`] or [`Self::new`].
+/// [`Self::from_chart`], [`Self::from_pointer`] or [`Self::new`]. At a whitespace bar, or on a
+/// chart without bars, the prices, volume and changes are NaN and the panel lists the time,
+/// interval, series and studies without value rows, as the status line does.
 ///
 /// ```
-/// use egui_charts::ui::widget_bar::panels::object_tree::{DataWindowInfo, DataWindowSeries};
+/// use egui_charts::ui::widget_bar::{DataWindowInfo, DataWindowSeries};
 ///
 /// let mut info = DataWindowInfo::new("XAUUSD").with_ohlcv(2400.0, 2410.0, 2395.0, 2405.0, 9.0);
 /// let value = Some("5,000.00".to_owned());
 /// info.series.push(DataWindowSeries::new("SPX", egui::Color32::GOLD, value));
+/// // A readout built for a strike scale names its value as that scale does.
+/// info.value_name = Some("Strike".to_owned());
 /// ```
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct DataWindowInfo {
     /// Symbol name (e.g., "XAUUSD")
     pub symbol: String,
     /// Timestamp at cursor position
     pub timestamp: String,
+    /// The name the data window gives [`Self::timestamp`], the horizontal value: the chart's
+    /// [`HorizontalScale::value_name`](crate::scales::HorizontalScale::value_name), which
+    /// [`Self::from_chart`] and [`Self::from_pointer`] fill and the panel passes through the
+    /// translator, as the chart's readout does. `Some("Time")` by default, as on a time chart;
+    /// `None` or an empty name shows the value without a name.
+    pub value_name: Option<String>,
     /// Timeframe (e.g., "1m", "1H", "1D")
     pub timeframe: String,
     /// Open price
@@ -418,6 +441,34 @@ pub struct DataWindowInfo {
     pub series: Vec<DataWindowSeries>,
     /// Visible study plots at the same bar as the OHLCV values.
     pub studies: Vec<crate::chart::rendering::StudyValue>,
+}
+
+impl Default for DataWindowInfo {
+    /// An empty readout whose horizontal value is named "Time", as on a time chart.
+    fn default() -> Self {
+        Self {
+            symbol: String::new(),
+            timestamp: String::new(),
+            value_name: Some("Time".to_owned()),
+            timeframe: String::new(),
+            open: 0.0,
+            high: 0.0,
+            low: 0.0,
+            close: 0.0,
+            volume: 0.0,
+            volume_hidden: false,
+            change: 0.0,
+            change_percent: 0.0,
+            volume_precision: None,
+            prev_close: 0.0,
+            price_decimals: None,
+            formatted_prices: None,
+            formatted_volume: None,
+            formatted_change: None,
+            series: Vec::new(),
+            studies: Vec::new(),
+        }
+    }
 }
 
 /// An added series' row in the data window.
@@ -488,11 +539,16 @@ impl DataWindowInfo {
         self
     }
 
-    /// Calculate and set change from previous close
+    /// Calculate and set change from previous close. Without a close or a previous close, such
+    /// as at a whitespace bar, both changes are NaN rather than zero.
     pub fn with_prev_close(mut self, prev: f64) -> Self {
         self.prev_close = prev;
         self.change = self.close - prev;
-        self.change_percent = percent_change(prev, self.close);
+        self.change_percent = if self.change.is_nan() {
+            f64::NAN
+        } else {
+            percent_change(prev, self.close)
+        };
         self
     }
 

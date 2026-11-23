@@ -11,7 +11,9 @@ use egui::Color32;
 
 use history::Paging;
 
-use super::Trading;
+pub(super) use crate::chart::quantity_decimals;
+
+use super::{Trading, changed};
 use crate::model::{
     BalanceChange, ClosedPosition, Execution, JournalEntry, Order, OrderId, OrderRequest,
     OrderStatus, OrderType, Position,
@@ -64,13 +66,20 @@ impl Fills {
         if !repeated {
             *self.filled.entry(fill.order.clone()).or_default() += fill.quantity;
         }
-        if let Some(order) = self.orders.get(&fill.order) {
-            let symbol = order.symbol.clone();
+        if let Some(symbol) = self.symbol(fill).map(str::to_owned) {
             self.remember(&symbol, fill);
         }
         if let Some(old) = dropped {
             self.forget(&old.order);
         }
+    }
+
+    /// The order's symbol when known, otherwise the fill's own.
+    pub(super) fn symbol<'a>(&'a self, fill: &'a Execution) -> Option<&'a str> {
+        self.orders
+            .get(&fill.order)
+            .map(|order| order.symbol.as_str())
+            .or(fill.symbol.as_deref())
     }
 
     pub(super) fn forget(&mut self, id: &OrderId) {
@@ -294,6 +303,7 @@ impl Tab {
                     right("Stop Loss", 80.0),
                     left("Status", 76.0),
                     left("Placing Time", 130.0),
+                    left("Expiry", 130.0),
                     left("Order ID", 60.0),
                 ];
                 COLUMNS
@@ -413,6 +423,7 @@ fn kind(order_type: &OrderType) -> &'static str {
         OrderType::Limit(_) => "Limit",
         OrderType::Stop(_) => "Stop",
         OrderType::StopLimit { .. } => "Stop Limit",
+        OrderType::TrailingStop { .. } => "Trailing Stop",
     }
 }
 
@@ -436,7 +447,7 @@ impl AccountPanel {
             && self
                 .editing
                 .as_ref()
-                .is_some_and(|(old, _)| old.id == order.id && old != order)
+                .is_some_and(|(old, _)| old.id == order.id && changed(old, order))
         {
             self.editing = None;
         }
@@ -484,11 +495,6 @@ impl AccountPanel {
         self.paging.clear();
         self.editing = None;
     }
-}
-
-/// Decimals that show `quantity` without rounding, up to 8.
-pub(super) fn quantity_decimals(quantity: f64) -> usize {
-    crate::scales::decimals(quantity).min(8)
 }
 
 /// The rows in view as comma-separated values, with the shown columns' titles as the header.
@@ -1014,6 +1020,19 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
             panel.record(&event);
             assert!(panel.editing.is_none());
         }
+        let mut trailing = order.clone();
+        trailing.request.order_type = OrderType::TrailingStop {
+            distance: crate::model::TrailDistance::Price(2.0),
+            activation: None,
+        };
+        trailing.trailing_stop = Some(98.0);
+        panel.editing = Some((trailing.clone(), trailing.request.clone()));
+        trailing.trailing_stop = Some(99.0);
+        panel.record(&AccountEvent::Order(trailing));
+        assert!(
+            panel.editing.is_some(),
+            "a moving trailing stop keeps the dialog"
+        );
         panel.clear();
         assert!(panel.fills.executions.is_empty());
     }
@@ -1152,6 +1171,9 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
         let now = chrono::Utc::now();
         let mut fill = Execution::new(order.id.clone(), now, OrderSide::Buy, 100.0, 1.0);
         fills.execution(&fill);
+        fill.symbol = Some("CL".into());
+        assert_eq!(fills.symbol(&fill), Some("ES"));
+        fill.symbol = None;
         fill.time -= chrono::Duration::seconds(1);
         fill.price = 99.0;
         fills.execution(&fill);
@@ -1159,6 +1181,11 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
         fills.execution(&fill);
         assert_eq!(fills.price("ES"), Some(100.0));
         assert_eq!(fills.price("NQ"), None);
+        let mut cl = fill.clone();
+        cl.order = OrderId::new("unknown-cl");
+        cl.symbol = Some("CL".into());
+        fills.execution(&cl);
+        assert_eq!(fills.price("CL"), Some(99.0));
         let mut delayed = order.clone();
         delayed.id = fill.order.clone();
         delayed.request.symbol = "NQ".into();

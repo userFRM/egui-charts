@@ -44,10 +44,10 @@ pub enum BackgroundStyle {
 pub enum NavigationButtons {
     /// Always show the buttons.
     Always,
-    /// Show the buttons while the pointer is over the main pane, price and volume.
-    OnHover,
-    /// Hide the buttons (the default).
+    /// Show the buttons while the pointer is over the main pane, price and volume (the default).
     #[default]
+    OnHover,
+    /// Hide the buttons.
     Never,
 }
 
@@ -422,7 +422,8 @@ pub struct ChartConfig {
     pub show_ohlc_change_percent: bool,
     /// Show volume in the legend independently of the histogram.
     pub show_legend_volume: bool,
-    /// Show host-supplied study inputs in the legend.
+    /// Show study inputs after their names in the legend: the host's caption, else one built
+    /// from the study's inputs.
     pub show_indicator_inputs: bool,
     /// Show the symbol's logo before the legend title: the legend badge, else the instrument's
     /// logo, else the symbol's initial on a neutral disc.
@@ -556,7 +557,7 @@ pub struct ChartConfig {
     pub realtime_button_hover_color: Color32,
     /// Text or icon color for the realtime button; `PLACEHOLDER` follows the theme.
     pub realtime_button_text_color: Color32,
-    /// When to show the navigation buttons.
+    /// When to show the navigation buttons. Default: [`NavigationButtons::OnHover`].
     pub navigation_buttons: NavigationButtons,
     /// When to show the maximize and menu buttons of the panes.
     #[serde(default = "pane_buttons_on_hover")]
@@ -816,6 +817,31 @@ impl ChartConfig {
         } else {
             (color.to_opaque(), color)
         }
+    }
+
+    /// The colour an Analyst price forecast study shows for the choice `color`: the fill
+    /// `PLACEHOLDER` stands for, made from the side's theme candle colour `themed`, or the
+    /// choice itself.
+    #[cfg(feature = "studies")]
+    pub(crate) fn price_target_study_color(color: Color32, themed: Color32) -> Color32 {
+        if color == Color32::PLACEHOLDER {
+            Self::price_target_colors(color, themed).1
+        } else {
+            color
+        }
+    }
+
+    /// The choice a study colour stands for: `PLACEHOLDER` when it is the theme's own fill,
+    /// within the rounding of a colour picker, otherwise the colour itself.
+    #[cfg(feature = "studies")]
+    pub(crate) fn price_target_choice(color: Color32, themed: Color32) -> Color32 {
+        let theme = Self::price_target_study_color(Color32::PLACEHOLDER, themed);
+        let near = color
+            .to_array()
+            .iter()
+            .zip(theme.to_array())
+            .all(|(a, b)| a.abs_diff(b) <= 1);
+        if near { Color32::PLACEHOLDER } else { color }
     }
 
     /// Apply the theme's background, grid, axis text, candle, session break and watermark

@@ -1,5 +1,5 @@
 //! Reusable alert settings, stored without the values that belong to one alert: symbols, levels,
-//! drawings and webhook addresses.
+//! drawings, webhook addresses and plain-text email addresses.
 
 use std::collections::BTreeMap;
 
@@ -23,15 +23,15 @@ const VERSION: u32 = 3;
 pub(super) struct PresetFields {
     /// Each rule's source and operator.
     pub(super) condition: bool,
-    /// Each rule's interval.
+    /// Each rule's interval, and the session of the alert's inputs.
     pub(super) interval: bool,
     /// How often the alert fires.
     pub(super) frequency: bool,
     /// The time left until expiry, or no expiry.
     pub(super) expiry: bool,
-    /// The alert's name and message.
+    /// The alert's name and message, each only where the alert has one.
     pub(super) text: bool,
-    /// The delivery choices, without the webhook address.
+    /// The delivery choices, without the webhook and plain-text email addresses.
     pub(super) delivery: bool,
     /// The notification schedule.
     pub(super) schedule: bool,
@@ -75,10 +75,15 @@ pub(super) struct AlertPreset {
     source_names: Vec<(AlertSource, AlertSourceName)>,
     timeframe: Option<Timeframe>,
     additional_timeframes: Vec<Option<Timeframe>>,
+    /// The session of the alert's inputs, kept with the interval: extended hours, and overnight
+    /// hours beside them. `None` when the alert had no inputs or the preset predates sessions.
+    hours: Option<(bool, bool)>,
     frequency: AlertFrequency,
     /// Seconds from applying the preset to the expiry; `None` never expires.
     expires_after: Option<i64>,
+    /// Empty when the saved alert had no name; applying then leaves the alert's own.
     name: String,
+    /// Empty when the saved alert had no message; applying then leaves the alert's own.
     message: String,
     delivery: AlertDelivery,
     schedule: Option<Box<NotificationSchedule>>,
@@ -130,6 +135,10 @@ impl AlertPreset {
             preset
                 .additional_timeframes
                 .clone_from(&alert.additional_timeframes);
+            preset.hours = alert
+                .inputs
+                .as_ref()
+                .map(|inputs| (inputs.extended_hours, inputs.overnight_hours));
         }
         if fields.frequency {
             preset.frequency = alert.frequency;
@@ -146,6 +155,7 @@ impl AlertPreset {
         if fields.delivery {
             preset.delivery = AlertDelivery {
                 webhook_url: String::new(),
+                plain_text_address: String::new(),
                 ..alert.delivery.clone()
             };
         }
@@ -155,11 +165,13 @@ impl AlertPreset {
         preset
     }
 
-    /// Set the selected groups on `alert`, whose subject, levels, drawings, compared plots and
-    /// webhook address stay. A rule stays whole where its stored operator would drop the drawings
-    /// or plots it tests or needs levels it lacks. A stored study that `sources` does not offer
-    /// under its stored name is not reused, and an alert on host events keeps its condition, interval
-    /// and any frequency it cannot use; a position alert keeps its condition and frequency.
+    /// Set the selected groups on `alert`, whose subject, levels, drawings, compared plots,
+    /// webhook address and plain-text email address stay. A rule stays whole where its stored
+    /// operator would drop the drawings or plots it tests or needs levels it lacks. A stored
+    /// study that `sources` does not offer under its stored name is not reused, and an alert on
+    /// host events keeps its condition, interval and any frequency it cannot use; a position
+    /// alert keeps its condition and frequency. The alert also keeps its name or its message
+    /// where the preset holds none.
     pub(super) fn apply(
         &self,
         alert: &mut Alert,
@@ -187,15 +199,22 @@ impl AlertPreset {
                     &self.source_names,
                     sources,
                 ) {
-                    Some(condition) => AlertRule {
-                        source: restored_source(
-                            &rule.source,
-                            &current.source,
-                            &self.source_names,
-                            sources,
-                        ),
-                        condition,
-                    },
+                    Some(condition) => {
+                        let rule = AlertRule {
+                            source: restored_source(
+                                &rule.source,
+                                &current.source,
+                                &self.source_names,
+                                sources,
+                            ),
+                            condition,
+                        };
+                        if rule.condition.pairs_with(&rule.source) {
+                            rule
+                        } else {
+                            current.clone()
+                        }
+                    }
                     None => current.clone(),
                 }
             });
@@ -219,6 +238,9 @@ impl AlertPreset {
             alert
                 .additional_timeframes
                 .clone_from(&self.additional_timeframes);
+            if let (Some(hours), Some(inputs)) = (self.hours, &mut alert.inputs) {
+                (inputs.extended_hours, inputs.overnight_hours) = hours;
+            }
         }
         alert
             .additional_timeframes
@@ -240,12 +262,17 @@ impl AlertPreset {
                 .and_then(|after| now.checked_add_signed(after));
         }
         if self.fields.text {
-            alert.name.clone_from(&self.name);
-            alert.message.clone_from(&self.message);
+            if !self.name.is_empty() {
+                alert.name.clone_from(&self.name);
+            }
+            if !self.message.is_empty() {
+                alert.message.clone_from(&self.message);
+            }
         }
         if self.fields.delivery {
             alert.delivery = AlertDelivery {
                 webhook_url: std::mem::take(&mut alert.delivery.webhook_url),
+                plain_text_address: std::mem::take(&mut alert.delivery.plain_text_address),
                 ..self.delivery.clone()
             };
         }
@@ -261,6 +288,7 @@ fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
     use AlertCondition as C;
     let channel = |comparison| channel_condition(comparison, 0.0, 0.0);
     Some(match condition {
+        C::Holds => C::Holds,
         C::StrategyFills(_) | C::DetectorSignals(_) | C::CustomEvents(_) | C::Position { .. } => {
             return None;
         }
@@ -297,6 +325,19 @@ fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
     })
 }
 
+/// The lower and upper bound of a channel condition, or a single level and one above it,
+/// which is how the condition menu and presets carry thresholds between operators.
+pub(super) fn seeded_bounds(condition: &AlertCondition) -> Option<(f64, f64)> {
+    use AlertCondition as C;
+    match condition {
+        C::EnteringChannel { lower, upper }
+        | C::ExitingChannel { lower, upper }
+        | C::InsideChannel { lower, upper }
+        | C::OutsideChannel { lower, upper } => Some((*lower, *upper)),
+        _ => condition.level().map(|level| (level, level + 1.0)),
+    }
+}
+
 /// A stored operator with the thresholds, drawings or plots of `current`, where a single level
 /// seeds a channel as the condition menu does. `None` for a rule that `replaces` `current` when
 /// the operator would drop the drawings or plots it tests or needs levels it lacks. A rule the
@@ -309,14 +350,7 @@ fn restored_condition(
     sources: &[(AlertSource, AlertSourceName)],
 ) -> Option<AlertCondition> {
     use AlertCondition as C;
-    let levels = match current {
-        C::EnteringChannel { lower, upper }
-        | C::ExitingChannel { lower, upper }
-        | C::InsideChannel { lower, upper }
-        | C::OutsideChannel { lower, upper } => Some((*lower, *upper)),
-        _ => current.level().map(|level| (level, level + 1.0)),
-    }
-    .or((!replaces).then_some((0.0, 1.0)));
+    let levels = seeded_bounds(current).or((!replaces).then_some((0.0, 1.0)));
     let to_level = |comparison| match (current, levels) {
         (C::Compare { other, .. }, _) => Some(C::Compare {
             other: other.clone(),
@@ -340,6 +374,7 @@ fn restored_condition(
         _ => 1.0,
     };
     Some(match stored {
+        C::Holds => C::Holds,
         C::StrategyFills(_)
         | C::DetectorSignals(_)
         | C::CustomEvents(_)
@@ -410,7 +445,7 @@ fn offered(
 ) -> bool {
     match source {
         AlertSource::Price | AlertSource::Volume => true,
-        AlertSource::Study { .. } => {
+        AlertSource::Study { .. } | AlertSource::StudyCondition { .. } => {
             let mut matching = sources.iter().filter(|(offered, _)| offered == source);
             match names.iter().find(|(named, _)| named == source) {
                 Some(stored) => matching.any(|offered| offered == stored),
@@ -481,7 +516,10 @@ pub(super) fn from_document(
                             expiry: alert.expires.is_none(),
                             ..PresetFields::default()
                         };
-                        (name, AlertPreset::capture(&alert, &[], fields, now))
+                        let mut preset = AlertPreset::capture(&alert, &[], fields, now);
+                        // Creation inputs in older presets never changed the applied session.
+                        preset.hours = None;
+                        (name, preset)
                     })
                     .collect()
             })
@@ -507,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn stored_presets_hold_no_subject_threshold_drawing_or_webhook_address() {
+    fn stored_presets_hold_no_subject_threshold_drawing_or_addresses() {
         let now = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
         let mut alert = Alert::new("SECRETSYMBOL", AlertCondition::CrossingUp(123.456));
         alert.id = Some(crate::model::AlertId("SECRETID".into()));
@@ -515,6 +553,8 @@ mod tests {
         alert.source = AlertSource::Drawing("SECRETDRAWING".into());
         alert.delivery.webhook = true;
         alert.delivery.webhook_url = "https://SECRETHOOK".into();
+        alert.delivery.plain_text = true;
+        alert.delivery.plain_text_address = "SECRETMAIL@example.com".into();
         alert.additional_conditions = vec![
             AlertRule {
                 source: AlertSource::Price,
@@ -553,7 +593,7 @@ mod tests {
             let stored = serde_json::to_string(&preset).unwrap();
             assert!(!stored.contains("SECRET"), "{stored}");
             assert!(!stored.contains("123.456"), "{stored}");
-            // Operators, lookbacks and the webhook choice stay.
+            // Operators, lookbacks and the webhook and plain-text choices stay.
             let rules: Vec<_> = preset.rules.iter().map(|r| r.condition.clone()).collect();
             assert_eq!(
                 rules,
@@ -570,7 +610,7 @@ mod tests {
                     },
                 ]
             );
-            assert!(preset.delivery.webhook);
+            assert!(preset.delivery.webhook && preset.delivery.plain_text);
         }
     }
 
@@ -600,7 +640,41 @@ mod tests {
             output: 0,
         };
         let price = AlertSource::Price;
+        let declared = AlertSource::StudyCondition {
+            id: "absent".into(),
+            condition: 0,
+        };
+        let available = AlertSource::StudyCondition {
+            id: "3".into(),
+            condition: 0,
+        };
         let cases = [
+            (
+                available.clone(),
+                C::Holds,
+                price.clone(),
+                C::Above(100.0),
+                available.clone(),
+                C::Holds,
+            ),
+            // A missing declared condition cannot replace a price rule with Holds.
+            (
+                declared.clone(),
+                C::Holds,
+                price.clone(),
+                C::Above(100.0),
+                price.clone(),
+                C::Above(100.0),
+            ),
+            // A price preset cannot leave a declared source paired with a level comparison.
+            (
+                gone.clone(),
+                C::Above(9.0),
+                declared.clone(),
+                C::Holds,
+                declared,
+                C::Holds,
+            ),
             // A level from the opened alert, and a channel seeded the way the menu seeds it.
             (
                 price.clone(),
@@ -835,7 +909,10 @@ mod tests {
                 C::Below(100.0),
             ),
         ];
-        let sources = [(study(), AlertSourceName::from("RSI signal"))];
+        let sources = [
+            (study(), AlertSourceName::from("RSI signal")),
+            (available, AlertSourceName::from("Declared condition")),
+        ];
         for (stored_source, stored, current_source, current, source, condition) in cases {
             let mut saved = Alert::new("OLD", stored.clone());
             saved.source = stored_source;
@@ -875,12 +952,18 @@ mod tests {
         saved.expires = Some(Utc.with_ymd_and_hms(2026, 1, 1, 11, 0, 0).unwrap());
         saved.schedule = Some(schedule.clone());
         saved.delivery.email = true;
+        saved.delivery.plain_text = true;
         saved.delivery.popup = false;
         saved.additional_conditions.push(AlertRule {
             source: AlertSource::Volume,
             condition: AlertCondition::Above(1.0),
         });
         saved.additional_timeframes.push(Some(Timeframe::Min5));
+        saved.inputs = Some(Box::new(AlertInputs {
+            extended_hours: true,
+            overnight_hours: true,
+            ..Default::default()
+        }));
 
         let mut blank = PresetFields {
             condition: false,
@@ -897,12 +980,20 @@ mod tests {
             let mut alert = Alert::new("NEW", AlertCondition::Crossing(100.0));
             alert.message = "Own".into();
             alert.delivery.webhook_url = "https://own".into();
+            alert.delivery.plain_text_address = "own@example.com".into();
             alert.expires = Some(now + TimeDelta::days(9));
             alert.inputs = Some(Box::new(AlertInputs {
                 start: span,
+                extended_hours: true,
                 ..Default::default()
             }));
             alert
+        };
+        let hours = |alert: &Alert| {
+            alert
+                .inputs
+                .as_ref()
+                .map(|inputs| (inputs.extended_hours, inputs.overnight_hours))
         };
         let apply = |saved: &Alert, fields: PresetFields| {
             let preset = AlertPreset::capture(saved, &[], fields, saved_at);
@@ -930,7 +1021,26 @@ mod tests {
         assert_eq!(alert.timeframe, Some(Timeframe::Hour1));
         assert!(alert.additional_timeframes.is_empty(), "no rule takes it");
         assert_eq!(alert.inputs.as_ref().unwrap().start, None);
+        assert_eq!(hours(&alert), Some((true, true)));
         assert_eq!(alert.condition, AlertCondition::Crossing(100.0));
+        // A preset stored before presets kept the session leaves the alert's.
+        for document in [
+            r#"{"version":3,"presets":{"P":{"fields":{"condition":false,"interval":true,
+            "frequency":false,"expiry":false,"text":false,"delivery":false,"schedule":false},
+            "rules":[],"source_names":[],"timeframe":"Hour1","additional_timeframes":[],
+            "frequency":"Once","expires_after":null,"name":"","message":"","delivery":{"popup":true,
+            "sound":true,"email":false,"push":false,"webhook":false,"webhook_url":""},
+            "schedule":null}},"last_schedule":null}"#
+                .to_owned(),
+            serde_json::json!({"version": 1, "presets": {"P": saved}}).to_string(),
+        ] {
+            let mut alert = opened();
+            from_document(&document, saved_at).unwrap().0["P"].apply(&mut alert, &[], now);
+            assert_eq!(
+                (alert.timeframe, hours(&alert)),
+                (Some(Timeframe::Hour1), Some((true, false)))
+            );
+        }
         blank.interval = false;
         blank.frequency = true;
         assert_eq!(apply(&saved, blank).frequency, AlertFrequency::OncePerBar);
@@ -956,8 +1066,9 @@ mod tests {
         blank.text = false;
         blank.delivery = true;
         let alert = apply(&saved, blank);
-        assert!(alert.delivery.email && !alert.delivery.popup);
+        assert!(alert.delivery.email && alert.delivery.plain_text && !alert.delivery.popup);
         assert_eq!(alert.delivery.webhook_url, "https://own");
+        assert_eq!(alert.delivery.plain_text_address, "own@example.com");
         blank.delivery = false;
         blank.schedule = true;
         assert_eq!(apply(&saved, blank).schedule, Some(schedule));
@@ -999,6 +1110,44 @@ mod tests {
         let mut alert = Alert::new("NEW", AlertCondition::Above(1.0));
         fills.apply(&mut alert, &[], now);
         assert_eq!(alert.condition, AlertCondition::Above(1.0));
+    }
+
+    /// Each row saves an alert with the stored name and message and applies the preset, and the
+    /// document earlier versions wrote for it, to an alert that has both.
+    #[test]
+    fn a_preset_without_a_name_or_a_message_leaves_the_alerts_own() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
+        for (name, message, expected) in [
+            ("", "Stored message", ("Own name", "Stored message")),
+            ("Stored name", "", ("Stored name", "Own message")),
+            ("", "", ("Own name", "Own message")),
+        ] {
+            let mut saved = Alert::new("OLD", AlertCondition::Below(9.0));
+            saved.name = name.into();
+            saved.message = message.into();
+            let captured = AlertPreset::capture(&saved, &[], PresetFields::default(), now);
+            // Every version wrote a missing name or message as empty text.
+            let document = serde_json::json!({
+                "version": 3,
+                "presets": {"P": {"name": name, "message": message}},
+            });
+            let stored = from_document(&document.to_string(), now)
+                .unwrap()
+                .0
+                .remove("P")
+                .unwrap();
+            for (preset, origin) in [(captured, "captured"), (stored, "stored")] {
+                let mut alert = Alert::new("NEW", AlertCondition::Crossing(100.0));
+                alert.name = "Own name".into();
+                alert.message = "Own message".into();
+                preset.apply(&mut alert, &[], now);
+                assert_eq!(
+                    (alert.name.as_str(), alert.message.as_str()),
+                    expected,
+                    "{origin} {name:?} and {message:?}"
+                );
+            }
+        }
     }
 
     /// Rules that a preset adds to an alert with fewer rules replace nothing, so the drawing the

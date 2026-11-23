@@ -229,7 +229,7 @@ impl Volume24h {
         if span > 0 && span <= day && day % span == 0 {
             return None;
         }
-        lower_interval::lower_timeframe(&self.clock, None)
+        lower_interval::below(&self.clock)
     }
 
     /// Whether converting the latest window, whose bars open at `times`, lacks a rate, with
@@ -692,6 +692,7 @@ mod tests {
                     clock: BarClock::new(lower),
                     instrument: None,
                     timeframe: lower,
+                    chart: None,
                 };
                 for end in 1..=data.len() {
                     study.update_data(&data[..end], end - 1, std::slice::from_ref(&source));
@@ -753,6 +754,7 @@ mod tests {
                     clock: BarClock::new(lower),
                     instrument: None,
                     timeframe: lower,
+                    chart: None,
                 };
                 study.update_data(&data, 0, &[source]);
                 assert_eq!(
@@ -861,6 +863,7 @@ mod tests {
                     clock: BarClock::new(lower),
                     instrument: None,
                     timeframe: lower,
+                    chart: None,
                 }];
                 if let Some(rates) = rates {
                     sources.push(StudyData {
@@ -869,6 +872,7 @@ mod tests {
                         clock: BarClock::new(Timeframe::Ticks(std::num::NonZeroU64::MIN)),
                         instrument: None,
                         timeframe: Timeframe::default(),
+                        chart: None,
                     });
                 }
                 study.update_data(&data, 0, &sources);
@@ -933,6 +937,7 @@ mod tests {
                     clock: BarClock::new(Timeframe::Ticks(std::num::NonZeroU64::MIN)),
                     instrument: None,
                     timeframe: Timeframe::default(),
+                    chart: None,
                 })
                 .collect();
             study.update_data(std::slice::from_ref(&bar), 0, &sources);
@@ -1132,6 +1137,7 @@ mod tests {
                 clock: BarClock::new(lower),
                 instrument: None,
                 timeframe: lower,
+                chart: None,
             };
             study.update_data(data, 0, &[source]);
             (0..data.len())

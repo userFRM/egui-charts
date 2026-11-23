@@ -2,31 +2,24 @@
 //! the reply they accept, the chart bar each candle belongs to and the volume delta of a bar.
 
 use crate::model::{Bar, BarClock, Timeframe};
-use crate::studies::{InputKind, InputValue, StudyData, StudyDataRequest, StudyInput};
+use crate::studies::{
+    InputKind, InputValue, StudyCell, StudyData, StudyDataRequest, StudyInput, StudyTable,
+};
 use std::ops::Range;
 
-/// The interval read below the chart's: `chosen` when it is shorter than the chart interval and
-/// divides it, otherwise one second below a minute, one minute below a day, five minutes on daily
-/// and one hour on longer charts, or one second when the chart interval is not a whole number of
-/// those. `None` on tick, volume, range, delta and subsecond charts, whatever is chosen.
-pub(super) fn lower_timeframe(clock: &BarClock, chosen: Option<Timeframe>) -> Option<Timeframe> {
+/// The interval of the candles read below a chart of `clock`'s interval, by its length: one
+/// second below a minute, one minute below a day and one hour on longer charts, or one second
+/// when the chart interval is not a whole number of those. `None` on tick, volume, range, delta
+/// and subsecond charts.
+pub(super) fn below(clock: &BarClock) -> Option<Timeframe> {
     let tf = clock.timeframe()?;
     if matches!(tf, Timeframe::Ticks(_)) || tf.duration_ms() < Timeframe::Sec1.duration_ms() {
         return None;
-    }
-    if let Some(chosen) = chosen.filter(|chosen| {
-        chosen.duration_ms() > 0
-            && chosen.duration_ms() < tf.duration_ms()
-            && tf.duration_ms() % chosen.duration_ms() == 0
-    }) {
-        return Some(chosen);
     }
     let lower = if tf.duration_ms() < Timeframe::Min1.duration_ms() {
         Timeframe::Sec1
     } else if tf.duration_ms() < Timeframe::Day1.duration_ms() {
         Timeframe::Min1
-    } else if tf == Timeframe::Day1 {
-        Timeframe::Min5
     } else {
         Timeframe::Hour1
     };
@@ -34,6 +27,45 @@ pub(super) fn lower_timeframe(clock: &BarClock, chosen: Option<Timeframe>) -> Op
         lower
     } else {
         Timeframe::Sec1
+    })
+}
+
+/// The interval the Lower interval input reads on a chart of `clock`'s interval: `chosen` when it
+/// is a time interval no longer than the chart's, also one that does not divide it, and `None`
+/// when it is longer or trade-based. Unset, five minutes on charts of whole days, such as 1D and
+/// 2D, and [`below`] on the others. `None` on tick, volume, range, delta and subsecond charts,
+/// whatever is chosen.
+pub(super) fn lower_timeframe(clock: &BarClock, chosen: Option<Timeframe>) -> Option<Timeframe> {
+    let automatic = below(clock)?;
+    let chart = clock.timeframe()?;
+    match chosen {
+        Some(chosen) => (!chosen.is_trade_based() && chosen.duration_ms() <= chart.duration_ms())
+            .then_some(chosen),
+        None if matches!(chart, Timeframe::Day1)
+            || matches!(chart, Timeframe::Custom(seconds) if seconds.get() % 86_400 == 0) =>
+        {
+            Some(Timeframe::Min5)
+        }
+        None => Some(automatic),
+    }
+}
+
+/// The table `study` shows while the interval chosen in its Lower interval input is not read,
+/// being longer than the chart's or trade-based, on a chart that reads lower-interval candles.
+pub(super) fn notice(
+    study: &str,
+    clock: &BarClock,
+    chosen: Option<Timeframe>,
+) -> Option<StudyTable> {
+    let chosen = chosen?;
+    let chart = clock.timeframe()?;
+    (below(clock).is_some() && lower_timeframe(clock, Some(chosen)).is_none()).then(|| StudyTable {
+        title: study.to_owned(),
+        columns: vec!["Lower interval".to_owned()],
+        rows: vec![vec![StudyCell::Text(format!(
+            "{chosen} is not used: choose {chart} or shorter"
+        ))]],
+        ..StudyTable::default()
     })
 }
 
@@ -46,14 +78,14 @@ pub(super) fn request(timeframe: Timeframe) -> StudyDataRequest {
     }
 }
 
-/// The Lower interval input. `None`, which the settings show as the chart interval, and any
-/// interval that is not shorter than the chart's or does not divide it read the automatic one.
-pub(super) fn input(chosen: Option<Timeframe>) -> StudyInput {
+/// The Lower interval input. Unset, it reads the interval [`lower_timeframe`] picks on a chart of
+/// `clock`'s interval, which its kind names for the settings to show.
+pub(super) fn input(clock: &BarClock, chosen: Option<Timeframe>) -> StudyInput {
     StudyInput::new(
         "lower_interval",
         "Lower interval",
         InputValue::Timeframe(chosen),
-        InputKind::Timeframe,
+        InputKind::AutoTimeframe(lower_timeframe(clock, None)),
     )
     .with_default(InputValue::Timeframe(None))
 }
@@ -252,6 +284,58 @@ mod tests {
         &'static [[f64; 3]],
     );
 
+    /// The three volume studies saved with the Lower interval unset, read or not read, on time,
+    /// tick and subsecond charts, restore from their templates with the inputs they were saved
+    /// with, before and after the chart gives them its interval.
+    #[test]
+    fn saved_lower_intervals_restore_unchanged() {
+        use crate::studies::{ConfiguredStudy, Indicator, InputValue, StudyTemplate};
+        use std::num::NonZeroU64;
+        let factory = IndicatorFactory::new();
+        let custom = |seconds| Timeframe::Custom(NonZeroU64::new(seconds).unwrap());
+        for (name, chart, chosen) in [
+            ("Volume Delta", Timeframe::Min5, None),
+            ("Up/Down Volume", Timeframe::Min5, Some(custom(180))),
+            ("Up/Down Volume", Timeframe::Min5, Some(Timeframe::Hour1)),
+            (
+                "Cumulative Volume Delta",
+                Timeframe::Sec30,
+                Some(Timeframe::Min1),
+            ),
+            (
+                "Volume Delta",
+                Timeframe::Ticks(NonZeroU64::new(100).unwrap()),
+                None,
+            ),
+            (
+                "Cumulative Volume Delta",
+                Timeframe::Ms500,
+                Some(Timeframe::Sec1),
+            ),
+        ] {
+            let mut study = ConfiguredStudy::new(factory.create(name).unwrap());
+            study.set_bar_clock(&BarClock::new(chart));
+            study
+                .set_input("lower_interval", InputValue::Timeframe(chosen))
+                .unwrap();
+            let saved = StudyTemplate::from_study(&study);
+            let mut restored = saved
+                .create_with(&factory)
+                .unwrap_or_else(|error| panic!("{name} on {chart}: {error}"));
+            assert_eq!(
+                StudyTemplate::from_study(restored.as_ref()).inputs,
+                saved.inputs,
+                "{name} on {chart}, restored"
+            );
+            restored.set_bar_clock(&BarClock::new(chart));
+            assert_eq!(
+                StudyTemplate::from_study(restored.as_ref()).inputs,
+                saved.inputs,
+                "{name} on {chart}, on the chart"
+            );
+        }
+    }
+
     /// A lower-interval candle that closes at its open and at the previous close takes the side
     /// of the candle before it, inside a chart bar, across chart bars and from before the first
     /// one, alike in the three studies that split volume by side and when only the last chart bar
@@ -365,6 +449,7 @@ mod tests {
                             clock: BarClock::new(Timeframe::Min1),
                             instrument: None,
                             timeframe: Timeframe::Min1,
+                            chart: None,
                         }],
                     );
                     let got: Vec<Vec<f64>> = if name == "Up/Down Volume" {

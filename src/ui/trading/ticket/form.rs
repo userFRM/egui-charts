@@ -2,19 +2,19 @@
 //! exits.
 
 use super::{
-    Bracket, BracketMode, Kind, Market, OrderTicket, PresetLevel, Sizing, exit_lines,
+    Bracket, BracketMode, Kind, Market, OrderTicket, PresetLevel, Sizing, TrailUnit, exit_lines,
     levels_accepted, reward, risk,
 };
 use crate::chart::{COVERAGE_CELL, coverage_text, exit_coverage, paint_coverage};
 use crate::icons::icons;
 use crate::localization as l10n;
-use crate::model::{OrderRequest, OrderSide};
+use crate::model::{OrderRequest, OrderSide, TimeInForce};
 use crate::scales::{decimals, to_step};
 use crate::theme::ThemeExt;
 use crate::ui::top_toolbar::buttons::rule_color;
 use crate::ui::trading::widgets::{
-    FIELD_HEIGHT, SECTION_TITLE_SIZE, chevron, dropdown, field, grouped, hit, info, muted, number,
-    side_color, swap, text, time_in_force_menu, title, toggle, track,
+    FIELD_HEIGHT, SECTION_TITLE_SIZE, chevron, date_time, dropdown, field, grouped, hit, info,
+    muted, number, side_color, swap, text, time_in_force_menu, title, toggle, track,
 };
 use crate::ui_kit::IconButton;
 use crate::ui_kit::buttons::{Button, ButtonSize};
@@ -24,6 +24,50 @@ use egui::{Align, Align2, FontId, Layout, Rect, RichText, Sense, Ui, pos2, vec2}
 const QUOTE_PRICE_SIZE: f32 = 17.0;
 
 impl OrderTicket {
+    /// A trailing stop's distance with its unit, and its optional activation price, which
+    /// starts at `touch` when it is switched on.
+    fn trailing_fields(&mut self, ui: &mut Ui, market: &Market<'_>, touch: Option<f64>) {
+        const UNITS: [(TrailUnit, &str); 3] = [
+            (TrailUnit::Price, "Price"),
+            (TrailUnit::Ticks, "Ticks"),
+            (TrailUnit::Percent, "%"),
+        ];
+        muted(ui, "Trailing distance");
+        let places = match self.trail.0 {
+            TrailUnit::Price => market.decimals,
+            TrailUnit::Ticks => 0,
+            TrailUnit::Percent => 2,
+        };
+        field(ui, |ui| {
+            number(ui, "Trailing distance", &mut self.trail.1, places);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let (_, caption) = UNITS[UNITS
+                    .iter()
+                    .position(|(unit, _)| *unit == self.trail.0)
+                    .unwrap_or_default()];
+                let response = dropdown(ui, caption.to_owned());
+                egui::Popup::menu(&response).show(|ui| {
+                    for (unit, label) in UNITS {
+                        ui.selectable_value(&mut self.trail.0, unit, l10n::text(ui.ctx(), label));
+                    }
+                });
+            });
+        });
+        let (on, price) = &mut self.activation;
+        ui.horizontal(|ui| {
+            toggle(ui, on, "Activation price");
+            muted(ui, "Activation price");
+        });
+        if *on {
+            if *price == 0.0 {
+                *price = touch.unwrap_or_default();
+            }
+            field(ui, |ui| {
+                number(ui, "Activation price", price, market.decimals);
+            });
+        }
+    }
+
     /// The Order tab above the send button.
     pub(super) fn form(&mut self, ui: &mut Ui, market: &Market<'_>, compact: bool) {
         let theme = ui.active_theme();
@@ -57,6 +101,7 @@ impl OrderTicket {
             Kind::Market => &[],
             Kind::Limit | Kind::Stop => &[("Price", false)],
             Kind::StopLimit => &[("Stop price", false), ("Limit price", true)],
+            Kind::TrailingStop => &[],
         };
         let touch = self.touch(market).or(market.last);
         for &(label, limit) in prices {
@@ -116,6 +161,9 @@ impl OrderTicket {
             if swapped {
                 self.price_in_ticks = !self.price_in_ticks;
             }
+        }
+        if self.kind == Kind::TrailingStop {
+            self.trailing_fields(ui, market, touch);
         }
 
         // The quantity, and the risk at the stop loss.
@@ -209,7 +257,7 @@ impl OrderTicket {
                 ticket.resize(ui.ctx(), market, sizing, ticket.risk_in_money);
             }
         };
-        if market.capabilities.brackets && !compact {
+        if self.brackets(market) && !compact {
             ui.columns(2, |columns| {
                 units(self, &mut columns[0]);
                 quantity_field(self, &mut columns[0], false);
@@ -288,7 +336,7 @@ impl OrderTicket {
             return;
         }
 
-        if market.capabilities.brackets {
+        if self.brackets(market) {
             self.exits(ui, market, request.as_ref().ok(), entry, per_point);
         }
 
@@ -296,6 +344,17 @@ impl OrderTicket {
         title(ui, "Extra settings");
         muted(ui, "Time in force");
         time_in_force_menu(ui, "order_ticket_tif", &mut self.time_in_force, rules);
+        if self.time_in_force == TimeInForce::GoodTillDate {
+            muted(ui, "Expiry");
+            field(ui, |ui| {
+                date_time(
+                    ui,
+                    "order_ticket_expiry",
+                    &mut self.expires,
+                    &market.timezone,
+                );
+            });
+        }
 
         ui.add_space(8.0);
         title(ui, "Order info");
@@ -490,11 +549,7 @@ impl OrderTicket {
                 Some(selected),
             );
             if response.clicked() {
-                if self.kind == Kind::Market && kind != Kind::Market && self.price == 0.0 {
-                    self.price = self.touch(market).or(market.last).unwrap_or_default();
-                    self.limit = self.price;
-                }
-                self.kind = kind;
+                self.select_kind(kind, market);
             }
             let color = if selected || response.hovered() {
                 theme.ui.text

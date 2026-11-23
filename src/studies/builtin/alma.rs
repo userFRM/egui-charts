@@ -63,11 +63,6 @@ impl ALMA {
         }
     }
 
-    /// Create with default params (9, 0.85, 6.0)
-    pub fn default_params() -> Self {
-        Self::new(9, 0.85, 6.0)
-    }
-
     /// Set the line color
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;

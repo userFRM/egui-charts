@@ -361,7 +361,7 @@ fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
 /// The study browser opens these studies with the lengths and switches most often used for them.
 #[test]
 fn catalogue_studies_open_with_their_usual_lengths() {
-    use crate::studies::InputValue::{Length, Toggle};
+    use crate::studies::InputValue::{Choice, Length, Number, Toggle};
     let rows = [
         ("SMA", "period", Length(9)),
         ("EMA", "period", Length(9)),
@@ -371,6 +371,7 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("TEMA", "period", Length(9)),
         ("LSMA", "period", Length(25)),
         ("SMMA", "period", Length(7)),
+        ("Hamming MA", "period", Length(10)),
         ("EMA Cross", "period_0", Length(9)),
         ("EMA Cross", "period_1", Length(26)),
         ("ROC", "period", Length(9)),
@@ -384,6 +385,10 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("Knoxville Divergence", "rsi_period", Length(21)),
         ("Knoxville Divergence", "lookback", Length(150)),
         ("Advance/Decline", "period", Length(10)),
+        ("Missed Pivot Levels", "period", Choice(4)),
+        ("Missed Pivot Levels", "days_back", Length(180)),
+        ("Missed Pivot Levels", "show_touched", Toggle(false)),
+        ("Missed Pivot Levels", "tolerance", Number(0.0)),
         ("Booker Reversal", "fast_period", Length(12)),
         ("Booker Reversal", "slow_period", Length(26)),
         ("Booker Reversal", "k_period", Length(70)),
@@ -405,6 +410,16 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         let input = inputs.iter().find(|input| input.id == id);
         assert_eq!(input.map(|input| &input.value), Some(&value), "{name} {id}");
     }
+    // A Hamming MA saved at the former default keeps its period.
+    let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Hamming MA","inputs":[["period",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.HammingMA.html","plots":[{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[5,11,5,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+    let inputs = saved.create().unwrap().inputs();
+    assert_eq!(
+        inputs
+            .iter()
+            .find(|input| input.id == "period")
+            .map(|input| &input.value),
+        Some(&Length(20))
+    );
 }
 
 /// The study browser opens the channel studies with their usual inputs, and every band they
@@ -641,23 +656,24 @@ fn per_bar_states_offer_the_colours_they_draw() {
     }
 }
 
-/// No catalogue study configured as the chart configures it lists two inputs under one
-/// label, so every field of its Inputs tab says which value it sets.
+/// No catalogue study configured as the chart configures it lists two inputs under one id or
+/// one label, so an edit by id reaches one input and every field of its Inputs tab says which
+/// value it sets.
 #[test]
-fn configured_studies_label_every_input_once() {
+fn configured_studies_list_every_input_id_and_label_once() {
     use crate::studies::ConfiguredStudy;
 
     let factory = IndicatorFactory::new();
     let mut repeated: Vec<(String, String)> = Vec::new();
     for name in factory.list() {
-        let labels: Vec<_> = ConfiguredStudy::new(factory.create(&name).unwrap())
-            .inputs()
-            .into_iter()
-            .map(|input| input.label)
-            .collect();
-        for (index, label) in labels.iter().enumerate() {
-            if labels[..index].contains(label) {
-                repeated.push((name.clone(), label.clone()));
+        let inputs = ConfiguredStudy::new(factory.create(&name).unwrap()).inputs();
+        for (index, input) in inputs.iter().enumerate() {
+            let earlier = &inputs[..index];
+            if earlier.iter().any(|other| other.id == input.id) {
+                repeated.push((name.clone(), format!("id {}", input.id)));
+            }
+            if earlier.iter().any(|other| other.label == input.label) {
+                repeated.push((name.clone(), format!("label {}", input.label)));
             }
         }
     }
@@ -764,9 +780,11 @@ fn catalogue_choices_read_in_words_and_restore() {
         ("All Candlestick Patterns", "trend", 2, "No detection"),
         ("Pivot Points Standard", "timeframe", 6, "Biyearly"),
         ("Pivot Points Standard", "timeframe", 9, "Decennially"),
-        ("VWAP Auto Anchored", "anchor", 1, "Highest High"),
-        ("VWAP Auto Anchored", "anchor", 3, "Highest Volume"),
-        ("Vol Profile Auto Anchored", "anchor", 2, "Lowest Low"),
+        ("VWAP Auto Anchored", "anchor", 1, "Highest high"),
+        ("VWAP Auto Anchored", "anchor", 3, "Highest volume"),
+        ("Vol Profile Auto Anchored", "anchor", 1, "Highest high"),
+        ("Vol Profile Auto Anchored", "anchor", 2, "Lowest low"),
+        ("Vol Profile Auto Anchored", "anchor", 3, "Highest volume"),
         ("BB", "basis", 4, "VWMA"),
         ("Volume", "color_rule", 1, "Previous close"),
         ("CVD", "mode", 0, "Close position"),
@@ -786,6 +804,12 @@ fn catalogue_choices_read_in_words_and_restore() {
         ("Missed Pivot Levels", "period", 1, "Daily"),
         ("Missed Pivot Levels", "period", 2, "Weekly"),
         ("Missed Pivot Levels", "period", 3, "Monthly"),
+        (
+            "Missed Pivot Levels",
+            "period",
+            4,
+            "Daily, weekly and monthly",
+        ),
     ];
     let got: Vec<_> = saved
         .iter()

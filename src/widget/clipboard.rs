@@ -29,6 +29,7 @@ impl Chart {
             return Ok(None);
         }
         let storage = self.store_drawings(
+            self.symbol(),
             self.drawings
                 .drawings
                 .iter()
@@ -144,6 +145,9 @@ impl Chart {
         }
         .create_with(factory)?;
         study.set_overlay(copied.overlay);
+        if copied.overlay {
+            study.set_scale(copied.scale);
+        }
         if self.study_limit_reached() {
             return Err(StudyError::StudyLimitReached(RefusedStudy::new(study)));
         }

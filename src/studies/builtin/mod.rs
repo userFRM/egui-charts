@@ -40,7 +40,7 @@
 //! [`Median`], [`VolatilityIndex`]
 //!
 //! ## Price
-//! [`BollingerBars`]
+//! [`BollingerBars`], [`AnalystPriceForecast`]
 //!
 //! ## Volume
 //! [`OnBalanceVolume`], [`VolumeWeightedAvgPrice`], [`MoneyFlowIndex`],
@@ -87,6 +87,9 @@ mod chart_patterns;
 pub use chart_patterns::{
     ChartPatterns, Formation, FormationKind, FormationStatus, PatternDirection, PatternFamily,
 };
+
+mod analyst_price_forecast;
+pub use analyst_price_forecast::AnalystPriceForecast;
 
 mod higher_interval_candles;
 pub use higher_interval_candles::HigherIntervalCandles;
@@ -320,6 +323,8 @@ pub use market_breadth::{
 mod special_k;
 mod woodies_cci;
 pub use symbol_pair::{Correlation, CorrelationLog, Ratio, Spread, SymbolPair};
+#[cfg(feature = "ui")]
+pub(crate) use technical_ratings::rating as technical_rating;
 pub use technical_ratings::{RatingBasis, TechnicalRatings};
 // Time studies
 mod lower_interval;

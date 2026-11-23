@@ -287,7 +287,7 @@ impl TopToolbar {
     fn is_shown(&self, slot: Slot) -> bool {
         !self.host_hidden.contains(&slot.host_control())
             && (slot != S::Trade || self.state.can_trade)
-            && (slot != S::Publish || self.state.can_publish_image)
+            && (slot != S::Publish || self.state.can_publish_ideas)
     }
 
     /// Show the full toolbar, reading the active symbol from app state.
@@ -678,6 +678,13 @@ impl TopToolbar {
                                         .size(11.0)
                                         .color(crate::ui_kit::section::menu_heading_color(&theme)),
                                 );
+                                // Hosts bind the snapshot shortcut to Copy link while they can
+                                // publish images, and to Download image otherwise.
+                                let shortcut_action = if self.state.can_publish_image {
+                                    TopToolbarAction::CopyImageLink
+                                } else {
+                                    TopToolbarAction::TakeScreenshot
+                                };
                                 for (label, icon, value, available) in [
                                     (
                                         "Download image",
@@ -706,7 +713,7 @@ impl TopToolbar {
                                     (
                                         "Post image",
                                         &embedded_icons::PUBLISH,
-                                        TopToolbarAction::Publish,
+                                        TopToolbarAction::PostImage,
                                         self.state.can_publish_image,
                                     ),
                                 ] {
@@ -717,8 +724,7 @@ impl TopToolbar {
                                         ui,
                                         LabelContent::new(label).with_icon(icon).icon_size(17.0),
                                     );
-                                    // Hosts bind the snapshot shortcut to this entry's action.
-                                    if value == TopToolbarAction::TakeScreenshot
+                                    if value == shortcut_action
                                         && let Some(hint) = &hint
                                     {
                                         ui.painter().text(
@@ -1298,6 +1304,7 @@ mod tests {
                 toolbar.state.can_undo = true;
                 toolbar.state.can_redo = true;
                 toolbar.state.can_publish_image = true;
+                toolbar.state.can_publish_ideas = true;
                 ctx.global_style_mut(|style| {
                     style.scroll_animation = egui::style::ScrollAnimation::none();
                     style.spacing.scroll.kinetic.decay_time = 0.0;
@@ -1602,7 +1609,7 @@ mod tests {
                     TopToolbarAction::OpenImage,
                 ),
                 (S::Screenshot, "Copy link", TopToolbarAction::CopyImageLink),
-                (S::Screenshot, "Post image", TopToolbarAction::Publish),
+                (S::Screenshot, "Post image", TopToolbarAction::PostImage),
                 (
                     S::Save,
                     "Save layout",
@@ -1616,7 +1623,7 @@ mod tests {
                 (
                     S::Save,
                     "Create new layout",
-                    TopToolbarAction::Layout(LayoutAction::CreateNew),
+                    TopToolbarAction::Layout(LayoutAction::CreateNew("Desk".into())),
                 ),
                 (
                     S::Save,
@@ -1677,6 +1684,7 @@ mod tests {
                 let mut toolbar = TopToolbar::new();
                 let publishing = label != "Copy image";
                 toolbar.state.can_publish_image = publishing;
+                toolbar.state.can_publish_ideas = publishing;
                 toolbar.state.can_undo = expected != TopToolbarAction::None;
                 toolbar.state.can_redo = expected != TopToolbarAction::None;
                 // A built-in set is listed also when none is saved.
@@ -1821,6 +1829,32 @@ mod tests {
                     ])
                     .2;
                 }
+                if slot == S::Screenshot {
+                    // The shortcut's keys share a row only with the entry hosts bind it to.
+                    let hint =
+                        snapshot_shortcut_hint(&ctx, &egui::FontId::proportional(14.0)).unwrap();
+                    let hint = labels.iter().find(|(text, _)| *text == hint).unwrap().1;
+                    let entry = if publishing {
+                        "Copy link"
+                    } else {
+                        "Download image"
+                    };
+                    let entries = [
+                        "Download image",
+                        "Copy image",
+                        "Open in new tab",
+                        "Copy link",
+                        "Post image",
+                    ];
+                    // Entries scrolled out of the menu are not painted.
+                    for (name, at) in labels
+                        .iter()
+                        .filter(|(name, _)| entries.contains(&name.as_str()))
+                    {
+                        let on_row = (at.y - hint.y).abs() < 8.0;
+                        assert_eq!(on_row, name == entry, "{label}: {name}");
+                    }
+                }
                 let pos = labels
                     .iter()
                     .find(|(text, at)| text == label && (5.0..height - 16.0).contains(&at.y))
@@ -1831,7 +1865,11 @@ mod tests {
                 let (mut action, _, _) = frame(vec![click(pos, false)]);
                 if matches!(
                     expected,
-                    TopToolbarAction::Layout(LayoutAction::Rename(_, _) | LayoutAction::SaveAs(_))
+                    TopToolbarAction::Layout(
+                        LayoutAction::Rename(_, _)
+                            | LayoutAction::SaveAs(_)
+                            | LayoutAction::CreateNew(_)
+                    )
                 ) {
                     let (_, _, labels) = frame(vec![]);
                     assert!(
@@ -1861,7 +1899,7 @@ mod tests {
             (|t| t.state.can_undo = false, &[TopToolbarAction::Undo]),
             (|t| t.state.can_redo = false, &[TopToolbarAction::Redo]),
             (
-                |t| t.state.can_publish_image = false,
+                |t| t.state.can_publish_ideas = false,
                 &[TopToolbarAction::Publish],
             ),
             (
@@ -1923,7 +1961,7 @@ mod tests {
         let broker = || {
             let mut toolbar = TopToolbar::default();
             toolbar.state.can_trade = true;
-            toolbar.state.can_publish_image = true;
+            toolbar.state.can_publish_ideas = true;
             toolbar.timeframe_selector.favorites.insert(Timeframe::Min5);
             toolbar
         };

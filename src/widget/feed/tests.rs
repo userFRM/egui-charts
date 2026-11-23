@@ -15,6 +15,9 @@ mod rebinding;
 #[path = "partial_tests.rs"]
 mod partial;
 
+#[path = "checkpoint_tests.rs"]
+mod checkpoint;
+
 #[derive(Debug, Clone, PartialEq)]
 enum Call {
     Resolve(String),
@@ -2985,9 +2988,15 @@ fn symbol_changes_reset_manual_price_scaling() {
             assert!(!chart.state.price_scale().bar_ratio_locked());
             assert!(!chart.state.has_zoom_history());
             let range = chart.state.price_scale().range();
-            // 50 / (1 - 0.1 - 0.1) = 62.5; each margin adds 6.25.
-            assert!((range.min - 993.75).abs() < 1e-10, "{range:?}");
-            assert!((range.max - 1056.25).abs() < 1e-10, "{range:?}");
+            // Span = 50 / 0.82; the bottom takes 8% of it and the top takes 10%.
+            assert!(
+                (range.min - (1000.0 - 50.0 / 0.82 * 0.08)).abs() < 1e-10,
+                "{range:?}"
+            );
+            assert!(
+                (range.max - (1050.0 + 50.0 / 0.82 * 0.1)).abs() < 1e-10,
+                "{range:?}"
+            );
         }
     }
 }

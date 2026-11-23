@@ -173,6 +173,9 @@ impl Chart {
         if !self.main_bars_live() || !holds_bars(series, "set_data") {
             return false;
         }
+        if let Some(link) = &mut self.feed_link {
+            link.non_trade_bars = true;
+        }
         self.replace_main_data(bars);
         self.data_set(series);
         true
@@ -265,6 +268,11 @@ impl Chart {
             return false;
         };
         if changed {
+            if series == SeriesId::MAIN
+                && let Some(link) = &mut self.feed_link
+            {
+                link.non_trade_bars = true;
+            }
             self.data_updated(series);
         }
         if let Some(operation) = operation {
@@ -319,6 +327,11 @@ impl Chart {
             return Vec::new();
         };
         if !removed.is_empty() {
+            if series == SeriesId::MAIN
+                && let Some(link) = &mut self.feed_link
+            {
+                link.non_trade_bars = true;
+            }
             self.data_updated(series);
         }
         removed
@@ -809,14 +822,17 @@ impl Chart {
     ///
     /// The drawings that an added series or a study owns stay drawn in its pane, which takes
     /// them over as it takes a drawing moved into it. When the pane goes with the series or
-    /// study, they are deleted with the pane's own drawings, locked ones included, as
+    /// study, its unfiltered drawings are deleted, locked ones included, as
     /// [`remove_pane`](Self::remove_pane) deletes them, and undo of the user action brings them
-    /// back. A drawing being placed in the pane follows the same rule: the pane's next owner
+    /// back. Filtered shared drawings keep their stored study pane. A drawing being placed
+    /// in the pane follows the ordinary removal rule: the pane's next owner
     /// takes it, or it is cancelled with the pane, and the drawing tool stays selected. Drawings
     /// of the pane stay over and under the same remaining series and studies.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
         #[cfg(feature = "drawings")]
         let placed = self.placement_pane();
+        #[cfg(feature = "drawings")]
+        let drawings = self.drawings.begin_removal();
         let dependents = self.study_dependents(id);
         let removed = self.remove_one_series(id);
         if removed {
@@ -826,6 +842,8 @@ impl Chart {
         }
         #[cfg(feature = "drawings")]
         self.keep_placement_in(placed);
+        #[cfg(feature = "drawings")]
+        self.drawings.finish_removal(drawings);
         removed
     }
 
@@ -835,6 +853,10 @@ impl Chart {
         let stack = self.pane_stack(id);
         #[cfg(feature = "drawings")]
         let pane = self.series_pane(id).filter(|_| id != SeriesId::MAIN);
+        #[cfg(feature = "drawings")]
+        if let Some(pane) = pane {
+            self.keep_filtered_pane(pane, Some(id));
+        }
         let removed = self.remove_series_keeping_drawings(id);
         #[cfg(feature = "drawings")]
         if let Some(pane) = pane.filter(|_| removed) {
@@ -878,8 +900,7 @@ impl Chart {
         } else {
             let ids: Vec<_> = self
                 .drawings
-                .drawings
-                .iter()
+                .unfiltered_drawings()
                 .filter(|drawing| held(drawing))
                 .map(|drawing| drawing.id)
                 .collect();

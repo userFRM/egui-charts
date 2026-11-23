@@ -11,7 +11,7 @@ use crate::model::rounding_tolerance;
 use crate::model::{
     Account, BalanceChange, Capabilities, ClosedPosition, Execution, JournalEntry, Order, OrderId,
     OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, StrategyExit,
-    StrategyReport, StrategyTrade, TimeInForce, Timeframe, TradingRules,
+    StrategyReport, StrategyTrade, TimeInForce, Timeframe, TradingRules, TrailDistance,
 };
 
 /// The times in force the account supports, the default first.
@@ -42,7 +42,10 @@ const MAX_TAKE_PROFIT_LEVELS: usize = 4;
 /// calendar, and a working order cannot change its time in force. Market orders fill at the bid or
 /// ask of a usable [quote](Self::set_bid_ask), otherwise at the last price; limit and stop orders
 /// fill at the first price that reaches them, a limit at that price or better; a triggered
-/// stop-limit works on as a limit order. An order's take profits and stop loss become exit orders
+/// stop-limit works on as a limit order. A trailing stop follows the best last price since its
+/// activation price, or since it was placed without one, at its distance and never back, and
+/// fills as a stop at the first price that reaches it; each move of its stop is pushed with the
+/// order. It takes no take profit or stop loss. An order's take profits and stop loss become exit orders
 /// once it fills, for the quantity the fill opened: take-profit levels each close their own
 /// quantity, the first ones first when the fill opened less than the order's quantity, as after
 /// closing an opposite position. A level's own stop loss closes the same quantity as its take
@@ -111,6 +114,8 @@ pub struct SavedPaperAccount {
     trips: Vec<(String, Trip)>,
     #[serde(default)]
     closed_positions: Vec<ClosedPosition>,
+    #[serde(default)]
+    trails: Vec<(OrderId, f64)>,
 }
 
 /// The account a replay trading session starts with, as the replay start menu offers it: its
@@ -201,6 +206,8 @@ struct State {
     /// cancels. A level with its own stop loss is a group of two; the order's stop loss and the
     /// take profits without their own form the other.
     exits: HashMap<OrderId, Vec<OrderId>>,
+    /// The best price of each working trailing stop since it started trailing.
+    trails: HashMap<OrderId, f64>,
     positions: HashMap<String, Position>,
     trips: HashMap<String, Trip>,
     closed_positions: Vec<ClosedPosition>,
@@ -250,6 +257,20 @@ fn describe(request: &OrderRequest) -> String {
         OrderType::Limit(limit) => format!("limit {limit}"),
         OrderType::Stop(stop) => format!("stop {stop}"),
         OrderType::StopLimit { stop, limit } => format!("stop {stop} limit {limit}"),
+        OrderType::TrailingStop {
+            distance,
+            activation,
+        } => {
+            let distance = match distance {
+                TrailDistance::Price(price) => format!("{price}"),
+                TrailDistance::Ticks { ticks, .. } => format!("{ticks} ticks"),
+                TrailDistance::Percent(percent) => format!("{percent}%"),
+            };
+            match activation {
+                Some(activation) => format!("trailing stop {distance} from {activation}"),
+                None => format!("trailing stop {distance}"),
+            }
+        }
     };
     format!("{side} {} {} {kind}", request.quantity, request.symbol)
 }
@@ -522,6 +543,12 @@ impl PaperAccount {
             .iter()
             .filter_map(|order| Some((order.id.clone(), state.exits.get(&order.id)?.clone())))
             .collect();
+        let mut trails: Vec<_> = state
+            .working
+            .iter()
+            .filter_map(|order| Some((order.id.clone(), *state.trails.get(&order.id)?)))
+            .collect();
+        trails.sort_by(|a, b| a.0.0.cmp(&b.0.0));
         SavedPaperAccount {
             currency: self.currency.clone(),
             initial: self.initial,
@@ -541,6 +568,7 @@ impl PaperAccount {
             journal: state.journal.clone(),
             trips,
             closed_positions: state.closed_positions.clone(),
+            trails,
         }
     }
 
@@ -587,6 +615,11 @@ impl PaperAccount {
             state.next_id = saved.next_id;
             state.working = saved.working;
             state.exits = saved.exits.into_iter().collect();
+            state.trails = saved
+                .trails
+                .into_iter()
+                .filter(|(id, _)| state.working.iter().any(|order| order.id == *id))
+                .collect();
             state.trips = saved.trips.into_iter().collect();
             for position in &saved.positions {
                 // Earlier saves have no trip totals or opening time; retain their known cost basis.
@@ -747,6 +780,7 @@ impl State {
                 limit: true,
                 stop: true,
                 stop_limit: true,
+                trailing_stop: true,
                 brackets: true,
                 take_profit_levels: true,
                 take_profit_level_stops: true,
@@ -895,6 +929,7 @@ impl State {
     }
 
     fn finish(&mut self, mut order: Order, status: OrderStatus) {
+        self.trails.remove(&order.id);
         order.status = status;
         order.closed = Some(self.now());
         self.push(AccountEvent::Order(order.clone()));
@@ -1027,13 +1062,14 @@ impl State {
 
         order.filled = request.quantity;
         order.fill_price = Some(price);
-        let execution = Execution::new(
+        let mut execution = Execution::new(
             order.id.clone(),
             self.now(),
             request.side,
             price,
             request.quantity,
         );
+        execution.symbol = Some(request.symbol.clone());
         let id = order.id.clone();
         self.finish(order, OrderStatus::Filled);
         self.push(AccountEvent::Execution(execution.clone()));
@@ -1224,19 +1260,48 @@ impl State {
         true
     }
 
+    /// Moves the trailing stop of `self.working[index]` with `price`: records its best price
+    /// and sets [`Order::trailing_stop`]. Returns whether the stop changed. Other orders are
+    /// left as they are.
+    fn trail(&mut self, index: usize, price: f64) -> bool {
+        let order = &mut self.working[index];
+        let best = self.trails.get(&order.id).copied();
+        let Some((best, stop)) = order
+            .request
+            .order_type
+            .trail(order.request.side, best, price)
+        else {
+            return false;
+        };
+        self.trails.insert(order.id.clone(), best);
+        let stop = stop.is_finite().then_some(stop);
+        let changed = order.trailing_stop != stop;
+        order.trailing_stop = stop;
+        changed
+    }
+
     /// Fills the working orders of `symbol` that `price` reached.
     fn reach(&mut self, terms: &PaperAccount, symbol: &str, price: f64) {
         let mut index = 0;
         while index < self.working.len() {
-            let order = &mut self.working[index];
-            let fill = if order.request.symbol == symbol {
+            let order = &self.working[index];
+            let fill = if order.request.symbol != symbol {
+                None
+            } else if let OrderType::TrailingStop { .. } = order.request.order_type {
+                if self.trail(index, price) {
+                    self.push(AccountEvent::Order(self.working[index].clone()));
+                }
+                let order = &self.working[index];
+                order.trailing_stop.and_then(|stop| {
+                    OrderType::Stop(stop).fill_price(order.request.side, price, price)
+                })
+            } else {
                 order
                     .request
                     .order_type
                     .fill_price(order.request.side, price, price)
-            } else {
-                None
             };
+            let order = &mut self.working[index];
             if let (Some(_), OrderType::StopLimit { limit, .. }) = (fill, order.request.order_type)
             {
                 // Triggered: it works on as a limit order, which may fill at once.
@@ -1270,7 +1335,23 @@ fn validate(order: &OrderRequest, last: f64, point_value: f64) -> Result<(), Fee
         OrderType::Limit(price) | OrderType::Stop(price) => price,
         OrderType::StopLimit { stop, limit } if stop.is_finite() => limit,
         OrderType::StopLimit { .. } => f64::NAN,
+        OrderType::TrailingStop {
+            distance,
+            activation,
+        } if distance.is_valid() && activation.is_none_or(f64::is_finite) => {
+            activation.unwrap_or(last)
+        }
+        OrderType::TrailingStop { .. } => f64::NAN,
     };
+    if matches!(order.order_type, OrderType::TrailingStop { .. })
+        && (order.take_profit.is_some()
+            || !order.take_profit_levels.is_empty()
+            || order.stop_loss.is_some())
+    {
+        return Err(FeedError::Other(
+            "a trailing stop takes no take profit or stop loss".into(),
+        ));
+    }
     let buy = order.side == OrderSide::Buy;
     let no_profit = |p: f64| !p.is_finite() || if buy { p <= price } else { p >= price };
     let no_loss = |p: f64| !p.is_finite() || if buy { p >= price } else { p <= price };
@@ -1385,8 +1466,11 @@ impl Broker for PaperAccount {
             }
         } else {
             let symbol = order.request.symbol.clone();
-            state.push(AccountEvent::Order(order.clone()));
             state.working.push(order);
+            // The first event already carries the stop of a trailing stop that trails at once.
+            let index = state.working.len() - 1;
+            state.trail(index, last);
+            state.push(AccountEvent::Order(state.working[index].clone()));
             // A marketable limit or a reached stop fills at once.
             state.reach(self, &symbol, last);
             state.push(state.account(self));
@@ -1444,13 +1528,22 @@ impl Broker for PaperAccount {
         if let Err(error) = state.buying_power(self, &order, Some(&id)) {
             return reply.send(Err(error));
         }
-        let working = state
+        let index = state
             .working
-            .iter_mut()
-            .find(|working| working.id == id)
+            .iter()
+            .position(|working| working.id == id)
             .unwrap();
-        working.request = order;
-        let (working, symbol) = (working.clone(), working.request.symbol.clone());
+        let trailing = matches!(order.order_type, OrderType::TrailingStop { .. });
+        state.working[index].request = order;
+        if trailing {
+            // The best price so far is kept, so a new distance moves the stop from it at once.
+            state.trail(index, last);
+        } else {
+            state.trails.remove(&id);
+            state.working[index].trailing_stop = None;
+        }
+        let working = state.working[index].clone();
+        let symbol = working.request.symbol.clone();
         reply.send(Ok(()));
         state.push(AccountEvent::Order(working.clone()));
         state.log(format!(
@@ -1544,7 +1637,7 @@ mod tests {
         rules.point_value = 50.0;
         rules.leverage = Some(20.0);
         rules.time_in_force = vec![
-            TimeInForce::Day,
+            TimeInForce::GoodTillDate,
             TimeInForce::ImmediateOrCancel,
             TimeInForce::GoodTillCancelled,
         ];
@@ -3364,7 +3457,9 @@ mod tests {
     #[test]
     fn immediate_orders_fill_at_once_or_are_cancelled_and_session_orders_are_refused() {
         use OrderSide::{Buy, Sell};
-        use TimeInForce::{Day, FillOrKill, GoodTillCancelled, ImmediateOrCancel, Month, Week};
+        use TimeInForce::{
+            Day, FillOrKill, GoodTillCancelled, GoodTillDate, ImmediateOrCancel, Month, Week,
+        };
         let paper = PaperAccount::new("USD", 1_000.0);
         paper.set_price("SYM", 100.0);
         assert_eq!(
@@ -3376,8 +3471,17 @@ mod tests {
         let id = place(&paper, request.clone()).unwrap();
         let before = snapshot(&paper);
         let inbox = Arc::new(Inbox::default());
-        for tif in [Day, Week, Month, ImmediateOrCancel, FillOrKill] {
+        for tif in [
+            Day,
+            Week,
+            Month,
+            GoodTillDate,
+            ImmediateOrCancel,
+            FillOrKill,
+        ] {
             request.time_in_force = tif;
+            request.expires =
+                (tif == GoodTillDate).then(|| "2026-12-01T21:00:00Z".parse().unwrap());
             paper.modify(id.clone(), request.clone(), inbox.reply(0));
             let result = *inbox
                 .drain()
@@ -3448,11 +3552,14 @@ mod tests {
             (Day, OrderType::Market, Buy, None),
             (Week, OrderType::Market, Buy, None),
             (Month, OrderType::Market, Buy, None),
+            (GoodTillDate, OrderType::Market, Buy, None),
         ] {
             let paper = PaperAccount::new("USD", 1_000.0);
             paper.set_price("SYM", 100.0);
             let mut request = OrderRequest::new("SYM", side, 1.0, kind);
             request.time_in_force = tif;
+            request.expires =
+                (tif == GoodTillDate).then(|| "2026-12-01T21:00:00Z".parse().unwrap());
             paper.place(request, inbox.reply(0));
             let result = *inbox
                 .drain()
@@ -3561,6 +3668,291 @@ mod tests {
                     assert_eq!(fill.filled, 1.0);
                 }
             }
+        }
+    }
+
+    /// The events the account pushed to `inbox` since the last call.
+    fn pushed(inbox: &Inbox) -> Vec<AccountEvent> {
+        inbox
+            .drain()
+            .answers
+            .into_iter()
+            .map(|(_, event)| *event.downcast::<AccountEvent>().unwrap())
+            .collect()
+    }
+
+    /// The stop of order `id` the account last pushed among `events`, else `stop`, and the
+    /// price of any fill.
+    fn trail_of(id: &OrderId, events: Vec<AccountEvent>, stop: &mut Option<f64>) -> Option<f64> {
+        let mut fill = None;
+        for event in events {
+            match event {
+                AccountEvent::Order(order)
+                    if order.id == *id && order.status == OrderStatus::Working =>
+                {
+                    *stop = order.trailing_stop;
+                }
+                AccountEvent::Execution(execution) => fill = Some(execution.price),
+                _ => {}
+            }
+        }
+        fill
+    }
+
+    /// A trailing stop follows the best last price from its activation, or from placement, by
+    /// its distance in each unit, never back, and fills as a stop at the first price that
+    /// reaches it. A new distance moves the stop at once from the best price so far, and a
+    /// restored account keeps that best price.
+    #[test]
+    fn trailing_stops_trail_the_best_price_and_fill_at_their_stop() {
+        use OrderSide::{Buy, Sell};
+        use TrailDistance::{Percent, Price, Ticks};
+        let trailing = |distance, activation| OrderType::TrailingStop {
+            distance,
+            activation,
+        };
+        let ticks = |ticks, tick_size| Ticks { ticks, tick_size };
+        // The stops are those after placement and after each price but the last, which fills.
+        for (side, distance, activation, start, prices, stops, fill) in [
+            (
+                Sell,
+                Price(3.0),
+                None,
+                100.0,
+                &[102.0, 101.0, 103.0, 100.5, 100.0][..],
+                &[Some(97.0), Some(99.0), Some(99.0), Some(100.0), Some(100.0)][..],
+                100.0,
+            ),
+            (
+                Buy,
+                Price(1.5),
+                Some(97.0),
+                100.0,
+                &[99.0, 97.0, 96.0, 97.5],
+                &[None, None, Some(98.5), Some(97.5)],
+                97.5,
+            ),
+            (
+                Buy,
+                ticks(4, 0.25),
+                Some(98.0),
+                100.0,
+                &[99.0, 98.0, 98.5, 97.0, 98.0],
+                &[None, None, Some(99.0), Some(99.0), Some(98.0)],
+                98.0,
+            ),
+            // 100.3 - 0.01 is 100.28999999999999 before it is settled, which 100.29 misses.
+            (
+                Sell,
+                ticks(1, 0.01),
+                None,
+                100.3,
+                &[100.29],
+                &[Some(100.29)],
+                100.29,
+            ),
+            (
+                Sell,
+                Percent(2.0),
+                Some(105.0),
+                100.0,
+                &[104.0, 106.0, 110.0, 108.0, 107.8],
+                &[None, None, Some(103.88), Some(107.8), Some(107.8)],
+                107.8,
+            ),
+            (
+                Sell,
+                Percent(1.0),
+                None,
+                200.0,
+                &[210.0, 208.0, 207.9],
+                &[Some(198.0), Some(207.9), Some(207.9)],
+                207.9,
+            ),
+            // A price beyond the stop fills there.
+            (
+                Buy,
+                Price(2.0),
+                None,
+                100.0,
+                &[103.0],
+                &[Some(102.0)],
+                103.0,
+            ),
+        ] {
+            let paper = PaperAccount::new("USD", 100_000.0);
+            let inbox = Arc::new(Inbox::default());
+            let (_listener, events) = Listener::new(&inbox, 2);
+            paper.connect(events);
+            paper.set_price("SYM", start);
+            pushed(&inbox);
+            let request = OrderRequest::new("SYM", side, 1.0, trailing(distance, activation));
+            let id = place(&paper, request).unwrap();
+            let mut stop = None;
+            let mut seen = Vec::new();
+            let mut filled = trail_of(&id, pushed(&inbox), &mut stop);
+            for &price in prices {
+                seen.push(stop);
+                paper.set_price("SYM", price);
+                filled = filled.or(trail_of(&id, pushed(&inbox), &mut stop));
+            }
+            assert_eq!(seen, stops, "{side:?} {distance:?} from {activation:?}");
+            assert_eq!(
+                filled,
+                Some(fill),
+                "{side:?} {distance:?} from {activation:?}"
+            );
+        }
+
+        // A sell trailing 3 from 100, moved by 104 to a stop of 101.
+        let moved = || {
+            let paper = PaperAccount::new("USD", 100_000.0);
+            paper.set_price("SYM", 100.0);
+            let request = OrderRequest::new("SYM", Sell, 1.0, trailing(Price(3.0), None));
+            let id = place(&paper, request.clone()).unwrap();
+            paper.set_price("SYM", 104.0);
+            (paper, id, request)
+        };
+        let (paper, id, mut request) = moved();
+        let inbox = Arc::new(Inbox::default());
+        let (_listener, events) = Listener::new(&inbox, 2);
+        paper.connect(events);
+        paper.set_price("SYM", 103.5);
+        let mut stop = None;
+        assert_eq!(trail_of(&id, pushed(&inbox), &mut stop), None);
+        assert_eq!(stop, Some(101.0));
+        request.order_type = trailing(Price(1.0), None);
+        request.time_in_force = TimeInForce::GoodTillCancelled;
+        let reply = Arc::new(Inbox::default());
+        paper.modify(id.clone(), request, reply.reply(0));
+        let answer = reply.drain().answers.pop().unwrap().1;
+        assert_eq!(*answer.downcast::<Result<(), FeedError>>().unwrap(), Ok(()));
+        assert_eq!(trail_of(&id, pushed(&inbox), &mut stop), None);
+        assert_eq!(stop, Some(103.0), "from the best price of 104");
+        paper.set_price("SYM", 103.0);
+        assert_eq!(trail_of(&id, pushed(&inbox), &mut stop), Some(103.0));
+
+        let restored = PaperAccount::restore(moved().0.save()).unwrap();
+        let inbox = Arc::new(Inbox::default());
+        let (_listener, events) = Listener::new(&inbox, 2);
+        restored.connect(events);
+        restored.set_price("SYM", 103.0);
+        let mut stop = None;
+        assert_eq!(trail_of(&id, pushed(&inbox), &mut stop), None);
+        assert_eq!(stop, Some(101.0), "from the restored best price of 104");
+        restored.set_price("SYM", 101.0);
+        assert_eq!(trail_of(&id, pushed(&inbox), &mut stop), Some(101.0));
+
+        let base = OrderRequest::new("SYM", Sell, 1.0, trailing(Price(3.0), None));
+        let paper = PaperAccount::new("USD", 100_000.0);
+        paper.set_price("SYM", 100.0);
+        for change in [
+            "percent",
+            "price",
+            "not finite",
+            "no ticks",
+            "no tick size",
+            "activation",
+            "take profit",
+            "stop loss",
+        ] {
+            let mut request = base.clone();
+            match change {
+                "percent" => request.order_type = trailing(Percent(100.0), None),
+                "price" => request.order_type = trailing(Price(0.0), None),
+                "not finite" => request.order_type = trailing(Price(f64::NAN), None),
+                "no ticks" => request.order_type = trailing(ticks(0, 0.25), None),
+                "no tick size" => request.order_type = trailing(ticks(1, 0.0), None),
+                "activation" => request.order_type = trailing(Price(3.0), Some(f64::NAN)),
+                "take profit" => request.take_profit = Some(90.0),
+                _ => request.stop_loss = Some(110.0),
+            }
+            assert!(place(&paper, request).is_err(), "{change}");
+        }
+        assert!(place(&paper, base).is_ok());
+    }
+
+    /// The same price path gives a trailing stop the stop and fill of a backtest's trailing
+    /// exit, for a long with an activation price and a short without one.
+    #[cfg(feature = "strategies")]
+    #[test]
+    fn a_trailing_stop_fills_where_a_backtest_trailing_exit_does() {
+        use crate::model::Bar;
+        use crate::strategies::{Backtest, OrderSize, Strategy, StrategyContext};
+        use OrderSide::{Buy, Sell};
+        struct Trail(OrderSide, f64, f64);
+        impl Strategy for Trail {
+            fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+                if context.bars().len() == 1 {
+                    context.entry("A", self.0, None, OrderType::Market);
+                    context.exit_trailing("X", self.0, None, self.1, self.2);
+                }
+            }
+        }
+        let time = |n: i64| DateTime::from_timestamp(1_704_067_200 + n * 60, 0).unwrap();
+        let mut backtest = Backtest::new("Trail", "SYM", Timeframe::Min1, 1_000.0);
+        backtest.settings.order_size = OrderSize::Fixed(2.0);
+        // Each path runs from the open through the nearer extreme, the other one, to the close.
+        for (side, activation, offset, bars, path, stops, exit) in [
+            (
+                Buy,
+                4.0,
+                3.0,
+                &[(100.0, 103.0, 99.0, 99.5), (99.5, 107.0, 99.0, 104.0)][..],
+                &[99.0, 103.0, 99.5, 99.0, 107.0, 104.0][..],
+                &[None, None, None, None, None, Some(104.0)][..],
+                104.0,
+            ),
+            (
+                Sell,
+                0.0,
+                2.0,
+                &[(100.0, 101.0, 96.0, 98.0)],
+                &[101.0, 96.0, 98.0],
+                &[Some(102.0), Some(102.0), Some(98.0)],
+                98.0,
+            ),
+        ] {
+            let mut prices = vec![(100.0, 100.0, 100.0, 100.0)];
+            prices.extend_from_slice(bars);
+            let bars: Vec<_> = (0..)
+                .zip(prices)
+                .map(|(n, (open, high, low, close))| Bar::new(time(n), open, high, low, close, 1.0))
+                .collect();
+            let report = backtest.run(&mut Trail(side, activation, offset), &bars, &[]);
+            let trade = &report.trades[0];
+            assert_eq!(trade.entry_price, 100.0);
+            assert_eq!(trade.exit.as_ref().map(|exit| exit.price), Some(exit));
+
+            let paper = PaperAccount::new("USD", 1_000.0);
+            let inbox = Arc::new(Inbox::default());
+            let (_listener, events) = Listener::new(&inbox, 2);
+            paper.connect(events);
+            paper.set_price("SYM", 100.0);
+            place(
+                &paper,
+                OrderRequest::new("SYM", side, 2.0, OrderType::Market),
+            )
+            .unwrap();
+            let distance = TrailDistance::Price(offset);
+            let activation = (activation > 0.0).then_some(100.0 + activation);
+            let order_type = OrderType::TrailingStop {
+                distance,
+                activation,
+            };
+            let exit_side = if side == Buy { Sell } else { Buy };
+            let id = place(&paper, OrderRequest::new("SYM", exit_side, 2.0, order_type));
+            let id = id.unwrap();
+            let (mut stop, mut seen, mut filled) = (None, Vec::new(), None);
+            // These events also hold the market entry's fill.
+            trail_of(&id, pushed(&inbox), &mut stop);
+            for &price in path {
+                seen.push(stop);
+                paper.set_price("SYM", price);
+                filled = filled.or(trail_of(&id, pushed(&inbox), &mut stop));
+            }
+            assert_eq!(seen, stops, "{side:?}");
+            assert_eq!(filled, Some(exit), "{side:?}");
         }
     }
 }

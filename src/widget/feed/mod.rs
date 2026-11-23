@@ -5,6 +5,8 @@
 //! outside any egui closure: a feed may answer or push inline, and that runs the waker, which
 //! takes the egui context's lock.
 
+pub(super) mod checkpoint;
+mod checkpoint_key;
 mod footprints;
 mod pump;
 
@@ -66,6 +68,8 @@ pub(crate) struct FeedLink {
     /// history lacks or holds with other values, which stands for the first live execution while
     /// none is held.
     pushed_from: Option<chrono::DateTime<chrono::Utc>>,
+    /// Host-supplied or paged candles cannot resume a trade-built partial candle.
+    pub(super) non_trade_bars: bool,
     pub(super) paused: bool,
     /// The pause last set with [`Chart::set_feed_paused`]. `paused` also holds while the main
     /// bars take no data or a replay runs.
@@ -224,6 +228,7 @@ impl FeedLink {
             resumed: false,
             resumed_from: None,
             pushed_from: None,
+            non_trade_bars: self.non_trade_bars,
             paused: true,
             host_paused: true,
             next_key: 0,
@@ -624,6 +629,7 @@ impl Chart {
             resumed: false,
             resumed_from: None,
             pushed_from: None,
+            non_trade_bars: false,
             paused: false,
             host_paused: false,
             next_key: 0,
@@ -773,14 +779,19 @@ impl Chart {
                 next.0.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
                 next.0.eraser_mode = self.drawings.eraser_mode;
                 next.0.set_hidden(self.drawings.is_hidden());
+                next.0.shared_filter = self.drawings.shared_filter;
+                next.0.set_locked(self.drawings.is_locked());
                 next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
-                self.flush_drawing_events();
+                self.flush_change_events();
                 next.0.events.clear();
                 next.0.events_dropped = 0;
                 std::mem::swap(&mut self.drawings, &mut next.0);
                 std::mem::swap(&mut self.marks, &mut next.1);
                 self.attach_pending_drawings();
+                // A pane remembered for a study removed while shared drawings were hidden
+                // places those drawings on charts that mirror this one when they return.
                 if !next.0.drawings.is_empty()
+                    || !next.0.removed_panes.is_empty()
                     || !next.1.is_empty()
                     || !next
                         .0

@@ -30,7 +30,7 @@ pub(crate) struct OwnData {
     /// then takes its size in ticks of the instrument.
     pub(crate) sizing: bool,
     /// The symbol search of the synthetic session, set aside while own data is on.
-    pub(crate) search: SymbolSearchDialog,
+    pub(crate) search: Box<SymbolSearchDialog>,
 }
 
 impl DemoApp {
@@ -112,16 +112,18 @@ impl DemoApp {
         let intervals = profile.intervals.iter().map(|interval| interval.chart);
         let intervals = intervals.collect();
         let feed = Arc::new(MappedFeed::new(profile.clone(), secrets));
-        let mut chart = egui_charts::ChartBuilder::new()
-            .with_feed(feed.clone())
-            .with_symbol(symbol)
-            .with_timeframe(timeframe)
-            .with_theme(self.theme.clone())
-            .with_config(self.chart.config().clone())
-            .with_chart_options(self.chart.chart_options().clone())
-            .with_drawing_registry(self.chart.drawings().registry.clone())
-            .with_visible_candles(0)
-            .build();
+        let mut chart = Box::new(
+            egui_charts::ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol(symbol)
+                .with_timeframe(timeframe)
+                .with_theme(self.theme.clone())
+                .with_config(self.chart.config().clone())
+                .with_chart_options(self.chart.chart_options().clone())
+                .with_drawing_registry(self.chart.drawings().registry.clone())
+                .with_visible_candles(0)
+                .build(),
+        );
         self.formatting.apply(&mut chart);
         super::super::size_by_atr(&mut chart);
         chart.set_event_visibility(self.chart.event_visibility().clone());
@@ -141,7 +143,8 @@ impl DemoApp {
             let synthetic_paused = self.live.paused();
             self.live.set_paused(true);
             self.park_workspace(chart);
-            let search = std::mem::replace(&mut self.symbol_search, SymbolSearchDialog::new());
+            let search =
+                std::mem::replace(&mut self.symbol_search, Box::new(SymbolSearchDialog::new()));
             self.own_data = Some(OwnData {
                 profile,
                 feed,
@@ -304,7 +307,7 @@ mod tests {
         assert!(!app.state.replay_active);
         assert!(notified(&app, "Replay: available on synthetic data only."));
         let tabs = app.layout_tabs.len();
-        app.handle_layout_action(LayoutAction::CreateNew);
+        app.handle_layout_action(LayoutAction::CreateNew("Other".into()));
         assert_eq!(app.layout_tabs.len(), tabs);
         assert!(notified(&app, "Layouts: available on synthetic data only."));
         // A symbol outside the profile is refused. One of the profile is asked of its service.
@@ -364,10 +367,9 @@ mod tests {
     }
 
     /// On own data, time and sales writes a price at the decimals of the profile's price step,
-    /// as the chart's price scale does, and so does the notice of a size filter that matches.
+    /// as the chart's price scale does.
     #[test]
     fn time_and_sales_writes_own_data_prices_at_the_price_step() {
-        use egui_charts::ui::widget_bar::TradeSizeFilter;
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         let server = Server::start(pages(vec!["[]".to_owned()]));
@@ -378,16 +380,9 @@ mod tests {
         until(&ctx, &mut app.chart, "the price step", |chart| {
             step(chart) == Some(0.001)
         });
-        let mut filter = TradeSizeFilter::new(1.0);
-        filter.sound = true;
-        app.time_and_sales.filters.push(filter);
         let trade = egui_charts::model::Tick::new(chrono::Utc::now(), 12.347, 5.0, None);
-        app.feed_time_and_sales(vec![trade]);
-        // The step 0.001 has three decimals: the list and the notice write 12.347, not 12.35.
+        app.feed_time_and_sales(&ctx, vec![trade]);
+        // The step 0.001 has three decimals: the list writes 12.347, not 12.35.
         assert_eq!(app.time_and_sales.config.price_decimals, Some(3));
-        assert_eq!(
-            app.toasts.toasts().last().unwrap().message,
-            "Size filter matched on fill: 5 at 12.347"
-        );
     }
 }

@@ -51,6 +51,18 @@ impl Chart {
         }
     }
 
+    /// The name the readouts give the horizontal value that [`Self::format_time`] writes: the
+    /// [horizontal scale](Self::set_horizontal_scale)'s
+    /// [`value_name`](crate::scales::HorizontalScale::value_name), else "Time", as the time
+    /// scale names it.
+    #[cfg(feature = "ui")]
+    pub(crate) fn horizontal_value_name(&self) -> Option<&str> {
+        match &self.horizontal_scale {
+            Some(scale) => scale.value_name(),
+            None => Some("Time"),
+        }
+    }
+
     /// The chart's clock: the replay time while replaying, else the server time from
     /// [`set_server_time`](Self::set_server_time) or the feed, when known.
     pub(super) fn chart_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -77,28 +89,39 @@ impl Chart {
         let now = self
             .chart_time()
             .or_else(|| self.quote.as_ref().map(|quote| quote.ts))?;
-        let session = rendering::exchange_session(
-            self.instrument(),
-            self.config.session_config.as_ref(),
-            &self.display_timezone(),
-            timeframe,
-        );
-        // Calendar bars encode their trading date in the feed's selected zone.
-        let session_open = if self.feed_link.is_some() && timeframe.duration_ms() >= 86_400_000 {
-            let date = match self.display_timezone() {
-                crate::scales::TimezoneMode::Local => {
-                    last.time.with_timezone(&chrono::Local).date_naive()
-                }
-                zone => last
-                    .time
-                    .with_timezone(&zone.to_tz().unwrap_or(crate::model::TimezoneId::utc()))
-                    .date_naive(),
-            };
-            date.and_hms_opt(0, 0, 0)?.and_utc()
+        let session_close = if let Some(link) = self
+            .feed_link
+            .as_ref()
+            .filter(|link| link.clock.has_session())
+        {
+            link.clock
+                .sessions()
+                .bar_session_close(link.clock.bar_open(last.time), timeframe, true)
         } else {
-            last.time
+            let session = rendering::exchange_session(
+                self.instrument(),
+                self.config.session_config.as_ref(),
+                &self.display_timezone(),
+                timeframe,
+            );
+            // Calendar bars encode their trading date in the feed's selected zone.
+            let session_open = if self.feed_link.is_some() && timeframe.duration_ms() >= 86_400_000
+            {
+                let date = match self.display_timezone() {
+                    crate::scales::TimezoneMode::Local => {
+                        last.time.with_timezone(&chrono::Local).date_naive()
+                    }
+                    zone => last
+                        .time
+                        .with_timezone(&zone.to_tz().unwrap_or(crate::model::TimezoneId::utc()))
+                        .date_naive(),
+                };
+                date.and_hms_opt(0, 0, 0)?.and_utc()
+            } else {
+                last.time
+            };
+            session.bar_session_close(session_open, timeframe, self.extended_hours)
         };
-        let session_close = session.bar_session_close(session_open, timeframe, self.extended_hours);
         let boundary = self
             .feed_link
             .as_ref()
@@ -214,6 +237,11 @@ impl Chart {
         }
     }
 
+    /// The zone of the calendar that dates the bars, the one [`Self::go_to_local_time`] reads.
+    pub(crate) fn bar_date_timezone(&self) -> crate::scales::TimezoneMode {
+        self.label_timezone(|| self.time_label_seconds())
+    }
+
     /// Resolves local fields on the calendar that dates the bars. A skipped wall time opens at
     /// the clock jump, a repeated one at its first occurrence; unrepresentable dates give `None`.
     pub(super) fn local_date_instant(
@@ -222,7 +250,7 @@ impl Chart {
         time: Option<chrono::NaiveTime>,
     ) -> Option<chrono::DateTime<chrono::Utc>> {
         let local = date.and_time(time.unwrap_or(chrono::NaiveTime::MIN));
-        match Self::calendar_zone(self.label_timezone(|| self.time_label_seconds())) {
+        match Self::calendar_zone(self.bar_date_timezone()) {
             Some(zone) => crate::model::local_instant(zone, local),
             None => crate::model::local_instant(chrono::Local, local),
         }
@@ -564,7 +592,7 @@ mod tests {
         };
         use chrono::{
             NaiveTime,
-            Weekday::{Fri, Mon, Thu, Tue, Wed},
+            Weekday::{Fri, Mon, Sat, Thu, Tue, Wed},
         };
         struct Feed;
         impl Datafeed for Feed {
@@ -572,11 +600,12 @@ mod tests {
                 unreachable!("this test only reads the attached calendar");
             }
         }
-        for (interval, open, now, session, expected) in [
+        for (interval, open, now, session, session_config, expected) in [
             (
                 "7min",
                 "2024-03-31T00:59:00Z",
                 "2024-03-31T00:59:30Z",
+                false,
                 false,
                 Some("00:30"),
             ),
@@ -585,6 +614,7 @@ mod tests {
                 "2024-03-10T23:00:00Z",
                 "2024-03-11T14:59:00Z",
                 true,
+                false,
                 Some("01:00"),
             ),
             (
@@ -592,6 +622,7 @@ mod tests {
                 "2024-03-10T23:00:00Z",
                 "2024-03-15T14:59:00Z",
                 true,
+                false,
                 Some("01:00"),
             ),
             (
@@ -599,12 +630,55 @@ mod tests {
                 "2024-02-29T23:00:00Z",
                 "2024-03-29T14:59:00Z",
                 true,
+                false,
                 Some("01:00"),
+            ),
+            (
+                "3D",
+                "2026-11-11T23:00:00Z",
+                "2026-11-16T14:59:00Z",
+                true,
+                false,
+                Some("01:00"),
+            ),
+            // The chart's saved hours supply the close when the feed has no session.
+            (
+                "5min",
+                "2026-11-16T20:55:00Z",
+                "2026-11-16T20:58:00Z",
+                false,
+                true,
+                Some("02:00"),
+            ),
+            (
+                "1D",
+                "2026-11-15T23:00:00Z",
+                "2026-11-16T20:58:00Z",
+                false,
+                true,
+                Some("02:00"),
+            ),
+            (
+                "1W",
+                "2026-11-15T23:00:00Z",
+                "2026-11-20T20:58:00Z",
+                false,
+                true,
+                Some("02:00"),
+            ),
+            (
+                "1M",
+                "2026-10-31T23:00:00Z",
+                "2026-11-30T20:58:00Z",
+                false,
+                true,
+                Some("02:00"),
             ),
             (
                 "10t",
                 "2024-03-11T14:59:00Z",
                 "2024-03-11T14:59:30Z",
+                false,
                 false,
                 None,
             ),
@@ -612,17 +686,25 @@ mod tests {
             let timeframe: Timeframe = interval.parse().unwrap();
             let mut chart = chart(&[100.0], &[110.0]);
             chart.timeframe = Some(timeframe);
+            chart.config.session_config = session_config.then(crate::config::SessionConfig::nyse);
             chart.chart_options.time_scale.timezone =
                 crate::scales::TimezoneMode::Exchange("Europe/Zurich".parse().unwrap());
             chart.attach_feed(std::sync::Arc::new(Feed), 1);
             let mut instrument =
                 Instrument::new("TEST").with_time_zone(TimezoneId::named("Europe/Zurich").unwrap());
             if session {
-                instrument.session = Some(Session::new([SessionWindow::new(
+                let mut hours = Session::new([SessionWindow::new(
                     [Mon, Tue, Wed, Thu, Fri],
                     NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
                     NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
-                )]));
+                )]);
+                // Saturday trades only in extended hours, outside the regular feed's runs.
+                hours.extended_windows.push(SessionWindow::new(
+                    [Sat],
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+                ));
+                instrument.session = Some(hours);
             }
             chart.set_instrument(Some(instrument));
             // Metadata resolves Exchange timezone before the bar is assigned to its slot.
@@ -649,7 +731,7 @@ mod tests {
             assert_eq!(
                 chart.current_bar_countdown().as_deref(),
                 expected,
-                "{interval}"
+                "{interval}, session={session}, session_config={session_config}"
             );
         }
     }

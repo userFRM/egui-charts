@@ -6,7 +6,7 @@ use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, FontId, Pos2, Response, Stroke, Ui, Vec2};
 
-pub use crate::model::DateRange;
+use crate::model::DateRange;
 
 /// Configuration for the Range Switcher widget
 #[derive(Debug, Clone)]

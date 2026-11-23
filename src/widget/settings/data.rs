@@ -121,7 +121,8 @@ pub struct StatusLineOptions {
     pub quote_panel: bool,
     /// Display study names.
     pub show_indicator_titles: bool,
-    /// Display host-supplied study inputs.
+    /// Display study inputs after their names: the host's caption, else one built from the
+    /// study's inputs.
     pub show_indicator_inputs: bool,
     /// Display historical study output values.
     pub show_indicator_values: bool,
@@ -227,6 +228,42 @@ impl Default for CrosshairSettings {
     }
 }
 
+/// Which crosshair lines and axis labels the Canvas tab shows. Lines show only in the full
+/// crosshair style.
+///
+/// ```
+/// use egui_charts::widget::settings::CrosshairVisibility;
+///
+/// let mut shown = CrosshairVisibility::default();
+/// shown.horizontal_line = false;
+/// shown.price_label = false;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct CrosshairVisibility {
+    /// Draw the vertical line.
+    pub vertical_line: bool,
+    /// Draw the horizontal line.
+    pub horizontal_line: bool,
+    /// Draw the time label on the time axis.
+    pub time_label: bool,
+    /// Draw the price label on the price axis, and the values of volume and studies.
+    pub price_label: bool,
+}
+
+impl Default for CrosshairVisibility {
+    /// Everything shown, as on a new chart.
+    fn default() -> Self {
+        Self {
+            vertical_line: true,
+            horizontal_line: true,
+            time_label: true,
+            price_label: true,
+        }
+    }
+}
+
 /// Canvas tab: Watermark settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WatermarkSettings {
@@ -275,7 +312,7 @@ impl Default for ScalesAppearanceSettings {
     }
 }
 
-/// Canvas tab: Buttons visibility settings
+/// Canvas tab: Buttons visibility settings. Both groups show on mouse over by default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ButtonsSettings {
     /// Visibility of chart navigation controls.
@@ -287,7 +324,7 @@ pub struct ButtonsSettings {
 impl Default for ButtonsSettings {
     fn default() -> Self {
         Self {
-            navigation: ButtonVisibility::Hidden,
+            navigation: ButtonVisibility::VisibleOnMouseOver,
             pane: ButtonVisibility::VisibleOnMouseOver,
         }
     }
@@ -330,7 +367,7 @@ pub struct MarginsSettings {
 impl Default for MarginsSettings {
     /// The margins of a new chart, read as the settings read a chart's.
     fn default() -> Self {
-        let price = crate::scales::PriceScaleMargins::default();
+        let price = crate::scales::PriceScaleMargins::CHART;
         Self {
             top_percent: (price.top * 100.0) as f32,
             bottom_percent: (price.bottom * 100.0) as f32,
@@ -586,6 +623,9 @@ pub struct TradingSettings {
     /// saved without this field keep labels off, as they were drawn when saved.
     #[serde(default)]
     pub show_execution_labels: bool,
+    /// Add the quantity-weighted average fill price to each mark's label, as in "Buy 2 @ 101.25".
+    /// Off by default, including for settings saved without this field.
+    pub show_execution_prices: bool,
 }
 
 impl Default for TradingSettings {
@@ -610,6 +650,7 @@ impl Default for TradingSettings {
             bracket_pnl_unit: PnlUnit::Money,
             show_executions: true,
             show_execution_labels: true,
+            show_execution_prices: false,
         }
     }
 }
@@ -657,9 +698,8 @@ impl TradingNotifications {
 #[serde(default)]
 #[non_exhaustive]
 pub struct AlertsSettings {
-    /// Ask the host to play a local sound when an alert fires.
-    pub play_sound: bool,
-    /// Host sound name; empty selects its first available sound.
+    /// Host sound name played when an alert whose delivery keeps Sound fires; empty selects its
+    /// first available sound.
     pub sound: String,
     /// Local alert sound gain, from zero (muted) to one.
     pub sound_volume: f32,
@@ -685,7 +725,6 @@ pub struct AlertsSettings {
 impl Default for AlertsSettings {
     fn default() -> Self {
         Self {
-            play_sound: false,
             sound: String::new(),
             sound_volume: 1.0,
             show_alerts: true,
@@ -738,7 +777,7 @@ pub struct OrderFlowSettings {
 /// settings.candle_colors.show_wick = false;
 /// settings.status_line.show_logo = false;
 /// settings.trading.instant_orders = true;
-/// settings.alerts.play_sound = false;
+/// settings.alerts.sound_volume = 0.5;
 /// settings.session_background = Some(egui_charts::widget::settings::SessionBackgroundSettings::default());
 /// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -797,16 +836,18 @@ pub struct ChartSettingsState {
     /// settings, which keep the chart's current backgrounds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_background: Option<SessionBackgroundSettings>,
-    /// Ask the host for continuous futures history back-adjusted at each roll. The host owns
-    /// the data, so [`apply_to_chart`](Self::apply_to_chart) leaves reloading to the host;
-    /// [`from_chart`](Self::from_chart) leaves this off.
+    /// Ask the host for continuous futures history back-adjusted at each roll.
+    /// [`apply_to_chart`](Self::apply_to_chart) records the choice on the chart, and
+    /// [`from_chart`](Self::from_chart) and layouts keep it; the host owns the data and reloads
+    /// its history when the choice changes. Off by default, also in settings saved without it.
     #[serde(default)]
     pub back_adjust_futures: bool,
-    /// Ask the host to use settlement prices as the close of daily and longer futures bars.
-    /// The host owns the data, so [`apply_to_chart`](Self::apply_to_chart) leaves reloading to
-    /// the host. New settings enable this; older saves without it keep last-trade closes.
-    /// Intraday history is unchanged. Hosts preserve their choice when refreshing settings.
-    #[serde(default)]
+    /// Ask the host to use settlement prices as the close of daily and longer futures bars;
+    /// intraday history is unchanged. [`apply_to_chart`](Self::apply_to_chart) records the
+    /// choice on the chart, and [`from_chart`](Self::from_chart) and layouts keep it; the host
+    /// owns the data and reloads its history when the choice changes. On by default, also in
+    /// settings saved without it.
+    #[serde(default = "settlement_closes")]
     pub settlement_as_close: bool,
 
     // Order flow tab
@@ -834,6 +875,10 @@ pub struct ChartSettingsState {
     pub pane_separator_color: Option<Color32>,
     /// Crosshair line appearance.
     pub crosshair: CrosshairSettings,
+    /// Which crosshair lines and labels are drawn. `None` keeps the chart's, as do settings
+    /// saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crosshair_lines: Option<CrosshairVisibility>,
     /// Watermark appearance.
     pub watermark: WatermarkSettings,
     /// Axis appearance.
@@ -882,6 +927,11 @@ impl<'de> serde::Deserialize<'de> for ChartSettingsState {
     }
 }
 
+/// Settlement closes, the default also for settings saved before the choice existed.
+fn settlement_closes() -> bool {
+    true
+}
+
 impl Default for ChartSettingsState {
     fn default() -> Self {
         let chart_basic_styles = ChartBasicStylesSettings::default();
@@ -914,6 +964,7 @@ impl Default for ChartSettingsState {
             grid_lines: grid_lines.clone(),
             pane_separator_color: None,
             crosshair: CrosshairSettings::default(),
+            crosshair_lines: None,
             watermark: WatermarkSettings::default(),
             scales_appearance: ScalesAppearanceSettings::default(),
             btns: ButtonsSettings::default(),

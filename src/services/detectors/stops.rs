@@ -9,7 +9,7 @@ use crate::data::{Footprint, meets_threshold};
 use crate::model::{
     BarClock, Direction, OrderSide, Placement, Signal, SignalId, SignalShape, Tick,
 };
-use crate::scales::{PriceFormatter, VolumeFormatter};
+use crate::scales::VolumeFormatter;
 use crate::services::SignalEvent;
 
 /// A burst of same-side fills, each at most [`max_gap_ms`](Self::max_gap_ms) after the one
@@ -168,7 +168,8 @@ impl StopRuns {
             tooltip: Some(format!(
                 "{} fills, {ticks} ticks, size {}, {} ms",
                 burst.fills,
-                self.sizes_label.format(burst.size),
+                self.sizes_label
+                    .format_with_min_unit_decimals(burst.size, 2),
                 (burst.last - burst.first).num_milliseconds()
             )),
         }));
@@ -184,6 +185,7 @@ pub(super) fn direction(side: OrderSide) -> Direction {
 
 pub(super) struct StopSweeps {
     tick: f64,
+    sizes_label: VolumeFormatter,
     trades: VecDeque<Tick>,
     clock: Option<BarClock>,
     footprint: Option<Footprint>,
@@ -217,9 +219,12 @@ struct Prices {
 }
 
 impl StopSweeps {
-    pub(super) fn new(tick: f64) -> Self {
+    pub(super) fn new(tick: f64, volume_decimals: Option<u8>) -> Self {
         Self {
             tick,
+            sizes_label: VolumeFormatter {
+                precision: volume_decimals.map_or(2, usize::from),
+            },
             trades: VecDeque::new(),
             clock: None,
             footprint: None,
@@ -421,8 +426,10 @@ impl StopSweeps {
                     category: DetectionKind::StopSweep.category().into(),
                     label: Some("Stop sweep".into()),
                     tooltip: Some(format!(
-                        "Volume {volume}, delta {}, {count} diagonal imbalances",
-                        bar.delta()
+                        "Volume {}, delta {}, {count} diagonal imbalances",
+                        self.sizes_label.format_with_min_unit_decimals(volume, 2),
+                        self.sizes_label
+                            .format_with_min_unit_decimals(bar.delta(), 2)
                     )),
                 }));
             }
@@ -440,6 +447,95 @@ mod tests {
     use super::*;
     use crate::data::MarketEvent;
     use crate::model::{Instrument, Timeframe};
+
+    /// A sweep's six fills sum to 3.3 with delta 2.7; the final 0.01 gives 3.31 and 2.71.
+    /// Hover and alert text share the instrument's units, with two decimals without them.
+    #[test]
+    fn stop_sweep_hover_and_alert_write_volume_decimals() {
+        for (decimals, scale, last, expected) in [
+            (
+                Some(1),
+                0.1,
+                0.01,
+                "Volume 3.3, delta 2.7, 3 diagonal imbalances",
+            ),
+            (
+                None,
+                0.1,
+                0.01,
+                "Volume 3.31, delta 2.71, 3 diagonal imbalances",
+            ),
+            (
+                Some(0),
+                1.0,
+                0.0,
+                "Volume 33, delta 27, 3 diagonal imbalances",
+            ),
+            (
+                Some(0),
+                100.0,
+                0.0,
+                "Volume 3.30K, delta 2.70K, 3 diagonal imbalances",
+            ),
+        ] {
+            let mut instrument = Instrument::new("ES").with_tick_size(0.25);
+            instrument.volume_decimals = decimals;
+            let host = Host::tracking(&instrument, Timeframe::Min1, None);
+            let mut settings = host.detectors.settings();
+            settings.stop_sweeps.enabled = true;
+            settings.stop_sweeps.alert = true;
+            host.detectors.set_settings(settings);
+            for minute in 0..11 {
+                host.push(MarketEvent::Trade(Tick::new(
+                    time(minute * 60),
+                    100.0,
+                    20.0 * scale,
+                    Some(OrderSide::Buy),
+                )));
+            }
+            for (second, price, size, side) in [
+                (660, 100.0, scale, OrderSide::Sell),
+                (661, 100.25, scale, OrderSide::Sell),
+                (662, 100.5, scale, OrderSide::Sell),
+                (663, 100.25, 10.0 * scale, OrderSide::Buy),
+                (664, 100.5, 10.0 * scale, OrderSide::Buy),
+                (665, 100.75, 10.0 * scale, OrderSide::Buy),
+                (666, 100.75, last, OrderSide::Buy),
+            ] {
+                host.push(MarketEvent::Trade(Tick::new(
+                    time(second),
+                    price,
+                    size,
+                    Some(side),
+                )));
+            }
+            let events = host.push(MarketEvent::Trade(Tick::new(
+                time(720),
+                100.75,
+                1.0,
+                Some(OrderSide::Buy),
+            )));
+            let sweeps: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    SignalEvent::Upsert(signal) if signal.category == "Stop sweeps" => Some(signal),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(sweeps.len(), 1, "volume decimals {decimals:?}");
+            assert_eq!(
+                sweeps[0].tooltip.as_deref(),
+                Some(expected),
+                "volume decimals {decimals:?}"
+            );
+            let alerts = host.detectors.take_alerts();
+            assert_eq!(alerts.len(), 1, "volume decimals {decimals:?}");
+            assert_eq!(
+                alerts[0].notification.body, expected,
+                "volume decimals {decimals:?}"
+            );
+        }
+    }
 
     #[test]
     fn stop_runs_follow_each_limit_of_their_rule() {

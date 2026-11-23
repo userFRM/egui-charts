@@ -38,7 +38,11 @@ market times; share a domain key only with charts using the same encoding.
 Install a scale with
 [`Chart::set_horizontal_scale(Some(Arc::new(scale)))`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_horizontal_scale).
 [`PriceHorizontalScale::precision`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceHorizontalScale.html#structfield.precision)
-controls decimals on the axis and crosshair. The scale prioritizes round strikes
+controls decimals on the axis and crosshair.
+[`PriceHorizontalScale::value_name`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceHorizontalScale.html#structfield.value_name)
+names the value in the hover readout and the data window, here **Strike**; a maturity scale names it **Maturity**,
+and a numeric scale without a name shows the value alone.
+The scale prioritizes round strikes
 when labels would overlap. Passing `None` restores the chart's time formatter.
 
 The generated smiles have strikes from 3,800 through 5,200, spaced 25 apart

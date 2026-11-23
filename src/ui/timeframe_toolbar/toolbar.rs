@@ -4,12 +4,13 @@
 //! session controls, and dividend adjustment.
 //! Narrow bars keep date ranges in a menu beside the clock and session controls.
 
-use super::{DateRange, SessionType, TimeframeToolbarAction, TimeframeToolbarState};
+use super::{SessionType, TimeframeToolbarAction, TimeframeToolbarState};
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
+use crate::model::DateRange;
 use crate::model::TimezoneId;
 use crate::scales::TimezoneMode;
-use crate::styles::{icons as icon_sizes, stroke};
+use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
@@ -372,7 +373,12 @@ impl TimeframeToolbar {
             return false;
         };
         let choices = SessionType::choices(
-            chart.overnight_hours() || super::state::has_overnight_windows(chart.instrument()),
+            chart.overnight_hours()
+                || super::state::has_overnight_windows(
+                    chart
+                        .instrument()
+                        .and_then(|instrument| instrument.session.as_ref()),
+                ),
         );
         let mut chosen = None;
         egui::Popup::new(
@@ -711,7 +717,7 @@ impl TimeframeToolbar {
     /// Render the calendar icon button (Go to date)
     /// Uses the GoToDate SVG icon from the app's icon system
     fn icon_button_calendar(&self, ui: &mut Ui, tooltip: &str) -> Response {
-        let icon_size = icon_sizes::LG;
+        let icon_size = DESIGN_TOKENS.sizing.icon_lg;
         let btn_size = Vec2::new(
             DESIGN_TOKENS.sizing.button_md,
             self.config.panel_height - ui.active_theme().spacing.sm,

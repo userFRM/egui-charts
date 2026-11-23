@@ -1243,6 +1243,113 @@ fn heikin_ashi_readouts_describe_the_drawn_candle() {
     assert_eq!(chart.indicator_value_at(average, 50), Some((0, 149.25)));
 }
 
+/// Without volume decimals the floating readout, the tracking bar and, in builds without
+/// studies, the volume tag write a bar's volume as the legend does: no decimals below a
+/// thousand, so 999 reads 999 and 0.375 reads 0, not 999.00 and 0.38.
+#[test]
+fn volume_readouts_write_the_legend_text_without_volume_decimals() {
+    use crate::config::TooltipMode;
+    for (volume, text) in [(999.0, "999"), (0.375, "0")] {
+        for mode in [TooltipMode::Floating, TooltipMode::Tracking] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[110.0]);
+            let mut bars = chart.state.data().bars.clone();
+            bars.last_mut().unwrap().volume = volume;
+            chart.set_data(crate::widget::SeriesId::MAIN, bars);
+            // With studies a volume study replaces the legend's volume field and the tag.
+            chart.config.show_volume = cfg!(not(feature = "studies"));
+            chart.chart_options.tooltip.mode = mode;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let price = chart.last_rendered_price_rect;
+            let pos = Pos2::new(map.idx_to_x(99), price.center().y);
+            let texts: Vec<_> = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)])
+                .into_iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(shape) => Some((shape.galley.text().to_owned(), shape.pos.x)),
+                    _ => None,
+                })
+                .collect();
+            let legend = format!("Vol {text}");
+            assert!(
+                texts.iter().any(|(shown, _)| *shown == legend),
+                "{volume} {mode:?}: {texts:?}"
+            );
+            let readout = match mode {
+                // The card paints each label, then its value.
+                TooltipMode::Floating => texts
+                    .windows(2)
+                    .any(|pair| pair[0].0 == "Vol" && pair[1].0 == text),
+                // The bar joins its parts with three spaces.
+                _ => texts.iter().any(|(shown, _)| {
+                    shown
+                        .split("   ")
+                        .any(|part| part.strip_prefix("Vol: ") == Some(text))
+                }),
+            };
+            assert!(readout, "{volume} {mode:?}: {texts:?}");
+            #[cfg(not(feature = "studies"))]
+            assert!(
+                texts
+                    .iter()
+                    .any(|(shown, x)| shown == text && *x >= price.right()),
+                "{volume} {mode:?} tag: {texts:?}"
+            );
+        }
+    }
+}
+
+/// Over the volume area the crosshair label writes the volume as the volume tag does: in the
+/// host's volume format, else with the instrument's volume decimals and at least two in K, M and
+/// B values, else in automatic volume units. 1,111,111 is 1.111111M, so it reads 1.11M without
+/// volume decimals and at 0 or 1, 1.111M at 3 and 1.1111M in a host format of 4 decimals.
+#[test]
+fn volume_overlay_crosshair_label_writes_the_volume_rule() {
+    // Volume decimals, the precision of a host volume format, the label.
+    for (decimals, host, expected) in [
+        (None, None, "1.11M"),
+        (Some(0), None, "1.11M"),
+        (Some(1), None, "1.11M"),
+        (Some(3), None, "1.111M"),
+        (None, Some(4), "1.1111M"),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        let mut bars = chart.state.data().bars.clone();
+        bars.last_mut().unwrap().volume = 1_234_567.0;
+        chart.set_data(crate::widget::SeriesId::MAIN, bars);
+        chart.set_instrument(decimals.map(|decimals| {
+            crate::model::Instrument::new("SAMPLE").with_volume_decimals(decimals)
+        }));
+        if let Some(precision) = host {
+            chart.set_volume_formatter(Some(std::sync::Arc::new(crate::scales::VolumeFormatter {
+                precision,
+            })));
+        }
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let map = chart.host_events.volume_map.expect("volume area");
+        let pos = Pos2::new(
+            chart.get_chart_mapping().idx_to_x(99),
+            map.price_to_y(1_111_111.0),
+        );
+        assert!(chart.last_rendered_volume_rect.contains(pos));
+        let price = chart.last_rendered_price_rect;
+        let texts: Vec<_> = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)])
+            .into_iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(shape) if shape.pos.x >= price.right() => {
+                    Some(shape.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|text| text == expected),
+            "{decimals:?} {host:?}: {texts:?}"
+        );
+    }
+}
+
 /// Default options track a touch held for its delay, keep its values until the next tap and
 /// leave mouse hover unchanged; `OnTouchEnd` exits on release. Short taps, cancelled contacts
 /// and a pan started before the delay cannot latch a readout.
@@ -1758,30 +1865,21 @@ fn crosshair_time_label_names_the_nearest_bar() {
     }
 }
 
-/// Dragging a drawing raises no value readout in either tooltip mode, so the area around the
-/// drawing stays visible, and the readout returns on the next hover or hold.
+/// Dragging a drawing or a box-zoom selection raises no value readout in either tooltip mode,
+/// so the area around the drawing or inside the selection stays visible, and the readout
+/// returns on the next hover or hold.
 #[cfg(feature = "drawings")]
 #[test]
 fn drawing_drag_hides_the_value_readout() {
     use crate::drawings::{Drawing, DrawingToolType};
-    for on_long_press in [false, true] {
+    for (box_zoom, on_long_press) in [(false, false), (false, true), (true, false), (true, true)] {
+        let row = format!("box zoom {box_zoom}, on_long_press {on_long_press}");
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[120.0]);
         chart.config.show_ohlc_info = true;
         chart.chart_options.tooltip.on_long_press = on_long_press;
         chart.chart_options.tooltip.show_time = false;
         frame(&ctx, &mut chart, 0.0, vec![]);
-        let time = chart.state.shown()[50].time;
-        let id = chart
-            .create_drawing(
-                Drawing::new(0, DrawingToolType::HorizontalLine),
-                &[(time, 110.0)],
-            )
-            .unwrap();
-        frame(&ctx, &mut chart, 0.1, vec![]);
-        let map = chart.get_chart_mapping();
-        let start = Pos2::new(map.idx_to_x(50), chart.last_price_map.price_to_y(110.0));
-        let end = start + egui::vec2(0.0, 20.0);
         let button = |pos, pressed| Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
@@ -1793,8 +1891,30 @@ fn drawing_drag_hides_the_value_readout() {
                 .iter()
                 .any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "Open"))
         };
+        let rect = chart.last_rendered_price_rect;
+        let mut drawing = None;
+        let (start, end) = if box_zoom {
+            // Up and to the left, so that the card beside the pointer lies inside the selection.
+            chart.set_zoom_mode(true);
+            let start = rect.center() + egui::vec2(120.0, 100.0);
+            (start, start - egui::vec2(240.0, 200.0))
+        } else {
+            let time = chart.state.shown()[50].time;
+            drawing = Some(
+                chart
+                    .create_drawing(
+                        Drawing::new(0, DrawingToolType::HorizontalLine),
+                        &[(time, 110.0)],
+                    )
+                    .unwrap(),
+            );
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.get_chart_mapping();
+            let start = Pos2::new(map.idx_to_x(50), chart.last_price_map.price_to_y(110.0));
+            (start, start + egui::vec2(0.0, 20.0))
+        };
 
-        frame(
+        let pressed = shapes(
             &ctx,
             &mut chart,
             0.2,
@@ -1803,20 +1923,37 @@ fn drawing_drag_hides_the_value_readout() {
         let dragged = shapes(&ctx, &mut chart, 0.3, vec![Event::PointerMoved(end)]);
         assert_eq!(
             chart.drawings.dragging_handle().map(|(drawing, _)| drawing),
-            Some(id),
-            "on_long_press {on_long_press}: the drag started"
+            drawing,
+            "{row}: the drawing drag started"
         );
+        if box_zoom {
+            assert!(chart.box_zoom.active, "{row}: the selection started");
+            assert!(
+                !shows_readout(&pressed),
+                "{row}: readout painted on the press"
+            );
+        }
         assert!(
             !shows_readout(&dragged),
-            "on_long_press {on_long_press}: readout painted during the drag"
+            "{row}: readout painted during the drag"
         );
 
         frame(&ctx, &mut chart, 0.4, vec![button(end, false)]);
-        assert_eq!(chart.drawings.dragging_handle(), None);
-        let after = shapes(&ctx, &mut chart, 0.5, vec![button(end, true)]);
+        assert_eq!(chart.drawings.dragging_handle(), None, "{row}");
+        assert!(
+            !chart.is_zoom_mode_active(),
+            "{row}: the zoom ends the mode"
+        );
+        let at = rect.center();
+        let after = shapes(
+            &ctx,
+            &mut chart,
+            0.5,
+            vec![Event::PointerMoved(at), button(at, true)],
+        );
         assert!(
             shows_readout(&after),
-            "on_long_press {on_long_press}: readout returns after the drag"
+            "{row}: readout returns after the drag"
         );
     }
 }

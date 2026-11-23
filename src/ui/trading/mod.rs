@@ -15,10 +15,12 @@ mod widgets;
 pub use account_panel::{AccountPanel, AccountPanelAction};
 pub use broker_picker::{BrokerFact, BrokerPicker, BrokerPickerAction, BrokerTile};
 pub use dom::DepthPanel;
+pub use executions::{ExecutionMark, ExecutionMarkStyle, render_executions};
 pub use format::TradingFormatter;
-pub use ticket::{Bracket, BracketMode, OrderPreset, PresetLevel};
+pub use ticket::{Bracket, BracketMode, Kind as OrderKind, OrderPreset, PresetLevel, PresetSizing};
+pub(crate) use widgets::grouped;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::chart::TradingLineAction;
@@ -81,6 +83,7 @@ pub struct Trading {
     /// restate the account and raise no notification.
     restating: bool,
     account: Option<Account>,
+    account_id: String,
     orders: Vec<Order>,
     positions: Vec<Position>,
     rules: TradingRules,
@@ -116,8 +119,9 @@ pub struct Trading {
     /// use. Positive, in the symbol's trading units. The chart's legend shows it under the quote
     /// buttons' spread, where a click opens a calculator that changes it.
     pub quantity: f64,
-    /// The quantity and brackets the user saved in the ticket. Persist them in the host.
-    pub presets: Vec<OrderPreset>,
+    /// The ticket presets by the broker's [`account_id`](Broker::account_id). Hosts persist
+    /// them by this stable id; brokers that keep the default share the empty key.
+    pub presets: BTreeMap<String, Vec<OrderPreset>>,
     /// The account panel's names and the history it lists.
     pub account_panel: AccountPanel,
     /// The chart settings' trading options: what [`show`](Self::show) draws, whether Buy and
@@ -145,6 +149,7 @@ impl std::fmt::Debug for Trading {
             .field("connection", &self.connection)
             .field("restating", &self.restating)
             .field("account", &self.account)
+            .field("account_id", &self.account_id)
             .field("orders", &self.orders)
             .field("positions", &self.positions)
             .field("rules", &self.rules)
@@ -201,6 +206,7 @@ impl Default for Trading {
             connection: None,
             restating: false,
             account: None,
+            account_id: String::new(),
             orders: Vec::new(),
             positions: Vec::new(),
             rules: TradingRules::new(""),
@@ -220,7 +226,7 @@ impl Default for Trading {
             formatter: None,
             quote: None,
             quantity: 1.0,
-            presets: Vec::new(),
+            presets: BTreeMap::new(),
             account_panel: AccountPanel::default(),
             display: TradingSettings::default(),
             sound: None,
@@ -232,19 +238,14 @@ impl Default for Trading {
     }
 }
 
-/// `quantity` of `symbol` in the host's text, else at its own decimals, up to eight,
-/// with thousands separators, as the account tables write it.
-pub(crate) fn quantity_text(
-    formatter: Option<&dyn TradingFormatter>,
-    symbol: &str,
-    quantity: f64,
-) -> String {
-    Numbers {
-        symbol,
-        decimals: 2,
-        formatter,
-    }
-    .quantity(quantity, account_panel::quantity_decimals(quantity))
+pub(crate) use crate::chart::quantity_text;
+
+/// Whether `new` changes `old` beyond a move of its trailing stop, which the broker pushes on
+/// every tick and which leaves a confirmation or an open dialog about the order valid.
+fn changed(old: &Order, new: &Order) -> bool {
+    let mut moved = old.clone();
+    moved.trailing_stop = new.trailing_stop;
+    moved != *new
 }
 
 impl Trading {
@@ -267,8 +268,9 @@ impl Trading {
     }
 
     /// Writes the prices, quantities, spreads and pip values of the ticket, the depth ladder and
-    /// the account tables, and the prices and quantities of order and fill notifications, with
-    /// `formatter`, where it returns text. `None` restores the built-in text.
+    /// the account tables and fill marks, and the prices and quantities of order and fill
+    /// notifications and the quantities of order, bracket and position lines, with `formatter`,
+    /// where it returns text. `None` restores the built-in text.
     pub fn set_formatter(&mut self, formatter: Option<Arc<dyn TradingFormatter>>) {
         self.formatter = formatter;
     }
@@ -303,6 +305,7 @@ impl Trading {
     /// waits for its trading rules is reported as refused at the next [`poll`](Self::poll).
     pub fn set_service(&mut self, service: Arc<dyn Broker>) {
         self.listener = None;
+        self.account_id = service.account_id().to_owned();
         self.service = Some(service);
         self.inbox = Arc::default();
         self.ticket.open = false;
@@ -314,6 +317,7 @@ impl Trading {
     pub fn disconnect(&mut self) {
         self.listener = None;
         self.service = None;
+        self.account_id.clear();
         self.inbox = Arc::default();
         self.display.instant_orders = false;
         self.ticket.open = false;
@@ -576,6 +580,7 @@ mod tests {
     /// A broker that pushes `state` on connecting and records the calls it gets.
     #[derive(Default)]
     pub(super) struct Recorder {
+        pub(super) account: &'static str,
         pub(super) state: Vec<AccountEvent>,
         pub(super) brackets: bool,
         pub(super) partial_close: bool,
@@ -588,6 +593,9 @@ mod tests {
     }
 
     impl Broker for Recorder {
+        fn account_id(&self) -> &str {
+            self.account
+        }
         fn connect(&self, events: Events<AccountEvent>) {
             let capabilities = Capabilities {
                 market: true,
@@ -709,6 +717,7 @@ mod tests {
                 "fallback",
                 "failure",
                 "invalid",
+                "expiry first",
                 "changed",
                 "withdrawn",
             ] {
@@ -765,6 +774,9 @@ mod tests {
                 if response == "invalid" {
                     rules.time_in_force.clear();
                 }
+                if response == "expiry first" {
+                    rules.time_in_force = vec![TimeInForce::GoodTillDate, TimeInForce::Day];
+                }
                 reply.send(match response {
                     "fallback" => Err(FeedError::NotSupported),
                     "failure" => Err(FeedError::Network("offline".into())),
@@ -783,7 +795,7 @@ mod tests {
                 };
                 let reason = match response {
                     "failure" => Some("trading rules unavailable: network error: offline"),
-                    "invalid" => Some("the broker returned invalid trading rules"),
+                    "invalid" | "expiry first" => Some("the broker returned invalid trading rules"),
                     "changed" => Some("the position changed before the order was sent"),
                     "withdrawn" => Some("the account no longer accepts this order type"),
                     _ => None,

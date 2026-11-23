@@ -47,6 +47,7 @@ use chrono::{DateTime, Duration, Utc};
 pub struct CustomHorizontalScale<K> {
     keys: Vec<K>,
     format: Box<dyn Fn(&K) -> String + Send + Sync>,
+    value_name: Option<&'static str>,
 }
 
 impl<K> std::fmt::Debug for CustomHorizontalScale<K> {
@@ -70,7 +71,14 @@ impl<K: Ord> CustomHorizontalScale<K> {
         Self {
             keys,
             format: Box::new(format),
+            value_name: None,
         }
+    }
+
+    /// This domain with `name` heading its value in the readout, such as `"Phase"`.
+    pub fn with_value_name(mut self, name: &'static str) -> Self {
+        self.value_name = Some(name);
+        self
     }
 
     /// The internal chart identity of a key, or `None` for an unknown key. Use this for APIs
@@ -105,6 +113,10 @@ impl<K: Ord + Send + Sync> HorizontalScale for CustomHorizontalScale<K> {
     fn is_numeric(&self) -> bool {
         // Internal identities are ranks, so gaps retain missing categories without time rules.
         true
+    }
+
+    fn value_name(&self) -> Option<&str> {
+        self.value_name
     }
 
     fn tick_marks(
@@ -183,6 +195,14 @@ pub trait HorizontalScale: Send + Sync {
     /// [`TickMarkLayout::bar_spacing`].
     fn is_numeric(&self) -> bool {
         false
+    }
+
+    /// The name of the horizontal value in the floating readout and in the data window
+    /// (`DataWindowInfo::value_name`, requires `ui`), such as `"Strike"`, which both pass
+    /// through the chart's translator, or `None` to show the value without a name. The default
+    /// names a time scale's value `"Time"` and leaves a numeric scale's unnamed.
+    fn value_name(&self) -> Option<&str> {
+        (!self.is_numeric()).then_some("Time")
     }
 
     /// The marks to label among `points`, the key and logical index of each bar in view in
@@ -275,30 +295,41 @@ pub fn time_key(time: DateTime<Utc>) -> f64 {
 ///
 /// The axis labels the roundest prices in view first: multiples of 100, then of 50, 25, 10, 5
 /// and 1, then half prices, and draws the roundest kind shown in bold. Labels and the crosshair
-/// show `precision` decimals.
+/// show `precision` decimals. Set [`Self::value_name`] to name the value in the readout, such
+/// as the strike.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PriceHorizontalScale {
     /// Decimals of the labels.
     pub precision: usize,
+    /// The name of the value in the readout, such as `Some("Strike")`; `None`, the default,
+    /// shows the value without a name.
+    pub value_name: Option<&'static str>,
 }
 
 impl PriceHorizontalScale {
     /// A scale whose labels and crosshair show `precision` decimals.
     pub fn new(precision: usize) -> Self {
-        Self { precision }
+        Self {
+            precision,
+            value_name: None,
+        }
     }
 }
 
 impl Default for PriceHorizontalScale {
     fn default() -> Self {
-        Self { precision: 2 }
+        Self::new(2)
     }
 }
 
 impl HorizontalScale for PriceHorizontalScale {
     fn is_numeric(&self) -> bool {
         true
+    }
+
+    fn value_name(&self) -> Option<&str> {
+        self.value_name
     }
 
     fn tick_marks(
@@ -348,6 +379,9 @@ pub struct MaturityScale {
     pub minimum_range: u32,
     /// Maturity of the first slot in months.
     pub start: u32,
+    /// The name of the value in the readout, `Some("Maturity")` by default; `None` shows the
+    /// value without a name.
+    pub value_name: Option<&'static str>,
 }
 
 impl Default for MaturityScale {
@@ -357,6 +391,7 @@ impl Default for MaturityScale {
             base_resolution: 1,
             minimum_range: 120,
             start: 0,
+            value_name: Some("Maturity"),
         }
     }
 }
@@ -404,6 +439,10 @@ impl MaturityScale {
 impl HorizontalScale for MaturityScale {
     fn is_numeric(&self) -> bool {
         true
+    }
+
+    fn value_name(&self) -> Option<&str> {
+        self.value_name
     }
 
     fn tick_marks(
@@ -493,7 +532,7 @@ mod tests {
             assert_eq!(key_time(key), None, "{key}");
         }
 
-        let price = PriceHorizontalScale { precision: 0 };
+        let price = PriceHorizontalScale::new(0);
         let strikes = [4400.0, 4450.0, 4500.0, 4525.0, 4550.0, 4575.0, 4600.0];
         let months: Vec<f64> = (0..=36).map(f64::from).collect();
         // Scale, keys, bar spacing, label spacing, uniform distribution, labels and bold labels.
@@ -594,6 +633,7 @@ mod tests {
             base_resolution: 3,
             minimum_range: 12,
             start: 0,
+            ..Default::default()
         };
         // Inclusive quarterly slots: 0 through 12,000 has 4,001 bars; 24,000 has 8,001.
         for (minimum, last, slots) in [

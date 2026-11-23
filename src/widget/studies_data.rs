@@ -135,6 +135,9 @@ fn clock(
             .unwrap_or_else(crate::model::TimezoneId::utc);
         if timeframe.duration_ms() < Timeframe::Day1.duration_ms() {
             clock = clock.with_timezone(zone.clone());
+        } else if instrument.session.is_none() && instrument.time_zone.is_some() {
+            // Without session hours, the zone's midnights end the symbol's dates.
+            clock = clock.with_trading_zone(zone.clone());
         }
         if let Some(session) = &instrument.session {
             clock = clock.with_session_hours(zone, session.clone(), extended, overnight);
@@ -166,6 +169,10 @@ impl StudyDataCache {
     pub(super) fn clear_feed(&mut self) {
         self.series.retain(|series| series.stream.is_none());
         self.generation += 1;
+    }
+    /// Auxiliary series still connected to a feed, including ones the next pump will detach.
+    pub(super) fn has_feed_stream(&self) -> bool {
+        self.series.iter().any(|series| series.stream.is_some())
     }
     pub(super) fn generation(&self) -> u64 {
         self.generation
@@ -219,6 +226,7 @@ impl StudyDataCache {
                     clock: series.clock.clone(),
                     instrument: series.instrument.as_ref(),
                     timeframe: key.timeframe.unwrap(),
+                    chart: None,
                 })
             })
             .collect()
@@ -852,11 +860,20 @@ pub(super) mod tests {
             .collect()
     }
 
-    /// Counts the heap allocations of each thread, so a test can bound its own.
+    /// Counts allocation requests and their sizes on the calling thread.
     struct Counting;
 
     thread_local! {
-        static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static TOTALS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    }
+
+    impl Counting {
+        fn record(bytes: usize) {
+            let _ = TOTALS.try_with(|totals| {
+                let (count, requested) = totals.get();
+                totals.set((count + 1, requested.wrapping_add(bytes)));
+            });
+        }
     }
 
     #[global_allocator]
@@ -865,7 +882,7 @@ pub(super) mod tests {
     // SAFETY: every call forwards to `System` with the caller's arguments; the counter only observes.
     unsafe impl std::alloc::GlobalAlloc for Counting {
         unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
+            Self::record(layout.size());
             // SAFETY: forwarded unchanged.
             unsafe { std::alloc::System.alloc(layout) }
         }
@@ -881,7 +898,7 @@ pub(super) mod tests {
             layout: std::alloc::Layout,
             new_size: usize,
         ) -> *mut u8 {
-            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
+            Self::record(new_size);
             // SAFETY: forwarded unchanged.
             unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
         }
@@ -889,9 +906,17 @@ pub(super) mod tests {
 
     /// The heap allocations `run` makes on this thread, not counting the drop of its result.
     pub(in crate::widget) fn allocations<T>(run: impl FnOnce() -> T) -> (usize, T) {
-        let before = ALLOCATIONS.with(std::cell::Cell::get);
+        let before = TOTALS.with(std::cell::Cell::get).0;
         let result = run();
-        (ALLOCATIONS.with(std::cell::Cell::get) - before, result)
+        (TOTALS.with(std::cell::Cell::get).0 - before, result)
+    }
+
+    /// Total bytes requested on this thread, charging reallocations at their full new size.
+    pub(in crate::widget) fn requested_bytes<T>(run: impl FnOnce() -> T) -> (usize, T) {
+        let before = TOTALS.with(std::cell::Cell::get).1;
+        let result = run();
+        let after = TOTALS.with(std::cell::Cell::get).1;
+        (after.wrapping_sub(before), result)
     }
 
     /// The chart rebuilds its session profiles on every frame, so grouping rows must not copy
@@ -2934,6 +2959,327 @@ pub(super) mod tests {
         }
     }
 
+    /// Guards #3925, #4020 and #4083: a custom study reads a history of a longer interval as each
+    /// chart bar knew it, through `StudyData::closed_at`, and the chart's Wait for interval close,
+    /// offered on by default, decides whether the latest bar reads the developing bar. Rows: a
+    /// study with an interval input of its own that offers the input, a study reading another
+    /// symbol, which has it because the chart can calculate it on another interval, and that study
+    /// calculated through the Interval input on bars of the chart's symbol at the history's
+    /// interval, which date its history instead. The first three read hours on a 30-minute chart.
+    /// The next three trade 09:30 to 16:00 UTC on weekdays: a day reaches an hourly chart on the
+    /// 15:30 bar that ends its session, and a week reaches a daily chart on Friday. The last two
+    /// trade around the clock in UTC-5 without a session: a day, dated at midnight UTC, reaches an
+    /// hourly chart on the 04:00 UTC bar that ends at its local midnight.
+    #[test]
+    fn custom_study_reads_closed_bars_of_a_longer_interval() {
+        use crate::model::Timeframe::{Day1, Hour1, Min30, Week1};
+        use crate::model::{Session, SessionWindow, TimezoneId};
+        use crate::studies::{CustomIndicator, IndicatorValue, InputKind, StudyInput};
+        use chrono::Weekday::{Fri, Mon, Thu, Tue, Wed};
+        type Requests = fn(&[StudyInput]) -> Vec<StudyDataRequest>;
+        type Row = (
+            &'static str,
+            StudyInput,
+            Requests,
+            bool,
+            &'static str,
+            bool,
+            Timeframe,
+            bool,
+        );
+        fn other(inputs: &[StudyInput], timeframe: Timeframe) -> Vec<StudyDataRequest> {
+            match &inputs[0].value {
+                InputValue::Symbol(symbol) => vec![StudyDataRequest {
+                    symbol: symbol.clone(),
+                    timeframe: Some(timeframe),
+                    metric: None,
+                }],
+                _ => Vec::new(),
+            }
+        }
+        let own: Requests = |inputs| match &inputs[0].value {
+            InputValue::Timeframe(timeframe) => vec![StudyDataRequest {
+                symbol: String::new(),
+                timeframe: *timeframe,
+                metric: None,
+            }],
+            _ => Vec::new(),
+        };
+        let (hourly, daily): (Requests, Requests) =
+            (|inputs| other(inputs, Hour1), |inputs| other(inputs, Day1));
+        let interval = |timeframe| {
+            StudyInput::new(
+                "interval",
+                "Interval",
+                InputValue::Timeframe(Some(timeframe)),
+                InputKind::Timeframe,
+            )
+        };
+        let other_symbol = || {
+            StudyInput::new(
+                "symbol",
+                "Symbol",
+                InputValue::Symbol("OTHER".into()),
+                InputKind::Symbol,
+            )
+        };
+        // The study's input and requests, whether it offers Wait for interval close, the
+        // history's symbol, whether the chart calculates the study on bars of the history's
+        // interval, the chart's interval, which picks the bars below, and whether the symbols
+        // trade in UTC-5 without a session.
+        #[rustfmt::skip]
+        let rows: [Row; 8] = [
+            ("own interval", interval(Hour1), own, true, "MAIN", false, Min30, false),
+            ("other symbol", other_symbol(), hourly, false, "OTHER", false, Min30, false),
+            ("other symbol on hourly bars", other_symbol(), hourly, false, "OTHER", true, Min30,
+                false),
+            ("own interval on a session", interval(Day1), own, true, "MAIN", false, Hour1, false),
+            ("other symbol on daily bars of a session", other_symbol(), daily, false, "OTHER", true,
+                Hour1, false),
+            ("own interval of weeks on a session", interval(Week1), own, true, "MAIN", false, Day1,
+                false),
+            ("other symbol in a zone without a session", other_symbol(), daily, false, "OTHER",
+                false, Hour1, true),
+            ("other symbol on daily bars in a zone without a session", other_symbol(), daily, false,
+                "OTHER", true, Hour1, true),
+        ];
+        let hm = |hour, minute| chrono::NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        let session = Session::new([SessionWindow::new(
+            [Mon, Tue, Wed, Thu, Fri],
+            hm(9, 30),
+            hm(16, 0),
+        )]);
+        // Days of March 2024 at a UTC time of day.
+        let march = |days: &[u32], time: &str| -> Vec<DateTime<chrono::Utc>> {
+            days.iter()
+                .map(|day| format!("2024-03-{day:02}T{time}Z").parse().unwrap())
+                .collect()
+        };
+        let priced = |times: &[DateTime<chrono::Utc>], prices: &[f64]| -> Vec<Bar> {
+            times
+                .iter()
+                .zip(prices)
+                .map(|(&time, &price)| Bar::new(time, price, price, price, price, 1.0))
+                .collect()
+        };
+        let zone = TimezoneId::fixed_offset(-5 * 3600).unwrap();
+        for (case, input, requests, offers_wait, symbol, calculated, chart_interval, zoned) in rows
+        {
+            // The chart's bar times, the history's interval and bar times, and how many chart
+            // bars show no value, 10.5 and 20.5 while Wait for interval close is on.
+            let (times, history_interval, history_times, counts): (Vec<_>, _, Vec<_>, [usize; 3]) =
+                match (chart_interval, zoned) {
+                    (Min30, _) => (
+                        (0..6)
+                            .map(|n| DateTime::UNIX_EPOCH + Duration::minutes(30 * n))
+                            .collect(),
+                        Hour1,
+                        (0..3)
+                            .map(|n| DateTime::UNIX_EPOCH + Duration::hours(n))
+                            .collect(),
+                        [1, 2, 3],
+                    ),
+                    // Hours from 05:00 UTC on 12 March, local midnight in UTC-5, for three days;
+                    // a day closes at the next local midnight with its 04:00 UTC bar.
+                    (Hour1, true) => {
+                        let first = march(&[12], "05:00:00")[0];
+                        (
+                            (0..72).map(|hour| first + Duration::hours(hour)).collect(),
+                            Day1,
+                            march(&[12, 13, 14], "00:00:00"),
+                            [23, 24, 25],
+                        )
+                    }
+                    // 09:30 to 15:30 on 12 to 14 March; a day closes at 16:00 with its 15:30 bar.
+                    (Hour1, false) => (
+                        march(&[12, 13, 14], "09:30:00")
+                            .into_iter()
+                            .flat_map(|open| (0..7).map(move |hour| open + Duration::hours(hour)))
+                            .collect(),
+                        Day1,
+                        march(&[12, 13, 14], "00:00:00"),
+                        [6, 7, 8],
+                    ),
+                    // Weekdays from 4 to 18 March; a week closes at 16:00 on its Friday.
+                    _ => (
+                        march(&[4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 18], "00:00:00"),
+                        Week1,
+                        march(&[4, 11, 18], "00:00:00"),
+                        [4, 5, 2],
+                    ),
+                };
+            let instrument = |symbol: &str| match (chart_interval, zoned) {
+                (_, true) => Some(Instrument::new(symbol).with_time_zone(zone.clone())),
+                (Min30, false) => None,
+                _ => Some(Instrument::new(symbol).with_session(session.clone())),
+            };
+            let mut study = CustomIndicator::new(case, |_| Vec::new())
+                .with_inputs(vec![input], move |bars, inputs, _, histories| {
+                    let wanted = requests(inputs);
+                    let history = histories
+                        .iter()
+                        .find(|history| wanted.contains(&history.request));
+                    bars.iter()
+                        .enumerate()
+                        .map(|(at, bar)| {
+                            history
+                                .and_then(|history| {
+                                    let at = history.closed_at(bar.time, at + 1 == bars.len())?;
+                                    Some(history.bars[at].close)
+                                })
+                                .map_or(IndicatorValue::None, IndicatorValue::Single)
+                        })
+                        .collect()
+                })
+                .unwrap()
+                .with_data_requests(requests);
+            if offers_wait {
+                study = study.with_wait_for_close();
+            }
+            let chart_bars = priced(&times, &vec![1.0; times.len()]);
+            let mut chart = Chart::new(crate::model::BarData::from_bars(chart_bars));
+            chart.set_symbol("MAIN");
+            chart.set_timeframe(chart_interval);
+            chart.set_instrument(instrument("MAIN"));
+            let id = chart.add_indicator(Box::new(study));
+            let request = |symbol: &str| StudyDataRequest {
+                symbol: symbol.into(),
+                timeframe: Some(history_interval),
+                metric: None,
+            };
+            let mut requested = vec![request(symbol)];
+            if calculated {
+                chart
+                    .indicator_mut(id)
+                    .unwrap()
+                    .set_input(
+                        "calculation_timeframe",
+                        InputValue::Timeframe(Some(history_interval)),
+                    )
+                    .unwrap();
+                // The study runs on the chart symbol's bars of the history's interval, requested
+                // first, and reads none of their closes.
+                requested.insert(0, request("MAIN"));
+                chart.set_study_data(
+                    request("MAIN"),
+                    priced(&history_times, &[1.0; 3]),
+                    instrument("MAIN"),
+                );
+            }
+            assert_eq!(chart.study_data_requests(), requested, "{case}");
+            chart.set_study_data(
+                request(symbol),
+                priced(&history_times, &[10.5, 20.5, 30.5]),
+                instrument(symbol),
+            );
+            let ctx = egui::Context::default();
+            let values = |chart: &mut Chart, frames: std::ops::Range<u32>| {
+                for frame in frames {
+                    shapes(&ctx, chart, f64::from(frame), Vec::new());
+                }
+                let (_, study) = chart
+                    .indicators()
+                    .find(|(candidate, _)| *candidate == id)
+                    .unwrap();
+                (0..times.len())
+                    .map(|bar| study.values().value(0, bar))
+                    .collect::<Vec<_>>()
+            };
+            // Each bar of the history reaches the chart bar that closes with it; the latest chart
+            // bar, still forming, waits for the history's developing bar to close.
+            let mut expected: Vec<_> = [None, Some(10.5), Some(20.5)]
+                .into_iter()
+                .zip(counts)
+                .flat_map(|(value, count)| std::iter::repeat_n(value, count))
+                .collect();
+            assert_eq!(values(&mut chart, 0..10), expected, "{case}");
+            let (_, study) = chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap();
+            let wait = study
+                .inputs()
+                .into_iter()
+                .find(|input| input.id == "wait_for_close")
+                .map(|input| (input.value, input.default));
+            assert_eq!(
+                wait,
+                Some((InputValue::Toggle(true), InputValue::Toggle(true))),
+                "{case}"
+            );
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("wait_for_close", InputValue::Toggle(false))
+                .unwrap();
+            // Turned off, the latest chart bar reads the developing bar.
+            *expected.last_mut().unwrap() = Some(30.5);
+            assert_eq!(values(&mut chart, 10..20), expected, "{case}");
+        }
+    }
+
+    /// A bar-only study requests the chosen symbol and matches a chart of that symbol.
+    #[test]
+    fn a_study_without_a_source_reads_another_symbol() {
+        use crate::studies::{Indicator, ParabolicSAR};
+        let main = bars(&[1.0; 10], 60);
+        let other = bars(
+            &[10.0, 11.0, 12.5, 12.0, 13.5, 13.0, 15.0, 14.0, 16.5, 18.0],
+            60,
+        );
+        let mut chart = Chart::new(crate::model::BarData::from_bars(main.clone()));
+        chart.set_symbol("MAIN");
+        chart.set_timeframe(Timeframe::Hour1);
+        let id = chart.add_indicator(Box::new(ParabolicSAR::default()));
+        chart
+            .indicator_mut(id)
+            .unwrap()
+            .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
+            .unwrap();
+        let request = StudyDataRequest {
+            symbol: "OTHER".into(),
+            timeframe: Some(Timeframe::Hour1),
+            metric: None,
+        };
+        assert_eq!(chart.study_data_requests(), std::slice::from_ref(&request));
+        chart.set_study_data(request, other.clone(), None);
+        let mut reference = Chart::new(crate::model::BarData::from_bars(other));
+        reference.set_symbol("OTHER");
+        reference.set_timeframe(Timeframe::Hour1);
+        let reference_id = reference.add_indicator(Box::new(ParabolicSAR::default()));
+        let ctx = egui::Context::default();
+        let reference_ctx = egui::Context::default();
+        for frame in 0..10 {
+            shapes(&ctx, &mut chart, frame as f64, Vec::new());
+            shapes(&reference_ctx, &mut reference, frame as f64, Vec::new());
+        }
+        let study = chart
+            .indicators()
+            .find(|(candidate, _)| *candidate == id)
+            .unwrap()
+            .1;
+        let expected = reference
+            .indicators()
+            .find(|(candidate, _)| *candidate == reference_id)
+            .unwrap()
+            .1;
+        for line in 0..study.line_count() {
+            for bar in 0..10 {
+                assert_eq!(
+                    study.values().value(line, bar),
+                    expected.values().value(line, bar),
+                    "{line} {bar}"
+                );
+            }
+        }
+        let mut chart_symbol = ParabolicSAR::default();
+        chart_symbol.calculate(&main);
+        assert_ne!(
+            study.values().value(0, 9),
+            chart_symbol.values().value(0, 9)
+        );
+    }
+
     /// A study calculated on another interval reads the other symbol its input names on that
     /// interval, whether the symbol or the interval is chosen first, through `set_input` or
     /// `apply_settings`, in one Apply, and once restored from a save made before it read it.
@@ -3095,5 +3441,98 @@ pub(super) mod tests {
             .unwrap();
         assert_eq!(StudyTemplate::from_study(study).inputs, saved.inputs);
         check("Ratio: restored", &mut restored, id);
+    }
+
+    /// Bar studies read the host's other-symbol history by time, keep a gap for a missing bar,
+    /// and shift Ichimoku's leading and lagging plots on the chart's bars.
+    #[test]
+    fn bar_studies_on_another_symbol_draw_its_bars_by_time() {
+        use crate::studies::{IchimokuCloud, Indicator, OHLC4};
+        type Make = fn() -> Box<dyn Indicator>;
+        let cases: [(&str, Make, bool); 2] = [
+            ("Average Price", || Box::new(OHLC4::new()), true),
+            ("Ichimoku", || Box::new(IchimokuCloud::new(2, 3, 4)), false),
+        ];
+        let other: Vec<_> = [10.0, 13.0, 11.0, 15.0, 12.0, 16.0, 14.0, 18.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| {
+                Bar::new(
+                    DateTime::UNIX_EPOCH + Duration::minutes(30 * i as i64),
+                    p,
+                    p + 2.0,
+                    p - 1.0,
+                    p + 1.0,
+                    1.0,
+                )
+            })
+            .collect();
+        for (name, make, gap) in cases {
+            let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&[100.0; 8], 30)));
+            chart.set_timeframe(Timeframe::Min30);
+            let id = chart.add_indicator(make());
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
+                .unwrap();
+            let request = StudyDataRequest {
+                symbol: "OTHER".into(),
+                timeframe: Some(Timeframe::Min30),
+                metric: None,
+            };
+            assert_eq!(
+                chart.study_data_requests(),
+                std::slice::from_ref(&request),
+                "{name}"
+            );
+            let history: Vec<_> = other
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !gap || *i != 2)
+                .map(|(_, bar)| bar.clone())
+                .collect();
+            chart.set_study_data(request, history.clone(), None);
+            crate::widget::test_frames::frame(
+                &egui::Context::default(),
+                &mut chart,
+                0.0,
+                Vec::new(),
+            );
+            let study = chart.indicators().next().unwrap().1;
+            if gap {
+                assert_eq!(
+                    (0..8).map(|i| study.plot_value(0, i)).collect::<Vec<_>>(),
+                    [
+                        Some(10.5),
+                        Some(13.5),
+                        None,
+                        Some(15.5),
+                        Some(12.5),
+                        Some(16.5),
+                        Some(14.5),
+                        Some(18.5),
+                    ]
+                );
+            } else {
+                let mut expected = make();
+                expected.calculate(&history);
+                for line in 0..5 {
+                    for bar in 0..10 {
+                        assert_eq!(
+                            study.plot_value(line, bar),
+                            expected.plot_value(line, bar),
+                            "{name}: line {line}, bar {bar}"
+                        );
+                    }
+                }
+                // Highest high 20, lowest low 13 over the last two/three bars; over four,
+                // lowest low 11. Displacement 3 shifts spans two bars; the last close is 19.
+                assert_eq!(study.plot_value(0, 7), Some(16.5));
+                assert_eq!(study.plot_value(2, 9), Some(16.5));
+                assert_eq!(study.plot_value(3, 9), Some(15.5));
+                assert_eq!(study.plot_value(4, 5), Some(19.0));
+            }
+        }
     }
 }

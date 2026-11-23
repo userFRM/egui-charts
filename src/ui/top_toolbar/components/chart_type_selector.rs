@@ -6,7 +6,6 @@
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::localization as l10n;
 use crate::model::ChartType;
-use crate::styles::icons as icon_sizes;
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::top_toolbar::buttons::Trigger;
@@ -357,8 +356,11 @@ impl ListItemContent for ChartTypeRow<'_> {
         });
 
         let icon_rect = Rect::from_min_size(
-            pos2(rect.min.x, rect.center().y - icon_sizes::MD / 2.0),
-            vec2(icon_sizes::MD, icon_sizes::MD),
+            pos2(
+                rect.min.x,
+                rect.center().y - DESIGN_TOKENS.sizing.icon_md / 2.0,
+            ),
+            vec2(DESIGN_TOKENS.sizing.icon_md, DESIGN_TOKENS.sizing.icon_md),
         );
         self.chart_type
             .icon()

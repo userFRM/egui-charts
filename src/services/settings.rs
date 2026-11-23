@@ -2,8 +2,9 @@
 
 use super::document::{Received, StoredDocument};
 use super::{ConflictChoice, Storage, StoreKind};
+use crate::config::shortcut_map::{ShortcutMap, canonical};
 use crate::config::{CursorType, DrawingSort, DrawingToolType};
-use crate::model::{ChartType, ReplaySession, Timeframe, Watchlist};
+use crate::model::{ChartType, ReplaySession, Timeframe, Watchlist, WatchlistFlag};
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -57,6 +58,9 @@ pub struct UserSettings {
     pub layout_autosave: bool,
     /// The names of the starred layouts.
     pub layout_favorites: Vec<String>,
+    /// The host's names of starred hotlists, in the order offered; documents without this field
+    /// read with none.
+    pub hotlist_favorites: Vec<String>,
     /// Factory names of the starred studies of the indicator dialog, in order.
     pub indicator_favorites: Vec<String>,
     /// The intervals starred in the interval menu, in order. An interval this release does not
@@ -81,6 +85,16 @@ pub struct UserSettings {
     pub drawing_defaults: BTreeMap<String, serde_json::Value>,
     /// The watchlists, in order.
     pub watchlists: Vec<Watchlist>,
+    /// The index of the last shown watchlist. Older documents read zero. Restore it with
+    /// `WatchlistPanel::set_active_list`, which ignores an index past the last list.
+    pub active_watchlist: usize,
+    /// The watchlist flags of symbols that none of `watchlists` holds, in the order the flag views
+    /// show them. Save `WatchlistPanel::unlisted_flags` and restore them with
+    /// `WatchlistPanel::set_unlisted_flags` after building the panel. Older documents read none,
+    /// and an entry this release cannot read, such as one with a flag a newer release added, is
+    /// left out.
+    #[serde(deserialize_with = "known_items")]
+    pub unlisted_flags: Vec<(String, WatchlistFlag)>,
     /// The market heatmap's universe, size metric and colour metric.
     pub market_heatmap: MarketHeatmapSelection,
     /// The replay position to resume, with the interval its history was fetched at. A position
@@ -88,6 +102,13 @@ pub struct UserSettings {
     /// non-finite speed, reads as `None`.
     #[serde(deserialize_with = "known_or_unset")]
     pub replay_session: Option<(ReplaySession, Timeframe)>,
+    /// The key bindings the user chose, to give every chart of a layout through
+    /// [`ChartLayout::set_shortcuts`](crate::widget::ChartLayout::set_shortcuts) or a single chart
+    /// through [`Chart::shortcuts_mut`](crate::widget::Chart::shortcuts_mut). `None`, as in older
+    /// documents, keeps each chart's defaults. A saved map holds every binding, so an action a
+    /// later release binds by default stays unbound in it until the user resets the bindings. A
+    /// binding whose key or action this release does not know is left out when reading.
+    pub shortcuts: Option<ShortcutMap>,
 }
 
 /// What the market heatmap shows, by the identifiers the host gave its universes and metrics.
@@ -157,9 +178,9 @@ impl UserSettings {
 
     /// Reads a document [`to_json`](Self::to_json) wrote, migrating older versions. Fails on
     /// invalid JSON and on a version this release does not know. A missing field takes its
-    /// default. A drawing order, tool, cursor mode, interval or chart type a newer release added
-    /// is left out, as each field says, and the rest is read. Values left out when reading are
-    /// absent from the next save.
+    /// default. A drawing order, tool, cursor mode, interval, chart type or key binding a newer
+    /// release added is left out, as each field says, and the rest is read. Values left out when
+    /// reading are absent from the next save.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let document: Document<serde_json::Value> = serde_json::from_str(json)?;
         match document.version {
@@ -173,7 +194,8 @@ impl UserSettings {
 
     /// The settings as [`from_json`](Self::from_json) reads back what [`to_json`](Self::to_json)
     /// writes: JSON has no non-finite numbers, so a replay position with such a speed and such a
-    /// favourites position are unset.
+    /// favourites position are unset, and a key binding on Control or Cmd reads back on the
+    /// command key.
     fn as_read_back(&self) -> Cow<'_, Self> {
         let speed = self
             .replay_session
@@ -182,7 +204,12 @@ impl UserSettings {
         let pos = self
             .drawing_favorites_pos
             .is_some_and(|(x, y)| !x.is_finite() || !y.is_finite());
-        if !speed && !pos {
+        let shortcuts = self.shortcuts.as_ref().is_some_and(|map| {
+            map.bindings
+                .iter()
+                .any(|(shortcut, _)| canonical(*shortcut) != *shortcut)
+        });
+        if !speed && !pos && !shortcuts {
             return Cow::Borrowed(self);
         }
         let mut settings = self.clone();
@@ -191,6 +218,11 @@ impl UserSettings {
         }
         if pos {
             settings.drawing_favorites_pos = None;
+        }
+        if let Some(map) = settings.shortcuts.as_mut() {
+            for (shortcut, _) in &mut map.bindings {
+                *shortcut = canonical(*shortcut);
+            }
         }
         Cow::Owned(settings)
     }
@@ -485,6 +517,8 @@ mod tests {
             symbol: "AAA".into(),
             time: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
             speed: 2.0,
+            scope: Default::default(),
+            charts: Vec::new(),
         };
         let rows = [
             (
@@ -518,6 +552,76 @@ mod tests {
                 "{interval}"
             );
         }
+    }
+
+    /// Key bindings are saved as text in precedence order, a rebound and a removed action read
+    /// back as written, and an entry this release cannot read is left out with the rest kept.
+    #[test]
+    fn key_bindings_round_trip_and_unknown_entries_are_left_out() {
+        use crate::config::KeyboardAction as A;
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let alt = |key| KeyboardShortcut::new(Modifiers::ALT, key);
+        let mut map = ShortcutMap::default();
+        map.bindings.retain(|(_, action)| *action != A::CreateAlert);
+        for (key, action) in &mut map.bindings {
+            if *action == A::OpenLayout {
+                *key = alt(Key::O);
+            }
+        }
+        let settings = UserSettings {
+            shortcuts: Some(map),
+            ..UserSettings::default()
+        };
+        let written: serde_json::Value = serde_json::from_str(&settings.to_json()).unwrap();
+        let entries = written["shortcuts"].as_array().unwrap();
+        for entry in [
+            serde_json::json!({"shortcut": "Alt+O", "action": "OpenLayout"}),
+            serde_json::json!({"shortcut": "Ctrl+Shift+Z", "action": "Redo"}),
+            serde_json::json!({"shortcut": "Plus", "action": "ZoomIn"}),
+            serde_json::json!({"shortcut": "Alt+T", "action": {"DrawingTool": "TrendLine"}}),
+        ] {
+            assert!(entries.contains(&entry), "{entry}");
+        }
+        assert!(!entries.iter().any(|entry| entry["action"] == "CreateAlert"));
+        assert_eq!(
+            UserSettings::from_json(&settings.to_json()).unwrap(),
+            settings
+        );
+        let json = r#"{"version":1,"shortcuts":[
+            {"shortcut":"Alt+O","action":"OpenLayout"},
+            {"shortcut":"Alt+X","action":"FutureAction"},
+            {"shortcut":"Alt+T","action":{"DrawingTool":"FutureTool"}},
+            {"shortcut":"Alt+Hyper","action":"Undo"},
+            {"shortcut":"Meta+Z","action":"Undo"},
+            {"shortcut":"","action":"Undo"},
+            7,
+            {"shortcut":"Ctrl+Shift+Z","action":"Redo"}]}"#;
+        assert_eq!(
+            UserSettings::from_json(r#"{"version":1}"#)
+                .unwrap()
+                .shortcuts,
+            None
+        );
+        assert!(UserSettings::from_json(r#"{"version":1,"shortcuts":{}}"#).is_err());
+        assert!(
+            UserSettings::from_json(r#"{"version":1,"shortcuts":[]}"#)
+                .unwrap()
+                .shortcuts
+                .unwrap()
+                .bindings
+                .is_empty()
+        );
+        let read = UserSettings::from_json(json).unwrap().shortcuts.unwrap();
+        assert_eq!(
+            read.bindings,
+            [
+                (alt(Key::O), A::OpenLayout),
+                (
+                    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z),
+                    A::Redo
+                ),
+            ]
+        );
     }
 
     /// The default settings with the layout `name` open.
@@ -730,15 +834,25 @@ mod tests {
         }
     }
 
-    /// A non-finite replay speed or favourites position is written as unset, so the settings
-    /// are saved once, a second after they changed, and the document reads back.
+    /// A non-finite replay speed or favourites position is written as unset and a key binding
+    /// on Control as one on the command key, so the settings are saved once, a second after they
+    /// changed, and the document reads back.
     #[test]
-    fn non_finite_settings_are_saved_once_and_read_back() {
+    fn settings_written_differently_are_saved_once_and_read_back() {
         use chrono::TimeZone;
+        use egui::{Key, KeyboardShortcut, Modifiers};
         let session = |speed| ReplaySession {
             symbol: "AAA".into(),
             time: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
             speed,
+            scope: Default::default(),
+            charts: Vec::new(),
+        };
+        let ctrl_k = |modifiers| ShortcutMap {
+            bindings: vec![(
+                KeyboardShortcut::new(modifiers, Key::K),
+                crate::config::KeyboardAction::OpenQuickSearch,
+            )],
         };
         let cases = [
             (
@@ -747,6 +861,7 @@ mod tests {
                     replay_session: Some((session(f32::INFINITY), Timeframe::Day1)),
                     ..UserSettings::default()
                 },
+                UserSettings::default(),
             ),
             (
                 "NaN speed",
@@ -754,6 +869,7 @@ mod tests {
                     replay_session: Some((session(f32::NAN), Timeframe::Day1)),
                     ..UserSettings::default()
                 },
+                UserSettings::default(),
             ),
             (
                 "infinite position",
@@ -761,10 +877,23 @@ mod tests {
                     drawing_favorites_pos: Some((f32::INFINITY, 0.0)),
                     ..UserSettings::default()
                 },
+                UserSettings::default(),
+            ),
+            (
+                "Control-only binding",
+                UserSettings {
+                    shortcuts: Some(ctrl_k(Modifiers::CTRL)),
+                    ..UserSettings::default()
+                },
+                UserSettings {
+                    shortcuts: Some(ctrl_k(Modifiers::COMMAND)),
+                    ..UserSettings::default()
+                },
             ),
         ];
-        for (case, mut settings) in cases {
+        for (case, mut settings, mut expected) in cases {
             settings.theme = Some("Dark".into());
+            expected.theme = Some("Dark".into());
             let ctx = egui::Context::default();
             let host = Arc::new(Counted::default());
             let saves = || host.1.load(std::sync::atomic::Ordering::Relaxed);
@@ -779,10 +908,6 @@ mod tests {
             assert_eq!(saves(), 1, "{case}");
             assert!(store.flush(&settings), "{case}");
             assert_eq!(saves(), 1, "{case}");
-            let expected = UserSettings {
-                theme: Some("Dark".into()),
-                ..UserSettings::default()
-            };
             let mut store = SettingsStore::new(host.clone());
             assert_eq!(
                 poll_at(&ctx, &mut store, 20.0, &UserSettings::default()),

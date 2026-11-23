@@ -2,7 +2,7 @@
 
 use super::{Chart, ChartElementId, SeriesId};
 use crate::model::Bar;
-use crate::studies::{Indicator, InputValue, RefusedStudy, StudyError, StudySource};
+use crate::studies::{Indicator, InputKind, InputValue, RefusedStudy, StudyError, StudySource};
 use web_time::Instant;
 
 impl Chart {
@@ -12,7 +12,10 @@ impl Chart {
     /// chart of a layout and to the object tree's Duplicate; studies already on the chart stay. A
     /// user action that turns the volume setting on, such as the Toggle volume shortcut, leaves
     /// [`ChartConfig::show_volume`](crate::config::ChartConfig::show_volume) off at the cap unless
-    /// a Volume study is already on the chart.
+    /// a Volume study is already on the chart. The same applies to the
+    /// [analyst targets setting](Self::set_price_targets_visible), served by an Analyst price
+    /// forecast study. Both settings stay uncapped outside user actions, as do restores and
+    /// undo/redo.
     /// [`set_chained_study_limit`](Self::set_chained_study_limit) caps, on the same paths, the
     /// studies that read another study's output; a study is refused when it would pass either cap.
     pub fn set_study_limit(&mut self, limit: Option<usize>) {
@@ -143,11 +146,21 @@ impl Chart {
     /// another study's output ([`StudySource::Study`]) opens in that study's pane when the source
     /// has a pane of its own, and takes the source's scale when the two share a pane; move it
     /// afterwards with [`move_indicator_to_pane`](Self::move_indicator_to_pane).
+    /// In a [`user_action`](Self::user_action), drawings of the pane it joins stay over and
+    /// under the same series and studies, and the study goes under a drawing where its place
+    /// leaves the choice, as an added series does. Outside one, drawings keep their stored
+    /// count of items under them.
     /// Returns the study's id, which stays valid when other studies are removed. Host code adds
     /// past both caps; the interface goes through [`try_add_indicator`](Self::try_add_indicator).
     pub fn add_indicator(&mut self, indicator: Box<dyn Indicator>) -> SeriesId {
+        #[cfg(feature = "drawings")]
+        let stack = self.pane_stack(SeriesId(self.next_series));
         let id = self.insert_indicator(indicator);
         self.place_on_source(id);
+        #[cfg(feature = "drawings")]
+        if let Some(stack) = stack {
+            self.keep_stack(stack);
+        }
         id
     }
 
@@ -197,10 +210,13 @@ impl Chart {
             .flatten();
         let overlay = indicator.is_overlay() && original;
         self.studies.add(indicator);
+        #[cfg(feature = "studies")]
+        self.adopt_price_target_study();
         self.readout_revision = crate::model::next_revision();
         self.study_ids.push(id);
         self.study_autoscale.push(true);
         self.study_inputs.push(String::new());
+        self.study_captions.push(std::sync::OnceLock::new());
         self.pending_from.push(None);
         self.stale.push(false);
         self.next_refresh.push(f64::NEG_INFINITY);
@@ -223,7 +239,10 @@ impl Chart {
         id
     }
 
-    /// Set the input caption displayed beside a study in the legend.
+    /// Sets the caption the legends show after the name of study `id`, in place of the one the
+    /// chart derives from its inputs. A host caption does not follow later changes of the
+    /// study's inputs; an empty one returns the study to the derived caption. Returns `false`
+    /// for an id that is not a study of the chart.
     pub fn set_indicator_inputs(&mut self, id: SeriesId, inputs: impl Into<String>) -> bool {
         let Some(index) = self.study_ids.iter().position(|candidate| *candidate == id) else {
             return false;
@@ -233,8 +252,32 @@ impl Chart {
         true
     }
 
-    /// The host-supplied input caption of a study, if its id is still present.
+    /// The caption the legends show after the name of study `id` while
+    /// [`ChartConfig::show_indicator_inputs`](crate::config::ChartConfig::show_indicator_inputs)
+    /// is on: the host's from [`set_indicator_inputs`](Self::set_indicator_inputs), else one built
+    /// from the study's shown inputs. `None` if `id` is not a study of the chart.
     pub fn indicator_inputs(&self, id: SeriesId) -> Option<&str> {
+        let at = self
+            .study_ids
+            .iter()
+            .position(|candidate| *candidate == id)?;
+        Some(self.study_caption(at))
+    }
+
+    /// The caption the legends show for the study at `at`: the host's, else the derived one.
+    pub(crate) fn study_caption(&self, at: usize) -> &str {
+        match self.study_inputs[at].as_str() {
+            "" => self.study_captions[at]
+                .get_or_init(|| derived_caption(self.studies.indicators()[at].as_ref())),
+            host => host,
+        }
+    }
+
+    /// The caption the host set for study `id` with
+    /// [`set_indicator_inputs`](Self::set_indicator_inputs), empty if none. Copies and saved
+    /// layouts keep this one, so that a copy derives its own.
+    #[cfg(feature = "studies")]
+    pub(crate) fn host_indicator_inputs(&self, id: SeriesId) -> Option<&str> {
         self.study_ids
             .iter()
             .position(|candidate| *candidate == id)
@@ -280,10 +323,23 @@ impl Chart {
             self.volume_setting = false;
         }
         let indicator = self.studies.remove_indicator(at);
+        #[cfg(feature = "studies")]
+        if indicator
+            .as_ref()
+            .is_some_and(|study| is_price_target_study(study.as_ref()))
+            && !self
+                .studies
+                .indicators()
+                .iter()
+                .any(|study| is_price_target_study(study.as_ref()))
+        {
+            self.show_price_targets = false;
+        }
         self.readout_revision = crate::model::next_revision();
         self.study_ids.remove(at);
         self.study_autoscale.remove(at);
         self.study_inputs.remove(at);
+        self.study_captions.remove(at);
         self.pending_from.remove(at);
         self.stale.remove(at);
         self.next_refresh.remove(at);
@@ -397,14 +453,35 @@ impl Chart {
     }
 
     /// The study `id`, to change its settings. Its values reflect the bars as of the last
-    /// [`show`](Self::show); the next one recomputes it in full.
+    /// [`show`](Self::show); the next one recomputes it in full. Changes report
+    /// [`ChartEvent::Study`](super::ChartEvent::Study) before the next chart notification.
     pub fn indicator_mut(&mut self, id: SeriesId) -> Option<&mut (dyn Indicator + 'static)> {
         let at = self.study_ids.iter().position(|study| *study == id)?;
         self.record_study(id);
+        Some(self.edit_study(at))
+    }
+
+    /// Settings dialog previews keep recomputation and history bookkeeping without reporting
+    /// [`ChartEvent::Study`](super::ChartEvent::Study); the host reports the committed edit.
+    #[cfg(feature = "ui")]
+    pub(crate) fn preview_indicator_mut(
+        &mut self,
+        id: SeriesId,
+    ) -> Option<&mut (dyn Indicator + 'static)> {
+        let at = self.study_ids.iter().position(|study| *study == id)?;
+        self.record_study(id);
+        self.host_events
+            .studies
+            .retain(|(watched, _)| *watched != id);
+        Some(self.edit_study(at))
+    }
+
+    /// Marks the study for a full recompute at the next `show`.
+    fn edit_study(&mut self, at: usize) -> &mut (dyn Indicator + 'static) {
         self.pending_from[at] = Some(0);
         self.next_refresh[at] = f64::NEG_INFINITY;
         self.readout_revision = crate::model::next_revision();
-        Some(self.studies.indicators_mut()[at].as_mut())
+        self.studies.indicators_mut()[at].as_mut()
     }
 
     /// Updates every study with a pending change, as of `now` in seconds. An incremental study
@@ -429,6 +506,8 @@ impl Chart {
             let clock_changed = study.set_bar_clock(&clock);
             let events_changed = study.set_time_scale_events(events);
             if instrument_changed || symbol_changed || clock_changed || events_changed {
+                // The inputs a study offers can follow the chart's symbol and interval.
+                self.study_captions[at].take();
                 self.pending_from[at] = Some(0);
                 self.element_studies.dirty = true;
                 self.readout_revision = crate::model::next_revision();
@@ -583,6 +662,12 @@ pub(crate) fn reads_study(study: &dyn Indicator) -> bool {
     matches!(study.source(), Some(StudySource::Study { .. }))
 }
 
+/// Whether `study` is an Analyst price forecast, which the chart's targets setting follows.
+#[cfg(feature = "studies")]
+pub(super) fn is_price_target_study(study: &dyn Indicator) -> bool {
+    study.name() == crate::studies::AnalystPriceForecast::NAME
+}
+
 /// The typed events studies read, without the mark source page an export froze at their end: a page
 /// covers only the visible range, so restarts on it would move while scrolling.
 fn held_events(
@@ -590,6 +675,73 @@ fn held_events(
     frozen: usize,
 ) -> &[crate::model::TimeScaleEvent] {
     &events[..events.len().saturating_sub(frozen)]
+}
+
+/// The caption the legends show after a study's name when the host set none: what identifies it
+/// at a glance, in input order. Lengths and numbers, choices by their label, the price source,
+/// the interval and the symbol; not flags, colours, text, zero values, list sizes, painted
+/// widths, times of day, Style tab inputs, choices set to None or another study's output, which
+/// mean nothing without their labels. The volume study names its moving average itself.
+fn derived_caption(study: &dyn Indicator) -> String {
+    if study.is_volume() {
+        return String::new();
+    }
+    let price = |source: &StudySource| match source {
+        StudySource::Price(price) => Some(format!("{price:?}").to_lowercase()),
+        // The caption has no name for another study's output.
+        _ => None,
+    };
+    let source = study.source();
+    let inputs = study.inputs();
+    let mut caption: Vec<_> = inputs
+        .iter()
+        // List sizes, painted widths and minutes after midnight mean nothing alone; the study's
+        // source goes below.
+        .filter(|input| {
+            input.is_shown(&inputs)
+                && !input.style
+                && !matches!(input.id.as_str(), "band_count" | "event_count" | "width")
+                && !matches!(input.kind, InputKind::Length(0, 1439))
+                && (source.is_none() || input.id != "source")
+        })
+        .filter_map(|input| match (&input.kind, &input.value) {
+            (InputKind::Choice(choices), InputValue::Choice(index)) => choices
+                .get(*index)
+                .filter(|label| label.as_str() != "None")
+                .cloned(),
+            (_, InputValue::Length(value)) => (*value != 0).then(|| value.to_string()),
+            (_, InputValue::Integer(value)) => (*value != 0).then(|| value.to_string()),
+            // Single precision reads short and turns an open upper limit into infinity.
+            (_, InputValue::Number(value)) => {
+                let value = *value as f32;
+                (value != 0.0 && value.is_finite()).then(|| value.to_string())
+            }
+            (_, InputValue::Source(value)) => price(value),
+            (_, InputValue::Timeframe(Some(value))) => Some(value.to_string()),
+            (_, InputValue::Symbol(value)) if !value.is_empty() => Some(value.clone()),
+            _ => None,
+        })
+        .collect();
+    // An anchor or session choice identifies the study, which names its price only once edited.
+    // Flags, which the caption leaves out, can precede that choice.
+    let anchored = matches!(
+        inputs
+            .iter()
+            .map(|input| &input.kind)
+            .find(|kind| !matches!(kind, InputKind::Toggle)),
+        Some(InputKind::Choice(_))
+    );
+    let edited = inputs
+        .iter()
+        .any(|input| matches!(input.kind, InputKind::Source) && input.value != input.default);
+    if let Some(source) = source
+        .as_ref()
+        .filter(|_| !anchored || edited)
+        .and_then(price)
+    {
+        caption.insert(caption.len().min(1), source);
+    }
+    caption.join(" ")
 }
 
 /// Updates one study with its source column, keeping values indexed by the input bars.
@@ -678,6 +830,12 @@ pub(super) fn refresh_values(
             stale[at] = false;
         }
     }
+    // A calculation running elsewhere is asked for its result on every frame until it ends.
+    for (at, study) in studies.iter().enumerate() {
+        if running(study.as_ref()) && pending(pending_from, stale, at).is_none() {
+            pending_from[at] = Some(bars.len());
+        }
+    }
     let mut recomputed = false;
     for &at in &order {
         let parent = match studies[at].source() {
@@ -696,8 +854,8 @@ pub(super) fn refresh_values(
             continue;
         };
         let len = studies[at].values().len();
-        let incremental =
-            studies[at].is_incremental() && len > 0 && from + 1 >= len && bars.len() >= len;
+        let incremental = running(studies[at].as_ref())
+            || studies[at].is_incremental() && len > 0 && from + 1 >= len && bars.len() >= len;
         if !incremental {
             if recomputed {
                 continue;
@@ -716,6 +874,7 @@ pub(super) fn refresh_values(
                     // Only a start at the first bar whose values belong to other bars is due at
                     // once; kept values wait like a tail update.
                     parent_ready
+                        && !running(studies[at].as_ref())
                         && pending(pending_from, stale, at).is_some_and(|from| {
                             let len = studies[at].values().len();
                             !(studies[at].is_incremental()
@@ -744,7 +903,7 @@ pub(super) fn refresh_values(
         // The consumers of values kept for a full recompute keep theirs until their own turn.
         let kept = stale[at] && pending_from[at] != Some(0);
         super::studies::update(studies, ids, at, bars, from, sources);
-        pending_from[at] = None;
+        pending_from[at] = running(studies[at].as_ref()).then_some(bars.len());
         stale[at] = false;
         if !incremental {
             recomputed = true;
@@ -779,9 +938,12 @@ pub(super) fn refresh_values(
         if pending(pending_from, stale, at).is_none() {
             continue;
         }
-        // Values kept for a full recompute stay drawn until it runs.
-        let left = if pending_from[at] == Some(0) {
-            if !study.values().is_empty() {
+        // Values kept for a full recompute stay drawn until it runs, and so do the values of a
+        // study whose calculation reports its progress, until its next one ends.
+        let left = if running(study.as_ref()) {
+            RUNNING_REPAINT
+        } else if pending_from[at] == Some(0) {
+            if !study.values().is_empty() && study.calculation().is_none() {
                 study.update(&[], 0);
             }
             0.0
@@ -798,6 +960,17 @@ pub(super) fn refresh_values(
 fn pending(pending_from: &[Option<usize>], stale: &[bool], at: usize) -> Option<usize> {
     if stale[at] { Some(0) } else { pending_from[at] }
 }
+
+/// Whether `study` calculates away from the UI thread and has not finished.
+fn running(study: &dyn Indicator) -> bool {
+    matches!(
+        study.calculation(),
+        Some(crate::studies::Calculation::Running(_))
+    )
+}
+
+/// Seconds until a study whose calculation is running is asked again: one frame.
+const RUNNING_REPAINT: f64 = 0.016;
 
 /// Least time in seconds between two full recomputes of a study while bars stream; a study
 /// whose recompute took longer than a quarter of it waits four times that instead.
@@ -1591,6 +1764,57 @@ mod tests {
         );
     }
 
+    /// A study whose calculation runs elsewhere is asked again on every frame until it ends, so
+    /// its values appear without a new bar (#3631). A chart that asks a study only when its bars
+    /// change shows nothing until the next tick.
+    #[test]
+    fn running_studies_stay_drawn_and_update_again() {
+        use crate::studies::{Calculation, CustomIndicator, IndicatorValues, Resume, ResumeRun};
+
+        /// A running sum of closes, reported as running on its first two calls.
+        #[derive(Clone)]
+        struct Sums(Arc<AtomicUsize>);
+
+        impl Resume for Sums {
+            fn resume(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation {
+                if self.0.fetch_add(1, Ordering::Relaxed) < 2 {
+                    return Calculation::Running(0.5);
+                }
+                values.clear();
+                let mut sum = 0.0;
+                for bar in run.data {
+                    sum += bar.close;
+                    values.push_lines(&[sum]);
+                }
+                Calculation::Done(std::time::Duration::ZERO)
+            }
+        }
+
+        let mut chart = Chart::new(BarData::from_bars(
+            [1.0, 2.0, 3.0, 4.0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, close)| bar(i as i64 * 60, close))
+                .collect(),
+        ));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let id = chart.add_indicator(Box::new(
+            CustomIndicator::new("Sums", |_| Vec::new()).with_resume(Sums(Arc::clone(&calls))),
+        ));
+        let values = |chart: &Chart| {
+            let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
+            study.values().line(0).to_vec()
+        };
+        for frame in 1..=3 {
+            chart.refresh_studies(frame as f64 / 60.0);
+            if calls.load(Ordering::Relaxed) < 3 {
+                assert!(values(&chart).is_empty(), "frame {frame}");
+            }
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+        assert_eq!(values(&chart), [1.0, 3.0, 6.0, 10.0]);
+    }
+
     /// A chart capped at two studies refuses a third from the interface and pastes, and stays
     /// as it was; host code and lifting the cap still add.
     #[cfg(feature = "drawings")]
@@ -1831,5 +2055,182 @@ mod tests {
         needs_error::<crate::widget::RestoreError>();
         #[cfg(feature = "drawings")]
         needs_error::<crate::widget::DrawingError>();
+    }
+
+    /// Without a host caption, the legends show one built from the study's inputs, which follows
+    /// every edit, undo and redo until the host sets its own (#3570).
+    #[test]
+    fn derived_caption_follows_settings_undo_and_redo() {
+        let mut chart = Chart::new(BarData::new());
+        let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+        // Without smoothing, its length and deviation are hidden.
+        assert_eq!(chart.indicator_inputs(rsi), Some("14 close"));
+        chart.user_action(|chart| {
+            let study = chart.indicator_mut(rsi).unwrap();
+            let settings = study.settings();
+            study
+                .apply_settings(&[("period".into(), InputValue::Length(5))], settings)
+                .unwrap();
+        });
+        assert_eq!(chart.indicator_inputs(rsi), Some("5 close"));
+        assert!(chart.undo());
+        assert_eq!(chart.indicator_inputs(rsi), Some("14 close"));
+        assert!(chart.redo());
+        assert_eq!(chart.indicator_inputs(rsi), Some("5 close"));
+        chart
+            .indicator_mut(rsi)
+            .unwrap()
+            .set_input("smoothing", InputValue::Choice(1))
+            .unwrap();
+        assert_eq!(chart.indicator_inputs(rsi), Some("5 close SMA 14"));
+        chart.set_indicator_inputs(rsi, "Mine");
+        chart
+            .indicator_mut(rsi)
+            .unwrap()
+            .set_input("period", InputValue::Length(7))
+            .unwrap();
+        assert_eq!(chart.indicator_inputs(rsi), Some("Mine"));
+        chart.set_indicator_inputs(rsi, "");
+        assert_eq!(chart.indicator_inputs(rsi), Some("7 close SMA 14"));
+    }
+
+    /// The derived caption names each input by its value and leaves out what means nothing
+    /// without its label (#3570).
+    #[test]
+    fn derived_captions_by_input_kind() {
+        use crate::model::Timeframe;
+        use crate::studies::{CustomIndicator, InputKind as Kind, InputValue as Value, StudyInput};
+        let input = |id: &str, value, kind| StudyInput::new(id, id, value, kind);
+        let one = |value, kind| vec![input("value", value, kind)];
+        let length =
+            |id: &str, value, min, max| input(id, Value::Length(value), Kind::Length(min, max));
+        let choice = |index, labels: [&str; 2]| {
+            let labels = labels.map(String::from).into();
+            input("mode", Value::Choice(index), Kind::Choice(labels))
+        };
+        let price = |price| Value::Source(StudySource::Price(price));
+        let close = input("source", price(PriceSource::Close), Kind::Source);
+        let rows = [
+            (vec![length("length", 20, 1, 500)], "20"),
+            (vec![length("offset", 0, 0, 500)], ""),
+            // Minutes after midnight.
+            (vec![length("start", 570, 0, 1439)], ""),
+            (vec![length("width", 3, 1, 10)], ""),
+            (vec![length("rows", 30, 1, 500).in_style_tab()], ""),
+            (one(Value::Number(2.5), Kind::Number(0.0, 10.0)), "2.5"),
+            (one(Value::Number(-1.5), Kind::Number(-10.0, 10.0)), "-1.5"),
+            // An open upper limit.
+            (
+                one(Value::Number(f64::MAX), Kind::Number(0.0, f64::MAX)),
+                "",
+            ),
+            (one(Value::Integer(-3), Kind::Integer(-10, 10)), "-3"),
+            (vec![choice(1, ["Fast", "Slow"])], "Slow"),
+            (vec![choice(0, ["None", "Slow"])], ""),
+            (
+                vec![input("source", price(PriceSource::HL2), Kind::Source)],
+                "hl2",
+            ),
+            (
+                one(Value::Timeframe(Some(Timeframe::Hour1)), Kind::Timeframe),
+                "1h",
+            ),
+            (one(Value::Timeframe(None), Kind::Timeframe), ""),
+            (one(Value::Symbol("OTHER".into()), Kind::Symbol), "OTHER"),
+            (one(Value::Symbol(String::new()), Kind::Symbol), ""),
+            (one(Value::Toggle(true), Kind::Toggle), ""),
+            (one(Value::Text("hi".into()), Kind::Text), ""),
+            (one(Value::Color(egui::Color32::RED), Kind::Color), ""),
+            // The price follows the first input.
+            (
+                vec![
+                    length("length", 20, 1, 500),
+                    choice(1, ["Fast", "Slow"]),
+                    close.clone(),
+                ],
+                "20 close Slow",
+            ),
+            // A study anchored by a choice names its price only once it is edited.
+            (
+                vec![
+                    choice(0, ["Session", "Week"]),
+                    length("length", 1, 1, 10),
+                    close,
+                ],
+                "Session 1",
+            ),
+        ];
+        let mut chart = Chart::new(BarData::new());
+        for (at, (inputs, expected)) in rows.into_iter().enumerate() {
+            let study = CustomIndicator::new("X", |_| Vec::new())
+                .with_inputs(inputs, |_, _, _, _| Vec::new())
+                .unwrap();
+            let id = chart.add_indicator(Box::new(study));
+            assert_eq!(chart.indicator_inputs(id), Some(expected), "row {at}");
+        }
+        let anchored = chart.indicators().last().unwrap().0;
+        chart
+            .indicator_mut(anchored)
+            .unwrap()
+            .set_input("source", price(PriceSource::HLC3))
+            .unwrap();
+        assert_eq!(chart.indicator_inputs(anchored), Some("Session hlc3 1"));
+        // Another study's output has no name in the caption.
+        let sma = chart.add_indicator(Box::new(SMA::new(7)));
+        let rsi = chart.add_indicator(Box::new(RSI::new(9)));
+        assert_eq!(chart.indicator_inputs(rsi), Some("9 close"));
+        chart
+            .set_indicator_source(rsi, StudySource::Study { id: sma.0, plot: 0 })
+            .unwrap();
+        assert_eq!(chart.indicator_inputs(rsi), Some("9"));
+        assert_eq!(chart.indicator_inputs(sma), Some("7 close"));
+    }
+
+    /// Built-in studies read as before the chart derived their captions, and no caption shows a
+    /// flag, an empty field, a list size or an open limit (#3570).
+    #[test]
+    fn derived_captions_of_built_in_studies() {
+        let factory = crate::studies::IndicatorFactory::new();
+        let mut chart = Chart::new(BarData::new());
+        let mut caption = |name: &str| {
+            let id = chart.add_indicator(factory.create(name).unwrap());
+            chart.indicator_inputs(id).unwrap().to_owned()
+        };
+        for (name, expected) in [
+            ("RSI", "14 close SMA 14"),
+            ("VWAP", "Session 1"),
+            ("Vol Profile Session", "24 70 Up / down Trading day"),
+            ("Time Weighted Average Price", "Session"),
+            ("Trend Strength Index", "14 close"),
+            ("Higher Interval Candles", "1D"),
+            ("Accelerator Oscillator", "hl2"),
+            // Its legend names its moving average instead.
+            ("Volume", ""),
+        ] {
+            assert_eq!(caption(name), expected, "{name}");
+        }
+        for name in factory.list() {
+            let caption = caption(&name);
+            assert_eq!(caption.trim(), caption, "{name}");
+            assert!(
+                !caption.contains("  ")
+                    && !caption.contains("true")
+                    && !caption.contains("false")
+                    && !caption.contains("00000")
+                    && !caption.split(' ').any(|item| item == "None"),
+                "{name}: {caption}"
+            );
+        }
+        let vwap = chart.add_indicator(factory.create("VWAP").unwrap());
+        assert_eq!(chart.indicator_inputs(vwap), Some("Session 1"));
+        chart
+            .indicator_mut(vwap)
+            .unwrap()
+            .set_input(
+                "source",
+                InputValue::Source(StudySource::Price(PriceSource::Close)),
+            )
+            .unwrap();
+        assert_eq!(chart.indicator_inputs(vwap), Some("Session close 1"));
     }
 }

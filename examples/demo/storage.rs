@@ -102,7 +102,8 @@ impl super::DemoApp {
                         } else {
                             super::SessionType::RTH
                         };
-                        live.set_view(session, chart.dividend_adjusted());
+                        // restore_layout_groups took the adjustment from the restored conversion.
+                        live.set_view(session, live.view(chart.extended_hours()).1);
                         chart.reload_feed();
                         chart.set_data(
                             egui_charts::widget::SeriesId::MAIN,
@@ -129,10 +130,9 @@ impl super::DemoApp {
                         .chart
                         .bars(egui_charts::widget::SeriesId::MAIN)
                         .to_vec();
-                    self.timeframe_toolbar
-                        .set_session(self.live.view(self.chart.extended_hours()).0);
-                    self.timeframe_toolbar.state.adjust_for_dividends =
-                        self.chart.dividend_adjusted();
+                    let (session, adjusted) = self.live.view(self.chart.extended_hours());
+                    self.timeframe_toolbar.set_session(session);
+                    self.timeframe_toolbar.state.adjust_for_dividends = adjusted;
                     let zone = self
                         .chart
                         .chart_options()
@@ -499,6 +499,102 @@ mod tests {
     }
 
     #[test]
+    fn the_alert_log_survives_a_restart_in_the_chart_zone() {
+        use super::super::tests::{ui_click, ui_frame};
+        use egui_charts::model::{Alert, AlertCondition, AlertFrequency, CustomAlertEvent};
+        const SIZE: egui::Vec2 = egui::vec2(1440.0, 900.0);
+        fn frames(app: &mut DemoApp, ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = ui_frame(ctx, SIZE, vec![], |ui| {
+                    app.ui(ui, &mut eframe::Frame::_new_kittest())
+                });
+            }
+            texts
+        }
+        fn fire(app: &DemoApp, sequence: u64) {
+            let time = "2026-11-18T17:00:00Z".parse().unwrap();
+            app.alert_host.engine().custom_events(
+                "Turns",
+                "STOCKA",
+                None,
+                egui_charts::model::Timeframe::Min5,
+                &[CustomAlertEvent::new(sequence, time, "Turn confirmed")],
+                time,
+            );
+        }
+        let ctx = egui::Context::default();
+        let mut storage = AppStorage::default();
+        eframe::set_value(
+            &mut storage,
+            KEY,
+            &HashMap::from([("own-data", r#"{"asked":true}"#)]),
+        );
+        let mut app = restart(&ctx, &storage);
+        app.alert_host.engine().connect_custom_events("Turns");
+        let mut alert = Alert::new("STOCKA", AlertCondition::CustomEvents("Turns".into()));
+        alert.frequency = AlertFrequency::EveryTime;
+        app.alerts.save(alert);
+        fire(&app, 1);
+        frames(&mut app, &ctx);
+        let trigger = app.alerts.log().back().unwrap().clone();
+        app.save(&mut storage);
+        let mut app = restart(&ctx, &storage);
+        frames(&mut app, &ctx);
+        assert_eq!(app.alerts.log().back(), Some(&trigger));
+        super::super::apply_timezone(&mut app.chart, &mut app.timeframe_toolbar, "Europe/Paris");
+        frames(&mut app, &ctx);
+        assert!(app.alerts.log_csv().contains("2026-11-18T18:00:00+01:00"));
+        app.switch_symbol("TOKENA");
+        app.alert_host.engine().connect_custom_events("Turns");
+        for (sequence, label) in [(2, "Open chart"), (3, "Edit alert")] {
+            fire(&app, sequence);
+            let texts = frames(&mut app, &ctx);
+            let at = texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap_or_else(|| panic!("missing {label}"))
+                .1
+                .center();
+            ui_click(&ctx, SIZE, at, |ui| {
+                app.ui(ui, &mut eframe::Frame::_new_kittest())
+            });
+            frames(&mut app, &ctx);
+            if label == "Open chart" {
+                assert_eq!(app.chart.symbol(), "STOCKA");
+            } else {
+                assert!(app.alert_dialog.is_open);
+                assert_eq!(app.alert_dialog.alert.id.as_ref(), Some(&trigger.id));
+            }
+        }
+        app.alert_dialog.close();
+        frames(&mut app, &ctx);
+        // Clearing through the wrapper must also clear the history saved for the next session.
+        for label in ["Log", "Clear log…", "Clear"] {
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = ui_frame(&ctx, SIZE, vec![], |ui| {
+                    app.alerts.show(ui);
+                });
+            }
+            let at = texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap()
+                .1
+                .center();
+            ui_click(&ctx, SIZE, at, |ui| {
+                app.alerts.show(ui);
+            });
+        }
+        assert!(app.alert_host.engine().triggers().is_empty());
+        app.save(&mut storage);
+        let mut app = restart(&ctx, &storage);
+        frames(&mut app, &ctx);
+        assert!(app.alerts.log().is_empty());
+    }
+
+    #[test]
     fn study_favorites_survive_restart_and_removal_with_legacy_settings() {
         let ctx = egui::Context::default();
         let mut storage = AppStorage::default();
@@ -543,9 +639,9 @@ mod tests {
         use egui_charts::ui::timeframe_toolbar::SessionType;
         use egui_charts::ui::top_toolbar::{CompareAction, TopToolbarAction};
         use egui_charts::widget::ChartLayoutMode;
-        for (mode, session) in [
-            (ChartLayoutMode::Single, SessionType::Full24x7),
-            (ChartLayoutMode::TwoHorizontal, SessionType::RTH),
+        for (mode, session, adjusted) in [
+            (ChartLayoutMode::Single, SessionType::Full24x7, true),
+            (ChartLayoutMode::TwoHorizontal, SessionType::RTH, false),
         ] {
             let ctx = egui::Context::default();
             let mut storage = AppStorage::default();
@@ -577,6 +673,7 @@ mod tests {
             let mut settings =
                 egui_charts::widget::settings::ChartSettingsState::from_chart(&app.chart);
             settings.timezone = "+05:45".into();
+            settings.adjust_for_dividends = adjusted;
             app.apply_chart_settings(settings);
             app.layout.set_sync_group(0, Some("Recovered".into()));
             app.layout.set_detached(mode.chart_count() - 1, true);
@@ -606,6 +703,15 @@ mod tests {
             assert!(app.layout_groups() == saved_groups);
             assert_eq!(app.chart.chart_type(), ChartType::Line);
             assert_eq!(app.timeframe_toolbar.state.session_type, session);
+            // The demo asks for adjusted prices through the conversion it saved with the chart.
+            assert_eq!(
+                (
+                    app.chart.conversion(),
+                    app.timeframe_toolbar.state.adjust_for_dividends,
+                    app.live.view(app.chart.extended_hours()).1,
+                ),
+                (adjusted.then_some("adjusted"), adjusted, adjusted)
+            );
             assert_eq!(app.timeframe_toolbar.state.timezone, "+05:45");
             assert_eq!(
                 app.chart.state().price_scale().options().mode,
@@ -689,7 +795,9 @@ mod tests {
             app.top_toolbar.layout_menu.save("Unnamed 2", &layout);
             app.poll_storage(&ctx);
             app.handle_layout_action(
-                egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction::CreateNew,
+                egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction::CreateNew(
+                    "Unnamed".into(),
+                ),
             );
             assert!(
                 !app.top_toolbar

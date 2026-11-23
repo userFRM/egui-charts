@@ -66,9 +66,9 @@ impl Chart {
 
     /// Returns a drawing's UTC anchors and prices, or `None` for an unknown id or an index
     /// without a time mapping. Retains exact supplied times between bars and in whitespace.
-    /// An anchored text reports the time and price under the point it was last drawn at, which
-    /// change as the chart scrolls and zooms; while a text moved outside the view waits to be
-    /// drawn inside its pane, the point it was given.
+    /// An anchored text, or a table anchored to the screen, reports the time and price under the
+    /// point it was last drawn at, which change as the chart scrolls and zooms; while one moved
+    /// outside the view waits to be drawn inside its pane, the point it was given.
     pub fn drawing_points(&self, id: usize) -> Option<Vec<(DateTime<Utc>, f64)>> {
         self.drawings()
             .drawings
@@ -82,8 +82,8 @@ impl Chart {
 
     /// Replaces a drawing's anchors as one undoable edit. Invalid points and locked drawings
     /// leave the original untouched. Screen positions are rebuilt on the next frame.
-    /// An anchored text moves to the new point and keeps its place in the pane from the first
-    /// frame that draws that point inside the pane.
+    /// An anchored text, or a table anchored to the screen, moves to the new point and keeps its
+    /// place in the pane from the first frame that draws that point inside the pane.
     pub fn set_drawing_points(
         &mut self,
         id: usize,
@@ -282,7 +282,7 @@ impl Chart {
         Ok(())
     }
 
-    /// Replace a projection's levels, target zone backgrounds, coefficient labels and leg style
+    /// Replace a projection's levels, gradient colours, coefficient labels and outline style
     /// as one undoable edit. Unknown ids, locked drawings, other tools and invalid settings
     /// change nothing.
     pub fn set_projection_config(
@@ -646,7 +646,9 @@ impl Chart {
         drawings.edit_drawing(id, |d| d.pane = owner).is_ok()
     }
 
-    /// Deletes the selected drawings as one undo step, as Delete and Backspace do. Locked drawings
+    /// Deletes the selected drawings as one undo step, as Delete and Backspace do. Locked drawings,
+    /// and every drawing while
+    /// [`DrawingManager::set_locked`](crate::drawings::DrawingManager::set_locked) locks them all,
     /// stay selected and in place, and
     /// [`ChartEvent::LockedDrawingsKept`](super::ChartEvent::LockedDrawingsKept) reports how many,
     /// so the host can tell the user why. Drawings whose user edits are off also stay selected
@@ -656,21 +658,24 @@ impl Chart {
         self.delete_drawings_keeping_locked(&ids);
     }
 
-    /// Deletes the drawings in `ids` as one undo step, keeping the locked ones, and reports how
+    /// Deletes the drawings in `ids` as one undo step. Locked drawings, and every drawing while
+    /// [`DrawingManager::set_locked`](crate::drawings::DrawingManager::set_locked) locks them all,
+    /// stay selected and in place. Reports how
     /// many it kept with [`ChartEvent::LockedDrawingsKept`](super::ChartEvent::LockedDrawingsKept).
     /// Drawings whose user edits are off also stay selected and in place, and are not counted.
     pub(crate) fn delete_drawings_keeping_locked(&mut self, ids: &[usize]) {
+        let all_locked = self.drawings.is_locked();
         let kept = self
             .drawings
             .drawings
             .iter()
-            .filter(|d| d.locked && d.user_edit_enabled && ids.contains(&d.id))
+            .filter(|d| (d.locked || all_locked) && d.user_edit_enabled && ids.contains(&d.id))
             .count();
         let ids: Vec<_> = self
             .drawings
             .drawings
             .iter()
-            .filter(|d| d.user_edit_enabled && ids.contains(&d.id))
+            .filter(|d| self.drawings.accepts_user_edits(d) && ids.contains(&d.id))
             .map(|d| d.id)
             .collect();
         self.drawings.delete_drawings(&ids);
@@ -852,13 +857,15 @@ mod tests {
         frame(&ctx, &mut chart, 0.0, vec![]);
         let map = chart.get_chart_mapping();
         let plot = chart.last_rendered_price_rect;
+        // Unequal scale margins put the pane centre away from the data's midpoint.
+        let centre_price = map.y_to_price(plot.center().y);
         let over = pos2(map.idx_to_x(30), map.price_to_y(16.0));
         let study = &chart.last_rendered_indicator_panes[0];
         let study = pos2(study.mapping.idx_to_x(30), study.chart_rect.center().y);
         for (time, pointer, at, expected) in [
             (0.1, Event::PointerMoved(over), over, 16.0),
-            (0.2, Event::PointerMoved(study), plot.center(), 15.0),
-            (0.3, Event::PointerGone, plot.center(), 15.0),
+            (0.2, Event::PointerMoved(study), plot.center(), centre_price),
+            (0.3, Event::PointerGone, plot.center(), centre_price),
         ] {
             frame(&ctx, &mut chart, time, vec![pointer]);
             chart.drain_events().for_each(drop);

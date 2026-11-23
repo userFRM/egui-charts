@@ -6,8 +6,8 @@
 use super::model::ReplayProgress;
 use crate::icons::icons;
 use crate::localization as l10n;
-use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
+use crate::tokens::DESIGN_TOKENS;
 use egui::{Response, RichText, Sense, Ui, Vec2, Widget};
 
 /// Replay status for the indicator
@@ -105,7 +105,7 @@ impl<'a> Widget for ReplayStatusIndicator<'a> {
 
                     // Replay indicator - icon + text
                     ui.add(icons::MEDIA_PLAY.as_image_tinted(
-                        Vec2::splat(icon_sizes::STATUS_INDICATOR),
+                        Vec2::splat(DESIGN_TOKENS.sizing.icon_xxs),
                         theme.ui.warning,
                     ));
                     ui.label(
@@ -154,7 +154,7 @@ impl<'a> Widget for ReplayStatusIndicator<'a> {
                     // Paused indicator - icon + text
                     ui.add(
                         icons::MEDIA_PAUSE
-                            .as_image_tinted(Vec2::splat(icon_sizes::STATUS_INDICATOR), muted),
+                            .as_image_tinted(Vec2::splat(DESIGN_TOKENS.sizing.icon_xxs), muted),
                     );
                     ui.label(
                         RichText::new(l10n::text(ui.ctx(), "Paused"))
@@ -181,7 +181,7 @@ impl<'a> Widget for ReplayStatusIndicator<'a> {
 
                     // Complete indicator - icon + text
                     ui.add(icons::SUCCESS.as_image_tinted(
-                        Vec2::splat(icon_sizes::STATUS_INDICATOR),
+                        Vec2::splat(DESIGN_TOKENS.sizing.icon_xxs),
                         theme.ui.success,
                     ));
                     ui.label(

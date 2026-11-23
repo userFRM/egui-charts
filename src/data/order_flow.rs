@@ -10,6 +10,15 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ops::RangeBounds;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+#[cfg(all(feature = "widget", feature = "studies"))]
+mod checkpoint;
+#[cfg(all(feature = "widget", feature = "studies"))]
+pub(crate) use checkpoint::{PackedTradeRate, RateGuard};
+#[cfg(feature = "widget")]
+mod footprint_checkpoint;
+#[cfg(feature = "widget")]
+pub(crate) use footprint_checkpoint::{FootprintGuard, PackedFootprintInput};
+
 /// Fixed stream aggregation performed before a feed coalesces its updates for painting.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -60,12 +69,16 @@ pub enum OrderFlowKind {
         reversal: bool,
     },
     /// Buy minus sell volume per bar, counting only executions whose size lies in each of three
-    /// inclusive `[min, max]` ranges, all from the same trades. A range with `min > max`
-    /// matches nothing; executions of unknown side count for no range. With
-    /// [`OrderFlowInput::with_size_basis`] a range can test the combined size of each
-    /// execution's aggressive order instead.
+    /// ranges, all from the same trades. A range `[min, limit]` includes its smallest size `min`
+    /// and excludes its `limit`, so ranges such as `[0.0, 10.0]` and `[10.0, 100.0]` meet at 10
+    /// without a gap or an overlap and count an execution of 10 in the second. A limit of
+    /// `f64::MAX` has no upper bound. The ranges are independent: an execution counts in every
+    /// range that holds its size, and a range with `min >= limit` matches nothing. Executions of
+    /// unknown side count for no range. With [`OrderFlowInput::with_size_basis`] a range can test
+    /// the combined size of each execution's aggressive order instead.
     SizeDelta {
-        /// Inclusive size ranges, one per output.
+        /// Size ranges `[min, limit]`, one per output: `min` is counted and `limit` is not,
+        /// except that a limit of `f64::MAX` counts every larger size.
         ranges: [[f64; 2]; 3],
     },
     /// Total volume and buy minus sell volume per bar, which a study sums over `bars` bars.
@@ -626,7 +639,14 @@ impl OrderFlowInput {
     /// instead of an unfiltered one. Other aggregations ignore it. A filter that accepts every
     /// order is the same as none.
     pub fn with_order_filter(self, filter: OrderFilter) -> Self {
-        self.state().filter = (filter != OrderFilter::default()).then_some(filter);
+        {
+            let mut state = self.state();
+            let filter = (filter != OrderFilter::default()).then_some(filter);
+            if state.filter != filter {
+                state.filter = filter;
+                state.checkpoint_state_changed();
+            }
+        }
         self
     }
 
@@ -641,8 +661,9 @@ impl OrderFlowInput {
             let mut state = self.state();
             if state.basis != basis {
                 state.pending = PendingParts::default();
+                state.basis = basis;
+                state.checkpoint_state_changed();
             }
-            state.basis = basis;
         }
         self
     }
@@ -722,6 +743,7 @@ impl OrderFlowInput {
             return;
         }
         state.tick_size = tick_size;
+        state.checkpoint_state_changed();
         if state.footprint.take().is_some() {
             state.changes.clear();
             state.revision = state.revision.wrapping_add(1);
@@ -764,18 +786,13 @@ impl OrderFlowInput {
     #[cfg(feature = "widget")]
     pub(crate) fn copy_footprint(&self, target: &mut Footprint, since: u64) -> u64 {
         let state = self.state();
-        if state.revision != since {
-            let from = if state.restart_revision() > since {
-                None
-            } else {
-                state
-                    .changes
-                    .iter()
-                    .find(|(_, changed)| **changed > since)
-                    .map(|(time, _)| *time)
-            };
-            if let Some(flow) = &state.footprint {
-                target.copy_trade_bars(flow.view(), from);
+        if state.revision != since
+            && let Some(flow) = &state.footprint
+        {
+            if since > state.revision || state.restart_revision() > since {
+                target.copy_trade_bars(flow.view(), None);
+            } else if let Some((&open, _)) = state.changes.iter().find(|(_, rev)| **rev > since) {
+                target.copy_trade_bars(flow.view(), Some(open));
             }
         }
         state.revision
@@ -972,16 +989,21 @@ impl OrderFlowInput {
         state.discard_paged_rate();
         if matches!(state.source, Source::Footprint) {
             state.push_footprint(clock, trade, Some((open, size)));
+            if state.trade_bars.forming.replace(open) != Some(open) {
+                state.checkpoint_state_changed();
+            }
         } else {
             state.add_trade(trade, open, size, first);
+            state.trade_bars.forming = Some(open);
         }
-        state.trade_bars.forming = Some(open);
     }
 
     pub(crate) fn set_trade_bar(&self, open: DateTime<Utc>) {
         let mut state = self.state();
         state.discard_paged_rate();
-        state.trade_bars.forming = Some(open);
+        if state.trade_bars.forming.replace(open) != Some(open) {
+            state.checkpoint_state_changed();
+        }
     }
 
     /// Leaves out queued executions that cannot be allocated again, as after a store loss.
@@ -1029,7 +1051,10 @@ impl OrderFlowInput {
     /// the sink allocated to before. Sources it does not rebuild keep their values.
     #[cfg(feature = "widget")]
     pub(crate) fn forget_trade_bar(&self) {
-        self.state().trade_bars.forming = None;
+        let mut state = self.state();
+        if state.trade_bars.forming.take().is_some() {
+            state.checkpoint_state_changed();
+        }
     }
 
     /// Expires rolling rates and movement during an idle part of a bar with stream data.
@@ -1208,6 +1233,7 @@ impl OrderFlowInput {
                     flow.live.trade_bars = bars.clone();
                 }
                 state.trade_bars = bars;
+                state.checkpoint_state_changed();
             } else if trade_based && lost.is_some() {
                 // After a loss the oldest live execution held need not open a chart bar: without
                 // the original live anchor, take the sink's allocations, of queued executions too.
@@ -1245,6 +1271,7 @@ impl OrderFlowInput {
             {
                 let mut state = self.state();
                 let lost = lost.max(left_out);
+                state.checkpoint_state_changed();
                 state.window.lost_until = lost;
                 state.instant.lost_until = lost;
                 state.extremes.lost_until = lost;
@@ -1260,6 +1287,10 @@ impl OrderFlowInput {
                     let first = previous.is_none_or(|previous| !std::ptr::eq(previous, trade));
                     state.add_trade(trade, open, size, first);
                     previous = Some(trade);
+                }
+                if previous.is_none() {
+                    // The grouping changes even when the rebuild had no rows to `finish`.
+                    state.checkpoint_state_changed();
                 }
                 state.trade_bars = bars;
             } else if !trade_based || lost.is_none() {
@@ -1289,6 +1320,7 @@ impl OrderFlowInput {
                 state.pending = PendingParts::default();
                 state.changes.retain(|open, _| *open > cut);
                 state.cut = Some(cut);
+                state.checkpoint_state_changed();
             }
         }
         if let Some(now) = as_of {
@@ -1801,10 +1833,16 @@ impl OrderFlowInput {
     }
 }
 
-/// `size` signed by the execution's side when `measured`, its own or its order's size,
-/// lies in `min..=max`; zero for an unknown side or a size outside the range.
-fn signed_size(trade: &Tick, measured: f64, min: f64, max: f64, size: f64) -> f64 {
-    if !(min..=max).contains(&measured) {
+/// Whether `size` lies in a Multi-Range Delta range: from its smallest size, included, up to
+/// its limit, excluded, or without an upper bound when the limit is `f64::MAX`.
+fn in_size_range([min, limit]: [f64; 2], size: f64) -> bool {
+    min <= size && (size < limit || limit == f64::MAX)
+}
+
+/// `size` signed by the execution's side when `counted`, which says whether its own or its
+/// order's size lies in the range; zero for an unknown side or a size outside the range.
+fn signed_size(trade: &Tick, counted: bool, size: f64) -> f64 {
+    if !counted {
         return 0.0;
     }
     match trade.side {
@@ -1825,6 +1863,42 @@ fn balance([bid, ask]: [f64; 2]) -> f64 {
 }
 
 impl State {
+    /// A replay plan observes the source settings and allocation, even when no row changes.
+    fn checkpoint_state_changed(&mut self) {
+        #[cfg(feature = "widget")]
+        if matches!(self.source, Source::Footprint)
+            || cfg!(feature = "studies")
+                && matches!(self.source, Source::Fixed(OrderFlowKind::TradeRate { .. }))
+        {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    /// Neither supported checkpoint owns a book, a time placement or pending order fills.
+    /// A rate rebuild may mark all the unused auxiliary windows with the same loss.
+    #[cfg(feature = "widget")]
+    fn plain_checkpoint_state(&self) -> bool {
+        self.trade_bars.is_plain()
+            && self.placement.is_empty()
+            && self.filter.is_none()
+            && self.books.is_empty()
+            && self.book_rows == 0
+            && self.pending.sizes.checkpoint_empty()
+            && self.pending.parts.is_empty()
+            && self.pending.rows.is_empty()
+            && self.inside.is_none()
+            && self.last_price == [None; 2]
+            && self.extremes.high.is_empty()
+            && self.extremes.low.is_empty()
+            && self.extremes.now.is_none()
+            && self.distinct.iter().all(|d| {
+                d.events.is_empty()
+                    && d.counts.is_empty()
+                    && d.now.is_none()
+                    && d.lost_until == self.extremes.lost_until
+            })
+    }
+
     /// The revision from which readers start over: the latest reset or drop.
     #[cfg(any(feature = "studies", feature = "widget"))]
     fn restart_revision(&self) -> u64 {
@@ -1845,9 +1919,7 @@ impl State {
         };
         // Which size ranges count a size: three for SizeDelta, the first for FilteredCvd.
         let counted = |size: f64| match kind {
-            OrderFlowKind::SizeDelta { ranges } => {
-                ranges.map(|[min, max]| (min..=max).contains(&size))
-            }
+            OrderFlowKind::SizeDelta { ranges } => ranges.map(|range| in_size_range(range, size)),
             OrderFlowKind::FilteredCvd { min, max } => [(min..=max).contains(&size), false, false],
             _ => [false; 3],
         };
@@ -1974,22 +2046,18 @@ impl State {
             }
             OrderFlowKind::SizeDelta { ranges } => {
                 let mut row = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
-                for (sum, [min, max]) in row.iter_mut().zip(ranges) {
-                    *sum += signed_size(trade, measured, min, max, size);
+                for (sum, range) in row.iter_mut().zip(ranges) {
+                    *sum += signed_size(trade, in_size_range(range, measured), size);
                 }
                 row
             }
             OrderFlowKind::FlowSum { .. } => {
                 let old = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
-                [
-                    old[0] + size,
-                    old[1] + signed_size(trade, trade.size, 0.0, f64::MAX, size),
-                    0.0,
-                ]
+                [old[0] + size, old[1] + signed_size(trade, true, size), 0.0]
             }
             OrderFlowKind::FilteredCvd { min, max } => {
                 let old = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
-                let delta = old[0] + signed_size(trade, measured, min, max, size);
+                let delta = old[0] + signed_size(trade, (min..=max).contains(&measured), size);
                 [delta, old[1].max(delta), old[2].min(delta)]
             }
             OrderFlowKind::PriceRange { seconds } => {
@@ -2001,6 +2069,7 @@ impl State {
         let latest = self.last.map_or(trade.ts, |t| t.max(trade.ts));
         if self.cut.is_some_and(|cut| open <= cut) {
             self.last = Some(latest);
+            self.checkpoint_state_changed();
             return;
         }
         self.bars.insert(open, (row, 0));
@@ -2145,7 +2214,8 @@ impl State {
         let Some(tick_size) = self.tick_size else {
             return;
         };
-        if self.footprint.is_none() {
+        let new_source = self.footprint.is_none();
+        if new_source {
             let Ok(mut flow) = Footprint::new(clock.clone(), tick_size, 1) else {
                 return;
             };
@@ -2167,11 +2237,10 @@ impl State {
         {
             return;
         }
+        let trade_based = clock.timeframe().is_some_and(|tf| tf.is_trade_based());
         let changed = match part {
             Some((open, _)) => Some(open),
-            None if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) => {
-                flow.live.bars().last_key_value().map(|(open, _)| *open)
-            }
+            None if trade_based => flow.live.bars().last_key_value().map(|(open, _)| *open),
             None => Some(self.placement.open(clock, trade.ts)),
         };
         let result = match part {
@@ -2179,6 +2248,11 @@ impl State {
             None => flow.live.push(trade),
         };
         if !matches!(result, Ok(true)) {
+            // Only trade-based clocks keep grouping state for the next execution
+            // when a fill adds no footprint row.
+            if trade_based && (new_source || (result.is_ok() && part.is_none())) {
+                self.checkpoint_state_changed();
+            }
             return;
         }
         flow.seal();
@@ -2190,7 +2264,7 @@ impl State {
             .bars()
             .last_key_value()
             .map_or(trade.ts, |(open, _)| *open);
-        if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+        if trade_based {
             self.trade_bars.forming = Some(open);
         }
         self.finish(latest, changed.or(first).unwrap_or(open));

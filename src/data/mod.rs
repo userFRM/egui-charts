@@ -72,8 +72,6 @@ mod targets;
 mod volume_profile;
 pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
 pub use financials::{CompanyFinancials, FinancialPage, FinancialRow};
-#[cfg(feature = "widget")]
-pub(crate) use footprint::FootprintState;
 #[cfg(any(feature = "widget", feature = "studies"))]
 pub use footprint::FootprintView;
 #[cfg(any(feature = "studies", feature = "detectors"))]
@@ -81,11 +79,13 @@ pub(crate) use footprint::meets_threshold;
 #[cfg(any(feature = "studies", feature = "widget"))]
 pub(crate) use footprint::side_delta;
 pub use footprint::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
+#[cfg(feature = "widget")]
+pub(crate) use footprint::{FootprintState, PackedFootprintState};
 pub use footprint_view::{FootprintBarView, FootprintBars, FootprintRows, FootprintSource};
 pub use market::{
     CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
-    NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,
-    ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
+    NewsStory, ScreenerColumn, ScreenerColumnKind, ScreenerColumnSet, ScreenerCondition,
+    ScreenerFilter, ScreenerQuery, ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
 };
 pub use option_chain::{
     OptionChain, OptionChainQuery, OptionChainSink, OptionExposure, OptionExposureHandle,
@@ -97,9 +97,11 @@ pub(crate) use options_volume::OptionsVolumeSource;
 pub use options_volume::{
     OptionsVolume, OptionsVolumeQuery, OptionsVolumeReader, OptionsVolumeSink,
 };
+#[cfg(any(feature = "studies", feature = "drawings"))]
+pub(crate) use volume_profile::price_span;
 #[cfg(feature = "studies")]
 pub(crate) use volume_profile::{
-    DevelopingVolume, ExposureProfile, StrikeExposure, grid_row, price_span, whole_tick_rows,
+    DevelopingVolume, ExposureProfile, OptionWalls, StrikeExposure, grid_row, whole_tick_rows,
 };
 #[cfg_attr(
     not(any(test, feature = "widget")),
@@ -112,6 +114,10 @@ pub use inbox::{
     aggregate_trades_with_tick_size,
 };
 pub use order_flow::{BarBook, OrderFlowBars, OrderFlowFootprints, OrderFlowInput, OrderFlowKind};
+#[cfg(feature = "widget")]
+pub(crate) use order_flow::{FootprintGuard, PackedFootprintInput};
+#[cfg(all(feature = "widget", feature = "studies"))]
+pub(crate) use order_flow::{PackedTradeRate, RateGuard};
 pub use orders::{
     OrderEvent, OrderFilter, OrderFilterUnavailable, OrderQueue, OrderSizeTier, OrderSizeTiers,
     RestingOrder,
@@ -121,7 +127,7 @@ pub use replay::{MarketEvent, ReplayClock, ReplayDriver, ReplayEvent};
 #[cfg(feature = "studies")]
 pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session, resample_with_session_hours};
-pub use study::{StudyData, StudyDataRequest};
+pub use study::{StudyChart, StudyData, StudyDataRequest};
 pub use targets::PriceTargets;
 pub use trades::{CombinedTrade, ConsumedOrder, SizeBasis, combine_trades};
 pub use volume_profile::{
@@ -401,16 +407,17 @@ pub trait Datafeed: MaybeSend + 'static {
         reply.send(Err(FeedError::NotSupported));
     }
 
-    /// Up to `query.limit` stories, newest first, for the news and highlights panels. Answer
-    /// [`FeedError::NotSupported`] (the default) to have the panels say the feed has none.
+    /// Up to `query.limit` stories, newest first, for the news, highlights and symbol details
+    /// panels. Answer [`FeedError::NotSupported`] (the default) to have the news and highlights
+    /// panels say the feed has none.
     fn news(&self, query: NewsQuery, reply: Reply<Vec<NewsStory>>) {
         let _ = query;
         reply.send(Err(FeedError::NotSupported));
     }
 
     /// The events of one calendar that pass `query`'s filters, in time order, for the calendar
-    /// panel. Answer [`FeedError::NotSupported`] (the default) to have the panel say the feed has
-    /// none.
+    /// panel and the symbol details' Upcoming events. Answer [`FeedError::NotSupported`] (the
+    /// default) to have the calendar panel say the feed has none.
     fn calendar(&self, query: CalendarQuery, reply: Reply<Vec<CalendarEvent>>) {
         let _ = query;
         reply.send(Err(FeedError::NotSupported));
@@ -426,8 +433,8 @@ pub trait Datafeed: MaybeSend + 'static {
     }
 
     /// Up to `query.limit` symbols of the hotlist `query.list`, in the list's order, for the
-    /// hotlists panel. Answer [`FeedError::NotSupported`] (the default) to have the panel say the
-    /// feed has none.
+    /// hotlists panel, only of `query.exchanges` and `query.countries` when they are not empty.
+    /// Answer [`FeedError::NotSupported`] (the default) to have the panel say the feed has none.
     fn hotlist(&self, query: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
         let _ = query;
         reply.send(Err(FeedError::NotSupported));

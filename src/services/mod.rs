@@ -59,7 +59,7 @@ pub use alert_engine::AlertEngine;
 pub use alert_evaluator::AlertEvaluator;
 #[cfg(feature = "alert-engine")]
 pub use alert_feed::{AlertData, AlertFeed};
-pub use alerts::{AlertEvent, Alerts};
+pub use alerts::{AlertEvent, AlertNotice, Alerts};
 pub use broker::{AccountEvent, Broker, HistoryKind, HistoryPage, HistoryRequest};
 pub use chats::{
     ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, NewChatRoom, NewChatRoomKind,
@@ -87,6 +87,6 @@ pub use search::{ExpressionError, SymbolExpression, SymbolQuery, SymbolSearch};
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub use settings::{MarketHeatmapSelection, SettingsStore, UserSettings};
-pub use sharing::{ShareKind, ShareLink, ShareOffer, Sharing};
+pub use sharing::{ShareAccess, ShareKind, ShareLink, ShareOffer, Sharing};
 pub use signals::{SignalEvent, Signals};
 pub use storage::{ConflictChoice, Revision, SaveOutcome, Storage, StoreKind, Versioned};

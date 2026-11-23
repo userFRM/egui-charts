@@ -19,7 +19,7 @@ use super::{
 use crate::{
     data::StudyDataRequest,
     localization as l10n,
-    model::{Bar, Signal, StrategyReport, Timeframe},
+    model::{Bar, BarClock, Signal, StrategyReport, Timeframe},
     strategies::{Backtest, BacktestSettings, OrderSize, Strategy, StrategyFactory},
     studies::{InputValue, StudyInput},
     theme::ThemeExt,
@@ -27,7 +27,8 @@ use crate::{
 };
 
 /// History needed for one run. Answer with [`StrategyTester::set_history`],
-/// [`StrategyTester::set_history_with_rates`] when it names exchange rates, or
+/// [`StrategyTester::set_history_with_rates`] when it names exchange rates,
+/// [`StrategyTester::set_history_with_calculation`] when it names calculation bars, or
 /// [`StrategyTester::history_failed`]; the library never fetches it itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -44,6 +45,10 @@ pub struct StrategyHistoryRequest {
     pub end: Option<DateTime<Utc>>,
     /// Finer fill interval, or `None` for chart-bar fills.
     pub lower_timeframe: Option<Timeframe>,
+    /// The interval the strategy calculates on besides the chart's, or `None`. Supply the
+    /// instrument's own bars from the one containing `start`, or earlier for warm-up, through
+    /// [`StrategyTester::set_history_with_calculation`].
+    pub calculation_timeframe: Option<Timeframe>,
     /// Exchange rates from the instrument's currency into the account currency, when they
     /// differ. Answer with [`StrategyTester::set_history_with_rates`]; without them the run
     /// reports them unavailable.
@@ -54,7 +59,8 @@ impl StrategyHistoryRequest {
     /// The request `id` for `symbol`'s `timeframe` bars from `start`, filled on chart bars in
     /// the instrument's currency. Assign [`lower_timeframe`](Self::lower_timeframe) for finer
     /// fills, [`end`](Self::end) to bound the run and [`exchange_rate`](Self::exchange_rate)
-    /// for another account currency.
+    /// for another account currency, and [`calculation_timeframe`](Self::calculation_timeframe)
+    /// for the bars a strategy calculates on.
     ///
     /// ```
     /// use egui_charts::model::Timeframe;
@@ -80,16 +86,18 @@ impl StrategyHistoryRequest {
             start,
             end: None,
             lower_timeframe: None,
+            calculation_timeframe: None,
             exchange_rate: None,
         }
     }
 }
 
-/// Host intents from the tester. Replace the previous run's markers when a run completes.
+/// Host intents from the tester. Replace the previous run's markers when a run completes or continues.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum StrategyTesterAction {
-    /// Fetch chart history and, when requested, finer fill bars and exchange rates for this run.
+    /// Fetch chart history and, when requested, finer fill bars, calculation bars and exchange
+    /// rates for this run.
     RequestHistory(StrategyHistoryRequest),
     /// Replace markers for the given scope with these entries and exits, including an empty list.
     Signals {
@@ -102,6 +110,22 @@ pub enum StrategyTesterAction {
     },
     /// Navigation or export intent from the report view.
     Report(StrategyReportAction),
+    /// Start a live run with these inputs and settings on the chart's symbol and interval,
+    /// continue it with [`Backtest::update`], and open the alert dialog on its Strategy fills,
+    /// listing the run in [`AlertDialog::strategy_runs`](crate::ui::dialogs::AlertDialog::strategy_runs).
+    /// The host supplies instrument currency, exchange rates and calculation bars when needed.
+    AddAlert {
+        /// Strategy name in the tester's factory.
+        strategy: String,
+        /// Inputs by id, as `Strategy::set_input` takes them.
+        inputs: Vec<(String, InputValue)>,
+        /// Account and execution settings of the form.
+        settings: BacktestSettings,
+        /// Instrument of the tester's chart.
+        symbol: String,
+        /// Decision interval of the tester's chart.
+        timeframe: Timeframe,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -134,11 +158,77 @@ struct Trial {
 }
 
 enum JobOutput {
-    Report(StrategyReport, Vec<Bar>),
+    Report(Box<StrategyReport>, Box<Continuation>),
     Trials(Vec<Trial>, Vec<(&'static str, usize)>),
 }
 
 type Job = Pin<Box<dyn Future<Output = Result<JobOutput, &'static str>>>>;
+
+/// The completed single run's bars, retained to compare against later chart frames.
+struct Continuation {
+    /// Retained execution state and the strategy that produced it.
+    engine: Backtest,
+    strategy: Box<dyn Strategy>,
+    /// Finer fill history and its requested interval, if used.
+    lower: Vec<Bar>,
+    lower_timeframe: Option<Timeframe>,
+    /// Host history first, then chart bars, oldest first.
+    bars: Vec<Bar>,
+    /// Leading bars supplied through `set_history`.
+    host: usize,
+    /// Chart bars at or before the last host bar when the run completed.
+    chart: Vec<Bar>,
+}
+
+impl Continuation {
+    /// Chart bars after host history, and whether the captured chart bars within that history
+    /// are unchanged. Chart bars that close later within it are host bars the run already used.
+    fn tail<'a>(&self, bars: &'a [Bar]) -> (&'a [Bar], bool) {
+        let split = self.host.checked_sub(1).map(|last| self.bars[last].time);
+        let cut = bars.partition_point(|bar| split.is_some_and(|time| bar.time <= time));
+        let kept = bars[..cut]
+            .get(..self.chart.len())
+            .is_some_and(|captured| crate::strategies::same_bars(captured, &self.chart));
+        (&bars[cut..], kept)
+    }
+}
+
+impl std::fmt::Debug for Continuation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Continuation")
+            .field("bars", &self.bars.len())
+            .field("host", &self.host)
+            .field("chart", &self.chart.len())
+            .field("lower", &self.lower.len())
+            .field("lower_timeframe", &self.lower_timeframe)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Resume the retained engine cooperatively, returning it with its updated report.
+fn continue_job(
+    mut follow: Box<Continuation>,
+    bars: Vec<Bar>,
+    lower: Vec<Bar>,
+    completed: Rc<Cell<usize>>,
+) -> Job {
+    Box::pin(async move {
+        let Continuation {
+            engine, strategy, ..
+        } = &mut *follow;
+        engine
+            .update_closed_async(strategy.as_mut(), &bars, &lower)
+            .await;
+        let report = engine
+            .report()
+            .cloned()
+            .expect("an update leaves a live report");
+        follow.bars = bars;
+        follow.lower = lower;
+        completed.set(1);
+        Ok(JobOutput::Report(Box::new(report), follow))
+    })
+}
 
 /// Counts one trial skipped for `reason`, keeping reasons in first-seen order.
 fn skip(skipped: &mut Vec<(&'static str, usize)>, reason: &'static str) {
@@ -155,15 +245,31 @@ fn skip(skipped: &mut Vec<(&'static str, usize)>, reason: &'static str) {
 /// web builds. Host strategy preparation and callbacks must be bounded, as documented on
 /// [`Backtest::run_async`]. Edits cancel pending work and retain the previous report as stale.
 /// History replies are tied to a request id and discarded after an edit or scope change.
+///
+/// A completed Run retains its engine and strategy. More closed chart bars continue its report,
+/// returning [`StrategyTesterAction::Signals`] with updated fills; the result equals a fresh Run
+/// over that history. A corrected processed bar rebuilds it. Shorter history, or a changed or
+/// missing chart bar at or before the last host-supplied bar, marks it stale and ends
+/// continuation; chart bars that close later within host history are already part of the run.
+/// Runs using finer fills, exchange rates or calculation bars request those data for new bars
+/// and stay stale until answered through [`Self::set_history`], [`Self::set_history_with_rates`]
+/// or [`Self::set_history_with_calculation`]. Only the reply's finer bars, rates and calculation
+/// bars are used. Optimisation results do not continue. Form edits, a scope
+/// change, Run and [`Self::set_report`] end continuation; optimisation ranges and requests leave
+/// it running. Continued reports keep the report tab, comparison toggle and selected entry when
+/// it remains, as [`Self::selected_trade`] reports.
+///
 /// An optimisation skips combinations the strategy refuses as a whole, and runs that lack exchange
 /// rates, and shows how many, with the reason. Pass the chart instrument's currency to
-/// [`Self::set_instrument_currency`]. Give each tester its own egui id scope.
+/// [`Self::set_instrument_currency`] and its calendar to [`Self::set_bar_clock`]. Give each
+/// tester its own egui id scope.
 pub struct StrategyTester {
     factory: Arc<StrategyFactory>,
     name: String,
     inputs: Vec<StudyInput>,
     settings: BacktestSettings,
     instrument_currency: Option<String>,
+    bar_clock: Option<BarClock>,
     undo_settings: Vec<BacktestSettings>,
     redo_settings: Vec<BacktestSettings>,
     settings_edit: Option<BacktestSettings>,
@@ -179,6 +285,11 @@ pub struct StrategyTester {
     revision: u64,
     pending: Option<(StrategyHistoryRequest, bool)>,
     job: Option<Job>,
+    follow: Option<Box<Continuation>>,
+    /// Owns the continuation until the job completes.
+    follow_job: Option<Job>,
+    /// Host data requested for a captured continuation history.
+    follow_request: Option<(StrategyHistoryRequest, Box<Continuation>, Vec<Bar>)>,
     completed: Rc<Cell<usize>>,
     total: usize,
     ranges: Vec<Range>,
@@ -196,6 +307,7 @@ impl std::fmt::Debug for StrategyTester {
             .field("inputs", &self.inputs)
             .field("settings", &self.settings)
             .field("instrument_currency", &self.instrument_currency)
+            .field("bar_clock", &self.bar_clock)
             .field("undo_settings", &self.undo_settings)
             .field("redo_settings", &self.redo_settings)
             .field("settings_edit", &self.settings_edit)
@@ -210,6 +322,11 @@ impl std::fmt::Debug for StrategyTester {
             .field("scope", &self.scope)
             .field("revision", &self.revision)
             .field("pending", &self.pending)
+            .field("follow", &self.follow)
+            .field(
+                "follow_request",
+                &self.follow_request.as_ref().map(|(request, ..)| request),
+            )
             .field("completed", &self.completed)
             .field("total", &self.total)
             .field("ranges", &self.ranges)
@@ -249,6 +366,7 @@ impl StrategyTester {
             ranges,
             settings,
             instrument_currency: None,
+            bar_clock: None,
             undo_settings: Vec::new(),
             redo_settings: Vec::new(),
             settings_edit: None,
@@ -264,6 +382,9 @@ impl StrategyTester {
             revision: 0,
             pending: None,
             job: None,
+            follow: None,
+            follow_job: None,
+            follow_request: None,
             completed: Rc::new(Cell::new(0)),
             total: 0,
             trials: Vec::new(),
@@ -342,6 +463,16 @@ impl StrategyTester {
         }
     }
 
+    /// Set the instrument's calendar, including its zone and exchange session, as used to build
+    /// the supplied history. Runs place other calculation intervals on this calendar, as
+    /// [`Backtest::bar_clock`] describes. A change makes the report stale.
+    pub fn set_bar_clock(&mut self, clock: BarClock) {
+        if self.bar_clock.as_ref() != Some(&clock) {
+            self.bar_clock = Some(clock);
+            self.changed();
+        }
+    }
+
     /// Restore the previous account and execution settings, retaining the report as stale.
     pub fn undo_settings(&mut self) -> bool {
         let Some(settings) = self.undo_settings.pop() else {
@@ -376,7 +507,7 @@ impl StrategyTester {
         self.changed();
     }
 
-    /// Whether the report no longer describes the current form or chart scope.
+    /// Whether the report no longer describes the current form, chart scope or chart bars.
     pub fn is_stale(&self) -> bool {
         self.stale
     }
@@ -384,6 +515,13 @@ impl StrategyTester {
     /// The last completed or host-supplied report.
     pub fn report(&self) -> Option<&StrategyReport> {
         self.report.report()
+    }
+
+    /// Index into the report's trades of the trade selected in its list. Continued runs keep it
+    /// on the same entry, so a host highlighting that trade reads it again after
+    /// [`StrategyTesterAction::Signals`].
+    pub fn selected_trade(&self) -> Option<usize> {
+        self.report.selected
     }
 
     /// Replace or clear a host report, cancelling pending work. A host report is not a run of the
@@ -401,7 +539,9 @@ impl StrategyTester {
 
     /// Supply both histories for the exact pending request. A superseded reply is rejected.
     /// Empty finer history is refused rather than silently using chart-bar fills.
-    /// A request naming exchange rates then reports them unavailable.
+    /// A request naming exchange rates then reports them unavailable. A continuation uses only
+    /// `lower` from the reply and the chart bars received by [`Self::show`]. A request naming a
+    /// calculation interval needs [`Self::set_history_with_calculation`].
     pub fn set_history(
         &mut self,
         request: &StrategyHistoryRequest,
@@ -413,7 +553,9 @@ impl StrategyTester {
 
     /// Supply both histories and the exchange rates the request names, as [`Self::set_history`]
     /// does. Rates are ignored when the request names none; empty rates for a request that names
-    /// them report the rates unavailable.
+    /// them report the rates unavailable. Continuation replies replace finer bars and rates from
+    /// the requested start onward, retaining earlier history and using the captured chart bars.
+    /// A request naming a calculation interval needs [`Self::set_history_with_calculation`].
     pub fn set_history_with_rates(
         &mut self,
         request: &StrategyHistoryRequest,
@@ -421,25 +563,79 @@ impl StrategyTester {
         lower: Vec<Bar>,
         rates: Vec<Bar>,
     ) -> Result<(), &'static str> {
+        self.set_history_with_calculation(request, bars, lower, rates, Vec::new())
+    }
+
+    /// Supply the histories, rates and calculation bars named by the pending request. As with
+    /// [`Self::set_history_with_rates`], superseded replies are rejected. Empty requested
+    /// calculation history is refused; calculation bars are ignored when none were requested.
+    /// A continuation replaces held calculation bars from the reply's first bar onward, so the
+    /// reply starts with the bar containing the requested `start`.
+    pub fn set_history_with_calculation(
+        &mut self,
+        request: &StrategyHistoryRequest,
+        bars: Vec<Bar>,
+        lower: Vec<Bar>,
+        rates: Vec<Bar>,
+        calculation: Vec<Bar>,
+    ) -> Result<(), &'static str> {
+        if self
+            .follow_request
+            .as_ref()
+            .is_some_and(|(pending, ..)| pending == request)
+        {
+            if bars.is_empty()
+                || (request.lower_timeframe.is_some() && lower.is_empty())
+                || (request.calculation_timeframe.is_some() && calculation.is_empty())
+            {
+                return Err("Requested history is empty");
+            }
+            let (_, mut follow, bars) = self.follow_request.take().expect("a matching request");
+            follow.lower.retain(|bar| bar.time < request.start);
+            follow
+                .lower
+                .extend(lower.into_iter().filter(|bar| bar.time >= request.start));
+            if request.exchange_rate.is_some() {
+                follow
+                    .engine
+                    .exchange_rates
+                    .retain(|bar| bar.time < request.start);
+                follow
+                    .engine
+                    .exchange_rates
+                    .extend(rates.into_iter().filter(|bar| bar.time >= request.start));
+            }
+            if request.calculation_timeframe.is_some() {
+                // The first reply bar can update a forming calculation bar already held.
+                let first = calculation[0].time;
+                let held = &mut follow.engine.calculation_bars;
+                held.retain(|bar| bar.time < first);
+                held.extend(calculation);
+            }
+            let lower = std::mem::take(&mut follow.lower);
+            self.follow_job = Some(continue_job(follow, bars, lower, Rc::new(Cell::new(0))));
+            return Ok(());
+        }
         let Some((pending, optimise)) = &self.pending else {
             return Err("History request is no longer current");
         };
         if pending != request {
             return Err("History request is no longer current");
         }
-        if bars.is_empty() || (request.lower_timeframe.is_some() && lower.is_empty()) {
+        if bars.is_empty()
+            || (request.lower_timeframe.is_some() && lower.is_empty())
+            || (request.calculation_timeframe.is_some() && calculation.is_empty())
+        {
             return Err("Requested history is empty");
         }
         let optimise = *optimise;
         self.pending = None;
-        self.start_job(
-            &request.symbol,
-            request.timeframe,
-            bars,
-            lower,
-            rates,
-            optimise,
-        )
+        let mut engine = self.engine(&request.symbol, request.timeframe);
+        engine.exchange_rates = rates;
+        if request.calculation_timeframe.is_some() {
+            engine.calculation_bars = calculation;
+        }
+        self.start_job(engine, bars, lower, optimise, Some(request.lower_timeframe))
     }
 
     /// Show the host's failure for the exact pending request. Returns false for a late failure.
@@ -448,6 +644,16 @@ impl StrategyTester {
         request: &StrategyHistoryRequest,
         message: impl Into<String>,
     ) -> bool {
+        if self
+            .follow_request
+            .as_ref()
+            .is_some_and(|(pending, ..)| pending == request)
+        {
+            self.follow_request = None;
+            self.stale = true;
+            self.error = Some(message.into());
+            return true;
+        }
         if self
             .pending
             .as_ref()
@@ -460,8 +666,17 @@ impl StrategyTester {
         true
     }
 
+    /// An edit or scope change stops following and retains the report as stale.
     fn changed(&mut self) {
         self.stale = true;
+        self.follow = None;
+        self.follow_job = None;
+        self.follow_request = None;
+        self.cancel();
+    }
+
+    /// Cancel pending runs and optimisations, keeping the report and what it follows.
+    fn cancel(&mut self) {
         self.revision = self.revision.wrapping_add(1);
         self.pending = None;
         self.job = None;
@@ -478,13 +693,14 @@ impl StrategyTester {
         Ok(strategy)
     }
 
-    /// A single run needs the form's inputs valid together; an optimisation checks each
-    /// combination instead and skips those refused.
-    fn check_run(&self, optimise: bool) -> Result<(), &'static str> {
-        let strategy = self.configured_strategy()?;
+    /// A single run needs the form's inputs valid together on the chart's `timeframe`; an
+    /// optimisation checks each combination instead and skips those refused.
+    fn check_run(&self, timeframe: Timeframe, optimise: bool) -> Result<(), &'static str> {
+        let mut strategy = self.configured_strategy()?;
         if optimise {
             Ok(())
         } else {
+            strategy.set_timeframe(timeframe);
             strategy.validate_inputs()
         }
     }
@@ -495,30 +711,46 @@ impl StrategyTester {
             Backtest::new(&self.name, symbol, timeframe, self.settings.initial_capital);
         engine.settings = self.settings.clone();
         engine.instrument_currency = self.instrument_currency.clone();
+        engine.bar_clock = self.bar_clock.clone();
         engine
     }
 
     fn start_job(
         &mut self,
-        symbol: &str,
-        timeframe: Timeframe,
+        engine: Backtest,
         bars: Vec<Bar>,
         lower: Vec<Bar>,
-        rates: Vec<Bar>,
         optimise: bool,
+        request: Option<Option<Timeframe>>,
     ) -> Result<(), &'static str> {
+        let timeframe = engine.timeframe;
         super::properties::validate(&self.settings)?;
-        self.check_run(optimise)?;
-        let (count, axes) = if optimise {
-            optimisation::grid(&self.ranges)?
-        } else {
-            (1, Vec::new())
-        };
+        self.check_run(timeframe, optimise)?;
+        if !optimise {
+            if !bars.windows(2).all(|pair| pair[0].time < pair[1].time) {
+                return Err("Bar times must be strictly increasing");
+            }
+            let follow = Box::new(Continuation {
+                engine,
+                strategy: self.configured_strategy()?,
+                host: if request.is_some() { bars.len() } else { 0 },
+                bars: Vec::new(),
+                chart: Vec::new(),
+                lower: Vec::new(),
+                lower_timeframe: request.flatten(),
+            });
+            self.total = 1;
+            self.completed = Rc::new(Cell::new(0));
+            self.error = None;
+            self.trials.clear();
+            self.skipped.clear();
+            self.job = Some(continue_job(follow, bars, lower, self.completed.clone()));
+            return Ok(());
+        }
+        let (count, axes) = optimisation::grid(&self.ranges)?;
         let factory = self.factory.clone();
         let name = self.name.clone();
         let inputs = self.inputs.clone();
-        let mut engine = self.engine(symbol, timeframe);
-        engine.exchange_rates = rates;
         self.total = count;
         self.completed = Rc::new(Cell::new(0));
         let completed = self.completed.clone();
@@ -543,10 +775,8 @@ impl StrategyTester {
                 for input in &inputs {
                     strategy.set_input(&input.id, input.value.clone())?;
                 }
+                strategy.set_timeframe(timeframe);
                 if let Err(reason) = strategy.validate_inputs() {
-                    if !optimise {
-                        return Err(reason);
-                    }
                     skip(&mut skipped, reason);
                     completed.set(ordinal + 1);
                     continue;
@@ -559,9 +789,6 @@ impl StrategyTester {
                     .join(", ");
                 let report = engine.run_async(strategy.as_mut(), &bars, &lower).await;
                 completed.set(ordinal + 1);
-                if !optimise {
-                    return Ok(JobOutput::Report(report, bars));
-                }
                 if report.unavailable.is_some() {
                     skip(&mut skipped, "Exchange rates unavailable");
                     continue;
@@ -598,17 +825,26 @@ impl StrategyTester {
             return Err("Choose a fill interval shorter than the chart interval");
         }
         super::properties::validate(&self.settings)?;
-        self.check_run(optimise)?;
+        self.check_run(timeframe, optimise)?;
         if optimise {
             optimisation::grid(&self.ranges)?;
         }
-        let stale = self.stale;
-        self.changed();
         if optimise {
-            self.stale = stale;
+            self.cancel();
+        } else {
+            self.changed();
         }
+        let calculation = {
+            let mut strategy = self.configured_strategy()?;
+            strategy.set_timeframe(timeframe);
+            strategy.calculation_timeframe()
+        };
         let exchange_rate = self.engine(symbol, timeframe).exchange_rate_request();
-        if self.settings.start_time.is_some() || self.lower || exchange_rate.is_some() {
+        if self.settings.start_time.is_some()
+            || self.lower
+            || exchange_rate.is_some()
+            || calculation.is_some()
+        {
             let mut request = StrategyHistoryRequest::new(
                 self.revision,
                 symbol,
@@ -620,20 +856,40 @@ impl StrategyTester {
             );
             request.end = self.settings.end_time;
             request.lower_timeframe = self.lower.then_some(self.lower_timeframe);
+            request.calculation_timeframe = calculation;
             request.exchange_rate = exchange_rate;
             self.pending = Some((request.clone(), optimise));
             Ok(Some(StrategyTesterAction::RequestHistory(request)))
         } else {
             self.start_job(
-                symbol,
-                timeframe,
+                self.engine(symbol, timeframe),
                 bars.to_vec(),
                 Vec::new(),
-                Vec::new(),
                 optimise,
+                None,
             )?;
             Ok(None)
         }
+    }
+
+    fn add_alert(
+        &self,
+        symbol: &str,
+        timeframe: Timeframe,
+    ) -> Result<StrategyTesterAction, &'static str> {
+        super::properties::validate(&self.settings)?;
+        self.check_run(timeframe, false)?;
+        Ok(StrategyTesterAction::AddAlert {
+            strategy: self.name.clone(),
+            inputs: self
+                .inputs
+                .iter()
+                .map(|input| (input.id.clone(), input.value.clone()))
+                .collect(),
+            settings: self.settings.clone(),
+            symbol: symbol.into(),
+            timeframe,
+        })
     }
 
     /// Draw the form, advance pending execution by one batch and return all host intents.
@@ -679,13 +935,19 @@ impl StrategyTester {
                     egui::Button::new(l10n::text(ui.ctx(), "Run")),
                 )
                 .clicked();
+            if ui.button(l10n::text(ui.ctx(), "Add alert")).clicked() {
+                match self.add_alert(symbol, timeframe) {
+                    Ok(action) => actions.push(action),
+                    Err(error) => self.error = Some(error.into()),
+                }
+            }
             if self.stale && self.report().is_some() {
                 ui.colored_label(
                     ui.active_theme().ui.warning,
                     l10n::text(ui.ctx(), "Result is stale. Run again to update."),
                 );
             }
-            if self.pending.is_some() {
+            if self.pending.is_some() || self.follow_request.is_some() {
                 ui.label(l10n::text(ui.ctx(), "Waiting for host history"));
             }
             if self.job.is_some() || self.pending.is_some() {
@@ -733,6 +995,7 @@ impl StrategyTester {
                                 .iter()
                                 .map(|input| input.is_shown(&self.inputs))
                                 .collect();
+                            let zones = crate::ui::timeframe_toolbar::default_time_zones();
                             crate::ui_kit::FormGrid::new("strategy_inputs").show(ui, |ui| {
                                 for (input, _) in self
                                     .inputs
@@ -740,7 +1003,7 @@ impl StrategyTester {
                                     .zip(shown)
                                     .filter(|(_, shown)| *shown)
                                 {
-                                    edited |= super::inputs::show_input(ui, input, &[]);
+                                    edited |= super::inputs::show_input(ui, input, &[], &zones);
                                 }
                             });
                             if ui.button(l10n::text(ui.ctx(), "Reset inputs")).clicked() {
@@ -787,9 +1050,7 @@ impl StrategyTester {
                         }
                         Tab::Optimisation => {
                             if optimisation::show(ui, &mut self.ranges) {
-                                let stale = self.stale;
-                                self.changed();
-                                self.stale = stale;
+                                self.cancel();
                             }
                             match optimisation::grid(&self.ranges) {
                                 Ok((count, _)) => {
@@ -873,28 +1134,43 @@ impl StrategyTester {
             self.undo_settings.push(before);
             self.redo_settings.clear();
         }
+        let stale = self.stale;
+        if let Some(action) = self.follow_chart(bars) {
+            actions.push(action);
+        }
+        if self.stale != stale {
+            ui.ctx().request_repaint();
+        }
         if let Some(job) = &mut self.job {
             match job.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
                 Poll::Pending => ui.ctx().request_repaint(),
                 Poll::Ready(result) => {
                     self.job = None;
                     match result {
-                        Ok(JobOutput::Report(report, bars)) => {
+                        Ok(JobOutput::Report(report, mut follow)) => {
+                            let report = *report;
                             actions.push(StrategyTesterAction::Signals {
                                 symbol: report.symbol.clone(),
                                 timeframe: report.timeframe,
                                 signals: report.signals(),
                             });
-                            let from = bars.partition_point(|bar| {
+                            let from = follow.bars.partition_point(|bar| {
                                 self.settings
                                     .start_time
                                     .is_some_and(|start| bar.time < start)
                             });
                             let to = self
                                 .settings
-                                .bars_before_end(report.timeframe, &bars)
+                                .bars_before_end(report.timeframe, &follow.bars)
                                 .max(from);
-                            self.report.set_report(Some(report), &bars[from..to]);
+                            self.report.set_report(Some(report), &follow.bars[from..to]);
+                            if follow.host > 0 {
+                                follow.chart = bars[..bars.partition_point(|bar| {
+                                    bar.time <= follow.bars[follow.host - 1].time
+                                })]
+                                    .to_vec();
+                            }
+                            self.follow = Some(follow);
                             self.stale = false;
                             self.tab = Tab::Report;
                         }
@@ -909,7 +1185,104 @@ impl StrategyTester {
                 }
             }
         }
+        if let Some(job) = &mut self.follow_job {
+            match job.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+                Poll::Pending => ui.ctx().request_repaint(),
+                Poll::Ready(result) => {
+                    self.follow_job = None;
+                    match result {
+                        Ok(JobOutput::Report(report, follow)) => {
+                            let report = *report;
+                            actions.push(StrategyTesterAction::Signals {
+                                symbol: report.symbol.clone(),
+                                timeframe: report.timeframe,
+                                signals: report.signals(),
+                            });
+                            let from = follow.bars.partition_point(|bar| {
+                                self.settings
+                                    .start_time
+                                    .is_some_and(|start| bar.time < start)
+                            });
+                            let to = self
+                                .settings
+                                .bars_before_end(report.timeframe, &follow.bars)
+                                .max(from);
+                            self.report.continue_report(report, &follow.bars[from..to]);
+                            self.stale = false;
+                            self.follow = Some(follow);
+                        }
+                        Err(error) => {
+                            self.error = Some(error.into());
+                            self.stale = true;
+                        }
+                        _ => {}
+                    }
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
         actions
+    }
+
+    /// Follow the chart only while a completed single run is idle.
+    fn follow_chart(&mut self, bars: &[Bar]) -> Option<StrategyTesterAction> {
+        let follow = self.follow.as_ref()?;
+        let (tail, kept) = follow.tail(bars);
+        let previous = &follow.bars[follow.host..];
+        if !kept || tail.len() < previous.len() {
+            self.stale = true;
+            self.follow = None;
+            return None;
+        }
+        if crate::strategies::same_bars(tail, previous) {
+            return None;
+        }
+        if !tail.windows(2).all(|pair| pair[0].time < pair[1].time) {
+            self.stale = true;
+            self.follow = None;
+            self.error = Some("Bar times must be strictly increasing".into());
+            return None;
+        }
+        let first = tail
+            .iter()
+            .zip(previous)
+            .take_while(|(a, b)| {
+                crate::strategies::same_bars(std::slice::from_ref(a), std::slice::from_ref(b))
+            })
+            .count();
+        let mut bars = follow.bars[..follow.host].to_vec();
+        bars.extend_from_slice(tail);
+        let exchange_rate = follow.engine.exchange_rate_request();
+        let calculation = follow.strategy.calculation_timeframe();
+        // Bars past a historical end need no finer fills, exchange rates or calculation bars.
+        let needs_history =
+            (follow.lower_timeframe.is_some() || exchange_rate.is_some() || calculation.is_some())
+                && follow.host + first
+                    < self
+                        .settings
+                        .bars_before_end(follow.engine.timeframe, &bars);
+        if needs_history {
+            self.revision = self.revision.wrapping_add(1);
+            let mut request = StrategyHistoryRequest::new(
+                self.revision,
+                &follow.engine.symbol,
+                follow.engine.timeframe,
+                tail[first].time,
+            );
+            request.end = self.settings.end_time;
+            request.lower_timeframe = follow.lower_timeframe;
+            request.calculation_timeframe = calculation;
+            request.exchange_rate = exchange_rate;
+            self.stale = true;
+            let follow = self.follow.take().expect("an idle continuation");
+            self.follow_request = Some((request.clone(), follow, bars));
+            Some(StrategyTesterAction::RequestHistory(request))
+        } else {
+            let mut follow = self.follow.take().expect("an idle continuation");
+            let lower = std::mem::take(&mut follow.lower);
+            self.follow_job = Some(continue_job(follow, bars, lower, Rc::new(Cell::new(0))));
+            None
+        }
     }
 
     fn sort_trials(&mut self) {

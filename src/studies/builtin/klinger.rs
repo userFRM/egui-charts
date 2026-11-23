@@ -196,6 +196,10 @@ impl Indicator for KlingerOscillator {
         2
     }
 
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
     fn line_names(&self) -> Vec<String> {
         vec![
             format!("KVO({},{})", self.short_period, self.long_period),

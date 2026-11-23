@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 
 use egui_charts::data::Reply;
-use egui_charts::model::{Alert, AlertId};
+use egui_charts::model::{Alert, AlertId, AlertTrigger};
 use egui_charts::services::{AlertEngine, AlertEvent, Alerts, Events};
 
 /// The demo's alerts: an [`AlertEngine`] that only takes alerts on symbols of the catalog and
@@ -14,11 +14,16 @@ pub struct DemoAlerts {
 }
 
 impl DemoAlerts {
-    /// Starts with `alerts` from the previous session.
-    pub fn new(alerts: Vec<Alert>, notify: impl Fn(&str) + Send + Sync + 'static) -> Self {
+    /// Starts with `alerts` and the alert log `triggers` from the previous session.
+    pub fn new(
+        alerts: Vec<Alert>,
+        triggers: Vec<AlertTrigger>,
+        notify: impl Fn(&str) + Send + Sync + 'static,
+    ) -> Self {
         Self {
             engine: AlertEngine::new()
                 .with_alerts(alerts)
+                .with_triggers(triggers)
                 .on_trigger(move |_, event| {
                     if let AlertEvent::TriggeredForSymbol { symbol, .. } = event {
                         notify(symbol);
@@ -35,6 +40,10 @@ impl DemoAlerts {
 }
 
 impl Alerts for DemoAlerts {
+    fn engine(&self) -> Option<&AlertEngine> {
+        Some(&self.engine)
+    }
+
     fn watch(&self, events: Events<AlertEvent>) {
         self.engine.watch(events);
     }

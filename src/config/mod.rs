@@ -11,6 +11,7 @@ mod drawing_tool;
 mod interaction;
 mod keyboard;
 mod kinetic;
+pub(crate) mod shortcut_map;
 mod timescale;
 mod tooltip;
 

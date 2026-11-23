@@ -33,6 +33,7 @@ jobs:
       base: ${{ steps.inputs.outputs.base }}
       rust: ${{ steps.inputs.outputs.rust }}
       terminal: ${{ steps.inputs.outputs.terminal }}
+      scripting: ${{ steps.inputs.outputs.scripting }}
       native: ${{ steps.inputs.outputs.native }}
       fmt: ${{ steps.inputs.outputs.fmt }}
       docs: ${{ steps.inputs.outputs.docs }}
@@ -57,20 +58,21 @@ jobs:
           # performance baseline is the base branch itself; the changed paths are the head's own.
           echo "base=$(git rev-parse "$BASE_REF^{commit}")" >> "$GITHUB_OUTPUT"
           git diff --name-only --no-renames -z "$(git merge-base "$BASE_REF" "$HEAD_REF")" "$HEAD_REF" > changed-paths
-          rust=false terminal=false native=false fmt=false docs=false security=false counts=false
+          rust=false terminal=false scripting=false native=false fmt=false docs=false security=false counts=false
           while IFS= read -r -d '' path; do
             case "$path" in
               README.md|ROADMAP.md) docs=true counts=true ;;
               docs/builder-guide.md|docs/study-data.md|docs/strategy-report.md|docs/site/src/content/docs/*.mdx) docs=true ;;
+              crates/scripting/*) scripting=true fmt=true security=true ;;
               *.md|docs/site/*|docs/progress/*) ;;
               terminal/*) terminal=true fmt=true security=true ;;
               examples/demo/*) native=true fmt=true security=true ;;
               examples/docs/*|docs/capture/*|fuzz/*) fmt=true security=true ;;
               deny.toml) security=true ;;
-              .github/workflows/ci.yml) rust=true terminal=true native=true ;;
+              .github/workflows/ci.yml) rust=true terminal=true scripting=true native=true ;;
               tests/*|benches/*|examples/*|.github/check-module-cycles.py) rust=true ;;
               .github/workflows/*|.github/ISSUE_TEMPLATE/*|.github/dependabot.yml|.github/FUNDING.yml) ;;
-              *) rust=true terminal=true native=true ;;
+              *) rust=true terminal=true scripting=true native=true ;;
             esac
           done < changed-paths
           if [[ $rust == true ]]; then
@@ -78,9 +80,9 @@ jobs:
           fi
           # Main and manual or reusable runs always exercise the complete suite.
           if [[ $EVENT_NAME != pull_request ]]; then
-            rust=true terminal=true native=true fmt=true docs=true security=true counts=true
+            rust=true terminal=true scripting=true native=true fmt=true docs=true security=true counts=true
           fi
-          printf '%s\n' "rust=$rust" "terminal=$terminal" "native=$native" "fmt=$fmt" \
+          printf '%s\n' "rust=$rust" "terminal=$terminal" "scripting=$scripting" "native=$native" "fmt=$fmt" \
             "docs=$docs" "security=$security" "counts=$counts" >> "$GITHUB_OUTPUT"
           # Branches of this repository run the Linux check, feature, UI, terminal, format, documentation,
           # API and security jobs on the runner label the LINUX_RUNNER repository variable names, when it
@@ -811,6 +813,63 @@ jobs:
         if: needs.changes.outputs.terminal == 'true'
         run: cargo test --locked --manifest-path terminal/Cargo.toml
 
+  scripting:
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
+    name: Scripting package
+    # The browser test of the time slices runs here, and browser tests stay on GitHub-hosted runners.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
+      - uses: actions/checkout@v7
+        if: needs.changes.outputs.scripting == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.scripting == 'true'
+        with:
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.scripting == 'true'
+        with:
+          workspaces: crates/scripting
+      - name: Clippy
+        if: needs.changes.outputs.scripting == 'true'
+        run: |
+          cargo clippy --locked --manifest-path crates/scripting/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path crates/scripting/Cargo.toml --all-targets --all-features -- -D warnings
+      - name: Test
+        if: needs.changes.outputs.scripting == 'true'
+        # `cargo test` builds the example without running its tests, so they run on their own.
+        run: |
+          cargo test --locked --manifest-path crates/scripting/Cargo.toml --all-features
+          cargo test --locked --manifest-path crates/scripting/Cargo.toml --all-features --example scripting
+      - name: Check docs build
+        if: needs.changes.outputs.scripting == 'true'
+        run: cargo doc --locked --manifest-path crates/scripting/Cargo.toml --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+      - name: Build for the browser
+        if: needs.changes.outputs.scripting == 'true'
+        run: cargo build --locked --manifest-path crates/scripting/Cargo.toml --lib --all-features --target wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        if: needs.changes.outputs.scripting == 'true'
+        with:
+          tool: wasm-pack
+      - name: Run browser tests
+        if: needs.changes.outputs.scripting == 'true'
+        timeout-minutes: 5
+        env:
+          WASM_BINDGEN_TEST_DRIVER_TIMEOUT: "60"
+          WASM_BINDGEN_TEST_TIMEOUT: "120"
+        run: timeout --verbose --kill-after=10s 240s wasm-pack test --headless --chrome crates/scripting --lib
+
   fmt:
     needs: changes
     if: "!cancelled() && github.event.pull_request.draft != true"
@@ -833,7 +892,7 @@ jobs:
         if: needs.changes.outputs.fmt == 'true'
       - name: Check the crates outside the workspace
         if: needs.changes.outputs.fmt == 'true'
-        run: for m in examples/demo examples/docs terminal docs/capture fuzz; do cargo fmt --manifest-path $m/Cargo.toml -- --check || exit 1; done
+        run: for m in examples/demo examples/docs terminal crates/scripting docs/capture fuzz; do cargo fmt --manifest-path $m/Cargo.toml -- --check || exit 1; done
 
   doc:
     needs: changes
@@ -899,6 +958,7 @@ jobs:
           widget=$(cargo tree --locked -e normal --no-default-features --features widget --prefix none)
           icons=$(cargo tree --locked -e normal --no-default-features --features icons --prefix none)
           studies=$(cargo tree --locked -e normal --no-default-features --features studies --prefix none)
+          scripting=$(cargo tree --locked --manifest-path crates/scripting/Cargo.toml -e normal --prefix none)
           banned=$(grep -E '^(rustls|ureq|ehttp|image) v' <<< "$default" | sort -u || true)
           if [ -n "$banned" ]; then echo "::error::default features depend on: $banned"; exit 1; fi
           banned=$(grep -E '^(egui|egui_extras|epaint|winit|chrono-tz|csv|csv-core|ryu) v' <<< "$headless" | sort -u || true)
@@ -907,6 +967,8 @@ jobs:
           if [ -n "$banned" ]; then echo "::error::--features widget depends on: $banned"; exit 1; fi
           banned=$(grep -E '^(egui|epaint|winit) v' <<< "$studies" | sort -u || true)
           if [ -n "$banned" ]; then echo "::error::--features studies depends on: $banned"; exit 1; fi
+          banned=$(grep -E '^(egui|epaint|winit) v' <<< "$scripting" | sort -u || true)
+          if [ -n "$banned" ]; then echo "::error::crates/scripting depends on: $banned"; exit 1; fi
           banned=$(grep -E '^(egui_extras|enum-map|enum-map-derive) v' <<< "$icons" | sort -u || true)
           if [ -n "$banned" ]; then echo "::error::--features icons depends on: $banned"; exit 1; fi
           # The deployed demo must build the versions its committed lockfile pins.
@@ -921,4 +983,5 @@ jobs:
         run: |
           cargo deny --all-features --locked check advisories bans licenses
           cargo deny --manifest-path examples/demo/Cargo.toml --all-features --locked check advisories bans licenses
+          cargo deny --manifest-path crates/scripting/Cargo.toml --all-features --locked check advisories bans licenses
           cargo deny --manifest-path examples/docs/Cargo.toml --all-features --locked check advisories bans licenses

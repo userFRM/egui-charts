@@ -1807,8 +1807,9 @@ fn magnet_snaps_to_study_values_on_their_own_scale() {
     assert_eq!(at(&chart, rect.bottom() - 1.0), main);
 }
 
-/// Logarithms are monotone on positive prices. With 10% margins, ln(2)..ln(100)
-/// occupies 80% of the pane; a lone zero-crossing bar instead starts at ln(5).
+/// Logarithms are monotone on positive prices. On the main scale ln(2)..ln(100) occupies
+/// 82% of the pane, with 8% below and 10% above; a secondary scale keeps 10% on each
+/// side. A lone zero-crossing bar instead starts at ln(5).
 #[test]
 fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
     use crate::studies::{CustomIndicator, IndicatorValue, PlotType, StudyScale};
@@ -1839,9 +1840,10 @@ fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
             frame(&egui::Context::default(), &mut chart, 0.0, vec![]);
             let map = chart.series_price_map(id).unwrap();
             let low: f64 = if count == 1 { 5.0 } else { 2.0 };
-            let span = (100.0_f64.ln() - low.ln()) / 0.8;
+            let bottom = if secondary { 0.1 } else { 0.08 };
+            let span = (100.0_f64.ln() - low.ln()) / (0.9 - bottom);
             assert!(
-                (map.range().min - (low.ln() - span * 0.1)).abs() < 1e-10,
+                (map.range().min - (low.ln() - span * bottom)).abs() < 1e-10,
                 "secondary={secondary}, count={count}: {:?}",
                 map.range()
             );
@@ -1895,7 +1897,7 @@ fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
             frame(&egui::Context::default(), &mut chart, 0.1, vec![]);
             let map = chart.series_price_map(id).unwrap();
             assert_eq!(map.transform().mode, PriceScaleMode::Logarithmic);
-            let span = (15.0_f64.ln() - 10.0_f64.ln()) / 0.8;
+            let span = (15.0_f64.ln() - 10.0_f64.ln()) / if secondary { 0.8 } else { 0.82 };
             assert!((map.range().max - (15.0_f64.ln() + span * 0.1)).abs() < 1e-10);
         }
     }
@@ -2198,12 +2200,14 @@ fn heikin_ashi_fit_uses_the_transformed_visible_candles() {
         chart.set_visible_logical_range(crate::model::LogicalRange::new(1.0, right));
         let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
         let map = chart.series_price_map(id).unwrap();
+        let bottom = if secondary { 0.1 } else { 0.08 };
+        let span = (high - 9.0) / (0.9 - bottom);
         assert!(
-            (map.range().min - (9.0 - (high - 9.0) / 8.0)).abs() < 1e-8,
+            (map.range().min - (9.0 - span * bottom)).abs() < 1e-8,
             "secondary={secondary}, right={right}: {:?}",
             map.range()
         );
-        assert!((map.range().max - (high + (high - 9.0) / 8.0)).abs() < 1e-8);
+        assert!((map.range().max - (high + span * 0.1)).abs() < 1e-8);
         for price in [9.0, 10.0, 100.0, high] {
             let (top, bottom) = map.extent();
             assert!((top..=bottom).contains(&map.price_to_y(price)));
@@ -2222,8 +2226,8 @@ fn heikin_ashi_fit_uses_the_transformed_visible_candles() {
 }
 
 /// Percent compares returns, not absolute prices: 100 -> 110 and 200 -> 220
-/// coincide at +10%; 200 -> 240 extends the shared range to 20%, plus an eighth of that on
-/// each side for the 10% of the pane above and below.
+/// coincide at +10%; 200 -> 240 extends the shared range to 20%. The main scale leaves
+/// 10% of the pane above and 8% below, so its span is 20 / 0.82.
 #[test]
 fn comparisons_share_percent_ranges_with_individual_visible_references() {
     let ctx = egui::Context::default();
@@ -2236,7 +2240,8 @@ fn comparisons_share_percent_ranges_with_individual_visible_references() {
     assert!((map.price_to_y(220.0) - chart.last_price_map.price_to_y(110.0)).abs() < 1e-4);
     let range = chart.state.price_scale().range();
     assert!(
-        (range.min + 2.5).abs() < 1e-10 && (range.max - 22.5).abs() < 1e-10,
+        (range.min + 20.0 / 0.82 * 0.08).abs() < 1e-10
+            && (range.max - (20.0 + 20.0 / 0.82 * 0.1)).abs() < 1e-10,
         "{range:?}"
     );
     chart.state.time_scale_mut().set_bar_spacing(100.0);
@@ -2577,7 +2582,10 @@ fn series_style_draws_columns_and_lines_and_fits_provided_ranges() {
     );
     assert!((fitted.0 + 125.0).abs() < 1e-9 && (fitted.1 - 1125.0).abs() < 1e-9);
     let range = chart.state.price_scale().range();
-    assert!((range.min - 48.75).abs() < 1e-10 && (range.max - 61.25).abs() < 1e-10);
+    assert!(
+        (range.min - (50.0 - 10.0 / 0.82 * 0.08)).abs() < 1e-10
+            && (range.max - (60.0 + 10.0 / 0.82 * 0.1)).abs() < 1e-10
+    );
     for (price, color) in [
         (220.0, Color32::GOLD),
         (200.0, Color32::from_rgb(178, 181, 190)),
@@ -2788,8 +2796,8 @@ fn autoscale_contributions_reserve_pixels_per_pane_and_scale() {
                     );
                     if placement == "added" {
                         let main = chart.series_price_map(SeriesId::MAIN).unwrap().range();
-                        let span = (last - 100.0) / 0.8;
-                        assert!((main.min - (100.0 - span * 0.1)).abs() < 1e-8);
+                        let span = (last - 100.0) / 0.82;
+                        assert!((main.min - (100.0 - span * 0.08)).abs() < 1e-8);
                         assert!((main.max - (last + span * 0.1)).abs() < 1e-8);
                     }
                 }
@@ -3243,7 +3251,7 @@ fn series_scales_fit_visible_members_and_reserve_their_axes() {
         frame(&ctx, &mut chart, 0.0, vec![]);
         let range = chart.series_price_scale_mut(id).unwrap().range();
         let expected = if key == SeriesScale::Right {
-            (85.0, 235.0)
+            (100.0 - 120.0 / 0.82 * 0.08, 220.0 + 120.0 / 0.82 * 0.1)
         } else {
             (197.5, 222.5)
         };
@@ -3259,7 +3267,10 @@ fn series_scales_fit_visible_members_and_reserve_their_axes() {
         frame(&ctx, &mut chart, 0.1, vec![]);
         assert!(chart.series_axis_keys().is_empty());
         let range = chart.state.price_scale().range();
-        assert!((range.min - 98.75).abs() < 1e-10 && (range.max - 111.25).abs() < 1e-10);
+        assert!(
+            (range.min - (100.0 - 10.0 / 0.82 * 0.08)).abs() < 1e-10
+                && (range.max - (110.0 + 10.0 / 0.82 * 0.1)).abs() < 1e-10
+        );
         // Secondary bars can occupy whitespace beyond the main history.
         let future = bars(&[200.0, 220.0])
             .into_iter()
@@ -4963,7 +4974,7 @@ fn pane_axis_commands_enumerate_sources_and_restore_layout() {
 }
 
 /// Empty studies contribute no fallback prices; attached primitives still fit. Bars from 10 to 20
-/// fit 8.75..21.25 with 10% fractional margins, or 9..21 with a pane's 10% price padding.
+/// fit 9.024390..21.219512 with 10% above and 8% below, or 9..21 with a pane's 10% price padding.
 /// A study from 1000 to 1010 pads to 999..1011, or -0.1..1.1% and 99.9..101.1 indexed.
 /// Logarithmic panes fit ln(1000)..ln(1010). A 40 point margin at each edge widens a
 /// span s in a plot h points tall by s / (1 - 80 / h), centred on the original range.
@@ -5096,7 +5107,9 @@ fn study_without_values_in_view_adds_nothing_to_its_scale() {
                 }
                 let map = chart.series_price_map(target).unwrap();
                 let (low, high) = match case {
-                    "main warm-up" | "main scrolled" => (8.75, 21.25),
+                    "main warm-up" | "main scrolled" => {
+                        (10.0 - 10.0 / 0.82 * 0.08, 20.0 + 10.0 / 0.82 * 0.1)
+                    }
                     "shared bars" => (9.0, 21.0),
                     "primitive" if mode == PriceScaleMode::Logarithmic => {
                         (30_f64.ln(), 40_f64.ln())
@@ -5224,9 +5237,9 @@ fn pinned_volume_adds_no_range_where_the_chart_type_hides_volume() {
 
 /// A margin-only request (prices left out, as the hook allows) while no bar is in view: the
 /// main scale has nothing to fit, so it keeps the range it had, as `PriceScale::autoscale`
-/// documents for bounds that are not finite. With the default 10% margins and 40 points at each
-/// edge of a plot h points tall, bars from 10 to 20 fit a span of 10 / (0.8 - 80 / h), with
-/// 0.1 + 40 / h of it beyond each price.
+/// documents for bounds that are not finite. With 10% above, 8% below and 40 points at each
+/// edge of a plot h points tall, bars from 10 to 20 fit a span of 10 / (0.82 - 80 / h), with
+/// 0.08 + 40 / h of it below and 0.1 + 40 / h above.
 #[test]
 fn margin_only_request_keeps_the_main_range_with_no_bar_in_view() {
     use crate::chart::primitives::Primitive;
@@ -5251,10 +5264,11 @@ fn margin_only_request_keeps_the_main_range_with_no_bar_in_view() {
     frame(&ctx, &mut chart, 0.5, vec![]);
     let map = chart.series_price_map(SeriesId::MAIN).unwrap();
     let height = f64::from(map.extent().1 - map.extent().0);
-    let beyond = 10.0 / (0.8 - 80.0 / height) * (0.1 + 40.0 / height);
+    let span = 10.0 / (0.82 - 80.0 / height);
     let fitted = chart.state().price_scale().range();
     assert!(
-        (fitted.min - (10.0 - beyond)).abs() < 1e-8 && (fitted.max - (20.0 + beyond)).abs() < 1e-8,
+        (fitted.min - (10.0 - span * (0.08 + 40.0 / height))).abs() < 1e-8
+            && (fitted.max - (20.0 + span * (0.1 + 40.0 / height))).abs() < 1e-8,
         "observed {fitted:?}"
     );
     // Scroll into the whitespace after the last bar; no bar remains in view.
@@ -5424,7 +5438,8 @@ fn placed_axes_report_their_side_and_respect_hidden_chart_axes() {
 
 /// A locked axis keeps its units per bar, span * spacing / height, whichever axis shows it, and
 /// an unlocked scale keeps its range. The main axis is the control: a range of 10 inside margins
-/// of 10% spans 12.5, and twice the spacing at the same height halves it. A scale of a secondary
+/// of 10% above and 8% below spans 10 / 0.82; twice the spacing at the same height halves it.
+/// Added scales retain 10% on each side and span 12.5. A scale of a secondary
 /// pane has no margins and fits 10% of padding, so it spans 12.
 #[test]
 fn named_axis_lock_keeps_units_per_bar() {
@@ -5492,7 +5507,7 @@ fn named_axis_lock_keeps_units_per_bar() {
             assert!(near(span(locked), hand), "{case}: {locked:?}");
         }
         assert!(
-            near(span(chart.state.price_scale().range()), 12.5),
+            near(span(chart.state.price_scale().range()), 10.0 / 0.82),
             "{case}"
         );
 
@@ -5517,7 +5532,7 @@ fn named_axis_lock_keeps_units_per_bar() {
         let centre = |range: crate::scales::PriceRange| (range.min + range.max) / 2.0;
         assert!(near(centre(halved), centre(locked)), "{case}: {halved:?}");
         assert!(
-            near(span(chart.state.price_scale().range()), 12.5 * zoom),
+            near(span(chart.state.price_scale().range()), 10.0 / 0.82 * zoom),
             "{case}"
         );
 

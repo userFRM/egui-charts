@@ -184,4 +184,8 @@ impl Indicator for ChandeKrollStop {
     fn line_names(&self) -> Vec<String> {
         vec!["Stop Short".into(), "Stop Long".into()]
     }
+
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
 }

@@ -181,8 +181,13 @@ supply another study's output as this source and checks its dependencies and cyc
 [`with_data_requests`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html#method.with_data_requests)
 declares histories from the current inputs, such as another symbol on another interval
 ([`StudyDataRequest`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyDataRequest.html)).
-Find each available history by its request and align its bars with
-[`StudyData::bar_at`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyData.html#method.bar_at).
+Find each available history by its request.
+[`StudyData::closed_at`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyData.html#method.closed_at)
+reads the bar of another interval each chart bar knew, and
+[`with_wait_for_close`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html#method.with_wait_for_close)
+offers Wait for interval close for it;
+[`StudyData::bar_at`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyData.html#method.bar_at)
+reads the bar containing a time.
 A study declaring histories, and any Source input other than `source`, accepts price fields only.
 
 ## Save and load drawings
@@ -246,6 +251,7 @@ return their per-bar results through [`CustomIndicator`](https://userfrm.github.
 unavailable observations. Recalculate when the source bars or script inputs change;
 report compilation and execution errors in the host UI. A closure may capture an
 `Arc` holding the host evaluator; its calculation must be `Send + Sync`.
+The repository's [`egui-charts-scripting`](https://github.com/userFRM/egui-charts/blob/main/crates/scripting/README.md) package is such a host runtime: it compiles scripts with history, state and plots into studies that calculate away from the UI thread.
 
 ## Runnable examples
 

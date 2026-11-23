@@ -3,20 +3,24 @@
 //!
 //! Each reference is the last finite close on or before the same trading date a period earlier,
 //! a number of days, weeks, months or years; month subtraction clamps to the last day of a
-//! shorter month, and year to date uses the last close of the previous calendar year. Dates
-//! follow the instrument's trading calendar, as VWAP does. On an interval shorter than a day the
-//! study requests the symbol's daily bars and takes the later of the daily close and the chart's
-//! own close on or before each date, the daily close on the same date. A connected feed loads
-//! those daily bars back to the oldest period's date, five years before the latest with the
-//! default periods. Missing history and a zero reference close have no value.
+//! shorter month, and year to date starts on 1 January, from the latest close on or before it,
+//! or from the latest earlier close on 1 January itself. Dates
+//! follow the instrument's trading calendar, as VWAP does. On every interval but one day the
+//! study requests the symbol's daily bars. Below a day it takes the later of the daily close and
+//! the chart's own close on or before each date, the daily close on the same date. On bars longer
+//! than a day, which are dated by their first day, it measures from daily closes alone: each bar
+//! counts as closed on the date of the last daily close inside it, and without daily bars a
+//! period has no value. A connected feed loads those daily bars back to the oldest period's date,
+//! five years before the latest with the default periods. Missing history and a zero reference
+//! close have no value.
 //!
 //! The table has a row for the chart symbol and one for each other symbol of the Symbol list,
 //! whose daily bars the study requests on every interval and measures from that symbol's own
 //! latest close, and a column for each period of the Timeframe list. With Include chart symbol
 //! off, a listed chart symbol has a row of its own. The six plots keep the chart symbol's
 //! standard periods. A new study compares `AAPL, NASDAQ:AMZN, EURUSD, ES1!, BTCUSD` over
-//! `1W, 1M, 3M, 6M, 12M, YTD, 5Y` in a table at the middle centre, 100% of the pane wide and 95%
-//! high, with falling changes in `#F23745`.
+//! `1W, 1M, 3M, 6M, 12M, YTD, 5Y` in a pane of its own, in a table at the middle centre, 100%
+//! of that pane wide and 95% high, with falling changes in `#F23745`.
 //!
 //! A row is labelled with the description of its symbol's instrument when the host gives one,
 //! and with the ticker otherwise. Each change is written in its sign's colour, the Positive
@@ -58,7 +62,8 @@ enum Period {
     Days(u64),
     /// The same date this many months earlier, clamped to the last day of a shorter month.
     Months(u32),
-    /// The last day of the previous calendar year.
+    /// 1 January of the date's year, or the day before on 1 January itself, whose own close
+    /// is still developing.
     YearToDate,
 }
 
@@ -68,15 +73,15 @@ impl Period {
         match self {
             Self::Days(days) => date.checked_sub_days(Days::new(days)),
             Self::Months(months) => date.checked_sub_months(Months::new(months)),
-            Self::YearToDate => {
-                NaiveDate::from_ymd_opt(date.year(), 1, 1).and_then(|day| day.pred_opt())
-            }
+            Self::YearToDate => NaiveDate::from_ymd_opt(date.year(), 1, 1)
+                .filter(|first| *first < date)
+                .or_else(|| date.pred_opt()),
         }
     }
 }
 
 /// Latest close's percentage change over calendar periods, of the chart symbol and of listed
-/// symbols, shown as a table.
+/// symbols, shown as a table. The study opens in a pane of its own.
 #[derive(Clone, Debug)]
 pub struct Performance {
     days: ExchangeDays,
@@ -85,7 +90,8 @@ pub struct Performance {
     history: Vec<(NaiveDate, f64)>,
     before_last_history: usize,
     intraday: bool,
-    /// The chart interval, which decides whether daily bars are requested.
+    /// The chart interval, which decides whether daily bars are requested and whether the
+    /// chart's own bars may start a period.
     timeframe: Option<Timeframe>,
     /// Trading date and finite close of each requested daily bar, in time order.
     daily: Vec<(NaiveDate, f64)>,
@@ -135,8 +141,9 @@ struct State {
 }
 
 impl Performance {
-    /// Performance over the chart's loaded bars, and on intraday charts over the daily bars the
-    /// host supplies for [`Indicator::data_requests`], in UTC until an instrument is supplied.
+    /// Performance over the chart's loaded bars, and on every interval but one day over the daily
+    /// bars the host supplies for [`Indicator::data_requests`], in UTC until an instrument is
+    /// supplied.
     pub fn new() -> Self {
         Self {
             days: ExchangeDays::default(),
@@ -169,11 +176,18 @@ impl Performance {
         }
     }
 
-    /// The chart symbol's daily bars, on intervals shorter than a day.
+    /// The chart symbol's daily bars, on every interval but one day, whose own bars are daily.
     fn daily_request(&self) -> Option<StudyDataRequest> {
         self.timeframe
-            .filter(|timeframe| timeframe.duration_ms() < Timeframe::Day1.duration_ms())
+            .filter(|timeframe| timeframe.duration_ms() != Timeframe::Day1.duration_ms())
             .map(|_| daily_bars(""))
+    }
+
+    /// Whether each chart bar spans more than a day. Such a bar is dated by its first day and
+    /// closes at its end, so its periods are measured from daily closes alone.
+    fn long_bars(&self) -> bool {
+        self.timeframe
+            .is_some_and(|timeframe| timeframe.duration_ms() > Timeframe::Day1.duration_ms())
     }
 
     /// The symbols of the Symbol list, each once, in list order.
@@ -226,8 +240,16 @@ impl Performance {
                 None if self.chart_symbol.is_empty() => "Chart".to_owned(),
                 None => self.chart_symbol.clone(),
             };
-            let histories = [&self.history[..], &self.daily[..]];
-            rows.push((label, changes(self.history.last(), histories)));
+            let long = self.long_bars();
+            let latest = self.history.last().map(|&(date, close)| {
+                if long {
+                    (close_date(&self.daily, date, None), close)
+                } else {
+                    (date, close)
+                }
+            });
+            let own = if long { &[][..] } else { &self.history[..] };
+            rows.push((label, changes(latest.as_ref(), [own, &self.daily[..]])));
         }
         for symbol in self.compared_symbols() {
             // The chart symbol's row stands for a listed copy of it.
@@ -316,6 +338,19 @@ fn closes(bars: &[Bar]) -> Vec<(NaiveDate, f64)> {
     }
 }
 
+/// The date of the close of a chart bar longer than a day, dated `date`, whose next bar is
+/// dated `next`: the last daily close from `date` up to `next`, or `date` without one.
+fn close_date(daily: &[(NaiveDate, f64)], date: NaiveDate, next: Option<NaiveDate>) -> NaiveDate {
+    let end = next.map_or(daily.len(), |next| {
+        daily.partition_point(|(day, _)| *day < next)
+    });
+    daily[..end]
+        .last()
+        .map(|(day, _)| *day)
+        .filter(|day| *day >= date)
+        .unwrap_or(date)
+}
+
 /// The trimmed description of `instrument`, or `None` when it has none or a blank one.
 fn description(instrument: Option<&Instrument>) -> Option<String> {
     let description = instrument?.description.as_deref()?.trim();
@@ -383,7 +418,36 @@ pub(super) fn share(percent: f64) -> Option<f32> {
     (percent > 0.0).then_some((percent / 100.0) as f32)
 }
 
+/// The pane height that shows `table` whole at its text size: its rows under the title and
+/// the headings, the 40 points the table leaves around itself, at most 420 points.
+pub(super) fn table_pane_height(table: &StudyTable) -> f32 {
+    let content = 2.0 * table.text_size.points() * (table.rows.len() + 2) as f32;
+    // Fitted tables use at most half the pane, so leave room for their full content.
+    let minimum = if table.height.is_none() {
+        2.0 * content
+    } else {
+        0.0
+    };
+    (content + 40.0).max(minimum).min(420.0)
+}
+
 impl Indicator for Performance {
+    fn is_overlay(&self) -> bool {
+        false
+    }
+
+    /// The table has no value axis: the six plots are hidden until the user shows them.
+    fn scale(&self) -> crate::studies::StudyScale {
+        crate::studies::StudyScale::None
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: Some(table_pane_height(&self.table)),
+            ..Default::default()
+        }
+    }
+
     crate::studies::inputs::study_inputs!(self;
         symbols: text("Symbol list"),
         include_chart_symbol: toggle("Include chart symbol"),
@@ -424,13 +488,13 @@ impl Indicator for Performance {
 
     fn set_timeframe(&mut self, timeframe: Timeframe) {
         self.timeframe = Some(timeframe);
-        // Daily and longer charts read their own bars; drop daily bars of an earlier interval.
+        // Daily charts read their own bars; drop daily bars of an earlier interval.
         if self.daily_request().is_none() {
             self.daily.clear();
         }
     }
 
-    /// The chart symbol's daily bars on intervals shorter than a day, then the daily bars of
+    /// The chart symbol's daily bars on every interval but one day, then the daily bars of
     /// each compared symbol on every interval.
     fn data_requests(&self) -> Vec<StudyDataRequest> {
         self.daily_request()
@@ -477,6 +541,11 @@ impl Indicator for Performance {
 
     fn update(&mut self, data: &[Bar], mut from: usize) {
         let len = self.values.len();
+        let long = self.long_bars();
+        // A long bar's close date depends on the bar after it, so an append redoes the last bar.
+        if long {
+            from = from.min(len.saturating_sub(1));
+        }
         let start = if len > 0 && from >= len - 1 && data.len() >= len {
             from.min(len)
         } else {
@@ -502,14 +571,16 @@ impl Indicator for Performance {
                         return IndicatorValue::None;
                     }
                     let date = self.days.day(bar, !self.intraday);
+                    let (closed, own) = if long {
+                        let next = data.get(source + 1).map(|next| next.time.date_naive());
+                        (close_date(&self.daily, date, next), &[][..])
+                    } else {
+                        (date, &self.history[..])
+                    };
                     for (line, (_, period)) in PERIODS.into_iter().enumerate() {
-                        state.latest[line] = change(
-                            bar.close,
-                            date,
-                            period,
-                            [&self.history[..], &self.daily[..]],
-                        )
-                        .map(|(change, _)| change);
+                        state.latest[line] =
+                            change(bar.close, closed, period, [own, &self.daily[..]])
+                                .map(|(change, _)| change);
                     }
                     self.history.push((date, bar.close));
                     IndicatorValue::Multiple(
@@ -576,20 +647,52 @@ mod tests {
     use crate::studies::*;
     use chrono::{TimeZone, Utc};
 
+    /// A new table fills its own pane below the candles, and can still move to the price pane.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn performance_opens_in_a_pane_of_its_own() {
+        use crate::widget::{PaneId, test_frames};
+
+        let mut chart = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+        let id = chart.add_indicator(Box::new(Performance::new()));
+        let ctx = egui::Context::default();
+        test_frames::shapes(&ctx, &mut chart, 0.0, Vec::new());
+        let painted = test_frames::shapes(&ctx, &mut chart, 0.1, Vec::new());
+        assert_eq!(chart.panes().len(), 2);
+        let pane = chart.series_pane(id).unwrap();
+        assert_ne!(pane, PaneId::MAIN);
+        assert_eq!(chart.pane_series(pane), [id]);
+        let heading_y = painted
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Text(text) if text.galley.text() == "Symbol" => Some(text.pos.y),
+                _ => None,
+            })
+            .unwrap();
+        let candle_bottom = test_frames::candle_ys(&painted, palette::UP)
+            .into_iter()
+            .reduce(f32::max)
+            .unwrap();
+        assert!(heading_y > candle_bottom);
+        // Six rows, headings and title at 22 points per row, with 40 points around the table.
+        assert!((chart.pane_height(pane).unwrap() - 216.0).abs() < 0.5);
+        assert_eq!(
+            chart.indicators().next().unwrap().1.scale(),
+            StudyScale::None
+        );
+        assert!(chart.move_series_to_pane(id, PaneId::MAIN));
+        assert_eq!(chart.panes().len(), 1);
+        assert_eq!(chart.series_pane(id), Some(PaneId::MAIN));
+    }
+
     /// Calendar lookbacks use the last close on or before the target date, not bar counts, and
     /// a study saved before Performance had inputs shows the chart symbol alone over the six
-    /// periods, fitted at the lower right, with falling changes in the red it had.
+    /// periods, fitted at the lower right, with falling changes in the red it had. Year to date
+    /// starts from 1 January's close when the symbol trades then, and from the latest earlier
+    /// close otherwise.
     #[test]
     fn performance_uses_calendar_dates_and_missing_history() {
-        let bars: Vec<_> = [
-            (2023, 9, 29, 80.0),
-            (2023, 12, 29, 100.0),
-            (2024, 2, 28, 120.0),
-            (2024, 2, 29, 125.0),
-            (2024, 3, 22, 150.0),
-            (2024, 3, 31, 180.0),
-        ]
-        .map(|(y, m, d, c)| {
+        let bar = |(y, m, d, c)| {
             Bar::new(
                 Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap(),
                 c,
@@ -598,7 +701,16 @@ mod tests {
                 c,
                 1.0,
             )
-        })
+        };
+        let bars: Vec<_> = [
+            (2023, 9, 29, 80.0),
+            (2023, 12, 29, 100.0),
+            (2024, 2, 28, 120.0),
+            (2024, 2, 29, 125.0),
+            (2024, 3, 22, 150.0),
+            (2024, 3, 31, 180.0),
+        ]
+        .map(bar)
         .to_vec();
         // A literal template saved before Performance had inputs.
         let saved: StudyTemplate = serde_json::from_str(
@@ -686,11 +798,45 @@ mod tests {
                 |shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == "Symbol")
             ));
         }
+        // Year to date starts at 1 January: from its close when the symbol trades then, from the
+        // latest earlier close otherwise. 1 March closes at 121: from 1 January's 110,
+        // 100 * 11 / 110 = 10; from 31 December's 100, 21.
+        let trades_new_year = [
+            (2024, 12, 31, 100.0),
+            (2025, 1, 1, 110.0),
+            (2025, 3, 1, 121.0),
+        ];
+        let closed_new_year = [(2024, 12, 31, 100.0), (2025, 3, 1, 121.0)];
+        for (closes, ytd, from) in [
+            (&trades_new_year[..], 10.0, "01 Jan 2025"),
+            (&closed_new_year[..], 21.0, "31 Dec 2024"),
+        ] {
+            let bars: Vec<_> = closes.iter().copied().map(bar).collect();
+            let mut study = Performance::new();
+            study
+                .set_input("symbols", InputValue::Text(String::new()))
+                .unwrap();
+            study
+                .set_input("periods", InputValue::Text("YTD".into()))
+                .unwrap();
+            study.calculate(&bars);
+            let table = study.table().unwrap();
+            assert_eq!(
+                (&table.rows[0][1], table.cell_tooltips[0][1].as_str()),
+                (&StudyCell::Percent(Some(ytd)), from),
+                "{from}"
+            );
+            assert_eq!(
+                study.values().value(4, bars.len() - 1),
+                Some(ytd),
+                "plot, {from}"
+            );
+        }
     }
 
     /// On an intraday chart each period starts from the requested daily bars, the daily close
     /// winning on the same date, and from the chart's own bars when none are supplied or they
-    /// are out of time order.
+    /// are out of time order, and on 1 January year to date starts from the year before.
     #[test]
     fn performance_takes_period_starts_from_daily_bars() {
         use crate::model::{BarClock, Timeframe};
@@ -730,11 +876,17 @@ mod tests {
         let from_daily = [20.0, 44.0, 100.0, 125.0, 80.0, 260.0].map(Some);
         let without_daily = [Some(12.5), None, None, None, None, None];
         let reversed: Vec<_> = daily.iter().rev().cloned().collect();
+        // On 1 January, year to date starts from the year before, never from the day's
+        // developing daily bar.
+        let new_year = [(2024, 12, 31, 0, 0, 100.0), (2025, 1, 1, 0, 0, 999.0)].map(bar);
+        let new_year_day = [(2025, 1, 1, 14, 30, 105.0), (2025, 1, 1, 14, 31, 110.0)].map(bar);
+        let ytd_only = [None, None, None, None, Some(10.0), None];
         for (chart, supplied, expected) in [
             (today.to_vec(), &daily[..], from_daily),
             (week_before.clone(), &daily[..], from_daily),
             (week_before.clone(), &[][..], without_daily),
             (week_before, &reversed[..], without_daily),
+            (new_year_day.to_vec(), &new_year[..], ytd_only),
         ] {
             let mut study = Performance::new();
             study
@@ -748,6 +900,7 @@ mod tests {
                 clock: BarClock::new(Timeframe::Day1),
                 instrument: None,
                 timeframe: Timeframe::Day1,
+                chart: None,
             };
             study.update_data(&chart, 0, &[source]);
             for (line, expected) in expected.into_iter().enumerate() {
@@ -763,6 +916,147 @@ mod tests {
             study.set_timeframe(Timeframe::Day1);
             assert!(study.data_requests().is_empty());
         }
+    }
+
+    /// Long bars end on their last daily close and start periods from daily closes alone.
+    /// Appending a bar bounds the previous bar again, as a fresh calculation does.
+    #[test]
+    fn performance_measures_long_bars_from_daily_closes() {
+        use crate::model::{BarClock, Timeframe};
+
+        let bar = |(y, m, d, c)| {
+            Bar::new(
+                Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap(),
+                c,
+                c,
+                c,
+                c,
+                1.0,
+            )
+        };
+        let daily = [
+            (2023, 11, 29, 80.0),
+            (2023, 12, 29, 100.0),
+            (2024, 1, 29, 125.0),
+            (2024, 1, 31, 120.0),
+            (2024, 2, 22, 160.0),
+            (2024, 2, 28, 190.0),
+            (2024, 2, 29, 200.0),
+        ]
+        .map(bar);
+        let monthly = [
+            (2023, 11, 1, 80.0),
+            (2023, 12, 1, 100.0),
+            (2024, 1, 1, 120.0),
+            (2024, 2, 1, 200.0),
+        ]
+        .map(bar);
+        let weekly = [
+            (2024, 2, 5, 140.0),
+            (2024, 2, 12, 150.0),
+            (2024, 2, 19, 170.0),
+            (2024, 2, 26, 200.0),
+        ]
+        .map(bar);
+        let new = |timeframe| {
+            let mut study = Performance::new();
+            study
+                .set_input("symbols", InputValue::Text(String::new()))
+                .unwrap();
+            study
+                .set_input(
+                    "periods",
+                    InputValue::Text("1W, 1M, 3M, 6M, YTD, 1Y".into()),
+                )
+                .unwrap();
+            study.set_timeframe(timeframe);
+            study
+        };
+        let request = StudyDataRequest {
+            symbol: String::new(),
+            timeframe: Some(Timeframe::Day1),
+            metric: None,
+        };
+        let changes = [Some(25.0), Some(60.0), Some(150.0), None, Some(100.0), None];
+        let dates = [
+            "",
+            "22 Feb 2024",
+            "29 Jan 2024",
+            "29 Nov 2023",
+            "",
+            "29 Dec 2023",
+            "",
+        ];
+        for (timeframe, chart) in [(Timeframe::Month1, &monthly), (Timeframe::Week1, &weekly)] {
+            for supplied in [&daily[..], &[][..]] {
+                let mut study = new(timeframe);
+                let source = StudyData {
+                    request: request.clone(),
+                    bars: supplied,
+                    clock: BarClock::new(Timeframe::Day1),
+                    instrument: None,
+                    timeframe: Timeframe::Day1,
+                    chart: None,
+                };
+                study.update_data(chart, 0, &[source]);
+                let table = study.table().unwrap();
+                for (cell, expected) in table.rows[0][1..].iter().zip(if supplied.is_empty() {
+                    [None; 6]
+                } else {
+                    changes
+                }) {
+                    match expected {
+                        Some(expected) => {
+                            let StudyCell::Percent(Some(got)) = cell else {
+                                panic!("a percentage: {cell:?}")
+                            };
+                            assert!(
+                                (got - expected).abs() < 1e-10,
+                                "{timeframe:?}: {got}, expected {expected}"
+                            );
+                        }
+                        None => assert_eq!(*cell, StudyCell::Text("No data".into())),
+                    }
+                }
+                assert_eq!(
+                    table.cell_tooltips[0],
+                    if supplied.is_empty() { [""; 7] } else { dates }
+                );
+                assert_eq!(study.data_requests(), std::slice::from_ref(&request));
+                if timeframe == Timeframe::Month1 && !supplied.is_empty() {
+                    // January closes at 120; all three starts use December's daily close, 100.
+                    for line in [0, 1, 4] {
+                        assert!((study.values().value(line, 2).unwrap() - 20.0).abs() < 1e-10);
+                    }
+                    assert_eq!(study.values().value(2, 2), None);
+                }
+            }
+        }
+        let daily = [daily.as_slice(), &[bar((2024, 3, 1, 210.0))]].concat();
+        let grown = [monthly.as_slice(), &[bar((2024, 3, 1, 210.0))]].concat();
+        let sources = [StudyData {
+            request,
+            bars: &daily,
+            clock: BarClock::new(Timeframe::Day1),
+            instrument: None,
+            timeframe: Timeframe::Day1,
+            chart: None,
+        }];
+        let mut updated = new(Timeframe::Month1);
+        updated.update_data(&monthly, 0, &sources);
+        updated.update_data(&grown, monthly.len(), &sources);
+        let mut fresh = new(Timeframe::Month1);
+        fresh.update_data(&grown, 0, &sources);
+        for line in 0..6 {
+            for bar in 0..grown.len() {
+                assert_eq!(
+                    updated.values().value(line, bar),
+                    fresh.values().value(line, bar),
+                    "line {line}, bar {bar}"
+                );
+            }
+        }
+        assert!((updated.values().value(1, 3).unwrap() - 60.0).abs() < 1e-10);
     }
 
     /// The chart symbol and each listed symbol get a row under a column per listed period, each
@@ -823,6 +1117,7 @@ mod tests {
                 clock: BarClock::new(Timeframe::Day1),
                 instrument,
                 timeframe: Timeframe::Day1,
+                chart: None,
             }
         }
         let source = supplied(&msft, None);

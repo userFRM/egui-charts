@@ -39,8 +39,13 @@ pub(super) struct LiveState {
     realized: f64,
     rejected: usize,
     tick: u64,
+    margin_calls: Vec<(DateTime<Utc>, f64)>,
+    peak_margin: f64,
+    range: Option<EquityRange>,
     instrument_currency: Option<String>,
     exchange_rates: Vec<Bar>,
+    calculation_bars: Vec<Bar>,
+    bar_clock: Option<BarClock>,
     rate: f64,
     unconverted: bool,
 }
@@ -52,7 +57,7 @@ fn same_bar(a: &Bar, b: &Bar) -> bool {
             == [b.open, b.high, b.low, b.close, b.volume].map(f64::to_bits)
 }
 
-fn same_bars(a: &[Bar], b: &[Bar]) -> bool {
+pub(crate) fn same_bars(a: &[Bar], b: &[Bar]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_bar(a, b))
 }
 
@@ -70,7 +75,7 @@ fn same_lower(a: &[Bar], b: &[Bar], before: Option<DateTime<Utc>>) -> bool {
 }
 
 impl Backtest {
-    /// The current live report, available after the first [`Self::update`].
+    /// The current live report, available after the first [`Self::update`] or [`Self::update_closed_async`].
     /// With tick recalculation, trades include forming-bar fills; equity marks are closed bars.
     /// [`Self::run`] remains an independent historical calculation and does not change this state.
     pub fn report(&self) -> Option<&StrategyReport> {
@@ -92,8 +97,9 @@ impl Backtest {
     /// to a live run.
     ///
     /// A correction before the previous forming bar, removed history, changed settings, inputs or
-    /// instrument currency, or changed exchange rates while amounts convert, rebuilds from the
-    /// start using `Strategy::prepare` to reset decision state. Replayed fills before the previous
+    /// instrument currency, calculation bars or bar clock, or changed exchange rates while
+    /// amounts convert, rebuilds from the start using `Strategy::prepare` to reset decision state.
+    /// Replayed fills before the previous
     /// forming bar are not returned again. An observed forming bar can be
     /// revised freely without a rebuild. Start a new `Backtest` for a different strategy instance.
     ///
@@ -106,6 +112,45 @@ impl Backtest {
         bars: &[Bar],
         lower: &[Bar],
     ) -> Vec<StrategyFill> {
+        let closed = bars.len().saturating_sub(1);
+        finish_now(self.advance(strategy, bars, lower, closed, &mut None))
+    }
+
+    /// Continues a run on closed bars, yielding after every 256 chart or finer bars as
+    /// [`Self::run_async`] does. Pass the same strategy and full history, oldest first, each time.
+    ///
+    /// The first call leaves [`Self::report`] equal to [`Self::run`] over the same bars; later
+    /// calls process appended bars and return their fills. Corrections to processed bars or
+    /// finer bars, removed history, changed settings, inputs, instrument currency, calculation
+    /// bars or bar clock, or changed exchange rates while amounts convert, rebuild the run
+    /// without returning replayed fills again. Identical calls do nothing.
+    /// [`BacktestSettings::end_time`] bounds the run as in [`Self::run`]; there is no forming-bar
+    /// decision, regardless of `recalculate_on_every_update`. Dropping an unfinished future
+    /// discards the run, as a new `Backtest` would.
+    ///
+    /// # Panics
+    ///
+    /// Panics if starting capital is not finite or bar timestamps are not strictly increasing.
+    pub async fn update_closed_async(
+        &mut self,
+        strategy: &mut dyn Strategy,
+        bars: &[Bar],
+        lower: &[Bar],
+    ) -> Vec<StrategyFill> {
+        let closed = self.settings.bars_before_end(self.timeframe, bars);
+        self.advance(strategy, bars, lower, closed, &mut Some(0))
+            .await
+    }
+
+    async fn advance(
+        &mut self,
+        strategy: &mut dyn Strategy,
+        bars: &[Bar],
+        lower: &[Bar],
+        closed: usize,
+        processed: &mut Option<usize>,
+    ) -> Vec<StrategyFill> {
+        let forming = processed.is_none();
         assert!(
             bars.windows(2).all(|pair| pair[0].time < pair[1].time),
             "bar times must be strictly increasing"
@@ -115,19 +160,22 @@ impl Backtest {
         let replay_before = previous
             .as_ref()
             .and_then(|live| live.bars.last().map(|bar| bar.time));
-        let replayed_forming = previous.as_ref().is_some_and(|live| live.forming.is_some());
+        // The previous last bar announced fills if observed forming or already processed closed.
+        let replayed_forming = previous
+            .as_ref()
+            .is_some_and(|live| live.forming.is_some() || live.processed == live.bars.len());
         let replayed = |time| {
             replay_before
                 .is_some_and(|before| time < before || (replayed_forming && time == before))
         };
         let sequence = previous.as_ref().map_or(0, |live| live.sequence);
         let rebuild = previous.as_ref().is_none_or(|live| {
-            let prefix = live.bars.len().saturating_sub(1);
+            let prefix = live.processed;
             bars.len() < live.bars.len()
                 || !same_bars(&live.bars[..prefix], &bars[..prefix.min(bars.len())])
                 || live
                     .bars
-                    .last()
+                    .get(prefix)
                     .zip(bars.get(prefix))
                     .is_some_and(|(a, b)| a.time != b.time)
                 || live.settings != self.settings
@@ -135,10 +183,21 @@ impl Backtest {
                 || live.report.name != self.name
                 || live.report.symbol != self.symbol
                 || live.report.timeframe != self.timeframe
+                || live.bar_clock != self.bar_clock
+                || !same_bars(&live.calculation_bars, &self.calculation_bars)
                 || live.instrument_currency != self.instrument_currency
                 || (self.conversion().is_some()
                     && !same_bars(&live.exchange_rates, &self.exchange_rates))
-                || !same_lower(&live.lower, lower, replay_before)
+                || !same_lower(
+                    &live.lower,
+                    lower,
+                    if forming {
+                        replay_before
+                    } else {
+                        // Only finer bars of previously processed chart bars can correct a run.
+                        bars.get(live.processed).map(|bar| bar.time)
+                    },
+                )
         });
         let mut live = if rebuild {
             Box::new(LiveState {
@@ -156,8 +215,13 @@ impl Backtest {
                 realized: 0.0,
                 rejected: 0,
                 tick: 0,
+                margin_calls: Vec::new(),
+                peak_margin: 0.0,
+                range: None,
                 instrument_currency: self.instrument_currency.clone(),
                 exchange_rates: self.exchange_rates.clone(),
+                calculation_bars: self.calculation_bars.clone(),
+                bar_clock: self.bar_clock.clone(),
                 rate: if self.conversion().is_some() {
                     f64::NAN
                 } else {
@@ -176,9 +240,8 @@ impl Backtest {
         {
             *count = lower.len().to_string();
         }
-        let closed = bars.len().saturating_sub(1);
         let tick_changed =
-            self.settings.recalculate_on_every_update && !same_bars(&live.bars, bars);
+            forming && self.settings.recalculate_on_every_update && !same_bars(&live.bars, bars);
         let changed = rebuild || live.processed < closed || tick_changed;
         if !changed {
             live.bars = bars.to_vec();
@@ -189,7 +252,7 @@ impl Backtest {
         let candles = (self.settings.chart_type == ChartType::Heikin)
             .then(|| crate::model::BarData::from_bars(bars.to_vec()).to_heikin_ashi());
         let decision_bars = candles.as_ref().map_or(bars, |data| data.bars.as_slice());
-        let calculation_bars = if self.settings.recalculate_on_every_update {
+        let calculation_bars = if forming && self.settings.recalculate_on_every_update {
             decision_bars
         } else if self.settings.recalculate_on_history
             && !self.settings.chart_type.transforms_data()
@@ -198,6 +261,8 @@ impl Backtest {
         } else {
             &decision_bars[..closed]
         };
+        strategy.set_timeframe(self.timeframe);
+        let calculation = self.supply_calculation(strategy, decision_bars);
         if rebuild {
             strategy.prepare(calculation_bars);
         } else {
@@ -212,6 +277,7 @@ impl Backtest {
             rejected: live.rejected,
             settings: &self.settings,
             strategy,
+            calculation,
             history: Cow::Borrowed(&[]),
             prices: bars,
             trading: false,
@@ -219,6 +285,9 @@ impl Backtest {
             open_tick: 0,
             fills: Some(&mut fills),
             forming: false,
+            margin_calls: std::mem::take(&mut live.margin_calls),
+            peak_margin: live.peak_margin,
+            range: live.range,
             rates: self.rates(),
             rate: live.rate,
             unconverted: Cell::new(live.unconverted),
@@ -234,6 +303,12 @@ impl Backtest {
             && let Some(mark) = live.report.equity.last_mut()
         {
             mark.0 = bars[live.processed].time;
+            if let Some(mark) = live.report.margin.last_mut() {
+                mark.0 = bars[live.processed].time;
+            }
+            if let Some(mark) = live.report.peak_margin.last_mut() {
+                mark.0 = bars[live.processed].time;
+            }
         }
         if live.report.equity.is_empty() {
             run.start_equity(self.timeframe, &bars[..closed], &mut live.report);
@@ -253,13 +328,19 @@ impl Backtest {
                 }
                 live.forming = None;
             }
-            run.closed_bar(
-                &decision_bars[..closed],
+            run.closed_bar_inner(
+                if forming {
+                    &decision_bars[..closed]
+                } else {
+                    decision_bars
+                },
                 index,
                 &finer,
                 &mut live.report,
                 !observed,
-            );
+                processed,
+            )
+            .await;
             if rebuild
                 && replayed(bar.time)
                 && let Some(fills) = &mut run.fills
@@ -268,8 +349,9 @@ impl Backtest {
             }
         }
         live.processed = closed;
-        if self.settings.recalculate_on_every_update
-            && let Some(bar) = bars.last()
+        if forming
+            && self.settings.recalculate_on_every_update
+            && let Some(bar) = bars.get(closed)
         {
             let previous_price = live
                 .forming
@@ -306,6 +388,9 @@ impl Backtest {
         live.realized = run.realized;
         live.rejected = run.rejected;
         live.tick = run.tick;
+        live.margin_calls = run.margin_calls;
+        live.peak_margin = run.peak_margin;
+        live.range = run.range;
         live.rate = run.rate;
         live.unconverted = run.unconverted.get();
         if live.unconverted {
@@ -349,6 +434,7 @@ impl<'a> Run<'a> {
         };
         if self.trading {
             if previous.is_none() {
+                self.range = None;
                 self.open_bar();
             }
             self.fill_along(
@@ -411,6 +497,23 @@ mod tests {
 
     #[test]
     fn closed_updates_match_full_runs_without_repeating_decisions() {
+        fn closed(
+            engine: &mut Backtest,
+            strategy: &mut dyn Strategy,
+            bars: &[Bar],
+            lower: &[Bar],
+        ) -> (Vec<StrategyFill>, usize) {
+            let mut future = std::pin::pin!(engine.update_closed_async(strategy, bars, lower));
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            for polls in 1.. {
+                if let std::task::Poll::Ready(fills) =
+                    std::future::Future::poll(future.as_mut(), &mut context)
+                {
+                    return (fills, polls);
+                }
+            }
+            unreachable!()
+        }
         let bars: Vec<_> = [100., 101., 104., 102., 98., 95., 97., 99., 96.]
             .into_iter()
             .enumerate()
@@ -523,6 +626,45 @@ mod tests {
                 engine.report(),
                 Some(&engine.run(&mut Script::default(), &corrected[..8], &[]))
             );
+
+            let mut engine = engine.clone();
+            engine.live = None;
+            let mut script = Script::default();
+            let mut sequence = 0;
+            for count in 0..=bars.len() {
+                let lower = if magnifier {
+                    bars[..count].to_vec()
+                } else {
+                    vec![]
+                };
+                for fill in closed(&mut engine, &mut script, &bars[..count], &lower).0 {
+                    sequence += 1;
+                    assert_eq!(fill.sequence, sequence);
+                }
+                assert_eq!(
+                    engine.report(),
+                    Some(&engine.run(&mut Script::default(), &bars[..count], &lower,)),
+                    "closed prefix {count}, close {fill_on_close}, start {start_time:?}"
+                );
+                assert_eq!(script.decisions, (1..=count).collect::<Vec<_>>());
+                assert!(
+                    closed(&mut engine, &mut script, &bars[..count], &lower)
+                        .0
+                        .is_empty()
+                );
+                assert_eq!(script.decisions, (1..=count).collect::<Vec<_>>());
+            }
+            assert_eq!(script.resets, 1);
+            assert!(
+                closed(&mut engine, &mut script, &corrected, &[])
+                    .0
+                    .is_empty()
+            );
+            assert_eq!(script.resets, 2);
+            assert_eq!(
+                engine.report(),
+                Some(&engine.run(&mut Script::default(), &corrected, &[]))
+            );
         }
         // A rate missing at minute 3 alone withholds every later report, as it does the run's.
         let mut engine = Backtest::new("Live", "SYM", Timeframe::Min1, 10_000.0);
@@ -557,7 +699,62 @@ mod tests {
                 &[],
             );
             assert_eq!(engine.report(), Some(&full), "{name}");
+            for (variant, settings) in [
+                ("default", BacktestSettings::default()),
+                (
+                    "history",
+                    BacktestSettings {
+                        recalculate_on_history: true,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "ticks",
+                    BacktestSettings {
+                        recalculate_on_every_update: true,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "ticks and history",
+                    BacktestSettings {
+                        recalculate_on_every_update: true,
+                        recalculate_on_history: true,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "Heikin",
+                    BacktestSettings {
+                        chart_type: ChartType::Heikin,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "end",
+                    BacktestSettings {
+                        end_time: Some(source[42].time),
+                        ..Default::default()
+                    },
+                ),
+            ] {
+                let mut engine = Backtest::new(name, "SYM", Timeframe::Min1, 10_000.0);
+                engine.settings = settings;
+                let mut strategy = factory.create(name).unwrap();
+                for count in (0..=80).step_by(7).chain([80]) {
+                    closed(&mut engine, strategy.as_mut(), &source[..count], &[]);
+                    let full = engine.run(
+                        factory.create(name).unwrap().as_mut(),
+                        &source[..count],
+                        &[],
+                    );
+                    assert_eq!(engine.report(), Some(&full), "{variant} {name} {count}");
+                }
+            }
         }
+        let mut engine = Backtest::new("Closed", "SYM", Timeframe::Min1, 10_000.0);
+        let many: Vec<_> = (0..1000).map(|i| bar(i, 100.0)).collect();
+        assert!(closed(&mut engine, &mut Script::default(), &many, &[]).1 > 1);
     }
 
     #[test]
@@ -600,6 +797,9 @@ mod tests {
         let report = engine.report().unwrap();
         assert_eq!(report.equity.last().unwrap().1, 10_000.);
         assert!(report.trades[0].exit.is_none());
+        bars[1].low = 104.;
+        bars[1].close = 104.;
+        assert!(engine.update(&mut strategy, &bars, &[]).is_empty());
         bars[1].high = 112.;
         bars[1].close = 112.;
         let fills = engine.update(&mut strategy, &bars, &[]);
@@ -622,47 +822,174 @@ mod tests {
                 .profit,
             4.
         );
+        // Two units reached the target at 110 during bar 1, using 220 at full funding,
+        // before it closed flat in a later update.
+        bars.push(bar(2, 112.));
+        engine.update(&mut strategy, &bars, &[]);
+        let report = engine.report().unwrap();
+        assert_eq!(report.margin.last(), Some(&(bars[1].time, 0.)));
+        assert_eq!(report.peak_margin.last(), Some(&(bars[1].time, 220.)));
+        // Two units from 108 fall to 104, then exit at 110: fall 8 and rise 12.
+        assert_eq!(
+            engine.report().unwrap().equity_ranges.last(),
+            Some(&EquityRange::new(9992.0, 10_004.0, 8.0, 12.0))
+        );
         // A historical rebuild must not announce the observed forming-bar executions again.
         bars[0].high = 121.;
         assert!(engine.update(&mut strategy, &bars, &[]).is_empty());
     }
 
-    /// A fill carries no study output, so a plot placeholder in a fill message is missing.
+    /// Fill fields belong to the execution, stay unknown on price alerts and expand only once.
     #[test]
     #[cfg(feature = "alert-engine")]
-    fn strategy_fill_message_reads_no_study_value() {
+    fn fill_fields_fill_fill_messages_and_stay_as_written_elsewhere() {
         use crate::model::{Alert, AlertCondition};
         use crate::services::{AlertEngine, AlertEvent};
         use std::sync::{Arc, Mutex};
-        let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
-        alert.message = "{{value}} rsi {{plot_3_0}}".into();
+        let fill = StrategyFill {
+            sequence: 1,
+            time: DateTime::UNIX_EPOCH,
+            order_id: "Reverse".into(),
+            side: OrderSide::Sell,
+            price: 180.0,
+            quantity: 7.0,
+            position: -3.0,
+        };
+        for (template, order, expected, price_expected) in [
+            ("{{order_id}}", "Reverse", "Reverse", "{{order_id}}"),
+            ("{{side}}", "Reverse", "Sell", "{{side}}"),
+            ("{{quantity}}", "Reverse", "7", "{{quantity}}"),
+            ("{{position}}", "Reverse", "-3", "{{position}}"),
+            (
+                "{{value}} rsi {{plot_3_0}}",
+                "Reverse",
+                "180 rsi NaN",
+                "101.5 rsi NaN",
+            ),
+            ("{{order_id}}", "{{close}}", "{{close}}", "{{order_id}}"),
+        ] {
+            let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
+            alert.message = template.into();
+            let delivered = Arc::new(Mutex::new(Vec::new()));
+            let sink = delivered.clone();
+            let engine = AlertEngine::new()
+                .with_alerts(vec![alert.clone()])
+                .on_trigger(move |_, event| sink.lock().unwrap().push(event.clone()));
+            let mut fill = fill.clone();
+            fill.order_id = order.into();
+            engine.strategy_fills(
+                "run-1",
+                "SYM",
+                None,
+                Timeframe::Min1,
+                &[fill],
+                DateTime::UNIX_EPOCH,
+            );
+            let events = delivered.lock().unwrap();
+            let [AlertEvent::TriggeredForSymbol { message, .. }] = events.as_slice() else {
+                panic!("one fill");
+            };
+            assert_eq!(message, expected, "{template}");
+            let bar = Bar::new(DateTime::UNIX_EPOCH, 99.0, 102.0, 98.0, 101.5, 1000.0);
+            alert.condition = AlertCondition::Above(100.0);
+            assert_eq!(
+                alert.expand_message("SYM", None, Timeframe::Min1, &bar, bar.time, |source| {
+                    (*source == crate::model::AlertSource::Price).then_some(bar.close)
+                }),
+                price_expected
+            );
+        }
+    }
+
+    /// The tester intent contains everything a host needs to run the same decisions live.
+    #[test]
+    #[cfg(all(feature = "alert-engine", feature = "ui"))]
+    fn a_run_started_from_the_add_alert_intent_alerts_on_its_fills() {
+        use crate::model::{Alert, AlertCondition};
+        use crate::services::{AlertEngine, AlertEvent};
+        use crate::ui::strategy_report::{StrategyTester, StrategyTesterAction};
+        use egui_kittest::{Harness, kittest::Queryable};
+        use std::sync::{Arc, Mutex};
+        let bars: Vec<_> = [100.0, 101.0, 102.0, 103.0, 100.0, 99.0, 98.0, 101.0, 101.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, close)| bar(i as i64, close))
+            .collect();
+        let mut tester = StrategyTester::default();
+        tester.select_strategy("Consecutive Up/Down").unwrap();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .build_ui_state(
+                |ui, (tester, actions): &mut (StrategyTester, Vec<StrategyTesterAction>)| {
+                    actions.extend(tester.show(ui, "SYM", Timeframe::Min1, &bars[..8]));
+                },
+                (tester, Vec::new()),
+            );
+        h.get_by_label("Add alert").click();
+        h.run();
+        let StrategyTesterAction::AddAlert {
+            strategy,
+            inputs,
+            settings,
+            symbol,
+            timeframe,
+        } = h.state_mut().1.pop().expect("alert intent")
+        else {
+            panic!("alert intent");
+        };
+        let mut script = StrategyFactory::new().create(&strategy).unwrap();
+        for (id, value) in inputs {
+            script.set_input(&id, value).unwrap();
+        }
+        let mut run = Backtest::new(&strategy, &symbol, timeframe, settings.initial_capital);
+        run.settings = settings;
+        let mut alert = Alert::new(&symbol, AlertCondition::StrategyFills("run-1".into()));
+        alert.timeframe = Some(timeframe);
         let delivered = Arc::new(Mutex::new(Vec::new()));
         let sink = delivered.clone();
         let engine = AlertEngine::new()
             .with_alerts(vec![alert])
             .on_trigger(move |_, event| sink.lock().unwrap().push(event.clone()));
-        let fill = StrategyFill {
-            sequence: 1,
-            time: DateTime::UNIX_EPOCH,
-            order_id: "Long".into(),
-            side: OrderSide::Buy,
-            price: 187.5,
-            quantity: 2.0,
-            position: 2.0,
-        };
-        engine.strategy_fills(
-            "run-1",
-            "SYM",
-            None,
-            Timeframe::Min1,
-            &[fill],
-            DateTime::UNIX_EPOCH,
+        for count in 1..=bars.len() {
+            let fills = run.update(script.as_mut(), &bars[..count], &[]);
+            engine.strategy_fills(
+                "run-1",
+                &symbol,
+                None,
+                timeframe,
+                &fills,
+                bars[count - 1].time,
+            );
+        }
+        let actual: Vec<_> = delivered
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                AlertEvent::TriggeredForSymbol {
+                    time,
+                    price,
+                    message,
+                    ..
+                } => Some((*time, *price, message.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    bars[4].time,
+                    Some(100.0),
+                    "Buy 1 at 100.00, position 1".into()
+                ),
+                (
+                    bars[7].time,
+                    Some(101.0),
+                    "Sell 2 at 101.00, position -1".into()
+                ),
+            ]
         );
-        let events = delivered.lock().unwrap();
-        let [AlertEvent::TriggeredForSymbol { message, .. }] = events.as_slice() else {
-            panic!("one fill");
-        };
-        assert_eq!(message, "187.5 rsi NaN");
     }
 
     #[test]

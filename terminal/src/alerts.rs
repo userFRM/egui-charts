@@ -57,19 +57,29 @@ impl Terminal {
             .map(|list| (list.name.clone(), list.name.clone()))
             .collect();
         let settings = &self.studies.settings.alerts;
-        self.alerts.panel.set_sound(settings.play_sound.then(|| {
-            if settings.sound.is_empty() {
+        self.alerts
+            .panel
+            .set_sound(Some(if settings.sound.is_empty() {
                 self.services.sounds.first().cloned().unwrap_or_default()
             } else {
                 settings.sound.clone()
-            }
-        }));
+            }));
         self.alerts
             .panel
             .set_notification_seconds(settings.notification_seconds as f32);
-        self.alerts
-            .panel
-            .set_symbol(self.charts[self.active].symbol());
+        let chart = &self.charts[self.active];
+        self.alerts.panel.set_price(
+            chart.symbol(),
+            chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .rev()
+                .find(|bar| !bar.is_whitespace())
+                .map(|bar| bar.close),
+            chart
+                .instrument()
+                .and_then(|instrument| instrument.tick_size),
+        );
         let inputs = self.charts[self.active].alert_inputs();
         self.alerts.panel.set_sources(inputs.sources.clone());
         self.alerts
@@ -150,11 +160,7 @@ impl Terminal {
                         self.alerts.panel.alerts().iter().filter(|alert| {
                             alert.symbol == chart.symbol() && alert.watchlist.is_none()
                         }),
-                        if series.color != egui_charts::model::SeriesAlerts::default().color {
-                            series.color
-                        } else {
-                            settings.alert_color
-                        },
+                        series.color.unwrap_or(settings.alert_color),
                         settings.show_alert_labels && series.labels,
                         settings.show_active_only,
                         |price| format!("{price:.decimals$} {currency}"),
@@ -443,7 +449,6 @@ mod tests {
             .with_sounds(vec!["Bell".into()], move |name, volume| {
                 played.lock().unwrap().push((name.to_owned(), volume));
             });
-        terminal.studies.settings.alerts.play_sound = true;
         terminal.studies.settings.alerts.sound = "Bell".into();
         terminal.studies.settings.alerts.sound_volume = 0.35;
         let study = terminal.chart_mut().add_indicator(Box::new(SMA::new(2)));

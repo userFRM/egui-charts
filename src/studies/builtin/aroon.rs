@@ -43,7 +43,7 @@ impl Aroon {
     /// Create a new Aroon indicator
     ///
     /// # Arguments
-    /// * `period` - Lookback period (typically 25)
+    /// * `period` - Lookback period (typically 14)
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -52,11 +52,6 @@ impl Aroon {
             down_color: palette::BLUE,
             visible: true,
         }
-    }
-
-    /// Create with default param (25)
-    pub fn default_params() -> Self {
-        Self::new(25)
     }
 
     /// Set colors for up and down lines
@@ -183,6 +178,10 @@ impl Indicator for Aroon {
 
     fn line_count(&self) -> usize {
         2 // Aroon Up and Aroon Down
+    }
+
+    fn draws_only_plots(&self) -> bool {
+        true
     }
 
     fn is_visible(&self) -> bool {

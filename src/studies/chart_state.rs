@@ -20,6 +20,8 @@ struct ZoomState {
     right_offset: f64,
     /// Manual price range in prices, or `None` when auto-scaled.
     price_range: Option<(f64, f64)>,
+    /// Scale units per bar while the price scale is locked to the bar spacing.
+    bar_ratio: Option<f64>,
 }
 
 /// Backend chart state -- owns bar data, time-scale coordinate system,
@@ -297,9 +299,10 @@ impl ChartState {
         &mut self.price_scale
     }
 
-    /// Fits the price scale to the visible bars and the visible values of the visible overlay
-    /// studies in `indicators`, unless the user scaled by hand, and returns this frame's
-    /// transform: percentage and indexed modes are relative to the first visible close.
+    /// Fits the price scale to the visible bars and values of the visible overlay studies in
+    /// `indicators` and the studies that keep their plots on the price chart, unless the user
+    /// scaled by hand, and returns this frame's transform: percentage and indexed modes are
+    /// relative to the first visible close.
     pub fn fit_price_scale<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
@@ -349,8 +352,11 @@ impl ChartState {
             .into_iter()
             .filter(|study| {
                 study.is_visible()
-                    && study.is_overlay()
-                    && study.scale() == crate::studies::StudyScale::Main
+                    && if study.is_overlay() {
+                        study.scale() == crate::studies::StudyScale::Main
+                    } else {
+                        study.plots_on_price()
+                    }
             })
             .flat_map(|study| {
                 #[cfg(not(feature = "drawings"))]
@@ -509,11 +515,13 @@ impl ChartState {
                 .price_scale
                 .is_manual()
                 .then(|| (t.to_price(range.min), t.to_price(range.max))),
+            bar_ratio: self.price_scale.bar_ratio(),
         };
         self.zoom_history.push(curr_state);
     }
 
-    /// Restore previous zoom state (zoom out button)
+    /// Restore previous zoom state (zoom out button). A price scale locked to the bar spacing
+    /// before the zoom and still locked gets its ratio back.
     pub fn pop_zoom_state(&mut self) -> bool {
         if let Some(state) = self.zoom_history.pop() {
             self.time_scale.set_bar_spacing(state.bar_spacing);
@@ -526,7 +534,13 @@ impl ChartState {
                 .map(|(min, max)| (t.to_scale(min), t.to_scale(max)));
             match range {
                 Some((min, max)) if min.is_finite() && max.is_finite() => {
-                    self.price_scale.set_range(min, max)
+                    // A scale locked before the zoom and still locked gets its ratio back:
+                    // restoring the range is not a zoom, which would rescale it.
+                    let ratio = self.price_scale.bar_ratio().and(state.bar_ratio);
+                    self.price_scale.set_range(min, max);
+                    if ratio.is_some() {
+                        self.price_scale.set_bar_ratio(ratio);
+                    }
                 }
                 _ => self.price_scale.reset(),
             }

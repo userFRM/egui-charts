@@ -14,7 +14,7 @@ use egui_charts::ui::top_toolbar::components::indicator_dialog::IndicatorDialogA
 use egui_charts::ui::top_toolbar::components::settings_menu::SettingsAction;
 use egui_charts::ui::top_toolbar::{CompareAction, LayoutAction, TopToolbarAction};
 use egui_charts::ui::trading::{AccountPanelAction, BrokerPickerAction};
-use egui_charts::ui::widget_bar::panels::object_tree::ObjectTreeAction;
+use egui_charts::ui::widget_bar::ObjectTreeAction;
 use egui_charts::ui::widget_bar::{
     AlertPanelAction, CalendarAction, HotlistsAction, NewsAction, NotificationsAction,
     ProductsAction, ScreenerAction, WatchlistAction, WidgetBarAction,

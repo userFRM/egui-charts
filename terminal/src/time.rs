@@ -7,12 +7,14 @@ use chrono::{Datelike, Duration, Months, NaiveDate, NaiveTime, TimeZone, Utc, We
 use egui_charts::Chart;
 use egui_charts::config::{KeyboardAction, TimezoneMode};
 use egui_charts::localization as l10n;
-use egui_charts::model::{Bar, BoxSizeMethod, ChartType, Session, Timeframe, TimezoneId};
+use egui_charts::model::{
+    Bar, BoxSizeMethod, ChartType, DateRange, Session, Timeframe, TimezoneId,
+};
 use egui_charts::services::UserSettings;
 use egui_charts::ui::Control;
 use egui_charts::ui::floating_replay_control::ReplayControlAction;
 use egui_charts::ui::timeframe_toolbar::{
-    DatePicker, DatePickerAction, DateRange, SessionType, TimeframeToolbar, TimeframeToolbarAction,
+    DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction,
 };
 use egui_charts::ui::top_toolbar::{ChartTypePreferences, TimeframePreferences, TopToolbarAction};
 use egui_charts::ui_kit::dialog::DialogFooter;

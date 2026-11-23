@@ -79,13 +79,110 @@ pub enum OrderType {
         /// Limit price of the order after triggering.
         limit: f64,
     },
+    /// As a stop order whose stop follows the best price since it started trailing, at
+    /// `distance` behind it, and never moves back: below the highest price for a sell, above
+    /// the lowest for a buy. It starts trailing once the market trades at `activation` or
+    /// beyond it (at or above it for a sell, at or below for a buy), or at once from the price
+    /// when it is placed without one. [`Order::trailing_stop`] reports where the stop stands.
+    TrailingStop {
+        /// How far the stop stays behind the best price.
+        distance: TrailDistance,
+        /// The price at which the stop starts trailing, or `None` to start at once.
+        activation: Option<f64>,
+    },
+}
+
+/// How far a [trailing stop](OrderType::TrailingStop) stays behind the best price since it
+/// started trailing.
+///
+/// ```
+/// use egui_charts::model::{OrderRequest, OrderSide, OrderType, TrailDistance};
+///
+/// let distance = TrailDistance::Ticks { ticks: 8, tick_size: 0.25 };
+/// let order_type = OrderType::TrailingStop { distance, activation: Some(4_510.0) };
+/// let order = OrderRequest::new("ES", OrderSide::Sell, 1.0, order_type);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum TrailDistance {
+    /// In the symbol's price units, positive.
+    Price(f64),
+    /// A positive number of ticks of `tick_size`, the symbol's positive tick size, which the
+    /// order carries so that any account can price it.
+    Ticks {
+        /// How many ticks.
+        ticks: u32,
+        /// The price units of one tick.
+        tick_size: f64,
+    },
+    /// A percentage of the best price's magnitude, above 0 and below 100.
+    Percent(f64),
+}
+
+impl TrailDistance {
+    /// The distance in price units from `best`: the price, the ticks times the tick size, or
+    /// the percentage of `best`'s magnitude.
+    pub(crate) fn amount(self, best: f64) -> f64 {
+        match self {
+            Self::Price(price) => price,
+            Self::Ticks { ticks, tick_size } => f64::from(ticks) * tick_size,
+            Self::Percent(percent) => best.abs() * percent / 100.0,
+        }
+    }
+
+    /// Whether the distance is usable: a positive finite price, a positive number of ticks of a
+    /// positive finite tick size with a finite product, or a finite percentage above 0 and
+    /// below 100.
+    pub(crate) fn is_valid(self) -> bool {
+        match self {
+            Self::Price(price) => price.is_finite() && price > 0.0,
+            Self::Ticks { ticks, tick_size } => {
+                ticks > 0
+                    && tick_size.is_finite()
+                    && tick_size > 0.0
+                    && (f64::from(ticks) * tick_size).is_finite()
+            }
+            Self::Percent(percent) => percent > 0.0 && percent < 100.0,
+        }
+    }
+}
+
+/// Best price since reaching `level`, in direction `s` (1 long, -1 short).
+pub(crate) fn trailed(
+    best: Option<f64>,
+    level: f64,
+    s: f64,
+    points: impl IntoIterator<Item = f64>,
+) -> Option<f64> {
+    points.into_iter().fold(best, |best, point| match best {
+        Some(best) => Some(if s * (point - best) > 0.0 {
+            point
+        } else {
+            best
+        }),
+        None => (s * (point - level) >= 0.0).then_some(point),
+    })
+}
+
+/// The stop `distance` price units behind `best` in direction `s` (1 long, -1 short), at 15
+/// significant digits, so a stop one tick behind a decimal price lands on that tick's price.
+pub(crate) fn trailing_stop(best: f64, s: f64, distance: f64) -> f64 {
+    settled(best - s * distance)
+}
+
+/// `value` at 15 significant digits, the most an f64 writes faithfully, so a computed
+/// 0.3 - 0.1 is 0.2, not 0.19999999999999998.
+pub(crate) fn settled(value: f64) -> f64 {
+    format!("{value:.14e}").parse().unwrap_or(value)
 }
 
 impl OrderType {
     /// Where an order of this type on `side` fills while the price moves from `start` to `end`,
     /// or `None` if it does not: a market order at `start`, a limit or stop already reached at
     /// `start` there, one the movement reaches at its price. A stop-limit order returns the
-    /// point where its stop triggered; the caller continues it from there as a limit order.
+    /// point where its stop triggered; the caller continues it from there as a limit order. A
+    /// trailing stop returns `None`: its stop is not part of its type, so callers price it from
+    /// its current stop.
     pub(crate) fn fill_price(&self, side: OrderSide, start: f64, end: f64) -> Option<f64> {
         let buy = side == OrderSide::Buy;
         let reach = |price: f64, at_or_below: bool| {
@@ -108,7 +205,29 @@ impl OrderType {
             OrderType::Market => Some(start),
             OrderType::Limit(limit) => reach(limit, buy),
             OrderType::Stop(stop) | OrderType::StopLimit { stop, .. } => reach(stop, !buy),
+            OrderType::TrailingStop { .. } => None,
         }
+    }
+
+    /// A trailing stop's best price after the market trades at `price`, from `best` before it,
+    /// and its stop there; `None` before it starts trailing and for other order types. The
+    /// direction is the position the order protects: up for a sell, down for a buy.
+    pub(crate) fn trail(
+        &self,
+        side: OrderSide,
+        best: Option<f64>,
+        price: f64,
+    ) -> Option<(f64, f64)> {
+        let OrderType::TrailingStop {
+            distance,
+            activation,
+        } = *self
+        else {
+            return None;
+        };
+        let s = if side == OrderSide::Sell { 1.0 } else { -1.0 };
+        let best = trailed(best, activation.unwrap_or(price), s, [price])?;
+        Some((best, trailing_stop(best, s, distance.amount(best))))
     }
 }
 
@@ -187,6 +306,9 @@ pub struct OrderRequest {
     pub stop_loss: Option<f64>,
     /// How long the order stays working.
     pub time_in_force: TimeInForce,
+    /// When a [`GoodTillDate`](TimeInForce::GoodTillDate) order expires, in UTC. `None` for
+    /// every other time in force.
+    pub expires: Option<DateTime<Utc>>,
     /// Explicit link to the net position in this symbol. Ordinary opposite-side orders are
     /// not brackets. Brokers should preserve this role on updates.
     pub position_bracket: Option<PositionBracket>,
@@ -209,6 +331,7 @@ impl OrderRequest {
             take_profit_levels: Vec::new(),
             stop_loss: None,
             time_in_force: TimeInForce::Day,
+            expires: None,
             position_bracket: None,
         }
     }
@@ -229,6 +352,8 @@ pub enum TimeInForce {
     Month,
     /// Until it fills or is cancelled.
     GoodTillCancelled,
+    /// Until it fills, is cancelled or reaches [`OrderRequest::expires`].
+    GoodTillDate,
     /// Fills what it can at once and cancels the rest.
     ImmediateOrCancel,
     /// Fills in full at once, or not at all.
@@ -243,6 +368,7 @@ impl TimeInForce {
             Self::Week => "WEEK",
             Self::Month => "MONTH",
             Self::GoodTillCancelled => "GTC",
+            Self::GoodTillDate => "GTD",
             Self::ImmediateOrCancel => "IOC",
             Self::FillOrKill => "FOK",
         }
@@ -268,6 +394,11 @@ pub struct Order {
     pub placed: Option<DateTime<Utc>>,
     /// When the order filled in full, was cancelled or was rejected, when the broker reports it.
     pub closed: Option<DateTime<Utc>>,
+    /// Where a working [trailing stop](OrderType::TrailingStop)'s stop stands now, as the
+    /// broker reports it. `None` before it starts trailing, for other order types and for a
+    /// broker that does not report it.
+    #[serde(default)]
+    pub trailing_stop: Option<f64>,
 }
 
 impl Order {
@@ -281,6 +412,7 @@ impl Order {
             fill_price: None,
             placed: None,
             closed: None,
+            trailing_stop: None,
         }
     }
 }
@@ -364,10 +496,14 @@ pub struct Execution {
     pub price: f64,
     /// Positive, in the symbol's trading units.
     pub quantity: f64,
+    /// The fill's symbol when the broker supplies it. The chart and account panel prefer the
+    /// order's symbol when known, otherwise this one, including for older history pages.
+    /// Keep it identical in the stream and history pages: repeated fills are matched by value.
+    pub symbol: Option<String>,
 }
 
 impl Execution {
-    /// A fill of `quantity` at `price`.
+    /// A fill of `quantity` at `price`, without a symbol.
     pub fn new(
         order: OrderId,
         time: DateTime<Utc>,
@@ -381,6 +517,7 @@ impl Execution {
             side,
             price,
             quantity,
+            symbol: None,
         }
     }
 }
@@ -562,6 +699,8 @@ pub struct Capabilities {
     pub stop: bool,
     /// Accepts stop-limit orders.
     pub stop_limit: bool,
+    /// Accepts trailing stop orders. Without it the order ticket offers none.
+    pub trailing_stop: bool,
     /// Accepts a take-profit and a stop-loss with an order, and with [`modify`](Self::modify)
     /// adds them to a working order.
     pub brackets: bool,
@@ -603,6 +742,7 @@ impl Capabilities {
             OrderType::Limit(_) => self.limit,
             OrderType::Stop(_) => self.stop,
             OrderType::StopLimit { .. } => self.stop_limit,
+            OrderType::TrailingStop { .. } => self.trailing_stop,
         }
     }
 }
@@ -643,6 +783,8 @@ pub struct TradingRules {
     /// [`point_value`](Self::point_value), and shows no pip value for an instrument without pips.
     pub pip_value: Option<f64>,
     /// The times in force the broker accepts for the symbol, the default first. Never empty.
+    /// The first is never [`GoodTillDate`](TimeInForce::GoodTillDate), which needs an entered
+    /// expiry: orders sent without the ticket, such as Buy and Sell, take the first.
     pub time_in_force: Vec<TimeInForce>,
     /// The trade value per unit of margin, such as 20 for 20:1, if the broker trades the symbol
     /// on margin. The order ticket estimates the margin an order needs from it.

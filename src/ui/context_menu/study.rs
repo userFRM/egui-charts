@@ -25,7 +25,7 @@ use std::collections::HashSet;
 pub enum StudyContextMenuAction {
     /// Save this alert, on the study's value at the menu's bar, through the host's alerts
     /// service, for example with
-    /// [`AlertsPanel::save`](crate::ui::widget_bar::panels::AlertsPanel::save).
+    /// [`AlertsPanel::save`](crate::ui::widget_bar::AlertsPanel::save).
     AddAlert(Box<Alert>),
     /// Open the indicators dialog to add a study.
     AddIndicator,

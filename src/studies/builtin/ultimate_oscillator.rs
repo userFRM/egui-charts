@@ -58,11 +58,6 @@ impl UltimateOscillator {
         }
     }
 
-    /// Create with default params (7, 14, 28)
-    pub fn default_params() -> Self {
-        Self::new(7, 14, 28)
-    }
-
     /// Set the line color
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
@@ -200,6 +195,10 @@ impl Indicator for UltimateOscillator {
 
     fn line_count(&self) -> usize {
         1
+    }
+
+    fn draws_only_plots(&self) -> bool {
+        true
     }
 
     fn is_visible(&self) -> bool {

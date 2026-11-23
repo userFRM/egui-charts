@@ -2,7 +2,7 @@
 //! column widths and text import and export. The panel in `ui::widget_bar` shows them and the
 //! settings store keeps them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use egui::Color32;
 use serde::de::{self, IntoDeserializer, Visitor};
@@ -100,11 +100,41 @@ pub enum WatchlistItem {
     Symbol {
         /// Instrument identifier used by the host.
         symbol: String,
-        /// Optional user-assigned color flag.
+        /// The symbol's colour flag. `WatchlistPanel` keeps it equal in every list, and keeps it
+        /// while no list holds the symbol.
         flag: Option<WatchlistFlag>,
     },
     /// A section title grouping the symbols below it, up to the next section.
     Section(String),
+}
+
+/// The characters that separate the entries of list text.
+const SEPARATORS: [char; 5] = [',', ';', '\t', '\n', '\r'];
+
+/// `entry` without white space or byte order marks at either end. Editors write the mark at the
+/// start of a file, and it is not white space.
+fn trimmed(entry: &str) -> &str {
+    entry.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+}
+
+/// Whether `symbol`, already trimmed, can be a list symbol: not empty, without separators or
+/// other control characters, and not a section title.
+pub(crate) fn valid_symbol(symbol: &str) -> bool {
+    !symbol.is_empty()
+        && !symbol.contains(SEPARATORS)
+        && !symbol.chars().any(char::is_control)
+        && !symbol.starts_with("###")
+}
+
+/// The entries [`Watchlist::read_text`] left out of a list, besides empty entries and symbols
+/// already listed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SkippedEntries {
+    /// Entries holding a control character, as a binary file chosen by mistake gives.
+    pub invalid: usize,
+    /// Symbols and sections after the list reached [`Watchlist::MAX_IMPORTED`] items.
+    pub past_limit: usize,
 }
 
 /// A named list of symbols and sections, in the order the user arranged them.
@@ -115,6 +145,8 @@ pub enum WatchlistItem {
 /// let mut list = Watchlist::new("Tech");
 /// list.favorite = true;
 /// list.show_descriptions = true;
+/// list.show_tickers = false;
+/// list.columns = Some(vec![WatchlistColumn::Last, WatchlistColumn::Volume]);
 /// list.column_widths.insert(WatchlistColumn::Last, 72.0);
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -122,6 +154,13 @@ pub enum WatchlistItem {
 pub struct Watchlist {
     /// Display name.
     pub name: String,
+    /// The list's identifier, kept through renames and differing between lists of the same name,
+    /// by which a [`Sharing`](crate::services::Sharing) service knows the list. Empty in a new
+    /// list and in lists saved before identifiers existed; `WatchlistPanel` gives every list it
+    /// holds an identifier of its own, replacing an empty one or one an earlier list has. Save
+    /// the lists after loading them so the identifiers persist.
+    #[serde(default)]
+    pub id: String,
     /// Symbols and section headings in display order.
     pub items: Vec<WatchlistItem>,
     /// Whether the user starred the list, which the list menu then shows first.
@@ -134,16 +173,66 @@ pub struct Watchlist {
     /// no logo, before the symbol. On by default, also for a saved list without this setting.
     #[serde(default = "shown")]
     pub show_logos: bool,
+    /// Whether rows show tickers. Off, the host's nonblank description takes the ticker's
+    /// place, falling back to the ticker. On by default, including in older saves.
+    #[serde(default = "shown")]
+    pub show_tickers: bool,
+    /// Chosen compact quote columns, in [`WatchlistColumn::WIDE`] order after a menu edit.
+    /// `None`, including in older saves, uses the panel's columns, initially
+    /// [`WatchlistColumn::DEFAULT`]. Unknown column names are ignored when reading.
+    #[serde(default, deserialize_with = "known_column_choice")]
+    pub columns: Option<Vec<WatchlistColumn>>,
     /// The widths, in points, the user dragged quote columns to. The other columns share the
     /// room left, as they do by default. A column this release does not know is left out when
     /// reading.
     #[serde(default, deserialize_with = "known_columns")]
     pub column_widths: BTreeMap<WatchlistColumn, f32>,
+    /// The widths, in points, the user dragged the host's columns to, by column name; see
+    /// `WatchlistPanel::add_column`.
+    #[serde(default)]
+    pub host_column_widths: BTreeMap<String, f32>,
 }
 
-/// The logos setting of a list saved without one.
+/// Logos and tickers stay shown in lists saved before those settings existed.
 fn shown() -> bool {
     true
+}
+
+/// A column read by name, `None` for a name this release does not know.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Known(Option<WatchlistColumn>);
+impl<'de> Deserialize<'de> for Known {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Name;
+        impl Visitor<'_> for Name {
+            type Value = Known;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a watchlist column")
+            }
+            fn visit_str<E: de::Error>(self, name: &str) -> Result<Known, E> {
+                let column: Result<WatchlistColumn, E> =
+                    WatchlistColumn::deserialize(name.into_deserializer());
+                Ok(Known(column.ok()))
+            }
+        }
+        // Read as an identifier: a JSON key reads as one, and so does a variant name in
+        // other formats.
+        deserializer.deserialize_identifier(Name)
+    }
+}
+
+/// Reads chosen columns without rejecting a list saved by a newer release.
+fn known_column_choice<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<WatchlistColumn>>, D::Error> {
+    Ok(
+        Option::<Vec<Known>>::deserialize(deserializer)?.map(|columns| {
+            columns
+                .into_iter()
+                .filter_map(|Known(column)| column)
+                .collect()
+        }),
+    )
 }
 
 /// Reads column widths, leaving out the columns this release does not know, such as one a newer
@@ -151,28 +240,6 @@ fn shown() -> bool {
 fn known_columns<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<BTreeMap<WatchlistColumn, f32>, D::Error> {
-    /// A column read by name, `None` for a name this release does not know.
-    #[derive(PartialEq, Eq, PartialOrd, Ord)]
-    struct Known(Option<WatchlistColumn>);
-    impl<'de> Deserialize<'de> for Known {
-        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            struct Name;
-            impl Visitor<'_> for Name {
-                type Value = Known;
-                fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    formatter.write_str("a watchlist column")
-                }
-                fn visit_str<E: de::Error>(self, name: &str) -> Result<Known, E> {
-                    let column: Result<WatchlistColumn, E> =
-                        WatchlistColumn::deserialize(name.into_deserializer());
-                    Ok(Known(column.ok()))
-                }
-            }
-            // Read as an identifier: a JSON key reads as one, and so does a variant name in
-            // other formats.
-            deserializer.deserialize_identifier(Name)
-        }
-    }
     Ok(BTreeMap::<Known, f32>::deserialize(deserializer)?
         .into_iter()
         .filter_map(|(Known(column), width)| Some((column?, width)))
@@ -180,21 +247,29 @@ fn known_columns<'de, D: Deserializer<'de>>(
 }
 
 impl Watchlist {
+    /// The most items, symbols and sections, [`read_text`](Self::read_text) keeps.
+    pub const MAX_IMPORTED: usize = 1_000;
+
     /// An empty list.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            id: String::new(),
             items: Vec::new(),
             favorite: false,
             show_descriptions: false,
             show_logos: true,
+            show_tickers: true,
+            columns: None,
             column_widths: BTreeMap::new(),
+            host_column_widths: BTreeMap::new(),
         }
     }
 
     /// A copy named after this list and `taken` names: "Name copy", then "Name copy 2" and so on.
-    /// Sections, symbol order, flags, the descriptions and logos settings and column widths carry
-    /// over; the copy is not starred.
+    /// Sections, symbol order, flags, the descriptions, logos, tickers and columns settings and
+    /// widths carry over; the copy is not starred and has no [`id`](Self::id), so a panel gives it
+    /// one of its own.
     pub fn duplicate<'a>(&self, taken: impl IntoIterator<Item = &'a str>) -> Self {
         let taken: Vec<&str> = taken.into_iter().collect();
         let base = format!("{} copy", self.name);
@@ -204,6 +279,7 @@ impl Watchlist {
             .expect("an unused name exists");
         Self {
             name,
+            id: String::new(),
             favorite: false,
             ..self.clone()
         }
@@ -242,14 +318,11 @@ impl Watchlist {
     }
 
     /// Appends `symbol`, trimmed. Returns false, leaving the list unchanged, for an empty symbol,
-    /// one containing a text separator or starting with `###`, or one the list already holds.
+    /// one containing a text separator (comma, semicolon, tab or line break) or another control
+    /// character or starting with `###`, or one the list already holds.
     pub fn add_symbol(&mut self, symbol: &str) -> bool {
         let symbol = symbol.trim();
-        if symbol.is_empty()
-            || symbol.contains([',', '\n', '\r'])
-            || symbol.starts_with("###")
-            || self.symbols().any(|s| s == symbol)
-        {
+        if !valid_symbol(symbol) || self.symbols().any(|s| s == symbol) {
             return false;
         }
         self.items.push(WatchlistItem::Symbol {
@@ -260,35 +333,63 @@ impl Watchlist {
     }
 
     /// The list as comma-separated text, each section written as `###` and its title, the format
-    /// [`from_text`](Self::from_text) reads. Flags are not exported. Commas and line breaks in a
-    /// section title become spaces.
+    /// [`from_text`](Self::from_text) reads. Flags are not exported. Separators and other control
+    /// characters in a section title become spaces.
     pub fn to_text(&self) -> String {
         let entries: Vec<String> = self
             .items
             .iter()
             .map(|item| match item {
                 WatchlistItem::Symbol { symbol, .. } => symbol.clone(),
-                WatchlistItem::Section(title) => {
-                    format!("###{}", title.replace([',', '\n', '\r'], " "))
-                }
+                WatchlistItem::Section(title) => format!(
+                    "###{}",
+                    title.replace(|c: char| SEPARATORS.contains(&c) || c.is_control(), " ")
+                ),
             })
             .collect();
         entries.join(",")
     }
 
-    /// A list named `name` from text separated by commas or line breaks. An entry starting with
-    /// `###` is a section title; every other entry is a symbol. Entries are trimmed; empty
-    /// entries and symbols already listed are skipped.
-    pub fn from_text(name: impl Into<String>, text: &str) -> Self {
+    /// A list named `name` from text separated by commas, semicolons, tabs or line breaks, and
+    /// what it left out. An entry starting with `###` is a section title; every other entry is a
+    /// symbol. Entries are trimmed of white space and byte order marks; empty entries and symbols
+    /// already listed are skipped without being counted. Entries with a control character are
+    /// left out, and so is every symbol or section after the list holds
+    /// [`MAX_IMPORTED`](Self::MAX_IMPORTED) items.
+    pub fn read_text(name: impl Into<String>, text: &str) -> (Self, SkippedEntries) {
         let mut list = Self::new(name);
-        for entry in text.split([',', '\n', '\r']).map(str::trim) {
-            if let Some(title) = entry.strip_prefix("###") {
-                list.items
-                    .push(WatchlistItem::Section(title.trim().to_owned()));
-            } else {
-                list.add_symbol(entry);
+        let mut skipped = SkippedEntries::default();
+        let mut listed: HashSet<&str> = HashSet::new();
+        for entry in text.split(SEPARATORS).map(trimmed) {
+            if entry.is_empty() {
+                continue;
             }
+            if entry.chars().any(char::is_control) {
+                skipped.invalid += 1;
+                continue;
+            }
+            let item = match entry.strip_prefix("###") {
+                Some(title) => WatchlistItem::Section(trimmed(title).to_owned()),
+                None if listed.contains(entry) => continue,
+                None => WatchlistItem::Symbol {
+                    symbol: entry.to_owned(),
+                    flag: None,
+                },
+            };
+            if list.items.len() == Self::MAX_IMPORTED {
+                skipped.past_limit += 1;
+                continue;
+            }
+            if matches!(item, WatchlistItem::Symbol { .. }) {
+                listed.insert(entry);
+            }
+            list.items.push(item);
         }
-        list
+        (list, skipped)
+    }
+
+    /// The list [`read_text`](Self::read_text) reads from `text`, without what it left out.
+    pub fn from_text(name: impl Into<String>, text: &str) -> Self {
+        Self::read_text(name, text).0
     }
 }

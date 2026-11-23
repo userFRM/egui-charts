@@ -8,10 +8,10 @@ use egui::{
 };
 
 use crate::model::{OrderSide, TimeInForce, TradingRules};
-use crate::scales::{CurrencyFormatter, PriceFormatter};
 use crate::theme::{Theme, ThemeExt, readable_color};
 use crate::ui::top_toolbar::buttons::rule_color;
 
+pub(crate) use crate::chart::grouped;
 pub(super) use crate::theme::trading_side_color as side_color;
 
 /// Height shared by the ticket's fields, menus and order-type row.
@@ -52,6 +52,7 @@ pub(super) fn time_in_force_name(time_in_force: TimeInForce) -> &'static str {
         TimeInForce::Week => "Week",
         TimeInForce::Month => "Month",
         TimeInForce::GoodTillCancelled => "Good till cancelled",
+        TimeInForce::GoodTillDate => "Good till date",
         TimeInForce::ImmediateOrCancel => "Immediate or cancel",
         TimeInForce::FillOrKill => "Fill or kill",
     }
@@ -276,6 +277,43 @@ pub(super) fn number(
     response
 }
 
+/// A date and time field, `YYYY-MM-DD HH:MM` in `zone`, for an instant kept in UTC. Invalid
+/// text clears the instant so the ticket cannot send the previous value.
+pub(super) fn date_time(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut Option<chrono::DateTime<chrono::Utc>>,
+    zone: &crate::scales::TimezoneMode,
+) -> Response {
+    let id = ui.make_persistent_id(id);
+    let editing = ui.memory(|memory| memory.has_focus(id));
+    let mut text = match ui.data(|data| data.get_temp::<String>(id)) {
+        Some(text) if editing => text,
+        _ => value
+            .map(|time| zone.wall_time(time).format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_default(),
+    };
+    let response = ui
+        .add(
+            egui::TextEdit::singleline(&mut text)
+                .id(id)
+                .frame(egui::Frame::NONE)
+                .desired_width(ui.available_width())
+                .hint_text("YYYY-MM-DD HH:MM")
+                .font(FontId::proportional(ui.active_theme().text.title)),
+        )
+        .accessible_name(l10n::text(ui.ctx(), "Expiry"));
+    if response.changed() {
+        *value = chrono::NaiveDateTime::parse_from_str(text.trim(), "%Y-%m-%d %H:%M")
+            .ok()
+            .and_then(|wall| zone.instant(wall));
+    }
+    if response.has_focus() {
+        ui.data_mut(|data| data.insert_temp(id, text));
+    }
+    response
+}
+
 /// Two opposite arrows that swap what a field takes.
 pub(super) fn swap(ui: &mut Ui, tooltip: &str) -> bool {
     let theme = ui.active_theme();
@@ -384,20 +422,6 @@ pub(super) fn info(ui: &mut Ui, label: &str, value: &str, unit: &str, color: Col
     let at = right - vec2(galley.size().x, galley.size().y / 2.0);
     ui.painter().galley(at, galley, color);
     rect
-}
-
-/// `value` with thousands separators and `decimals` decimals, signed with `sign`.
-pub(super) fn grouped(value: f64, decimals: usize, sign: bool) -> String {
-    if !value.is_finite() {
-        return "-".to_owned();
-    }
-    let magnitude = CurrencyFormatter::new("", decimals).format(value.abs());
-    let shown = magnitude.bytes().any(|b| matches!(b, b'1'..=b'9'));
-    match (shown, value < 0.0, sign) {
-        (true, true, _) => format!("-{magnitude}"),
-        (true, false, true) => format!("+{magnitude}"),
-        _ => magnitude,
-    }
 }
 
 /// `text` at `size` in the bundled face's semibold weight.
@@ -529,16 +553,39 @@ mod tests {
 
     #[test]
     fn figures_group_thousands_and_sign_only_what_they_show() {
-        for (value, sign, text) in [
-            (-123_456.0, false, "-123,456.00"),
-            (-24_932.084, true, "-24,932.08"),
-            (100_050.68, true, "+100,050.68"),
-            (1_234_567.891, false, "1,234,567.89"),
-            (-0.004, true, "0.00"),
-            (0.0, true, "0.00"),
-            (f64::NAN, false, "-"),
+        for (value, decimals, sign, text) in [
+            (-123_456.0, 2, false, "-123,456.00"),
+            (-24_932.084, 2, true, "-24,932.08"),
+            (100_050.68, 2, true, "+100,050.68"),
+            (1_234_567.891, 2, false, "1,234,567.89"),
+            (-0.004, 2, true, "0.00"),
+            (0.0, 2, true, "0.00"),
+            (f64::NAN, 2, false, "-"),
+            (43237.45, 2, false, "43,237.45"),
+            (43237.45, 2, true, "+43,237.45"),
+            (-1234567.0, 0, false, "-1,234,567"),
+            (-1234567.0, 0, true, "-1,234,567"),
+            (863.83, 2, false, "863.83"),
+            (863.83, 2, true, "+863.83"),
+            (100000.5, 1, false, "100,000.5"),
+            (100000.5, 1, true, "+100,000.5"),
+            (0.000123, 6, false, "0.000123"),
+            (0.000123, 6, true, "+0.000123"),
+            (-0.0, 2, false, "0.00"),
+            (-0.0, 2, true, "0.00"),
+            (-0.001, 2, false, "0.00"),
+            (-0.001, 2, true, "0.00"),
+            (0.001, 2, false, "0.00"),
+            (0.001, 2, true, "0.00"),
+            (f64::INFINITY, 2, false, "-"),
+            (f64::INFINITY, 2, true, "-"),
+            (f64::NAN, 2, true, "-"),
         ] {
-            assert_eq!(grouped(value, 2, sign), text, "{value}");
+            assert_eq!(
+                grouped(value, decimals, sign),
+                text,
+                "{value} {decimals} {sign}"
+            );
         }
     }
 }

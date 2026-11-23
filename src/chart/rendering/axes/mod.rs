@@ -646,6 +646,28 @@ pub(crate) fn price_axis_width_with_edges(
         + 6.0
 }
 
+/// A bar's volume as the chart's readouts write it: in the host's volume format, else with the
+/// instrument's volume decimals and at least two in K, M and B values, else as
+/// [`StudyFormat::Volume`](crate::scales::StudyFormat::Volume) writes it without a precision.
+pub(crate) fn volume_text(
+    volume: f64,
+    decimals: Option<u8>,
+    formatter: Option<&dyn crate::scales::PriceFormatter>,
+) -> String {
+    if let Some(formatter) = formatter {
+        return formatter.format(volume);
+    }
+    decimals.map_or_else(
+        || crate::scales::StudyFormat::Volume.format(volume, None),
+        |decimals| {
+            crate::scales::VolumeFormatter {
+                precision: usize::from(decimals),
+            }
+            .format_with_min_unit_decimals(volume, 2)
+        },
+    )
+}
+
 /// Paints independent current close, session and volume readouts, returning their rectangles
 /// in that order. Pass all three rectangles to tick occlusion and pointer routing.
 ///
@@ -686,7 +708,6 @@ pub(crate) fn render_quote_tags_with_countdown(
     allow_overlap: bool,
     close_name: &str,
 ) -> [Option<Rect>; 3] {
-    use crate::scales::{PriceFormatter, VolumeFormatter};
     let mut tags = [None; 3];
     let transform = price_map.transform();
     let height = painter
@@ -761,15 +782,7 @@ pub(crate) fn render_quote_tags_with_countdown(
         rows.push((
             2,
             price_rect.bottom() - height / 2.0,
-            volume_formatter.map_or_else(
-                || {
-                    VolumeFormatter {
-                        precision: usize::from(volume_precision.unwrap_or(2)),
-                    }
-                    .format(value)
-                },
-                |formatter| formatter.format(value),
-            ),
+            volume_text(value, volume_precision, volume_formatter),
             color,
         ));
     }

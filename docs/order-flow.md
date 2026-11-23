@@ -41,6 +41,17 @@ no grouping crosses it.
 History bars newer than everything the trade page reaches draw candles too, so a host should answer
 both pages up to the same time.
 
+The demo's synthetic instruments, TOKENA, TOKENB, STOCKA, STOCKB, STOCKC, STOCKD, INDEXA,
+FOREXA, INDEXFZ2026, INDEXFH2027 and SAMPLE, answer
+[`Datafeed::trades`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.trades)
+and [`Datafeed::depth_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.depth_history)
+for the time before their stream and declare both services. Their executions before the stream
+are re-created from the minute bars `history` returns, so each minute's executions rebuild its
+bar, and their depth columns hold a book quoted one tick around the price of those executions.
+Scrolling a footprint chart or the liquidity heatmap back past the streamed session loads both,
+and the feed answers as far back as its minute history reaches. The columns of INDEXFZ2026 before
+its stream carry no largest orders, since its individual orders there are not known.
+
 <!-- example -->
 
 The source beside the running example supplies candles independently, pushes chronological
@@ -313,8 +324,8 @@ rows count as zero, and endpoints and ties are not nodes. The renderer selects b
 total volume or signed delta through the first [`FootprintConfig::modes`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/overlays/struct.FootprintConfig.html#structfield.modes) entry. It draws the
 value area, POC, developing POC and volume nodes on the host's price mapping.
 [`developing_value_area`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfile.html#method.developing_value_area) returns the inclusive value area rows after each
-contributing bar of the footprint the profile came from, by the final area's share and tie rules. The Profile section of the Symbol settings can trace that area and extend each
-completed session's POC, VAH and VAL to the first later bar that trades in their row; all are off by default, and sessions labelled "Partial executions" do not extend. The same section can hide the POC, choose the value area edges its guides draw, and colour the POC, each edge and the up and down volume inside and outside the value area; a level's colour also paints its extension.
+contributing bar of the footprint the profile came from, by the final area's share and tie rules. The Profile section of the Symbol settings can trace that area and the developing POC as steps that hold until the next bar, and extend each
+completed session's POC, VAH and VAL to the first later bar whose traded range reaches their drawn price; all are off by default, and sessions labelled "Partial executions" do not extend. The same section can hide the POC, choose the value area edges its guides draw, and colour the POC, each edge and the up and down volume inside and outside the value area; a level's colour also paints its extension. It can also grow each session's histogram from the right edge of the session, give it a share of the session's width, write each row's volume beside its bar when the row is tall enough for the text, and hide or recolour the box behind each session. Cropped profiles report the same POC centre and value area edges as their lines. Custom hours divide the day into up to five sessions; shared hours form a separate profile or stay in both sessions, whose profiles then overlap. Overlapping profiles cannot be merged or split. A switch clips custom sessions to the instrument's regular hours, counting periods from the later open. Saved single windows restore as the only session.
 
 ## Stream studies
 
@@ -424,8 +435,11 @@ preserve them, and only trades at or after the page's exclusive cutoff continue 
 Vol Profile VR, FR, Session, Periodic, Anchored and Auto Anchored each return a footprint
 source from [`Indicator::order_flow_inputs`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.order_flow_inputs). Where it holds the executions of a profile's bars,
 the profile sums them, in rows of whole ticks: the Height input rounded to whole ticks, at least
-one, or the traded ticks over Row count, rounded up, with rows counted from multiples of their
-height as the volume footprint groups them and widened where that would exceed Row count. A
+one; with Whole ticks per row, the traded ticks over Row count rounded down or up, whichever lays
+rows on multiples of their height closer to Row count, the taller on a tie, as the session volume
+profile chart type lays out Number of rows; otherwise the traded ticks over Row count, rounded
+up, with rows counted from multiples of their height as the volume footprint groups them and
+widened where that would exceed Row count. A
 profile whose executions start after its first bar sums those held and is noted "Partial
 executions". A profile without executions, one calculated on another interval, and one whose bars
 do not each hold their own executions, as on price-based chart types, keep the estimate from

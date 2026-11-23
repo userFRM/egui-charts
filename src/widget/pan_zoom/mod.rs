@@ -21,8 +21,9 @@ pub(super) use box_zoom::render_box_zoom;
 
 use egui::{Event, MouseWheelUnit, Pos2, Rect, Response, Ui, Vec2, vec2};
 
-use crate::scales::PriceScale;
-use crate::widget::Chart;
+use crate::model::SeriesScale;
+use crate::scales::{PriceScale, PriceTransform};
+use crate::widget::{Chart, PaneId, PaneScale};
 
 /// This frame's wheel scroll in points before egui smooths it: line and page units converted, and
 /// the axis forced by egui's horizontal and vertical scroll modifiers. Unlike
@@ -154,6 +155,29 @@ impl Chart {
             .panes
             .iter()
             .any(|pane| pane.id != main && pane.rect.contains(pos))
+    }
+
+    /// The pane whose plot holds `pos`, with that plot, where a box-zoom selection can start: the
+    /// price pane's `chart_rect`, or the plot of another expanded pane, which spans the same
+    /// columns. `None` elsewhere, such as on an axis or the header row of a collapsed pane.
+    pub(in crate::widget) fn box_zoom_plot(
+        &self,
+        pos: Pos2,
+        chart_rect: Rect,
+    ) -> Option<(PaneId, Rect)> {
+        let main = self.main_series_pane();
+        if chart_rect.contains(pos) {
+            return Some((main, chart_rect));
+        }
+        self.pane_layout
+            .panes
+            .iter()
+            .filter(|pane| pane.id != main && pane.rect.height() > 24.0)
+            .map(|pane| {
+                let plot = Rect::from_x_y_ranges(chart_rect.x_range(), pane.rect.y_range());
+                (pane.id, plot)
+            })
+            .find(|(_, plot)| plot.contains(pos))
     }
 
     /// Handle mouse wheel events for time-axis zoom and horizontal pan. The wheel over the
@@ -369,7 +393,7 @@ impl Chart {
         chart_rect_min_x: f32,
         has_active_drawing_tool: bool,
     ) {
-        // CRITICAL: Skip panning if box zoom is active (right-click drag)
+        // A box-zoom selection in progress owns the drag, so it does not pan.
         let box_zoom_active = self.box_zoom.active;
         // The frame clock times the samples, as it times the input they come from.
         let (is_touch, multi_touch, now) = ui.input(|i| {
@@ -654,8 +678,10 @@ impl Chart {
 
     /// Handle box-zoom interaction (left-click drag when zoom mode is active).
     ///
-    /// On press, starts tracking the selection rectangle. On release, zooms into the rectangle.
-    /// Returns `true` if a zoom was successfully applied this frame.
+    /// A press on a plot that no drawing, selection area or touch readout owns (`owns_drag`)
+    /// starts the selection rectangle, in the price pane or another pane; the release zooms
+    /// into it. `response` senses the plots of every pane. Returns `true` if a zoom was
+    /// successfully applied this frame.
     pub(crate) fn handle_box_zoom(
         &mut self,
         ui: &Ui,
@@ -663,15 +689,21 @@ impl Chart {
         chart_rect: Rect,
         chart_width: f32,
         zoom_mode_active: bool,
+        owns_drag: bool,
     ) -> bool {
-        // Use left-click (primary) when zoom mode is active, otherwise don't trigger
-        let btn_pressed = zoom_mode_active && ui.input(|i| i.pointer.primary_pressed());
-        let btn_down = zoom_mode_active && ui.input(|i| i.pointer.primary_down());
-        let btn_released = zoom_mode_active && ui.input(|i| i.pointer.primary_released());
+        // A selection in progress ends with the mode.
+        if !zoom_mode_active {
+            self.box_zoom.reset();
+            return false;
+        }
+        let btn_pressed = ui.input(|i| i.pointer.primary_pressed());
+        let btn_down = ui.input(|i| i.pointer.primary_down());
+        let btn_released = ui.input(|i| i.pointer.primary_released());
 
         if btn_pressed
+            && !owns_drag
             && let Some(pos) = response.interact_pointer_pos()
-            && chart_rect.contains(pos)
+            && self.box_zoom_plot(pos, chart_rect).is_some()
         {
             self.box_zoom.active = true;
             self.box_zoom.start_pos = Some(pos);
@@ -687,10 +719,11 @@ impl Chart {
 
         let mut zoom_applied = false;
         if btn_released && self.box_zoom.active {
+            // The selection zooms the pane it began in.
             if let (Some(start), Some(end)) = (self.box_zoom.start_pos, self.box_zoom.curr_pos)
-                && (chart_rect.contains(start) || chart_rect.contains(end))
+                && let Some((pane, plot)) = self.box_zoom_plot(start, chart_rect)
             {
-                zoom_applied = self.execute_box_zoom(start, end, chart_rect, chart_width);
+                zoom_applied = self.zoom_to_box(start, end, chart_rect, chart_width, pane, plot);
             }
             self.box_zoom.reset();
         }
@@ -699,7 +732,8 @@ impl Chart {
     }
 
     /// Zoom programmatically to a screen rectangle from `start` to `end`, filling the
-    /// viewport with the selected time and price ranges. [`Self::zoom_back`] undoes it.
+    /// viewport with the selected time and price ranges. [`Self::zoom_back`] undoes it. A price
+    /// scale locked to the bar spacing stays locked, at the ratio of the zoomed view.
     ///
     /// Returns `false` if either dimension of the selection is 20 points or less, or if a
     /// corner or the width is non-finite.
@@ -709,6 +743,28 @@ impl Chart {
         end: Pos2,
         chart_rect: Rect,
         chart_width: f32,
+    ) -> bool {
+        self.zoom_to_box(
+            start,
+            end,
+            chart_rect,
+            chart_width,
+            self.main_series_pane(),
+            chart_rect,
+        )
+    }
+
+    /// [`Self::execute_box_zoom`] for a selection drawn on the `plot` of `pane`, which spans the
+    /// columns of the price pane's `chart_rect`. In another pane than the price pane the selected
+    /// values fill that pane on each of its scales, and the other panes keep theirs.
+    fn zoom_to_box(
+        &mut self,
+        start: Pos2,
+        end: Pos2,
+        chart_rect: Rect,
+        chart_width: f32,
+        pane: PaneId,
+        plot: Rect,
     ) -> bool {
         if !(start.is_finite() && end.is_finite() && chart_width.is_finite()) {
             return false;
@@ -722,8 +778,13 @@ impl Chart {
             return false; // Zoom box too small
         }
 
-        // Save current zoom state to history before applying new zoom
+        // Save current zoom state to history before applying new zoom, with an entry for the
+        // study pane scales it sets. A history cleared since the last zoom drops their entries.
+        if !self.state.has_zoom_history() {
+            self.zoom_scales.clear();
+        }
         self.state.push_zoom_state();
+        self.zoom_scales.push(Vec::new());
 
         // Horizontal zoom: the box's bars fill the width (up to the maximum spacing), centred.
         // A box inside one bar shows that bar across the width, or keeps a wider spacing.
@@ -742,6 +803,36 @@ impl Chart {
             center - base_idx + (f64::from(chart_width) - 1.0) / 2.0 / f64::from(spacing) - 0.5,
         );
 
+        if pane != self.main_series_pane() {
+            // The pane's own scale and every scale with an axis there; each maps the pane's
+            // whole height, as it is painted.
+            let mut keys = vec![SeriesScale::Right];
+            for key in self.pane_scale_keys(pane) {
+                if let PaneScale::Named(key) = key
+                    && !keys.contains(&key)
+                {
+                    keys.push(key);
+                }
+            }
+            for key in keys {
+                let scale = self.pane_price_scale_mut(pane, key);
+                let before = scale.clone();
+                let map = scale.map(scale.transform(), plot.top(), plot.bottom());
+                let (a, b) = (map.y_to_scale(min_y), map.y_to_scale(max_y));
+                Self::zoom_scale_to_box(scale, a, b, spacing, plot.height());
+                // Kept as values: the next fit converts a range in another mode's units by
+                // value, into the units of the zoomed time range, whose first visible value is
+                // the base of the relative modes.
+                scale.rebase(PriceTransform::default());
+                self.zoom_scales
+                    .last_mut()
+                    .expect("entry pushed with the zoom history")
+                    .push((pane, key, before));
+            }
+            self.pending_scroll_time = None;
+            return true;
+        }
+
         // Vertical zoom: the box's prices, in the units of the window it selects, whose first
         // visible close (the base of the relative modes) can differ from the one it was drawn on.
         let (p, q) = (
@@ -757,13 +848,62 @@ impl Chart {
                 .map(|(study, _)| study.as_ref()),
         );
         let (a, b) = (transform.to_scale(p), transform.to_scale(q));
-        let scale = self.state.price_scale_mut();
-        // Widened around its middle to the span zooming stops at.
-        let pad = (scale.min_span() - (a - b).abs()).max(0.0) / 2.0;
-        scale.set_range(a.min(b) - pad, a.max(b) + pad);
+        // The height the frames apply a locked ratio at, which `last_price_map` spans.
+        let height = self.last_rendered_price_rect.height();
+        Self::zoom_scale_to_box(self.state.price_scale_mut(), a, b, spacing, height);
         self.pending_scroll_time = None;
+        self.history.clear_view_restore();
 
         true // Zoom successfully applied
+    }
+
+    /// Shows the scale values `a` and `b` of a box-zoom selection, widened around their middle to
+    /// the span zooming stops at. A scale locked to the bar spacing takes the ratio of that range
+    /// at the zoomed bar `spacing` and the plot `height`, at which the frames apply it, so the
+    /// selection fills the plot. A ratio that is not positive and finite, from a plot without
+    /// height, leaves the one `set_range` scaled.
+    fn zoom_scale_to_box(scale: &mut PriceScale, a: f64, b: f64, spacing: f32, height: f32) {
+        let pad = (scale.min_span() - (a - b).abs()).max(0.0) / 2.0;
+        scale.set_range(a.min(b) - pad, a.max(b) + pad);
+        if scale.bar_ratio_locked() {
+            let range = scale.range();
+            scale.set_bar_ratio(Some((range.max - range.min) * f64::from(spacing / height)));
+        }
+    }
+
+    /// Gives the scales that the box zoom [`Self::zoom_back`] undoes set in a study pane their
+    /// state from before it: a manual range in the units it was shown in, or the fit of their
+    /// values. A scale locked to the bar spacing before the zoom and still locked gets its
+    /// ratio back. Scales that no longer exist, such as those of a pane removed since, and the
+    /// pane of the main series, whose scale the zoom history restores, are left alone.
+    pub(in crate::widget) fn restore_box_zoom_scales(&mut self) {
+        for (pane, key, before) in self.zoom_scales.pop().unwrap_or_default() {
+            let Some(item) = self.pane_layout.panes.iter().find(|item| item.id == pane) else {
+                continue;
+            };
+            // The scale `pane_price_scale_mut` reaches, which it would otherwise create.
+            let exists = if pane == PaneId::MAIN && key != self.main_series_scale {
+                self.series_scales.contains_key(&key)
+            } else {
+                pane == PaneId::MAIN || item.own_scale(key).is_some()
+            };
+            if !exists || pane == self.main_series_pane() {
+                continue;
+            }
+            let scale = self.pane_price_scale_mut(pane, key);
+            if before.is_manual() {
+                let ratio = scale.bar_ratio().and(before.bar_ratio());
+                // In the units of the transform it was shown in; the next fit rebases them.
+                scale.rebase(before.transform());
+                scale.set_range(before.range().min, before.range().max);
+                if ratio.is_some() {
+                    // Restoring the range is not a zoom, which would rescale the ratio.
+                    scale.set_bar_ratio(ratio);
+                }
+            } else {
+                scale.reset();
+            }
+        }
     }
 
     /// Apply pending timescale configuration: width, initial visible bars,
@@ -2136,8 +2276,9 @@ mod tests {
         for left in [false, true] {
             let (one, slow) = (drag_price_axis(1, left), drag_price_axis(20, left));
             let span = one.1 - one.0;
-            // Dragging down zooms out from the autoscaled 93.5..111.5 (95..110 plus 10% margins).
-            assert!(span > 18.0, "1 frame: {one:?}");
+            // A 95..110 fit has span 15 / 0.82, from 93.536585 to 111.829268.
+            // Dragging down widens it beyond the initial 10% top and 8% bottom margins.
+            assert!(span > 15.0 / 0.82, "1 frame: {one:?}");
             assert!(
                 (one.0 - slow.0).abs() < span * 1e-9 && (one.1 - slow.1).abs() < span * 1e-9,
                 "1 frame: {one:?}, 20 frames: {slow:?}"
@@ -2464,13 +2605,21 @@ mod tests {
             (true, 0.1, false, 15.0),
             (true, 0.02, false, 2.0),
         ] {
-            for (touch_inertia, mouse_inertia) in
-                [(false, false), (true, false), (false, true), (true, true)]
-            {
+            // `None` keeps the default options: touch swipes coast and mouse drags stop.
+            for options in [
+                None,
+                Some((false, false)),
+                Some((true, false)),
+                Some((false, true)),
+                Some((true, true)),
+            ] {
+                let (touch_inertia, mouse_inertia) = options.unwrap_or((true, false));
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
-                chart.chart_options.kinetic_scroll.enabled = touch_inertia;
-                chart.chart_options.kinetic_scroll.mouse = mouse_inertia;
+                if options.is_some() {
+                    chart.chart_options.kinetic_scroll.enabled = touch_inertia;
+                    chart.chart_options.kinetic_scroll.mouse = mouse_inertia;
+                }
                 frame(&ctx, &mut chart, 0.0, vec![]);
                 let start = chart.last_rendered_price_rect.center();
                 let button = |pos, pressed| Event::PointerButton {
@@ -2494,6 +2643,7 @@ mod tests {
                     events
                 };
                 frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
+                let before = chart.state.time_scale().right_offset_precise();
                 let press = input(button(start, true), egui::TouchPhase::Start, start);
                 frame(&ctx, &mut chart, 0.04, press);
                 let mut end = start;
@@ -2515,12 +2665,12 @@ mod tests {
                 let release = input(button(end, false), egui::TouchPhase::End, end);
                 frame(&ctx, &mut chart, released, release);
                 let inertia = if touch { touch_inertia } else { mouse_inertia };
+                let coasts = inertia && (rest <= 0.05 || slide > 0.0);
                 // Only a rest of more than 50 ms ends the motion, whether or not frames were
                 // drawn, and a release that brings movement with it is no rest, however slow
                 // the frames.
                 assert_eq!(
-                    chart.kinetic_scroll.is_active,
-                    inertia && (rest <= 0.05 || slide > 0.0),
+                    chart.kinetic_scroll.is_active, coasts,
                     "touch={touch}, rest={rest}, frames={frames}, slide={slide}, touch \
                      inertia={touch_inertia}, mouse inertia={mouse_inertia}"
                 );
@@ -2538,6 +2688,18 @@ mod tests {
                     "touch={touch}, rest={rest}, slide={slide}: {}",
                     chart.kinetic_scroll.velocity
                 );
+
+                let released_at = chart.state.time_scale().right_offset_precise();
+                frame(&ctx, &mut chart, released + 0.01, vec![]);
+                let after = chart.state.time_scale().right_offset_precise();
+                // The pointer moved left, which raises the right offset; a coast keeps raising it.
+                assert!(released_at > before, "the drag scrolled");
+                assert_eq!(
+                    after > released_at,
+                    coasts,
+                    "touch={touch}, rest={rest}, options={options:?}"
+                );
+                assert!(after >= released_at);
 
                 let press = input(button(end, true), egui::TouchPhase::Start, end);
                 frame(&ctx, &mut chart, released + 0.02, press);
@@ -2982,24 +3144,396 @@ mod tests {
         }
     }
 
-    /// The bars and prices inside a zoom box fill the pane on the next frame. The box re-centres
-    /// the time window, so the relative modes rebase on another first visible close than the box
-    /// was drawn on.
+    /// Box-zoom mode takes one selection, in the price pane or a study pane, and a drawing tool
+    /// or the eraser owns the plot's drags while it is on: a drag either zooms or draws, never
+    /// both. The zoom-in cursor shows over the plots only, where a press starts a selection.
+    /// Zoom back returns a study pane to its fit or to its manual range, and skips a pane
+    /// removed since.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn box_zoom_mode_ends_after_one_zoom_and_yields_to_drawing_modes() {
+        use crate::drawings::DrawingToolType;
+        use egui::CursorIcon;
+        for (tool, eraser, pane, manual_range) in [
+            (None, false, false, false),
+            (Some(DrawingToolType::TrendLine), false, false, false),
+            (None, true, false, false),
+            (None, false, true, false),
+            (None, false, true, true),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[200.0]);
+            if pane {
+                chart.add_indicator(Box::new(
+                    crate::studies::CustomIndicator::new("Pane", |bars| {
+                        (0..bars.len())
+                            .map(|i| crate::studies::IndicatorValue::Single(i as f64))
+                            .collect()
+                    })
+                    .with_overlay(false),
+                ));
+            }
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            let study_pane = |chart: &Chart| {
+                chart
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .find(|item| item.id != crate::widget::PaneId::MAIN)
+                    .expect("study pane")
+                    .id
+            };
+            if manual_range {
+                let study = study_pane(&chart);
+                chart
+                    .pane_price_scale_mut(study, crate::model::SeriesScale::Right)
+                    .set_range(20.0, 80.0);
+            }
+            chart.set_zoom_mode(true);
+            chart.drawings_mut().set_active_tool(tool);
+            chart.drawings_mut().set_eraser_mode(eraser);
+            let price = chart.last_rendered_price_rect;
+            let study = chart
+                .pane_layout
+                .panes
+                .iter()
+                .find(|item| item.id != crate::widget::PaneId::MAIN)
+                .map(|item| item.rect);
+            let rect = study.map_or(price, |study| {
+                Rect::from_x_y_ranges(price.x_range(), study.y_range())
+            });
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            let mut t = 0.0;
+            let row = format!("tool {tool:?}, eraser {eraser}, pane {pane}, manual {manual_range}");
+            if tool.is_none() && !eraser {
+                // The axes keep their own cursors: a drag there scales the axis.
+                for (at, expected) in [
+                    (rect.center(), CursorIcon::ZoomIn),
+                    (
+                        Pos2::new(price.right() + 10.0, price.center().y),
+                        CursorIcon::ResizeVertical,
+                    ),
+                    (chart.time_axis_rect.center(), CursorIcon::ResizeHorizontal),
+                ] {
+                    t += 0.1;
+                    let cursor = frame(&ctx, &mut chart, t, vec![Event::PointerMoved(at)]);
+                    assert_eq!(cursor, expected, "{row}: cursor at {at:?}");
+                }
+            }
+            // A selection pans nothing until its release.
+            let selecting = tool.is_none() && !eraser;
+            let mut drag = |chart: &mut Chart, start: Pos2, end: Pos2| {
+                let view = chart.get_time_scale_state();
+                for events in [
+                    vec![Event::PointerMoved(start)],
+                    vec![button(start, true)],
+                    vec![Event::PointerMoved(start.lerp(end, 0.5))],
+                    vec![Event::PointerMoved(end)],
+                    vec![button(end, false)],
+                ] {
+                    if selecting && chart.is_zoom_mode_active() {
+                        assert_eq!(chart.get_time_scale_state(), view, "before the release");
+                    }
+                    t += 0.1;
+                    frame(&ctx, chart, t, events);
+                }
+                t += 0.1;
+                frame(&ctx, chart, t, Vec::new())
+            };
+            let view = chart.get_time_scale_state();
+            let start = rect.center() - egui::vec2(50.0, 25.0);
+            let end = start + egui::vec2(100.0, 50.0);
+            if selecting {
+                // A selection of 20 points or less zooms nothing and keeps the mode.
+                drag(&mut chart, start, start + egui::vec2(20.0, 50.0));
+                assert!(
+                    chart.is_zoom_mode_active(),
+                    "{row}: a selection too small to zoom"
+                );
+                assert_eq!(chart.get_time_scale_state(), view, "{row}");
+                assert!(!chart.state.has_zoom_history(), "{row}");
+            }
+            let study_values = |chart: &Chart| {
+                let pane = chart
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .find(|item| item.id != crate::widget::PaneId::MAIN)?;
+                let scale = chart.pane_price_scale(pane.id, crate::model::SeriesScale::Right);
+                let map = scale.map(scale.transform(), pane.rect.top(), pane.rect.bottom());
+                Some((map, scale.is_manual()))
+            };
+            let before = study_values(&chart);
+            let cursor = drag(&mut chart, start, end);
+            assert_eq!(
+                chart.drawings().drawings.len(),
+                usize::from(tool.is_some()),
+                "{row}"
+            );
+            if tool.is_some() {
+                assert_eq!(
+                    chart.get_time_scale_state(),
+                    view,
+                    "{row}: view after the drawing"
+                );
+            }
+            if tool.is_some() || eraser {
+                // The eraser keeps its own drag, which pans over an empty plot, but never zooms.
+                assert_eq!(chart.get_time_scale_state().0, view.0, "{row}: spacing");
+                assert!(!chart.state.has_zoom_history(), "{row}");
+            }
+            assert!(
+                !chart.is_zoom_mode_active(),
+                "{row}: zoom mode after the first drag"
+            );
+            assert_ne!(cursor, CursorIcon::ZoomIn, "{row}");
+            if tool.is_some() || eraser {
+                continue;
+            }
+            let zoomed = chart.get_time_scale_state();
+            assert!(zoomed.0 > view.0, "{row}: the first drag zooms");
+            if let (Some((before, _)), Some((after, manual))) = (before, study_values(&chart)) {
+                // The selected values fill the study pane; the price pane keeps fitting its bars.
+                assert!(manual, "{row}: the study pane keeps the selected range");
+                assert!(!chart.state.price_scale().is_manual(), "{row}: price pane");
+                let (top, bottom) = after.extent();
+                let (y_hi, y_lo) = (
+                    after.price_to_y(before.y_to_price(start.y)),
+                    after.price_to_y(before.y_to_price(end.y)),
+                );
+                assert!(
+                    (y_hi - top).abs() < 0.5 && (y_lo - bottom).abs() < 0.5,
+                    "{row}: selection at y {y_hi}..{y_lo}, pane {top}..{bottom}"
+                );
+            } else {
+                assert!(!pane, "{row}: the study pane before and after");
+            }
+            drag(&mut chart, start, end);
+            let panned = chart.get_time_scale_state();
+            assert_eq!(
+                panned.0, zoomed.0,
+                "{row}: the second drag keeps the spacing"
+            );
+            assert_ne!(panned.1, zoomed.1, "{row}: the second drag pans");
+            assert!(chart.zoom_back(), "{row}");
+            // Zoom back returns the study pane to its fit or its manual range.
+            t += 0.1;
+            frame(&ctx, &mut chart, t, Vec::new());
+            if let (Some((before, was_manual)), Some((after, is_manual))) =
+                (before, study_values(&chart))
+            {
+                assert_eq!(is_manual, was_manual, "{row}: zoom back");
+                for y in [start.y, end.y] {
+                    let back = after.price_to_y(before.y_to_price(y));
+                    assert!(
+                        (back - y).abs() < 0.5,
+                        "{row}: y {y} at {back} after zoom back"
+                    );
+                }
+            }
+            assert!(!chart.zoom_back(), "{row}: one zoom step");
+            if pane {
+                // A zoom in a pane removed before zoom back restores the time range alone.
+                let study = study_pane(&chart);
+                let view = chart.get_time_scale_state();
+                assert!(chart.zoom_to_box(start, end, price, price.width(), study, rect));
+                assert!(chart.remove_pane(study), "{row}");
+                assert!(chart.zoom_back(), "{row}: after removing the pane");
+                assert_eq!(chart.get_time_scale_state(), view, "{row}");
+            }
+        }
+
+        // A press on a drawing drags the drawing and starts no selection, so the mode stays on.
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[200.0]);
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        let time = chart.state.shown()[50].time;
+        let id = chart
+            .create_drawing(
+                crate::drawings::Drawing::new(0, DrawingToolType::HorizontalLine),
+                &[(time, 150.0)],
+            )
+            .unwrap();
+        frame(&ctx, &mut chart, 0.1, Vec::new());
+        chart.set_zoom_mode(true);
+        let view = chart.get_time_scale_state();
+        let start = Pos2::new(
+            chart.get_chart_mapping().idx_to_x(50),
+            chart.last_price_map.price_to_y(150.0),
+        );
+        let end = start + egui::vec2(100.0, 50.0);
+        for (i, events) in [
+            vec![Event::PointerMoved(start)],
+            vec![Event::PointerButton {
+                pos: start,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+            vec![Event::PointerMoved(start.lerp(end, 0.5))],
+            vec![Event::PointerMoved(end)],
+            vec![Event::PointerButton {
+                pos: end,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            frame(&ctx, &mut chart, 0.2 + i as f64 * 0.1, events);
+            assert!(
+                !chart.box_zoom.active,
+                "frame {i}: a selection over the drawing"
+            );
+        }
+        assert!(!chart.state.has_zoom_history());
+        assert_eq!(chart.get_time_scale_state().0, view.0);
+        assert!(chart.is_zoom_mode_active());
+        let moved = chart.drawing_points(id).unwrap()[0].1;
+        assert!(moved < 150.0, "the drag moves the line down, to {moved}");
+    }
+
+    /// A box zoom on a scale locked to the bar spacing, in the price pane or in the study pane it
+    /// began in, shows the selection across the plot on the next frame, and zoom back gives the
+    /// scale the range and ratio it had. The frames apply the ratio at the zoomed spacing, so the
+    /// zoom takes the ratio of the selection there; restoring the range would rescale it as a zoom.
+    #[test]
+    fn box_zoom_fills_a_locked_scale_and_zoom_back_restores_it() {
+        for in_study_pane in [false, true] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[200.0]);
+            chart.add_indicator(Box::new(
+                crate::studies::CustomIndicator::new("Pane", |bars| {
+                    (0..bars.len())
+                        .map(|i| crate::studies::IndicatorValue::Single(i as f64))
+                        .collect()
+                })
+                .with_overlay(false),
+            ));
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            let price = chart.last_rendered_price_rect;
+            let (pane, plot) = if in_study_pane {
+                let study = chart
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .find(|item| item.id != crate::widget::PaneId::MAIN)
+                    .expect("study pane");
+                (
+                    study.id,
+                    Rect::from_x_y_ranges(price.x_range(), study.rect.y_range()),
+                )
+            } else {
+                (crate::widget::PaneId::MAIN, price)
+            };
+            let key = crate::model::SeriesScale::Right;
+            let spacing = chart.state.time_scale().bar_spacing();
+            chart.pane_price_scale_mut(pane, key).set_bar_ratio_locked(
+                true,
+                spacing,
+                plot.height(),
+            );
+            frame(&ctx, &mut chart, 0.1, Vec::new());
+            let read = |chart: &Chart| {
+                let scale = chart.pane_price_scale(pane, key);
+                (scale.range(), scale.bar_ratio())
+            };
+            let map = |chart: &Chart| {
+                let scale = chart.pane_price_scale(pane, key);
+                scale.map(scale.transform(), plot.top(), plot.bottom())
+            };
+            let (range, ratio) = read(&chart);
+            let (start, end) = (
+                plot.center() - egui::vec2(100.0, 20.0),
+                plot.center() + egui::vec2(100.0, 20.0),
+            );
+            let before = map(&chart);
+            let (high, low) = (before.y_to_price(start.y), before.y_to_price(end.y));
+            assert!(chart.zoom_to_box(start, end, price, price.width(), pane, plot));
+            frame(&ctx, &mut chart, 0.2, Vec::new());
+            let after = map(&chart);
+            let (y_high, y_low) = (after.price_to_y(high), after.price_to_y(low));
+            assert!(
+                (y_high - plot.top()).abs() < 0.5 && (y_low - plot.bottom()).abs() < 0.5,
+                "study pane {in_study_pane}: {low}..{high} at y {y_low}..{y_high}, plot {plot:?}"
+            );
+            assert!(chart.zoom_back());
+            frame(&ctx, &mut chart, 0.3, Vec::new());
+            let (back, back_ratio) = read(&chart);
+            let tolerance = (range.max - range.min) * 1e-9;
+            assert!(
+                (back.min - range.min).abs() < tolerance
+                    && (back.max - range.max).abs() < tolerance,
+                "study pane {in_study_pane}: {back:?}, was {range:?}"
+            );
+            assert_eq!(back_ratio, ratio, "study pane {in_study_pane}");
+        }
+    }
+
+    /// The bars and values inside a zoom box fill the pane it was drawn in on the next frame: the
+    /// price pane, also on a price scale locked to the bar spacing, or a study pane on its own
+    /// scale. The box re-centres the time window, so the relative modes rebase on another first
+    /// visible close or study value than the box was drawn on, and a locked price scale takes its
+    /// ratio in the units of that window.
     #[test]
     fn box_zoom_fills_the_pane_with_the_selected_bars_and_prices() {
         let lows: Vec<f64> = (0..100).map(|i| 100.0 + i as f64).collect();
         let highs: Vec<f64> = lows.iter().map(|low| low + 1.0).collect();
-        for mode in [PriceScaleMode::Normal, PriceScaleMode::Percentage] {
+        for (in_study_pane, mode, locked) in [
+            (false, PriceScaleMode::Normal, false),
+            (false, PriceScaleMode::Percentage, false),
+            (false, PriceScaleMode::Percentage, true),
+            (true, PriceScaleMode::Percentage, false),
+            (true, PriceScaleMode::IndexedTo100, false),
+        ] {
+            let row = format!("study pane {in_study_pane}, {mode:?}, locked {locked}");
             let ctx = egui::Context::default();
             let mut chart = chart(&lows, &highs);
-            chart.apply_series_settings(&SeriesSettings {
-                price_scale_mode: mode,
-                ..SeriesSettings::default()
-            });
+            let id = if in_study_pane {
+                // The closes, 101 to 200, in a pane of their own.
+                chart.add_indicator(Box::new(
+                    crate::studies::CustomIndicator::new("Pane", |bars| {
+                        bars.iter()
+                            .map(|bar| crate::studies::IndicatorValue::Single(bar.close))
+                            .collect()
+                    })
+                    .with_overlay(false),
+                ))
+            } else {
+                chart.apply_series_settings(&SeriesSettings {
+                    price_scale_mode: mode,
+                    ..SeriesSettings::default()
+                });
+                crate::widget::SeriesId::MAIN
+            };
             frame(&ctx, &mut chart, 0.0, Vec::new());
-            let rect = chart.last_rendered_price_rect;
-            let before = chart.get_chart_mapping().price;
-            let (y_hi, y_lo) = (rect.top() + 100.0, rect.top() + 200.0);
+            let price = chart.last_rendered_price_rect;
+            let pane = chart.series_pane(id).expect("present series");
+            if in_study_pane {
+                chart
+                    .pane_price_scale_mut(pane, crate::model::SeriesScale::Right)
+                    .options_mut()
+                    .mode = mode;
+                frame(&ctx, &mut chart, 0.05, Vec::new());
+            }
+            if locked {
+                let spacing = chart.state.time_scale().bar_spacing();
+                chart
+                    .state
+                    .price_scale_mut()
+                    .set_bar_ratio_locked(true, spacing, price.height());
+            }
+            let before = chart.series_price_map(id).expect("drawn pane");
+            let (top, bottom) = before.extent();
+            let rect = Rect::from_x_y_ranges(price.x_range(), top..=bottom);
+            let (y_hi, y_lo) = (top + rect.height() / 4.0, top + rect.height() * 0.6);
             let (hi, lo) = (before.y_to_price(y_hi), before.y_to_price(y_lo));
             let (start, end) = (
                 Pos2::new(rect.right() - 150.0, y_hi),
@@ -3010,7 +3544,17 @@ mod tests {
                 ts.coord_to_idx(x, rect.left(), rect.width())
             };
             let (left, right) = (idx(start.x), idx(end.x));
-            assert!(chart.execute_box_zoom(start, end, rect, rect.width()));
+            if in_study_pane {
+                assert!(
+                    chart.zoom_to_box(start, end, price, price.width(), pane, rect),
+                    "{row}"
+                );
+            } else {
+                assert!(
+                    chart.execute_box_zoom(start, end, price, price.width()),
+                    "{row}"
+                );
+            }
             frame(&ctx, &mut chart, 0.1, Vec::new());
             let ts = chart.state.time_scale();
             let x = |idx| ts.idx_to_coord_precise(idx, rect.left(), rect.width());
@@ -3018,14 +3562,14 @@ mod tests {
             assert!(
                 (x_left - rect.left()).abs() < 0.01
                     && (x_right - (rect.right() - 1.0)).abs() < 0.01,
-                "{mode:?}: bars {left}..{right} at x {x_left}..{x_right}, pane {rect:?}"
+                "{row}: bars {left}..{right} at x {x_left}..{x_right}, pane {rect:?}"
             );
-            let after = chart.get_chart_mapping().price;
+            let after = chart.series_price_map(id).expect("drawn pane");
             let (top, bottom) = after.extent();
             let (y_hi, y_lo) = (after.price_to_y(hi), after.price_to_y(lo));
             assert!(
                 (y_hi - top).abs() < 0.5 && (y_lo - bottom).abs() < 0.5,
-                "{mode:?}: {lo}..{hi} at y {y_lo}..{y_hi}, pane {top}..{bottom}"
+                "{row}: {lo}..{hi} at y {y_lo}..{y_hi}, pane {top}..{bottom}"
             );
         }
 

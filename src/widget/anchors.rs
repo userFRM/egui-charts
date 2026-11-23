@@ -133,6 +133,7 @@ impl Chart {
     /// [`DrawingStorage::saved_by`].
     pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
         self.store_drawings(
+            self.symbol(),
             self.drawings
                 .drawings
                 .iter()
@@ -142,13 +143,19 @@ impl Chart {
 
     pub(super) fn store_drawings<'a>(
         &self,
+        symbol: &str,
         drawings: impl IntoIterator<Item = &'a Drawing>,
     ) -> Result<DrawingStorage, SaveError> {
-        let mut storage = DrawingStorage::new(self.symbol());
+        let mut storage = DrawingStorage::new(symbol);
         storage.timeframe = self
             .timeframe()
             .map(|timeframe| timeframe.as_str().into_owned());
         storage.saved_by = Some(self.data_table_identity);
+        let manager = if symbol == self.symbol() {
+            Some(&self.drawings)
+        } else {
+            self.symbol_drawings.get(symbol).map(|(manager, _)| manager)
+        };
         for drawing in drawings {
             for (at, point) in drawing.chart_points.iter().enumerate() {
                 if point
@@ -171,10 +178,7 @@ impl Chart {
                     price,
                 )
             });
-            // A drawing without an owner is stored for the price pane, wherever that pane is.
-            stored.pane = self
-                .owner_pane(drawing)
-                .and_then(|pane| self.stored_pane(pane));
+            self.set_record_pane(symbol, drawing, manager, &mut stored);
             storage.add_drawing(stored);
         }
         // Validate all settings too, before a host replaces its last good save.
@@ -206,10 +210,34 @@ impl Chart {
         json: &str,
         remap: bool,
     ) -> Result<Vec<SkippedDrawing>, LoadError> {
-        let (storage, mut skipped) = DrawingStorage::from_json(json)?;
+        let (storage, skipped) = self.parse_drawing_file(json)?;
+        let own_snapshot = remap
+            && self.keeps_stored_drawings()
+            && self.restored_from == Some(self.data_table_identity)
+            && storage.saved_by == self.restored_from;
+        let skipped = self.apply_drawing_file(&storage, skipped, remap, own_snapshot);
+        self.remember_read_panes(&storage);
+        Ok(skipped)
+    }
+
+    pub(super) fn parse_drawing_file(
+        &self,
+        json: &str,
+    ) -> Result<(DrawingStorage, Vec<SkippedDrawing>), LoadError> {
+        let (storage, skipped) = DrawingStorage::from_json(json)?;
         if storage.symbol != self.symbol() {
             return Err(LoadError::OtherSymbol);
         }
+        Ok((storage, skipped))
+    }
+
+    pub(super) fn apply_drawing_file(
+        &mut self,
+        storage: &DrawingStorage,
+        mut skipped: Vec<SkippedDrawing>,
+        remap: bool,
+        keep_snapshot_links: bool,
+    ) -> Vec<SkippedDrawing> {
         let drawings = storage
             .drawings()
             .iter()
@@ -220,7 +248,7 @@ impl Chart {
             .filter(|index| skipped.iter().all(|s| s.index != *index))
             .take(storage.drawings().len())
             .collect();
-        for (at, error) in self.replace_drawings(drawings) {
+        for (at, error) in self.replace_drawings(drawings, keep_snapshot_links) {
             skipped.push(SkippedDrawing {
                 index: read[at],
                 id: Some(storage.drawings()[at].id.clone()),
@@ -228,17 +256,19 @@ impl Chart {
             });
         }
         skipped.sort_by_key(|skipped| skipped.index);
-        Ok(skipped)
+        skipped
     }
 
     /// Replaces the drawings with `drawings`, in their order, keeping the drawing tools, options
-    /// and defaults, and clears undo history. Returns the position in `drawings` and the reason
-    /// of each drawing the manager refused, which it leaves out.
+    /// and defaults and the studies removed while shared drawings were hidden, and clears undo
+    /// history. Returns the position in `drawings` and the reason of each drawing the manager
+    /// refused, which it leaves out.
     pub(super) fn replace_drawings(
         &mut self,
         drawings: Vec<Drawing>,
+        keep_snapshot_links: bool,
     ) -> Vec<(usize, &'static str)> {
-        self.flush_drawing_events();
+        self.flush_change_events();
         let mut manager = DrawingManager::new();
         manager.set_sync_enabled(self.drawings.sync_enabled);
         manager.registry = self.drawings.registry.clone();
@@ -252,7 +282,12 @@ impl Chart {
         manager.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
         manager.eraser_mode = self.drawings.eraser_mode;
         manager.set_hidden(self.drawings.is_hidden());
+        manager.shared_filter = self.drawings.shared_filter;
+        manager.set_locked(self.drawings.is_locked());
         manager.curr_timeframe = self.drawings.curr_timeframe.clone();
+        // The studies removed while shared drawings were hidden stay removed on this chart.
+        manager.removed_owners = std::mem::take(&mut self.drawings.removed_owners);
+        manager.removed_panes = std::mem::take(&mut self.drawings.removed_panes);
         let refused = drawings
             .into_iter()
             .enumerate()
@@ -260,6 +295,9 @@ impl Chart {
             .collect();
         manager.events.clear();
         manager.events_dropped = 0;
+        if keep_snapshot_links {
+            manager.keep_snapshot_links(&self.drawings);
+        }
         self.drawings = manager;
         self.history.clear();
         refused
@@ -719,6 +757,7 @@ mod tests {
         restored.drawings_mut().stay_in_drawing_mode = true;
         restored.drawings_mut().eraser_mode = true;
         restored.drawings_mut().set_hidden(true);
+        restored.drawings_mut().set_locked(true);
         let skipped = restored.load_drawings(&json.to_string()).unwrap();
         assert_eq!(skipped.iter().map(|s| s.index).collect::<Vec<_>>(), [1, 2]);
         assert!(restored.drawings().pending_sync.lock().unwrap().is_empty());
@@ -726,6 +765,7 @@ mod tests {
         assert!(restored.drawings().stay_in_drawing_mode);
         assert!(restored.drawings().eraser_mode);
         assert!(restored.drawings().is_hidden());
+        assert!(restored.drawings().is_locked());
         // Timestamp-only drawings can be saved while history is still pending.
         assert_eq!(
             serde_json::to_value(&restored.save_drawings().unwrap().drawings[0].points).unwrap(),
@@ -793,15 +833,20 @@ mod tests {
     /// stored. An SMI record with equal `smooth1` and `smooth2`, as written before an equal pair
     /// shared one input, matches the SMI that lists them as `smoothing`. A study restored under
     /// host defaults that set the missing input for new studies matches too. A Knoxville record
-    /// from before the window rule, with pivot sides, matches the study without them. An ADX
-    /// record from before the smoothing had an input matches the ADX whose smoothing equals its
-    /// period. Loading and pasting agree.
+    /// from before the window rule, with pivot sides, matches the study without them. A Doji
+    /// record from before the patterns without a trend condition dropped the trend rule matches
+    /// the Doji without it. An ADX record from before the smoothing had an input matches the ADX
+    /// whose smoothing equals its period. A Knoxville record stored while the study offered
+    /// Symbol and Interval matches the Knoxville that offers neither. A Trading Sessions record
+    /// from before session hours were times of day matches the study that reports them so.
+    /// Loading and pasting agree.
     #[cfg(feature = "studies")]
     #[test]
     fn stored_pane_survives_a_new_study_input() {
         use crate::studies::{
             ADX, ConfiguredStudy, CustomIndicator, Indicator, IndicatorFactory, IndicatorValue,
             InputValue, KnoxvilleDivergence, RSI, StochasticMomentumIndex, StudyTemplate,
+            TradingSessions,
         };
         let bars = [0, 60, 180]
             .map(|s| Bar::new(Utc.timestamp_opt(s, 0).unwrap(), 10.0, 11.0, 9.0, 10.0, 1.0))
@@ -824,6 +869,39 @@ mod tests {
             study.set_overlay(false);
             Box::new(study)
         };
+        let doji: Study = || {
+            // In a pane of its own, where drawings are stored with its inputs.
+            let mut study = ConfiguredStudy::new(IndicatorFactory::new().create("Doji").unwrap());
+            study.set_overlay(false);
+            Box::new(study)
+        };
+        let sessions: Study = || {
+            // Moved into a pane of its own, as a user can move any study.
+            let mut study = ConfiguredStudy::new(Box::new(TradingSessions::new()));
+            study.set_overlay(false);
+            Box::new(study)
+        };
+        // Hours and zones as written before inputs had a time of day and a time zone.
+        let minute_counts = |inputs: &mut Vec<serde_json::Value>| {
+            let mut written = 0;
+            for input in inputs.iter_mut() {
+                let value = &mut input[1];
+                if let Some((hours, minutes)) = value["TimeOfDay"]
+                    .as_str()
+                    .and_then(|time| time.split_once(':'))
+                {
+                    let minutes =
+                        hours.parse::<usize>().unwrap() * 60 + minutes.parse::<usize>().unwrap();
+                    *value = serde_json::to_value(InputValue::Length(minutes)).unwrap();
+                    written += 1;
+                } else if let Some(zone) = value["TimeZone"].as_str() {
+                    *value = serde_json::to_value(InputValue::Text(zone.into())).unwrap();
+                    written += 1;
+                }
+            }
+            // Start, end and zone of each of the three sessions.
+            assert_eq!(written, 9);
+        };
         let pivots = |inputs: &mut Vec<serde_json::Value>| {
             inputs.retain(|input| input[0] != "left" && input[0] != "right");
             let side = serde_json::to_value(InputValue::Length(5)).unwrap();
@@ -834,6 +912,33 @@ mod tests {
                     serde_json::json!(["right", side]),
                 ],
             );
+        };
+        let other_bars = |inputs: &mut Vec<serde_json::Value>| {
+            inputs.retain(|input| {
+                !matches!(
+                    input[0].as_str(),
+                    Some("calculation_symbol" | "calculation_timeframe" | "wait_for_close")
+                )
+            });
+            for (id, value) in [
+                ("calculation_symbol", InputValue::Symbol("OTHER".into())),
+                (
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(crate::model::Timeframe::Day1)),
+                ),
+                ("wait_for_close", InputValue::Toggle(false)),
+            ] {
+                inputs.push(serde_json::json!([
+                    id,
+                    serde_json::to_value(value).unwrap()
+                ]));
+            }
+        };
+        // A Doji record from before the trendless patterns dropped the trend rule.
+        let trend_rule = |inputs: &mut Vec<serde_json::Value>| {
+            inputs.retain(|input| input[0] != "trend");
+            let rule = serde_json::to_value(InputValue::Choice(2)).unwrap();
+            inputs.insert(0, serde_json::json!(["trend", rule]));
         };
         // Saved without `wait_for_close`, then restored by a factory whose defaults turn it off.
         let restored: Study = || {
@@ -919,7 +1024,7 @@ mod tests {
             Option<(&'a str, InputValue)>,
             bool,
         );
-        let cases: [Case<'_>; 14] = [
+        let cases: [Case<'_>; 17] = [
             // From before an input existed: the last one, which the chart adds after the study's
             // own, or one of the study's own, which comes before the chart's.
             (rsi, &last, None, true),
@@ -927,6 +1032,9 @@ mod tests {
             (rsi, &last, wait(false), false),
             (restored, &last, None, true),
             (knoxville, &pivots, None, true),
+            // Stored while it listed Symbol and Interval, with values set.
+            (knoxville, &other_bars, None, true),
+            (doji, &trend_rule, None, true),
             // Before the ADX smoothing had an input, the DI period set it too.
             (adx, &no_smoothing, None, true),
             (rsi, &other_period, None, false),
@@ -942,6 +1050,8 @@ mod tests {
             (smi, &equal, None, true),
             (smi, &unequal, length("smooth2", 4), true),
             (smi, &equal, length("smoothing", 4), false),
+            // From before session hours were times of day and zones were time zones.
+            (sessions, &minute_counts, None, true),
         ];
         for (at, (study, edit, input, shown)) in cases.into_iter().enumerate() {
             let text = copied(study);
@@ -962,6 +1072,36 @@ mod tests {
                 }
                 let drawn = target.drawings().drawings[0].pane;
                 assert_eq!(drawn, shown.then_some(pane.0), "case {at}, paste {paste}");
+            }
+        }
+        // Earlier built-in pane names resolve, while host studies keep their own name.
+        let pvt: Study = || IndicatorFactory::new().create("PVT").unwrap();
+        let host_vpt: Study = || {
+            Box::new(
+                CustomIndicator::new("VPT", |bars: &[Bar]| {
+                    vec![IndicatorValue::Single(0.0); bars.len()]
+                })
+                .with_overlay(false),
+            )
+        };
+        for study in [pvt, host_vpt] {
+            let text = copied(study);
+            let (prefix, json) = text.split_once('\n').unwrap();
+            let mut json: serde_json::Value = serde_json::from_str(json).unwrap();
+            json["drawings"][0]["pane"]["studies"][0][0] = "VPT".into();
+            for paste in [false, true] {
+                let (mut target, pane) = chart(study);
+                if paste {
+                    target.paste_drawings(&format!("{prefix}\n{json}")).unwrap();
+                } else {
+                    target.load_drawings(&json.to_string()).unwrap();
+                }
+                assert_eq!(
+                    target.drawings().drawings[0].pane,
+                    Some(pane.0),
+                    "{}, paste {paste}",
+                    target.indicators().next().unwrap().1.name()
+                );
             }
         }
     }

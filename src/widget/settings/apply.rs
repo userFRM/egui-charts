@@ -161,8 +161,9 @@ fn set_unless_resolved(current: &mut Option<Color32>, fallback: Color32, color: 
 }
 
 impl ChartSettingsState {
-    /// Read the chart's current display settings. Host-managed trading and alert groups and
-    /// futures data choices retain defaults; hosts preserve them when refreshing settings.
+    /// Read the chart's current display settings and the futures data choices it recorded.
+    /// Host-managed trading and alert groups retain defaults; hosts preserve them when refreshing
+    /// settings.
     pub fn from_chart(chart: &Chart) -> Self {
         let config = chart.config();
         let mut settings = Self {
@@ -173,6 +174,8 @@ impl ChartSettingsState {
             show_session_breaks: Some(config.show_session_breaks),
             extended_hours: Some(chart.extended_hours()),
             overnight_hours: Some(chart.overnight_hours()),
+            back_adjust_futures: chart.back_adjust_futures,
+            settlement_as_close: chart.settlement_as_close,
             session_background: Some(super::SessionBackgroundSettings {
                 show_extended_hours: config.show_extended_hours,
                 extended_hours_color: config.extended_hours_color,
@@ -402,6 +405,12 @@ impl ChartSettingsState {
         settings.crosshair.color = crosshair.horz_line_color;
         settings.crosshair.line_width = crosshair.horz_line_width;
         settings.crosshair.line_style = crosshair.horz_line_style;
+        settings.crosshair_lines = Some(super::CrosshairVisibility {
+            vertical_line: crosshair.vert_line_visible,
+            horizontal_line: crosshair.horz_line_visible,
+            time_label: crosshair.label_visible && crosshair.vert_label_visible,
+            price_label: crosshair.label_visible && crosshair.horz_label_visible,
+        });
         settings.precision = PrecisionMode::from_scale(chart.state().price_scale());
         settings.watermark.mode = if !config.show_watermark {
             WatermarkMode::ReplayMode
@@ -503,7 +512,8 @@ impl ChartSettingsState {
 
     /// Apply the display controls offered by the dialog without rebuilding the chart or feed.
     /// A changed hours choice reloads history on the next frame.
-    /// Host-owned trading and alerts are left to their providers. Invalid timezone,
+    /// Host-owned trading and alerts are left to their providers. The futures data choices are
+    /// recorded on the chart, which leaves reloading history for them to the host. Invalid timezone,
     /// margins or crosshair width returns an error before changing the chart. The optional
     /// choices that hold `None`, as in settings saved before they existed, keep the chart's,
     /// while the optional colours apply as they are: `None` gives the last price its candle
@@ -544,6 +554,8 @@ impl ChartSettingsState {
         if let Some(extended) = self.extended_hours {
             chart.set_extended_hours(extended);
         }
+        chart.back_adjust_futures = self.back_adjust_futures;
+        chart.settlement_as_close = self.settlement_as_close;
         if let Some(background) = &self.session_background {
             let config = chart.config_mut();
             config.show_extended_hours = background.show_extended_hours;
@@ -584,6 +596,20 @@ impl ChartSettingsState {
         crosshair.vert_line_width = self.crosshair.line_width;
         crosshair.horz_line_style = self.crosshair.line_style;
         crosshair.vert_line_style = crosshair.horz_line_style;
+        if let Some(shown) = self.crosshair_lines {
+            crosshair.vert_line_visible = shown.vertical_line;
+            crosshair.horz_line_visible = shown.horizontal_line;
+            // Unedited painted labels keep the master switch and record no undo step.
+            let labels = (
+                crosshair.label_visible && crosshair.vert_label_visible,
+                crosshair.label_visible && crosshair.horz_label_visible,
+            );
+            if labels != (shown.time_label, shown.price_label) {
+                crosshair.label_visible = true;
+                crosshair.vert_label_visible = shown.time_label;
+                crosshair.horz_label_visible = shown.price_label;
+            }
+        }
         chart.pane_options_mut().separator_color = self.pane_separator_color;
         let mut axis_layout = self.scales_and_lines.axis_layout;
         if self.scales_and_lines.price_scale_left != chart.main_axis_on_left()
@@ -1480,6 +1506,18 @@ mod tests {
         assert_eq!(config.grid_color, grid);
         assert_eq!(config.vertical_grid_color, Some(old_grid));
         assert!(chart.can_undo());
+
+        // A hidden master label switch applies back without changing the individual switches.
+        let mut chart = Chart::new(bars());
+        chart.chart_options.crosshair.label_visible = false;
+        chart.user_action(|chart| {
+            ChartSettingsState::from_chart(chart)
+                .apply_to_chart(chart)
+                .unwrap();
+        });
+        let crosshair = &chart.chart_options().crosshair;
+        assert!(crosshair.vert_label_visible && crosshair.horz_label_visible);
+        assert!(!chart.can_undo());
 
         // Margins leaving no room for prices, which the fit ignores, are kept.
         let mut chart = Chart::new(bars());

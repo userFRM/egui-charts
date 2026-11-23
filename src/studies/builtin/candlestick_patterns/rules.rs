@@ -106,17 +106,32 @@ pub(super) enum Side {
     Neutral,
 }
 
-/// A pattern's toggle label, chart abbreviation, rule in words, side, bar count and rule over
-/// exactly that many bars, oldest first.
+impl Side {
+    /// The line of All Candlestick Patterns that marks this side.
+    pub(super) const fn line(self) -> usize {
+        match self {
+            Self::Bullish => 0,
+            Self::Bearish => 1,
+            Self::Neutral => 2,
+        }
+    }
+}
+
+/// A pattern's toggle label, chart abbreviation, rule in words, side, bar count, whether the
+/// rule reads the trend, and rule over exactly that many bars, oldest first.
 pub(super) struct Pattern {
     pub(super) label: &'static str,
     pub(super) abbr: &'static str,
     pub(super) rule: &'static str,
     pub(super) side: Side,
     pub(super) bars: usize,
+    /// Whether the rule reads a bar's trend, so that the pattern's own study offers the trend
+    /// rule.
+    pub(super) trend: bool,
     pub(super) found: fn(&[Candle]) -> bool,
 }
 
+/// A pattern whose rule reads the trend.
 const fn pattern(
     label: &'static str,
     abbr: &'static str,
@@ -131,6 +146,27 @@ const fn pattern(
         rule,
         side,
         bars,
+        trend: true,
+        found,
+    }
+}
+
+/// A pattern whose rule has no trend condition, so the trend rule never changes its marks.
+const fn trendless(
+    label: &'static str,
+    abbr: &'static str,
+    rule: &'static str,
+    side: Side,
+    bars: usize,
+    found: fn(&[Candle]) -> bool,
+) -> Pattern {
+    Pattern {
+        label,
+        abbr,
+        rule,
+        side,
+        bars,
+        trend: false,
         found,
     }
 }
@@ -172,7 +208,7 @@ pub(super) const PATTERNS: [Pattern; 44] = [
             && b.close < p.middle() && b.close > p.open)
         },
     ),
-    pattern(
+    trendless(
         "Doji",
         "D",
         "The open and close are almost equal, between shadows of similar length.",
@@ -274,7 +310,7 @@ pub(super) const PATTERNS: [Pattern; 44] = [
         2,
         |c| matches!(c, [p, b] if p.down && p.range() != 0.0 && b.range() != 0.0 && b.high < p.low),
     ),
-    pattern(
+    trendless(
         "Gravestone Doji - Bearish",
         "GD",
         "The open and close are almost equal at the low, under a long upper shadow.",
@@ -338,7 +374,7 @@ pub(super) const PATTERNS: [Pattern; 44] = [
         1,
         |c| matches!(c, [b] if b.down && b.inverted_hammer()),
     ),
-    pattern(
+    trendless(
         "Kicking - Bearish",
         "K",
         "A long black body with almost no shadows gaps below a long white body with almost no shadows.",
@@ -346,7 +382,7 @@ pub(super) const PATTERNS: [Pattern; 44] = [
         2,
         |c| matches!(c, [p, b] if p.white() && p.marubozu() && b.black() && b.marubozu() && p.low > b.high),
     ),
-    pattern(
+    trendless(
         "Kicking - Bullish",
         "K",
         "A long white body with almost no shadows gaps above a long black body with almost no shadows.",
@@ -354,7 +390,7 @@ pub(super) const PATTERNS: [Pattern; 44] = [
         2,
         |c| matches!(c, [p, b] if p.black() && p.marubozu() && b.white() && b.marubozu() && p.high < b.low),
     ),
-    pattern(
+    trendless(
         "Long Lower Shadow - Bullish",
         "LLS",
         "The lower shadow is longer than three quarters of the range.",
@@ -362,7 +398,7 @@ pub(super) const PATTERNS: [Pattern; 44] = [
         1,
         |c| matches!(c, [b] if b.lower() > b.range() * 0.75),
     ),
-    pattern(
+    trendless(
         "Long Upper Shadow - Bearish",
         "LUS",
         "The upper shadow is longer than three quarters of the range.",
@@ -370,7 +406,7 @@ pub(super) const PATTERNS: [Pattern; 44] = [
         1,
         |c| matches!(c, [b] if b.upper() > b.range() * 0.75),
     ),
-    pattern(
+    trendless(
         "Marubozu Black - Bearish",
         "MB",
         "A long black body with almost no shadows.",
@@ -378,7 +414,7 @@ pub(super) const PATTERNS: [Pattern; 44] = [
         1,
         |c| matches!(c, [b] if b.black() && b.marubozu()),
     ),
-    pattern(
+    trendless(
         "Marubozu White - Bullish",
         "MW",
         "A long white body with almost no shadows.",
@@ -452,7 +488,7 @@ pub(super) const PATTERNS: [Pattern; 44] = [
         1,
         |c| matches!(c, [b] if b.up && b.inverted_hammer()),
     ),
-    pattern(
+    trendless(
         "Spinning Top Black",
         "STB",
         "A black body larger than a doji, with each shadow at least 34% of the range.",
@@ -460,7 +496,7 @@ pub(super) const PATTERNS: [Pattern; 44] = [
         1,
         |c| matches!(c, [b] if b.black() && b.spinning_top()),
     ),
-    pattern(
+    trendless(
         "Spinning Top White",
         "STW",
         "A white body larger than a doji, with each shadow at least 34% of the range.",
@@ -468,7 +504,7 @@ pub(super) const PATTERNS: [Pattern; 44] = [
         1,
         |c| matches!(c, [b] if b.white() && b.spinning_top()),
     ),
-    pattern(
+    trendless(
         "Three Black Crows - Bearish",
         "3BC",
         "Three long black candles, each opening within the previous body and closing lower, near its low.",
@@ -480,7 +516,7 @@ pub(super) const PATTERNS: [Pattern; 44] = [
             && b.open > p1.close && b.open < p1.open && p1.open > p2.close && p1.open < p2.open)
         },
     ),
-    pattern(
+    trendless(
         "Three White Soldiers - Bullish",
         "3WS",
         "Three long white candles, each opening within the previous body and closing higher, near its high.",

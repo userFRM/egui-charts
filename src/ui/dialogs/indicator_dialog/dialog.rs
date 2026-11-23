@@ -179,9 +179,19 @@ impl IndicatorDialog {
         }
     }
 
-    /// Restore the user's saved browser settings, including unavailable host studies.
+    /// Restore the user's saved browser settings, including unavailable host studies. A favourite
+    /// saved under a built-in's earlier name stars the study under its name now, unless this
+    /// dialog lists the earlier name itself.
     pub fn set_preferences(&mut self, preferences: IndicatorPreferences) {
-        self.favorites = preferences.favorites.into_iter().collect();
+        let listed = |id: &str| self.indicators.iter().any(|info| info.id == id);
+        self.favorites = preferences
+            .favorites
+            .into_iter()
+            .map(|id| match IndicatorFactory::renamed(&id) {
+                Some(now) if !listed(&id) => now.to_owned(),
+                _ => id,
+            })
+            .collect();
     }
 
     /// Create a new indicator dialog with the built-in studies
@@ -455,15 +465,6 @@ impl IndicatorDialog {
     /// Check if dialog is open
     pub fn is_open(&self) -> bool {
         self.is_open
-    }
-
-    /// Sync dialog open/close state from an external flag.
-    pub fn sync_open_state(&mut self, should_be_open: bool) {
-        if should_be_open && !self.is_open {
-            self.open();
-        } else if !should_be_open && self.is_open {
-            self.close();
-        }
     }
 
     /// Show the dialog with live theme colors
@@ -1401,6 +1402,17 @@ mod tests {
                 "{category:?}"
             );
         }
+        // Earlier built-in names migrate unless the host lists that key itself.
+        let earlier = IndicatorPreferences {
+            favorites: ["VPT".to_owned()].into(),
+        };
+        restored.set_preferences(earlier.clone());
+        assert_eq!(restored.favorites, HashSet::from(["PVT".to_owned()]));
+        let mut host = IndicatorFactory::new();
+        host.register("VPT", || Box::new(crate::studies::SMA::new(5)));
+        let mut hosted = IndicatorDialog::new().with_factory(host);
+        hosted.set_preferences(earlier);
+        assert_eq!(hosted.favorites, HashSet::from(["VPT".to_owned()]));
     }
 
     #[test]
@@ -1949,6 +1961,7 @@ mod tests {
         let cases: &[Row] = &[
             ("52 Week High/Low", &["52W High/Low"], &[]),
             ("Accumulative Swing Index", &["ASI"], &[]),
+            ("Analyst price targets", &["Analyst price forecast"], &[]),
             ("Arnaud Legoux Moving Average", &["ALMA"], &[]),
             (
                 "Auto Fib Retracement",
@@ -2067,8 +2080,10 @@ mod tests {
                 &["VWAP", "AVWAP", "VWAP Auto Anchored"],
                 &["VWMA", "Time Weighted Average Price"],
             ),
-            ("Price Volume Trend", &["VPT", "PVT Enhanced"], &[]),
-            ("PVT", &["VPT", "PVT Enhanced"], &[]),
+            ("Price Volume Trend", &["PVT", "PVT Enhanced"], &[]),
+            ("PVT", &["PVT", "PVT Enhanced"], &[]),
+            ("VPT", &["PVT"], &[]),
+            ("Volume Price Trend", &["PVT"], &[]),
             (
                 "Session Volume Profile",
                 &["Vol Profile Session"],
@@ -2215,6 +2230,13 @@ mod tests {
             }
         }
         assert!(differ.is_empty(), "added with other parameters: {differ:?}");
+        let pvt = dialog
+            .indicators
+            .iter()
+            .find(|info| info.id == "PVT")
+            .expect("PVT is listed");
+        assert_eq!(pvt.name, "Price Volume Trend");
+        assert_eq!(factory.create("PVT").unwrap().line_names(), ["PVT"]);
     }
 
     /// The light chooser has distinct hint inks; other palettes keep their supplied roles.

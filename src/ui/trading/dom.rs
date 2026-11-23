@@ -269,6 +269,8 @@ impl DepthPanel {
             last_fill: None,
             pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
+            account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         ui.push_id("depth_panel", |ui| {
             self.ladder.draw(ui, chart.symbol(), &market, None);
@@ -1736,6 +1738,8 @@ mod tests {
                     last_fill: None,
                     pnl_unit: crate::chart::PnlUnit::Money,
                     logo: None,
+                    account: "",
+                    timezone: crate::scales::TimezoneMode::Utc,
                 };
                 let mut ladder = Ladder {
                     centre: last.is_none().then_some(initial),
@@ -1843,6 +1847,8 @@ mod tests {
             last_fill: None,
             pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
+            account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         let ctx = egui::Context::default();
         let frame = |ladder: &mut Ladder, market: &Market<'_>, events: Vec<egui::Event>| {
@@ -2189,6 +2195,8 @@ mod tests {
                         last_fill: None,
                         pnl_unit: crate::chart::PnlUnit::Money,
                         logo: None,
+                        account: "",
+                        timezone: crate::scales::TimezoneMode::Utc,
                     };
                     let mut output = ctx.run_ui(
                         egui::RawInput {
@@ -2473,6 +2481,8 @@ mod tests {
                 last_fill: None,
                 pnl_unit: crate::chart::PnlUnit::Money,
                 logo: None,
+                account: "",
+                timezone: crate::scales::TimezoneMode::Utc,
             };
             let output = ctx.run_ui(
                 egui::RawInput {
@@ -2630,6 +2640,8 @@ mod tests {
                             last_fill: None,
                             pnl_unit: crate::chart::PnlUnit::Money,
                             logo: None,
+                            account: "",
+                            timezone: crate::scales::TimezoneMode::Utc,
                         };
                         let mut action = None;
                         let output = ctx.run_ui(
@@ -2847,6 +2859,8 @@ mod tests {
                     last_fill: None,
                     pnl_unit: crate::chart::PnlUnit::Money,
                     logo: None,
+                    account: "",
+                    timezone: crate::scales::TimezoneMode::Utc,
                 };
                 let output = ctx.run_ui(egui::RawInput::default(), |ui| {
                     ladder.show(ui, "ES", &market, &mut 1.0, &mut TimeInForce::Day);
@@ -3014,6 +3028,8 @@ mod tests {
             last_fill: None,
             pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
+            account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         let ctx = egui::Context::default();
         let mut ladder = Ladder {
@@ -3220,6 +3236,8 @@ mod tests {
             last_fill: None,
             pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
+            account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         // The action, the text labels and the outlines with their stroke colours.
         let frame = |ctx: &egui::Context, ladder: &mut Ladder, events| {
@@ -3406,6 +3424,9 @@ mod tests {
             last_fill: None,
             pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
+
+            account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         for (over_ladder, focus_text, expected) in
             [(true, false, 400), (false, false, 398), (true, true, 398)]
@@ -3557,6 +3578,9 @@ mod tests {
                 last_fill: None,
                 pnl_unit: unit,
                 logo: None,
+
+                account: "",
+                timezone: crate::scales::TimezoneMode::Utc,
             };
             let labels = |output: egui::FullOutput| {
                 let labels: Vec<_> = output

@@ -7,12 +7,13 @@ use egui_charts::model::Timeframe;
 use egui_charts::services::UserSettings;
 use egui_charts::studies::IndicatorFactory;
 use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
-use egui_charts::ui::widget_bar::panels::object_tree::ObjectTreeAction;
+use egui_charts::ui::widget_bar::ObjectTreeAction;
 use egui_charts::widget::{Chart, ChartLayout, ChartLayoutMode, SavedLayout, SeriesId};
 use std::sync::Arc;
 
 pub(super) struct DemoChart {
-    pub chart: Chart,
+    /// Boxed, so slots and parked workspaces move charts without copying them on the stack.
+    pub chart: Box<Chart>,
     pub live: Arc<LiveFeed>,
     pub comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
     pub spreads: Vec<super::comparison::Spread>,
@@ -26,12 +27,12 @@ pub(super) struct LayoutTab {
 }
 
 struct Workspace {
-    chart: Chart,
+    chart: Box<Chart>,
     live: Arc<LiveFeed>,
     comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
     spreads: Vec<super::comparison::Spread>,
     extra: Vec<DemoChart>,
-    layout: ChartLayout,
+    layout: Box<ChartLayout>,
     slot: usize,
 }
 
@@ -125,20 +126,21 @@ impl DemoApp {
         live.set_symbol(source.symbol());
         let (session, adjusted) = feed.view(source.extended_hours());
         live.set_view(session, adjusted);
-        let mut chart = egui_charts::ChartBuilder::new()
-            .with_feed(live.clone())
-            .with_symbol(source.symbol())
-            .with_timeframe(source.timeframe().unwrap_or(Timeframe::Min1))
-            .with_theme(self.theme.clone())
-            .with_config(source.config().clone())
-            .with_chart_options(source.chart_options().clone())
-            .with_chart_type(source.chart_type())
-            .with_drawing_registry(source.drawings().registry.clone())
-            .with_visible_candles(0)
-            .build();
+        let mut chart = Box::new(
+            egui_charts::ChartBuilder::new()
+                .with_feed(live.clone())
+                .with_symbol(source.symbol())
+                .with_timeframe(source.timeframe().unwrap_or(Timeframe::Min1))
+                .with_theme(self.theme.clone())
+                .with_config(source.config().clone())
+                .with_chart_options(source.chart_options().clone())
+                .with_chart_type(source.chart_type())
+                .with_drawing_registry(source.drawings().registry.clone())
+                .with_visible_candles(0)
+                .build(),
+        );
         self.formatting.apply(&mut chart);
         chart.set_main_series_visible(source.is_main_series_visible());
-        chart.set_price_targets_visible(source.price_targets_visible());
         chart.set_signal_source(Some(if self.api_samples {
             live.clone() as Arc<dyn egui_charts::services::Signals>
         } else {
@@ -178,10 +180,9 @@ impl DemoApp {
         for (id, indicator) in source.indicators() {
             let copy = chart.add_indicator(indicator.clone_box());
             study_ids.insert(id.0, copy.0);
-            if let Some(inputs) = source.indicator_inputs(id) {
-                chart.set_indicator_inputs(copy, inputs);
-            }
         }
+        // After the studies, whose forecast study the setting would otherwise add a second time.
+        chart.set_price_targets_visible(source.price_targets_visible());
         chart.drawings_mut().drawings = source.drawings().drawings.clone();
         chart.drawings_mut().drawings.retain_mut(|drawing| {
             if let Some(pane) = drawing.pane {
@@ -225,6 +226,7 @@ impl DemoApp {
         if slot == self.layout_slot {
             return;
         }
+        self.range_fit = None;
         self.stop_replay();
         // `chart` always holds the active slot so every existing toolbar and dialog acts on it.
         let other = if slot < self.layout_slot {
@@ -253,6 +255,7 @@ impl DemoApp {
     }
 
     pub(super) fn refresh_active_chart(&mut self) {
+        self.range_fit = None;
         self.comparison_settings = None;
         self.refresh_strategy_signals();
         self.last_chart_click = None;
@@ -355,7 +358,7 @@ impl DemoApp {
             self.close_layout(index);
         }
         if new {
-            self.new_layout(None);
+            self.new_layout(None, false);
         }
     }
 
@@ -391,7 +394,7 @@ impl DemoApp {
     /// Sets the active tab's workspace aside in the tab's own slot, where an inactive tab keeps
     /// its workspace, and shows `chart` alone. Theme and number format changes therefore keep
     /// reaching the charts set aside. Nothing is saved or stopped here.
-    pub(super) fn park_workspace(&mut self, chart: Chart) {
+    pub(super) fn park_workspace(&mut self, chart: Box<Chart>) {
         let workspace = Workspace {
             chart: std::mem::replace(&mut self.chart, chart),
             live: self.live.clone(),
@@ -433,13 +436,14 @@ impl DemoApp {
         self.top_toolbar.chart_grid_selector.sync = self.layout.sync.clone();
     }
 
-    fn new_layout(&mut self, name: Option<String>) {
+    /// Opens a tab named `name`, or `Unnamed`, with a numeric suffix while that name is taken;
+    /// with `duplicate` it holds a copy of the whole layout, otherwise a copy of the active chart.
+    fn new_layout(&mut self, name: Option<String>, duplicate: bool) {
         let copy = self.copy_chart(&self.chart, &self.live, &self.comparisons, &self.spreads);
-        let duplicate = name.is_some();
         let layout = if duplicate {
             self.layout.clone()
         } else {
-            ChartLayout::default()
+            Box::default()
         };
         let extra = if duplicate {
             self.extra_charts
@@ -540,14 +544,14 @@ impl DemoApp {
             }
             LayoutAction::DownloadData => self.export_csv(None),
             LayoutAction::OpenLayout => self.open_layout = true,
-            LayoutAction::CreateNew => self.new_layout(None),
+            LayoutAction::CreateNew(name) => self.new_layout(Some(name), false),
             LayoutAction::SaveAs(name) => match self
                 .capture_layout()
                 .and_then(|layout| Ok((layout, self.capture_comparisons()?)))
             {
                 Ok((layout, comparisons)) => {
                     let groups = self.layout_groups();
-                    self.new_layout(Some(name));
+                    self.new_layout(Some(name), true);
                     let name = self.layout_tabs[self.layout_tab].name.clone();
                     if let Err(error) = self
                         .storage
@@ -610,13 +614,17 @@ impl DemoApp {
         };
         self.extra_charts
             .get_mut(index)
-            .map(|c| (&mut c.chart, factory))
+            .map(|c| (&mut *c.chart, factory))
     }
 
     /// Gives the object tree the layout's drawings by symbol, while it lists them.
     pub(super) fn refresh_symbol_drawings(&mut self) {
         let inventory = if self.object_tree.state().showing_symbol_drawings {
-            let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+            let mut charts: Vec<_> = self
+                .extra_charts
+                .iter_mut()
+                .map(|c| &mut *c.chart)
+                .collect();
             charts.insert(self.layout_slot, &mut self.chart);
             charts.truncate(self.layout.mode.chart_count());
             self.layout.drawing_inventory(&charts)
@@ -629,7 +637,11 @@ impl DemoApp {
     /// Handles the object tree's actions on the layout's drawings by symbol. Returns whether
     /// `action` was one.
     pub(super) fn handle_symbol_drawings(&mut self, action: &ObjectTreeAction) -> bool {
-        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        let mut charts: Vec<_> = self
+            .extra_charts
+            .iter_mut()
+            .map(|c| &mut *c.chart)
+            .collect();
         charts.insert(self.layout_slot, &mut self.chart);
         charts.truncate(self.layout.mode.chart_count());
         match action {
@@ -754,6 +766,10 @@ impl DemoApp {
         for (saved, snapshot) in comparisons.iter_mut().zip(&mut layout.charts) {
             super::comparison::rename_former(saved);
             DemoSymbol::rename_former(snapshot);
+            // The former demo generated these captions; derive them so they keep following edits.
+            for study in &mut snapshot.studies {
+                study.caption.clear();
+            }
         }
         for (saved, snapshot) in comparisons.iter().zip(&layout.charts) {
             if let Err(error) = super::comparison::validate(saved, snapshot.panes.len()) {
@@ -854,7 +870,7 @@ impl DemoApp {
         settings.alerts = self.settings_state.alerts.clone();
         settings.trading = self.trading.display.clone();
         settings.adjust_for_dividends = self.timeframe_toolbar.state.adjust_for_dividends;
-        self.settings_state = settings;
+        *self.settings_state = settings;
         true
     }
 
@@ -882,6 +898,7 @@ impl DemoApp {
             .filter(|name| self.layout_is_saved(name));
         settings.layout_autosave = menu.autosave;
         settings.layout_favorites = menu.favorites.clone();
+        settings.hotlist_favorites = self.hotlist_favorites.clone();
         settings.indicator_favorites = self
             .indicator_dialog
             .preferences()
@@ -898,7 +915,7 @@ impl DemoApp {
         self.object_tree.state_mut().drawing_sort = settings
             .drawing_sort
             .iter()
-            .map(|(symbol, sort)| (DemoSymbol::current(symbol), sort.clone()))
+            .map(|(symbol, sort)| (DemoSymbol::current(symbol), *sort))
             .collect();
         self.update_theme(ctx);
         // Switching stops a replay the demo restored from its own storage.
@@ -925,6 +942,8 @@ impl DemoApp {
         toolbar.magnet_hint_dismissed |= settings.magnet_hint_dismissed;
         self.top_toolbar.layout_menu.autosave = settings.layout_autosave;
         self.top_toolbar.layout_menu.favorites = settings.layout_favorites;
+        self.hotlist_favorites = settings.hotlist_favorites;
+        self.hotlists.set_starred(self.hotlist_favorites.clone());
         let mut preferences =
             egui_charts::ui::dialogs::indicator_dialog::IndicatorPreferences::default();
         preferences.favorites = settings.indicator_favorites.into_iter().collect();
@@ -968,7 +987,7 @@ impl DemoApp {
         }
         let edits = std::iter::once(&self.chart)
             .chain(self.extra_charts.iter().map(|c| &c.chart))
-            .map(Chart::edit_count)
+            .map(|chart| chart.edit_count())
             .fold(self.grid_edits, u64::wrapping_add);
         if self.top_toolbar.layout_menu.autosave_due(ctx, edits) {
             self.save_layout();
@@ -987,6 +1006,82 @@ mod tests {
         groups.symbol = symbol;
         groups.interval = interval;
         groups
+    }
+
+    #[test]
+    fn older_demo_layout_captions_follow_study_edits() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        let saved = SavedLayout::from_json(
+            r#"{
+                "version": 1,
+                "mode": "Single",
+                "charts": [{
+                    "symbol": "STOCKA", "interval": null, "extended_hours": false,
+                    "chart_type": "Candles", "chart_type_params": {},
+                    "main_series_visible": true,
+                    "settings": {
+                        "candle_colors": {}, "precision": "Default", "timezone": "UTC",
+                        "status_line": {}, "scales_and_lines": {},
+                        "chart_basic_styles": {
+                            "background_type": "Solid", "background_color": [0, 0, 0, 255],
+                            "background_gradient_top": [0, 0, 0, 255],
+                            "background_gradient_bottom": [0, 0, 0, 255]
+                        },
+                        "grid_lines": {
+                            "mode": "Both", "horizontal_color": [30, 30, 30, 255],
+                            "vertical_color": [30, 30, 30, 255]
+                        },
+                        "crosshair": {
+                            "color": [128, 128, 128, 255], "line_width": 1.0,
+                            "line_style": "Dashed"
+                        },
+                        "watermark": {"mode": "ReplayMode", "color": [0, 0, 0, 0]},
+                        "scales_appearance": {
+                            "text_color": [128, 128, 128, 255], "font_size": 12,
+                            "lines_color": [0, 0, 0, 0]
+                        },
+                        "btns": {"navigation": "Hidden", "pane": "VisibleOnMouseOver"},
+                        "margins": {"top_percent": 10.0, "bottom_percent": 10.0, "right_bars": 5.0},
+                        "trading": {}, "alerts": {}, "events": {}
+                    },
+                    "studies": [{
+                        "id": 1, "caption": "14 close SMA 14", "autoscale": true, "pane": 1,
+                        "study": {
+                            "name": "RSI", "visible": true,
+                            "inputs": [
+                                ["period", {"Length": 14}], ["smoothing", {"Choice": 1}],
+                                ["smoothing_length", {"Length": 14}]
+                            ],
+                            "settings": {
+                                "plots": [
+                                    {"color": [126, 87, 194, 255], "width": 1.0, "pattern": "Solid", "plot_type": "JoinedLine", "visible": true},
+                                    {"color": [253, 216, 53, 255], "width": 1.0, "pattern": "Solid", "plot_type": "JoinedLine", "visible": true}
+                                ],
+                                "precision": 2, "hidden_intervals": []
+                            }
+                        }
+                    }],
+                    "panes": [{"main": true, "stretch": 1.0}, {"main": false, "stretch": 1.0}],
+                    "bar_spacing": 6.0, "right_offset": 5.0, "drawings": null
+                }]
+            }"#,
+        )
+        .unwrap();
+        assert!(
+            app.restore_layout("Older".into(), saved, Ok(Vec::new())),
+            "{:?}",
+            app.toasts
+        );
+        let id = app.chart.indicators().next().unwrap().0;
+        assert_eq!(app.chart.indicator_inputs(id), Some("14 close SMA 14"));
+        app.chart
+            .indicator_mut(id)
+            .unwrap()
+            .set_input("period", egui_charts::studies::InputValue::Length(5))
+            .unwrap();
+        assert_eq!(app.chart.indicator_inputs(id), Some("5 close SMA 14"));
     }
 
     #[test]
@@ -1120,7 +1215,7 @@ mod tests {
                     }
                 }
             }
-            app.new_layout(None);
+            app.new_layout(None, false);
             ctx.run_ui(egui::RawInput::default(), |ui| {
                 let top = ui.available_rect_before_wrap().top();
                 app.show_layout_tabs(ui);
@@ -1185,7 +1280,12 @@ mod tests {
             repeat: false,
             modifiers,
         };
-        for (modifiers, expected) in [(Modifiers::NONE, 1), (Modifiers::SHIFT, 0)] {
+        for (pressed, modifiers, expected) in [
+            (Key::Tab, Modifiers::NONE, 1),
+            (Key::Tab, Modifiers::SHIFT, 0),
+            (Key::ArrowRight, Modifiers::SHIFT, 1),
+            (Key::ArrowLeft, Modifiers::SHIFT, 0),
+        ] {
             app.time_and_sales.push(egui_charts::model::Tick::new(
                 chrono::Utc::now(),
                 987.65,
@@ -1194,7 +1294,7 @@ mod tests {
             ));
             frame(
                 &mut app,
-                vec![Event::ModifiersChanged(modifiers), key(Key::Tab, modifiers)],
+                vec![Event::ModifiersChanged(modifiers), key(pressed, modifiers)],
             );
             assert_eq!(app.layout_slot, expected);
             assert_eq!(app.layout.saved_link_groups(), memberships);
@@ -1392,8 +1492,16 @@ mod tests {
         app.activate_chart_slot(0);
         app.sync_comparisons();
         assert!(app.compare_dialog.compared_symbols.is_empty());
+        app.handle_timeframe_toolbar(super::super::TimeframeToolbarAction::DateRangeChanged(
+            egui_charts::model::DateRange::Year5,
+        ));
+        assert!(app.range_fit.is_some());
         let before = app.chart.get_time_scale_state();
-        app.new_layout(Some("Saved".into()));
+        app.new_layout(Some("Saved".into()), true);
+        assert!(
+            app.range_fit.is_none(),
+            "a pending fit belongs to its original chart"
+        );
         assert_eq!(app.layout.mode, ChartLayoutMode::Four);
         assert_eq!(app.chart.get_time_scale_state(), before);
         frame(&mut app);
@@ -1520,10 +1628,10 @@ mod tests {
             }
         };
         app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() / 2);
-        assert_eq!(app.replay_slots, [2]);
+        assert_eq!(app.replay_slots, [0, 1, 2, 3]);
         app.handle_layout_action(LayoutAction::SelectGrid(ChartLayoutMode::Single));
         assert!(app.replay.is_some(), "the replayed chart stays on screen");
-        assert_eq!(app.replay_slots, [0]);
+        assert_eq!(app.replay_slots, [2, 1, 0, 3]);
         assert_eq!((app.layout_slot, app.layout.active()), (0, 0));
         assert_eq!(app.chart.symbol(), "TOKENB");
         assert_eq!(app.state.symbol, "TOKENB");
@@ -1575,5 +1683,111 @@ mod tests {
         app.handle_layout_action(LayoutAction::SelectGrid(ChartLayoutMode::Single));
         settle(&mut app, &ctx);
         assert_eq!(counts(&app), [1, 1, 1, 1]);
+    }
+
+    /// Lines drawn on the charts a replay covers stay on them, off another layout of the same
+    /// symbol and out of the stored drawings, until the user shares their folder. Once the
+    /// replay has ended, a new line is shared again.
+    #[test]
+    fn lines_drawn_during_replay_stay_on_their_chart_until_shared() {
+        use egui_charts::drawings::persistence::DrawingStorage;
+        use egui_charts::drawings::{DrawingToolType, FolderSync};
+
+        fn place(chart: &mut Chart, price: f32) {
+            chart.user_action(|chart| {
+                chart.drawings_mut().start_drawing_with_coords(
+                    DrawingToolType::HorizontalLine,
+                    egui::pos2(1.0, price),
+                    |x| x,
+                    f64::from,
+                );
+            });
+        }
+        fn prices(chart: &Chart) -> Vec<f64> {
+            let drawings = chart.drawings().drawings.iter();
+            drawings
+                .filter_map(|d| d.chart_points.first().map(|p| p.price))
+                .collect()
+        }
+        /// The prices of the drawings the demo keeps in storage for `symbol`.
+        fn stored(app: &mut DemoApp, symbol: &str) -> Vec<f64> {
+            assert!(app.chart.flush_stored_drawings());
+            for extra in &mut app.extra_charts {
+                assert!(extra.chart.flush_stored_drawings());
+            }
+            let mut saved = super::super::tests::AppStorage::default();
+            app.storage.persist(&mut saved);
+            // The key `DemoStorage::persist` writes its documents under.
+            let documents: std::collections::HashMap<String, String> =
+                eframe::get_value(&saved, "templates").unwrap();
+            documents
+                .get(&format!("Drawings/{symbol}"))
+                .map_or_else(Vec::new, |json| {
+                    let (stored, skipped) = DrawingStorage::from_json(json).unwrap();
+                    assert!(skipped.is_empty(), "{skipped:?}");
+                    stored
+                        .drawings()
+                        .iter()
+                        .filter_map(|d| d.points.first().map(|p| p.price))
+                        .collect()
+                })
+        }
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        app.ensure_chart_slots(ChartLayoutMode::TwoHorizontal);
+        // Another layout of the same symbol, set aside while this one replays.
+        app.new_layout(None, false);
+        app.select_layout(0);
+        settle(&mut app, &ctx);
+        let symbol = app.chart.symbol().to_owned();
+        assert_eq!(app.extra_charts[0].chart.symbol(), symbol);
+        app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() / 2);
+        assert_eq!(app.replay_slots, [0, 1], "the replay covers both charts");
+        place(&mut app.chart, 123.375);
+        settle(&mut app, &ctx);
+        place(&mut app.extra_charts[0].chart, 117.625);
+        settle(&mut app, &ctx);
+        assert!(prices(&app.chart).contains(&123.375));
+        assert!(prices(&app.extra_charts[0].chart).contains(&117.625));
+        let kept = stored(&mut app, &symbol);
+        assert!(
+            !kept.contains(&123.375) && !kept.contains(&117.625),
+            "stored: {kept:?}"
+        );
+        // Showing the other layout ends the replay; the practice lines stay off it.
+        app.select_layout(1);
+        settle(&mut app, &ctx);
+        assert!(app.replay.is_none());
+        let other = prices(&app.chart);
+        assert!(
+            !other.contains(&123.375) && !other.contains(&117.625),
+            "other layout: {other:?}"
+        );
+
+        app.select_layout(0);
+        settle(&mut app, &ctx);
+        assert!(prices(&app.chart).contains(&123.375), "kept on its chart");
+        app.handle_object_tree(
+            ObjectTreeAction::SetFolderSync(vec!["Practice".into()], Some(FolderSync::AllLayouts)),
+            &[],
+        );
+        // Placed after the share, so that it would stay local if the replay had left the
+        // chart's placement folder set.
+        place(&mut app.chart, 131.125);
+        settle(&mut app, &ctx);
+        let kept = stored(&mut app, &symbol);
+        assert!(
+            kept.contains(&123.375) && kept.contains(&131.125) && !kept.contains(&117.625),
+            "stored: {kept:?}"
+        );
+        app.select_layout(1);
+        settle(&mut app, &ctx);
+        let other = prices(&app.chart);
+        assert!(
+            other.contains(&123.375) && other.contains(&131.125) && !other.contains(&117.625),
+            "other layout: {other:?}"
+        );
     }
 }

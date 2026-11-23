@@ -16,6 +16,9 @@ pub struct NewsQuery {
     /// Only stories from these providers, in the identifiers the feed uses, or from every
     /// provider when empty.
     pub providers: Vec<String>,
+    /// Only stories about these countries, in the codes the feed uses, such as `"US"`, or about
+    /// every country when empty.
+    pub countries: Vec<String>,
     /// Short summaries of what moves the market or the symbol, instead of headlines.
     pub highlights: bool,
     /// Stories wanted at most.
@@ -23,9 +26,10 @@ pub struct NewsQuery {
 }
 
 impl NewsQuery {
-    /// Up to `limit` headlines about the whole market, of every topic and provider. Assign
-    /// [`symbols`](Self::symbols), [`topics`](Self::topics) and [`providers`](Self::providers) to
-    /// narrow it, and [`highlights`](Self::highlights) for summaries instead of headlines.
+    /// Up to `limit` headlines about the whole market, of every topic, provider and country.
+    /// Assign [`symbols`](Self::symbols), [`topics`](Self::topics),
+    /// [`providers`](Self::providers) and [`countries`](Self::countries) to narrow it, and
+    /// [`highlights`](Self::highlights) for summaries instead of headlines.
     ///
     /// ```
     /// use egui_charts::data::NewsQuery;
@@ -33,12 +37,14 @@ impl NewsQuery {
     /// let mut query = NewsQuery::new(50);
     /// query.symbols.push("AAPL".into());
     /// assert!(query.topics.is_empty());
+    /// assert!(query.countries.is_empty());
     /// ```
     pub fn new(limit: usize) -> Self {
         Self {
             symbols: Vec::new(),
             topics: Vec::new(),
             providers: Vec::new(),
+            countries: Vec::new(),
             highlights: false,
             limit,
         }
@@ -120,13 +126,21 @@ pub struct CalendarQuery {
     pub to: DateTime<Utc>,
     /// Only events of these countries, in the codes the feed uses, or of every country when empty.
     pub countries: Vec<String>,
+    /// Only economic events of these categories, in the values the feed uses, such as
+    /// `"Inflation"`, or of every category when empty. Set for economic events only.
+    pub categories: Vec<String>,
     /// Only events at least this important, when set. Set for economic events only.
     pub importance: Option<Importance>,
+    /// Only events of these symbols, in the identifiers the chart uses, or of every symbol when
+    /// empty. Set for earnings, dividends and IPOs, whose events carry a
+    /// [`symbol`](CalendarEvent::symbol).
+    pub symbols: Vec<String>,
 }
 
 impl CalendarQuery {
     /// The events of the `kind` calendar from `from` until before `to`, of every country and
-    /// importance. Assign [`countries`](Self::countries) and, for economic events,
+    /// importance. Assign [`countries`](Self::countries), [`symbols`](Self::symbols) and, for
+    /// economic events, [`categories`](Self::categories) and
     /// [`importance`](Self::importance) to narrow it.
     ///
     /// ```
@@ -139,6 +153,8 @@ impl CalendarQuery {
     /// );
     /// query.importance = Some(Importance::High);
     /// assert!(query.countries.is_empty());
+    /// assert!(query.categories.is_empty());
+    /// assert!(query.symbols.is_empty());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn new(kind: CalendarKind, from: DateTime<Utc>, to: DateTime<Utc>) -> Self {
@@ -147,7 +163,9 @@ impl CalendarQuery {
             from,
             to,
             countries: Vec::new(),
+            categories: Vec::new(),
             importance: None,
+            symbols: Vec::new(),
         }
     }
 }
@@ -157,6 +175,8 @@ impl CalendarQuery {
 /// `actual`, `forecast` and `prior` are the reported figure, the consensus and the previous
 /// figure: the release for an economic event, the earnings per share for earnings, the amount
 /// per share for a dividend and the offer price for an IPO. Leave unknown figures `None`.
+/// Company calendars also accept the optional figures below; columns absent from the entire
+/// answer are hidden. All figures and dates are formatted by the host.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct CalendarEvent {
@@ -175,12 +195,35 @@ pub struct CalendarEvent {
     pub symbol: Option<String>,
     /// Importance assigned by the host, when applicable.
     pub importance: Option<Importance>,
+    /// The economic event's category, in the values the feed uses, such as `"Inflation"`, shown
+    /// above its description, when known.
+    pub category: Option<String>,
+    /// What the release measures, shown when the user opens the event, when known.
+    pub description: Option<String>,
     /// Published figure, formatted by the host, when available.
     pub actual: Option<String>,
     /// Expected figure, formatted by the host, when available.
     pub forecast: Option<String>,
     /// Previous figure, formatted by the host, when available.
     pub prior: Option<String>,
+    /// Reported revenue, for earnings.
+    pub revenue: Option<String>,
+    /// Expected revenue, for earnings.
+    pub revenue_forecast: Option<String>,
+    /// Company capitalization, for earnings or an IPO.
+    pub market_cap: Option<String>,
+    /// Reported earnings compared with the estimate, for earnings.
+    pub surprise: Option<String>,
+    /// Dividend payout relative to the share price, for dividends.
+    pub dividend_yield: Option<String>,
+    /// Scheduled payment date, for dividends.
+    pub payment_date: Option<String>,
+    /// Planned capital raise, for an IPO.
+    pub deal_amount: Option<String>,
+    /// Number of shares offered, for an IPO.
+    pub shares_offered: Option<String>,
+    /// Listing venue, for an IPO.
+    pub exchange: Option<String>,
 }
 
 impl CalendarEvent {
@@ -199,14 +242,26 @@ impl CalendarEvent {
             title: title.into(),
             symbol: None,
             importance: None,
+            category: None,
+            description: None,
             actual: None,
             forecast: None,
             prior: None,
+            revenue: None,
+            revenue_forecast: None,
+            market_cap: None,
+            surprise: None,
+            dividend_yield: None,
+            payment_date: None,
+            deal_amount: None,
+            shares_offered: None,
+            exchange: None,
         }
     }
 }
 
-/// A column the screener shows, filters and sorts by.
+/// A column the screener shows, filters and sorts by. Its [`kind`](Self::kind) decides the
+/// conditions a filter on it offers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ScreenerColumn {
@@ -214,16 +269,50 @@ pub struct ScreenerColumn {
     pub id: String,
     /// The heading, such as `"Chg %"`.
     pub title: String,
+    /// What the column holds; numbers unless set.
+    pub kind: ScreenerColumnKind,
 }
 
 impl ScreenerColumn {
-    /// The column `id` headed `title`.
+    /// The number column `id` headed `title`.
     pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             title: title.into(),
+            kind: ScreenerColumnKind::Number,
         }
     }
+
+    /// The text column `id` headed `title`, filtered by the `values` the feed uses.
+    ///
+    /// ```
+    /// use egui_charts::data::{ScreenerColumn, ScreenerColumnKind};
+    ///
+    /// let column = ScreenerColumn::text("exchange", "Exchange", ["NYSE".into(), "NASDAQ".into()]);
+    /// assert_eq!(column.kind, ScreenerColumnKind::Text(vec!["NYSE".into(), "NASDAQ".into()]));
+    /// ```
+    pub fn text(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        values: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self {
+            kind: ScreenerColumnKind::Text(values.into_iter().collect()),
+            ..Self::new(id, title)
+        }
+    }
+}
+
+/// What a screener column holds, which decides the conditions its filters offer.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum ScreenerColumnKind {
+    /// Numbers, filtered above, below or between values.
+    #[default]
+    Number,
+    /// Text, filtered as one of or none of these values, in the values the feed uses, such as
+    /// exchange codes or sectors. The user picks from them in the order given.
+    Text(Vec<String>),
 }
 
 /// A named set of columns the user switches between, such as `"Overview"` or `"Performance"`.
@@ -267,14 +356,24 @@ impl ScreenerUniverse {
     }
 }
 
-/// How a screener filter compares a column's value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// What a screener filter requires of a column's value.
+///
+/// Saved screens keep conditions as `"op"` and `"value"`, so screens saved with only `Above` and
+/// `Below` read the same as before.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", content = "value")]
 #[non_exhaustive]
-pub enum ScreenerOp {
-    /// Greater than the filter's value.
-    Above,
-    /// Less than the filter's value.
-    Below,
+pub enum ScreenerCondition {
+    /// A number greater than this one.
+    Above(f64),
+    /// A number less than this one.
+    Below(f64),
+    /// A number from the first to the second, both included. The panel sends the smaller first.
+    Between(f64, f64),
+    /// Text equal to one of these values.
+    Is(Vec<String>),
+    /// Text equal to none of these values.
+    IsNot(Vec<String>),
 }
 
 /// One condition every row must meet.
@@ -283,26 +382,24 @@ pub enum ScreenerOp {
 pub struct ScreenerFilter {
     /// The [`ScreenerColumn::id`] compared.
     pub column: String,
-    /// Comparison applied to the selected column.
-    pub op: ScreenerOp,
-    /// Comparison threshold.
-    pub value: f64,
+    /// What the column's value must meet.
+    #[serde(flatten)]
+    pub condition: ScreenerCondition,
 }
 
 impl ScreenerFilter {
-    /// Rows whose `column` compares to `value` as `op` says.
+    /// Rows whose `column` meets `condition`.
     ///
     /// ```
-    /// use egui_charts::data::{ScreenerFilter, ScreenerOp};
+    /// use egui_charts::data::{ScreenerCondition, ScreenerFilter};
     ///
-    /// let filter = ScreenerFilter::new("price", ScreenerOp::Above, 10.0);
-    /// assert_eq!(filter.column, "price");
+    /// let filter = ScreenerFilter::new("exchange", ScreenerCondition::Is(vec!["NYSE".into()]));
+    /// assert_eq!(filter.column, "exchange");
     /// ```
-    pub fn new(column: impl Into<String>, op: ScreenerOp, value: f64) -> Self {
+    pub fn new(column: impl Into<String>, condition: ScreenerCondition) -> Self {
         Self {
             column: column.into(),
-            op,
-            value,
+            condition,
         }
     }
 }
@@ -338,11 +435,11 @@ impl ScreenerQuery {
     /// answers, and the other fields to describe, filter, sort and page the screen.
     ///
     /// ```
-    /// use egui_charts::data::{ScreenerFilter, ScreenerOp, ScreenerQuery};
+    /// use egui_charts::data::{ScreenerCondition, ScreenerFilter, ScreenerQuery};
     ///
     /// let mut query = ScreenerQuery::new(200);
     /// query.columns = vec!["price".into(), "change_percent".into()];
-    /// query.filters.push(ScreenerFilter::new("price", ScreenerOp::Above, 10.0));
+    /// query.filters.push(ScreenerFilter::new("price", ScreenerCondition::Above(10.0)));
     /// assert_eq!(query.offset, 0);
     /// ```
     pub fn new(limit: usize) -> Self {
@@ -409,26 +506,37 @@ pub struct HotlistQuery {
     pub list: String,
     /// Symbols wanted at most.
     pub limit: usize,
+    /// Only symbols of these exchanges, in the codes the feed uses, or of every exchange when
+    /// empty.
+    pub exchanges: Vec<String>,
+    /// Only symbols of these countries, in the codes the feed uses, or of every country when
+    /// empty.
+    pub countries: Vec<String>,
 }
 
 impl HotlistQuery {
-    /// Up to `limit` symbols of the hotlist `list`.
+    /// Up to `limit` symbols of the hotlist `list`, of every exchange and country. Assign
+    /// [`exchanges`](Self::exchanges) and [`countries`](Self::countries) to narrow it.
     ///
     /// ```
     /// use egui_charts::data::HotlistQuery;
     ///
     /// let query = HotlistQuery::new("Top gainers", 50);
     /// assert_eq!(query.list, "Top gainers");
+    /// assert!(query.exchanges.is_empty() && query.countries.is_empty());
     /// ```
     pub fn new(list: impl Into<String>, limit: usize) -> Self {
         Self {
             list: list.into(),
             limit,
+            exchanges: Vec::new(),
+            countries: Vec::new(),
         }
     }
 }
 
-/// One symbol of a hotlist, with its last price and its change since the previous close.
+/// One symbol of a hotlist, with its last price, its change since the previous close and
+/// optionally the figure the list ranks by.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct HotlistEntry {
@@ -440,16 +548,29 @@ pub struct HotlistEntry {
     pub change_percent: f64,
     /// Decimals of the price, or a default from its magnitude when `None`.
     pub price_decimals: Option<u8>,
+    /// The figure the list ranks by, as its column heading and its value, both formatted by the
+    /// host, such as `("Volume", "12.4M")` or `("Gap", "+3.1%")`. The panel shows it as a column
+    /// headed by the first entry that has one, and `-` for entries without. `None` by default.
+    pub figure: Option<(String, String)>,
 }
 
 impl HotlistEntry {
     /// `symbol` last at `last`, `change_percent` from the previous close.
+    ///
+    /// ```
+    /// use egui_charts::data::HotlistEntry;
+    ///
+    /// let mut entry = HotlistEntry::new("AAPL", 189.5, 2.4);
+    /// entry.figure = Some(("Volume".into(), "12.4M".into()));
+    /// assert_eq!(entry.price_decimals, None);
+    /// ```
     pub fn new(symbol: impl Into<String>, last: f64, change_percent: f64) -> Self {
         Self {
             symbol: symbol.into(),
             last,
             change_percent,
             price_decimals: None,
+            figure: None,
         }
     }
 }

@@ -1,7 +1,13 @@
 //! Order, bracket and position lines from a broker's state. Changes are host intents: rendering
 //! never changes an order or a position.
 
+mod format;
 mod position;
+
+pub use format::TradingFormatter;
+pub(crate) use format::quantity_text;
+#[cfg(feature = "ui")]
+pub(crate) use format::{grouped, quantity_decimals};
 
 #[cfg(feature = "ui")]
 pub(crate) use position::exit_request;
@@ -14,9 +20,9 @@ use crate::chart::rendering::{draw_dashed_polyline, render_price_line};
 use crate::localization as l10n;
 use crate::model::{
     Capabilities, LineStyle, Order, OrderId, OrderRequest, OrderSide, OrderType, Position,
-    PositionBracket, PriceLine,
+    PositionBracket, PriceLine, TimeInForce, settled,
 };
-use crate::scales::{decimals, to_step};
+use crate::scales::{TimezoneMode, decimals, to_step};
 use crate::theme::{Theme, ThemeExt};
 
 /// What the user asked for on a trading line. Confirm a change with the user, then send it to
@@ -128,8 +134,11 @@ pub struct TradingLines {
 /// let mut look = TradingLineAppearance::default();
 /// look.color = Some(egui::Color32::from_rgb(156, 39, 176));
 /// look.line_style = Some(LineStyle::Dashed);
+/// look.line_width = Some(2.0);
+/// look.line_length = Some(0.5);
 /// look.text = Some("Plan".into());
 /// look.hover_text = Some("Planned entry".into());
+/// look.cancel_hover_text = Some("Remove plan".into());
 /// let looks = [(OrderId::new("plan-1"), look)];
 /// let mut options = TradingLineOptions::new("USD", 0.25);
 /// options.order_appearance = &looks;
@@ -141,10 +150,22 @@ pub struct TradingLineAppearance {
     pub color: Option<Color32>,
     /// The line's pattern, replacing solid or the projected order's dashed pattern.
     pub line_style: Option<LineStyle>,
+    /// The width of the line, replacing [`TradingLineOptions::line_width`].
+    pub line_width: Option<f32>,
+    /// How far the line reaches from the pane's right edge, replacing
+    /// [`TradingLineOptions::line_length`].
+    pub line_length: Option<f32>,
     /// The description replacing an order's type or following a position's quantity.
     pub text: Option<String>,
     /// The text shown while the pointer hovers over the label.
     pub hover_text: Option<String>,
+    /// The hover text of an order's cancel button, replacing "Cancel". Its take profit and
+    /// stop loss keep theirs.
+    pub cancel_hover_text: Option<String>,
+    /// The hover text of a position's close button, replacing "Close position".
+    pub close_hover_text: Option<String>,
+    /// The hover text of a position's reverse button, replacing "Reverse position".
+    pub reverse_hover_text: Option<String>,
 }
 
 /// What [`render_trading_lines`] draws and offers.
@@ -157,6 +178,14 @@ pub struct TradingLineOptions<'a> {
     pub show_positions: bool,
     /// Extend lines to the left edge instead of starting at their labels.
     pub extend_lines: bool,
+    /// Width in points of order, bracket and position lines. 1 by default. A negative or
+    /// non-finite width draws 1; zero draws the labels and tags without lines.
+    pub line_width: f32,
+    /// How far lines reach left from the pane's right edge, as a share of the pane width from
+    /// 0 to 1, while [`extend_lines`](Self::extend_lines) is off. A line always reaches its
+    /// label, so 0, the default, starts each line at its label. Shares outside 0 to 1 are
+    /// clamped, and a non-finite share counts as 0.
+    pub line_length: f32,
     /// Horizontal placement of order and position labels.
     pub label_alignment: TradingLabelAlignment,
     /// Treat the orders as projected, not yet placed: their entry lines are dashed and they offer
@@ -199,13 +228,21 @@ pub struct TradingLineOptions<'a> {
     pub point_value: f64,
     /// The account's currency, such as "USD".
     pub currency: &'a str,
+    /// Host text for the quantities of order, bracket and position labels, asked with the
+    /// order's or position's symbol. Without it, or where it returns `None`, a quantity is
+    /// written at its own decimals, up to eight, with thousands separators, as the trading
+    /// panel's account tables write it.
+    pub formatter: Option<&'a dyn TradingFormatter>,
     /// The positive tick size used to round dragged prices.
     pub tick_size: f64,
+    /// The zone in which good-till-date order labels write their expiry.
+    pub timezone: TimezoneMode,
 }
 
 impl<'a> TradingLineOptions<'a> {
-    /// Orders and positions with their labels at the right edge, offering no buttons, drags or
-    /// menus, with no profit or loss, no coverage marks, no last price and a
+    /// Orders and positions with 1-point lines starting at their labels at the right edge,
+    /// offering no buttons, drags or menus, with no profit or loss, no coverage marks, no last
+    /// price, no host formatter and a
     /// [`point_value`](Self::point_value) of one. `currency` names the account's currency and
     /// `tick_size` rounds dragged prices. Assign the other fields to offer more.
     ///
@@ -214,12 +251,15 @@ impl<'a> TradingLineOptions<'a> {
     ///
     /// let mut options = TradingLineOptions::new("USD", 0.25);
     /// options.modify = true;
+    /// options.line_width = 2.0;
     /// ```
     pub fn new(currency: &'a str, tick_size: f64) -> Self {
         Self {
             show_orders: true,
             show_positions: true,
             extend_lines: false,
+            line_width: 1.0,
+            line_length: 0.0,
             label_alignment: TradingLabelAlignment::Right,
             submit: false,
             modify: false,
@@ -237,7 +277,9 @@ impl<'a> TradingLineOptions<'a> {
             last_price: None,
             point_value: 1.0,
             currency,
+            formatter: None,
             tick_size,
+            timezone: TimezoneMode::Utc,
         }
     }
 }
@@ -363,6 +405,7 @@ pub(crate) fn coverage_text(ctx: &egui::Context, coverage: (f64, f64)) -> String
 /// chart's symbol, and call it after drawing the chart. The price axis is left to the caller; see
 /// [`TradingLines::tags`]. A stop-limit order draws its stop and its limit as two lines joined
 /// at the node column; each is dragged on its own, and exits follow the stop.
+/// Equal prices share one line and move together.
 pub fn render_trading_lines<'a>(
     ui: &mut Ui,
     mapping: &ChartMapping,
@@ -408,12 +451,19 @@ pub fn render_trading_lines<'a>(
             .and_then(|look| look.color)
             .unwrap_or_else(|| side_color(order.request.side));
         let request = &order.request;
-        let open = request.quantity - order.filled;
+        let open = settled(request.quantity - order.filled);
         let kind = match request.order_type {
             OrderType::Limit(_) => "Limit",
             OrderType::Stop(_) => "Stop",
             OrderType::StopLimit { .. } => "Stop limit",
+            OrderType::TrailingStop { .. } => "Trailing stop",
             _ => "Market",
+        };
+        // The broker moves a trailing stop; until it reports the stop, the line waits at the
+        // activation price.
+        let trailing = match request.order_type {
+            OrderType::TrailingStop { activation, .. } => Some(order.trailing_stop.or(activation)),
+            _ => None,
         };
         let parent = request.position_bracket.and_then(|_| {
             positions.iter().find(|p| {
@@ -425,7 +475,7 @@ pub fn render_trading_lines<'a>(
             Some(PositionBracket::StopLoss) => Level::StopLoss,
             None => Level::Entry,
         };
-        let initial_entry = entry_price(&request.order_type);
+        let initial_entry = trailing.unwrap_or_else(|| entry_price(&request.order_type));
         // Each line: its kind, its take-profit level if any, its price and its quantity.
         let levels_of = &request.take_profit_levels;
         let mut levels = vec![(Level::Entry, None, initial_entry, open)];
@@ -461,7 +511,7 @@ pub fn render_trading_lines<'a>(
                 .filter(|level| level.stop_loss.is_none())
                 .map(|level| level.quantity)
                 .sum();
-            without.min(open)
+            settled(without).min(open)
         } else {
             open
         };
@@ -506,20 +556,45 @@ pub fn render_trading_lines<'a>(
                 if level == Level::Limit {
                     return l10n::text(&ctx, "Limit");
                 }
-                if let Some(text) = look.and_then(|look| look.text.as_ref()) {
-                    return text.clone();
-                }
-                match (appearance, options.bracket_pnl, entry) {
-                    (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
-                        let gain = (price - entry)
-                            * parent.map_or(direction(request.side), |p| p.quantity.signum());
-                        let money = gain * quantity * options.point_value;
-                        pnl_text(&ctx, unit, money, gain, entry, options).0
+                let body = if let Some(text) = look.and_then(|look| look.text.as_ref()) {
+                    text.clone()
+                } else {
+                    match (appearance, options.bracket_pnl, entry) {
+                        (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
+                            let gain = (price - entry)
+                                * parent.map_or(direction(request.side), |p| p.quantity.signum());
+                            let money = gain * quantity * options.point_value;
+                            pnl_text(&ctx, unit, money, gain, entry, options).0
+                        }
+                        _ => name.clone(),
                     }
-                    _ => name.clone(),
+                };
+                match request.expires.filter(|_| {
+                    level == Level::Entry && request.time_in_force == TimeInForce::GoodTillDate
+                }) {
+                    Some(expires) => l10n::format_text(
+                        &ctx,
+                        "{kind} until {expiry}",
+                        &[
+                            ("kind", body),
+                            (
+                                "expiry",
+                                options
+                                    .timezone
+                                    .wall_time(expires)
+                                    .format("%Y-%m-%d %H:%M")
+                                    .to_string(),
+                            ),
+                        ],
+                    ),
+                    None => body,
                 }
             };
-            let line = PriceLine::new(price, color).with_style(
+            let width = line_width(
+                look.and_then(|look| look.line_width)
+                    .unwrap_or(options.line_width),
+            );
+            let line = PriceLine::new(price, color).with_width(width).with_style(
                 look.and_then(|look| look.line_style).unwrap_or(
                     if appearance == Level::Entry && options.submit {
                         LineStyle::Dashed
@@ -540,6 +615,7 @@ pub fn render_trading_lines<'a>(
                 && options.order_exits
                 && request.position_bracket.is_none()
                 && initial_entry.is_some()
+                && trailing.is_none()
             {
                 offered_exits(
                     request.take_profit.is_none() && request.take_profit_levels.is_empty(),
@@ -555,13 +631,17 @@ pub fn render_trading_lines<'a>(
                 body: &body,
                 body_color: color,
                 hover_text: look.and_then(|look| look.hover_text.as_deref()),
-                quantity,
+                cancel_hover_text: look.and_then(|look| look.cancel_hover_text.as_deref()),
+                line_length: look
+                    .and_then(|look| look.line_length)
+                    .unwrap_or(options.line_length),
+                quantity: quantity_text(options.formatter, &request.symbol, quantity),
                 coverage: (options.coverage
                     && level == Level::Entry
                     && request.position_bracket.is_none())
                 .then(|| exit_coverage(request)),
                 buttons: if cancel { &[Button::Cancel] } else { &[] },
-                draggable: options.modify,
+                draggable: options.modify && trailing.is_none(),
                 submit: (options.submit && level == Level::Entry).then_some(request.side),
                 exits,
                 exit_pnl: &exit_pnl,
@@ -652,9 +732,11 @@ pub fn render_trading_lines<'a>(
                         changed.order_type = match request.order_type {
                             OrderType::Limit(_) => OrderType::Limit(price),
                             OrderType::Stop(_) => OrderType::Stop(price),
-                            OrderType::StopLimit { limit, .. } => {
-                                OrderType::StopLimit { stop: price, limit }
-                            }
+                            // A limit equal to its stop shares its line, so it moves with it.
+                            OrderType::StopLimit { stop, limit } => OrderType::StopLimit {
+                                stop: price,
+                                limit: if limit == stop { price } else { limit },
+                            },
                             other => other,
                         };
                         changed.take_profit = changed.take_profit.map(shift);
@@ -994,7 +1076,9 @@ impl ExitButtons<'_> {
                 continue;
             }
             // The exit being dragged: its line and a label like a bracket's.
-            let line = PriceLine::new(price, exit_color).with_style(LineStyle::Solid);
+            let line = PriceLine::new(price, exit_color)
+                .with_width(line_width(options.line_width))
+                .with_style(LineStyle::Solid);
             render_price_line(
                 &painter,
                 mapping.rect,
@@ -1052,7 +1136,10 @@ struct Label<'a> {
     body: &'a dyn Fn(f64) -> String,
     body_color: Color32,
     hover_text: Option<&'a str>,
-    quantity: f64,
+    cancel_hover_text: Option<&'a str>,
+    line_length: f32,
+    /// The open quantity's text.
+    quantity: String,
     /// The coverage mark after the quantity, if shown.
     coverage: Option<(f64, f64)>,
     buttons: &'a [Button],
@@ -1099,7 +1186,7 @@ impl Label<'_> {
         let layout = |text: String, color| painter.layout_no_wrap(text, font.clone(), color);
         let body = (self.body)(staged.unwrap_or(line.price));
         let body = (!body.is_empty()).then(|| layout(body, self.body_color));
-        let quantity = layout(format!("{}", self.quantity), line.color);
+        let quantity = layout(self.quantity.clone(), line.color);
         let width = |galley: &egui::Galley| galley.size().x + 2.0 * PADDING;
         let total = body.as_deref().map_or(0.0, width)
             + width(&quantity)
@@ -1110,19 +1197,18 @@ impl Label<'_> {
         let inset = LABEL_INSET.min((mapping.rect.width() - group - 8.0).max(8.0));
         let mut x = options.label_alignment.left(mapping.rect, group, inset) + exits_width;
         let rect = Rect::from_min_size(pos2(x, y - HEIGHT / 2.0), vec2(total, HEIGHT));
+        let line_left = line_left(
+            mapping.rect,
+            rect.left(),
+            options.extend_lines,
+            self.line_length,
+        );
 
         let mut dragged = None;
         let mut value = staged.unwrap_or(line.price);
         let grab = ui.interact(
             Rect::from_min_max(
-                pos2(
-                    if options.extend_lines {
-                        mapping.rect.left()
-                    } else {
-                        rect.left()
-                    },
-                    rect.top(),
-                ),
+                pos2(line_left, rect.top()),
                 pos2(rect.max.x - HEIGHT * self.buttons.len() as f32, rect.max.y),
             )
             .intersect(mapping.rect),
@@ -1180,11 +1266,7 @@ impl Label<'_> {
             mapping.rect,
             &mapping.price,
             &line,
-            if options.extend_lines {
-                mapping.rect.left()
-            } else {
-                rect.left()
-            },
+            line_left,
             false,
             f32::INFINITY,
         );
@@ -1270,7 +1352,10 @@ impl Label<'_> {
                     key.with(("button", index)),
                     Sense::click(),
                 )
-                .on_hover_text(l10n::text(ui.ctx(), "Cancel"));
+                .on_hover_text(
+                    self.cancel_hover_text
+                        .map_or_else(|| l10n::text(ui.ctx(), "Cancel"), str::to_owned),
+                );
             if response.hovered() {
                 clipped.rect_filled(cell.shrink(1.0), 1.0, line.color.gamma_multiply(0.2));
             }
@@ -1287,11 +1372,7 @@ impl Label<'_> {
             x: group_left,
             y,
             entry: value,
-            line_left: if options.extend_lines {
-                mapping.rect.left()
-            } else {
-                rect.left()
-            },
+            line_left,
             preview_right: rect.right(),
             pnl: self.exit_pnl,
         }
@@ -1332,6 +1413,29 @@ impl Label<'_> {
         }
         (dragged, pressed, released, chosen)
     }
+}
+
+/// A line width a host set, or 1 when it is negative or not finite.
+fn line_width(width: f32) -> f32 {
+    if width.is_finite() && width >= 0.0 {
+        width
+    } else {
+        1.0
+    }
+}
+
+/// Where a line starts: the pane's left edge with extended lines, otherwise its label's left
+/// edge or, further left, `length` of the pane width from its right edge.
+fn line_left(pane: Rect, label_left: f32, extend: bool, length: f32) -> f32 {
+    if extend {
+        return pane.left();
+    }
+    let share = if length.is_finite() {
+        length.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    label_left.min(pane.right() - share * pane.width())
 }
 
 /// The body of a label in `color`: the colour's tint over the chart, opaque so that the line and
@@ -1384,6 +1488,82 @@ fn connector(ui: &Ui, mapping: &ChartMapping, entry: f64, exit: f64, color: Colo
 mod tests {
     use super::*;
     use crate::model::{OrderId, OrderStatus};
+
+    /// Order, bracket and position labels keep the account tables' quantity text.
+    #[test]
+    fn labels_write_quantities_in_the_host_text_or_at_their_own_decimals() {
+        struct Lots;
+        impl TradingFormatter for Lots {
+            fn quantity(&self, symbol: &str, quantity: f64) -> Option<String> {
+                (symbol == "SYM").then(|| format!("{quantity} lots"))
+            }
+        }
+        type Row<'a> = (
+            Option<&'a dyn TradingFormatter>,
+            f64,
+            f64,
+            f64,
+            &'a str,
+            &'a str,
+        );
+        let rows: [Row<'_>; 3] = [
+            (None, 0.3, 0.1, 0.1 + 0.2, "0.2", "0.3"),
+            (None, 2500.0, 0.0, 1500.0, "2,500", "1,500"),
+            (Some(&Lots), 0.3, 0.1, 2.0, "0.2 lots", "2 lots"),
+        ];
+        for (formatter, quantity, filled, position_quantity, order_text, position_text) in rows {
+            let ctx = egui::Context::default();
+            let mut chart = crate::widget::test_frames::chart(&[90.0], &[115.0]);
+            let mut request =
+                OrderRequest::new("SYM", OrderSide::Buy, quantity, OrderType::Limit(95.0));
+            request.take_profit = Some(100.0);
+            request.stop_loss = Some(93.0);
+            let mut order = Order::new(OrderId::new("A"), request, OrderStatus::Working);
+            order.filled = filled;
+            let position = Position::new("SYM", position_quantity, 108.0);
+            let mut options = TradingLineOptions::new("USD", 0.01);
+            options.formatter = formatter;
+            for frame in 0..3 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.show(ui);
+                        render_trading_lines(
+                            ui,
+                            &chart.get_chart_mapping(),
+                            [&order],
+                            [&position],
+                            &options,
+                        );
+                    },
+                );
+                if frame == 2 {
+                    let texts: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) => Some(text.galley.text()),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(
+                        texts.iter().filter(|&&text| text == order_text).count(),
+                        3,
+                        "{order_text}: {texts:?}"
+                    );
+                    assert_eq!(
+                        texts.iter().filter(|&&text| text == position_text).count(),
+                        1,
+                        "{position_text}: {texts:?}"
+                    );
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
 
     /// Coverage uses quantities and remaining exits, ignores another symbol or side, and paints
     /// entry and position labels only. Both themes distinguish full, partial and empty tracks.
@@ -1546,138 +1726,272 @@ mod tests {
     /// An individual appearance changes its line and label, while neighbours and exits keep theirs.
     #[test]
     fn own_looks_replace_the_defaults_of_their_line_only() {
-        for theme in [Theme::light(), Theme::dark()] {
-            let ctx = egui::Context::default();
-            crate::theme::apply_to_egui(&ctx, &theme);
-            ctx.all_styles_mut(|style| {
-                style.interaction.tooltip_delay = 0.0;
-                style.interaction.show_tooltips_only_when_still = false;
-            });
-            let mut chart = crate::widget::test_frames::chart(&[90.0], &[115.0]);
-            let mut a = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(95.0));
-            a.take_profit = Some(97.0);
-            let orders = [
-                Order::new(OrderId::new("A"), a, OrderStatus::Working),
-                Order::new(
-                    OrderId::new("B"),
-                    OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(100.0)),
-                    OrderStatus::Working,
-                ),
-            ];
-            let position = Position::new("SYM", 2.0, 105.0);
-            let purple = Color32::from_rgb(156, 39, 176);
-            let cyan = Color32::from_rgb(0, 151, 167);
-            let plan = TradingLineAppearance {
-                color: Some(purple),
-                line_style: Some(LineStyle::Dashed),
-                text: Some("Plan".into()),
-                hover_text: Some("Planned entry".into()),
-            };
-            let hedge = TradingLineAppearance {
-                color: Some(cyan),
-                line_style: Some(LineStyle::Dotted),
-                text: Some("Hedge".into()),
-                hover_text: Some("Hedge position".into()),
-            };
-            let looks = [(OrderId::new("A"), plan)];
-            let positions = [("SYM".to_owned(), hedge)];
-            let mut options = TradingLineOptions::new("USD", 0.01);
-            options.order_appearance = &looks;
-            options.position_appearance = &positions;
-            let mut at = [Pos2::ZERO; 2];
-            for frame in 0..8 {
-                let events = match frame {
-                    3 | 4 => vec![egui::Event::PointerMoved(at[0])],
-                    5 => vec![egui::Event::PointerGone],
-                    6 | 7 => vec![egui::Event::PointerMoved(at[1])],
-                    _ => vec![],
+        let pane = Rect::from_min_max(pos2(10.0, 0.0), pos2(210.0, 100.0));
+        for (length, expected) in [
+            (0.0, 160.0),
+            (0.1, 160.0),
+            (0.5, 110.0),
+            (1.0, 10.0),
+            (2.0, 10.0),
+            (-1.0, 160.0),
+            (f32::NAN, 160.0),
+            (f32::INFINITY, 160.0),
+            (f32::NEG_INFINITY, 160.0),
+        ] {
+            assert_eq!(line_left(pane, 160.0, false, length), expected);
+            assert_eq!(line_left(pane, 160.0, true, length), 10.0);
+        }
+        for (width, expected) in [
+            (0.0, 0.0),
+            (2.0, 2.0),
+            (-1.0, 1.0),
+            (f32::NAN, 1.0),
+            (f32::INFINITY, 1.0),
+            (f32::NEG_INFINITY, 1.0),
+        ] {
+            assert_eq!(line_width(width), expected);
+        }
+        for (row_width, row_length) in [(1.0, 0.0), (2.0, 0.5)] {
+            for theme in [Theme::light(), Theme::dark()] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.all_styles_mut(|style| {
+                    style.interaction.tooltip_delay = 0.0;
+                    style.interaction.show_tooltips_only_when_still = false;
+                });
+                let mut chart = crate::widget::test_frames::chart(&[90.0], &[115.0]);
+                let mut a = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(95.0));
+                a.take_profit = Some(97.0);
+                let orders = [
+                    Order::new(OrderId::new("A"), a, OrderStatus::Working),
+                    Order::new(
+                        OrderId::new("B"),
+                        OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(100.0)),
+                        OrderStatus::Working,
+                    ),
+                ];
+                let position = Position::new("SYM", 2.0, 105.0);
+                let purple = Color32::from_rgb(156, 39, 176);
+                let cyan = Color32::from_rgb(0, 151, 167);
+                let plan = TradingLineAppearance {
+                    color: Some(purple),
+                    line_style: Some(LineStyle::Dashed),
+                    line_width: Some(3.0),
+                    line_length: Some(0.9),
+                    cancel_hover_text: Some("Remove plan".into()),
+                    text: Some("Plan".into()),
+                    hover_text: Some("Planned entry".into()),
+                    ..Default::default()
                 };
-                let mut ys = [0.0; 3];
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        chart.show(ui);
-                        let mapping = chart.get_chart_mapping();
-                        ys = [95.0, 100.0, 105.0].map(|price| mapping.price_to_y(price));
-                        let lines =
-                            render_trading_lines(ui, &mapping, &orders, [&position], &options);
-                        if frame == 2 {
-                            let buy = crate::theme::trading_side_color(&theme, OrderSide::Buy);
-                            assert_eq!(
-                                lines.tags,
-                                [
-                                    (105.0, cyan),
-                                    (95.0, purple),
-                                    (97.0, theme.ui.take_profit),
-                                    (100.0, buy)
-                                ]
+                let hedge = TradingLineAppearance {
+                    color: Some(cyan),
+                    line_style: Some(LineStyle::Dotted),
+                    line_width: Some(4.0),
+                    close_hover_text: Some("Exit hedge".into()),
+                    reverse_hover_text: Some("Flip hedge".into()),
+                    text: Some("Hedge".into()),
+                    hover_text: Some("Hedge position".into()),
+                    ..Default::default()
+                };
+                let looks = [(OrderId::new("A"), plan)];
+                let positions = [("SYM".to_owned(), hedge)];
+                let mut options = TradingLineOptions::new("USD", 0.01);
+                options.order_appearance = &looks;
+                options.position_appearance = &positions;
+                options.line_width = row_width;
+                options.line_length = row_length;
+                options.close = true;
+                options.reverse = true;
+                let mut at = [Pos2::ZERO; 6];
+                for frame in 0..20 {
+                    let events = match frame {
+                        3 | 4 => vec![egui::Event::PointerMoved(at[0])],
+                        5 | 8 | 11 | 14 | 17 => vec![egui::Event::PointerGone],
+                        6 | 7 => vec![egui::Event::PointerMoved(at[1])],
+                        9 | 10 => vec![egui::Event::PointerMoved(at[2])],
+                        12 | 13 => vec![egui::Event::PointerMoved(at[3])],
+                        15 | 16 => vec![egui::Event::PointerMoved(at[4])],
+                        18 | 19 => vec![egui::Event::PointerMoved(at[5])],
+                        _ => vec![],
+                    };
+                    let mut ys = [0.0; 4];
+                    let mut pane = Rect::NOTHING;
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                            let mapping = chart.get_chart_mapping();
+                            pane = mapping.rect;
+                            ys = [95.0, 100.0, 105.0, 97.0].map(|price| mapping.price_to_y(price));
+                            let lines =
+                                render_trading_lines(ui, &mapping, &orders, [&position], &options);
+                            if frame == 2 {
+                                let buy = crate::theme::trading_side_color(&theme, OrderSide::Buy);
+                                assert_eq!(
+                                    lines.tags,
+                                    [
+                                        (105.0, cyan),
+                                        (95.0, purple),
+                                        (97.0, theme.ui.take_profit),
+                                        (100.0, buy)
+                                    ]
+                                );
+                            }
+                        },
+                    );
+                    let text = |name: &str| {
+                        output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == name => Some(text),
+                            _ => None,
+                        })
+                    };
+                    if frame == 2 {
+                        at[0] = text("Plan")
+                            .expect("order caption")
+                            .visual_bounding_rect()
+                            .center();
+                        at[1] = text("Hedge")
+                            .expect("position caption")
+                            .visual_bounding_rect()
+                            .center();
+                        let limit = text("Limit").expect("default caption");
+                        assert!((limit.visual_bounding_rect().center().y - ys[1]).abs() < 2.0);
+                        let buy = crate::theme::trading_side_color(&theme, OrderSide::Buy);
+                        let label = |color, y: f32| {
+                            output
+                                .shapes
+                                .iter()
+                                .find_map(|shape| match &shape.shape {
+                                    egui::Shape::Rect(rect)
+                                        if rect.stroke.color == color
+                                            && rect.stroke.width == 1.0
+                                            && (rect.rect.center().y - y).abs() < 0.1 =>
+                                    {
+                                        Some(rect.rect)
+                                    }
+                                    _ => None,
+                                })
+                                .expect("line label")
+                        };
+                        for (i, color, width, length) in [
+                            (0, purple, 3.0, 0.9),
+                            (1, buy, row_width, row_length),
+                            (3, theme.ui.take_profit, row_width, row_length),
+                        ] {
+                            let segments: Vec<_> = output
+                                .shapes
+                                .iter()
+                                .filter_map(|shape| match &shape.shape {
+                                    egui::Shape::LineSegment { points, stroke }
+                                        if stroke.color == color
+                                            && (points[0].y - ys[i]).abs() < 0.1
+                                            && (points[1].y - ys[i]).abs() < 0.1 =>
+                                    {
+                                        Some((points, stroke))
+                                    }
+                                    _ => None,
+                                })
+                                .collect();
+                            if i == 0 {
+                                assert!(segments.len() > 1, "dashed order line");
+                            } else {
+                                assert_eq!(segments.len(), 1, "default solid line");
+                            }
+                            assert!(
+                                segments.iter().all(|(_, stroke)| stroke.width == width),
+                                "line width at {}",
+                                ys[i]
+                            );
+                            let start = segments
+                                .iter()
+                                .map(|(points, _)| points[0].x)
+                                .fold(f32::INFINITY, f32::min);
+                            let expected = if length == 0.0 {
+                                label(color, ys[i]).left()
+                            } else {
+                                pane.right() - length * pane.width()
+                            };
+                            assert!(
+                                (start - expected).abs() < 0.5,
+                                "line start {start}, expected {expected}"
                             );
                         }
-                    },
-                );
-                let text = |name: &str| {
-                    output.shapes.iter().find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == name => Some(text),
-                        _ => None,
-                    })
-                };
-                if frame == 2 {
-                    at[0] = text("Plan")
-                        .expect("order caption")
-                        .visual_bounding_rect()
-                        .center();
-                    at[1] = text("Hedge")
-                        .expect("position caption")
-                        .visual_bounding_rect()
-                        .center();
-                    let limit = text("Limit").expect("default caption");
-                    assert!((limit.visual_bounding_rect().center().y - ys[1]).abs() < 2.0);
-                    for (i, color) in [
-                        purple,
-                        crate::theme::trading_side_color(&theme, OrderSide::Buy),
-                        cyan,
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    {
-                        let segments = output.shapes.iter().filter(|shape| matches!(&shape.shape,
-                            egui::Shape::LineSegment { points, stroke } if stroke.color == color
-                                && (points[0].y - ys[i]).abs() < 0.1 && (points[1].y - ys[i]).abs() < 0.1)).count();
-                        match i {
-                            0 => assert!(segments > 1, "dashed order line"),
-                            1 => assert_eq!(segments, 1, "default solid line"),
-                            2 => assert!(
-                                output.shapes.iter().any(|shape| matches!(&shape.shape,
-                                egui::Shape::Mesh(mesh) if mesh.indices.len() > 6
-                                    && mesh.vertices.iter().all(|vertex| vertex.color == cyan
-                                        && (vertex.pos.y - ys[2]).abs() <= 1.0))),
-                                "dotted position line"
-                            ),
-                            _ => unreachable!(),
-                        }
-                        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-                            egui::Shape::Rect(rect) if rect.stroke.color == color && rect.stroke.width == 1.0
-                                && (rect.rect.center().y - ys[i]).abs() < 0.1)));
-                    }
-                    assert!(
-                        output
+                        let dots = output
                             .shapes
                             .iter()
-                            .any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect)
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Mesh(mesh)
+                                    if mesh.indices.len() > 6
+                                        && mesh.vertices.iter().all(|vertex| {
+                                            vertex.color == cyan
+                                                && (vertex.pos.y - ys[2]).abs() <= 4.0 / 2.0 + 1.0
+                                        }) =>
+                                {
+                                    Some(mesh)
+                                }
+                                _ => None,
+                            })
+                            .expect("dotted position line");
+                        let top = dots
+                            .vertices
+                            .iter()
+                            .map(|vertex| vertex.pos.y)
+                            .fold(f32::INFINITY, f32::min);
+                        let bottom = dots
+                            .vertices
+                            .iter()
+                            .map(|vertex| vertex.pos.y)
+                            .fold(f32::NEG_INFINITY, f32::max);
+                        assert!(bottom - top >= 3.5, "position line width");
+                        if row_length == 0.5 {
+                            let start = dots
+                                .vertices
+                                .iter()
+                                .map(|vertex| vertex.pos.x)
+                                .fold(f32::INFINITY, f32::min);
+                            assert!(
+                                (start - (pane.right() - 0.5 * pane.width())).abs() < 2.0,
+                                "position line start"
+                            );
+                        }
+                        let plan = label(purple, ys[0]);
+                        let default = label(buy, ys[1]);
+                        let hedge = label(cyan, ys[2]);
+                        at[2] = pos2(plan.right() - HEIGHT / 2.0, ys[0]);
+                        at[3] = pos2(default.right() - HEIGHT / 2.0, ys[1]);
+                        at[4] = pos2(hedge.right() - HEIGHT / 2.0, ys[2]);
+                        at[5] = pos2(hedge.left() - 1.6 * HEIGHT + HEIGHT / 2.0, ys[2]);
+                        assert!(
+                            output
+                                .shapes
+                                .iter()
+                                .any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect)
                         if rect.fill == cyan && (rect.rect.center().y - ys[2]).abs() < 0.1))
-                    );
+                        );
+                    }
+                    if frame == 4 {
+                        assert!(text("Planned entry").is_some());
+                    }
+                    if frame == 7 {
+                        assert!(text("Hedge position").is_some());
+                    }
+                    for (hover_frame, expected, replaced) in [
+                        (10, "Remove plan", "Cancel"),
+                        (13, "Cancel", "Remove plan"),
+                        (16, "Exit hedge", "Close position"),
+                        (19, "Flip hedge", "Reverse position"),
+                    ] {
+                        if frame == hover_frame {
+                            assert!(text(expected).is_some(), "{expected}");
+                            assert!(text(replaced).is_none(), "{replaced}");
+                        }
+                    }
+                    output.drop_without_applying_deltas();
                 }
-                if frame == 4 {
-                    assert!(text("Planned entry").is_some());
-                }
-                if frame == 7 {
-                    assert!(text("Hedge position").is_some());
-                }
-                output.drop_without_applying_deltas();
             }
         }
     }
@@ -1889,12 +2203,15 @@ mod tests {
     }
 
     /// Both stop-limit prices are visible and independent; exits keep following the stop.
+    /// A limit equal to its stop shares its line and moves with it.
     #[test]
     fn stop_limit_orders_drag_their_stop_and_limit_apart() {
         for theme in [Theme::light(), Theme::dark()] {
-            for (label, target, expected, take_profit) in [
+            for (label, limit, drawn, target, expected, take_profit) in [
                 (
                     "Limit",
+                    101.5,
+                    &[101.0, 101.5][..],
                     102.0,
                     OrderType::StopLimit {
                         stop: 101.0,
@@ -1904,12 +2221,25 @@ mod tests {
                 ),
                 (
                     "Stop limit",
+                    101.5,
+                    &[101.0, 101.5],
                     100.5,
                     OrderType::StopLimit {
                         stop: 100.5,
                         limit: 101.5,
                     },
                     102.5,
+                ),
+                (
+                    "Stop limit",
+                    101.0,
+                    &[101.0],
+                    103.0,
+                    OrderType::StopLimit {
+                        stop: 103.0,
+                        limit: 103.0,
+                    },
+                    105.0,
                 ),
             ] {
                 let ctx = egui::Context::default();
@@ -1919,10 +2249,7 @@ mod tests {
                     "SYM",
                     OrderSide::Buy,
                     1.0,
-                    OrderType::StopLimit {
-                        stop: 101.0,
-                        limit: 101.5,
-                    },
+                    OrderType::StopLimit { stop: 101.0, limit },
                 );
                 request.take_profit = Some(103.0);
                 let order = Order::new(OrderId::new("S"), request, OrderStatus::Working);
@@ -1964,9 +2291,18 @@ mod tests {
                                 let buy = crate::theme::trading_side_color(&theme, OrderSide::Buy);
                                 assert_eq!(
                                     lines.tags,
-                                    [(101.0, buy), (101.5, buy), (103.0, theme.ui.take_profit)]
+                                    drawn
+                                        .iter()
+                                        .map(|&price| (price, buy))
+                                        .chain([(103.0, theme.ui.take_profit)])
+                                        .collect::<Vec<_>>(),
+                                    "{label} {limit}"
                                 );
-                                assert_eq!(lines.outlined, [0, 1]);
+                                assert_eq!(
+                                    lines.outlined,
+                                    (0..drawn.len()).collect::<Vec<_>>(),
+                                    "{label} {limit}"
+                                );
                             }
                             action = action.take().or(lines.action);
                         },
@@ -1992,8 +2328,88 @@ mod tests {
                 assert_eq!(
                     action,
                     Some(TradingLineAction::Modify(order, changed)),
-                    "{label}"
+                    "{label} {limit}"
                 );
+            }
+        }
+    }
+
+    /// A trailing stop's line sits at the stop the broker reports and moves with it, waits at
+    /// the activation price before that, is not drawn without either, and cannot be dragged.
+    #[test]
+    fn trailing_stop_lines_follow_the_reported_stop() {
+        for theme in [Theme::light(), Theme::dark()] {
+            let sell = crate::theme::trading_side_color(&theme, OrderSide::Sell);
+            for (activation, stop, drawn) in [
+                (Some(105.0), Some(98.5), Some(98.5)),
+                (Some(105.0), Some(99.5), Some(99.5)),
+                (Some(105.0), None, Some(105.0)),
+                (None, None, None),
+            ] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+                let order_type = OrderType::TrailingStop {
+                    distance: crate::model::TrailDistance::Price(3.0),
+                    activation,
+                };
+                let request = OrderRequest::new("SYM", OrderSide::Sell, 1.0, order_type);
+                let mut order = Order::new(OrderId::new("T"), request, OrderStatus::Working);
+                order.trailing_stop = stop;
+                let mut options = TradingLineOptions::new("USD", 0.01);
+                options.modify = true;
+                let mut start = Pos2::ZERO;
+                let mut action = None;
+                for frame in 0..7 {
+                    let end = start + vec2(0.0, 40.0);
+                    let events = match frame {
+                        3 => vec![egui::Event::PointerMoved(start)],
+                        4 => vec![egui::Event::PointerButton {
+                            pos: start,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                        5 => vec![egui::Event::PointerMoved(end)],
+                        6 => vec![egui::Event::PointerButton {
+                            pos: end,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                        _ => vec![],
+                    };
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                            let mapping = chart.get_chart_mapping();
+                            let lines = render_trading_lines(ui, &mapping, [&order], [], &options);
+                            if frame == 2 {
+                                let expected: Vec<_> =
+                                    drawn.into_iter().map(|price| (price, sell)).collect();
+                                assert_eq!(lines.tags, expected, "{activation:?} {stop:?}");
+                            }
+                            action = action.take().or(lines.action);
+                        },
+                    );
+                    if frame == 2 {
+                        let label = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == "Trailing stop" => {
+                                Some(text.pos + text.galley.size() / 2.0)
+                            }
+                            _ => None,
+                        });
+                        assert_eq!(label.is_some(), drawn.is_some());
+                        start = label.unwrap_or(start);
+                    }
+                    output.drop_without_applying_deltas();
+                }
+                assert_eq!(action, None, "{activation:?} {stop:?}");
             }
         }
     }
@@ -2015,9 +2431,12 @@ mod tests {
             let position = Position::new("SYM", 1.0, 95.0);
             for (submit, is_position) in [(false, false), (true, false), (false, true)] {
                 let options = TradingLineOptions {
+                    timezone: TimezoneMode::Utc,
                     show_orders: true,
                     show_positions: true,
                     extend_lines: true,
+                    line_width: 1.0,
+                    line_length: 0.0,
                     label_alignment: TradingLabelAlignment::Right,
                     submit,
                     modify: false,
@@ -2035,6 +2454,7 @@ mod tests {
                     last_price: None,
                     point_value: 1.0,
                     currency: "USD",
+                    formatter: None,
                     tick_size: 0.01,
                 };
                 for frame in 0..3 {

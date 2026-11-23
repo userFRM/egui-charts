@@ -186,7 +186,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
             reversal: true,
         })),
         Box::new(OrderFlowStudy::new(OrderFlowKind::SizeDelta {
-            ranges: [[x(0.0), x(9.0)], [x(10.0), x(99.0)], [x(100.0), f64::MAX]],
+            ranges: [[x(0.0), x(10.0)], [x(10.0), x(100.0)], [x(100.0), f64::MAX]],
         })),
         Box::new(OrderFlowStudy::new(OrderFlowKind::FlowSum { bars: l(0) })),
         Box::new(OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
@@ -253,6 +253,17 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(
             MissedPivots::new(l(0), l(1), x(0.1), l(2)).with_period(MissedPivotPeriod::Monthly),
         ),
+        Box::new(MissedPivots::default()),
+        {
+            let mut touched = MissedPivots::default();
+            touched
+                .set_input("show_touched", InputValue::Toggle(true))
+                .unwrap();
+            touched
+                .set_input("days_back", InputValue::Length(l(3).clamp(1, 730)))
+                .unwrap();
+            Box::new(touched)
+        },
         Box::new(KeyLevels::new(l(0), l(1), l(2), x(0.25))),
         Box::new(AutoKeyLevels::new()),
         {
@@ -315,6 +326,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(HLC3::new()),
         Box::new(OHLC4::new()),
         Box::new(VisibleAveragePrice::new()),
+        Box::new(AnalystPriceForecast::default()),
         Box::new(Week52HighLow::new()),
         Box::new(Week52HighLowLevels::new()),
         Box::new(AcceleratorOscillator::new()),

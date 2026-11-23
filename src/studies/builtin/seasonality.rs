@@ -22,9 +22,12 @@
 //! calendar months of the bar's UTC date, the date a feed gives a daily or longer bar.
 //!
 //! The heatmap includes each loaded year and monthly average, sample standard deviation
-//! and percentage positive. Its current month uses the latest close; projections use only
-//! earlier years. The final projection extends through the remaining calendar-month slots
-//! of the time axis, without adding bars to the source history.
+//! and percentage positive, an unchanged month counting as positive. Its current month uses the
+//! latest close; projections use only earlier years. The final projection extends through the
+//! remaining calendar-month slots of the time axis, without adding bars to the source history.
+//!
+//! A new study shows the heatmap in a pane of its own and keeps the Expected and Previous close
+//! lines and the boxes on the price chart; moved to the price pane, it draws everything there.
 //!
 //! Month and Average cells use the change's sign colour, increasing in opacity up to the
 //! cutoff. Positive cells use their distance from 50%; standard deviations have no sign tint.
@@ -37,7 +40,8 @@
 //! their own Style tab colours.
 //! Colour intensity cutoff (%) defaults to 10. Show averages, Show standard deviation and
 //! Show percent positive default to on. Table position defaults to bottom centre; Table
-//! width (%) and Table height (%) default to 0, fitting the cells and rows.
+//! width (%) and Table height (%) default to 100 and 95 of the study's pane; 0 fits the cells
+//! and rows.
 //!
 //! # Example
 //! ```
@@ -74,8 +78,8 @@ use std::collections::BTreeMap;
 /// Behind a month without a change or one excluded from the calculation.
 const EMPTY_FILL: Color32 = Color32::from_rgba_unmultiplied_const(120, 123, 134, 128);
 
-/// Monthly projection from the average change of the same month in earlier years, drawn
-/// on the price chart.
+/// Monthly projection from the average change of the same month in earlier years. The
+/// projection is drawn on the price chart and the heatmap in the study's own pane.
 #[derive(Clone, Debug)]
 pub struct Seasonality {
     start_year: i32,
@@ -165,8 +169,8 @@ impl Seasonality {
             show_std_dev: true,
             show_positive: true,
             table_position: TablePosition::BottomCenter,
-            table_width: 0.0,
-            table_height: 0.0,
+            table_width: 100.0,
+            table_height: 95.0,
             visible: true,
         }
     }
@@ -228,6 +232,30 @@ fn ignored_months(list: &str) -> Result<Vec<(i32, u32)>, String> {
 }
 
 impl Indicator for Seasonality {
+    fn is_overlay(&self) -> bool {
+        false
+    }
+
+    fn plots_on_price(&self) -> bool {
+        true
+    }
+
+    /// The plots are prices on every pane.
+    fn scale(&self) -> crate::studies::StudyScale {
+        crate::studies::StudyScale::Main
+    }
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: Some(super::performance::table_pane_height(&self.table)),
+            ..Default::default()
+        }
+    }
+
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
             crate::model::PriceSource::Close,
@@ -417,7 +445,8 @@ impl Indicator for Seasonality {
             } else {
                 f64::NAN
             };
-            let positive = changes().filter(|(_, change)| *change > 0.0).count() as f64 / n * 100.0;
+            let positive =
+                changes().filter(|(_, change)| *change >= 0.0).count() as f64 / n * 100.0;
             for (index, value) in [mean, deviation, positive].into_iter().enumerate() {
                 let value = value.is_finite().then_some(value);
                 summaries[index].push(StudyCell::Percent(value));
@@ -494,15 +523,12 @@ impl Indicator for Seasonality {
                     .iter()
                     .rposition(|bar| bar.time < data[right].time)
                     .unwrap_or(right);
-                let seconds = |duration: chrono::TimeDelta| {
-                    duration.num_seconds() as f64 + duration.subsec_nanos() as f64 / 1e9
-                };
                 let step = if left == right {
                     1.0
                 } else {
-                    seconds(data[right].time - data[left].time) / (right - left) as f64
+                    (data[right].time - data[left].time).as_seconds_f64() / (right - left) as f64
                 };
-                let to = right as f64 + seconds(end.and_utc() - data[right].time) / step;
+                let to = right as f64 + (end.and_utc() - data[right].time).as_seconds_f64() / step;
                 if to.is_finite() && to > i as f64 {
                     self.projection.push(StudyProjection {
                         bars: i as f64..to,
@@ -600,6 +626,11 @@ impl Indicator for Seasonality {
         self.visible = visible;
     }
 
+    // Its remaining-month projection cannot follow source bars onto another symbol or interval.
+    fn draws_on_other_bars(&self) -> bool {
+        false
+    }
+
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
     }
@@ -623,6 +654,100 @@ mod tests {
     use crate::model::Bar;
     use crate::studies::*;
     use chrono::{TimeZone, Utc};
+
+    /// The heatmap has its own pane while the projection box and both price plots stay above it.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn seasonality_heatmap_has_its_pane_and_projects_on_the_price_pane() {
+        use crate::model::BarData;
+        use crate::widget::{Chart, PaneId, test_frames};
+
+        let mut close = 100.0;
+        let bars = (0..39)
+            .map(|i| {
+                let month = i % 12 + 1;
+                close *= if month % 2 == 1 { 1.06 } else { 0.97 };
+                Bar::new(
+                    Utc.with_ymd_and_hms(2021 + i / 12, month as u32, 1, 0, 0, 0)
+                        .unwrap(),
+                    close,
+                    close,
+                    close,
+                    close,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        let id = chart.add_indicator(Box::new(Seasonality::new()));
+        let ctx = egui::Context::default();
+        test_frames::shapes(&ctx, &mut chart, 0.0, Vec::new());
+        let painted = test_frames::shapes(&ctx, &mut chart, 0.1, Vec::new());
+        assert_eq!(chart.panes().len(), 2);
+        let pane = chart.series_pane(id).unwrap();
+        assert_ne!(pane, PaneId::MAIN);
+        let heading_y = painted
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Text(text) if text.galley.text() == "Year" => Some(text.pos.y),
+                _ => None,
+            })
+            .unwrap();
+        let study = chart.indicators().next().unwrap().1;
+        let fill = study.projection_fill_color(study.projections().last().unwrap());
+        let projection = painted
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Rect(rect) if rect.fill == fill => Some(rect.rect),
+                _ => None,
+            })
+            .expect("the remaining-month projection is painted");
+        assert!(projection.bottom() < heading_y);
+        let previous_close: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::LineSegment { points, stroke } if stroke.color == palette::GRAY => {
+                    Some(points)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!previous_close.is_empty());
+        assert!(
+            previous_close
+                .iter()
+                .all(|points| points.iter().all(|point| point.y < heading_y))
+        );
+        // Four years and three summary rows: 22 * (7 + 2) + 40.
+        assert!((chart.pane_height(pane).unwrap() - 238.0).abs() < 0.5);
+        assert_eq!(study.scale(), StudyScale::None);
+        let mut options = chart.chart_options().clone();
+        options.crosshair.mode = crate::config::CrosshairMode::Magnet;
+        options.crosshair.horz_line_color = Color32::GOLD;
+        options.crosshair.horz_line_style = crate::model::LineStyle::Solid;
+        options.crosshair.vert_line_visible = false;
+        chart.set_chart_options(options);
+        let pointer = egui::pos2(projection.left(), heading_y - 35.0);
+        let hovered = test_frames::shapes(
+            &ctx,
+            &mut chart,
+            0.2,
+            vec![egui::Event::PointerMoved(pointer)],
+        );
+        assert!(
+            hovered.iter().any(|shape| matches!(shape,
+                egui::Shape::LineSegment { points, stroke }
+                if stroke.color == Color32::GOLD
+                    && points.iter().all(|point| (point.y - pointer.y).abs() < 0.5)
+            )),
+            "the heatmap crosshair must not snap to price plots drawn in another pane"
+        );
+        assert!(chart.move_series_to_pane(id, PaneId::MAIN));
+        assert_eq!(chart.panes().len(), 1);
+        let study = chart.indicators().next().unwrap().1;
+        assert!(study.is_overlay());
+        assert_eq!(study.scale(), StudyScale::Main);
+    }
 
     fn heatmap_bars() -> Vec<Bar> {
         [
@@ -670,7 +795,7 @@ mod tests {
 
         assert_eq!(
             (table.position, table.width, table.height),
-            (TablePosition::BottomCenter, None, None)
+            (TablePosition::BottomCenter, Some(1.0), Some(0.95))
         );
         for (id, value) in [
             ("start_year", InputValue::Integer(2015)),
@@ -946,37 +1071,78 @@ mod tests {
         let mut study = ConfiguredStudy::new(Box::new(Seasonality::new()));
         study.set_bar_clock(&crate::model::BarClock::new(crate::model::Timeframe::Day1));
         study.calculate(&bars);
-        let table = study.table().expect("Seasonality heatmap");
-        let percent = |label: &str, month| {
-            let row = table
-                .rows
-                .iter()
-                .find(|row| row.first() == Some(&StudyCell::Text(label.into())))
-                .unwrap();
-            let StudyCell::Percent(value) = row[month] else {
-                panic!("percentage cell")
-            };
-            value
-        };
-        for (label, month, expected) in [
-            ("2023", 1, Some(10.0)),
-            ("2023", 2, Some(-10.0)),
-            ("2024", 1, Some(5.0)),
-            ("Average", 1, Some(7.5)),
-            ("Standard deviation", 1, Some(3.5355339059327378)),
-            ("Standard deviation", 2, None),
-            ("Positive", 1, Some(100.0)),
-            ("2022", 12, None),
-            ("2024", 2, None),
+        let unchanged: Vec<_> = [
+            (2020, 12, 100.0),
+            (2021, 1, 100.0),
+            (2021, 12, 200.0),
+            (2022, 1, 210.0),
+            (2022, 12, 300.0),
+            (2023, 1, 336.0),
+        ]
+        .into_iter()
+        .map(|(y, m, c)| {
+            Bar::new(
+                Utc.with_ymd_and_hms(y, m, 28, 0, 0, 0).unwrap(),
+                c,
+                c,
+                c,
+                c,
+                1.0,
+            )
+        })
+        .collect();
+        // January changes of 0%, 5% and 12% are all positive, including the developing month.
+        for (data, rows) in [
+            (
+                bars.as_slice(),
+                [
+                    ("2023", 1, Some(10.0)),
+                    ("2023", 2, Some(-10.0)),
+                    ("2024", 1, Some(5.0)),
+                    ("Average", 1, Some(7.5)),
+                    ("Standard deviation", 1, Some(3.5355339059327378)),
+                    ("Standard deviation", 2, None),
+                    ("Positive", 1, Some(100.0)),
+                    ("2022", 12, None),
+                    ("2024", 2, None),
+                ]
+                .as_slice(),
+            ),
+            (
+                unchanged.as_slice(),
+                [
+                    ("2021", 1, Some(0.0)),
+                    ("2022", 1, Some(5.0)),
+                    ("2023", 1, Some(12.0)),
+                    ("Positive", 1, Some(100.0)),
+                ]
+                .as_slice(),
+            ),
         ] {
-            match expected {
-                Some(expected) => assert!(
-                    (percent(label, month).unwrap() - expected).abs() < 1e-9,
-                    "{label}"
-                ),
-                None => assert_eq!(percent(label, month), None, "{label}"),
+            study.calculate(data);
+            let table = study.table().expect("Seasonality heatmap");
+            let percent = |label: &str, month| {
+                let row = table
+                    .rows
+                    .iter()
+                    .find(|row| row.first() == Some(&StudyCell::Text(label.into())))
+                    .unwrap();
+                let StudyCell::Percent(value) = row[month] else {
+                    panic!("percentage cell")
+                };
+                value
+            };
+            for &(label, month, expected) in rows {
+                match expected {
+                    Some(expected) => assert!(
+                        (percent(label, month).unwrap() - expected).abs() < 1e-9,
+                        "{label}"
+                    ),
+                    None => assert_eq!(percent(label, month), None, "{label}"),
+                }
             }
         }
+        study.calculate(&bars);
         let zone = study
             .projections()
             .last()
@@ -1009,26 +1175,9 @@ mod tests {
                 study.set_overlay(overlay);
                 state.fit_price_scale([&study as &dyn Indicator]);
                 let price = state.price_scale().map(Default::default(), 0.0, 200.0);
-                if overlay {
-                    assert!(price.range().min <= 200.0 && price.range().max >= 220.0);
-                } else {
-                    use crate::widget::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig};
-                    let mut pane =
-                        IndicatorPane::with_config(IndicatorPaneConfig::from_study(&study));
-                    egui::Context::default()
-                        .run_ui(Default::default(), |ui| {
-                            let interaction = pane
-                                .show_aligned_interactive(
-                                    ui,
-                                    &study,
-                                    &[],
-                                    12..21,
-                                    IndicatorCoordParams::new(8.0, 0.0, 20, 12),
-                                )
-                                .unwrap();
-                            assert!(interaction.y_min <= 200.0 && interaction.y_max >= 220.0);
-                        })
-                        .drop_without_applying_deltas();
+                assert!(price.range().min <= 200.0 && price.range().max >= 220.0);
+                if !overlay {
+                    assert_eq!(study.scale(), StudyScale::None);
                     continue;
                 }
                 let coords = ChartMapping::new(rect, 8.0, 12, 20, 0.0, price);

@@ -209,6 +209,27 @@ pub enum DataOperation {
     Insert(DateTime<Utc>),
 }
 
+/// The change to a study reported by [`ChartEvent::Study`].
+///
+/// A visibility change precedes `InputsChanged` when both happen in one edit. Unchanged
+/// visibility and inputs report nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum StudyEventKind {
+    /// Joined the chart, including paste, templates, snapshots, volume and undo or redo.
+    Added,
+    /// Left the chart, including removal with its source or pane, replacement and undo or redo.
+    Removed,
+    /// Its own [`visibility`](crate::studies::Indicator::user_visible) turned off. The group
+    /// switch [`Chart::set_indicators_hidden`] and interval visibility report nothing.
+    Hidden,
+    /// Its own visibility turned on.
+    Shown,
+    /// One or more [`inputs`](crate::studies::Indicator::inputs) changed, including its source.
+    /// Style, scale, pane and the legend caption of [`Chart::set_indicator_inputs`] report nothing.
+    InputsChanged,
+}
+
 /// A notification for the host. Existing selection and action polling APIs remain independent.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -292,6 +313,18 @@ pub enum ChartEvent {
         id: usize,
         /// What happened to it.
         kind: crate::drawings::DrawingEventKind,
+    },
+    /// A study changed through a user edit, undo or redo, or a host call, including
+    /// [`indicator_mut`](Chart::indicator_mut). Changes retain occurrence order before the next
+    /// notification. Undo or redo, applying a study template set and restoring a snapshot report
+    /// each touched study's net change; a snapshot reports its series before its studies.
+    /// Settings dialog previews report nothing until applied. Clicking a study stays a
+    /// [`Self::Click`].
+    Study {
+        /// The study's stable id, as returned by [`Chart::indicators`].
+        id: SeriesId,
+        /// The change to the study.
+        kind: StudyEventKind,
     },
     /// A successful history page, `set_data` or `set_custom_data` completed, including an empty
     /// result. Live updates emit `DataUpdated` instead; failed or obsolete feed replies emit
@@ -378,6 +411,10 @@ pub(super) struct HostEvents {
     queue: std::collections::VecDeque<Box<ChartEvent>>,
     dropped: usize,
     pub(super) data_operations: bool,
+    /// Facts before each pending change, in first-touch order; `None` for an absent study.
+    pub(super) studies: Vec<(SeriesId, Option<StudyFacts>)>,
+    /// Bulk edits compare each study once at their end.
+    study_batch: bool,
     range: Option<VisibleTimeRange>,
     logical_range: Option<crate::model::LogicalRange>,
     time_scale_size: egui::Vec2,
@@ -396,6 +433,13 @@ pub(super) struct HostEvents {
     pub(super) touch_position: Option<Option<Pos2>>,
     #[cfg(feature = "drawings")]
     dropped_images: Vec<egui::DroppedFileHandle>,
+}
+
+/// The study state that host notifications compare.
+#[derive(PartialEq)]
+pub(super) struct StudyFacts {
+    visible: bool,
+    inputs: Vec<(String, crate::studies::InputValue)>,
 }
 
 /// Capture the viewport's carried keys before egui applies this frame's changes, even while
@@ -462,8 +506,8 @@ impl Chart {
 
     /// Drains host notifications in occurrence order. Call after `show` each frame.
     ///
-    /// Symbol, interval, data and series setters and drawing changes enqueue as they happen;
-    /// view and pointer changes are measured during `show`. Unchanged views and pointers emit
+    /// Symbol, interval, data and series setters and study and drawing changes enqueue as they
+    /// happen; view and pointer changes are measured during `show`. Unchanged views and pointers emit
     /// nothing. Drain regularly: the newest 1024 notifications remain queued until taken; overflow is
     /// reported as `EventsDropped` before the retained events. A new chart's constructor data
     /// emits no load event. This queue does not consume context, quote or selection actions.
@@ -482,8 +526,7 @@ impl Chart {
     /// # });
     /// ```
     pub fn drain_events(&mut self) -> impl Iterator<Item = ChartEvent> + '_ {
-        #[cfg(feature = "drawings")]
-        self.flush_drawing_events();
+        self.flush_change_events();
         let dropped = std::mem::take(&mut self.host_events.dropped);
         (dropped > 0)
             .then_some(ChartEvent::EventsDropped(dropped))
@@ -491,11 +534,81 @@ impl Chart {
             .chain(self.host_events.queue.drain(..).map(|event| *event))
     }
 
-    /// Queues `event` after the drawing changes made before it.
+    /// Queues `event` after the study and drawing changes made before it.
     pub(super) fn push_event(&mut self, event: ChartEvent) {
+        self.flush_change_events();
+        self.host_events.push(event);
+    }
+
+    /// The study's own visibility and inputs, or `None` when it is absent.
+    fn study_facts(&self, id: SeriesId) -> Option<StudyFacts> {
+        let at = self.study_ids.iter().position(|study| *study == id)?;
+        let study = self.studies.indicators()[at].as_ref();
+        Some(StudyFacts {
+            visible: study.user_visible(),
+            inputs: study
+                .inputs()
+                .into_iter()
+                .map(|input| (input.id, input.value))
+                .collect(),
+        })
+    }
+
+    /// Captures studies before they change, flushing earlier changes outside a bulk edit.
+    pub(super) fn watch_studies(&mut self, ids: impl IntoIterator<Item = SeriesId>) {
+        if !self.host_events.study_batch {
+            self.flush_change_events();
+        }
+        for id in ids {
+            if self
+                .host_events
+                .studies
+                .iter()
+                .all(|(watched, _)| *watched != id)
+            {
+                let facts = self.study_facts(id);
+                self.host_events.studies.push((id, facts));
+            }
+        }
+    }
+
+    /// Defers study comparisons until the bulk edit ends. Returns the enclosing batch state.
+    pub(super) fn begin_study_batch(&mut self) -> bool {
+        if !self.host_events.study_batch {
+            self.flush_change_events();
+        }
+        std::mem::replace(&mut self.host_events.study_batch, true)
+    }
+
+    pub(super) fn end_study_batch(&mut self, outer: bool) {
+        self.host_events.study_batch = outer;
+    }
+
+    /// Queues pending study changes before drawings; studies wait during a bulk edit.
+    pub(super) fn flush_change_events(&mut self) {
+        if !self.host_events.study_batch {
+            for (id, before) in std::mem::take(&mut self.host_events.studies) {
+                let after = self.study_facts(id);
+                let kinds = match (&before, &after) {
+                    (None, None) => [None, None],
+                    (None, Some(_)) => [Some(StudyEventKind::Added), None],
+                    (Some(_), None) => [Some(StudyEventKind::Removed), None],
+                    (Some(before), Some(after)) => [
+                        (before.visible != after.visible).then_some(if after.visible {
+                            StudyEventKind::Shown
+                        } else {
+                            StudyEventKind::Hidden
+                        }),
+                        (before.inputs != after.inputs).then_some(StudyEventKind::InputsChanged),
+                    ],
+                };
+                for kind in kinds.into_iter().flatten() {
+                    self.host_events.push(ChartEvent::Study { id, kind });
+                }
+            }
+        }
         #[cfg(feature = "drawings")]
         self.flush_drawing_events();
-        self.host_events.push(event);
     }
 
     /// Queues the drawing changes the manager recorded, oldest first, counting those it dropped.
@@ -511,10 +624,11 @@ impl Chart {
     }
 
     pub(super) fn data_loaded(&mut self, series: SeriesId) {
-        self.push_event(ChartEvent::DataLoaded {
-            series,
-            bars: self.series_len(series),
-        });
+        let bars = self.series_len(series);
+        if series == SeriesId::MAIN {
+            self.history.data_loaded(bars);
+        }
+        self.push_event(ChartEvent::DataLoaded { series, bars });
     }
 
     pub(super) fn data_set(&mut self, series: SeriesId) {
@@ -533,8 +647,7 @@ impl Chart {
     }
 
     pub(super) fn data_updated(&mut self, series: SeriesId) {
-        #[cfg(feature = "drawings")]
-        self.flush_drawing_events();
+        self.flush_change_events();
         let bars = self.series_len(series);
         if let Some(ChartEvent::DataUpdated {
             series: last,
@@ -833,7 +946,11 @@ impl Chart {
                 })
                 .chain(closes)
                 .collect::<Vec<_>>();
-            (owner, magnet(map, values), pane_index(group.id))
+            // The pane's drawings convert heights on the same map.
+            let price = self
+                .anchor_crosshair_y(ui.ctx(), pos.y)
+                .map_or_else(|| magnet(map, values), |y| map.y_to_price(y));
+            (owner, price, pane_index(group.id))
         } else if self.last_rendered_volume_rect.contains(pos)
             && let Some(map) = self.host_events.volume_map
         {
@@ -847,10 +964,14 @@ impl Chart {
                 pane_index(self.main_series_pane()),
             )
         } else if plot.contains(pos) {
-            let snapped = bar_at.map_or(pos, |index| {
-                self.snap_crosshair(pos, &self.last_price_map, index)
+            let y = self.anchor_crosshair_y(ui.ctx(), pos.y).unwrap_or_else(|| {
+                bar_at
+                    .map_or(pos, |index| {
+                        self.snap_crosshair(pos, &self.last_price_map, index)
+                    })
+                    .y
             });
-            let price = self.last_price_map.y_to_price(snapped.y);
+            let price = self.last_price_map.y_to_price(y);
             (SeriesId::MAIN, price, pane_index(self.main_series_pane()))
         } else {
             return None;
@@ -1520,6 +1641,407 @@ mod tests {
         chart.drawings_mut().drawings[0].screen_anchor = Some([f32::NAN, 0.5]);
         chart.drawings_mut().edit_drawing(0, |_| {}).unwrap();
         assert_eq!(drained(&mut chart), []);
+    }
+
+    /// Renumbering drawings after a study or bar series leaves or crosses them is observable,
+    /// including undo and redo, while drawings whose layers stay put report nothing. A drawing
+    /// that a removed study owned changes owner and layer in one edit, reported once.
+    #[cfg(all(feature = "studies", feature = "drawings"))]
+    #[test]
+    fn restacked_drawings_reach_the_host_once() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingEventKind, DrawingToolType};
+        use crate::studies::{RSI, SMA};
+        use crate::widget::{SeriesOptions, VisualOrder};
+
+        let drawing_places = |chart: &Chart| {
+            chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| {
+                    (
+                        d.id,
+                        d.pane,
+                        d.series_layer,
+                        d.z_order,
+                        d.chart_points.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        type Row = (&'static str, bool, fn(&mut Chart, SeriesId), bool);
+        let rows: [Row; 7] = [
+            (
+                "remove study",
+                false,
+                |c, id| {
+                    assert!(c.remove_series(id));
+                },
+                true,
+            ),
+            (
+                "remove study sharing its pane",
+                false,
+                |c, id| {
+                    assert!(c.remove_series(id));
+                },
+                true,
+            ),
+            (
+                "move study",
+                false,
+                |c, id| {
+                    assert!(c.move_indicator_to_pane(id, id));
+                },
+                true,
+            ),
+            (
+                "reorder study",
+                false,
+                |c, id| {
+                    assert!(c.reorder_indicator(id, VisualOrder::BringToFront));
+                },
+                true,
+            ),
+            (
+                "unchanged study order",
+                false,
+                |c, id| {
+                    assert!(c.reorder_indicator(id, VisualOrder::SendToBack));
+                },
+                false,
+            ),
+            (
+                "remove bar series",
+                true,
+                |c, id| {
+                    assert!(c.remove_series(id));
+                },
+                true,
+            ),
+            (
+                "move bar series",
+                true,
+                |c, id| {
+                    let pane = c.add_pane();
+                    assert!(c.move_series_to_pane(id, pane));
+                },
+                true,
+            ),
+        ];
+        for (name, bars, edit, changes) in rows {
+            let mut chart = chart(&[100.0], &[200.0]);
+            chart.config.show_volume = false;
+            let shared = name == "remove study sharing its pane";
+            let id = if bars {
+                chart.add_series(SeriesOptions::default())
+            } else if shared {
+                // Pane: study, its drawings, other study; the other study takes the drawings.
+                let id = chart.add_indicator(Box::new(RSI::new(14)));
+                let other = chart.add_indicator(Box::new(RSI::new(7)));
+                assert!(chart.move_indicator_to_pane(other, id));
+                id
+            } else {
+                let id = chart.add_indicator(Box::new(SMA::new(3)));
+                assert!(chart.reorder_indicator(id, VisualOrder::SendToBack));
+                id
+            };
+            // Before: study, drawing, main; for a bar series: main, series, drawing.
+            // Removing/moving the study changes layer 1 to 0; the bar cases use layer 2 to 1.
+            let layer = if bars { 2 } else { 1 };
+            for (at, layer) in [layer, layer, 0].into_iter().enumerate() {
+                let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+                drawing.chart_points =
+                    vec![ChartPoint::new(0.0, 120.0), ChartPoint::new(1.0, 150.0)];
+                drawing.series_layer = Some(layer);
+                drawing.z_order = if at == 2 { -1 } else { at as i32 };
+                drawing.pane = (shared && at < 2).then_some(id.0);
+                chart.drawings_mut().add_drawing(drawing).unwrap();
+            }
+            chart.drain_events().for_each(drop);
+            let before = drawing_places(&chart);
+            let expected = if changes {
+                vec![
+                    ChartEvent::Drawing {
+                        id: 0,
+                        kind: DrawingEventKind::PropertiesChanged,
+                    },
+                    ChartEvent::Drawing {
+                        id: 1,
+                        kind: DrawingEventKind::PropertiesChanged,
+                    },
+                ]
+            } else {
+                vec![]
+            };
+            chart.user_action(|c| edit(c, id));
+            let events: Vec<_> = chart.drain_events().collect();
+            let mut ordered = Vec::new();
+            if name.starts_with("remove study") {
+                ordered.push(ChartEvent::Study {
+                    id,
+                    kind: StudyEventKind::Removed,
+                });
+            } else if name == "remove bar series" {
+                ordered.push(ChartEvent::SeriesRemoved(id));
+            }
+            ordered.extend(expected.clone());
+            assert_eq!(events, ordered, "{name}");
+            let after = drawing_places(&chart);
+            if changes {
+                for redo in [false, true] {
+                    assert!(if redo { chart.redo() } else { chart.undo() }, "{name}");
+                    let events: Vec<_> = chart.drain_events().collect();
+                    let mut ordered = Vec::new();
+                    if name.starts_with("remove study") {
+                        ordered.push(ChartEvent::Study {
+                            id,
+                            kind: if redo {
+                                StudyEventKind::Removed
+                            } else {
+                                StudyEventKind::Added
+                            },
+                        });
+                    } else if name == "remove bar series" {
+                        ordered.push(if redo {
+                            ChartEvent::SeriesRemoved(id)
+                        } else {
+                            ChartEvent::SeriesAdded(id)
+                        });
+                    }
+                    ordered.extend(expected.clone());
+                    assert_eq!(events, ordered, "{name}: redo {redo}");
+                    let restored = if redo { &after } else { &before };
+                    assert_eq!(&drawing_places(&chart), restored, "{name}: redo {redo}");
+                }
+            }
+        }
+    }
+
+    /// Study edits from the legend, keyboard and host retain their kind and id through history,
+    /// and bulk restores report each study once without exposing source remapping.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn study_changes_reach_the_host_by_kind() {
+        use super::StudyEventKind as K;
+        use crate::chart::rendering::StudyAction;
+        use crate::studies::{InputValue, RSI, SMA, StudySource};
+
+        fn studies(chart: &mut Chart) -> Vec<ChartEvent> {
+            chart
+                .drain_events()
+                .filter(|event| matches!(event, ChartEvent::Study { .. }))
+                .collect()
+        }
+        fn study(id: SeriesId, kinds: &[K]) -> Vec<ChartEvent> {
+            kinds
+                .iter()
+                .map(|&kind| ChartEvent::Study { id, kind })
+                .collect()
+        }
+
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0], &[200.0]);
+        chart.config.show_volume = false;
+        let sma = chart.user_action(|c| c.add_indicator(Box::new(SMA::new(3))));
+        assert_eq!(studies(&mut chart), study(sma, &[K::Added]));
+        for time in [0.0, 0.1] {
+            frame(&ctx, &mut chart, time, vec![]);
+        }
+        assert_eq!(studies(&mut chart), []);
+        let rsi = SeriesId(sma.0 + 1);
+        // Edit, whether it reports the RSI, its kinds, and the kinds its undo reports.
+        type Row = (
+            &'static str,
+            fn(&mut Chart, &Context, SeriesId),
+            bool,
+            &'static [K],
+            &'static [K],
+        );
+        let rows: [Row; 8] = [
+            (
+                "hide from the legend",
+                |c, _, _| c.apply_study_action(StudyAction::ToggleVisibility(0)),
+                false,
+                &[K::Hidden],
+                &[K::Shown],
+            ),
+            (
+                "show from the legend",
+                |c, _, _| c.apply_study_action(StudyAction::ToggleVisibility(0)),
+                false,
+                &[K::Shown],
+                &[K::Hidden],
+            ),
+            (
+                "hide and change an input",
+                |c, _, sma| {
+                    c.user_action(|c| {
+                        let s = c.indicator_mut(sma).unwrap();
+                        s.set_visible(false);
+                        s.set_input("period", InputValue::Length(5)).unwrap();
+                    })
+                },
+                false,
+                &[K::Hidden, K::InputsChanged],
+                &[K::Shown, K::InputsChanged],
+            ),
+            (
+                "show by the host",
+                |c, _, sma| assert!(c.user_action(|c| c.set_indicator_visible(sma, true))),
+                false,
+                &[K::Shown],
+                &[K::Hidden],
+            ),
+            (
+                "change an input",
+                |c, _, sma| {
+                    c.user_action(|c| {
+                        c.indicator_mut(sma)
+                            .unwrap()
+                            .set_input("period", InputValue::Length(7))
+                            .unwrap()
+                    })
+                },
+                false,
+                &[K::InputsChanged],
+                &[K::InputsChanged],
+            ),
+            (
+                "add",
+                |c, _, _| {
+                    c.user_action(|c| c.add_indicator(Box::new(RSI::new(14))));
+                },
+                true,
+                &[K::Added],
+                &[K::Removed],
+            ),
+            (
+                "remove from the legend",
+                |c, _, _| c.apply_study_action(StudyAction::Remove(1)),
+                true,
+                &[K::Removed],
+                &[K::Added],
+            ),
+            (
+                "press Delete",
+                |c, ctx, sma| {
+                    c.selection.select(ChartElementId::Indicator(sma), None);
+                    let key = Event::Key {
+                        key: egui::Key::Delete,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::NONE,
+                    };
+                    let time = ctx.input(|input| input.time) + 0.1;
+                    frame(ctx, c, time, vec![key]);
+                },
+                false,
+                &[K::Removed],
+                &[K::Added],
+            ),
+        ];
+        for (name, edit, second, reported, undone) in rows {
+            let id = if second { rsi } else { sma };
+            edit(&mut chart, &ctx, sma);
+            assert_eq!(studies(&mut chart), study(id, reported), "{name}");
+            assert!(chart.undo(), "{name}");
+            assert_eq!(studies(&mut chart), study(id, undone), "{name}: undo");
+            assert!(chart.redo(), "{name}");
+            assert_eq!(studies(&mut chart), study(id, reported), "{name}: redo");
+        }
+        let a = chart.add_indicator(Box::new(SMA::new(3)));
+        assert_eq!(studies(&mut chart), study(a, &[K::Added]));
+        assert!(chart.set_indicator_visible(a, false));
+        assert!(chart.set_indicator_visible(a, true));
+        assert_eq!(
+            studies(&mut chart),
+            study(a, &[K::Hidden, K::Shown]),
+            "consecutive visibility changes"
+        );
+        assert!(chart.set_indicator_visible(a, true));
+        chart
+            .indicator_mut(a)
+            .unwrap()
+            .set_input("period", InputValue::Length(3))
+            .unwrap();
+        chart.set_indicators_hidden(true);
+        chart.set_indicators_hidden(false);
+        assert!(!chart.set_indicator_visible(SeriesId(usize::MAX), false));
+        assert!(chart.indicator_mut(SeriesId(usize::MAX)).is_none());
+        assert!(!chart.remove_series(SeriesId(usize::MAX)));
+        assert_eq!(studies(&mut chart), []);
+        chart
+            .indicator_mut(a)
+            .unwrap()
+            .set_input("period", InputValue::Length(4))
+            .unwrap();
+        let series = chart.add_series(crate::widget::SeriesOptions::default());
+        assert_eq!(
+            chart.drain_events().collect::<Vec<_>>(),
+            [
+                ChartEvent::Study {
+                    id: a,
+                    kind: K::InputsChanged
+                },
+                ChartEvent::SeriesAdded(series)
+            ],
+            "before a later notification"
+        );
+        let b = chart.add_indicator(Box::new(SMA::new(3)));
+        chart
+            .set_indicator_source(b, StudySource::Study { id: a.0, plot: 0 })
+            .unwrap();
+        assert_eq!(
+            studies(&mut chart),
+            [study(b, &[K::Added]), study(b, &[K::InputsChanged])].concat()
+        );
+        // One undo step can change several studies without reporting its temporary removals.
+        chart.user_action(|c| {
+            for id in [a, b] {
+                c.indicator_mut(id)
+                    .unwrap()
+                    .set_input("period", InputValue::Length(6))
+                    .unwrap();
+            }
+        });
+        let inputs = [study(a, &[K::InputsChanged]), study(b, &[K::InputsChanged])].concat();
+        assert_eq!(studies(&mut chart), inputs, "bulk inputs");
+        assert!(chart.undo());
+        assert_eq!(studies(&mut chart), inputs, "bulk inputs: undo");
+        assert!(chart.redo());
+        assert_eq!(studies(&mut chart), inputs, "bulk inputs: redo");
+        let set = chart.study_template_set();
+        let ids = chart.apply_study_template_set(&set).unwrap();
+        assert_eq!(
+            studies(&mut chart),
+            [
+                study(a, &[K::Removed]),
+                study(b, &[K::Removed]),
+                study(ids[0], &[K::Added]),
+                study(ids[1], &[K::Added])
+            ]
+            .concat(),
+            "template set reports each study once"
+        );
+        #[cfg(feature = "ui")]
+        {
+            let snapshot = chart.snapshot().unwrap();
+            chart.restore(&snapshot).unwrap();
+            let restored: Vec<_> = chart.indicators().map(|(id, _)| id).collect();
+            assert_eq!(
+                studies(&mut chart),
+                [
+                    study(ids[0], &[K::Removed]),
+                    study(ids[1], &[K::Removed]),
+                    study(restored[0], &[K::Added]),
+                    study(restored[1], &[K::Added])
+                ]
+                .concat(),
+                "snapshot reports each study once"
+            );
+        }
     }
 
     /// Interleaved points occupy fractional main-series slots: minute 1 is at 0.5 between

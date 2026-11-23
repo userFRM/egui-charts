@@ -757,6 +757,9 @@ mod tests {
                 .series_price_scale_mut(series)
                 .unwrap()
                 .set_range(95.0, 105.0);
+            // The manual 95..105 range puts 100 halfway down, independently of autoscale margins.
+            let (top, bottom) = chart.series_price_map(series).unwrap().extent();
+            let pos = egui::pos2(pos.x, (top + bottom) * 0.5);
             chart.set_markers(
                 series,
                 vec![
@@ -1344,7 +1347,7 @@ mod tests {
             shapes
                 .iter()
                 .filter(|shape| matches!(shape,
-            Shape::Circle(circle) if circle.radius == 10.0 && circle.stroke.width == 1.2))
+            Shape::Path(path) if path.closed && path.points.len() == 4 && path.stroke.width == 1.2))
                 .count(),
             2
         );
@@ -1442,6 +1445,13 @@ mod tests {
                                 if circle.radius == 10.0 && circle.stroke.width == 1.2 =>
                             {
                                 Some(circle.center)
+                            }
+                            Shape::Path(path)
+                                if path.closed
+                                    && path.points.len() == 4
+                                    && path.stroke.width == 1.2 =>
+                            {
+                                Some(path.visual_bounding_rect().center())
                             }
                             _ => None,
                         })

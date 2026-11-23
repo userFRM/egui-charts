@@ -102,6 +102,8 @@ impl Trading {
             last_fill: self.account_panel.fills.price(symbol),
             pnl_unit: self.display.position_pnl_unit,
             logo: instrument.and_then(|instrument| instrument.logo.as_deref()),
+            account: &self.account_id,
+            timezone: chart.display_timezone(),
         }
     }
 
@@ -225,8 +227,11 @@ impl Trading {
         let mapping = chart.get_chart_mapping();
         let display = &self.display;
         let options = TradingLineOptions {
+            timezone: chart.display_timezone(),
             show_orders: display.show_orders,
             extend_lines: display.extend_lines,
+            line_width: 1.0,
+            line_length: 0.0,
             label_alignment: display.label_alignment,
             show_positions: display.show_positions,
             submit: false,
@@ -252,6 +257,7 @@ impl Trading {
                 .account
                 .as_ref()
                 .map_or("", |account| account.currency.as_str()),
+            formatter: self.formatter.as_deref(),
             tick_size: tick,
         };
         let mut shown_orders = self.orders.clone();
@@ -274,18 +280,12 @@ impl Trading {
                 .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
             // Under the lines, so that no mark covers an order's or a position's label.
             if display.show_executions {
-                let fills: Vec<_> = self
-                    .account_panel
-                    .fills
+                let fills = &self.account_panel.fills;
+                let marks: Vec<_> = fills
                     .executions
                     .iter()
-                    .filter(|fill| {
-                        self.account_panel
-                            .fills
-                            .orders
-                            .get(&fill.order)
-                            .is_some_and(|request| request.symbol == symbol)
-                    })
+                    .filter(|fill| fills.symbol(fill) == Some(symbol))
+                    .map(super::ExecutionMark::new)
                     .collect();
                 // `Trading::numbers` takes the ticket's decimals; prices here keep the market's.
                 let numbers = Numbers {
@@ -293,7 +293,7 @@ impl Trading {
                     decimals,
                     formatter: self.formatter.as_deref(),
                 };
-                executions::show(ui, chart, &fills, display.show_execution_labels, numbers);
+                executions::show(ui, chart, &marks, display, numbers);
             }
             render_trading_lines(
                 ui,
@@ -351,6 +351,8 @@ impl Trading {
 
     /// Draws the chart symbol's working orders, brackets, positions and execution marks,
     /// respecting [`display`](Self::display). Hovering a mark lists the fills of its bar.
+    /// [`render_executions`](super::render_executions) draws other fills, such as imported trades,
+    /// with the same marks.
     /// Asks the user to confirm a change made on a line or in the depth ladder before sending it.
     pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
         chart.trading_bid_ask = self.display.bid_ask_labels;
@@ -517,8 +519,11 @@ impl Trading {
                 .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
             let mapping = chart.get_chart_mapping();
             let options = TradingLineOptions {
+                timezone: chart.display_timezone(),
                 show_orders: true,
                 extend_lines: self.display.extend_lines,
+                line_width: 1.0,
+                line_length: 0.0,
                 label_alignment: self.display.label_alignment,
                 show_positions: false,
                 submit: true,
@@ -543,13 +548,18 @@ impl Trading {
                     .account
                     .as_ref()
                     .map_or("", |account| account.currency.as_str()),
+                formatter: self.formatter.as_deref(),
                 tick_size: tick,
             };
-            let order = Order::new(
+            let mut order = Order::new(
                 OrderId::new("projected"),
                 request.clone(),
                 OrderStatus::Working,
             );
+            // Where a trailing stop's stop starts, as the broker would set it now.
+            order.trailing_stop = last
+                .and_then(|last| request.order_type.trail(request.side, None, last))
+                .map(|(_, stop)| stop);
             let lines = ui
                 .push_id("projected_order", |ui| {
                     render_trading_lines(ui, &mapping, [&order], [], &options)
@@ -889,6 +899,26 @@ fn describe(
             (OrderSide::Sell, OrderType::StopLimit { .. }) => {
                 "SELL {quantity} {symbol} stop {stop} limit {limit}"
             }
+            (
+                OrderSide::Buy,
+                OrderType::TrailingStop {
+                    activation: Some(_),
+                    ..
+                },
+            ) => "BUY {quantity} {symbol} trailing stop {distance} from {price}",
+            (
+                OrderSide::Sell,
+                OrderType::TrailingStop {
+                    activation: Some(_),
+                    ..
+                },
+            ) => "SELL {quantity} {symbol} trailing stop {distance} from {price}",
+            (OrderSide::Buy, OrderType::TrailingStop { .. }) => {
+                "BUY {quantity} {symbol} trailing stop {distance}"
+            }
+            (OrderSide::Sell, OrderType::TrailingStop { .. }) => {
+                "SELL {quantity} {symbol} trailing stop {distance}"
+            }
             (OrderSide::Buy, _) => "BUY {quantity} {symbol} at market",
             (OrderSide::Sell, _) => "SELL {quantity} {symbol} at market",
         };
@@ -906,6 +936,19 @@ fn describe(
                     values[1],
                     ("stop", price(stop).as_str()),
                     ("limit", price(limit).as_str()),
+                ],
+            ),
+            OrderType::TrailingStop {
+                distance,
+                activation,
+            } => l10n::format_text(
+                ctx,
+                key,
+                &[
+                    values[0],
+                    values[1],
+                    ("distance", numbers.trail(ctx, distance).as_str()),
+                    ("price", activation.map(price).unwrap_or_default().as_str()),
                 ],
             ),
             _ => l10n::format_text(ctx, key, &values),
@@ -1030,6 +1073,107 @@ mod tests {
     use crate::ui_kit::notifications::Toasts;
     use crate::widget::settings::TradingSettings;
     use std::sync::Arc;
+
+    /// Orders report expiry in the table's UTC columns and label it in the chart's zone.
+    #[test]
+    fn good_till_date_orders_show_their_expiry() {
+        use crate::model::{TimeInForce, TimezoneId};
+        use crate::scales::TimezoneMode;
+        use egui_kittest::kittest::Queryable;
+        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+        chart.set_symbol("ES");
+        chart.chart_options.time_scale.timezone =
+            TimezoneMode::Timezone(TimezoneId::fixed_offset(-5 * 3600).unwrap());
+        let mut request = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Limit(95.0));
+        request.time_in_force = TimeInForce::GoodTillDate;
+        request.expires = Some("2026-12-01T21:00:00Z".parse().unwrap());
+        let order = Order::new(OrderId::new("dated"), request.clone(), OrderStatus::Working);
+        request.side = OrderSide::Sell;
+        request.order_type = OrderType::Limit(105.0);
+        request.position_bracket = Some(crate::model::PositionBracket::TakeProfit);
+        let exit = Order::new(OrderId::new("dated-exit"), request, OrderStatus::Working);
+        let mut trading = Trading::default();
+        let colors = crate::theme::Theme::dark().chart;
+        for account in ["stocks", "crypto"] {
+            trading.set_service(Arc::new(Recorder {
+                account,
+                ..Recorder::default()
+            }));
+            assert_eq!(trading.market(&chart, &colors).account, account);
+        }
+        trading.disconnect();
+        assert_eq!(trading.market(&chart, &colors).account, "");
+        trading.set_service(Arc::new(Recorder {
+            state: vec![
+                AccountEvent::Order(order),
+                AccountEvent::Order(exit),
+                AccountEvent::Position(Position::new("ES", 1.0, 100.0)),
+            ],
+            ..Recorder::default()
+        }));
+        let ctx = egui::Context::default();
+        trading.poll(&ctx, &mut Toasts::new());
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                    trading.show(ui, &mut chart);
+                },
+            );
+            texts = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+        }
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "Limit until 2026-12-01 16:00"),
+            "{texts:?}"
+        );
+        assert_eq!(
+            texts
+                .iter()
+                .filter(|text| text.ends_with(" until 2026-12-01 16:00"))
+                .count(),
+            2,
+            "a position exit keeps its expiry beside its bracket name or P&L: {texts:?}"
+        );
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, trading: &mut Trading| {
+                    trading.show_account_panel(ui, "ES");
+                },
+                trading,
+            );
+        harness.run();
+        harness.get_by_label("Orders 2").click();
+        harness.run();
+        assert!(
+            harness
+                .output()
+                .shapes
+                .iter()
+                .any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "2026-12-01 21:00:00"))
+        );
+    }
 
     /// Chart menus open their dialogs without an account panel and send each confirmation once.
     #[test]
@@ -1293,7 +1437,8 @@ mod tests {
 
     /// Rows of differently formatted symbols keep their own price decimals, host text and pip
     /// value instead of the chart symbol's decimals or a fixed two. A regression writes every
-    /// symbol with the chart's decimals, ignores the host's formatter, loses the pip value or shows
+    /// symbol with the chart's decimals, ignores the host's formatter in the tables or on the
+    /// chart's order and position lines, loses the pip value or shows
     /// another symbol's logo. A row's cancellation is confirmed in the order's own decimals too.
     #[test]
     fn symbols_keep_their_own_decimals_host_text_pip_values_and_logos() {
@@ -1380,6 +1525,41 @@ mod tests {
         }
         let asked = "Cancel the order to BUY 1 USDJPY limit 151.234?";
         assert!(texts.iter().any(|text| text == asked), "{texts:?}");
+
+        trading.pending = None;
+        chart.set_symbol("BTC");
+        trading.orders = vec![Order::new(
+            OrderId::new("btc"),
+            OrderRequest::new("BTC", OrderSide::Buy, 2.0, OrderType::Limit(95.0)),
+            OrderStatus::Working,
+        )];
+        trading.positions = vec![Position::new("BTC", 3.0, 105.0)];
+        for _ in 0..2 {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                    trading.draw_overlays(ui, &chart);
+                },
+            );
+            texts = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+        }
+        assert!(texts.iter().any(|text| text == "2 coins"), "{texts:?}");
+        assert!(texts.iter().any(|text| text == "3 coins"), "{texts:?}");
     }
 
     #[test]
@@ -1808,6 +1988,11 @@ mod tests {
             !defaults.show_execution_labels,
             "settings saved before labels were on by default keep them off"
         );
+        assert!(
+            !defaults.show_execution_prices,
+            "older settings keep fill prices off"
+        );
+        assert!(!TradingSettings::default().show_execution_prices);
         assert!(TradingSettings::default().show_execution_labels);
         assert!(
             !defaults.compact_ticket,
@@ -2688,7 +2873,11 @@ mod tests {
             trading.poll(&ctx, &mut Toasts::new());
             let mut preset = OrderPreset::new("Balance stop", 1.0);
             preset.stop_loss = Some(Bracket::new(BracketMode::BalancePercent, 1.0));
-            trading.presets.push(preset);
+            trading
+                .presets
+                .entry(trading.account_id.clone())
+                .or_default()
+                .push(preset);
             let frame = |trading: &mut Trading, events| {
                 let output = ctx.run_ui(
                     egui::RawInput {
@@ -2786,6 +2975,7 @@ mod tests {
             assert!(!texts.iter().any(|(text, _)| text.contains("NaN")));
             click(&mut trading, "Compact form");
             assert!(trading.display.compact_ticket);
+            frame(&mut trading, key(egui::Key::Escape));
             let texts = frame(&mut trading, vec![]).0;
             for wanted in ["Limit", "Price", "Units", reason] {
                 assert!(

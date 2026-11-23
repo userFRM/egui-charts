@@ -263,7 +263,9 @@ impl SettingsDialog {
         self.price_targets_offered = declared(FeedService::PriceTargets);
         self.hours_offered = (
             crate::ui::timeframe_toolbar::state::has_trading_hours(instrument),
-            crate::ui::timeframe_toolbar::state::has_overnight_windows(instrument),
+            crate::ui::timeframe_toolbar::state::has_overnight_windows(
+                instrument.and_then(|instrument| instrument.session.as_ref()),
+            ),
         );
         if !self.order_flow_layers.iter().any(|available| *available)
             && self.active_tab == SettingsTab::OrderFlow
@@ -615,7 +617,7 @@ impl SettingsDialog {
 
     fn draw_template_button(&self, ui: &mut Ui, theme: &Theme) -> Response {
         let template_label = if self.template_name.is_empty() {
-            "Template".to_string()
+            l10n::text(ui.ctx(), "Template")
         } else {
             self.template_name.clone()
         };
@@ -625,7 +627,7 @@ impl SettingsDialog {
                 DESIGN_TOKENS.sizing.settings_dialog.button_height,
             ),
             egui::Button::new((
-                RichText::new(l10n::text(ui.ctx(), &template_label))
+                RichText::new(&template_label)
                     .size(theme.text.title)
                     .color(theme.ui.text),
                 embedded_icons::CHEVRON_DOWN.as_image_tinted(Vec2::splat(12.0), theme.ui.text),
@@ -642,7 +644,7 @@ impl SettingsDialog {
                 DESIGN_TOKENS.sizing.settings_dialog.button_height,
             )),
         )
-        .on_hover_text(l10n::text(ui.ctx(), template_label))
+        .on_hover_text(template_label)
     }
 
     fn draw_template_menu(
@@ -819,16 +821,16 @@ impl SettingsDialog {
     ) -> SettingsAction {
         let is_sel = self.template_name == name;
         let text = if is_sel {
-            RichText::new(l10n::text(ui.ctx(), &name))
+            RichText::new(&name)
                 .size(theme.text.body)
                 .color(theme.ui.text)
         } else {
-            RichText::new(l10n::text(ui.ctx(), &name)).size(theme.text.body)
+            RichText::new(&name).size(theme.text.body)
         };
 
         if ui
             .add_enabled(self.templates.ready(), egui::Button::new(text).truncate())
-            .on_hover_text(l10n::text(ui.ctx(), &name))
+            .on_hover_text(&name)
             .clicked()
         {
             if let Some(template) = self.templates.entries().get(&name) {
@@ -889,6 +891,7 @@ impl SettingsDialog {
                 let session_breaks = template
                     .show_session_breaks
                     .or(self.settings.show_session_breaks);
+                let crosshair_lines = template.crosshair_lines.or(self.settings.crosshair_lines);
                 let positive = template
                     .price_target_positive_color
                     .or(self.settings.price_target_positive_color);
@@ -922,6 +925,7 @@ impl SettingsDialog {
                 self.settings.scales_and_lines.use_24_hour = use_24_hour;
                 self.settings.scales_and_lines.weekday_names = weekday_names;
                 self.settings.show_session_breaks = session_breaks;
+                self.settings.crosshair_lines = crosshair_lines;
                 self.settings.extended_hours = extended_hours;
                 self.settings.overnight_hours = overnight_hours;
                 self.settings.session_background = session_background;
@@ -997,6 +1001,7 @@ impl SettingsDialog {
                 chart_type_params: Some(Default::default()),
                 price_source: Some(Default::default()),
                 show_session_breaks: Some(false),
+                crosshair_lines: Some(Default::default()),
                 price_target_positive_color: Some(Color32::PLACEHOLDER),
                 price_target_negative_color: Some(Color32::PLACEHOLDER),
                 ..Default::default()
@@ -1121,6 +1126,10 @@ mod tests {
                 chart.pane_options_mut().separator_color = Some(Color32::GREEN);
                 chart.set_date_format(Some("%d.%m.%Y".into()));
                 let mut options = chart.chart_options().clone();
+                options.crosshair.vert_line_visible = false;
+                options.crosshair.horz_line_visible = false;
+                options.crosshair.vert_label_visible = false;
+                options.crosshair.horz_label_visible = false;
                 options.time_scale.use_24_hour = false;
                 options.time_scale.weekday_names = crate::scales::WeekdayNames::Never;
                 chart.set_chart_options(options);
@@ -1369,7 +1378,14 @@ mod tests {
                     None,
                     "{preset}, templates visible: {templates_visible}, {size:?}: pane separators"
                 );
-                // A new chart keeps a tenth of the pane free above and below, and 2.5 bars after
+                let crosshair = &chart.chart_options().crosshair;
+                assert!(crosshair.vert_line_visible && crosshair.horz_line_visible);
+                assert!(
+                    crosshair.label_visible
+                        && crosshair.vert_label_visible
+                        && crosshair.horz_label_visible
+                );
+                // A new chart keeps a tenth of the pane free above, 8% below, and 2.5 bars after
                 // the last one.
                 let price = chart.state().price_scale().options().scale_margins;
                 assert_eq!(
@@ -1378,7 +1394,7 @@ mod tests {
                         price.bottom,
                         chart.chart_options().time_scale.right_offset
                     ),
-                    (0.1, 0.1, 2.5),
+                    (0.1, 0.08, 2.5),
                     "{preset}: margins"
                 );
             }
@@ -2620,6 +2636,77 @@ mod tests {
         }
     }
 
+    /// Each Canvas switch reaches the painted stroke or axis label and reads back, including
+    /// enabling one label while the chart's master label switch is off.
+    #[test]
+    fn crosshair_parts_are_chosen_in_the_dialog() {
+        use crate::widget::settings::CrosshairVisibility;
+        use crate::widget::test_frames::{chart, frame, shapes};
+        use egui::{Event, Shape};
+        for (master, label, expected) in [
+            (true, "Vertical line", (false, true, true, true)),
+            (true, "Horizontal line", (true, false, true, true)),
+            (true, "Time label", (true, true, false, true)),
+            (true, "Price label", (true, true, true, false)),
+            (false, "Time label", (true, true, true, false)),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+            let mut options = chart.chart_options().clone();
+            options.crosshair.label_visible = master;
+            options.crosshair.vert_label_background_color = Color32::DARK_RED;
+            options.crosshair.horz_label_background_color = Color32::DARK_GREEN;
+            chart.set_chart_options(options);
+            let mut settings = ChartSettingsState::from_chart(&chart);
+            let color = Color32::from_rgb(1, 2, 3);
+            settings.crosshair.color = color;
+            settings.crosshair.line_style = crate::model::LineStyle::Solid;
+            let mut dialog = SettingsDialog::new();
+            dialog.open(settings);
+            dialog.active_tab = SettingsTab::Canvas;
+            let SettingsAction::Apply(settings) = click_through(&mut dialog, &[label, "Ok"]) else {
+                panic!("Ok must apply the settings");
+            };
+            let settings: ChartSettingsState =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let pointer = chart.get_rendered_price_rect().center();
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pointer)]);
+            let line = |vertical| {
+                painted.iter().any(|shape| {
+                    matches!(shape,
+                Shape::LineSegment { points, stroke } if stroke.color == color &&
+                    if vertical { points[0].x == points[1].x } else { points[0].y == points[1].y })
+                })
+            };
+            let fill = |color| {
+                painted
+                    .iter()
+                    .any(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == color))
+            };
+            assert_eq!(
+                (
+                    line(true),
+                    line(false),
+                    fill(Color32::DARK_RED),
+                    fill(Color32::DARK_GREEN)
+                ),
+                expected,
+                "{master} {label}"
+            );
+            assert_eq!(
+                ChartSettingsState::from_chart(&chart).crosshair_lines,
+                Some(CrosshairVisibility {
+                    vertical_line: expected.0,
+                    horizontal_line: expected.1,
+                    time_label: expected.2,
+                    price_label: expected.3,
+                })
+            );
+        }
+    }
+
     /// Retention edits apply only with Ok; releasing memory is immediate and keeps editing open,
     /// including while the heatmap is hidden. Cancel returns its action.
     #[test]
@@ -3038,6 +3125,7 @@ mod tests {
             .unwrap();
             for (group, choice) in [
                 ("", "show_session_breaks"),
+                ("", "crosshair_lines"),
                 ("", "extended_hours"),
                 ("", "overnight_hours"),
                 ("", "session_background"),
@@ -3062,6 +3150,7 @@ mod tests {
                 saved = serde_json::from_str(document).unwrap();
             }
             let mut options = crate::config::ChartOptions::default();
+            options.crosshair.horz_line_visible = false;
             options.time_scale.right_offset_pixels = pixels;
             options.time_scale.use_24_hour = false;
             options.time_scale.weekday_names = WeekdayNames::Never;
@@ -3093,10 +3182,17 @@ mod tests {
             dialog.open(current);
             load_template(&mut dialog, "Old");
             let shown = dialog.settings();
-            // Older templates keep their last-trade closes, independently of the new default.
-            assert!(!shown.settlement_as_close);
+            // Older templates hold the default futures data choices.
+            assert!(shown.settlement_as_close);
             assert!(!shown.back_adjust_futures);
             assert_eq!(shown.extended_hours, Some(true), "{pixels:?}");
+            assert_eq!(
+                shown.crosshair_lines,
+                Some(crate::widget::settings::CrosshairVisibility {
+                    horizontal_line: false,
+                    ..Default::default()
+                })
+            );
             assert_eq!(shown.overnight_hours, Some(true), "{pixels:?}");
             let backgrounds = shown.session_background.as_ref().unwrap();
             assert!(!backgrounds.show_extended_hours);
@@ -3150,6 +3246,9 @@ mod tests {
             assert_eq!(config.thousands_sep, Some('\''));
             assert!(config.show_session_breaks);
             assert!(chart.extended_hours());
+            assert!(!chart.chart_options().crosshair.horz_line_visible);
+            let margins = chart.state().price_scale().options().scale_margins;
+            assert_eq!((margins.top, margins.bottom), (0.1, 0.1));
             assert!(chart.overnight_hours());
             assert!(!config.show_extended_hours);
             assert_eq!(config.premarket_color, Some(Color32::GOLD));

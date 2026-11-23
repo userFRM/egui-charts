@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn export_errors_are_shown_without_returning_handled_actions() {
-        use egui_charts::ui::widget_bar::panels::alerts_panel::AlertPanelAction;
+        use egui_charts::ui::widget_bar::AlertPanelAction;
         use std::{cell::Cell, rc::Rc};
 
         for (size, dark) in [

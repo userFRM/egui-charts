@@ -70,11 +70,6 @@ impl ParabolicSAR {
         }
     }
 
-    /// Create with default params (0.02, 0.02, 0.2)
-    pub fn default_params() -> Self {
-        Self::new(0.02, 0.02, 0.2)
-    }
-
     /// Set colors for bullish and bearish SAR points
     pub fn with_colors(mut self, bullish: Color32, bearish: Color32) -> Self {
         self.bullish_color = bullish;
@@ -115,6 +110,10 @@ impl Indicator for ParabolicSAR {
             plot_type: crate::studies::PlotType::Crosses,
             visible: true,
         }
+    }
+
+    fn draws_only_plots(&self) -> bool {
+        true
     }
 
     fn name(&self) -> &str {

@@ -56,9 +56,14 @@ impl AudioPlayer {
             return Ok(());
         }
         if self.engine.is_none() {
+            let mut builder = EngineBuilder::new();
+            builder.set_sample_rate(SampleRate::Custom(SAMPLE_RATE));
+            // Tests mix into an engine without a device: none plays through the machine's
+            // speakers or depends on its audio hardware.
+            #[cfg(test)]
+            builder.no_device(1, SampleRate::Custom(SAMPLE_RATE));
             self.engine = Some(
-                EngineBuilder::new()
-                    .set_sample_rate(SampleRate::Custom(SAMPLE_RATE))
+                builder
                     .build()
                     .map_err(|error| format!("Could not open audio: {error}"))?,
             );
@@ -233,5 +238,106 @@ mod tests {
             * 0.25;
         assert!((f64::from(pcm[25]) - expected).abs() < 1e-7);
         assert_eq!(samples("Beep", 0.5)[25], pcm[25] * 0.5);
+    }
+
+    /// Fills matching a time and sales size filter with sound play the alert sound chosen in the
+    /// chart settings, at their volume, once however many fills of the frame match; a filter
+    /// without sound plays nothing, and no notice stands in for the sound.
+    #[test]
+    fn time_and_sales_size_filters_with_sound_play_the_alert_sound_once() {
+        use egui_charts::ui::widget_bar::TradeSizeFilter;
+        let ctx = egui::Context::default();
+        let mut app = super::super::DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            chrono::Utc::now(),
+            true,
+        );
+        app.settings_state.alerts.sound = "Bell".into();
+        app.settings_state.alerts.sound_volume = 0.35;
+        let toasts = app.toasts.len();
+        let fill = |size| egui_charts::model::Tick::new(chrono::Utc::now(), 100.0, size, None);
+        for (sound, voices) in [(false, 0), (true, 1)] {
+            let mut filter = TradeSizeFilter::new(5.0);
+            filter.sound = sound;
+            app.time_and_sales.filters = vec![filter];
+            // Two fills of the frame reach the filter and one does not.
+            app.feed_time_and_sales(&ctx, vec![fill(5.0), fill(1.0), fill(7.0)]);
+            assert_eq!(app.audio.voices.len(), voices, "sound={sound}");
+        }
+        assert_eq!(app.toasts.len(), toasts);
+        // With one voice, the mix is the Bell tone at the alert volume.
+        let mut reader = app
+            .audio
+            .engine
+            .as_ref()
+            .unwrap()
+            .try_acquire_reader()
+            .unwrap();
+        let mut output = vec![0.0; SAMPLE_RATE as usize];
+        reader.read_pcm_frames_into(&mut output).unwrap();
+        let expected = samples("Bell", 0.35);
+        for (index, (actual, expected)) in output.iter().zip(&expected).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1e-5,
+                "sample {index}: {actual}, expected {expected}"
+            );
+        }
+    }
+
+    /// Order-flow detections whose rule asks for a sound play the alert sound chosen in the chart
+    /// settings at the alert volume, as price alerts and time and sales filters do.
+    #[test]
+    fn order_flow_detections_with_sound_play_the_alert_sound() {
+        let ctx = egui::Context::default();
+        let now = "2026-11-04T17:30:00Z".parse().unwrap();
+        let mut app = super::super::DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        // The chart subscribes to its feed, which tracks the symbol, on its first frames.
+        super::super::tests::settle(&mut app, &ctx);
+        assert!(app.audio.voices.is_empty());
+        app.settings_state.alerts.sound = "Bell".into();
+        app.settings_state.alerts.sound_volume = 0.35;
+        let detectors = app.live.detectors();
+        let mut settings = detectors.settings();
+        settings.big_trades.enabled = true;
+        settings.big_trades.alert = true;
+        settings.big_trades.sound = true;
+        settings.big_trades.rule.threshold = egui_charts::services::Threshold::Fixed(10.0);
+        detectors.set_settings(settings);
+        let time = app.live.now();
+        let fill = egui_charts::model::Tick::new(time, 100.0, 50.0, None);
+        let event = egui_charts::data::MarketEvent::Trade(fill);
+        detectors.push(app.chart.symbol(), time, &event);
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ui| eframe::App::ui(&mut *app, ui, &mut eframe::Frame::_new_kittest()),
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(app.audio.voices.len(), 1);
+        let mut reader = app
+            .audio
+            .engine
+            .as_ref()
+            .unwrap()
+            .try_acquire_reader()
+            .unwrap();
+        let mut output = vec![0.0; SAMPLE_RATE as usize];
+        reader.read_pcm_frames_into(&mut output).unwrap();
+        let expected = samples("Bell", 0.35);
+        for (index, (actual, expected)) in output.iter().zip(&expected).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1e-5,
+                "sample {index}: {actual}, expected {expected}"
+            );
+        }
     }
 }

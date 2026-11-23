@@ -57,7 +57,10 @@ use chrono::{DateTime, Utc};
 use egui::{Pos2, Rect, Vec2};
 #[cfg(feature = "ui")]
 pub(crate) use export::ColumnId;
-pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
+pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions, PixelDensity};
+pub use feed::checkpoint::{
+    TradeReplayCheckpoint, TradeReplayCheckpointError, TradeReplayCheckpointPlan,
+};
 pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
 #[cfg(feature = "ui")]
 pub(crate) use readout::SeriesFingerprint;
@@ -91,6 +94,7 @@ mod targets;
 pub use events::ImageRequest;
 pub use events::{
     ChartEvent, ChartPointer, CursorDataPolicy, DataOperation, PointerKind, PointerTarget,
+    StudyEventKind,
 };
 mod export;
 mod format;
@@ -166,7 +170,8 @@ pub use sync::VisibleTimeRange;
 #[cfg(feature = "drawings")]
 pub(crate) mod tool_interaction;
 
-pub use keyboard::{ShortcutMap, ShortcutRequest};
+pub use crate::config::shortcut_map::ShortcutMap;
+pub use keyboard::ShortcutRequest;
 pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 
 /// The main bars' revision, length and last high, low and close, and the pending sizes, that
@@ -327,6 +332,10 @@ pub struct Chart {
     volume_setting: bool,
     #[cfg(feature = "studies")]
     volume_study: Option<SeriesId>,
+    /// The colours last given to or taken from the Analyst price forecast studies, positive then
+    /// negative; `None` gives them the configured colours on the next frame.
+    #[cfg(feature = "studies")]
+    price_target_colors: Option<[egui::Color32; 2]>,
     /// Id of each study in `studies`.
     pub(crate) study_ids: Vec<SeriesId>,
     /// The most studies the chart takes through the interface, if capped.
@@ -336,7 +345,12 @@ pub struct Chart {
     chained_study_limit: Option<usize>,
     /// Whether each study in `studies` contributes to the main price auto-scale.
     pub(crate) study_autoscale: Vec<bool>,
+    /// Host captions of the studies in `studies`, set with [`Chart::set_indicator_inputs`];
+    /// empty where the host set none.
     pub(crate) study_inputs: Vec<String>,
+    /// For each study in `studies`, the caption derived from its inputs, built on first read
+    /// and dropped whenever the study may have changed.
+    pub(crate) study_captions: Vec<std::sync::OnceLock<String>>,
     /// For each study in `studies`, the first bar it must be updated from on the next frame.
     pub(crate) pending_from: Vec<Option<usize>>,
     /// For each study in `studies`, whether it must be recomputed from the first bar while its
@@ -383,12 +397,17 @@ pub struct Chart {
     /// Original column ids of restored studies, retained for snapshots from earlier restores.
     #[cfg(feature = "drawings")]
     study_column_ids: std::collections::HashMap<usize, usize>,
-    /// Right-click box zoom state
+    /// Box-zoom selection in progress
     pub(crate) box_zoom: BoxZoomState,
-    /// Whether zoom mode is currently active (controlled by zoom toolbar button)
+    /// Whether box-zoom mode is on: set by [`Chart::set_zoom_mode`], ended by a completed zoom
+    /// and by an active drawing tool or the eraser.
     pub(crate) zoom_mode_active: bool,
-    /// Whether zoom was just applied in the last frame (for auto-deactivation)
+    /// Whether a box zoom was completed in the last frame.
     pub(crate) zoom_just_applied: bool,
+    /// For each entry of the zoom history of `state`, the scales its box zoom set in a study
+    /// pane, as the zoom found them: empty for a zoom of the main series' pane, whose scale the
+    /// history restores itself. Entries left by a cleared history go at the next zoom.
+    zoom_scales: Vec<Vec<(PaneId, crate::model::SeriesScale, PriceScale)>>,
     /// Current symbol being displayed (for legend)
     pub(crate) symbol: String,
     /// Metadata supplied directly by a host without a feed.
@@ -424,6 +443,9 @@ pub struct Chart {
         std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
     overnight_hours: bool,
+    /// The futures data choices the chart settings applied, which the host's history follows.
+    back_adjust_futures: bool,
+    settlement_as_close: bool,
     conversion: Option<String>,
     pub(crate) measured_axis_width: f32,
     /// Last usable widget width and its first frame, including discarded sizing passes.
@@ -476,6 +498,9 @@ pub struct Chart {
     /// X positions of the vertical grid lines of the last rendered price pane, which the study
     /// panes below it repeat; empty when the chart hides its vertical grid.
     pub(crate) last_vertical_grid_x: Vec<f32>,
+    /// X positions of the session breaks of the last rendered price pane, which the other panes
+    /// repeat; empty when the chart draws none.
+    pub(crate) last_session_break_x: Vec<f32>,
     /// Last rendered indicator pane info for hit testing
     /// Each entry: (indicator_index, panel_rect, chart_rect, y_min, y_max, coords)
     pub(crate) last_rendered_indicator_panes: Vec<RenderedIndicatorPane>,
@@ -736,6 +761,7 @@ impl Chart {
             && bars >= 0.0
             && (options.right_offset != bars || options.right_offset_pixels.is_some())
         {
+            self.history.clear_view_restore();
             options.right_offset = bars;
             options.right_offset_pixels = None;
             let scale = self.state.time_scale_mut();
@@ -782,24 +808,40 @@ impl Chart {
 
     /// Activates or deactivates box-zoom mode.
     ///
-    /// When active, left-click drag draws a selection rectangle and zooms into
-    /// that region. The mode auto-deactivates after a successful zoom operation
-    /// (check with [`Chart::zoom_was_applied`]).
+    /// While active, a left-button drag that starts on a plot, in the price pane or another
+    /// expanded pane, draws a selection rectangle and zooms into it: the selected bars fill the
+    /// width and the selected values fill the pane the selection began in, while the other panes
+    /// keep their scales. A press on an axis scales that axis, and a press on a drawing drags the
+    /// drawing, as without the mode. The mode applies to one selection: it ends once a zoom is
+    /// applied (see [`Chart::zoom_was_applied`]). A selection of 20 points or less zooms nothing
+    /// and keeps it. A drawing tool or the eraser owns the plot's drags, so the next frame with
+    /// either active ends the mode. [`Chart::is_zoom_mode_active`] reports it.
     pub fn set_zoom_mode(&mut self, active: bool) {
         self.zoom_mode_active = active;
     }
 
-    /// Restore the view preceding the last box zoom. Drawing and chart edit history is unchanged.
+    /// Returns whether box-zoom mode is on, for a toolbar's Zoom in button.
+    pub fn is_zoom_mode_active(&self) -> bool {
+        self.zoom_mode_active
+    }
+
+    /// Restore the view preceding the last box zoom: the time range, the price pane's scale and
+    /// the scales of the pane the selection began in. A scale that fitted its values before the
+    /// zoom fits them again, and one with a manual range gets that range back. Drawing and chart
+    /// edit history is unchanged.
     pub fn zoom_back(&mut self) -> bool {
         self.pending_scroll_time = None;
         self.tracking_mode_active = false;
-        self.state.pop_zoom_state()
+        let popped = self.state.pop_zoom_state();
+        if popped {
+            self.history.clear_view_restore();
+            self.restore_box_zoom_scales();
+        }
+        popped
     }
 
-    /// Returns `true` if a box-zoom was completed in the most recent frame.
-    ///
-    /// Use this to auto-deactivate zoom mode in your toolbar after the user
-    /// completes a zoom selection.
+    /// Returns `true` if a box zoom was completed in the most recent frame. Box-zoom mode has
+    /// ended by then, as [`Chart::is_zoom_mode_active`] reports.
     pub fn zoom_was_applied(&self) -> bool {
         self.zoom_just_applied
     }
@@ -944,7 +986,8 @@ impl Chart {
     /// Pass the result to `SeriesSettingsDialog::open`, then apply its accepted settings with
     /// [`Self::apply_series_settings`]. The active chart type selects the dialog's controls and
     /// where the candle colors are read from and written to; applying keeps the chart's type.
-    /// Its price source is the one the active chart type draws.
+    /// Its price source is the one the active chart type draws. Its `chart_alert_color` is the
+    /// default alert colour; set it to the host's chart-wide alert colour before opening the dialog.
     pub fn series_settings(&self) -> SeriesSettings {
         let mut settings = SeriesSettings {
             chart_type: self.chart_type,
@@ -1092,6 +1135,12 @@ impl Chart {
             new.right_offset,
             new.right_offset_pixels,
         ) {
+            if new.bar_spacing != old.bar_spacing
+                || (new.right_offset, new.right_offset_pixels)
+                    != (old.right_offset, old.right_offset_pixels)
+            {
+                self.history.clear_view_restore();
+            }
             let scale = self.state.time_scale_mut();
             let offset = scale.right_offset_precise();
             let spacing = if new.bar_spacing == old.bar_spacing {

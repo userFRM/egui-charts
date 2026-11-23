@@ -142,7 +142,9 @@ impl IndicatorValues {
         }
     }
 
-    pub(crate) fn truncate(&mut self, len: usize) {
+    /// Keep the first `len` bars and drop the rest, as a calculation that resumes from bar
+    /// `len` does before it appends the bars it recalculates.
+    pub fn truncate(&mut self, len: usize) {
         self.len = self.len.min(len);
         for line in &mut self.columns {
             line.truncate(len);

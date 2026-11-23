@@ -71,6 +71,26 @@ Drain
 separately for host commands such as opening symbol search or saving an image.
 Those requests are not chart events.
 
+[`ChartLayout::set_shortcuts`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartLayout.html#method.set_shortcuts)
+gives one map to every chart of a layout, and
+[`UserSettings::shortcuts`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.UserSettings.html#structfield.shortcuts)
+keeps it between sessions. With
+[`editable`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/dialogs/keyboard_shortcuts/struct.KeyboardShortcutsDialog.html#structfield.editable)
+set, the keyboard shortcuts dialog lets the user rebind keys and returns the new map.
+The host handles
+[`KeyboardShortcutsAction::Apply`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/dialogs/keyboard_shortcuts/enum.KeyboardShortcutsAction.html#variant.Apply)
+by assigning the map to its layout and settings. Change replaces the action's keys with the next combination; a conflict
+names its current action and asks before moving it. Clear removes all keys of an
+action, Escape cancels a capture, and Reset restores the library defaults. Save
+returns the edited map; Cancel discards it. The edit mode leaves pointer gestures
+and the fixed typing, drawing-arrow and replay controls unchanged.
+
+Maps save combinations in precedence order using English key names, with `Ctrl`
+for the command key (Cmd on Mac). An unknown key or action is skipped on restore;
+an older settings document without a map keeps defaults, while an empty saved map
+keeps every action unbound. A saved map keeps its full list until edited or reset,
+including when a later release adds default bindings.
+
 ## Crosshair modes and host positions
 
 [`set_crosshair_mode`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_crosshair_mode)
@@ -109,6 +129,7 @@ enum.
 | `DataLoaded`, `DataUpdated` | Refresh host state after accepted history or changed bars |
 | `SeriesAdded`, `SeriesRemoved` | Start or stop the host producer for that stable series id |
 | `Drawing { id, kind }` | Follow each drawing the user, undo or redo, or host code created, removed, hid, showed, moved or edited, for example in a host drawing list |
+| `Study { id, kind }` | Follow each study added, removed, hidden, shown or given other inputs by the user, undo or redo, or host code, for example in a host study list |
 | `SymbolChanged`, `TimeframeChanged` | Update host controls for the chart's instrument and interval |
 | `EventsDropped(count)` | Resynchronize the host from current chart state |
 

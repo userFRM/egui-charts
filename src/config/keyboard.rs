@@ -31,8 +31,11 @@ impl Default for KeyboardOptions {
     }
 }
 
-/// Keyboard actions that can be performed on the chart
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Keyboard actions that can be performed on the chart.
+///
+/// Serde writes and reads the variant name (`"Redo"`), and a drawing tool as
+/// `{"DrawingTool": "TrendLine"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum KeyboardAction {
     /// Pan left by a page.
@@ -182,6 +185,19 @@ pub enum KeyboardAction {
     /// Cycle focus to previous chart (Shift+Tab)
     CycleChartFocusBack,
 
+    // Watchlist
+    /// Show the next symbol of the active watchlist (Down or Space). The chart passes it to the
+    /// host as a shortcut request; answer it with `WatchlistPanel::select_next_symbol`. A
+    /// selected drawing takes Down first, and a shown replay bar takes Space.
+    NextWatchlistSymbol,
+    /// Show the previous symbol of the active watchlist (Up or Shift+Space), as
+    /// [`NextWatchlistSymbol`](Self::NextWatchlistSymbol) does the next one.
+    PreviousWatchlistSymbol,
+    /// Add the chart symbol to the shown watchlist (Alt+W): the active list, or while a flag view
+    /// is shown that flag. The host receives a shortcut request and answers with
+    /// `WatchlistPanel::add_symbol`, which refuses duplicates.
+    AddToWatchlist,
+
     // Trading
     /// A buy limit order at the pointer's price (Alt+Shift+B). `ChartMenus::show` returns the
     /// order of the chart menu's buy limit row there, and nothing where the menu has no such
@@ -288,6 +304,9 @@ impl KeyboardAction {
             Self::ShowKeyboardHelp => "Keyboard shortcuts",
             Self::CycleChartFocus => "Next chart",
             Self::CycleChartFocusBack => "Previous chart",
+            Self::NextWatchlistSymbol => "Next watchlist symbol",
+            Self::PreviousWatchlistSymbol => "Previous watchlist symbol",
+            Self::AddToWatchlist => "Add symbol to watchlist",
             Self::BuyLimitAtPointer => "Buy limit at pointer price",
             Self::SellLimitAtPointer => "Sell limit at pointer price",
         }
@@ -394,9 +413,21 @@ impl KeyboardAction {
                 }
             }
             Self::MaximizeChart => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::Enter)] },
-            Self::CycleChartFocus => const { &[key(Key::Tab)] },
+            Self::CycleChartFocus => {
+                const {
+                    &[
+                        key(Key::Tab),
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::ArrowRight),
+                    ]
+                }
+            }
             Self::CycleChartFocusBack => {
-                const { &[KeyboardShortcut::new(Modifiers::SHIFT, Key::Tab)] }
+                const {
+                    &[
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::Tab),
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::ArrowLeft),
+                    ]
+                }
             }
             Self::DeleteSelectedDrawing => const { &[key(Key::Delete), key(Key::Backspace)] },
             Self::Cancel => const { &[key(Key::Escape)] },
@@ -434,6 +465,16 @@ impl KeyboardAction {
                         Modifiers::ALT.plus(Modifiers::SHIFT),
                         Key::R,
                     )]
+                }
+            }
+            Self::AddToWatchlist => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::W)] },
+            Self::NextWatchlistSymbol => const { &[key(Key::ArrowDown), key(Key::Space)] },
+            Self::PreviousWatchlistSymbol => {
+                const {
+                    &[
+                        key(Key::ArrowUp),
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::Space),
+                    ]
                 }
             }
             Self::BuyLimitAtPointer => {
@@ -498,8 +539,11 @@ impl KeyboardAction {
             Self::Cancel => "Esc",
             Self::CompleteDrawing => "Enter",
             Self::ShowKeyboardHelp => "Ctrl+/ / ? / F1",
-            Self::CycleChartFocus => "Tab",
-            Self::CycleChartFocusBack => "Shift+Tab",
+            Self::CycleChartFocus => "Tab / Shift+→",
+            Self::CycleChartFocusBack => "Shift+Tab / Shift+←",
+            Self::NextWatchlistSymbol => "↓ / Space",
+            Self::PreviousWatchlistSymbol => "↑ / Shift+Space",
+            Self::AddToWatchlist => "Alt+W",
             Self::BuyLimitAtPointer => "Alt+Shift+B",
             Self::SellLimitAtPointer => "Alt+Shift+S",
             Self::DrawingTool(crate::config::DrawingToolType::TrendLine) => "Alt+T",
@@ -513,7 +557,8 @@ impl KeyboardAction {
         }
     }
 
-    /// The actions with a bound key, grouped by category (for the shortcuts dialog).
+    /// The actions the shortcuts dialog offers, grouped by category, including those without a
+    /// default key.
     pub fn all_by_category() -> Vec<(&'static str, Vec<KeyboardAction>)> {
         use crate::config::DrawingToolType;
         vec![
@@ -583,6 +628,14 @@ impl KeyboardAction {
                     Self::CycleChartFocus,
                     Self::CycleChartFocusBack,
                     Self::ShowKeyboardHelp,
+                ],
+            ),
+            (
+                "Watchlist",
+                vec![
+                    Self::NextWatchlistSymbol,
+                    Self::PreviousWatchlistSymbol,
+                    Self::AddToWatchlist,
                 ],
             ),
             (

@@ -78,10 +78,10 @@ fn stop_limit_orders_keep_their_requests_and_host_text_through_menu_rows() {
 #[test]
 fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
     let mut menu = ChartContextMenu::new();
-    let submenu = |menu: &ChartContextMenu| {
+    let submenu = |menu: &ChartContextMenu, shortcuts: &crate::widget::ShortcutMap| {
         menu.build_menu_items(
             &Context::default(),
-            &crate::widget::ShortcutMap::default(),
+            shortcuts,
             &crate::ui::context_menu::format_price,
         )
         .into_iter()
@@ -91,7 +91,7 @@ fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
                 entries
                     .into_iter()
                     .filter_map(|entry| match entry {
-                        MenuEntry::Item(item) => Some(item.action),
+                        MenuEntry::Item(item) => Some((item.action, item.shortcut)),
                         _ => None,
                     })
                     .collect::<Vec<_>>(),
@@ -99,19 +99,72 @@ fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
             _ => None,
         })
     };
+    let mut shortcuts = crate::widget::ShortcutMap::default();
     menu.watchlists = vec!["Tech".into(), "Energy".into()];
-    assert_eq!(submenu(&menu), None, "no symbol");
+    assert_eq!(submenu(&menu, &shortcuts), None, "no symbol");
     menu.symbol = "AAPL".into();
     let add = |list| ContextMenuAction::AddToWatchlist {
         list,
         symbol: "AAPL".into(),
     };
     assert_eq!(
-        submenu(&menu),
-        Some(("Add AAPL to watchlist".into(), vec![add(0), add(1)]))
+        submenu(&menu, &shortcuts),
+        Some((
+            "Add AAPL to watchlist".into(),
+            vec![(add(0), None), (add(1), None)]
+        ))
+    );
+    menu.active_watchlist = Some(1);
+    assert_eq!(
+        submenu(&menu, &shortcuts),
+        Some((
+            "Add AAPL to watchlist".into(),
+            vec![
+                (add(0), None),
+                (
+                    add(1),
+                    Some(egui::KeyboardShortcut::new(
+                        egui::Modifiers::ALT,
+                        egui::Key::W
+                    ))
+                )
+            ]
+        ))
+    );
+    shortcuts
+        .bindings
+        .retain(|(_, action)| *action != KeyboardAction::AddToWatchlist);
+    for binding in [
+        None,
+        Some(egui::KeyboardShortcut::new(
+            egui::Modifiers::ALT,
+            egui::Key::G,
+        )),
+    ] {
+        if let Some(binding) = binding {
+            shortcuts.bindings.retain(|(key, _)| *key != binding);
+            shortcuts
+                .bindings
+                .push((binding, KeyboardAction::AddToWatchlist));
+        }
+        assert_eq!(
+            submenu(&menu, &shortcuts),
+            Some((
+                "Add AAPL to watchlist".into(),
+                vec![(add(0), None), (add(1), binding)]
+            ))
+        );
+    }
+    menu.active_watchlist = None;
+    assert_eq!(
+        submenu(&menu, &shortcuts),
+        Some((
+            "Add AAPL to watchlist".into(),
+            vec![(add(0), None), (add(1), None)]
+        ))
     );
     menu.watchlists.clear();
-    assert_eq!(submenu(&menu), None, "no lists");
+    assert_eq!(submenu(&menu, &shortcuts), None, "no lists");
 }
 
 /// Each named control removes its row while leaving unrelated entries available; removing
@@ -411,7 +464,10 @@ fn hidden_alerts_and_settings_leave_the_drawing_menu_and_chart() {
         let ctx = Context::default();
         chart.drawings_mut().select(7);
         let mut toolbar = crate::ui::floating_toolbar::FloatingSelectionToolbar::new();
-        toolbar.set_alert_available(!menus.drawing.hidden.contains(&Control::Alerts));
+        toolbar.set_control_visible(
+            Control::Alerts,
+            !menus.drawing.hidden.contains(&Control::Alerts),
+        );
         let mut frame = |events| {
             ctx.run_ui(
                 RawInput {
@@ -1700,8 +1756,7 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
                     .clone()
             };
             config.tick_size = 1.0;
-            let (clock, session) = chart.profile_hours(&config.session);
-            config.session = session.clone();
+            let (clock, config) = chart.tpo_division(&config);
             to_tpo_profiles(chart.bars(SeriesId::MAIN), &config, &clock)
                 .iter()
                 .map(|p| {
@@ -2782,8 +2837,10 @@ fn pointer_button_opens_price_actions_in_each_pane_and_keeps_the_original_price(
                 };
                 assert!(action_price.is_finite());
                 if pane != "empty" {
+                    // Lines keep the click; alert and order prices use the menu's two decimals.
+                    let tolerance = if pick == "line" { 1e-4 } else { 0.005 + 1e-9 };
                     assert!(
-                        (action_price - price).abs() < 1e-4,
+                        (action_price - price).abs() < tolerance,
                         "{pane}: {action_price} != {price}"
                     );
                 }
@@ -2865,6 +2922,7 @@ fn study_and_series_panes_offer_no_main_symbol_alerts_or_orders() {
         let ctx = Context::default();
         // TEST trades between 100 and 110; OTHER, in its own pane, between 400 and 410.
         let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+        chart.config_mut().navigation_buttons = crate::config::NavigationButtons::Never;
         chart.set_symbol("TEST");
         match pane {
             "study" => {
@@ -3110,37 +3168,49 @@ fn limit_order_keys_return_the_menu_limit_row_at_the_pointer() {
 /// Guards #3427: the chart and series menus write the clicked price, and the order rows their
 /// price, as the chart's price scale writes prices: at the instrument's precision, with the
 /// chart's thousands separator or the host's price formatter, and as a price on a percentage
-/// scale, where the rows still copy, alert and order prices.
+/// scale, where the rows still copy, alert and order prices. Guards #3737: alert rows act on
+/// their written price, on the tick or at the menu's decimals, and Alt+A takes the same price.
 #[test]
-fn menu_rows_write_prices_as_the_price_scale_does() {
+fn menu_rows_write_and_act_on_prices_as_the_price_scale_does() {
     use crate::model::Instrument;
     use crate::scales::{CustomPriceFormatter, PriceScaleMode};
     type Setup = fn(&mut Chart);
-    // (bar low, bar high, tick size, setup, clicked price, its text, the order price's text)
-    type Row = (f64, f64, f64, Setup, f64, &'static str, &'static str);
-    let rows: [Row; 4] = [
+    // (bar low, bar high, tick size, setup, click, click text, action text, alert price)
+    type Row = (
+        f64,
+        f64,
+        Option<f64>,
+        Setup,
+        f64,
+        &'static str,
+        &'static str,
+        f64,
+    );
+    let rows: [Row; 7] = [
         (
             1.084,
             1.085,
-            0.00001,
+            Some(0.00001),
             |_| {},
             1.084537,
             "1.08454",
             "1.08454",
+            1.08454,
         ),
         (
             1230.0,
             1240.0,
-            0.25,
+            Some(0.25),
             |chart| chart.config_mut().thousands_sep = Some('\''),
             1234.6,
             "1'234.60",
             "1'234.50",
+            1234.5,
         ),
         (
             1.084,
             1.085,
-            0.00001,
+            Some(0.00001),
             |chart| {
                 chart.set_price_formatter(Some(std::sync::Arc::new(CustomPriceFormatter::new(
                     |price| format!("<{price:.6}>"),
@@ -3149,22 +3219,59 @@ fn menu_rows_write_prices_as_the_price_scale_does() {
             1.084537,
             "<1.084537>",
             "<1.084540>",
+            1.08454,
         ),
         (
             1.084,
             1.085,
-            0.00001,
+            Some(0.00001),
             |chart| chart.price_scale_mut().options_mut().mode = PriceScaleMode::Percentage,
             1.084537,
             "1.08454",
             "1.08454",
+            1.08454,
+        ),
+        (
+            1.084,
+            1.085,
+            None,
+            |chart| chart.set_instrument(Some(Instrument::new("EURUSD").with_price_decimals(3))),
+            1.084437,
+            "1.084",
+            "1.084",
+            1.084,
+        ),
+        (
+            100.0,
+            110.0,
+            None,
+            |_| {},
+            104.5671,
+            "104.57",
+            "104.57",
+            104.57,
+        ),
+        // Exactly halfway: the action rounds away from zero before its text is written.
+        (
+            0.11,
+            0.14,
+            None,
+            |chart| chart.price_scale_mut().set_price_precision(Some(2)),
+            0.125,
+            "0.12",
+            "0.13",
+            0.13,
         ),
     ];
     let ctx = Context::default();
-    for (low, high, tick, setup, click, text, order) in rows {
+    for (low, high, tick, setup, click, text, order, alert) in rows {
         let mut chart = crate::widget::test_frames::chart(&[low], &[high]);
         chart.symbol = "EURUSD".into();
-        chart.set_instrument(Some(Instrument::new("EURUSD").with_tick_size(tick)));
+        let mut instrument = Instrument::new("EURUSD");
+        if let Some(tick) = tick {
+            instrument = instrument.with_tick_size(tick);
+        }
+        chart.set_instrument(Some(instrument));
         setup(&mut chart);
         let mut menus = ChartMenus::default();
         let frame = |chart: &mut Chart, menus: &mut ChartMenus, show_chart: bool| {
@@ -3190,7 +3297,7 @@ fn menu_rows_write_prices_as_the_price_scale_does() {
                 RightClickTarget::Background { pos, price: click },
                 vec![
                     format!("Copy price {text}"),
-                    format!("Add alert on EURUSD at {text}…"),
+                    format!("Add alert on EURUSD at {order}…"),
                     format!("Draw horizontal line at {text}"),
                     format!("Buy 1 EURUSD @ {order} limit"),
                     format!("Sell 1 EURUSD @ {order} stop"),
@@ -3204,7 +3311,7 @@ fn menu_rows_write_prices_as_the_price_scale_does() {
                     price: click,
                 },
                 vec![
-                    format!("Add alert on EURUSD at {text}…"),
+                    format!("Add alert on EURUSD at {order}…"),
                     format!("Copy price {text}"),
                 ],
             ),
@@ -3223,6 +3330,67 @@ fn menu_rows_write_prices_as_the_price_scale_does() {
             for row in expected {
                 assert!(labels.contains(&row), "{row:?} in {labels:?}");
             }
+            if matches!(target, RightClickTarget::Background { .. }) {
+                let price =
+                    menus
+                        .build_menu_items(&ctx, &chart, menus.context.unwrap())
+                        .into_iter()
+                        .find_map(|entry| match entry {
+                            MenuEntry::Item(MenuItem {
+                                action:
+                                    ChartContextAction::Chart(ContextMenuAction::AddAlert {
+                                        price, ..
+                                    }),
+                                ..
+                            }) => Some(price),
+                            _ => None,
+                        })
+                        .unwrap();
+                assert_eq!(price, alert, "{text}");
+            } else {
+                assert_eq!(menus.series_alert_price(), alert, "{text}");
+                assert_eq!(menus.series_click_price(), click, "{text}");
+            }
         }
+        // The shortcut reader must agree with the actual menu at this pointer.
+        let (_, at) = chart.pointer_price(pos).unwrap();
+        chart.right_click = Some(RightClickTarget::Background { pos, price: at });
+        frame(&mut chart, &mut menus, false);
+        let price = menus
+            .build_menu_items(&ctx, &chart, menus.context.unwrap())
+            .into_iter()
+            .find_map(|entry| match entry {
+                MenuEntry::Item(MenuItem {
+                    action: ChartContextAction::Chart(ContextMenuAction::AddAlert { price, .. }),
+                    ..
+                }) => Some(price),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(chart.alert_price_at(pos), Some(price));
+    }
+
+    // Standalone menus also accept prices through their public field after set_context.
+    let mut standalone = SeriesContextMenu::new();
+    standalone.set_context("EURUSD", 100.0);
+    standalone.click_price = 101.1;
+    standalone.open(Pos2::new(100.0, 100.0), SeriesId::MAIN);
+    let mut labels = Vec::new();
+    for _ in 0..2 {
+        let output = ctx.run_ui(RawInput::default(), |ui| {
+            standalone.show(ui.ctx(), &Theme::dark());
+        });
+        labels = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        output.drop_without_applying_deltas();
+    }
+    for expected in ["Add alert on EURUSD at 101.10…", "Copy price 101.10"] {
+        assert!(labels.iter().any(|label| label == expected), "{labels:?}");
     }
 }

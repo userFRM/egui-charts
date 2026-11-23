@@ -49,9 +49,10 @@ fn assert_prefixes(name: &str, inputs: &[(&str, InputValue)], bars: &[Bar], back
     let full = backtest.run(configured(name, inputs).as_mut(), bars, &[]);
     for end in 1..=bars.len() {
         let prefix = backtest.run(configured(name, inputs).as_mut(), &bars[..end], &[]);
+        let last = (bars[end - 1].time - time(0)).num_minutes() as usize;
         let expected: Vec<_> = entries(&full)
             .into_iter()
-            .filter(|entry| entry.0 < end)
+            .filter(|entry| entry.0 <= last)
             .collect();
         assert_eq!(entries(&prefix), expected, "{name}, prefix {end}");
         for trade in &prefix.trades {
@@ -708,6 +709,261 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
         let report = backtest.run(strategy.as_mut(), &bars(&prices), &[]);
         assert_eq!(entries(&report), expected, "increment {increment}");
     }
+    let seconds = |count| Timeframe::Custom(std::num::NonZeroU64::new(count).unwrap());
+    // Other Indicator timeframes rate the instrument's own bars of that interval, each from the
+    // chart bar whose close ends it. Hourly bars trade 09:30 to 16:00 UTC on weekdays.
+    {
+        use crate::model::{BarClock, Session, SessionWindow, TimezoneId};
+        use chrono::{NaiveTime, Weekday::*};
+        type IntervalRow = (
+            &'static str,
+            Timeframe,
+            Timeframe,
+            Option<BarClock>,
+            Vec<Bar>,
+            Vec<Bar>,
+            Vec<Entry>,
+        );
+        let at = |text: &str| text.parse::<DateTime<Utc>>().unwrap();
+        let priced = |times: Vec<DateTime<Utc>>, prices: Vec<[f64; 4]>| -> Vec<Bar> {
+            (times.into_iter().zip(prices))
+                .map(|(time, [open, high, low, close])| Bar::new(time, open, high, low, close, 1.0))
+                .collect()
+        };
+        let closes = |closes: &[f64]| closes.iter().map(|&close| [close; 4]).collect::<Vec<_>>();
+        let hours = |day: u32, count: i64| -> Vec<DateTime<Utc>> {
+            (0..count)
+                .map(|hour| at(&format!("2026-01-{day:02}T09:30:00Z")) + TimeDelta::hours(hour))
+                .collect()
+        };
+        let minutes = |minute: i64| time(0) + TimeDelta::minutes(minute);
+        let hm = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        let days = [Mon, Tue, Wed, Thu, Fri];
+        let session = Session::new([SessionWindow::new(days, hm(9, 30), hm(16, 0))]);
+        let clock = BarClock::new(Timeframe::Hour1).with_session(TimezoneId::utc(), session, false);
+        let rows: Vec<IntervalRow> = vec![
+            // 5-minute slots first become readable at chart bars 4, 9, 14, 19.
+            (
+                "5 minutes on 1 minute",
+                Timeframe::Min1,
+                Timeframe::Min5,
+                None,
+                bars(&points(
+                    &[vec![10.; 5], vec![8.; 5], vec![10.; 5], vec![12.; 6]].concat(),
+                )),
+                priced(
+                    (0..4).map(|slot| minutes(5 * slot)).collect(),
+                    closes(&[10., 8., 10., 12.]),
+                ),
+                vec![(10, Sell, 10.), (15, Buy, 12.)],
+            ),
+            // The 09:30 bars close at 13:30 (read from 12:30), the 13:30 bars at 16:00 (read
+            // from 15:30): the 05 13:30 rating sells from 15:30, the 06 09:30 one buys from 12:30.
+            (
+                "4 hours on session hours",
+                Timeframe::Hour1,
+                Timeframe::Hour4,
+                Some(clock.clone()),
+                priced(
+                    [hours(5, 7), hours(6, 7)].concat(),
+                    closes(&[vec![10.; 4], vec![8.; 3], vec![10.; 4], vec![12.; 3]].concat()),
+                ),
+                priced(
+                    [
+                        "2026-01-05T09:30:00Z",
+                        "2026-01-05T13:30:00Z",
+                        "2026-01-06T09:30:00Z",
+                        "2026-01-06T13:30:00Z",
+                    ]
+                    .map(at)
+                    .to_vec(),
+                    closes(&[10., 8., 10., 12.]),
+                ),
+                vec![(7, Sell, 10.), (11, Buy, 12.)],
+            ),
+            // Day 06 sells from its last hour, 15:30; day 07 has not closed and is never read.
+            (
+                "1 day on session hours",
+                Timeframe::Hour1,
+                Timeframe::Day1,
+                Some(clock),
+                priced(
+                    [hours(5, 7), hours(6, 7), hours(7, 2)].concat(),
+                    closes(&[vec![10.; 7], vec![8.; 7], vec![12.; 2]].concat()),
+                ),
+                priced(
+                    [
+                        "2026-01-05T00:00:00Z",
+                        "2026-01-06T00:00:00Z",
+                        "2026-01-07T00:00:00Z",
+                    ]
+                    .map(at)
+                    .to_vec(),
+                    closes(&[10., 8., 12.]),
+                ),
+                vec![(14, Sell, 12.)],
+            ),
+            // A month is read from the week that ends after it: January from 26 January,
+            // February from 23 February, March from 30 March.
+            (
+                "1 month on 1 week",
+                Timeframe::Week1,
+                Timeframe::Month1,
+                None,
+                priced(
+                    (0..14)
+                        .map(|week| at("2026-01-05T00:00:00Z") + TimeDelta::weeks(week))
+                        .collect(),
+                    closes(&[vec![10.; 4], vec![8.; 4], vec![10.; 5], vec![12.; 1]].concat()),
+                ),
+                priced(
+                    [
+                        "2026-01-01T00:00:00Z",
+                        "2026-02-01T00:00:00Z",
+                        "2026-03-01T00:00:00Z",
+                    ]
+                    .map(at)
+                    .to_vec(),
+                    closes(&[10., 8., 10.]),
+                ),
+                vec![(8, Sell, 10.), (13, Buy, 12.)],
+            ),
+            // 00:05-00:10 closes inside the 00:09 bar, 00:10-00:15 with the 00:12 bar.
+            (
+                "5 minutes on 3 minutes",
+                seconds(180),
+                Timeframe::Min5,
+                None,
+                priced(
+                    (0..7).map(|bar| minutes(3 * bar)).collect(),
+                    vec![
+                        [10.; 4],
+                        [10., 10., 8., 8.],
+                        [8.; 4],
+                        [8., 10., 8., 10.],
+                        [10.; 4],
+                        [10., 12., 10., 12.],
+                        [12.; 4],
+                    ],
+                ),
+                priced(
+                    (0..4).map(|slot| minutes(5 * slot)).collect(),
+                    closes(&[10., 8., 10., 12.]),
+                ),
+                vec![(4, Sell, 10.), (5, Buy, 10.)],
+            ),
+            // Each minute reads its second half: minute 1 the -1 at 01:30, minute 2 the +1 at 02:30.
+            (
+                "30 seconds on 1 minute",
+                Timeframe::Min1,
+                Timeframe::Sec30,
+                None,
+                bars(&[[10.; 4], [10., 10., 8., 8.], [8., 10., 8., 10.], [12.; 4]]),
+                priced(
+                    (0..8)
+                        .map(|half| time(0) + TimeDelta::seconds(30 * half))
+                        .collect(),
+                    closes(&[10., 10., 10., 8., 8., 10., 12., 12.]),
+                ),
+                vec![(2, Sell, 8.), (3, Buy, 12.)],
+            ),
+        ];
+        for (name, chart, interval, clock, bars, calculation, expected) in rows {
+            let inputs = [("timeframe", InputValue::Timeframe(Some(interval)))];
+            let mut backtest = Backtest::new("Technical Ratings", "TEST", chart, 10_000.);
+            backtest.bar_clock = clock;
+            backtest.calculation_bars = calculation;
+            let report = backtest.run(
+                configured("Technical Ratings", &inputs).as_mut(),
+                &bars,
+                &[],
+            );
+            let expected: Vec<_> = (expected.into_iter())
+                .map(|(at, side, price)| {
+                    (
+                        (bars[at].time - time(0)).num_minutes() as usize,
+                        side,
+                        price,
+                    )
+                })
+                .collect();
+            assert_eq!(entries(&report), expected, "{name}");
+            assert_prefixes("Technical Ratings", &inputs, &bars, &backtest);
+            backtest.calculation_bars.clear();
+            assert!(
+                backtest
+                    .run(
+                        configured("Technical Ratings", &inputs).as_mut(),
+                        &bars,
+                        &[]
+                    )
+                    .trades
+                    .is_empty(),
+                "{name} must not substitute chart bars for missing calculation history"
+            );
+        }
+    }
+    // The histories agree through minute 9's open. Its 5-minute close cannot cause an entry
+    // before that minute closes, including when historical fills refresh the calculations.
+    for (historical, after_fills) in [(false, false), (true, false), (true, true)] {
+        let mut early = Vec::new();
+        for last in [8., 10.] {
+            let source = bars(
+                &[
+                    vec![[10.; 4]; 9],
+                    vec![[10., 10., last, last]],
+                    vec![[last; 4]; 5],
+                    vec![[12.; 4]; 6],
+                ]
+                .concat(),
+            );
+            let inputs = [("timeframe", InputValue::Timeframe(Some(Timeframe::Min5)))];
+            let mut backtest = Backtest::new("Technical Ratings", "TEST", Timeframe::Min1, 10_000.);
+            backtest.settings.recalculate_on_history = historical;
+            backtest.settings.recalculate_after_fills = after_fills;
+            backtest.calculation_bars =
+                crate::data::resample(&source, Timeframe::Min1, Timeframe::Min5).unwrap();
+            let report = backtest.run(
+                configured("Technical Ratings", &inputs).as_mut(),
+                &source,
+                &[],
+            );
+            let found = entries(&report);
+            early.push(
+                found
+                    .iter()
+                    .copied()
+                    .filter(|entry| entry.0 <= 9)
+                    .collect::<Vec<_>>(),
+            );
+            if last == 8. {
+                assert_eq!(
+                    found.first(),
+                    Some(&(10, Sell, 8.)),
+                    "historical: {historical}, after fills: {after_fills}"
+                );
+            }
+            backtest.update(
+                configured("Technical Ratings", &inputs).as_mut(),
+                &source,
+                &[],
+            );
+            let continued = entries(backtest.report().unwrap());
+            assert_eq!(
+                continued
+                    .into_iter()
+                    .filter(|entry| entry.0 <= 10)
+                    .collect::<Vec<_>>(),
+                found
+                    .into_iter()
+                    .filter(|entry| entry.0 <= 10)
+                    .collect::<Vec<_>>(),
+                "live replay, historical: {historical}, after fills: {after_fills}"
+            );
+        }
+        assert_eq!(early[0], early[1], "after fills: {after_fills}");
+        assert!(early[0].is_empty());
+    }
     // The RSI signals read only the RSI line, so its smoothing and divergence are not inputs.
     let ids: Vec<_> = StrategyFactory::new()
         .create("RSI")
@@ -717,6 +973,106 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
         .map(|input| input.id)
         .collect();
     assert_eq!(ids, ["period", "oversold", "overbought"]);
+    let tick = Timeframe::Ticks(std::num::NonZeroU64::new(1).unwrap());
+    for (chart, interval, valid) in [
+        // Other time intervals use their own supplied history.
+        (seconds(180), Timeframe::Min5, true),
+        (Timeframe::Week1, Timeframe::Month1, true),
+        // The last 7-minute bar of a day ends early, at midnight.
+        (seconds(420), Timeframe::Day1, true),
+        (Timeframe::Day1, Timeframe::Week1, true),
+        (Timeframe::Min1, Timeframe::Sec30, true),
+        (Timeframe::Min1, Timeframe::Min5, true),
+        (Timeframe::Min1, Timeframe::Min1, true),
+        (tick, Timeframe::Min1, false),
+        (Timeframe::Min1, tick, false),
+        (tick, tick, true),
+    ] {
+        let mut strategy = configured(
+            "Technical Ratings",
+            &[("timeframe", InputValue::Timeframe(Some(interval)))],
+        );
+        strategy.set_timeframe(chart);
+        assert_eq!(
+            strategy.validate_inputs(),
+            if valid {
+                Ok(())
+            } else {
+                Err(
+                    "indicator timeframe must be the chart interval or a time interval on a time-based chart",
+                )
+            },
+            "{chart} into {interval}",
+        );
+    }
+}
+
+/// ATR(14) is 2 from bar 13: true ranges are all 2, so the distances are 6, 10 and 4.
+/// Mirroring prices around 100 gives the same protection for a short position.
+#[cfg(feature = "studies")]
+#[test]
+fn technical_ratings_exits_at_atr_stops() {
+    let rising = |count: usize| -> Vec<[f64; 4]> {
+        (0..count)
+            .map(|i| {
+                let close = 100. + 0.5 * i as f64;
+                [close - 0.5, close + 1., close - 1., close]
+            })
+            .collect()
+    };
+    let backtest = Backtest::new("Technical Ratings", "TEST", Timeframe::Min1, 10_000.);
+    for (count, last, exit_price, profit) in [
+        // Entry at bar 2's open 100.5; fixed stop 100.5 - 6 = 94.5.
+        (14, [106.5, 106.5, 94., 95.], 94.5, -6.),
+        // Bar 19 reaches activation 110.5 exactly. Best 111 at bar 20 gives stop 107.
+        (21, [110., 110., 100., 101.], 107., 6.5),
+    ] {
+        for short in [false, true] {
+            let mut prices = rising(count);
+            prices.push(last);
+            if short {
+                for bar in &mut prices {
+                    let [open, high, low, close] = *bar;
+                    *bar = [200. - open, 200. - low, 200. - high, 200. - close];
+                }
+            }
+            let bars = bars(&prices);
+            let report = backtest.run(configured("Technical Ratings", &[]).as_mut(), &bars, &[]);
+            let first = &report.trades[0];
+            assert_eq!(
+                first.side,
+                if short {
+                    OrderSide::Sell
+                } else {
+                    OrderSide::Buy
+                }
+            );
+            assert_eq!(first.quantity, 1.);
+            assert_eq!(first.entry_time, time(2));
+            assert_eq!(first.entry_price, if short { 99.5 } else { 100.5 });
+            let exit = first.exit.as_ref().expect("protective exit");
+            assert_eq!(exit.time, time(count));
+            assert_eq!(
+                exit.price,
+                if short { 200. - exit_price } else { exit_price }
+            );
+            assert_eq!(exit.profit, profit);
+            assert_eq!(
+                first.label.as_deref(),
+                Some(if short {
+                    "Short / Short stop"
+                } else {
+                    "Long / Long stop"
+                })
+            );
+            assert!(
+                report
+                    .properties
+                    .contains(&("Input: Indicator timeframe".into(), "Chart interval".into()))
+            );
+            assert_prefixes("Technical Ratings", &[], &bars, &backtest);
+        }
+    }
 }
 
 #[cfg(feature = "studies")]

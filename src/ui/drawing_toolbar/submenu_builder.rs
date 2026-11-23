@@ -30,7 +30,7 @@
 use super::actions::DrawingToolbarAction;
 use crate::icons::{Icon, icons};
 use crate::localization as l10n;
-use crate::styles::{focus::focus_ring_color, icons as icon_sizes};
+use crate::styles::focus::focus_ring_color;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::ext::UiExt;
@@ -303,11 +303,16 @@ pub(super) fn row_width(ui: &Ui, row: &FlyoutRow) -> f32 {
             .size()
             .x
     };
-    let icon = row.icon.map_or(0.0, |_| icon_sizes::SM + gap);
+    let icon = row.icon.map_or(0.0, |_| DESIGN_TOKENS.sizing.icon_sm + gap);
     let shortcut = row
         .shortcut
         .map_or(0.0, |s| gap + text_width(s, theme.text.small));
-    gap + icon + text_width(row.label, theme.text.body) + shortcut + gap + icon_sizes::SM + gap
+    gap + icon
+        + text_width(row.label, theme.text.body)
+        + shortcut
+        + gap
+        + DESIGN_TOKENS.sizing.icon_sm
+        + gap
 }
 
 /// Draw one flyout row `width` wide and return its responses.
@@ -327,8 +332,11 @@ pub(super) fn flyout_row(ui: &mut Ui, width: f32, row: &FlyoutRow) -> RowRespons
 
     let slot = |right_edge: f32| {
         Rect::from_center_size(
-            Pos2::new(right_edge - icon_sizes::SM / 2.0, rect.center().y),
-            Vec2::splat(icon_sizes::SM),
+            Pos2::new(
+                right_edge - DESIGN_TOKENS.sizing.icon_sm / 2.0,
+                rect.center().y,
+            ),
+            Vec2::splat(DESIGN_TOKENS.sizing.icon_sm),
         )
     };
     let right_slot = slot(rect.right() - gap);
@@ -376,12 +384,12 @@ pub(super) fn flyout_row(ui: &mut Ui, width: f32, row: &FlyoutRow) -> RowRespons
         let mut x = rect.left() + gap;
         if let Some(icon) = row.icon {
             let icon_rect = Rect::from_min_size(
-                Pos2::new(x, rect.center().y - icon_sizes::SM / 2.0),
-                Vec2::splat(icon_sizes::SM),
+                Pos2::new(x, rect.center().y - DESIGN_TOKENS.sizing.icon_sm / 2.0),
+                Vec2::splat(DESIGN_TOKENS.sizing.icon_sm),
             );
             icon.as_image_tinted(icon_rect.size(), text)
                 .paint_at(ui, icon_rect);
-            x += icon_sizes::SM + gap;
+            x += DESIGN_TOKENS.sizing.icon_sm + gap;
         }
         ui.painter().text(
             Pos2::new(x, rect.center().y),

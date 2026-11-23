@@ -6,35 +6,43 @@
 //! - Presets: "YTD", "MTD", "1M", "3M", "6M", "1Y", "5Y", "MAX"
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
-use thiserror::Error;
 
 /// Date range parsing errors
-#[derive(Debug, Clone, Error, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DateRangeParseError {
-    #[error("Invalid date format: {0}")]
     /// A date could not be parsed; carries the invalid text.
     InvalidDateFormat(String),
 
-    #[error("Invalid range format: {0}")]
     /// The range syntax is invalid; carries the invalid text.
     InvalidRangeFormat(String),
 
-    #[error("Invalid number: {0}")]
     /// A relative duration has an invalid number.
     InvalidNumber(String),
 
-    #[error("Invalid time unit: {0}")]
     /// A relative duration has an unsupported unit.
     InvalidTimeUnit(String),
 
-    #[error("End date must not be before start date")]
     /// The end date precedes the start date.
     InvalidDateOrder,
 
-    #[error("Unsupported format: {0}")]
     /// The input does not match a supported range format.
     UnsupportedFormat(String),
 }
+
+impl std::fmt::Display for DateRangeParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidDateFormat(text) => write!(f, "Invalid date format: {text}"),
+            Self::InvalidRangeFormat(text) => write!(f, "Invalid range format: {text}"),
+            Self::InvalidNumber(text) => write!(f, "Invalid number: {text}"),
+            Self::InvalidTimeUnit(text) => write!(f, "Invalid time unit: {text}"),
+            Self::InvalidDateOrder => write!(f, "End date must not be before start date"),
+            Self::UnsupportedFormat(text) => write!(f, "Unsupported format: {text}"),
+        }
+    }
+}
+
+impl std::error::Error for DateRangeParseError {}
 
 /// Result type for internal date range parsing helpers.
 type DateRangeResult = Result<Option<(DateTime<Utc>, DateTime<Utc>)>, DateRangeParseError>;

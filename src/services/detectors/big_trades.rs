@@ -9,7 +9,7 @@ use crate::data::meets_threshold;
 use crate::model::{
     BarClock, Direction, OrderSide, Placement, Signal, SignalId, SignalShape, Tick,
 };
-use crate::scales::{PriceFormatter, VolumeFormatter};
+use crate::scales::VolumeFormatter;
 use crate::services::SignalEvent;
 
 /// Combined trade sizes the automatic threshold is calibrated on.
@@ -228,7 +228,7 @@ struct Bar {
 
 impl BigTrades {
     /// The detector of a symbol of tick size `tick`, labelling sizes with `volume_decimals`
-    /// decimals, or 2 like the chart's volume readouts.
+    /// decimals, or 2 without them.
     pub(super) fn new(tick: f64, volume_decimals: Option<u8>) -> Self {
         Self {
             tick,
@@ -425,7 +425,8 @@ impl BigTrades {
             category: super::DetectionKind::BigTrade.category().into(),
             label: Some(format!(
                 "{} {}",
-                self.sizes_label.format(trade.size),
+                self.sizes_label
+                    .format_with_min_unit_decimals(trade.size, 2),
                 kind.word()
             )),
             tooltip: None,

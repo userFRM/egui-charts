@@ -663,7 +663,7 @@ impl State {
             detections: VecDeque::new(),
             big_trades: BigTrades::new(tick, instrument.volume_decimals),
             stop_runs: StopRuns::new(instrument.volume_decimals),
-            stop_sweeps: StopSweeps::new(tick),
+            stop_sweeps: StopSweeps::new(tick, instrument.volume_decimals),
             counting: Counting::default(),
         };
         let timeframe = subscription.as_ref().map(|s| s.timeframe);

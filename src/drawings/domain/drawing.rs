@@ -10,10 +10,11 @@
 
 use super::{
     AnnotationMarker, ArrowStyle, BarsPatternConfig, BarsPatternMode, ChartPoint, DrawingToolType,
-    ElliottDegree, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig,
-    ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig,
-    PositionReadout, PositionSize, PositionSizing, PositionStyle, ProjectionConfig, RangeSettings,
-    RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    ElliottDegree, FibonacciConfig, FontWeight, ForecastStyle, GANN_SQUARE_UNITS, GannConfig,
+    GhostFeedConfig, ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle,
+    PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
+    ProjectionConfig, RangeSettings, RegressionTrendConfig, TableConfig, TimeframeVisibility,
+    VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -204,9 +205,9 @@ pub struct Drawing {
     #[serde(skip)]
     pub completed: bool,
     /// Optional annotation content, preserved with the drawing. Tables use one row per line
-    /// and tab-separated cells. Images use an image URI resolved by the host's egui image
-    /// loaders. Posts and ideas use the first line as author or title and the rest as body,
-    /// when they have no [`post`](Self::post).
+    /// and tab-separated cells, styled by [`table`](Self::table). Images use an image URI
+    /// resolved by the host's egui image loaders. Posts and ideas use the first line as author or
+    /// title and the rest as body, when they have no [`post`](Self::post).
     pub text: Option<String>,
     /// The post or idea a post or idea drawing shows: its link and the content the host
     /// resolved it to through [`Posts`](crate::services::Posts). The content is saved with the
@@ -273,10 +274,12 @@ pub struct Drawing {
     #[serde(default)]
     pub note_text_style: Option<NoteTextStyle>,
     /// Extend line to left edge; a trend line, ray, extended line, info line or trend angle
-    /// extends past its first anchor, whichever way it was drawn
+    /// extends past its first anchor, whichever way it was drawn, and a curve or double curve
+    /// continues along its tangent past its first anchor
     pub extend_left: bool,
     /// Extend line to right edge; a trend line, ray, extended line, info line or trend angle
-    /// extends past its second anchor, whichever way it was drawn
+    /// extends past its second anchor, whichever way it was drawn, and a curve or double curve
+    /// continues along its tangent past its last anchor
     pub extend_right: bool,
     /// Arrow style at start of line
     pub arrow_start_style: ArrowStyle,
@@ -295,8 +298,10 @@ pub struct Drawing {
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
-    /// info line, trend angle or arrow, the text placement of a horizontal line or ray or a
-    /// vertical line, and the reach of a vertical line. Other tools ignore these settings.
+    /// info line, trend angle or arrow, the text placement of a horizontal line or ray, a
+    /// vertical line, a cross line, a channel or a regression trend, the prices of a flat
+    /// top/bottom or disjoint channel, and the reach of a vertical line. Other tools ignore
+    /// these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
     /// Readouts, card, box border and vertical reach of a date range or date and price range.
@@ -343,13 +348,14 @@ pub struct Drawing {
     #[serde(default)]
     pub vwap: Option<VwapConfig>,
 
-    /// Levels, fan lines, arcs and background of the Gann tools; `None` draws
-    /// [`GannConfig::for_tool`].
+    /// Levels, fan lines, arcs, background and labels of the Gann tools. New drawings store
+    /// [`GannConfig::drawing_default`]; `None` keeps saved boxes' left and bottom labels and
+    /// squares' 10 point labels, ten arcs and grey hidden fan lines.
     #[serde(default)]
     pub gann: Option<GannConfig>,
     /// Average range and noise, in ticks, and colours of the candles a Ghost Feed projects. New
     /// feeds start from [`GhostFeedConfig::drawing_default`]; `None` uses the defaults, the
-    /// colours of feeds saved before these settings.
+    /// range, noise and colours of feeds saved before these settings.
     #[serde(default)]
     pub ghost_feed: Option<GhostFeedConfig>,
     /// Whether a rectangle or parallel channel draws its halfway line; a channel's takes
@@ -376,6 +382,12 @@ pub struct Drawing {
     /// Frame size and opacity of the image tool; `None` uses the defaults.
     #[serde(default)]
     pub image: Option<ImageConfig>,
+    /// Column widths, row heights, cell styles and the Anchor to screen switch of a table, by
+    /// the rows and columns of its [`text`](Self::text). `None`, as on tables saved before these
+    /// settings, fits each column to its text and each row to one line, with no cell styles, on
+    /// the table's bar and price. Other tools ignore it. Boxed so their drawing copies stay small.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<Box<TableConfig>>,
     /// Clockwise rotation of an icon, emoji or sticker about its centre, in degrees; 0 is upright.
     /// Its handles, selection frame and hit area rotate with it. Other tools ignore this field.
     /// Drawings saved before this setting load upright.
@@ -401,12 +413,19 @@ pub struct Drawing {
     /// bars; `None` uses the defaults, OHLC bars, as drawings saved before this setting do.
     #[serde(default)]
     pub bars_pattern: Option<BarsPatternConfig>,
-    /// Levels, target zone backgrounds, coefficient labels and leg style of the projection
+    /// Sector levels, gradient, coefficient labels and outline style of the projection
     /// tool. New projections start from [`ProjectionConfig::default`]; `None`, as on projections
-    /// saved before these settings, draws one dashed level at the whole move in the drawing
-    /// colour with a zone in the fill colour and no coefficients. Other tools ignore it.
+    /// saved before these settings, draws one dashed level at the sector's arc in the drawing
+    /// colour with a flat fill and no coefficients. Other tools ignore it.
     #[serde(default)]
     pub projection: Option<ProjectionConfig>,
+    /// Card, badge and anchor colours and the background transparency of the forecast tool. New
+    /// forecasts start from [`ForecastStyle::default`]; `None`, as on forecasts saved before
+    /// these settings, draws the theme's colours without borders, with the fill colour, when
+    /// set, as the background of its cards and decided badges, and the default pending badge
+    /// and anchor dots. Other tools ignore it.
+    #[serde(default)]
+    pub forecast: Option<ForecastStyle>,
 
     // === Z-Order (rendering layer) ===
     /// Z-order among the drawings of the same `series_layer` (higher = drawn on top).
@@ -416,13 +435,15 @@ pub struct Drawing {
     /// draws it over all of them, as drawings were drawn before this setting, and so does a
     /// count of at least the number of series and studies in the pane. Drawings with the same
     /// count are layered by [`z_order`](Self::z_order). The chart updates the count when a series
-    /// or study is removed, moved out of the pane or moved in its order, so the drawing stays
-    /// over and under the same other items.
+    /// or study is removed, moved out of the pane or moved in its order, and, in a user action,
+    /// when one joins the pane or the drawing moves to another pane with the main series or its
+    /// study, so the drawing stays over and under the same other items. An item new to the
+    /// drawing goes under it where its place leaves the choice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub series_layer: Option<usize>,
 }
 
-fn enabled() -> bool {
+pub(super) fn enabled() -> bool {
     true
 }
 
@@ -440,10 +461,10 @@ pub(super) const PINK: [u8; 4] = [233, 30, 99, 255];
 pub(super) const PURPLE: [u8; 4] = [156, 39, 176, 255];
 pub(super) const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
 pub(super) const GREY: [u8; 4] = [128, 128, 128, 255];
-const WHITE: [u8; 4] = [255, 255, 255, 255];
+pub(super) const WHITE: [u8; 4] = [255, 255, 255, 255];
 
 /// `color` at `alpha` of 255.
-const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
+pub(super) const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
     [color[0], color[1], color[2], alpha]
 }
 
@@ -573,7 +594,11 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             width: 1.0,
             ..LINE
         },
-        T::AnchoredVWAP => DefaultStyle { width: 1.0, ..LINE },
+        T::AnchoredVWAP => DefaultStyle {
+            color: [30, 136, 229, 255],
+            width: 1.0,
+            ..LINE
+        },
         // The colour of the range tint, the same cyan as the rows of rising volume.
         T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile => colored([83, 196, 216, 255]),
         T::XABCDPattern | T::CypherPattern => DefaultStyle {
@@ -664,6 +689,8 @@ impl Drawing {
 
     /// Whether the user can edit this drawing now: it is not [locked](Self::locked) and
     /// [user edits](Self::user_edit_enabled) are on.
+    /// Lock all drawings is not part of it: see
+    /// [`DrawingManager::accepts_user_edits`](crate::drawings::DrawingManager::accepts_user_edits).
     pub fn accepts_user_edits(&self) -> bool {
         self.user_edit_enabled && !self.locked
     }
@@ -760,7 +787,7 @@ impl Drawing {
             price_axis_label: true,
             time_axis_label: true,
             line_measurements: LineMeasurements::for_tool(tool_type),
-            range_settings: RangeSettings::default(),
+            range_settings: RangeSettings::for_tool(tool_type),
             position_size: matches!(
                 tool_type,
                 DrawingToolType::LongPos | DrawingToolType::ShortPos
@@ -832,9 +859,17 @@ impl Drawing {
             middle_line: MiddleLineStyle::default(),
             theme_shade: tool_type != DrawingToolType::ProjectionTool,
             image: None,
+            table: None,
             glyph_angle: 0.0,
             closed: false,
-            gann: None,
+            gann: matches!(
+                tool_type,
+                DrawingToolType::GannBox
+                    | DrawingToolType::GannSquare
+                    | DrawingToolType::GannFixed
+                    | DrawingToolType::GannFan
+            )
+            .then(|| GannConfig::drawing_default(tool_type)),
             ghost_feed: (tool_type == DrawingToolType::GhostFeed)
                 .then(GhostFeedConfig::drawing_default),
             bars_pattern: (tool_type == DrawingToolType::BarsPattern).then(|| BarsPatternConfig {
@@ -843,6 +878,7 @@ impl Drawing {
             }),
             projection: (tool_type == DrawingToolType::ProjectionTool)
                 .then(ProjectionConfig::default),
+            forecast: (tool_type == DrawingToolType::Forecast).then(ForecastStyle::default),
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
             series_layer: None,
@@ -918,12 +954,48 @@ impl Drawing {
         }
     }
 
+    /// Whether the drawing keeps its place in its pane while the chart scrolls and zooms:
+    /// anchored text, and a table anchored to the screen.
+    pub(crate) fn pins_to_pane(&self) -> bool {
+        self.tool_type == DrawingToolType::AnchoredText
+            || (self.tool_type == DrawingToolType::Table
+                && self
+                    .table
+                    .as_ref()
+                    .is_some_and(|table| table.screen_anchored))
+    }
+
+    /// The table settings in use: its own, or the defaults.
+    pub(crate) fn table_config(&self) -> std::borrow::Cow<'_, TableConfig> {
+        match &self.table {
+            Some(config) => std::borrow::Cow::Borrowed(config),
+            None => std::borrow::Cow::Owned(TableConfig::default()),
+        }
+    }
+
+    /// The text colour of Text and Anchored text that has one. Their colour controls show and
+    /// edit it, as the drawing colour then paints at most a border left to follow it.
+    #[cfg(feature = "ui")]
+    pub(crate) fn text_color_override(&self) -> Option<[u8; 4]> {
+        matches!(
+            self.tool_type,
+            DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+        )
+        .then_some(self.text_color)
+        .flatten()
+    }
+
     /// Set the colour picked in a colour control. A price label's badge stays one colour, so its
-    /// border and fill follow as in [`Self::set_line_color`]; other tools keep theirs.
+    /// border and fill follow as in [`Self::set_line_color`]. Text with a colour of its own takes
+    /// the pick there, and its drawing colour takes the RGB at its own opacity; other tools keep
+    /// their other colours.
     #[cfg(feature = "ui")]
     pub(crate) fn recolor(&mut self, color: [u8; 4]) {
         if self.tool_type == DrawingToolType::PriceLabel {
             self.set_line_color(color);
+        } else if self.text_color_override().is_some() {
+            self.text_color = Some(color);
+            self.color[..3].copy_from_slice(&color[..3]);
         } else {
             self.color = color;
         }
@@ -959,6 +1031,7 @@ impl Drawing {
     pub(crate) fn former_default_color(tool: DrawingToolType) -> Option<[u8; 4]> {
         use DrawingToolType as T;
         match tool {
+            T::AnchoredVWAP => Some(BLUE),
             T::Circle | T::RegressionTrend => Some(RED),
             T::SineLine => Some(TEAL),
             T::ElliottTriangle | T::ElliottDoubleCombo | T::ElliottTripleCombo => {
@@ -1018,7 +1091,9 @@ impl Drawing {
             }
         }
         if matches!(tool, T::GannBox | T::GannSquare | T::GannFixed | T::GannFan) {
-            let config = self.gann.get_or_insert_with(|| GannConfig::for_tool(tool));
+            let config = self
+                .gann
+                .get_or_insert_with(|| GannConfig::saved_default(tool));
             for (list, levels) in [
                 (3, &mut config.price_levels),
                 (4, &mut config.time_levels),
@@ -1096,16 +1171,18 @@ impl Drawing {
         }
     }
 
-    /// Rebuilds anchored text coordinates relative to the pane. Call after
-    /// `update_screen_coords`; other tools retain their chart coordinates. A text without a pane
-    /// position, such as an older drawing or one just moved, takes one the first time its point
-    /// is drawn inside `pane`, and stays on its bar and price until then. Resizing preserves the
-    /// width and height fractions.
+    /// Rebuilds the pane position of anchored text and of a table anchored to the screen. Call
+    /// after `update_screen_coords`; other tools retain their chart coordinates. A text or table
+    /// without a pane position, such as an older drawing or one just moved, takes one the first
+    /// time its point is drawn inside `pane`, and stays on its bar and price until then. Resizing
+    /// preserves the width and height fractions. A table not anchored to the screen drops the
+    /// pane position it still holds.
     pub fn update_pane_coords(&mut self, pane: egui::Rect) {
-        if self.tool_type != DrawingToolType::AnchoredText
-            || !pane.is_finite()
-            || pane.width() <= 0.0
-            || pane.height() <= 0.0
+        // A table taken off the screen keeps the bar and price it was last drawn at.
+        if self.tool_type == DrawingToolType::Table && !self.pins_to_pane() {
+            self.screen_anchor = None;
+        }
+        if !self.pins_to_pane() || !pane.is_finite() || pane.width() <= 0.0 || pane.height() <= 0.0
         {
             return;
         }
@@ -1524,8 +1601,8 @@ impl Serialize for Drawing {
 }
 
 impl<'de> Deserialize<'de> for Drawing {
-    /// A saved `gann` object takes the fields it leaves out from [`GannConfig::for_tool`] of the
-    /// drawing's tool, which a drawing without one draws. Range settings it leaves out take
+    /// Missing Gann settings take the drawing's former defaults. Saved squares store them on
+    /// load so editing their Inputs also keeps their former lists. Missing range settings take
     /// the drawing's font size for the readouts.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         GannConfig::forget_left_out();
@@ -1536,6 +1613,11 @@ impl<'de> Deserialize<'de> for Drawing {
         drawing.range_settings.fill_left_out(drawing.font_size);
         if let Some(gann) = &mut drawing.gann {
             gann.fill_left_out(drawing.tool_type);
+        } else if matches!(
+            drawing.tool_type,
+            DrawingToolType::GannSquare | DrawingToolType::GannFixed
+        ) {
+            drawing.gann = Some(GannConfig::saved_default(drawing.tool_type));
         }
         Ok(drawing)
     }
@@ -1551,7 +1633,9 @@ mod tests {
     /// Elliott wave has its colour and starts at the Intermediate degree; a regression trend
     /// draws a 1 px line in red at 30% opacity (77 of 255) under opaque red text, with 2 px bands
     /// in blue at 30% opacity; a price label is bold; a position risks 25% of an account of
-    /// 1,000 in lots of 1, over a green target and a red stop zone at 20% opacity (51). The
+    /// 1,000 in lots of 1, over a green target and a red stop zone at 20% opacity (51). A
+    /// parallel channel, flat top/bottom or disjoint channel starts its text at the left end of
+    /// its first line, and one saved without line measurements keeps it in the middle. The
     /// triangle, ellipse and double curve keep the styles they shared before.
     #[test]
     fn new_drawings_start_in_their_tool_style() {
@@ -1721,6 +1805,37 @@ mod tests {
             );
         }
         assert_eq!(Drawing::new(1, T::PriceLabel).font_weight, FontWeight::Bold);
+        let placed = Drawing::new(1, T::DateAndPriceRange);
+        assert_eq!(
+            (
+                placed.range_settings.border,
+                placed.range_settings.border_width
+            ),
+            (false, Some(1.0))
+        );
+        assert_eq!(placed.range_settings.border_color, None);
+        let mut saved = serde_json::to_value(&placed).unwrap();
+        saved.as_object_mut().unwrap().remove("range_settings");
+        let read: Drawing = serde_json::from_value(saved).unwrap();
+        assert!(read.range_settings.border);
+        assert_eq!(read.range_settings.border_width, None);
+        // Channels write their text from the left end of their first line; a channel saved
+        // without line measurements keeps it in the middle.
+        use crate::drawings::LineTextHorizontalAlign as H;
+        for tool in [T::ParallelChannel, T::FlatTopBottom, T::DisjointChannel] {
+            let placed = Drawing::new(1, tool);
+            let mut saved = serde_json::to_value(&placed).unwrap();
+            saved.as_object_mut().unwrap().remove("line_measurements");
+            let read: Drawing = serde_json::from_value(saved).unwrap();
+            assert_eq!(
+                (
+                    placed.line_measurements.text_horizontal_align,
+                    read.line_measurements.text_horizontal_align
+                ),
+                (H::Left, H::Center),
+                "{tool:?}"
+            );
+        }
         let config = Drawing::new(1, T::RegressionTrend)
             .regression_trend
             .unwrap();

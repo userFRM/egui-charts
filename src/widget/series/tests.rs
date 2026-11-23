@@ -6,11 +6,10 @@ use crate::widget::test_frames::frame;
 use chrono::{DateTime, TimeDelta, Utc};
 use std::time::Duration;
 
-/// Bars span 100..110 and the overlay reaches 120: 10% of the pane above and below adds an
-/// eighth of the span on each side, 97.5..122.5. Every line of a study counts and non-finite
-/// values do not; without eligible values, with the study group hidden, or with a volume
-/// profile, the bars alone give
-/// 98.75..111.25. Relative modes use close 110.
+/// Bars span 100..110 and the overlay reaches 120. With 10% above and 8% below the span is
+/// 20 / 0.82, giving 98.048780..122.439024. Every study line counts; non-finite values do not.
+/// Without eligible values, with the study group hidden, or with a volume profile, the bars
+/// alone give 99.024390..111.219512. Relative modes use close 110.
 #[test]
 fn autoscale_includes_only_visible_overlay_values() {
     use crate::scales::PriceScaleMode;
@@ -18,16 +17,20 @@ fn autoscale_includes_only_visible_overlay_values() {
     use crate::widget::test_frames::chart;
 
     for (mode, fitted, bars_only) in [
-        (PriceScaleMode::Normal, (97.5, 122.5), (98.75, 111.25)),
+        (
+            PriceScaleMode::Normal,
+            (4020.0 / 41.0, 5020.0 / 41.0),
+            (4060.0 / 41.0, 4560.0 / 41.0),
+        ),
         (
             PriceScaleMode::Percentage,
-            (-125.0 / 11.0, 125.0 / 11.0),
-            (-112.5 / 11.0, 12.5 / 11.0),
+            (-4900.0 / 451.0, 5100.0 / 451.0),
+            (-4500.0 / 451.0, 500.0 / 451.0),
         ),
         (
             PriceScaleMode::IndexedTo100,
-            (975.0 / 11.0, 1225.0 / 11.0),
-            (987.5 / 11.0, 1112.5 / 11.0),
+            (40200.0 / 451.0, 50200.0 / 451.0),
+            (40600.0 / 451.0, 45600.0 / 451.0),
         ),
     ] {
         for case in [
@@ -175,7 +178,10 @@ fn autoscale_includes_only_visible_overlay_values() {
             }
             let expected = if case == "main_hidden" {
                 let value = crate::scales::PriceTransform { mode, base: 110.0 }.to_scale(120.0);
-                (value - value.abs() * 0.00125, value + value.abs() * 0.00125)
+                (
+                    value - value.abs() * 0.01 / 0.82 * 0.08,
+                    value + value.abs() * 0.01 / 0.82 * 0.1,
+                )
             } else if matches!(
                 case,
                 "single" | "multiple" | "displaced_future" | "price_only_restored"

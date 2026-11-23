@@ -520,10 +520,7 @@ pub fn session_bars(
 
 /// Count the supplied bars in a lookback ending at the latest fixture timestamp.
 /// Session gaps and the selected interval determine the count, including YTD.
-pub fn visible_bars_for_range(
-    range: egui_charts::ui::timeframe_toolbar::DateRange,
-    bars: &[Bar],
-) -> usize {
+pub fn visible_bars_for_range(range: egui_charts::model::DateRange, bars: &[Bar]) -> usize {
     let Some(last) = bars.last() else {
         return 0;
     };
@@ -533,11 +530,11 @@ pub fn visible_bars_for_range(
 
 /// Inclusive start of a range preset, or no bound for all available history.
 pub fn range_start(
-    range: egui_charts::ui::timeframe_toolbar::DateRange,
+    range: egui_charts::model::DateRange,
     end: DateTime<Utc>,
 ) -> Option<DateTime<Utc>> {
     use chrono::{Datelike, Duration, Months, TimeZone};
-    use egui_charts::ui::timeframe_toolbar::DateRange;
+    use egui_charts::model::DateRange;
     match range {
         DateRange::Day1 => Some(end - Duration::days(1)),
         DateRange::Day5 => Some(end - Duration::days(5)),
@@ -554,7 +551,8 @@ pub fn range_start(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_charts::ui::timeframe_toolbar::{DateRange, SessionType};
+    use egui_charts::model::DateRange;
+    use egui_charts::ui::timeframe_toolbar::SessionType;
 
     #[test]
     fn synthetic_fixture_preserves_sessions_adjustments_and_ranges() {

@@ -39,6 +39,12 @@ pub struct IndicatorSettingsDialog {
     /// The edited study's name, for the title.
     study: String,
     line_names: Vec<String>,
+    /// The plots that hold no values, offered without a plot type, scale tag or latest value
+    /// line.
+    valueless_plots: Vec<usize>,
+    /// The plots offered only a visibility and a colour, which their study draws in a look of
+    /// its own.
+    color_only_plots: Vec<usize>,
     levels: Vec<(f64, &'static str)>,
     gradient_names: Vec<&'static str>,
     tab: Tab,
@@ -47,6 +53,8 @@ pub struct IndicatorSettingsDialog {
     /// with a checkbox each until the dialog closes.
     exact_hidden: Vec<Timeframe>,
     sources: Vec<(crate::studies::StudySource, String)>,
+    /// The zones time zone inputs list; `None` lists `default_time_zones`.
+    time_zones: Option<Vec<crate::model::TimezoneId>>,
     overlay: bool,
     price_scale: bool,
     original: Option<crate::studies::StudySettingsSnapshot>,
@@ -86,6 +94,15 @@ fn width_picker(ui: &mut egui::Ui, width: &mut f32) {
 }
 
 impl IndicatorSettingsDialog {
+    /// Offers `zones` in the lists of time zone inputs, after Exchange time where an input offers
+    /// it and after the zone an input holds when `zones` lacks it, in place of
+    /// [`default_time_zones`](crate::ui::timeframe_toolbar::default_time_zones). Pass the zones
+    /// given to [`SettingsDialog::set_time_zones`](crate::ui::dialogs::chart_settings::SettingsDialog::set_time_zones)
+    /// to list the chart's.
+    pub fn set_time_zones(&mut self, zones: Vec<crate::model::TimezoneId>) {
+        self.time_zones = Some(zones);
+    }
+
     /// Open on the current values of the study identified by `id`.
     /// The edit leaves out exact hidden intervals that the study's interval ranges already hide.
     pub fn open(&mut self, id: SeriesId, study: &dyn Indicator, interval: Option<Timeframe>) {
@@ -109,19 +126,31 @@ impl IndicatorSettingsDialog {
         });
         self.inputs = study.inputs();
         self.study = study.name().to_owned();
-        self.line_names = study.line_names();
+        self.read_plots(study);
         self.gradient_names = study.gradients().iter().map(|fill| fill.name).collect();
+        self.overlay = study.is_overlay();
+        self.price_scale = study.scale() == StudyScale::Main;
+        self.current_interval = interval;
+        self.tab = Tab::Inputs;
+        self.sources.clear();
+    }
+
+    /// Reads the plot names, the plots without values, the plots offered only a colour and the
+    /// guide levels of `study`.
+    fn read_plots(&mut self, study: &dyn Indicator) {
+        self.line_names = study.line_names();
+        self.valueless_plots = (0..study.line_count())
+            .filter(|&line| !study.plot_holds_values(line))
+            .collect();
+        self.color_only_plots = (0..study.line_count())
+            .filter(|&line| study.plot_color_only(line))
+            .collect();
         self.levels = study
             .pane()
             .levels
             .into_iter()
             .map(|(value, _, caption)| (value, caption))
             .collect();
-        self.overlay = study.is_overlay();
-        self.price_scale = study.scale() == StudyScale::Main;
-        self.current_interval = interval;
-        self.tab = Tab::Inputs;
-        self.sources.clear();
     }
 
     /// Open on a chart study and offer other studies' outputs, excluding cycles, to the input
@@ -218,7 +247,7 @@ impl IndicatorSettingsDialog {
         if self.edit.is_none() {
             if self.previewed.take().is_some()
                 && let Some(original) = self.original.take()
-                && let Some(study) = chart.indicator_mut(id)
+                && let Some(study) = chart.preview_indicator_mut(id)
             {
                 // The host can revoke editing while a preview is open.
                 let enabled = study.user_edit_enabled();
@@ -242,7 +271,7 @@ impl IndicatorSettingsDialog {
             .map(|input| (input.id.clone(), input.value.clone()))
             .collect();
         if self.previewed.as_ref() != Some(&pending)
-            && let Some(study) = chart.indicator_mut(id)
+            && let Some(study) = chart.preview_indicator_mut(id)
             && study
                 .apply_settings(&pending.inputs, pending.settings.clone())
                 .is_ok()
@@ -250,13 +279,7 @@ impl IndicatorSettingsDialog {
             // Inputs can change the number of plots and the declared guide values.
             pending.settings = study.settings();
             self.edit.as_mut()?.settings = pending.settings.clone();
-            self.line_names = study.line_names();
-            self.levels = study
-                .pane()
-                .levels
-                .into_iter()
-                .map(|(value, _, caption)| (value, caption))
-                .collect();
+            self.read_plots(study);
             self.previewed = Some(pending);
             ctx.request_repaint();
         }
@@ -313,6 +336,15 @@ impl IndicatorSettingsDialog {
                                 .iter()
                                 .map(|input| input.is_shown(&self.inputs))
                                 .collect();
+                            let default_zones;
+                            let zones = match &self.time_zones {
+                                Some(zones) => zones.as_slice(),
+                                None => {
+                                    default_zones =
+                                        crate::ui::timeframe_toolbar::default_time_zones();
+                                    default_zones.as_slice()
+                                }
+                            };
                             FormGrid::new("study_inputs").show(ui, |ui| {
                                 for (input, shown) in self.inputs.iter_mut().zip(shown) {
                                     if study_source
@@ -345,6 +377,7 @@ impl IndicatorSettingsDialog {
                                         } else {
                                             &[]
                                         },
+                                        zones,
                                     ) && let (
                                         InputKind::Choice(choices),
                                         InputValue::Choice(choice),
@@ -405,6 +438,7 @@ impl IndicatorSettingsDialog {
                                                 ui,
                                                 input,
                                                 &[],
+                                                &[],
                                             );
                                         }
                                     }
@@ -412,6 +446,7 @@ impl IndicatorSettingsDialog {
                                 ui.separator();
                             }
                             for (line, plot) in edit.settings.plots.iter_mut().enumerate() {
+                                let color_only = self.color_only_plots.contains(&line);
                                 ui.push_id(line, |ui| {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.checkbox(
@@ -424,94 +459,112 @@ impl IndicatorSettingsDialog {
                                             ),
                                         );
                                         ui.color_edit_button_srgba(&mut plot.color);
-                                        width_picker(ui, &mut plot.width);
+                                        if !color_only {
+                                            width_picker(ui, &mut plot.width);
+                                        }
                                     });
-                                    ui.horizontal_wrapped(|ui| {
-                                        pattern_combo(ui, &mut plot.pattern);
-                                        egui::ComboBox::from_id_salt("plot_type")
-                                            .selected_text(l10n::text(
-                                                ui.ctx(),
-                                                plot.plot_type.name(),
-                                            ))
-                                            .show_ui(ui, |ui| {
-                                                for kind in PlotType::ALL {
-                                                    let label = l10n::text(ui.ctx(), kind.name());
-                                                    // A saved choice stays listed and selected.
-                                                    match kind
-                                                        .incompatibility(
-                                                            self.overlay,
-                                                            self.price_scale,
-                                                        )
-                                                        .filter(|_| kind != plot.plot_type)
-                                                    {
-                                                        Some(reason) => {
-                                                            ui.add_enabled(
-                                                                false,
-                                                                egui::Button::selectable(
-                                                                    false, label,
-                                                                ),
+                                    // A plot drawn in a look of its own takes only its
+                                    // visibility and colour.
+                                    if !color_only {
+                                        ui.horizontal_wrapped(|ui| {
+                                            pattern_combo(ui, &mut plot.pattern);
+                                            // Zone edges are lines and a plot without values has no
+                                            // last value to tag or extend.
+                                            if self.valueless_plots.contains(&line) {
+                                                return;
+                                            }
+                                            egui::ComboBox::from_id_salt("plot_type")
+                                                .selected_text(l10n::text(
+                                                    ui.ctx(),
+                                                    plot.plot_type.name(),
+                                                ))
+                                                .show_ui(ui, |ui| {
+                                                    for kind in PlotType::ALL {
+                                                        let label =
+                                                            l10n::text(ui.ctx(), kind.name());
+                                                        // A saved choice stays listed and selected.
+                                                        match kind
+                                                            .incompatibility(
+                                                                self.overlay,
+                                                                self.price_scale,
                                                             )
-                                                            .on_disabled_hover_text(l10n::text(
-                                                                ui.ctx(),
-                                                                reason,
-                                                            ));
-                                                        }
-                                                        None => {
-                                                            ui.selectable_value(
-                                                                &mut plot.plot_type,
-                                                                kind,
-                                                                label,
-                                                            );
+                                                            .filter(|_| kind != plot.plot_type)
+                                                        {
+                                                            Some(reason) => {
+                                                                ui.add_enabled(
+                                                                    false,
+                                                                    egui::Button::selectable(
+                                                                        false, label,
+                                                                    ),
+                                                                )
+                                                                .on_disabled_hover_text(l10n::text(
+                                                                    ui.ctx(),
+                                                                    reason,
+                                                                ));
+                                                            }
+                                                            None => {
+                                                                ui.selectable_value(
+                                                                    &mut plot.plot_type,
+                                                                    kind,
+                                                                    label,
+                                                                );
+                                                            }
                                                         }
                                                     }
+                                                })
+                                                .response
+                                                .accessible_name(l10n::text(ui.ctx(), "Plot type"));
+                                            let mut tagged =
+                                                !edit.settings.untagged_plots.contains(&line);
+                                            if ui
+                                                .checkbox(
+                                                    &mut tagged,
+                                                    l10n::text(ui.ctx(), "Value on scale"),
+                                                )
+                                                .changed()
+                                            {
+                                                edit.settings
+                                                    .untagged_plots
+                                                    .retain(|&other| other != line);
+                                                if !tagged {
+                                                    edit.settings.untagged_plots.push(line);
                                                 }
-                                            })
-                                            .response
-                                            .accessible_name(l10n::text(ui.ctx(), "Plot type"));
-                                        let mut tagged =
-                                            !edit.settings.untagged_plots.contains(&line);
-                                        if ui
-                                            .checkbox(
-                                                &mut tagged,
-                                                l10n::text(ui.ctx(), "Value on scale"),
-                                            )
-                                            .changed()
-                                        {
-                                            edit.settings
-                                                .untagged_plots
-                                                .retain(|&other| other != line);
-                                            if !tagged {
-                                                edit.settings.untagged_plots.push(line);
                                             }
-                                        }
-                                        let mut price_line =
-                                            edit.settings.price_line_plots.contains(&line);
-                                        if ui
-                                            .checkbox(
-                                                &mut price_line,
-                                                l10n::text(ui.ctx(), "Latest value line"),
-                                            )
-                                            .changed()
-                                        {
-                                            edit.settings
-                                                .price_line_plots
-                                                .retain(|&other| other != line);
-                                            if price_line {
-                                                edit.settings.price_line_plots.push(line);
+                                            let mut price_line =
+                                                edit.settings.price_line_plots.contains(&line);
+                                            if ui
+                                                .checkbox(
+                                                    &mut price_line,
+                                                    l10n::text(ui.ctx(), "Latest value line"),
+                                                )
+                                                .changed()
+                                            {
+                                                edit.settings
+                                                    .price_line_plots
+                                                    .retain(|&other| other != line);
+                                                if price_line {
+                                                    edit.settings.price_line_plots.push(line);
+                                                }
                                             }
-                                        }
-                                    });
-                                    if let Some(variants) =
-                                        edit.settings.plot_variants.get_mut(line)
-                                    {
-                                        for (index, variant) in variants.iter_mut().enumerate() {
-                                            ui.push_id(("variant", index), |ui| {
-                                                ui.horizontal_wrapped(|ui| {
-                                                    ui.label(l10n::text(ui.ctx(), &variant.name));
-                                                    ui.color_edit_button_srgba(&mut variant.color);
-                                                    width_picker(ui, &mut variant.width);
+                                        });
+                                        if let Some(variants) =
+                                            edit.settings.plot_variants.get_mut(line)
+                                        {
+                                            for (index, variant) in variants.iter_mut().enumerate()
+                                            {
+                                                ui.push_id(("variant", index), |ui| {
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        ui.label(l10n::text(
+                                                            ui.ctx(),
+                                                            &variant.name,
+                                                        ));
+                                                        ui.color_edit_button_srgba(
+                                                            &mut variant.color,
+                                                        );
+                                                        width_picker(ui, &mut variant.width);
+                                                    });
                                                 });
-                                            });
+                                            }
                                         }
                                     }
                                     ui.separator();
@@ -1634,7 +1687,7 @@ mod tests {
                 [&[293.0 / 24.0], &[101.0 / 24.0], &[749.0 / 48.0]],
             ),
             (
-                "VPT",
+                "PVT",
                 [
                     &[36919.0 / 12012.0],
                     &[20903.0 / 12012.0],
@@ -1786,6 +1839,7 @@ mod tests {
                         );
                     }
                 }
+                chart.drain_events().for_each(drop);
                 let mut applied = None;
                 let setup_theme = theme.clone();
                 let mut harness = Harness::builder()
@@ -1825,6 +1879,11 @@ mod tests {
                     );
                 }
                 assert!(!chart.undo(), "preview must not enter history");
+                assert!(
+                    !chart.drain_events().any(|event| matches!(event,
+                        crate::widget::ChartEvent::Study { id: study, .. } if study == id)),
+                    "{name}: preview reported a study change"
+                );
                 let setup_theme = theme.clone();
                 let mut harness = Harness::builder()
                     .with_context_setup(move |ctx| {
@@ -1905,6 +1964,12 @@ mod tests {
                         .snapshot_settings()
                         == before
                 );
+
+                assert!(
+                    !chart.drain_events().any(|event| matches!(event,
+                        crate::widget::ChartEvent::Study { id: study, .. } if study == id)),
+                    "{name}: {action} reported the preview"
+                );
                 if action == "Cancel" {
                     assert!(applied.is_none());
                 } else {
@@ -1984,7 +2049,7 @@ mod tests {
                 // Alternating open/close changes give this independent Wilder/SMA result.
                 assert!((loaded.plot_value(0, 10).unwrap() - 66.0).abs() < 1e-9);
             }
-            if matches!(name, "Force Index" | "VPT") {
+            if matches!(name, "Force Index" | "PVT") {
                 loaded
                     .set_input(
                         "source",
@@ -2660,6 +2725,79 @@ mod tests {
             }
         }
     }
+
+    /// A session start saved as 570 minutes shows as 09:30 in two fields that edit it, and the
+    /// session's zone is picked from the zones the host set in place of the default list.
+    #[test]
+    fn session_start_and_zone_are_edited_as_a_time_and_a_listed_zone() {
+        use crate::model::TimezoneId;
+        use crate::studies::TradingSessions;
+        use chrono::NaiveTime;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut study = TradingSessions::new();
+        study
+            .set_input("start [0]", InputValue::Length(570))
+            .unwrap();
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let id = chart.add_indicator(Box::new(study));
+        let mut dialog = IndicatorSettingsDialog::default();
+        // Available without the `timezones` feature, where UTC also starts the default list.
+        dialog.set_time_zones(vec![TimezoneId::fixed_offset(19_800).unwrap()]);
+        assert!(dialog.open_for_chart(&chart, id));
+        let mut edit = None;
+        let mut harness = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .with_size(egui::vec2(1440.0, 900.0))
+            .build_ui(|ui| {
+                if let Some(applied) = dialog.show(ui.ctx(), &Theme::dark()) {
+                    edit = Some(applied);
+                }
+            });
+        harness.run();
+        let field = |harness: &Harness<'_>, label: &str| harness.get_by_label(label).value();
+        assert_eq!(
+            [
+                field(&harness, "First session start hours"),
+                field(&harness, "First session start minutes"),
+            ],
+            [Some("09".to_owned()), Some("30".to_owned())]
+        );
+        harness
+            .get_by_label("First session start hours")
+            .set_value_accesskit(10.0);
+        harness.run();
+        assert_eq!(
+            field(&harness, "First session start hours").as_deref(),
+            Some("10")
+        );
+        harness.get_by_label("First session time zone").click();
+        harness.run();
+        assert!(harness.query_by_label("UTC").is_none());
+        harness.get_by_label("+05:30").click();
+        harness.run();
+        harness.get_by_label("Apply").click();
+        harness.run();
+        drop(harness);
+        let edit = edit.unwrap();
+        let expected = [
+            (
+                "start [0]",
+                InputValue::TimeOfDay(NaiveTime::from_hms_opt(10, 30, 0).unwrap()),
+            ),
+            ("zone [0]", InputValue::TimeZone("+05:30".to_owned())),
+        ];
+        let study = chart.indicator_mut(id).unwrap();
+        study.apply_settings(&edit.inputs, edit.settings).unwrap();
+        let inputs = study.inputs();
+        for (id, value) in expected {
+            let edited = edit.inputs.iter().find(|(input, _)| input == id);
+            assert_eq!(edited.map(|(_, value)| value), Some(&value), "{id}");
+            let applied = inputs.iter().find(|input| input.id == id);
+            assert_eq!(applied.map(|input| &input.value), Some(&value), "{id}");
+        }
+    }
+
     /// Other studies' outputs are offered only to the source the chart supplies: not to a custom
     /// study's other Source inputs, nor to the source of a study that declares histories.
     #[test]
@@ -2856,5 +2994,188 @@ mod tests {
         );
         let study = chart.indicator_mut(id).unwrap();
         assert!(study.apply_settings(&edit.inputs, edit.settings).is_ok());
+    }
+
+    /// The Lower interval of a volume study on a five-minute chart reads Auto with the interval
+    /// it picks, one minute, rather than the chart interval it does not read.
+    #[test]
+    fn unset_lower_interval_names_the_interval_it_reads() {
+        use egui::accesskit::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        chart.set_timeframe(Timeframe::Min5);
+        let id = chart.add_indicator(Box::new(crate::studies::VolumeDelta::new()));
+        let mut dialog = IndicatorSettingsDialog::default();
+        assert!(dialog.open_for_chart(&chart, id));
+        let mut harness = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .with_size(egui::vec2(1440.0, 900.0))
+            .build_ui(|ui| {
+                dialog.show(ui.ctx(), &Theme::dark());
+            });
+        harness.run();
+        let combo = harness.get_by_role_and_label(Role::ComboBox, "Lower interval");
+        assert_eq!(
+            combo.accesskit_node().value().as_deref(),
+            Some("Auto (1min)")
+        );
+        combo.click();
+        harness.run();
+        assert!(harness.query_by_label("Auto (1min)").is_some());
+        assert!(harness.query_by_label("Chart interval").is_none());
+    }
+
+    /// A plot that only styles zones offers visibility, colour, width and line pattern on the
+    /// Style tab, and no plot type, scale tag or latest value line, which would change nothing.
+    /// Plots that hold values keep all three. Missed Pivot Levels switched from swings to the
+    /// three periods offers its new third plot the same way. The call and put walls of an options
+    /// profile offer only their visibility, unticked on a new profile, and their colour.
+    #[test]
+    fn plots_offer_only_the_styles_they_use() {
+        use crate::data::{Datafeed, HistoryPage, HistoryRequest, OptionChain, OptionChainQuery};
+        use crate::studies::{AutoKeyLevels, Gaps, MissedPivots, OptionsVolumeProfile};
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        struct Feed;
+        impl Datafeed for Feed {
+            fn history(&self, _: HistoryRequest, reply: crate::data::Reply<HistoryPage>) {
+                reply.send(Ok(HistoryPage::default()));
+            }
+        }
+        let expiry = chrono::Utc::now().date_naive();
+        let query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
+        let chain = OptionChain::new(&Feed, query, || {}).unwrap();
+        let profile = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        const COMBINED: &[&str] = &["Daily pivots", "Weekly pivots", "Monthly pivots"];
+        // The study, its Missed Pivot Levels period, its plot names, how many plots offer a
+        // width and a line pattern, how many a plot type, scale tag and latest value line, the
+        // colour wells, and the plots whose checkbox starts unticked.
+        type Row = (
+            Box<dyn Indicator>,
+            Option<usize>,
+            &'static [&'static str],
+            usize,
+            usize,
+            usize,
+            &'static [&'static str],
+        );
+        let rows: [Row; 6] = [
+            (
+                Box::new(MissedPivots::default()),
+                None,
+                COMBINED,
+                3,
+                0,
+                3,
+                &[],
+            ),
+            (
+                Box::new(MissedPivots::new(10, 10, 0.0, 500)),
+                Some(4),
+                COMBINED,
+                3,
+                0,
+                3,
+                &[],
+            ),
+            (
+                Box::new(Gaps::default()),
+                None,
+                &["Up gaps", "Down gaps"],
+                2,
+                0,
+                2,
+                &[],
+            ),
+            (
+                Box::new(AutoKeyLevels::new()),
+                None,
+                &[
+                    "Day",
+                    "Week",
+                    "Month",
+                    "Prev Day",
+                    "Prev Week",
+                    "Prev Month",
+                    "Custom",
+                ],
+                7,
+                0,
+                7,
+                &[],
+            ),
+            (Box::new(SMA::new(2)), None, &["SMA(2)"], 1, 1, 1, &[]),
+            // Nine plot colours and six bar colours.
+            (
+                Box::new(profile),
+                None,
+                &[
+                    "Put/call",
+                    "Max pain",
+                    "Gamma exposure",
+                    "Call wall",
+                    "Put wall",
+                    "Zero gamma",
+                    "Expected low",
+                    "Expected high",
+                    "Current price",
+                ],
+                7,
+                7,
+                15,
+                &["Call wall", "Put wall"],
+            ),
+        ];
+        for (study, period, names, styled, valued, wells, off) in rows {
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            let id = chart.add_indicator(study);
+            let mut dialog = IndicatorSettingsDialog::default();
+            assert!(dialog.open_for_chart(&chart, id));
+            dialog.tab = Tab::Style;
+            if let Some(choice) = period {
+                let input = dialog
+                    .inputs
+                    .iter_mut()
+                    .find(|input| input.id == "period")
+                    .unwrap();
+                input.value = InputValue::Choice(choice);
+            }
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 1600.0))
+                .build_ui(|ui| {
+                    let _ = dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart);
+                });
+            harness.run();
+            for name in names {
+                assert!(harness.query_all_by_label(name).next().is_some(), "{name}");
+            }
+            let count = |label| harness.query_all_by_label(label).count();
+            assert_eq!(
+                harness.query_all_by_role(Role::ColorWell).count(),
+                wells,
+                "{names:?}"
+            );
+            assert_eq!(count("Line width"), styled, "{names:?}");
+            assert_eq!(count("Line pattern"), styled, "{names:?}");
+            for label in ["Plot type", "Value on scale", "Latest value line"] {
+                assert_eq!(count(label), valued, "{names:?}: {label}");
+            }
+            let unticked: Vec<_> = names
+                .iter()
+                .copied()
+                .filter(|name| {
+                    harness
+                        .query_all_by_role_and_label(Role::CheckBox, name)
+                        .any(|node| node.accesskit_node().toggled() == Some(Toggled::False))
+                })
+                .collect();
+            assert_eq!(unticked, off, "{names:?}");
+        }
     }
 }

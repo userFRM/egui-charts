@@ -113,11 +113,6 @@ impl KeltnerChannels {
         }
     }
 
-    /// Create with default params (20, 10, 2.0)
-    pub fn default_params() -> Self {
-        Self::new(20, 10, 2.0)
-    }
-
     /// Set colors for upper, middle, and lower bands
     pub fn with_colors(mut self, upper: Color32, middle: Color32, lower: Color32) -> Self {
         self.upper_color = upper;

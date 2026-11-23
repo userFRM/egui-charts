@@ -27,13 +27,16 @@
 //! ```
 //!
 //! The closure is shared behind an [`Arc`], so a clone computes exactly what
-//! the original does.
+//! the original does. A study whose calculation resumes from its last bars, or runs away from
+//! the UI thread, implements [`Resume`] instead and is set with
+//! [`CustomIndicator::with_resume`].
 
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Type alias for the custom calculation closure.
 ///
@@ -55,6 +58,110 @@ pub type DataRequestsFn =
 /// Per-bar colour callback, receiving the output line, source bar and calculated columns.
 pub type PlotColorFn = Arc<dyn Fn(usize, usize, &IndicatorValues) -> Option<Color32> + Send + Sync>;
 
+/// The calculation of a custom study that resumes from its last bars instead of starting over,
+/// and may run away from the UI thread. Set it with [`CustomIndicator::with_resume`].
+///
+/// A running sum of closes that resumes from its last bar:
+///
+/// ```
+/// use egui_charts::model::Bar;
+/// use egui_charts::studies::{
+///     Calculation, CustomIndicator, Indicator, IndicatorValues, Resume, ResumeRun,
+/// };
+/// use std::time::Duration;
+///
+/// #[derive(Clone, Default)]
+/// struct RunningSum {
+///     // The sum after each bar calculated so far.
+///     sums: Vec<f64>,
+/// }
+/// impl Resume for RunningSum {
+///     fn resume(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation {
+///         let from = run.from.min(self.sums.len());
+///         self.sums.truncate(from);
+///         values.truncate(from);
+///         for bar in &run.data[from..] {
+///             let sum = self.sums.last().copied().unwrap_or(0.0) + bar.close;
+///             self.sums.push(sum);
+///             values.push_lines(&[sum]);
+///         }
+///         Calculation::Done(Duration::ZERO)
+///     }
+/// }
+///
+/// let bar = |close: f64| Bar::new(chrono::DateTime::UNIX_EPOCH, close, close, close, close, 1.0);
+/// let mut bars = vec![bar(1.0), bar(2.0)];
+/// let mut study = CustomIndicator::new("Sum", |_| Vec::new()).with_resume(RunningSum::default());
+/// study.calculate(&bars);
+/// bars.push(bar(4.0));
+/// study.update(&bars, 2);
+/// bars[2] = bar(5.0);
+/// study.update(&bars, 2);
+/// let mut fresh = study.clone();
+/// fresh.calculate(&bars);
+/// assert_eq!(format!("{:?}", study.values()), format!("{:?}", fresh.values()));
+/// assert_eq!(study.values().value(0, 2), Some(8.0));
+/// assert_eq!(study.calculation(), Some(Calculation::Done(Duration::ZERO)));
+/// ```
+pub trait Resume: Send + Sync {
+    /// Bring `values` up to date for `run.data`, given that `run.data[..run.from]` is unchanged
+    /// since the previous call (the contract of [`Indicator::update`]), and say how far it got.
+    /// [`Calculation::Running`] leaves `values` as an earlier call left them, and
+    /// [`Calculation::Stopped`] as they were before the calculation that stopped: the chart
+    /// keeps drawing them, and while the calculation runs it calls again on a later frame with
+    /// the latest bars.
+    fn resume(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation;
+}
+
+/// What a [`Resume::resume`] call works on.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct ResumeRun<'a> {
+    /// The chart's bars.
+    pub data: &'a [Bar],
+    /// The first bar that may differ from the previous call.
+    pub from: usize,
+    /// The study's current inputs.
+    pub inputs: &'a [super::StudyInput],
+    /// The column the chart feeds into the `source` input, if any.
+    pub source: Option<&'a [f64]>,
+    /// The histories the study requested, in request order.
+    pub histories: &'a [super::StudyData<'a>],
+}
+
+/// How far a study's calculation has come, for the chart and its legend.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Calculation {
+    /// The values are up to date; the calculation took this long.
+    Done(Duration),
+    /// The calculation runs elsewhere; the fraction of its bars done.
+    Running(f32),
+    /// The calculation stopped before its end and the values are the previous ones; why.
+    Stopped(String),
+}
+
+/// A [`Resume`] that [`CustomIndicator`] can clone.
+trait ResumeBox: Send + Sync {
+    fn resume_box(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation;
+    fn clone_box(&self) -> Box<dyn ResumeBox>;
+}
+
+impl<R: Resume + Clone + 'static> ResumeBox for R {
+    fn resume_box(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation {
+        self.resume(run, values)
+    }
+    fn clone_box(&self) -> Box<dyn ResumeBox> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn ResumeBox> {
+    fn clone(&self) -> Self {
+        self.as_ref().clone_box()
+    }
+}
+
 /// An indicator defined at runtime via a calculation closure.
 ///
 /// Build one with [`new`](Self::new) and customise it with the builder
@@ -67,6 +174,7 @@ pub struct CustomIndicator {
     input_calculate_fn: Option<InputCalculateFn>,
     inputs: Vec<super::StudyInput>,
     data_requests: Option<DataRequestsFn>,
+    wait_for_close: bool,
     values: IndicatorValues,
     colors: Vec<Color32>,
     is_overlay: bool,
@@ -79,6 +187,8 @@ pub struct CustomIndicator {
     offsets: Vec<isize>,
     fills: Vec<super::StudyFill>,
     plot_color: Option<PlotColorFn>,
+    resume: Option<Box<dyn ResumeBox>>,
+    calculation: Option<Calculation>,
 }
 
 impl std::fmt::Debug for CustomIndicator {
@@ -110,6 +220,7 @@ impl CustomIndicator {
             input_calculate_fn: None,
             inputs: Vec::new(),
             data_requests: None,
+            wait_for_close: false,
             values: IndicatorValues::new(),
             colors: vec![palette::YELLOW], // Yellow default
             is_overlay: true,
@@ -121,11 +232,17 @@ impl CustomIndicator {
             offsets: Vec::new(),
             fills: Vec::new(),
             plot_color: None,
+            resume: None,
+            calculation: None,
         }
     }
 
-    /// Declare editable inputs and calculate from their current values. Ids must be unique;
-    /// defaults and initial values must satisfy the same schema used by the editor and setters.
+    /// Declare editable inputs and calculate from their current values. Ids must be unique, and
+    /// must not be `plot_offset`, `calculation_symbol`, `calculation_timeframe` or
+    /// `wait_for_close`: the chart adds its Offset, Symbol, Interval and Wait for interval close
+    /// inputs to the study under these ids, and refuses them with
+    /// [`StudyError::InvalidInput`](super::StudyError::InvalidInput). Defaults and initial values
+    /// must satisfy the same schema used by the editor and setters.
     ///
     /// The calculation receives the bars, inputs, aligned source and available histories from
     /// [`with_data_requests`](Self::with_data_requests), and returns one value per bar.
@@ -151,7 +268,9 @@ impl CustomIndicator {
             if input.id.is_empty() {
                 return Err(super::StudyError::EmptyInputId { index: at });
             }
-            let reason = if inputs[..at].iter().any(|other| other.id == input.id) {
+            let reason = if super::settings::CHART_INPUT_IDS.contains(&input.id.as_str()) {
+                "is reserved by the chart".into()
+            } else if inputs[..at].iter().any(|other| other.id == input.id) {
                 "is declared twice".into()
             } else if !input.accepts(&input.value) {
                 format!("has value {:?}, expected {:?}", input.value, input.kind)
@@ -179,8 +298,13 @@ impl CustomIndicator {
     /// [`Symbol`](super::InputKind::Symbol) input. Empty symbols and absent intervals follow
     /// the chart. Input edits update the chart's requests; the calculation supplied to
     /// [`with_inputs`](Self::with_inputs) receives each available history with its declaration.
-    /// Histories that have not arrived are absent. A study declaring histories has no
-    /// [`Indicator::source`]; its `source` input, if present, reads a chart-bar price field.
+    /// Histories that have not arrived are absent. Read the bars of another interval as each
+    /// chart bar knew them with [`StudyData::closed_at`](super::StudyData::closed_at), passing
+    /// `developing` for the chart's latest bar, and offer Wait for interval close for them with
+    /// [`with_wait_for_close`](Self::with_wait_for_close).
+    /// [`StudyData::bar_at`](super::StudyData::bar_at) reads the bar containing a time, also
+    /// while it is still open. A study declaring histories has no [`Indicator::source`]; its
+    /// `source` input, if present, reads a chart-bar price field.
     ///
     /// ```
     /// use egui_charts::model::Timeframe;
@@ -204,14 +328,18 @@ impl CustomIndicator {
     ///     .with_inputs(vec![symbol], move |bars, inputs, _, histories| {
     ///         let requests = hourly(inputs);
     ///         let history = histories.iter().find(|history| requests.contains(&history.request));
-    ///         bars.iter().map(|bar| {
+    ///         bars.iter().enumerate().map(|(at, bar)| {
     ///             history
-    ///                 .and_then(|history| Some(history.bars[history.bar_at(bar.time)?].close))
+    ///                 .and_then(|history| {
+    ///                     let at = history.closed_at(bar.time, at + 1 == bars.len())?;
+    ///                     Some(history.bars[at].close)
+    ///                 })
     ///                 .map_or(IndicatorValue::None, IndicatorValue::Single)
     ///         }).collect()
     ///     })
     ///     .unwrap()
-    ///     .with_data_requests(hourly);
+    ///     .with_data_requests(hourly)
+    ///     .with_wait_for_close();
     /// assert_eq!(other_close.data_requests()[0].symbol, "OTHER");
     /// ```
     pub fn with_data_requests<F>(mut self, requests: F) -> Self
@@ -219,6 +347,27 @@ impl CustomIndicator {
         F: Fn(&[super::StudyInput]) -> Vec<super::StudyDataRequest> + Send + Sync + 'static,
     {
         self.data_requests = Some(Arc::new(requests));
+        self.values.clear();
+        self
+    }
+
+    /// Offer Wait for interval close, on by default, for the histories this study reads with
+    /// [`StudyData::closed_at`](super::StudyData::closed_at), also when an interval input of
+    /// its own chooses them. While it is on, the chart's latest bar reads only bars of a longer
+    /// interval that closed by its open; turned off, it reads the developing bar. The chart
+    /// applies the setting through [`StudyData::chart`](super::StudyData::chart).
+    pub fn with_wait_for_close(mut self) -> Self {
+        self.wait_for_close = true;
+        self
+    }
+
+    /// Calculate with `resume` instead of the per-bar closures, from the last bars on. The study
+    /// then updates on every tick ([`Indicator::is_incremental`]), keeps drawing its values
+    /// while a calculation runs or after one stopped, also after an input edit, and reports
+    /// each call's result through [`Indicator::calculation`].
+    pub fn with_resume(mut self, resume: impl Resume + Clone + 'static) -> Self {
+        self.resume = Some(Box::new(resume));
+        self.calculation = None;
         self.values.clear();
         self
     }
@@ -319,6 +468,28 @@ impl CustomIndicator {
             })
     }
 
+    /// Runs the [`Resume`], if set, and returns whether it ran.
+    fn resume(
+        &mut self,
+        data: &[Bar],
+        from: usize,
+        source: Option<&[f64]>,
+        histories: &[super::StudyData<'_>],
+    ) -> bool {
+        let Some(resume) = &mut self.resume else {
+            return false;
+        };
+        let run = ResumeRun {
+            data,
+            from,
+            inputs: &self.inputs,
+            source,
+            histories,
+        };
+        self.calculation = Some(resume.resume_box(run, &mut self.values));
+        true
+    }
+
     fn run(&mut self, data: &[Bar], fed: Option<&[f64]>, histories: &[super::StudyData<'_>]) {
         self.values = match &self.input_calculate_fn {
             Some(calculate) => {
@@ -359,7 +530,10 @@ impl Indicator for CustomIndicator {
             return Err(crate::studies::StudyError::invalid_input(id));
         }
         input.value = value;
-        self.values.clear();
+        // A resumed calculation keeps drawing its values until the next one replaces them.
+        if self.resume.is_none() {
+            self.values.clear();
+        }
         Ok(())
     }
 
@@ -393,6 +567,11 @@ impl Indicator for CustomIndicator {
         self.offsets.get(line).copied().unwrap_or(0)
     }
 
+    fn draws_only_plots(&self) -> bool {
+        // A study reading histories of its own keeps its inputs.
+        self.data_requests.is_none()
+    }
+
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
         self.plot_color
             .as_ref()
@@ -412,7 +591,23 @@ impl Indicator for CustomIndicator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.run(data, None, &[]);
+        if !self.resume(data, 0, None, &[]) {
+            self.run(data, None, &[]);
+        }
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        if !self.resume(data, from, None, &[]) {
+            self.run(data, None, &[]);
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        self.resume.is_some()
+    }
+
+    fn calculation(&self) -> Option<Calculation> {
+        self.calculation.clone()
     }
 
     fn source(&self) -> Option<super::StudySource> {
@@ -429,11 +624,20 @@ impl Indicator for CustomIndicator {
             .map_or_else(Vec::new, |requests| requests(&self.inputs))
     }
 
-    fn update_data(&mut self, data: &[Bar], _from: usize, sources: &[super::StudyData<'_>]) {
-        self.run(data, None, sources);
+    fn offers_wait_for_close(&self) -> bool {
+        self.wait_for_close
     }
 
-    fn update_source(&mut self, data: &[Bar], _from: usize, source: &[f64]) {
+    fn update_data(&mut self, data: &[Bar], from: usize, sources: &[super::StudyData<'_>]) {
+        if !self.resume(data, from, None, sources) {
+            self.run(data, None, sources);
+        }
+    }
+
+    fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
+        if self.resume(data, from, Some(source), &[]) {
+            return;
+        }
         if self.input_calculate_fn.is_some() {
             self.run(data, Some(source), &[]);
         } else {
@@ -598,6 +802,14 @@ mod tests {
             );
         }
         let length = |value| StudyInput::new("length", "Length", value, InputKind::Length(1, 10));
+        let reserved = |id: &str| {
+            vec![StudyInput::new(
+                id,
+                "Length",
+                InputValue::Length(2),
+                InputKind::Length(1, 10),
+            )]
+        };
         for (schema, expected) in [
             (
                 vec![StudyInput::new(
@@ -611,6 +823,22 @@ mod tests {
             (
                 vec![length(InputValue::Length(2)), length(InputValue::Length(3))],
                 "study input \"length\" is declared twice",
+            ),
+            (
+                reserved("plot_offset"),
+                "study input \"plot_offset\" is reserved by the chart",
+            ),
+            (
+                reserved("calculation_symbol"),
+                "study input \"calculation_symbol\" is reserved by the chart",
+            ),
+            (
+                reserved("calculation_timeframe"),
+                "study input \"calculation_timeframe\" is reserved by the chart",
+            ),
+            (
+                reserved("wait_for_close"),
+                "study input \"wait_for_close\" is reserved by the chart",
             ),
             (
                 vec![length(InputValue::Length(0))],

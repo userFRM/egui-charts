@@ -10,9 +10,10 @@
 //! Sunday and months follow the calendar. 4-hour periods follow the session as
 //! [`HigherIntervalCandles`](super::HigherIntervalCandles) do, from the chart's
 //! [`BarClock`] ([`Indicator::set_bar_clock`] or [`Indicator::set_timeframe`]; one minute in UTC
-//! until then). A period shorter than the chart interval has no value, nor has the 4-hour period
-//! on a chart without a time interval. Bars that do not form a valid candle, such as bars with a
-//! non-finite price or volume, have no value and do not enter a period.
+//! until then). On a 4-hour chart without session hours each bar is its own 4-hour period,
+//! wherever it opens. A period shorter than the chart interval has no value, nor has the 4-hour
+//! period on a chart without a time interval. Bars that do not form a valid candle, such as bars
+//! with a non-finite price or volume, have no value and do not enter a period.
 //!
 //! # Output
 //!
@@ -320,6 +321,11 @@ impl Indicator for ZivGhostPivots {
         self.visible = visible;
     }
 
+    // Its labels sit on source bars, which another symbol or interval does not place.
+    fn draws_on_other_bars(&self) -> bool {
+        false
+    }
+
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
     }
@@ -428,6 +434,32 @@ mod tests {
                 label(3, 31.5 / 3.0),
             ]
         );
+    }
+
+    /// On a 4-hour chart each bar is its own 4-hour period, also when it opens off the 4-hour
+    /// grid: bars opening at 01:00, 05:00 and 09:00 UTC with (high, low, close) (10, 8, 9),
+    /// (12, 9, 11) and (11, 7, 8) have the pivots 27 / 3, 32 / 3 and 26 / 3, and their day
+    /// (12 + 7 + 8) / 3.
+    #[test]
+    fn four_hour_bars_off_the_grid_keep_their_own_pivot() {
+        let mut bars =
+            super::super::hlc_bars(&[(10.0, 8.0, 9.0), (12.0, 9.0, 11.0), (11.0, 7.0, 8.0)]);
+        for (bar, time) in bars.iter_mut().zip([
+            "2026-03-02T01:00:00Z",
+            "2026-03-02T05:00:00Z",
+            "2026-03-02T09:00:00Z",
+        ]) {
+            bar.time = time.parse().unwrap();
+        }
+        let mut study = ZivGhostPivots::new();
+        study.set_timeframe(Timeframe::Hour4);
+        study.calculate(&bars);
+        let pivots: Vec<_> = (0..3).map(|at| study.values().value(0, at)).collect();
+        assert_eq!(pivots, [Some(9.0), Some(32.0 / 3.0), Some(26.0 / 3.0)]);
+        let day: Vec<_> = (0..3).map(|at| study.values().value(1, at)).collect();
+        assert_eq!(day, [Some(9.0); 3]);
+        let label = &study.labels()[0];
+        assert_eq!((label.plot, label.bar, label.price), (0, 2, 26.0 / 3.0));
     }
 
     /// On a daily chart the 4-hour pivot has no value, and a period turned off loses its values,

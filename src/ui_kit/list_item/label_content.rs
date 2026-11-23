@@ -5,7 +5,7 @@ use crate::theme::ThemeExt;
 use egui::{Response, RichText, Role, Ui, Vec2, WidgetInfo};
 
 use crate::icons::Icon;
-use crate::styles::icons;
+use crate::tokens::DESIGN_TOKENS;
 
 use super::content::{ContentContext, ListItemContent};
 
@@ -40,7 +40,7 @@ impl<'a> LabelContent<'a> {
             subdued: false,
             italics: false,
             strong: false,
-            icon_size: icons::SM,
+            icon_size: DESIGN_TOKENS.sizing.icon_sm,
         }
     }
 

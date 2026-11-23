@@ -140,9 +140,8 @@ pub trait Broker: MaybeSend + 'static {
     /// or after that answer.
     fn cancel(&self, id: OrderId, reply: Reply<()>);
 
-    /// Replaces the working order `id` with `order`, which differs in its prices or brackets,
-    /// after the user dragged one of its lines, added or removed a take profit or stop loss, and
-    /// confirmed. Called only for an account whose [`Capabilities::modify`](crate::model::Capabilities::modify) is set. Answer
+    /// Replaces the working order `id` after a confirmed change to its quantity, prices,
+    /// brackets, time in force or expiry in the ticket or on the chart. Called only for an account whose [`Capabilities::modify`](crate::model::Capabilities::modify) is set. Answer
     /// once the broker accepted the change; push the changed order as an [`AccountEvent::Order`].
     /// By default every change is refused as [`FeedError::NotSupported`].
     fn modify(&self, id: OrderId, order: OrderRequest, reply: Reply<()>) {
@@ -167,6 +166,13 @@ pub trait Broker: MaybeSend + 'static {
         reply.send(Err(FeedError::NotSupported));
     }
 
+    /// Names this account, such as its broker account number, so the order ticket offers only
+    /// its presets. Keep the id stable across sessions: hosts persist presets by it. Brokers
+    /// that keep the empty default share one list.
+    fn account_id(&self) -> &str {
+        ""
+    }
+
     /// Answers one page of finished history older than what [`connect`](Self::connect) pushed, for
     /// the kind and range of `request`. By default the answer is [`FeedError::NotSupported`], and
     /// only the pushed history exists.
@@ -174,9 +180,13 @@ pub trait Broker: MaybeSend + 'static {
     /// A page holds [`AccountEvent::Order`] with a finished status, [`AccountEvent::Execution`],
     /// [`AccountEvent::ClosedPosition`], [`AccountEvent::Balance`] or [`AccountEvent::Journal`]
     /// events, as the request's [`HistoryKind`] says, oldest first, and never working orders or
-    /// positions: those come only from the pushed stream. The first page of a request holds the
-    /// newest entries of its range and each page after it, asked for with the
-    /// [`next`](HistoryPage::next) cursor, the entries before the previous one. Entries that were pushed live may appear again in a page: an order
+    /// positions: those come only from the pushed stream. Set [`Execution::symbol`] on fills of
+    /// an executions page: their orders may be older than any the panel holds. Without a known
+    /// order or a symbol, a fill is listed without a symbol and not marked on a chart.
+    ///
+    /// The first page of a request holds the newest entries of its range
+    /// and each page after it, asked for with the [`next`](HistoryPage::next) cursor, the entries
+    /// before the previous one. Entries that were pushed live may appear again in a page: an order
     /// is matched by its id and other events by value, so repeat them unchanged. Answer for the
     /// account `connect` last served; a consumer drops an answer that arrives after the account
     /// changed.
@@ -268,7 +278,8 @@ pub enum AccountEvent {
     Order(Order),
     /// Adds the position in its symbol, or replaces it; a quantity of 0 removes it.
     Position(Position),
-    /// One fill, drawn on charts of its order's symbol: push the order first.
+    /// One fill, drawn on charts of its order's symbol, or its own
+    /// [`Execution::symbol`] when the order is unknown: push the order first or set the symbol.
     Execution(Execution),
     /// A completed position, closed or reversed, for the closed positions history.
     ClosedPosition(ClosedPosition),

@@ -2,17 +2,19 @@
 //! stable, distinct content. A host answers these from its own data vendors.
 
 use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, TimeZone, Utc, Weekday};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use egui_charts::data::{
     CalendarEvent, CalendarKind, CalendarQuery, FeedError, HistoryPage, HotlistEntry, HotlistQuery,
-    Importance, NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerOp,
+    Importance, NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerCondition,
     ScreenerQuery, ScreenerRow,
 };
 use egui_charts::model::{Bar, PostContent, Quote};
 use egui_charts::services::{
-    ChatEvent, ChatMessage, Chats, Events, Notification, Notifications, Posts, Quotes,
+    ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, Events, NewChatRoom,
+    NewChatRoomKind, Notification, NotificationTarget, Notifications, Posts, Profile, ProfileEvent,
+    ProfileId, Profiles, Quotes, ShareAccess, ShareKind, ShareLink, ShareOffer, Sharing,
 };
 
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
@@ -27,12 +29,11 @@ pub(super) fn search_catalog(
     let mut symbols = DemoSymbol::symbols();
     for symbol in &mut symbols {
         symbol.source = Some("Synthetic".into());
-        if matches!(
-            symbol.exchange.as_deref(),
-            Some("Stocks" | "Futures" | "Index")
-        ) {
-            symbol.country = Some("US".into());
-        }
+        symbol.country = symbol
+            .exchange
+            .as_deref()
+            .and_then(country)
+            .map(String::from);
         symbol.sector = match symbol.symbol.as_str() {
             "STOCKA" | "STOCKB" | "STOCKC" => Some("Technology".into()),
             "STOCKD" => Some("Consumer discretionary".into()),
@@ -132,6 +133,9 @@ impl DemoMarket {
     }
 }
 
+/// The symbols and sink of the active quote subscription.
+type QuoteStream = (Vec<String>, Events<(String, Quote)>);
+
 /// The watchlist's quote service: the chart symbol's quote from the live feed, with its regular
 /// and extended-hours prices, session volume and best bid and ask, and retained executions for
 /// other catalog symbols. The quotes follow the feed's simulation clock, which the pause freezes.
@@ -139,7 +143,7 @@ impl DemoMarket {
 /// quote only wakes the UI, so it is pushed again only when a displayed value changes.
 pub(super) struct DemoQuotes {
     live: Mutex<Arc<LiveFeed>>,
-    stream: Mutex<Option<(Vec<String>, Events<(String, Quote)>)>>,
+    stream: Mutex<Option<QuoteStream>>,
     /// The last quote pushed per symbol, with times at display precision.
     last_pushed: Mutex<BTreeMap<String, Quote>>,
 }
@@ -221,10 +225,7 @@ impl super::DemoApp {
     }
 
     /// Range presets fit available bars and state a limit when the selected detail cannot reach it.
-    pub(super) fn explain_history_limit(
-        &mut self,
-        range: egui_charts::ui::timeframe_toolbar::DateRange,
-    ) {
+    pub(super) fn explain_history_limit(&mut self, range: egui_charts::model::DateRange) {
         let bars = self.chart.bars(egui_charts::widget::SeriesId::MAIN);
         if let (Some(first), Some(last)) = (bars.first(), bars.last())
             && crate::sampledata::range_start(range, last.time)
@@ -300,7 +301,22 @@ const HIGHLIGHTS: &[(&str, &str)] = &[
 /// Up to `query.limit` synthetic stories, newest first, published on the hour before `now`.
 pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
     let mut stories = stories(&query.symbols, query.highlights, now);
-    stories.sort_by(|a, b| b.time.cmp(&a.time));
+    stories.retain(|story| {
+        (query.countries.is_empty()
+            || story.symbols.iter().any(|symbol| {
+                let spec = DemoSymbol::find(symbol);
+                let country = match spec.exchange {
+                    "Forex" => "GB",
+                    "Crypto" if spec.symbol == "TOKENA" => "EU",
+                    "Crypto" => "JP",
+                    _ => "US",
+                };
+                query.countries.iter().any(|selected| selected == country)
+            }))
+            && (query.topics.is_empty() || query.topics.iter().any(|topic| topic == "Markets"))
+            && (query.providers.is_empty() || query.providers.contains(&story.source))
+    });
+    stories.sort_by_key(|story| std::cmp::Reverse(story.time));
     stories.truncate(query.limit);
     stories
 }
@@ -333,7 +349,7 @@ fn stories(symbols: &[String], highlights: bool, now: DateTime<Utc>) -> Vec<News
                         text.replace("{name}", spec.company_name)
                             .replace("{symbol}", spec.symbol)
                     };
-                    let age = TimeDelta::hours(i as i64 * 7 + (spec.seed % 5) as i64 + 1);
+                    let age = TimeDelta::hours(i as i64 * 7);
                     let mut story =
                         NewsStory::new(format!("{}-{i}", spec.symbol), hour - age, fill(headline));
                     story.source = "Demo Wire".into();
@@ -368,8 +384,16 @@ impl Posts for DemoPosts {
     }
 }
 
-/// The countries the demo calendar knows.
+/// The countries the demo's calendars and news know.
 pub(super) const COUNTRIES: [&str; 4] = ["US", "EU", "GB", "JP"];
+
+pub(super) const CATEGORIES: [&str; 5] = [
+    "Inflation",
+    "Employment",
+    "Activity",
+    "Consumption",
+    "Monetary policy",
+];
 
 /// Economic releases: country, release, importance, UTC hour, and the base value in percent.
 const RELEASES: &[(&str, &str, Importance, u32, f64)] = &[
@@ -419,6 +443,26 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
                             CalendarEvent::new(id("eco", i), query.kind, at(hour), title);
                         let drift = ((n * 7 + i) % 5) as f64 / 10.0 - 0.2;
                         event.country = country.into();
+                        let (category, description) = match title {
+                            "CPI (YoY)" => ("Inflation", "Annual change in consumer prices."),
+                            "Initial jobless claims (K)" => (
+                                "Employment",
+                                "New applications for unemployment benefits, in thousands.",
+                            ),
+                            "Retail sales (MoM)" => {
+                                ("Consumption", "Monthly change in retail spending.")
+                            }
+                            "Interest rate decision" => (
+                                "Monetary policy",
+                                "The central bank's policy interest rate.",
+                            ),
+                            _ => (
+                                "Activity",
+                                "A survey or release tracking industrial activity.",
+                            ),
+                        };
+                        event.category = Some(category.into());
+                        event.description = Some(description.into());
                         event.importance = Some(importance);
                         event.forecast = Some(format!("{base:.1}"));
                         event.prior = Some(format!("{:.1}", base - drift / 2.0));
@@ -443,21 +487,35 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
                     event.country = "US".into();
                     event.symbol = Some(spec.symbol.into());
                     if dividends {
+                        event.dividend_yield = Some("3.2%".into());
+                        event.payment_date = Some(
+                            (event.time + TimeDelta::days(14))
+                                .format("%Y-%m-%d")
+                                .to_string(),
+                        );
                         event.actual = Some(format!("{:.2}", eps / 4.0));
                         event.prior = Some(format!("{:.2}", eps / 4.2));
                     } else {
+                        event.revenue = (event.time < now).then(|| "12.0B".into());
+                        event.revenue_forecast = Some("11.8B".into());
+                        event.market_cap = Some("120.0B".into());
+                        event.surprise = (event.time < now).then(|| "+3.0%".into());
                         event.forecast = Some(format!("{eps:.2}"));
                         event.prior = Some(format!("{:.2}", eps * 0.94));
                         event.actual = (event.time < now).then(|| format!("{:.2}", eps * 1.03));
                     }
                     events.push(event);
                 }
-                CalendarKind::Ipos if n % 2 == 0 => {
+                CalendarKind::Ipos if n.is_multiple_of(2) => {
                     let (symbol, name, price) = OFFERINGS[n / 2 % OFFERINGS.len()];
                     let mut event = CalendarEvent::new(id("ipo", 0), query.kind, at(14), name);
                     event.country = "US".into();
                     event.symbol = Some(symbol.into());
                     event.forecast = Some(format!("{price:.2}"));
+                    event.deal_amount = Some("500M".into());
+                    event.shares_offered = Some("25M".into());
+                    event.market_cap = Some("1.2B".into());
+                    event.exchange = Some("XNAS".into());
                     events.push(event);
                 }
                 _ => {}
@@ -467,13 +525,34 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
     }
     events.retain(|event| {
         (query.countries.is_empty() || query.countries.contains(&event.country))
+            && (query.categories.is_empty()
+                || event
+                    .category
+                    .as_ref()
+                    .is_some_and(|category| query.categories.contains(category)))
+            && (query.symbols.is_empty()
+                || event.symbol.as_deref().is_some_and(|symbol| {
+                    query
+                        .symbols
+                        .iter()
+                        .any(|asked| asked.eq_ignore_ascii_case(symbol))
+                }))
             && query
                 .importance
                 .is_none_or(|least| event.importance >= Some(least))
             && event.time >= query.from
+            && event.time < query.to
     });
     events.sort_by_key(|event| event.time);
     events
+}
+
+/// The distinct exchanges of the catalog, which the hotlists and the screener offer.
+pub(super) fn exchanges() -> BTreeSet<String> {
+    DemoSymbol::catalog()
+        .iter()
+        .map(|spec| spec.exchange.to_owned())
+        .collect()
 }
 
 /// The demo screener's column sets.
@@ -490,7 +569,11 @@ pub(super) fn screener_sets() -> Vec<ScreenerColumnSet> {
         ),
         ScreenerColumnSet::new(
             "Valuation",
-            vec![column("price", "Price"), column("market_cap", "Mkt cap")],
+            vec![
+                column("price", "Price"),
+                column("market_cap", "Mkt cap"),
+                ScreenerColumn::text("exchange", "Exchange", exchanges()),
+            ],
         ),
     ]
 }
@@ -510,23 +593,39 @@ pub(super) fn screen(
             _ => return None,
         })
     };
-    let known = |column: &String| value(&DemoSymbol::catalog()[0], column).is_some();
+    // Text needs no quote, so it filters before the quotes load.
+    let text = |spec: &DemoSymbol, column: &str| (column == "exchange").then_some(spec.exchange);
+    let known = |column: &String| {
+        let spec = &DemoSymbol::catalog()[0];
+        value(spec, column).is_some() || text(spec, column).is_some()
+    };
     if let Some(filter) = query.filters.iter().find(|filter| !known(&filter.column)) {
         return Err(FeedError::InvalidData(format!(
             "no column {} to filter",
             filter.column
         )));
     }
-    let mut rows: Vec<(f64, ScreenerRow)> = DemoSymbol::catalog()
+    let mut rows: Vec<((f64, &str), ScreenerRow)> = DemoSymbol::catalog()
         .iter()
         .filter(|spec| {
             query.filters.iter().all(|filter| {
-                value(spec, &filter.column).is_some_and(|v| match filter.op {
-                    ScreenerOp::Above => v > filter.value,
-                    ScreenerOp::Below => v < filter.value,
-                    // A comparison added later matches no row.
+                let number = value(spec, &filter.column);
+                let text = text(spec, &filter.column);
+                match &filter.condition {
+                    ScreenerCondition::Above(x) => number.is_some_and(|v| v > *x),
+                    ScreenerCondition::Below(x) => number.is_some_and(|v| v < *x),
+                    ScreenerCondition::Between(from, to) => {
+                        number.is_some_and(|v| (*from..=*to).contains(&v))
+                    }
+                    ScreenerCondition::Is(values) => {
+                        text.is_some_and(|t| values.iter().any(|v| v == t))
+                    }
+                    ScreenerCondition::IsNot(values) => {
+                        text.is_some_and(|t| values.iter().all(|v| v != t))
+                    }
+                    // A condition added later matches no row.
                     _ => false,
-                })
+                }
             })
         })
         .map(|spec| {
@@ -538,19 +637,21 @@ pub(super) fn screen(
                     ("price", Some(v)) => format!("{v:.decimals$}"),
                     ("change_percent", Some(v)) => format!("{v:+.2}%"),
                     ("volume" | "market_cap", Some(v)) => compact(v),
+                    ("exchange", _) => spec.exchange.to_owned(),
                     _ => String::new(),
                 })
                 .collect();
-            let key = query
-                .sort_by
-                .as_deref()
-                .and_then(|column| value(spec, column))
-                .unwrap_or(0.0);
+            let key = query.sort_by.as_deref().map_or((0.0, ""), |column| {
+                (
+                    value(spec, column).unwrap_or(0.0),
+                    text(spec, column).unwrap_or(""),
+                )
+            });
             (key, ScreenerRow::new(spec.symbol, values))
         })
         .collect();
     if query.sort_by.is_some() {
-        rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        rows.sort_by(|(a, _), (b, _)| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(b.1)));
         if query.descending {
             rows.reverse();
         }
@@ -574,33 +675,57 @@ fn compact(value: f64) -> String {
 }
 
 /// The demo's hotlists.
-pub(super) const HOTLISTS: [&str; 3] = ["Top gainers", "Top losers", "Most volatile"];
+pub(super) const HOTLISTS: [&str; 4] =
+    ["Top gainers", "Top losers", "Most volatile", "Most active"];
+
+/// The same country metadata used by symbol search; other markets have no country assigned.
+fn country(exchange: &str) -> Option<&str> {
+    matches!(exchange, "Stocks" | "Futures" | "Index").then_some("US")
+}
 
 /// The catalog symbols ranked for `query.list` on their shared execution quotes.
 pub(super) fn hotlist(query: &HotlistQuery, live: &LiveFeed) -> Vec<HotlistEntry> {
-    let mut entries: Vec<HotlistEntry> = DemoSymbol::catalog()
+    let mut entries: Vec<_> = DemoSymbol::catalog()
         .iter()
+        .filter(|spec| {
+            query.exchanges.is_empty() || query.exchanges.iter().any(|code| code == spec.exchange)
+        })
+        .filter(|spec| {
+            query.countries.is_empty()
+                || query
+                    .countries
+                    .iter()
+                    .any(|code| Some(code.as_str()) == country(spec.exchange))
+        })
         .filter_map(|spec| {
             let quote = live.market_quote(spec.symbol, live.now())?;
             let change = quote.change_percent();
             let mut entry = HotlistEntry::new(spec.symbol, quote.last, change);
             entry.price_decimals = super::live::price_decimals(spec.symbol);
-            Some(entry)
+            let rank = match query.list.as_str() {
+                "Most active" => {
+                    let volume = quote.volume.unwrap_or(0.0);
+                    entry.figure = Some(("Volume".into(), format!("{volume:.0}")));
+                    volume
+                }
+                "Top gainers" => change,
+                "Top losers" => -change,
+                _ => change.abs(),
+            };
+            Some((rank, entry))
         })
         .collect();
     match query.list.as_str() {
-        "Top gainers" => {
-            entries.retain(|entry| entry.change_percent > 0.0);
-            entries.sort_by(|a, b| b.change_percent.total_cmp(&a.change_percent));
-        }
-        "Top losers" => {
-            entries.retain(|entry| entry.change_percent < 0.0);
-            entries.sort_by(|a, b| a.change_percent.total_cmp(&b.change_percent));
-        }
-        _ => entries.sort_by(|a, b| b.change_percent.abs().total_cmp(&a.change_percent.abs())),
+        "Top gainers" => entries.retain(|(_, entry)| entry.change_percent > 0.0),
+        "Top losers" => entries.retain(|(_, entry)| entry.change_percent < 0.0),
+        _ => {}
     }
-    entries.truncate(query.limit);
+    entries.sort_by(|a, b| b.0.total_cmp(&a.0));
     entries
+        .into_iter()
+        .take(query.limit)
+        .map(|(_, entry)| entry)
+        .collect()
 }
 
 /// The demo's event log: what it reported to the user, newest last, kept for a new stream.
@@ -636,6 +761,20 @@ impl DemoNotifications {
         self.publish(entry);
     }
 
+    /// Logs `title` about the demo's feed entry `id`, which the panel offers to open.
+    pub(super) fn notify_post(&self, title: impl Into<String>, id: &str) {
+        let mut entry = Notification::new(Utc::now(), title);
+        entry.target = Some(NotificationTarget::Post(id.to_owned()));
+        self.publish(entry);
+    }
+
+    /// Logs `title` about the demo's chat room `room`, which the panel offers to open.
+    pub(super) fn notify_room(&self, title: impl Into<String>, room: &str) {
+        let mut entry = Notification::new(Utc::now(), title);
+        entry.target = Some(NotificationTarget::Room(room.to_owned()));
+        self.publish(entry);
+    }
+
     /// Keep supplied headlines quiet on repeated viewport requests.
     pub(super) fn notify_event(&self, symbol: &str, event: &egui_charts::model::TimeScaleEvent) {
         let mut latest = self.2.lock().unwrap_or_else(|e| e.into_inner());
@@ -649,7 +788,7 @@ impl DemoNotifications {
         self.publish(entry);
     }
 
-    fn publish(&self, entry: Notification) {
+    pub(super) fn publish(&self, entry: Notification) {
         let mut state = self.0.lock().unwrap();
         if state.0.contains(&entry) {
             return;
@@ -699,39 +838,82 @@ impl Notifications for DemoNotifications {
     }
 }
 
-/// Two rooms with a few synthetic messages, echoing what the user posts.
-pub(super) struct DemoChats(Mutex<(Vec<ChatMessage>, Option<Events<ChatEvent>>)>);
+/// Two rooms with recent messages, a fixed older backlog, echoes of what the user posts and the
+/// authors the user ignores; each post is also logged as a notification that opens its room.
+pub(super) struct DemoChats(
+    Mutex<(Vec<ChatMessage>, Option<Events<ChatEvent>>, Vec<ChatUser>)>,
+    Vec<ChatMessage>,
+    Arc<DemoNotifications>,
+);
 
 impl DemoChats {
-    pub(super) fn new(now: DateTime<Utc>) -> Self {
-        let message = |room, author, minutes, text| {
+    pub(super) fn new(now: DateTime<Utc>, notifications: Arc<DemoNotifications>) -> Self {
+        let message = |room, author: &str, minutes, text| {
             ChatMessage::new(room, author, now - TimeDelta::minutes(minutes), text)
+                .with_id(format!("{room}-seed-{minutes}"))
+                .with_author_id(author.to_lowercase())
         };
-        Self(Mutex::new((
-            vec![
-                message("General", "Ana", 42, "Morning. Anyone watching the open?"),
-                message(
-                    "General",
-                    "Ravi",
-                    37,
-                    "INDEXA holding above yesterday's close so far.",
-                ),
-                message(
-                    "General",
-                    "Ana",
-                    12,
-                    "Volume looks light ahead of the CPI release.",
-                ),
-                message("Crypto", "Lee", 25, "TOKENA testing the range high again."),
-                message(
-                    "Crypto",
-                    "Mia",
-                    9,
-                    "Watching for a close above it on the hourly.",
-                ),
-            ],
-            None,
-        )))
+        let history = ["General", "Crypto"]
+            .into_iter()
+            .flat_map(|room| {
+                (1..=60).map(move |n| {
+                    ChatMessage::new(
+                        room,
+                        "Ana",
+                        now - TimeDelta::minutes(121 - n),
+                        format!("{room} history {n}"),
+                    )
+                    .with_id(format!("{room}-history-{n}"))
+                    .with_author_id("ana")
+                })
+            })
+            .collect();
+        Self(
+            Mutex::new((
+                vec![
+                    message("General", "Ana", 42, "Morning. Anyone watching the open?"),
+                    message(
+                        "General",
+                        "Ravi",
+                        37,
+                        "INDEXA holding above yesterday's close so far.",
+                    ),
+                    message(
+                        "General",
+                        "Ana",
+                        12,
+                        "Volume looks light ahead of the CPI release.",
+                    ),
+                    message("Crypto", "Lee", 25, "TOKENA testing the range high again."),
+                    message(
+                        "Crypto",
+                        "Mia",
+                        9,
+                        "Watching for a close above it on the hourly.",
+                    ),
+                ],
+                None,
+                Vec::new(),
+            )),
+            history,
+            notifications,
+        )
+    }
+
+    /// Posts the user's `text` to `room`, answering the message `to` when set, and logs the post
+    /// as a notification that opens the room.
+    fn post(&self, room: String, text: String, to: Option<String>, reply: Reply<()>) {
+        let mut state = self.0.lock().unwrap();
+        let mut message = ChatMessage::new(room.clone(), "You", Utc::now(), text)
+            .with_id(format!("live-{}", state.0.len()));
+        message.reply_to = to;
+        if let Some(events) = &state.1 {
+            events.push(ChatEvent::Message(message.clone()));
+        }
+        state.0.push(message);
+        drop(state);
+        self.2.notify_room(format!("Message sent to {room}"), &room);
+        reply.send(Ok(()));
     }
 }
 
@@ -741,16 +923,148 @@ impl Chats for DemoChats {
         for message in &state.0 {
             events.push(ChatEvent::Message(message.clone()));
         }
+        events.push(ChatEvent::Ignored(state.2.clone()));
         state.1 = Some(events);
     }
 
     fn send(&self, room: String, text: String, reply: Reply<()>) {
-        let message = ChatMessage::new(room, "You", Utc::now(), text);
+        self.post(room, text, None, reply);
+    }
+
+    fn send_reply(&self, room: String, text: String, to: String, reply: Reply<()>) {
+        self.post(room, text, Some(to), reply);
+    }
+
+    fn link(&self, message: &ChatMessage) -> Option<String> {
+        // shortcut: the demo has no chat server, so its links resolve nowhere; a host returns its own URL.
+        message
+            .id
+            .as_ref()
+            .map(|id| format!("demo://chats/{}/{id}", message.room))
+    }
+
+    fn ignore_user(&self, user: String, ignore: bool, reply: Reply<()>) {
         let mut state = self.0.lock().unwrap();
-        if let Some(events) = &state.1 {
-            events.push(ChatEvent::Message(message.clone()));
+        state.2.retain(|ignored| ignored.id != user);
+        if ignore {
+            let name = state
+                .0
+                .iter()
+                .find(|message| message.author_id.as_ref() == Some(&user))
+                .map_or_else(|| user.clone(), |message| message.author.clone());
+            state.2.push(ChatUser::new(user, name));
         }
-        state.0.push(message);
+        if let Some(events) = &state.1 {
+            events.push(ChatEvent::Ignored(state.2.clone()));
+        }
+        reply.send(Ok(()));
+    }
+
+    /// A direct room is named after the other user, so asking again opens the same room.
+    fn create_room(&self, room: NewChatRoom, reply: Reply<String>) {
+        let (NewChatRoomKind::Direct, [member]) = (room.kind, room.members.as_slice()) else {
+            reply.send(Err(FeedError::NotSupported));
+            return;
+        };
+        let state = self.0.lock().unwrap();
+        let name = self
+            .1
+            .iter()
+            .chain(&state.0)
+            .find(|message| message.author_id.as_ref() == Some(member))
+            .map_or_else(|| member.clone(), |message| message.author.clone());
+        if let Some(events) = &state.1 {
+            events.push(ChatEvent::Room(name.clone()));
+        }
+        reply.send(Ok(name));
+    }
+
+    fn capabilities(&self) -> ChatCapabilities {
+        let mut capabilities = ChatCapabilities::default();
+        capabilities.history = true;
+        capabilities.direct_messages = true;
+        capabilities.replies = true;
+        capabilities.links = true;
+        capabilities.ignore_users = true;
+        capabilities
+    }
+
+    fn history(
+        &self,
+        room: String,
+        before: Option<String>,
+        limit: u32,
+        reply: Reply<Vec<ChatMessage>>,
+    ) {
+        let state = self.0.lock().unwrap();
+        let mut messages: Vec<_> = self
+            .1
+            .iter()
+            .chain(&state.0)
+            .filter(|message| message.room == room)
+            .collect();
+        if let Some(id) = before {
+            let Some(time) = messages
+                .iter()
+                .find(|message| message.id.as_deref() == Some(&id))
+                .map(|message| message.time)
+            else {
+                reply.send(Err(FeedError::InvalidData("Unknown chat message".into())));
+                return;
+            };
+            messages.retain(|message| message.time < time);
+        }
+        messages.sort_by_key(|message| message.time);
+        let start = messages.len().saturating_sub(limit as usize);
+        reply.send(Ok(messages[start..]
+            .iter()
+            .map(|message| (*message).clone())
+            .collect()));
+    }
+}
+
+/// The profiles of the chat authors, whose follow requests the demo grants at once.
+pub(super) struct DemoProfiles(Mutex<(Vec<Profile>, Option<Events<ProfileEvent>>)>);
+
+impl DemoProfiles {
+    pub(super) fn new() -> Self {
+        let profiles = [
+            ("Ana", "Index futures, mostly around the open."),
+            ("Ravi", "Swing trades in large caps."),
+            ("Lee", "Crypto ranges and their breakouts."),
+            ("Mia", "Hourly charts and patient entries."),
+        ]
+        .into_iter()
+        .map(|(name, bio)| {
+            let mut profile = Profile::new(ProfileId(name.to_lowercase()), name);
+            profile.bio = bio.into();
+            profile
+        })
+        .collect();
+        Self(Mutex::new((profiles, None)))
+    }
+}
+
+impl Profiles for DemoProfiles {
+    fn watch(&self, events: Events<ProfileEvent>) {
+        let mut state = self.0.lock().unwrap();
+        for profile in &state.0 {
+            events.push(ProfileEvent::Upsert(profile.clone()));
+        }
+        state.1 = Some(events);
+    }
+
+    fn follow(&self, id: ProfileId, follow: bool, reply: Reply<()>) {
+        let mut state = self.0.lock().unwrap();
+        let (profiles, events) = &mut *state;
+        let Some(profile) = profiles.iter_mut().find(|profile| profile.id == id) else {
+            reply.send(Err(FeedError::InvalidData("Unknown profile".into())));
+            return;
+        };
+        profile.followed = follow;
+        if let Some(events) = events {
+            events.push(ProfileEvent::Upsert(profile.clone()));
+        }
         reply.send(Ok(()));
     }
 }
@@ -958,9 +1272,190 @@ pub(super) fn seasonality(bars: &[Bar]) -> Seasonality {
     Seasonality::new(years as u32, summaries)
 }
 
+/// The demo's sharing of watchlists and layouts: a placeholder link per document, and layouts
+/// shared through the switch with a chosen access until it is turned off. A renamed layout stays
+/// shared under its new name.
+#[derive(Default)]
+pub(super) struct DemoSharing(Mutex<(usize, HashMap<(ShareKind, String), ShareAccess>)>);
+
+impl Sharing for DemoSharing {
+    fn offers(&self, kind: ShareKind) -> ShareOffer {
+        let mut offer = ShareOffer::new(true, false);
+        // Layouts share through the switch; a watchlist is shared by taking its link.
+        offer.switch = kind == ShareKind::Layout;
+        offer.revoke = !offer.switch;
+        offer
+    }
+    fn shared(&self, kind: ShareKind, name: &str) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .1
+            .contains_key(&(kind, name.to_owned()))
+    }
+    fn access(&self, kind: ShareKind, name: &str) -> ShareAccess {
+        let state = self.0.lock().unwrap();
+        state
+            .1
+            .get(&(kind, name.to_owned()))
+            .copied()
+            .unwrap_or_default()
+    }
+    fn share(&self, kind: ShareKind, name: &str, access: ShareAccess, reply: Reply<()>) {
+        self.0
+            .lock()
+            .unwrap()
+            .1
+            .insert((kind, name.to_owned()), access);
+        reply.send(Ok(()));
+    }
+    fn rename(&self, kind: ShareKind, name: &str, renamed: &str, reply: Reply<()>) {
+        let mut state = self.0.lock().unwrap();
+        if let Some(access) = state.1.remove(&(kind, name.to_owned())) {
+            state.1.insert((kind, renamed.to_owned()), access);
+        }
+        drop(state);
+        reply.send(Ok(()));
+    }
+    fn link(&self, kind: ShareKind, name: &str, reply: Reply<ShareLink>) {
+        let mut state = self.0.lock().unwrap();
+        state.0 += 1;
+        let n = state.0;
+        let key = (kind, name.to_owned());
+        let (path, access) = if kind == ShareKind::Layout {
+            ("layout", state.1.get(&key).copied().unwrap_or_default())
+        } else {
+            // Taking a watchlist's link shares it view only.
+            ("watchlist", *state.1.entry(key).or_default())
+        };
+        // There is no demo server; this reserved domain does not resolve.
+        reply.send(Ok(ShareLink::new(
+            format!("https://demo.invalid/{path}/{n}"),
+            access == ShareAccess::ViewAndCopy,
+        )));
+    }
+    fn revoke(&self, kind: ShareKind, name: &str, reply: Reply<()>) {
+        self.0.lock().unwrap().1.remove(&(kind, name.to_owned()));
+        reply.send(Ok(()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn demo_chat_history_pages_to_the_end_without_duplicates() {
+        use crate::controller::{DemoApp, SidePanel};
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let now = Utc.with_ymd_and_hms(2026, 11, 21, 12, 0, 0).unwrap();
+        let notifications = Arc::new(DemoNotifications::default());
+        let host = Arc::new(DemoChats::new(now, notifications.clone()));
+        let seeded: Vec<_> = host
+            .0
+            .lock()
+            .unwrap()
+            .0
+            .iter()
+            .filter(|message| message.room == "General")
+            .cloned()
+            .collect();
+        app.chats.set_service(host.clone());
+        app.open_panel = Some(SidePanel::Chats);
+        let mut texts = Vec::new();
+        for _ in 0..8 {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 8000.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.chats.poll(&ctx);
+                    app.chats.show(ui);
+                },
+            );
+            texts = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            if texts.iter().any(|text| text == "No older messages") {
+                break;
+            }
+        }
+        let shown: Vec<_> = texts
+            .iter()
+            .filter(|text| {
+                text.starts_with("General history ")
+                    || seeded.iter().any(|message| message.text == text.as_str())
+            })
+            .cloned()
+            .collect();
+        let expected: Vec<_> = (1..=60)
+            .map(|n| format!("General history {n}"))
+            .chain(seeded.iter().map(|message| message.text.clone()))
+            .collect();
+        assert_eq!(
+            shown, expected,
+            "the room must grow beyond its seeded messages in time order, each once"
+        );
+        let times: Vec<_> = texts
+            .iter()
+            .filter_map(|text| NaiveTime::parse_from_str(text, "%H:%M").ok())
+            .collect();
+        assert_eq!(times.len(), 63);
+        assert!(times.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(texts.iter().any(|text| text == "No older messages"));
+
+        use egui_charts::data::ReplyReader;
+        let (answer, reply) = ReplyReader::new();
+        host.send("General".into(), "Hello".into(), reply);
+        assert!(answer.take().unwrap().is_ok());
+        let sent = notifications.0.lock().unwrap().0.last().cloned().unwrap();
+        assert_eq!(sent.title, "Message sent to General");
+        assert_eq!(
+            sent.target,
+            Some(NotificationTarget::Room("General".into()))
+        );
+        let state = host.0.lock().unwrap();
+        let ids: std::collections::HashSet<_> = state
+            .0
+            .iter()
+            .map(|message| {
+                message
+                    .id
+                    .as_deref()
+                    .expect("seeded and echoed messages have identifiers")
+            })
+            .collect();
+        assert_eq!(ids.len(), state.0.len());
+        drop(state);
+        for room in ["General", "Crypto"] {
+            let (answer, reply) = ReplyReader::new();
+            host.history(room.into(), None, 2, reply);
+            let page = answer.take().unwrap().unwrap();
+            assert_eq!(page.len(), 2);
+            assert!(
+                page.iter()
+                    .all(|message| message.room == room && message.id.is_some())
+            );
+            assert!(page[0].time < page[1].time);
+            let (answer, reply) = ReplyReader::new();
+            host.history(room.into(), page[0].id.clone(), 1, reply);
+            let older = answer.take().unwrap().unwrap();
+            assert_eq!(older.len(), 1);
+            assert!(older[0].time < page[0].time);
+        }
+    }
 
     #[test]
     fn long_intervals_warm_up_and_page_without_execution_history() {
@@ -1039,7 +1534,7 @@ mod tests {
         let mut shifted = daily.clone();
         shifted.time = "2026-11-02T05:00:00Z".parse().unwrap();
         assert_eq!(
-            crate::sampledata::calendar_history(&[daily.clone()], &[], clock.clone()),
+            crate::sampledata::calendar_history(std::slice::from_ref(&daily), &[], clock.clone()),
             vec![shifted]
         );
         let mut sunday = daily;
@@ -1223,8 +1718,9 @@ mod tests {
 
     #[test]
     fn chart_quotes_follow_slots_tabs_and_symbols_outside_the_watchlist() {
+        use egui_charts::model::Watchlist;
         use egui_charts::ui::top_toolbar::LayoutAction;
-        use egui_charts::ui::widget_bar::{Watchlist, WatchlistPanel};
+        use egui_charts::ui::widget_bar::WatchlistPanel;
         let ctx = egui::Context::default();
         let now = "2026-10-23T15:00:00Z".parse().unwrap();
         let mut app = super::super::DemoApp::new_at(
@@ -1280,7 +1776,7 @@ mod tests {
         app.activate_chart_slot(0);
         app.live.set_paused(true);
         let now = app.live.now();
-        app.handle_layout_action(LayoutAction::CreateNew);
+        app.handle_layout_action(LayoutAction::CreateNew("Second".into()));
         app.switch_symbol("FOREXA");
         app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "STOCKA")]);
         app.watchlist.set_service(app.quotes.clone());
@@ -1391,10 +1887,95 @@ mod tests {
         }
     }
 
+    /// The demo's paper account offers trailing stops: one placed from the ticket's Trailing
+    /// tab starts 10 ticks behind the price and follows the price when it moves its way.
+    #[test]
+    fn a_trailing_stop_is_placed_from_the_ticket_and_follows_the_price() {
+        use egui_charts::model::{OrderRequest, OrderSide, OrderType};
+        let ctx = egui::Context::default();
+        let now = "2026-10-23T15:00:00Z".parse().unwrap();
+        let mut app = super::super::DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        app.switch_symbol("TOKENA");
+        app.trading.set_service(app.paper.clone());
+        app.trading.display.instant_orders = true;
+        demo_frame(&mut app, &ctx, vec![]);
+        let price = app.live.quote(now).unwrap().last;
+        app.paper.set_price("TOKENA", price);
+        let reference = LiveFeed::new("TOKENA", now);
+        super::super::tests::finish_feed(&reference);
+        reference.set_paused(false);
+        let (at, trigger) = (1..=40)
+            .find_map(|step| {
+                let at = now + TimeDelta::milliseconds(step * 100);
+                reference.advance(at);
+                let next = reference.quote(at)?.last;
+                (next != price).then_some((at, next))
+            })
+            .expect("the price moves");
+        // The side whose stop the move carries along: a sell trails a rise, a buy a fall.
+        let (side, s) = if trigger > price {
+            (OrderSide::Sell, 1.0)
+        } else {
+            (OrderSide::Buy, -1.0)
+        };
+        app.trading
+            .open_ticket(OrderRequest::new("TOKENA", side, 1.0, OrderType::Market));
+        let click = |app: &mut super::super::DemoApp, found: &dyn Fn(&str) -> bool| {
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = demo_frame(app, &ctx, vec![]);
+            }
+            let point = texts
+                .iter()
+                .find(|(text, _)| found(text))
+                .expect("the control")
+                .1
+                .center();
+            let press = [true, false].map(|pressed| egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            demo_frame(app, &ctx, vec![egui::Event::PointerMoved(point)]);
+            demo_frame(app, &ctx, press.to_vec());
+        };
+        click(&mut app, &|text| text == "Trailing");
+        click(&mut app, &|text| text.contains("TOKENA TRAIL 10 ticks"));
+        // The working order's tick size and stop, as the account saves them.
+        let working = |app: &super::super::DemoApp| {
+            let saved = serde_json::to_value(app.paper.save()).unwrap();
+            let order = &saved["working"][0];
+            let ticks = &order["request"]["order_type"]["TrailingStop"]["distance"]["Ticks"];
+            assert_eq!(ticks["ticks"], 10, "{saved}");
+            let tick = ticks["tick_size"].as_f64().unwrap();
+            (tick, order["trailing_stop"].as_f64().expect("the stop"))
+        };
+        let near = |actual: f64, expected: f64, tick: f64| {
+            assert!(
+                (actual - expected).abs() < tick * 1e-6,
+                "{actual} != {expected}"
+            );
+        };
+        let (tick, stop) = working(&app);
+        near(stop, price - s * 10.0 * tick, tick);
+        super::super::tests::finish_feed(&app.live);
+        app.live.set_paused(false);
+        app.live.advance(at);
+        demo_frame(&mut app, &ctx, vec![]);
+        let (_, moved) = working(&app);
+        near(moved, trigger - s * 10.0 * tick, tick);
+    }
+
     #[test]
     fn paper_orders_fill_after_switching_away_and_stay_frozen_during_replay() {
+        use egui_charts::model::Watchlist;
         use egui_charts::model::{OrderRequest, OrderSide, OrderType};
-        use egui_charts::ui::widget_bar::{Watchlist, WatchlistPanel};
+        use egui_charts::ui::widget_bar::WatchlistPanel;
         let ctx = egui::Context::default();
         let now = "2026-10-23T15:00:00Z".parse().unwrap();
         let mut app = super::super::DemoApp::new_at(

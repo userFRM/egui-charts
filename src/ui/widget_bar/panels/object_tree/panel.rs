@@ -31,7 +31,7 @@ use crate::ui_kit::ext::UiExt;
 /// # Example
 ///
 /// ```no_run
-/// use egui_charts::ui::widget_bar::panels::object_tree::{ObjectTreePanel, SourceItem};
+/// use egui_charts::ui::widget_bar::{ObjectTreePanel, SourceItem};
 ///
 /// # fn side_panel(ui: &mut egui::Ui) {
 /// let mut panel = ObjectTreePanel::new();
@@ -143,7 +143,10 @@ impl ObjectTreePanel {
                 .peekable();
             let all_locked = selected.peek().is_some()
                 && selected.all(|s| s.is_drawing() && (s.locked || !s.user_edit_enabled));
-            self.show_header(ui, &mut action, can_group, all_locked);
+            let lockable = sources
+                .iter()
+                .any(|s| s.is_drawing() && s.user_edit_enabled);
+            self.show_header(ui, &mut action, can_group, all_locked, lockable);
 
             ui.separator();
 
@@ -228,6 +231,7 @@ impl ObjectTreePanel {
         action: &mut ObjectTreeAction,
         can_group: bool,
         all_locked: bool,
+        lockable: bool,
     ) {
         PanelHeader::new("Objects")
             .strong()
@@ -307,11 +311,23 @@ impl ObjectTreePanel {
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button(l10n::text(ui.ctx(), "Lock all")).clicked() {
+                    if ui
+                        .add_enabled(
+                            lockable,
+                            egui::Button::new(l10n::text(ui.ctx(), "Lock all")),
+                        )
+                        .clicked()
+                    {
                         *action = ObjectTreeAction::LockAll;
                         ui.close();
                     }
-                    if ui.button(l10n::text(ui.ctx(), "Unlock all")).clicked() {
+                    if ui
+                        .add_enabled(
+                            lockable,
+                            egui::Button::new(l10n::text(ui.ctx(), "Unlock all")),
+                        )
+                        .clicked()
+                    {
                         *action = ObjectTreeAction::UnlockAll;
                         ui.close();
                     }
@@ -486,7 +502,7 @@ impl ObjectTreePanel {
                                 ),
                         );
                         ui.add(
-                            egui::Label::new(l10n::text(ui.ctx(), drawing.name()))
+                            egui::Label::new(drawing.shown_name(|tool| l10n::text(ui.ctx(), tool)))
                                 .selectable(false)
                                 .truncate(),
                         );
@@ -1173,6 +1189,80 @@ mod tests {
         }
     }
 
+    /// Lock all drawings turns off the actions menu's Lock all and Unlock all, as it turns off
+    /// the row and folder lock buttons, and the commands keep each drawing's own lock. With it
+    /// off, both entries act on the drawings again.
+    #[test]
+    fn lock_all_drawings_keeps_own_locks_from_the_actions_menu() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        type App = (ObjectTreePanel, crate::Chart);
+        let mut chart = crate::widget::ChartBuilder::new().build();
+        for (id, locked) in [(1, true), (2, false)] {
+            let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+            drawing.locked = locked;
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+            drawing.completed = true;
+            chart.drawings_mut().drawings.push(drawing);
+        }
+        chart.drawings_mut().set_locked(true);
+        let panel = ObjectTreePanel::with_config(ObjectTreeConfig {
+            show_data_window: false,
+            ..Default::default()
+        });
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(320.0, 600.0))
+            .build_ui_state(
+                |ui, (panel, chart): &mut App| {
+                    let mut sources: Vec<_> = chart
+                        .drawings()
+                        .drawings
+                        .iter()
+                        .map(|d| SourceItem::for_drawing(chart, d))
+                        .collect();
+                    let action = panel.show(ui, None, &mut sources);
+                    panel.apply_to_chart(chart, &action, &sources);
+                },
+                (panel, chart),
+            );
+        h.run();
+        let locks = |h: &Harness<'_, App>| {
+            h.state()
+                .1
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.locked)
+                .collect::<Vec<_>>()
+        };
+        h.get_by_label("Object actions").click();
+        h.run();
+        for label in ["Lock all", "Unlock all"] {
+            assert!(
+                h.get_by_label(label).accesskit_node().is_disabled(),
+                "{label}"
+            );
+        }
+        h.key_press(egui::Key::Escape);
+        h.run();
+        for action in [ObjectTreeAction::UnlockAll, ObjectTreeAction::LockAll] {
+            let (panel, chart) = h.state_mut();
+            panel.apply_to_chart(chart, &action, &[]);
+            assert_eq!(locks(&h), [true, false], "{action:?}");
+        }
+        h.state_mut().1.drawings_mut().set_locked(false);
+        h.run();
+        h.get_by_label("Object actions").click();
+        h.run();
+        h.get_by_label("Unlock all").click();
+        h.run();
+        assert_eq!(locks(&h), [false, false]);
+    }
+
     /// The list of drawings by symbol: reached from the actions menu when the host supplies it,
     /// sorted from a row's controls, which appear under the pointer or when expanded, and deleting
     /// one symbol only asks for that symbol.
@@ -1256,10 +1346,16 @@ mod tests {
         l10n::set_translator(&h.ctx, |english| match english {
             "Trend Line" => Some("Ligne de tendance".into()),
             "Ray" => Some("Rayon".into()),
+            "Alpha" => Some("Zulu".into()),
             _ => None,
         });
         h.run();
+        assert!(
+            h.query_by_label("Zulu").is_none(),
+            "a given name shows as saved"
+        );
         let top = |name: &str| h.get_by_label(name).rect().top();
+        assert!(top("Alpha") < top("Ligne de tendance"), "sorted as shown");
         assert!(
             top("Ligne de tendance") < top("Rayon"),
             "shown A to Z: Ligne de tendance at {}, Rayon at {}",

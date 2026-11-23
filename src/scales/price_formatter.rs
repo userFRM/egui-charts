@@ -17,7 +17,7 @@ use std::sync::Arc;
 const MAX_PRECISION: usize = 324;
 
 // Inspect the rounded digits so rounding ties follow Rust's formatter.
-pub(super) fn format_decimal(value: f64, precision: usize) -> String {
+pub(crate) fn format_decimal(value: f64, precision: usize) -> String {
     let precision = precision.min(MAX_PRECISION);
     let mut formatted = format!("{value:.precision$}");
     if formatted
@@ -61,6 +61,23 @@ fn format_fraction(value: f64, fraction: crate::model::PriceFraction) -> String 
 pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 {
     let scale = 10f64.powi(decimals(step) as i32);
     (round(value / step) * step * scale).round() / scale
+}
+
+/// The price alert and order rows act on: the nearest positive finite tick, else the menu's
+/// decimals, with halfway values away from zero. Non-finite prices and decimal counts above
+/// the instrument precision cap stay unchanged.
+#[cfg(feature = "ui")]
+pub(crate) fn snap_price(price: f64, tick: Option<f64>, decimals: usize) -> f64 {
+    if !price.is_finite() {
+        return price;
+    }
+    match tick.filter(|tick| tick.is_finite() && *tick > 0.0) {
+        Some(tick) => to_step(price, tick, f64::round),
+        None if decimals <= MAX_PRICE_DECIMALS => {
+            to_step(price, 10f64.powi(-(decimals as i32)), f64::round)
+        }
+        None => price,
+    }
 }
 
 /// Decimals needed to write `step`, such as 2 for 0.25.
@@ -417,8 +434,17 @@ impl Default for VolumeFormatter {
     }
 }
 
-impl PriceFormatter for VolumeFormatter {
-    fn format(&self, value: f64) -> String {
+impl VolumeFormatter {
+    /// The volume as [`format`](PriceFormatter::format) writes it, with K, M and B values at no
+    /// fewer than `unit_decimals` decimals. Values below a thousand keep the precision.
+    pub(crate) fn format_with_min_unit_decimals(&self, value: f64, unit_decimals: usize) -> String {
+        let decimals = |unit: f64| {
+            if unit == 1.0 {
+                self.precision
+            } else {
+                self.precision.max(unit_decimals)
+            }
+        };
         let abs_val = value.abs();
         let (mut unit, mut suffix) = if abs_val >= 1_000_000_000.0 {
             (1_000_000_000.0, "B")
@@ -429,7 +455,7 @@ impl PriceFormatter for VolumeFormatter {
         } else {
             (1.0, "")
         };
-        let mut formatted = format_decimal(value / unit, self.precision);
+        let mut formatted = format_decimal(value / unit, decimals(unit));
         if unit < 1_000_000_000.0
             && formatted.trim_start_matches('-').split('.').next() == Some("1000")
         {
@@ -439,10 +465,16 @@ impl PriceFormatter for VolumeFormatter {
                 "K" => "M",
                 _ => "B",
             };
-            formatted = format_decimal(value / unit, self.precision);
+            formatted = format_decimal(value / unit, decimals(unit));
         }
         formatted.push_str(suffix);
         formatted
+    }
+}
+
+impl PriceFormatter for VolumeFormatter {
+    fn format(&self, value: f64) -> String {
+        self.format_with_min_unit_decimals(value, 0)
     }
 
     fn clone_box(&self) -> Box<dyn PriceFormatter> {
@@ -867,22 +899,32 @@ mod tests {
         }
         assert_eq!(formatter.format(-0.006), "-0.01");
         assert_eq!(formatter.format(-3_500.0), "-3.50K");
-        for (precision, value, expected) in [
-            (2, 999.996, "1.00K"),
-            (2, 999_999.0, "1.00M"),
-            (2, 999_996_000.0, "1.00B"),
-            (2, 999.994, "999.99"),
-            (2, 999_994.0, "999.99K"),
-            (2, 999_994_000.0, "999.99M"),
-            (0, 999.6, "1K"),
-            (0, 999_600.0, "1M"),
-            (3, 999_999.4, "999.999K"),
-            (3, 999_999.6, "1.000M"),
-            (2, 999_999_999_999.0, "1000.00B"),
+        // Precision, the fewest decimals of K, M and B values, value and text.
+        for (precision, units, value, expected) in [
+            (2, 0, 999.996, "1.00K"),
+            (2, 0, 999_999.0, "1.00M"),
+            (2, 0, 999_996_000.0, "1.00B"),
+            (2, 0, 999.994, "999.99"),
+            (2, 0, 999_994.0, "999.99K"),
+            (2, 0, 999_994_000.0, "999.99M"),
+            (0, 0, 999.6, "1K"),
+            (0, 0, 999_600.0, "1M"),
+            (3, 0, 999_999.4, "999.999K"),
+            (3, 0, 999_999.6, "1.000M"),
+            (2, 0, 999_999_999_999.0, "1000.00B"),
+            (0, 2, 999.4, "999"),
+            (0, 2, 999.6, "1.00K"),
+            (0, 2, 1_234.5, "1.23K"),
+            (0, 2, 999_996.0, "1.00M"),
+            (3, 2, 1_234.5, "1.234K"),
         ] {
             let formatter = VolumeFormatter { precision };
-            assert_eq!(formatter.format(value), expected);
-            assert_eq!(formatter.format(-value), format!("-{expected}"));
+            let text = |value| formatter.format_with_min_unit_decimals(value, units);
+            assert_eq!(text(value), expected);
+            assert_eq!(text(-value), format!("-{expected}"));
+            if units == 0 {
+                assert_eq!(formatter.format(value), expected);
+            }
         }
     }
 

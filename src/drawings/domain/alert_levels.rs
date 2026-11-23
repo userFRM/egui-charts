@@ -192,6 +192,9 @@ impl Drawing {
                 if dx == 0.0 || (!back && (bar - start[0]) * dx < 0.0) {
                     continue;
                 }
+                if !fan && !config.extend_lines && (bar - start[0]) * dx > dx * dx {
+                    continue;
+                }
                 let axis = start[1] + (bar - start[0]) * (end[1] - start[1]) / dx;
                 let price = if log { axis.exp() } else { axis };
                 if price.is_finite() && (!log || price > 0.0) {

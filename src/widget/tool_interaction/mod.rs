@@ -246,6 +246,17 @@ impl Chart {
                         })
                         .map(|id| Some(id.0)),
                 )
+                .chain(
+                    drawing_manager
+                        .removed_owners
+                        .iter()
+                        .copied()
+                        .filter_map(|id| {
+                            (self.series_pane(super::SeriesId(id)).is_none()
+                                && self.pane_index(super::PaneId(id)).is_none())
+                            .then_some(Some(id))
+                        }),
+                )
                 .collect()
         };
         drawing_manager.set_pane(owner, members.clone(), price_rect);
@@ -281,13 +292,14 @@ impl Chart {
         // A strong snap keeps the actual OHLC even beyond a manual price range.
         let strong_magnet =
             drawing_manager.magnet_enabled() && drawing_manager.options.strong_magnet;
-        let y_to_price = |y: f32| -> f64 {
-            price_map.y_to_price(if strong_magnet {
+        let anchor_y = |y: f32| {
+            if strong_magnet {
                 y
             } else {
                 y.clamp(price_rect.min.y, price_rect.max.y)
-            })
+            }
         };
+        let y_to_price = |y: f32| -> f64 { price_map.y_to_price(anchor_y(y)) };
         let translate_price = |price, from, to| price_map.translate_price(price, from, to);
 
         // Update all drawings' screen coords before rendering (handles pan/zoom)
@@ -305,10 +317,11 @@ impl Chart {
             } else {
                 None
             };
+        let snap_pointer = press
+            .or_else(|| response.interact_pointer_pos())
+            .or_else(|| response.hover_pos());
         if drawing_manager.magnet_enabled()
-            && let Some(pointer) = press
-                .or_else(|| response.interact_pointer_pos())
-                .or_else(|| response.hover_pos())
+            && let Some(pointer) = snap_pointer
         {
             let distance = drawing_manager.options.magnet_distance;
             let bars = self.state.shown();
@@ -409,6 +422,17 @@ impl Chart {
                 }
             }
         }
+        // The crosshair of the pane under the pointer shows the height a click there gives the
+        // next anchor, or a drag below gives the dragged point, whatever the crosshair mode. Only
+        // that pane writes, so a pane drawn later cannot clear the price pane's record.
+        if let Some(pointer) = snap_pointer.filter(|pointer| price_rect.contains(*pointer)) {
+            let tool = drawing_manager.active_tool.filter(|tool| !tool.is_cursor());
+            drawing_manager.anchor_crosshair = tool.map(|tool| {
+                let y = drawing_manager.snap_placement(Some(tool), pointer).y;
+                (ui.ctx().cumulative_frame_nr(), pointer.y, anchor_y(y))
+            });
+        }
+        drawing_manager.drag_crosshair = None;
 
         // Handle drawing interaction
         // Select converter based on tool type: freeform tools (ContinuousDraw) use precise,
@@ -587,6 +611,14 @@ impl Chart {
                 &translate_price,
             );
         }
+        // A drag shows the height it puts its handle or grabbed point at, as a tool shows the
+        // next anchor's.
+        if let Some(y) = drawing_manager.drag_crosshair
+            && let Some(pointer) = snap_pointer.filter(|pointer| price_rect.contains(*pointer))
+        {
+            drawing_manager.anchor_crosshair =
+                Some((ui.ctx().cumulative_frame_nr(), pointer.y, anchor_y(y)));
+        }
         drawing_manager.render_all(painter, price_rect, &view);
         if drawing_manager.text_editor.as_ref().is_some_and(|editor| {
             drawing_manager
@@ -681,10 +713,6 @@ mod tests {
         for (id, (tool, anchors)) in [
             (Measure, vec![(30.0, 100_000.0), (40.0, 95_000.0)]),
             (Forecast, vec![(30.0, 100_000.0), (40.0, 105_000.0)]),
-            (
-                ProjectionTool,
-                vec![(30.0, 100_000.0), (40.0, 104_000.0), (50.0, 101_000.0)],
-            ),
             (LongPos, vec![(30.0, 100_000.0), (40.0, 106_000.0)]),
             (
                 FibonacciRetracement,
@@ -712,7 +740,7 @@ mod tests {
             }
             chart.drawings_mut().drawings.push(drawing);
         }
-        chart.drawings_mut().select(5);
+        chart.drawings_mut().select(4);
         // Only texts left of the price axes, whose tick labels can read as a drawing's price.
         let texts = |chart: &mut crate::Chart, time| {
             let painted = shapes(&ctx, chart, time, vec![]);
@@ -727,13 +755,11 @@ mod tests {
         };
         let mut failures = Vec::new();
         let built_in = texts(&mut chart, 0.0);
-        // Hand values in thousands: 95-100=-5, 105-100=5, |104-100|=4, 101+4=105,
+        // Hand values in thousands: 95-100=-5, 105-100=5,
         // target 106 and mirrored stop 94, midpoint 100, height 16 at 16/92*100 percent.
         for expected in [
             "-5,000.00 (-5.00%)",
             "+5,000.00 (+5.00%)",
-            "4,000.00 (4.0%)",
-            "Target: 105,000.00",
             "Target: 6,000.00 (6.000%)",
             "Stop: 6,000.00 (6.000%)",
             "(100,000.00)",
@@ -750,8 +776,6 @@ mod tests {
         for expected in [
             "-5000.0 pts (-5.00%)",
             "+5000.0 pts (+5.00%)",
-            "4000.0 pts (4.0%)",
-            "Target: 105000.0 pts",
             "Target: 6000.0 pts (6.000%)",
             "Stop: 6000.0 pts (6.000%)",
             "(100000.0 pts)",
@@ -1483,6 +1507,7 @@ mod tests {
         ]) {
             let ctx = Context::default();
             let mut chart = chart(&[0.0, 10.0, 10.0], &[30.0, 20.0, 20.0]);
+            chart.config_mut().navigation_buttons = crate::config::NavigationButtons::Never;
             let overlay = CustomIndicator::new("Two levels", move |bars| {
                 bars.iter()
                     .enumerate()
@@ -1867,14 +1892,257 @@ mod tests {
                 ((anchor - y) * 100.0).round() / 100.0,
             ));
         }
-        // 100..200 with 10% margins spans 87.5..212.5, so the middle of the pane is price 150.
+        // The main 100..200 span is 100 / 0.82. Unequal margins put its midpoint at
+        // 150 + (0.1 - 0.08) * (100 / 0.82) / 2 = 151.219512..., rounded here to 151.22.
         assert!(
             observed
                 .iter()
-                .all(|(_, _, price, below)| *price == 150.0 && *below == 0.0),
+                .all(|(_, _, price, below)| *price == 151.22 && *below == 0.0),
             "(main series moved into the study's pane, strong magnet, first anchor price, \
-             anchor below the painted level) observed {observed:?} expected price 150 and 0 \
+             anchor below the painted level) observed {observed:?} expected price 151.22 and 0 \
              below in every row"
+        );
+    }
+
+    /// The crosshair of the price pane and of the study pane below it, as drawn and as reported to
+    /// the host, reads the value a click there gives the next anchor while a drawing tool is
+    /// active, and the value a dragged anchor takes: the weak magnet snaps only within its
+    /// distance, Ctrl inverts the magnet, and study values count only while Snap to indicators is
+    /// on, whatever the crosshair mode. A size handle follows the pointer, and so does the
+    /// crosshair while it is dragged.
+    #[test]
+    fn crosshair_reads_the_price_the_next_or_dragged_anchor_takes() {
+        use crate::config::CrosshairMode;
+        use crate::drawings::HandlePos;
+        use crate::model::LineStyle;
+        use crate::studies::{CustomIndicator, IndicatorValue, StudyScale};
+        use crate::widget::{ChartEvent, SeriesId};
+        use egui::{Pos2, vec2};
+
+        let round = |price: f64| (price * 100.0).round() / 100.0;
+        let mut observed = Vec::new();
+        for (pane, gesture) in ["price", "study"]
+            .into_iter()
+            .flat_map(|pane| ["place", "drag", "resize"].map(|gesture| (pane, gesture)))
+        {
+            for (case, magnet, strong, ctrl, snap_to_indicators, near) in [
+                ("weak, far", true, false, false, true, false),
+                ("weak, near", true, false, false, true, true),
+                ("strong", true, true, false, true, false),
+                ("strong, Ctrl", true, true, true, true, false),
+                ("off, Ctrl", false, true, true, true, false),
+                ("indicators off", true, true, false, false, false),
+            ] {
+                if gesture == "resize" && (pane == "study" || case != "strong") {
+                    continue;
+                }
+                let ctx = Context::default();
+                let mut chart = chart(&[90.0], &[110.0]);
+                chart.config_mut().show_volume = false;
+                let crosshair_options = &mut chart.chart_options.crosshair;
+                crosshair_options.horz_line_style = LineStyle::Solid;
+                crosshair_options.horz_line_color = Color32::BLUE;
+                crosshair_options.label_text_color = Color32::MAGENTA;
+                // A level at 105 over the bars, and a study in its own pane below reading 40 on
+                // even bars and 60 on odd ones.
+                chart.add_indicator(Box::new(
+                    CustomIndicator::new("Level", |bars| {
+                        bars.iter().map(|_| IndicatorValue::Single(105.0)).collect()
+                    })
+                    .with_overlay(true)
+                    .with_scale(StudyScale::Main),
+                ));
+                let oscillator = CustomIndicator::new("Oscillator", |bars| {
+                    (0..bars.len())
+                        .map(|i| IndicatorValue::Single(40.0 + 20.0 * (i % 2) as f64))
+                        .collect()
+                });
+                let oscillator = chart.add_indicator(Box::new(oscillator.with_overlay(false)));
+                // The study, when the pointer and the drawing are in its pane.
+                let study = (pane == "study").then_some(oscillator);
+                let options = &mut chart.drawings_mut().options;
+                options.magnet_mode = magnet;
+                options.strong_magnet = strong;
+                options.snap_to_indicators = snap_to_indicators;
+                chart.drawings_mut().update_snap_options();
+                // As the demo sets it for its magnet buttons.
+                chart.set_crosshair_mode(if magnet {
+                    CrosshairMode::Magnet
+                } else {
+                    CrosshairMode::Normal
+                });
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                let map = chart.get_chart_mapping();
+                let (first, last) = chart.state.visible_range();
+                let middle = (first + last) / 2;
+                // An even bar, where the study reads 40.
+                let middle = middle - middle % 2;
+                // The pointer lies 5 px below the level or the study's 40, or at 101 or 50.
+                let (pane_map, level, far) = match study {
+                    Some(id) => (
+                        chart.series_price_map(id).expect("a study pane"),
+                        40.0,
+                        50.0,
+                    ),
+                    None => (map.price, 105.0, 101.0),
+                };
+                let pointer = Pos2::new(
+                    map.idx_to_x(middle) + 2.0,
+                    if near {
+                        pane_map.price_to_y(level) + 5.0
+                    } else {
+                        pane_map.price_to_y(far)
+                    },
+                );
+                let modifiers = if ctrl {
+                    Modifiers::CTRL
+                } else {
+                    Modifiers::NONE
+                };
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers,
+                };
+                let mut time = 1.0;
+                let mut step = |chart: &mut crate::widget::Chart, event| {
+                    time += 0.1;
+                    shapes(
+                        &ctx,
+                        chart,
+                        time,
+                        vec![Event::ModifiersChanged(modifiers), event],
+                    )
+                };
+                if gesture == "place" {
+                    chart
+                        .drawings_mut()
+                        .set_active_tool(Some(DrawingToolType::HorizontalLine));
+                } else {
+                    // A line at 95, or 45 in the study pane, has its anchor dragged; an icon at
+                    // 103 its size corner.
+                    let (tool, at, handle) = if gesture == "drag" {
+                        let at = if study.is_some() { 45.0 } else { 95.0 };
+                        (DrawingToolType::HorizontalLine, at, HandlePos::Start)
+                    } else {
+                        (DrawingToolType::FontIcon, 103.0, HandlePos::BottomRight)
+                    };
+                    let mut drawing = Drawing::new(1, tool);
+                    drawing.chart_points = vec![ChartPoint::new(middle as f32, at)];
+                    drawing.pane = study.map(|id| id.0);
+                    chart.drawings_mut().drawings.push(drawing);
+                    chart.drawings_mut().select(1);
+                    frame(&ctx, &mut chart, 0.5, vec![]);
+                    let from = chart
+                        .drawings()
+                        .get_handles(&chart.drawings().drawings[0])
+                        .into_iter()
+                        .find(|(at, _)| *at == handle)
+                        .expect("the handle is shown")
+                        .1;
+                    step(&mut chart, Event::PointerMoved(from));
+                    step(&mut chart, button(from, true));
+                    step(&mut chart, Event::PointerMoved(from + vec2(7.0, 0.0)));
+                }
+                chart.drain_events().for_each(drop);
+                let painted = step(&mut chart, Event::PointerMoved(pointer));
+                let crosshair = chart
+                    .drain_events()
+                    .filter_map(|event| match event {
+                        ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                        _ => None,
+                    })
+                    .last()
+                    .expect("the pointer moves the crosshair");
+                assert_eq!(
+                    crosshair.series,
+                    study.unwrap_or(SeriesId::MAIN),
+                    "{pane} {gesture} {case}"
+                );
+                // The study pane's horizontal line and its value label on the pane's axis.
+                let (line, label) = if study.is_some() {
+                    let rect = chart.get_rendered_indicator_panes()[0].panel_rect;
+                    (
+                        painted.iter().find_map(|shape| match shape {
+                            Shape::LineSegment { points, stroke }
+                                if stroke.color == Color32::BLUE
+                                    && points[0].y == points[1].y
+                                    && rect.contains(points[0]) =>
+                            {
+                                Some(pane_map.y_to_price(points[0].y))
+                            }
+                            _ => None,
+                        }),
+                        painted.iter().find_map(|shape| match shape {
+                            Shape::Text(text)
+                                if text.fallback_color == Color32::MAGENTA
+                                    && rect.contains(text.pos) =>
+                            {
+                                Some(text.galley.text().to_owned())
+                            }
+                            _ => None,
+                        }),
+                    )
+                } else {
+                    (chart.last_crosshair.and_then(|(_, price)| price), None)
+                };
+                if gesture == "place" {
+                    step(&mut chart, button(pointer, true));
+                }
+                step(&mut chart, button(pointer, false));
+                assert!(
+                    chart.drawings().dragging_handle.is_none(),
+                    "{pane} {gesture} {case}"
+                );
+                let anchor = chart.drawings().drawings[0].chart_points[0].price;
+                observed.push((
+                    pane,
+                    gesture,
+                    case,
+                    round(crosshair.price),
+                    line.map(round),
+                    label,
+                    round(anchor),
+                ));
+            }
+        }
+        // The level at 105 is 5.4 px from the near pointer, within the weak magnet's 20 px, and
+        // four price units, far more than 20 px, from a pointer at 101. The strong magnet takes
+        // the nearest of 90, 105 and 110. In the study pane, 40 is 5.4 px from the near pointer,
+        // and 40 and the neighbours' 60 lie 10 units, more than 20 px, from a pointer at 50. The
+        // strong magnet takes 40, the hovered bar's only value, and a study pane has no bars to
+        // snap to. A study in its own pane writes two decimals. A dragged anchor lands where a
+        // click places one; the icon keeps its anchor at 103 and the crosshair stays on the
+        // pointer at 101.
+        let lands = [
+            ("weak, far", 101.0, 50.0),
+            ("weak, near", 105.0, 40.0),
+            ("strong", 105.0, 40.0),
+            ("strong, Ctrl", 101.0, 50.0),
+            ("off, Ctrl", 105.0, 40.0),
+            ("indicators off", 110.0, 50.0),
+        ];
+        let rows = |pane| {
+            ["place", "drag"].into_iter().flat_map(move |gesture| {
+                lands.map(|(case, price, value)| {
+                    if pane == "price" {
+                        (pane, gesture, case, price, Some(price), None, price)
+                    } else {
+                        let label = Some(format!("{value:.2}"));
+                        (pane, gesture, case, value, Some(value), label, value)
+                    }
+                })
+            })
+        };
+        let expected: Vec<_> = rows("price")
+            .chain([("price", "resize", "strong", 101.0, Some(101.0), None, 103.0)])
+            .chain(rows("study"))
+            .collect();
+        assert!(
+            observed == expected,
+            "(pane, gesture, case, crosshair event price, painted crosshair price, painted label, \
+             anchor price) observed {observed:?} expected {expected:?}"
         );
     }
 

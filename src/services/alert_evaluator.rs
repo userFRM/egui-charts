@@ -96,7 +96,9 @@ impl Evaluation {
                     std::iter::once(source).chain(condition.partners().into_iter().flatten())
                 })
                 .filter_map(|source| match source {
-                    AlertSource::Study { id, .. } => id.parse::<usize>().ok(),
+                    AlertSource::Study { id, .. } | AlertSource::StudyCondition { id, .. } => {
+                        id.parse::<usize>().ok()
+                    }
                     _ => None,
                 })
                 .collect(),
@@ -450,6 +452,7 @@ impl AlertEvaluator {
                         clock: reader.clock().clone(),
                         instrument: reader.instrument(),
                         timeframe: run.subject(symbol, Some(request)).timeframe,
+                        chart: None,
                     }
                 })
                 .collect();
@@ -507,6 +510,13 @@ impl AlertEvaluator {
                         .iter()
                         .find(|(key, _)| key.to_string() == *id)
                         .and_then(|(_, study)| study.plot_value(*output, at)),
+                    AlertSource::StudyCondition { id, condition } => context
+                        .0
+                        .studies
+                        .iter()
+                        .find(|(key, _)| key.to_string() == *id)
+                        .and_then(|(_, study)| study.alert_condition(*condition, at))
+                        .map(|holds| if holds { 1.0 } else { 0.0 }),
                     #[cfg(feature = "ui")]
                     AlertSource::Drawing(_) => {
                         let (run, reader, from) = context;
@@ -952,6 +962,34 @@ mod tests {
         delivered.lock().unwrap().clone()
     }
 
+    /// A stored condition rebuilds its saved study, without relying on a chart's instance.
+    #[test]
+    fn a_saved_study_condition_rebuilds_its_study_and_fires() {
+        use crate::model::{AlertCondition, AlertStudy, InputValue};
+        let mut alert = Alert::new("SYM", AlertCondition::Holds);
+        alert.source = AlertSource::StudyCondition {
+            id: "3".into(),
+            condition: 0,
+        };
+        alert.timeframe = Some(Timeframe::Min1);
+        alert.message = "{{close}} {{value}}".into();
+        alert.inputs = Some(Box::new(AlertInputs {
+            studies: vec![AlertStudy::new(
+                3,
+                "SuperTrend",
+                vec![
+                    ("atr_period".into(), InputValue::Length(1)),
+                    ("multiplier".into(), InputValue::Number(1.0)),
+                ],
+            )],
+            ..Default::default()
+        }));
+        assert_eq!(
+            fired_messages(Arc::new(Feed::default()), &IndicatorFactory::new(), alert),
+            ["300 1"]
+        );
+    }
+
     /// `prepare_alert` saves every study of the chart with the alert; a price alert's message
     /// names study 7, which no condition tests. One-minute closes 200 and 300: the mean is 250.
     /// Study 8 is not saved, the factory does not know study 9, study 11 reads study 12, which
@@ -1239,6 +1277,73 @@ mod tests {
         );
     }
 
+    /// Every history request and live subscription of each watchlist member carries the session
+    /// the alert watches, whatever the chart that created it showed.
+    #[test]
+    fn every_member_is_requested_with_the_chosen_session() {
+        for hours in [(false, false), (true, false), (true, true)] {
+            let feed = Arc::new(Feed::default());
+            let mut alert = Alert::new("", crate::model::AlertCondition::Above(1_000.0));
+            alert.watchlist = Some("list".into());
+            alert.timeframe = Some(Timeframe::Min1);
+            alert.inputs = Some(Box::new(AlertInputs {
+                extended_hours: hours.0,
+                overnight_hours: hours.1,
+                ..Default::default()
+            }));
+            let engine = AlertEngine::new().with_alerts(vec![alert]);
+            engine.set_watchlist("list", vec!["SYM".into(), "OTHER".into()]);
+            let mut evaluator = AlertEvaluator::new(feed.clone());
+            #[cfg(feature = "ui")]
+            let ctx = egui::Context::default();
+            for _ in 0..6 {
+                let errors = evaluator.poll(
+                    &engine,
+                    &IndicatorFactory::new(),
+                    &[],
+                    #[cfg(feature = "ui")]
+                    &ctx,
+                    DateTime::from_timestamp(1000, 0).unwrap(),
+                );
+                assert!(errors.is_empty(), "{errors:?}");
+            }
+            let requested: Vec<_> = feed
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|live| {
+                    (
+                        live.symbol.clone(),
+                        (live.extended_hours, live.overnight_hours),
+                    )
+                })
+                .collect();
+            let subscribed: Vec<_> = feed
+                .subscriptions
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|live| {
+                    (
+                        live.symbol.clone(),
+                        (live.extended_hours, live.overnight_hours),
+                    )
+                })
+                .collect();
+            for (what, asked) in [("history", requested), ("live", subscribed)] {
+                let mut symbols: Vec<_> = asked.iter().map(|(symbol, _)| symbol.as_str()).collect();
+                symbols.sort_unstable();
+                symbols.dedup();
+                assert_eq!(symbols, ["OTHER", "SYM"], "{what} {hours:?}");
+                assert!(
+                    asked.iter().all(|(_, session)| *session == hours),
+                    "{what} {hours:?}: {asked:?}"
+                );
+            }
+        }
+    }
+
     /// A repeating study alert: one study 7 named `name` on one minute, `Above(100)`.
     fn repeating_alert(name: &str) -> Alert {
         let mut alert: Alert = serde_json::from_value(serde_json::json!({
@@ -1260,20 +1365,51 @@ mod tests {
     #[test]
     fn repeating_alert_keeps_its_studies_after_firing() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let feed = Arc::new(Feed::default());
-        let mut evaluator = AlertEvaluator::new(feed.clone());
-        let built = Arc::new(AtomicUsize::new(0));
-        let count = built.clone();
-        let mut factory = IndicatorFactory::new();
-        factory.register("Pair mean", move || {
-            count.fetch_add(1, Ordering::Relaxed);
-            Box::new(crate::studies::SMA::new(2))
-        });
-        // The one-minute mean (200+300)/2=250 is above 100 on the first evaluation.
-        let engine = AlertEngine::new().with_alerts(vec![repeating_alert("Pair mean")]);
-        #[cfg(feature = "ui")]
-        let ctx = egui::Context::default();
-        for _ in 0..4 {
+        // On a watchlist, a firing also records the member's time.
+        for list in [false, true] {
+            let feed = Arc::new(Feed::default());
+            let mut evaluator = AlertEvaluator::new(feed.clone());
+            let built = Arc::new(AtomicUsize::new(0));
+            let count = built.clone();
+            let mut factory = IndicatorFactory::new();
+            factory.register("Pair mean", move || {
+                count.fetch_add(1, Ordering::Relaxed);
+                Box::new(crate::studies::SMA::new(2))
+            });
+            let mut alert = repeating_alert("Pair mean");
+            if list {
+                alert.symbol = String::new();
+                alert.watchlist = Some("list".into());
+            }
+            // The one-minute mean (200+300)/2=250 is above 100 on the first evaluation.
+            let engine = AlertEngine::new().with_alerts(vec![alert]);
+            engine.set_watchlist("list", vec!["SYM".into()]);
+            #[cfg(feature = "ui")]
+            let ctx = egui::Context::default();
+            for _ in 0..4 {
+                evaluator.poll(
+                    &engine,
+                    &factory,
+                    &[],
+                    #[cfg(feature = "ui")]
+                    &ctx,
+                    DateTime::from_timestamp(1000, 0).unwrap(),
+                );
+            }
+            assert!(
+                engine.alerts()[0].last_triggered_at.is_some(),
+                "fired, list {list}"
+            );
+            assert_eq!(
+                engine.alerts()[0].status,
+                crate::model::AlertStatus::Active,
+                "list {list}"
+            );
+            // Turning the line across the chart off changes nothing the alert monitors.
+            let mut edited = engine.alerts()[0].clone();
+            edited.extend_line = false;
+            let inbox = Arc::new(crate::data::inbox::Inbox::default());
+            crate::services::Alerts::save(&engine, edited, inbox.reply(0));
             evaluator.poll(
                 &engine,
                 &factory,
@@ -1282,25 +1418,10 @@ mod tests {
                 &ctx,
                 DateTime::from_timestamp(1000, 0).unwrap(),
             );
+            assert!(!engine.alerts()[0].extend_line, "list {list}");
+            // One construction supplies settings; the template constructs the retained study.
+            assert_eq!(built.load(Ordering::Relaxed), 2, "list {list}");
         }
-        assert!(engine.alerts()[0].last_triggered_at.is_some(), "fired");
-        assert_eq!(engine.alerts()[0].status, crate::model::AlertStatus::Active);
-        // Turning the line across the chart off changes nothing the alert monitors.
-        let mut edited = engine.alerts()[0].clone();
-        edited.extend_line = false;
-        let inbox = Arc::new(crate::data::inbox::Inbox::default());
-        crate::services::Alerts::save(&engine, edited, inbox.reply(0));
-        evaluator.poll(
-            &engine,
-            &factory,
-            &[],
-            #[cfg(feature = "ui")]
-            &ctx,
-            DateTime::from_timestamp(1000, 0).unwrap(),
-        );
-        assert!(!engine.alerts()[0].extend_line);
-        // One construction supplies settings; the template constructs the retained study.
-        assert_eq!(built.load(Ordering::Relaxed), 2);
     }
 
     #[test]

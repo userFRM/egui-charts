@@ -1948,15 +1948,30 @@ mod tests {
         );
         chart.detach_primitive(primitive);
         for (owner, price_only, expected) in [
-            (SeriesId::MAIN, true, (-62.5, 562.5)),
-            (study_id, true, (8.75, 21.25)),
-            (study_id, false, (-62.5, 562.5)),
+            (
+                SeriesId::MAIN,
+                true,
+                (-500.0 / 0.82 * 0.08, 500.0 + 500.0 / 0.82 * 0.1),
+            ),
+            (
+                study_id,
+                true,
+                (10.0 - 10.0 / 0.82 * 0.08, 20.0 + 10.0 / 0.82 * 0.1),
+            ),
+            (
+                study_id,
+                false,
+                (-500.0 / 0.82 * 0.08, 500.0 + 500.0 / 0.82 * 0.1),
+            ),
         ] {
             let primitive = chart.attach_primitive(owner, Layers).unwrap();
             chart.config_mut().scale_price_chart_only = price_only;
             let painted = super::super::test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
             let range = chart.state().price_scale().range();
-            assert_eq!((range.min, range.max), expected);
+            assert!(
+                (range.min - expected.0).abs() < 1e-10 && (range.max - expected.1).abs() < 1e-10,
+                "{range:?}, expected {expected:?}"
+            );
             assert!(
                 painted.iter().any(fill(ABOVE)),
                 "the primitive still paints"

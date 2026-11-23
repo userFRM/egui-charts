@@ -17,6 +17,9 @@
 //!         .category("Preferences"),
 //!     Command::new("add_indicator", "Add Indicator")
 //!         .category("Trading"),
+//!     Command::new("trend_line", "Trend Line")
+//!         .starred(false)
+//!         .category("Drawing tools"),
 //! ]);
 //!
 //! // In your update loop
@@ -29,6 +32,11 @@
 //!         _ => {}
 //!     }
 //! }
+//! // Apply each star press to the favourites the host keeps.
+//! for id in handler.take_star_toggles() { /* toggle the favourite `id` */ }
+//! // Read the recent entries and restore them when rebuilding the handler.
+//! let recent = handler.recent().to_vec();
+//! handler.set_recent(recent);
 //! # });
 //! ```
 

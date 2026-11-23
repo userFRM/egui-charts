@@ -33,6 +33,11 @@ pub struct DrawingProps {
     pub save_as_default: bool,
     /// Primary color
     pub color: Color32,
+    /// The text colour last picked under Color in the Style tab, for a Text or Anchored text with
+    /// a text colour of its own. While it matches the edited text colour, applying gives its hue
+    /// to every selected drawing, as a Color pick does on other tools. Properties assembled by
+    /// hand leave it `None`.
+    pub color_row_text_pick: Option<[u8; 4]>,
     /// Line width (1-10)
     pub line_width: f32,
     /// Line style
@@ -63,6 +68,7 @@ impl Default for DrawingProps {
             coordinates: CoordinatesState::default(),
             save_as_default: false,
             color: crate::theme::Theme::default().ui.accent,
+            color_row_text_pick: None,
             line_width: 1.0,
             line_style: LineStyle::Solid,
             fill_color: None,
@@ -197,17 +203,20 @@ impl DrawingProps {
             .iter()
             .find(|d| d.id == id.0)
             .ok_or("Drawing was removed")?;
-        if !target.accepts_user_edits()
+        if !chart.drawings().accepts_user_edits(target)
             && (self.save_as_default
                 || !chart.drawings().is_selected(id.0)
                 || !chart.drawings().drawings.iter().any(|drawing| {
-                    drawing.accepts_user_edits() && chart.drawings().is_selected(drawing.id)
+                    chart.drawings().accepts_user_edits(drawing)
+                        && chart.drawings().is_selected(drawing.id)
                 }))
         {
-            return Err(if target.user_edit_enabled {
-                "Unlock the drawing before editing its properties"
-            } else {
+            return Err(if !target.user_edit_enabled {
                 "This drawing cannot be edited"
+            } else if chart.drawings().is_locked() {
+                "Unlock all drawings before editing its properties"
+            } else {
+                "Unlock the drawing before editing its properties"
             });
         }
         let adds_position_stop = matches!(
@@ -232,18 +241,28 @@ impl DrawingProps {
             })
         });
         let [r, g, b, a] = self.color_rgba();
-        let [tr, tg, tb, _] = target.color;
-        // Without tool settings only the paint colour is held, and it reads back as another hue
-        // at each opacity: the hue was edited unless one RGB paints both it and the target's.
-        let hue_edited = [r, g, b] != [tr, tg, tb]
-            && (self.tool_settings.is_some() || !self.keeps_hue_of(target.color32()));
+        // Only a recorded Color-row pick propagates text colour through the whole selection.
+        let text_pick = self
+            .tool_settings
+            .as_ref()
+            .and_then(|template| template.settings.text_color_override())
+            .zip(target.text_color_override())
+            .filter(|(picked, _)| self.color_row_text_pick == Some(*picked));
+        let hue_edited = if let Some((picked, shown)) = text_pick {
+            picked[..3] != shown[..3]
+        } else {
+            // Without tool settings only the paint colour is held, and it reads back as another
+            // hue at each opacity: the hue was edited unless one RGB paints both colours.
+            [r, g, b] != target.color[..3]
+                && (self.tool_settings.is_some() || !self.keeps_hue_of(target.color32()))
+        };
         let mut edits = Vec::new();
         for mut drawing in chart
             .drawings()
             .drawings
             .iter()
             .filter(|drawing| {
-                drawing.accepts_user_edits()
+                chart.drawings().accepts_user_edits(drawing)
                     && if selected {
                         chart.drawings().is_selected(drawing.id)
                     } else {
@@ -259,10 +278,23 @@ impl DrawingProps {
             // The dialog opened with the target's values: one that differs from them was edited,
             // and only edited values are written, so each drawing keeps the rest of its own.
             if hue_edited {
-                drawing.recolor([r, g, b, drawing.color[3]]);
+                let [.., opacity] = drawing.text_color_override().unwrap_or(drawing.color);
+                drawing.recolor([r, g, b, opacity]);
             }
             if a != target.color[3] {
                 drawing.color[3] = a;
+                if drawing.text_color_override().is_some() {
+                    drawing.text_color = drawing.text_color.map(|[r, g, b, _]| [r, g, b, a]);
+                }
+            }
+            if let Some((picked, shown)) = text_pick
+                && picked[3] != shown[3]
+                && matches!(
+                    drawing.tool_type,
+                    DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+                )
+            {
+                drawing.text_color.as_mut().unwrap_or(&mut drawing.color)[3] = picked[3];
             }
             if self.line_width != target.stroke_width {
                 drawing.stroke_width = self.line_width;
@@ -309,11 +341,14 @@ impl DrawingProps {
                         })+
                     };
                 }
+                // Colour-row picks already keep each text opacity above unless it was edited.
+                if text_pick.is_none() {
+                    edited!(text_color);
+                }
                 edited!(
                     font_weight,
                     italic,
                     glyph_angle,
-                    text_color,
                     background,
                     border,
                     border_color,
@@ -364,6 +399,7 @@ impl DrawingProps {
                     range_settings.font_size,
                     range_settings.background,
                     range_settings.background_color,
+                    range_settings.shadow_color,
                     range_settings.border,
                     range_settings.border_color,
                     range_settings.border_width,
@@ -392,9 +428,11 @@ impl DrawingProps {
                     ghost_feed => |d: &Drawing| d.ghost_feed.unwrap_or_default(),
                     bars_pattern => |d: &Drawing| d.bars_pattern.unwrap_or_default(),
                     projection => |d: &Drawing| d.projection_config().into_owned(),
+                    forecast => |d: &Drawing| d.forecast_style(),
                     volume_profile => |d: &Drawing| d.volume_profile.unwrap_or_default(),
                     regression_trend => |d: &Drawing| d.regression_trend.unwrap_or_default(),
                     vwap => |d: &Drawing| d.vwap.unwrap_or_default(),
+                    table => |d: &Drawing| d.table.clone().unwrap_or_default(),
                 );
                 if settings.custom_settings != target.custom_settings {
                     merge_edits(
@@ -534,6 +572,18 @@ impl DrawingProps {
                     .any(|l| !(l.value.is_finite() && l.value > 0.0))
                 {
                     return Err("Gann fan and arc ratios must be positive and finite");
+                }
+                if c.price_levels
+                    .iter()
+                    .chain(&c.time_levels)
+                    .chain(&c.fan_ratios)
+                    .chain(&c.arc_ratios)
+                    .any(|l| l.width.is_some_and(|w| !(w > 0.0 && w <= MAX_STROKE_WIDTH)))
+                {
+                    return Err("Gann widths must be above 0 and at most 100");
+                }
+                if !FONT_SIZES.contains(&c.label_size) {
+                    return Err("Gann label size must be between 1 and 256");
                 }
             }
             if settings.ghost_feed.is_some_and(|c| !c.is_valid()) {
@@ -718,6 +768,17 @@ mod tests {
             .drawings_mut()
             .edit_drawing(7, |d| d.user_edit_enabled = true)
             .unwrap();
+        chart.drawings_mut().set_locked(true);
+        assert_eq!(
+            DrawingProps {
+                font_size: 40.0,
+                ..props.clone()
+            }
+            .apply_to_chart(DrawingId(7), &mut chart),
+            Err("Unlock all drawings before editing its properties")
+        );
+        assert_eq!(chart.drawings().drawings[0].font_size, 24.0);
+        chart.drawings_mut().set_locked(false);
         // A size the drawings file would refuse cannot be applied.
         assert!(
             DrawingProps {
@@ -785,6 +846,8 @@ mod tests {
             DrawingToolType::HorizontalRay,
             DrawingToolType::VerticalLine,
             DrawingToolType::CrossLine,
+            DrawingToolType::DateRange,
+            DrawingToolType::DateAndPriceRange,
         ] {
             chart.drawings_mut().drawings.clear();
             let mut drawing = Drawing::new(7, tool);
@@ -806,6 +869,7 @@ mod tests {
                     ui,
                     &mut props,
                     &mut pickers,
+                    &mut Default::default(),
                     &mut Default::default(),
                     None,
                 );
@@ -955,7 +1019,17 @@ mod tests {
             settings.note_text_style = Some(note_text);
             settings.arrow_start_style = crate::drawings::ArrowStyle::Arrow;
             settings.arrow_end_style = crate::drawings::ArrowStyle::None;
+            settings.range_settings.shadow_color = [50, 60, 70, 128];
             let expected = format!("{:?}", settings.fib_config);
+            let template: DrawingTemplate = serde_json::from_value(
+                serde_json::to_value(props.tool_settings.as_ref().unwrap()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                template.settings.range_settings.shadow_color,
+                [50, 60, 70, 128]
+            );
+            props.tool_settings = Some(Box::new(template));
             props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
             let saved = &chart.drawings().drawings[0];
             assert_eq!(format!("{:?}", saved.fib_config), expected);
@@ -1000,6 +1074,7 @@ mod tests {
             assert_eq!(saved.note_text_style, Some(note_text));
             assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);
             assert_eq!(saved.arrow_end_style, crate::drawings::ArrowStyle::None);
+            assert_eq!(saved.range_settings.shadow_color, [50, 60, 70, 128]);
             assert!(chart.drawings().drawings[1].fib_config.is_none());
             let peer = &chart.drawings().drawings[1];
             assert!(!peer.italic && peer.background && peer.border);
@@ -1011,6 +1086,10 @@ mod tests {
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
             assert_eq!(
+                chart.drawings().drawings[0].range_settings.shadow_color,
+                Drawing::new(7, tool).range_settings.shadow_color
+            );
+            assert_eq!(
                 chart.drawings().drawings[0].line_measurements,
                 crate::drawings::LineMeasurements::for_tool(tool)
             );
@@ -1019,6 +1098,10 @@ mod tests {
                 format!("{:?}", Drawing::new(7, tool).fib_config)
             );
             assert!(chart.redo());
+            assert_eq!(
+                chart.drawings().drawings[0].range_settings.shadow_color,
+                [50, 60, 70, 128]
+            );
             chart
                 .drawings_mut()
                 .edit_drawing(7, |d| d.locked = true)
@@ -1275,6 +1358,32 @@ mod tests {
                 assert_eq!(drawing.position_readout.conversion_rate, Some(expected.1));
             }
         }
+        // Anchoring one of two selected tables to the screen anchors both, each keeping its own
+        // column widths.
+        chart.drawings_mut().drawings = [vec![Some(90.0)], vec![None, Some(50.0)]]
+            .into_iter()
+            .enumerate()
+            .map(|(id, column_widths)| {
+                let mut table = Drawing::new(id + 1, DrawingToolType::Table);
+                table.table = Some(Box::new(crate::drawings::TableConfig {
+                    column_widths,
+                    ..Default::default()
+                }));
+                table
+            })
+            .collect();
+        chart.drawings_mut().select_drawings([1, 2]);
+        let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+        let settings = &mut props.tool_settings.as_mut().unwrap().settings;
+        settings.table.as_mut().unwrap().screen_anchored = true;
+        let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+        let tables: Vec<_> = edits.iter().map(|d| d.table.clone().unwrap()).collect();
+        assert!(
+            tables.iter().all(|table| table.screen_anchored),
+            "{tables:?}"
+        );
+        assert_eq!(tables[0].column_widths, [Some(90.0)]);
+        assert_eq!(tables[1].column_widths, [None, Some(50.0)]);
         // An image's opacity is independent of its frame and of the other selected pictures.
         for opacity in [None, Some(128)] {
             let mut chart = Chart::new(crate::model::BarData::new());
@@ -1318,8 +1427,8 @@ mod tests {
         }
         // Opened drawing, peer, dialog edit, and the peer's independently expected settings.
         use crate::drawings::{
-            BarsPatternConfig, ChartPoint, GannConfig, GhostFeedConfig, PitchforkConfig,
-            PitchforkLevel, RegressionTrendConfig, VwapConfig,
+            BarsPatternConfig, ChartPoint, ForecastStyle, GannConfig, GhostFeedConfig,
+            PitchforkConfig, PitchforkLevel, RegressionTrendConfig, VwapConfig,
         };
         type ConfigCase = (
             &'static str,
@@ -1388,6 +1497,7 @@ mod tests {
                             .to_vec(),
                         show_background: true,
                         background_opacity: 75,
+                        extend_lines: true,
                     })
                 },
             ),
@@ -1405,7 +1515,7 @@ mod tests {
                     config.show_arcs = !config.show_arcs;
                 },
                 |d| {
-                    let mut config = GannConfig::for_tool(DrawingToolType::GannSquare);
+                    let mut config = GannConfig::saved_default(DrawingToolType::GannSquare);
                     config.show_arcs = !config.show_arcs;
                     d.gann = Some(config);
                 },
@@ -1473,6 +1583,23 @@ mod tests {
                 |d| d.volume_profile.as_mut().unwrap().extend_right = true,
             ),
             (
+                "volume profile ticks per row",
+                DrawingToolType::FixedRangeVolumeProfile,
+                |d| d.volume_profile = crate::data::VolumeProfileConfig::new(24, 0.7),
+                |d| {
+                    d.volume_profile = crate::data::VolumeProfileConfig::new(48, 0.8)
+                        .and_then(|c| c.with_row_size(Some(2.0)))
+                },
+                |d| {
+                    let config = d.volume_profile.as_mut().unwrap();
+                    *config = config.with_row_ticks(Some(4)).unwrap();
+                },
+                |d| {
+                    let config = d.volume_profile.as_mut().unwrap();
+                    *config = config.with_row_ticks(Some(4)).unwrap();
+                },
+            ),
+            (
                 "vwap band line",
                 DrawingToolType::AnchoredVWAP,
                 |d| d.vwap = Some(VwapConfig::default()),
@@ -1484,6 +1611,34 @@ mod tests {
                 },
                 |d| d.vwap.as_mut().unwrap().bands[0].upper.visible = false,
                 |d| d.vwap.as_mut().unwrap().bands[0].upper.visible = false,
+            ),
+            (
+                // A forecast saved before its card colours keeps its fill as every background.
+                "forecast saved before its colours",
+                DrawingToolType::Forecast,
+                |_| {},
+                |d| {
+                    d.forecast = None;
+                    d.fill_color = Some([1, 2, 3, 200]);
+                },
+                |d| d.forecast.as_mut().unwrap().start_text = Some([9, 8, 7, 255]),
+                |d| {
+                    let fill = Some([1, 2, 3, 200]);
+                    d.forecast = Some(ForecastStyle {
+                        start_background: fill,
+                        start_text: Some([9, 8, 7, 255]),
+                        start_border: None,
+                        target_background: fill,
+                        target_text: None,
+                        target_border: None,
+                        success_background: fill,
+                        success_text: None,
+                        failure_background: fill,
+                        failure_text: None,
+                        transparency: 0,
+                        ..ForecastStyle::default()
+                    });
+                },
             ),
             (
                 "edited level of a list of a different length",

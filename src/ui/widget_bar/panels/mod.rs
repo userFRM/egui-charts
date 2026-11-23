@@ -3,45 +3,26 @@
 //! Individual panels for alerts, object tree, watchlists, symbol details, time and sales, news,
 //! the event calendars, the screener, hotlists, notifications, chats and the products launcher.
 
-use crate::scales::{CurrencyFormatter, PriceFormatter};
 use egui::text::TextFormat;
 use egui::{Color32, FontId};
 
-pub mod alerts_panel;
-pub mod calendar;
-pub mod chats;
+pub(crate) mod alerts_panel;
+pub(crate) mod calendar;
+pub(crate) mod chats;
 mod controls;
-pub mod hotlists;
-pub mod market_details;
-pub mod market_heatmap;
-pub mod news;
-pub mod notifications;
-pub mod object_tree;
+pub(crate) mod hotlists;
+pub(crate) mod market_details;
+pub(crate) mod market_heatmap;
+pub(crate) mod news;
+pub(crate) mod notifications;
+pub(crate) mod object_tree;
 #[cfg(feature = "detectors")]
-pub mod order_flow;
-pub mod products;
-pub mod screener;
-pub mod symbol_details;
-pub mod time_and_sales;
-pub mod watchlist;
-
-pub use crate::ui::trading::DepthPanel;
-pub use alerts_panel::*;
-pub use calendar::*;
-pub use chats::*;
-pub use hotlists::*;
-pub use market_details::*;
-pub use market_heatmap::*;
-pub use news::*;
-pub use notifications::*;
-pub use object_tree::*;
-#[cfg(feature = "detectors")]
-pub use order_flow::*;
-pub use products::*;
-pub use screener::*;
-pub use symbol_details::*;
-pub use time_and_sales::*;
-pub use watchlist::*;
+pub(crate) mod order_flow;
+pub(crate) mod products;
+pub(crate) mod screener;
+pub(crate) mod symbol_details;
+pub(crate) mod time_and_sales;
+pub(crate) mod watchlist;
 
 /// Height shared by market data rows.
 const ROW_HEIGHT: f32 = 26.0;
@@ -54,24 +35,6 @@ fn weighted(size: f32, weight: f32, color: Color32) -> TextFormat {
     let mut format = TextFormat::simple(FontId::proportional(size), color);
     format.coords.push("wght", weight);
     format
-}
-
-/// `value` with an explicit sign, unsigned when it rounds to zero, or a dash when not finite.
-fn signed(value: f64, decimals: usize) -> String {
-    let text = grouped(value, decimals);
-    if value > 0.0 && text.bytes().any(|b| matches!(b, b'1'..=b'9')) {
-        format!("+{text}")
-    } else {
-        text
-    }
-}
-
-/// A price with thousands separators and `decimals` decimals, or a dash when not finite.
-fn grouped(value: f64, decimals: usize) -> String {
-    if !value.is_finite() {
-        return "-".to_owned();
-    }
-    CurrencyFormatter::new("", decimals).format(value)
 }
 
 /// Format price with decimals chosen by its magnitude, so a negative price
@@ -103,8 +66,12 @@ mod tests {
         Datafeed, FeedError, HistoryPage, HistoryRequest, HotlistEntry, HotlistQuery, Reply,
         ScreenerColumn, ScreenerColumnSet, ScreenerQuery, ScreenerRow, SymbolDetails,
     };
-    use crate::model::{Instrument, OrderSide, Quote, Tick};
+    use crate::model::{Instrument, OrderSide, Quote, Tick, Watchlist};
     use crate::theme::{Theme, apply_to_egui};
+    use crate::ui::widget_bar::{
+        HotlistsPanel, NewsPanel, ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel,
+        TradeSizeFilter, WatchlistPanel,
+    };
 
     struct Feed;
     impl Datafeed for Feed {
@@ -112,10 +79,11 @@ mod tests {
             reply.send(Err(FeedError::NotSupported));
         }
         fn hotlist(&self, _: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
-            reply.send(Ok(vec![
-                HotlistEntry::new("AAA", 123.45, 12.34),
-                HotlistEntry::new("B", 10.0, 0.0),
-            ]));
+            let mut first = HotlistEntry::new("AAA", 123.45, 12.34);
+            first.figure = Some(("Volume".into(), "123.4M".into()));
+            let mut wide = HotlistEntry::new("C", 10.0, 0.0);
+            wide.figure = Some(("Volume".into(), "1,234,567,890.00".into()));
+            reply.send(Ok(vec![first, HotlistEntry::new("B", 10.0, 0.0), wide]));
         }
         fn screen(&self, _: ScreenerQuery, reply: Reply<Vec<ScreenerRow>>) {
             reply.send(Ok(vec![
@@ -142,10 +110,12 @@ mod tests {
                     "tape",
                     "tape_combined",
                     "hotlist",
+                    "hotlist_long",
                     "screener",
                     "news",
                 ] {
                     let tape = matches!(panel, "tape" | "tape_combined");
+                    let is_hotlist = matches!(panel, "hotlist" | "hotlist_long");
                     let ctx = egui::Context::default();
                     apply_to_egui(&ctx, &theme);
                     let symbol = "EXCHANGE:LONG_SYMBOL_NAME";
@@ -205,7 +175,14 @@ mod tests {
                         };
                         20
                     ];
-                    let mut hotlist = HotlistsPanel::new(vec!["Gainers".into()]);
+                    let hotlist_title = if panel == "hotlist_long" {
+                        "Most active by dollar volume in the pre-market"
+                    } else {
+                        "Gainers"
+                    };
+                    let mut hotlist = HotlistsPanel::new(vec![hotlist_title.into()]);
+                    hotlist.set_exchanges(["NYSE".into(), "NASDAQ".into()]);
+                    hotlist.set_countries(["US".into(), "DE".into()]);
                     hotlist.set_feed(std::sync::Arc::new(Feed));
                     hotlist.poll(&ctx);
                     let mut screener = ScreenerPanel::new(vec![ScreenerColumnSet::new(
@@ -230,7 +207,7 @@ mod tests {
                                 details.show(ui);
                             } else if panel == "news" {
                                 news.show(ui);
-                            } else if panel == "hotlist" {
+                            } else if is_hotlist {
                                 hotlist.show(ui);
                             } else if panel == "screener" {
                                 screener.show(ui);
@@ -253,6 +230,16 @@ mod tests {
                             (rect.is_positive()).then(|| (text.galley.text().to_owned(), rect))
                         })
                         .collect();
+                    let elided: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.elided => {
+                                Some(text.galley.text().to_owned())
+                            }
+                            _ => None,
+                        })
+                        .collect();
                     output.drop_without_applying_deltas();
                     assert!(
                         used.right() <= width,
@@ -268,7 +255,7 @@ mod tests {
                         assert!(texts.iter().any(|(text, _)| text == "Market"), "{texts:?}");
                         continue;
                     }
-                    if matches!(panel, "hotlist" | "screener") {
+                    if is_hotlist || panel == "screener" {
                         let bounds = |label: &str| {
                             texts
                                 .iter()
@@ -288,6 +275,34 @@ mod tests {
                             "{panel}: rows must have watchlist height: {texts:?}"
                         );
                         assert!(!bounds("AAA").intersects(bounds("123.45")), "{texts:?}");
+                        if is_hotlist {
+                            if panel == "hotlist" {
+                                bounds(hotlist_title);
+                                assert!(!elided.contains(&hotlist_title.to_owned()), "{elided:?}");
+                            }
+                            // The list's figure heads its own column, a dash stands for a missing
+                            // one, and four columns fit without cutting a heading or a value.
+                            for label in ["123.4M", "-"] {
+                                assert!(
+                                    (bounds(label).right() - bounds("Volume").right()).abs() < 2.0,
+                                    "{texts:?}"
+                                );
+                            }
+                            assert!(!bounds("+12.34%").intersects(bounds("123.4M")), "{texts:?}");
+                            for label in [
+                                "Symbol",
+                                "AAA",
+                                "Chg%",
+                                "Volume",
+                                "+12.34%",
+                                "123.4M",
+                                "All exchanges",
+                                "All countries",
+                            ] {
+                                bounds(label);
+                                assert!(!elided.contains(&label.to_owned()), "{label}: {elided:?}");
+                            }
+                        }
                         continue;
                     }
                     let row: Vec<_> = texts
@@ -337,25 +352,6 @@ mod tests {
                     }
                 }
             }
-        }
-    }
-
-    #[test]
-    fn panel_numbers_group_digits_and_omit_signs_at_rounded_zero() {
-        for (value, decimals, price, change) in [
-            (43237.45, 2, "43,237.45", "+43,237.45"),
-            (-1234567.0, 0, "-1,234,567", "-1,234,567"),
-            (863.83, 2, "863.83", "+863.83"),
-            (100000.5, 1, "100,000.5", "+100,000.5"),
-            (0.000123, 6, "0.000123", "+0.000123"),
-            (-0.0, 2, "0.00", "0.00"),
-            (-0.001, 2, "0.00", "0.00"),
-            (0.001, 2, "0.00", "0.00"),
-            (f64::INFINITY, 2, "-", "-"),
-            (f64::NAN, 2, "-", "-"),
-        ] {
-            assert_eq!(grouped(value, decimals), price);
-            assert_eq!(signed(value, decimals), change);
         }
     }
 

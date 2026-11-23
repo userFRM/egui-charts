@@ -616,7 +616,7 @@ impl Default for TechnicalRatings {
 }
 
 /// The displayed rating of a score between -1 and 1.
-fn rating(score: f64) -> &'static str {
+pub(crate) fn rating(score: f64) -> &'static str {
     if score >= 0.5 {
         "Strong Buy"
     } else if score >= 0.1 {
@@ -1488,6 +1488,7 @@ mod tests {
             clock: BarClock::new(request.timeframe.unwrap()),
             instrument: None,
             timeframe: request.timeframe.unwrap(),
+            chart: None,
         };
         let sources = [
             source(&requests[0], &falling[..]),

@@ -1,14 +1,14 @@
 //! Canvas tab of the chart settings dialog.
 
 use super::super::SettingsDialog;
-use super::{pick_color, styled_dropdown, styled_text_input};
+use super::{checkbox, pick_color, styled_dropdown, styled_text_input};
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use crate::theme::Theme;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::widget::settings::{BackgroundType, ButtonVisibility, GridLinesMode, WatermarkMode};
-use egui::Ui;
+use egui::{RichText, Ui};
 
 impl SettingsDialog {
     pub(in super::super) fn draw_canvas_tab(&mut self, ui: &mut Ui, theme: &Theme) {
@@ -164,6 +164,37 @@ impl SettingsDialog {
                             .suffix(l10n::text(ui.ctx(), " px")),
                     );
                     dialog.settings.crosshair.line_width = lw;
+                });
+
+                self.draw_setting_row_with_controls(ui, "Crosshair lines", theme, |ui, dialog| {
+                    let mut shown = dialog.settings.crosshair_lines.unwrap_or_default();
+                    let text = |label| {
+                        RichText::new(l10n::text(ui.ctx(), label))
+                            .size(theme.text.title)
+                            .color(theme.ui.text)
+                    };
+                    let vertical = text("Vertical line");
+                    let horizontal = text("Horizontal line");
+                    let changed = checkbox(ui, &mut shown.vertical_line, vertical).changed()
+                        | checkbox(ui, &mut shown.horizontal_line, horizontal).changed();
+                    if changed {
+                        dialog.settings.crosshair_lines = Some(shown);
+                    }
+                });
+                self.draw_setting_row_with_controls(ui, "Crosshair labels", theme, |ui, dialog| {
+                    let mut shown = dialog.settings.crosshair_lines.unwrap_or_default();
+                    let text = |label| {
+                        RichText::new(l10n::text(ui.ctx(), label))
+                            .size(theme.text.title)
+                            .color(theme.ui.text)
+                    };
+                    let time = text("Time label");
+                    let price = text("Price label");
+                    let changed = checkbox(ui, &mut shown.time_label, time).changed()
+                        | checkbox(ui, &mut shown.price_label, price).changed();
+                    if changed {
+                        dialog.settings.crosshair_lines = Some(shown);
+                    }
                 });
 
                 ui.add_space(ui.active_theme().spacing.xxl);
