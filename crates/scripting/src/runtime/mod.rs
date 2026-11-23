@@ -76,9 +76,10 @@ pub(crate) struct Run {
     operations: u64,
     /// Whether the values of the running scope are due to be counted, once per clock read.
     due: bool,
-    /// The bytes the values of each call level's scope held at its last count on this bar, and
-    /// those of them outside the states, the running level last. A caller's scope is out of
-    /// reach while it waits, and unchanged, so its last count stands for it.
+    /// The bytes the values of the scope at each call level held at the last count there on this
+    /// bar, and those of them outside the states, zeros for a level without one, the running level
+    /// last. A caller's scope is out of reach while it waits, so the last count at its level stands
+    /// for it, without what the caller bound after that count.
     levels: Vec<(usize, usize)>,
     /// The bytes the values of the running scope outside the states held when their count
     /// stopped the run, for its report.

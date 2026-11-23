@@ -224,13 +224,14 @@ slow notice from one second on. A live tick recalculates only the newest bar.
 
 `Limits`, set with `Script::with_limits`, bound each study's runs: by default 500 ms for one bar,
 60 s for a full recompute and 256 MiB for the study's buffers and its script's values. Values count
-with the room they hold: those the states keep after each bar, and inside a bar, every
-256 operations, those in the variables of the running function and of the calls waiting on it. A run
-that passes a limit keeps none of its bars: the study keeps its previous values, and the legend and
-`Script::last_error` say which limit stopped it and where. It runs again when its inputs change or
-its bars change from the first one on. Whether a run close to a limit finishes depends on the
-machine and its load. A script with long logic on every bar costs time on every bar: on 100,000 bars
-a restated built-in study takes several hundred milliseconds to recompute, off the UI thread.
+with the room they hold, not their length: those the states keep, after each bar, and inside a bar,
+every 256 operations at the next variable read, the variables in scope there, with what the last
+count found in each call waiting on the running one. A run that passes a limit keeps none of its
+bars: the study keeps its previous values, and the legend and `Script::last_error` say which limit
+stopped it and where. It runs again when its inputs change or its bars change from the first one on.
+Whether a run close to a limit finishes depends on the machine and its load. A script with long
+logic on every bar costs time on every bar: on 100,000 bars a restated built-in study takes several
+hundred milliseconds to recompute, off the UI thread.
 
 `Limits` may gain fields, so a host starts from the defaults and sets the limits it changes:
 
@@ -257,11 +258,16 @@ default linker settings, so there arrays hold up to 200 items, maps 50 entries a
 deep; the deepest value in the deepest call needs under 900 KiB there in a debug build, measured in
 Chrome and Firefox.
 
-Inside one bar the memory limit has a gap: a value that no variable holds yet, such as the
-arguments of a call while they are evaluated or the results `map` collects, is not counted. So one
-bar may allocate past the memory limit until its time limit ends it: under the default limits up to
-about 480 MiB in a release build in the package's measurements, and more on a machine that
-allocates faster. A host that runs scripts it does not trust caps the memory of the process they
-run in itself.
+The memory limit guards against runaway growth in ordinary scripts, such as a state that grows on
+every bar or a buffer built in a loop, and is not a bound against a hostile script. Inside a bar it
+does not count a value no variable holds, such as the arguments of a call while they are evaluated
+or the results `map` collects, nor what a waiting call bound after its last count. So what one bar
+allocates has no fixed ceiling: it grows with the shape of the script until the time limit stops the
+bar. For example, in a release build under the default limits, 250 copies of a 10 MB map passed to
+one call reached about 2.4 GiB before the time limit stopped the bar, after 981 ms. The clock is
+read every 256 operations and one operation may copy a large value, so a bar may also run past its
+time limit, by up to about a second as measured. An allocation that fails ends the process natively
+and the WebAssembly module on the web. A host that runs scripts it does not trust caps the memory of
+the process or worker they run in.
 
 A script has no `import`, no `eval`, no clock and no output: it reaches nothing outside itself.
