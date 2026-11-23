@@ -950,11 +950,12 @@ pub struct ChartSyncOptions {
     pub sync_time_axis: bool,
     /// Synchronize the hovered timestamp.
     pub sync_crosshair: bool,
-    /// Synchronize completed main-pane drawings between charts of the same symbol.
+    /// Synchronize completed drawings between charts of the same symbol. A drawing in a study
+    /// pane goes to the linked pane of each other chart, the one holding the same studies with the
+    /// same inputs (see [`Chart::linked_pane`]); a chart without such a pane receives no copy.
     /// A chart that comes to a symbol receives the drawings mirrored there. Turning this on links
-    /// equal drawings of the charts of a symbol and mirrors the others both ways, without replaying
-    /// what was done while it was off.
-    /// Study-owned drawings stay local because study ids and scales belong to each chart.
+    /// equal drawings of the charts of a symbol, in the price pane or in linked study panes, and
+    /// mirrors the others both ways, without replaying what was done while it was off.
     /// Charts that keep their drawings in the same storage are left to it: they read each other's
     /// stored drawings whether this is on or off, so a drawing reaches them once a chart history
     /// edit writes it. Drawings that are not saveable still sync between them here, and so do

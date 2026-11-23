@@ -305,7 +305,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [ ] Restore custom series from chart snapshots: their renderers and host-fed points are not saved, and a restored study cannot take back a renderer that replaces its plots.
 - [x] Layout favourites appear in the catalogue and menu, follow renames and deletions, and persist in user settings.
 - [x] `ChartLayout` synchronises crosshair price as well as time, also over the empty space after the last bar, where each chart marks the slot of its own interval that holds the time. A time sent without a price, as from a study pane, draws the vertical guide and time label alone.
-- [x] Study-pane drawings map to the corresponding pane on other charts, and mirrored updates, unlocking and deletion reach locked receivers.
+- [x] Study-pane drawings map to the corresponding pane on other charts, also on a chart that comes to the symbol, and stay single and linked when the charts are reopened from their snapshots; mirrored updates, unlocking and deletion reach locked receivers.
 
 ## Data and Builder API
 
