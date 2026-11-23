@@ -1197,13 +1197,34 @@ mod tests {
 
     #[test]
     fn series_menu_alert_starts_at_the_clicked_price() {
+        use chrono::{NaiveTime, Weekday};
         use egui::{Event, Modifiers, PointerButton};
+        use egui_charts::model::{NotificationSchedule, NotificationWindow, TimezoneId};
 
         let engine = Arc::new(AlertEngine::new());
         let mut terminal = Terminal::new(Arc::new(crate::test_support::TestFeed))
             .with_symbol("AAPL")
             .with_alerts(engine.clone());
         frames(&mut terminal);
+
+        let schedule = NotificationSchedule::new(
+            TimezoneId::utc(),
+            vec![Weekday::Mon],
+            vec![NotificationWindow::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+            )],
+        );
+        let mut scheduled = Alert::new("AAPL", AlertCondition::Above(1.0));
+        scheduled.schedule = Some(Box::new(schedule.clone()));
+        terminal.alerts.dialog.edit(scheduled);
+        frames(&mut terminal);
+        let save = frame(&mut terminal, SIZE, vec![])
+            .text_at("Save alert")
+            .expect("the editor offers to save");
+        click(&mut terminal, SIZE, save);
+        frames(&mut terminal);
+        assert_eq!(engine.alerts().len(), 1, "the scheduled alert is saved");
 
         let chart = terminal.chart();
         let index = chart.state().shown().len() - 5;
@@ -1242,10 +1263,12 @@ mod tests {
             terminal.alerts.dialog.alert.condition,
             AlertCondition::Crossing(expected)
         );
-        assert!(
-            engine.alerts().is_empty(),
-            "the alert is still being edited"
+        assert_eq!(
+            terminal.alerts.dialog.alert.schedule.as_deref(),
+            Some(&schedule),
+            "the new alert starts with the last saved schedule"
         );
+        assert_eq!(engine.alerts().len(), 1, "the alert is still being edited");
     }
 
     #[test]
