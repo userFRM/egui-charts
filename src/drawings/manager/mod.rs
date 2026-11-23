@@ -1054,7 +1054,7 @@ impl DrawingManager {
     }
 
     /// Keep layout links when this chart's own snapshot restores exactly the same stored
-    /// records. Local drawing ids survive; old study ids and pane-removal history do not.
+    /// records. Local drawing ids survive; old study ids do not.
     pub(crate) fn keep_snapshot_links(&mut self, previous: &Self) {
         fn key(d: &Drawing) -> Option<(&str, i64)> {
             Some((d.stored_id.as_deref()?, d.created_at?))
