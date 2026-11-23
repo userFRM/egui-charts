@@ -519,6 +519,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Ctrl-drag and Command-drag now put every copied drawing in the chart-only placement folder when configured, just like Paste and Clone. Moving the originals does not change their sharing scope. ([#4123](https://github.com/userFRM/egui-charts/issues/4123))
+
 - Terminal’s Time and Sales panel now lists older trades when a history page arrives after a live trade. Backfilled rows do not trigger large-trade alerts; a live trade arriving in the same frame still can. ([#3702](https://github.com/userFRM/egui-charts/issues/3702))
 
 - Terminal’s Time and Sales panel drops the old rows when a feed resets its trade tape, even without a market replay driver. ([#3670](https://github.com/userFRM/egui-charts/issues/3670))

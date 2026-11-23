@@ -4931,18 +4931,74 @@ mod tests {
         }
         assert_eq!(prices(&charts)[1], [104.0]);
 
-        // A copy of the shared line, pasted from the other layout or cloned here, is placed in
-        // the numbered chart-only folder: absent from the other layout and from storage, also
-        // through undo and redo.
+        let original = charts[0]
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.folder == ["Notes"])
+            .unwrap()
+            .id;
+        // Copies of the shared original stay in the numbered chart-only folder.
         let mut check_local = |charts: &mut [Chart; 2], local: &[f64]| {
             settle(charts);
             assert_eq!(prices(charts), [local.to_vec(), vec![104.0]]);
             let (stored, skipped) =
                 DrawingStorage::from_json(&host.get("SAMPLE").unwrap()).unwrap();
             assert!(skipped.is_empty());
-            assert_eq!(stored.drawings().len(), 1);
+            let [record] = stored.drawings() else {
+                panic!("expected only the shared original")
+            };
+            assert_eq!(record.points[0].price, 104.0);
+            assert_eq!(record.drawing.folder, ["Notes"]);
+            for line in &charts[0].drawings().drawings {
+                let (folder, scope) = if line.id == original {
+                    ("Notes", FolderSync::AllLayouts)
+                } else {
+                    ("Notes (2)", FolderSync::Chart)
+                };
+                assert_eq!(line.folder, [folder]);
+                assert_eq!(line.folder_sync_mode(), Some(scope));
+            }
         };
         let shared = charts[1].drawings().drawings[0].id;
+        let local = charts[0]
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.chart_points[0].price == 108.0)
+            .unwrap()
+            .id;
+        let drag = |chart: &mut Chart, ids: &[usize], copy| {
+            chart.user_action(|chart| {
+                let manager = chart.drawings_mut();
+                manager.select_drawings(ids.iter().copied());
+                manager.start_drag_body(ids[0], egui::Pos2::ZERO);
+                if copy {
+                    manager.copy_dragged_drawings();
+                }
+                manager.update_drag_handle(
+                    egui::pos2(0.0, 1.0),
+                    |x| x,
+                    f64::from,
+                    |p, from, to| p + f64::from(to - from),
+                );
+                manager.end_drag_handle();
+            });
+        };
+        // In the group the shared line is not the grabbed one: every copy needs placement.
+        for (ids, expected) in [
+            (&[original][..], &[104.0, 105.0, 108.0, 110.0][..]),
+            (&[local, original], &[104.0, 105.0, 108.0, 109.0, 110.0]),
+        ] {
+            drag(&mut charts[0], ids, true);
+            check_local(&mut charts, expected);
+            assert!(charts[0].undo());
+            check_local(&mut charts, &[104.0, 108.0, 110.0]);
+            assert!(charts[0].redo());
+            check_local(&mut charts, expected);
+            assert!(charts[0].undo());
+            check_local(&mut charts, &[104.0, 108.0, 110.0]);
+        }
         charts[1].drawings_mut().select(shared);
         let copied = charts[1].copy_selected_drawings().unwrap().unwrap();
         charts[0].paste_drawings(&copied).unwrap();
@@ -4954,18 +5010,29 @@ mod tests {
         check_local(&mut charts, &[104.0, 108.0, 110.0]);
         assert!(charts[0].redo());
         check_local(&mut charts, &[104.0, 104.0, 108.0, 110.0]);
-        let original = charts[0]
-            .drawings()
-            .drawings
-            .iter()
-            .find(|d| d.folder == ["Notes"])
-            .unwrap()
-            .id;
         charts[0].user_action(|chart| chart.drawings_mut().duplicate_drawing(original));
         let cloned = charts[0].drawings().drawings.last().unwrap();
         assert_eq!(cloned.folder, ["Notes (2)"]);
         assert_eq!(cloned.folder_sync_mode(), Some(FolderSync::Chart));
         check_local(&mut charts, &[104.0, 104.0, 104.0, 108.0, 110.0]);
+
+        // Moving the original still syncs; a drag-copy on a chart without the option does too.
+        drag(&mut charts[0], &[original], false);
+        settle(&mut charts);
+        assert_eq!(prices(&charts)[1], [105.0]);
+        assert!(charts[0].undo());
+        settle(&mut charts);
+        drag(&mut charts[1], &[shared], true);
+        settle(&mut charts);
+        assert_eq!(
+            prices(&charts),
+            [
+                vec![104.0, 104.0, 104.0, 105.0, 108.0, 110.0],
+                vec![104.0, 105.0]
+            ]
+        );
+        assert!(charts[1].undo());
+        settle(&mut charts);
 
         charts[1].user_action(|chart| chart.drawings_mut().delete_drawing(shared));
         settle(&mut charts);
