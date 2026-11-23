@@ -1,7 +1,10 @@
 //! The engine scripts run on: Rhai's standard package and nothing that reaches outside the
-//! script, the size limits, the series type with its operators and history, and the helpers.
+//! script, the size limits, the series type with its operators and history, the bars of other
+//! histories, and the helpers.
 
-use crate::runtime::{self, program::Span, series::SeriesRef};
+use super::syntax::PRICES;
+use crate::runtime::series::{Field, SeriesRef};
+use crate::runtime::{self, bindings, program::Span};
 use ::rhai::packages::{Package, StandardPackage};
 use ::rhai::{
     Array, Dynamic, Engine, EvalAltResult, FLOAT, INT, ImmutableString, Map, NativeCallContext,
@@ -58,6 +61,17 @@ impl Handle {
         runtime::with(|run| run.columns.at(self.0, run.bar, offset))
             .unwrap_or(Ok(f64::NAN))
             .map_err(Into::into)
+    }
+}
+
+/// The bars of another history, as a script sees the name of a `bars` declaration: each field is
+/// a series.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BarsHandle(pub usize);
+
+impl BarsHandle {
+    fn field(&mut self, field: Field) -> Handle {
+        Handle(SeriesRef::History { at: self.0, field })
     }
 }
 
@@ -272,6 +286,32 @@ pub(crate) fn engine() -> Engine {
     });
     engine.register_indexer_get(|_: &mut bool, _: INT| -> Result<FLOAT> { Err(NO_HISTORY.into()) });
 
+    engine.register_type_with_name::<BarsHandle>("bars");
+    // The fields of the chart's bars; `bar_index` is none.
+    let fields: Vec<_> = PRICES
+        .into_iter()
+        .filter_map(|(name, series)| match series {
+            SeriesRef::Price(price) => Some((name, Field::Price(price))),
+            SeriesRef::Volume => Some((name, Field::Volume)),
+            SeriesRef::Time => Some((name, Field::Time)),
+            _ => None,
+        })
+        .collect();
+    for &(name, field) in &fields {
+        engine.register_get(name, move |bars: &mut BarsHandle| bars.field(field));
+    }
+    // Rhai asks this for a field that has no getter.
+    engine.register_indexer_get(move |bars: &mut BarsHandle, name: ImmutableString| {
+        let field = fields.iter().find(|(field, _)| *field == name);
+        field.map(|(_, field)| bars.field(*field)).ok_or_else(|| {
+            let names: Vec<_> = fields.iter().map(|(name, _)| *name).collect();
+            let names = names.join(", ");
+            Box::<EvalAltResult>::from(format!(
+                "bars have no field {name}; expected one of {names}"
+            ))
+        })
+    });
+
     engine.register_fn("is_na", |x: FLOAT| x.is_nan());
     engine.register_fn("is_na", |_: INT| false);
     engine.register_fn("is_na", |x: Handle| x.value().is_nan());
@@ -484,11 +524,7 @@ fn step(context: &NativeCallContext, name: &str, length: INT, x: f64, b: f64) ->
 
 /// A length or offset given as a number, which must be a whole one.
 fn whole(name: &str, value: f64) -> Result<INT> {
-    if value.fract() == 0.0 && value.abs() < 9.0e15 {
-        Ok(value as INT)
-    } else {
-        Err(format!("{name} {value} is not a whole number").into())
-    }
+    bindings::whole(value).ok_or_else(|| format!("{name} {value} is not a whole number").into())
 }
 
 fn clamp(x: f64, lo: f64, hi: f64) -> Result<FLOAT> {

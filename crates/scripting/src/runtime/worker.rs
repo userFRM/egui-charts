@@ -4,10 +4,9 @@
 use super::limits::Limits;
 use super::program::{ScriptSpec, Span};
 use super::{Outcome, Program, Request, RunState};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{
-    Mutex,
     atomic::{AtomicBool, AtomicU32, Ordering},
     mpsc,
 };
@@ -44,10 +43,18 @@ impl Runner {
         program: Arc<P>,
         spec: Arc<ScriptSpec>,
         series_spans: Arc<[Span]>,
+        history_spans: Arc<[Span]>,
         limits: Limits,
     ) -> Self {
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut state = RunState::new(program, spec, series_spans, limits, Some(cancel.clone()));
+        let mut state = RunState::new(
+            program,
+            spec,
+            series_spans,
+            history_spans,
+            limits,
+            Some(cancel.clone()),
+        );
         let progress = state.progress();
         let (requests, received) = mpsc::channel::<Request>();
         let (finished, outcomes) = mpsc::channel();
@@ -113,12 +120,13 @@ impl Drop for Runner {
 /// The calculation of one study, run in slices of [`Runner::SLICE`] per call.
 #[cfg(target_arch = "wasm32")]
 pub(crate) struct Runner {
-    state: Box<dyn Slices>,
+    // Behind a mutex only for `Sync`; `&mut self` reaches it without locking.
+    state: Mutex<Box<dyn Slices>>,
 }
 
 /// A [`RunState`] whose program type is erased.
 #[cfg(target_arch = "wasm32")]
-trait Slices: Send + Sync {
+trait Slices: Send {
     fn begin(&mut self, request: Request);
     fn advance(&mut self, until: web_time::Instant) -> Option<Outcome>;
     fn fraction(&self) -> f32;
@@ -139,29 +147,33 @@ impl<P: Program> Slices for RunState<P> {
 
 #[cfg(target_arch = "wasm32")]
 impl Runner {
-    /// The time a call runs bars before it returns; a bar is never split.
+    /// The time a call runs bars before it returns; a bar is never split, nor a study it calls.
     const SLICE: std::time::Duration = std::time::Duration::from_millis(4);
 
     pub fn new<P: Program>(
         program: Arc<P>,
         spec: Arc<ScriptSpec>,
         series_spans: Arc<[Span]>,
+        history_spans: Arc<[Span]>,
         limits: Limits,
     ) -> Self {
+        let state = RunState::new(program, spec, series_spans, history_spans, limits, None);
         Self {
-            state: Box::new(RunState::new(program, spec, series_spans, limits, None)),
+            state: Mutex::new(Box::new(state)),
         }
     }
 
     pub fn send(&mut self, request: Request) -> Poll {
-        self.state.begin(request);
+        let state = self.state.get_mut().unwrap_or_else(|e| e.into_inner());
+        state.begin(request);
         self.poll()
     }
 
     pub fn poll(&mut self) -> Poll {
-        match self.state.advance(web_time::Instant::now() + Self::SLICE) {
+        let state = self.state.get_mut().unwrap_or_else(|e| e.into_inner());
+        match state.advance(web_time::Instant::now() + Self::SLICE) {
             Some(outcome) => Poll::Done(outcome),
-            None => Poll::Running(self.state.fraction()),
+            None => Poll::Running(state.fraction()),
         }
     }
 }

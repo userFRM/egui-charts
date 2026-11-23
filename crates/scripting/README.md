@@ -2,10 +2,10 @@
 
 Scripts that add studies to [egui-charts](https://github.com/userFRM/egui-charts). A script is a
 short program that runs once per bar, oldest bar first, and writes the study's outputs for that
-bar. It reads the bar's prices and their history, its own inputs and its own persistent state. It
-cannot read files, the network, the clock, a random source or later bars, so it gives the same
-outputs for the same bars on every run, and a live update gives the outputs of a full calculation
-bit for bit.
+bar. It reads the bar's prices and their history, the studies of the registry, other histories the
+chart supplies, its own inputs and its own persistent state. It cannot read files, the network, the
+clock, a random source or later bars, so it gives the same outputs for the same bars on every run,
+and a live update gives the outputs of a full calculation bit for bit.
 
 The language is [Rhai](https://rhai.rs) with a fixed set of declarations, series and helpers. A
 script compiles into a `CustomIndicator`, so the chart's settings dialog shows its inputs and the
@@ -103,9 +103,9 @@ fill("Upper", "Lower", color = "#7E57C220");
 The whole text is the program of one bar. Rhai's expressions and control flow work: `let`, `if`
 and `else` as statements and expressions, `while`, `loop`, `for i in 0..n`, `break`,
 `continue`, `switch`, functions with `fn`, integer and floating-point arithmetic, strings, arrays
-and maps. Functions see only their parameters, so a function that needs a series takes it as one:
-`fn slope(s, n) { (s - s[n]) / n }`. There are no anonymous functions or closures: an array
-function such as `filter` takes a declared function as `Fn("name")`.
+and maps. Functions see only their parameters, so a function that needs a series or `bars` takes
+it as one: `fn slope(s, n) { (s - s[n]) / n }`. There are no anonymous functions or closures: an
+array function such as `filter` takes a declared function as `Fn("name")`.
 
 ## Values
 
@@ -114,15 +114,16 @@ function such as `filter` takes a declared function as `Fn("name")`.
 | number | `1.5`, results of arithmetic on series | `na` |
 | int | `14`, `length` and `int` inputs | none |
 | bool | `true`, comparisons | none |
-| string | `"text"`, `choice` and `text` inputs | none |
-| series | `open high low close volume hl2 hlc3 ohlc4 time bar_index`, `series` declarations, `source` inputs | `na` on a bar |
+| string | `"text"`, `choice`, `text`, `symbol` and `interval` inputs | none |
+| series | `open high low close volume hl2 hlc3 ohlc4 time bar_index`, `series` declarations, `source` inputs, `study(...)` calls, the fields of `bars` such as `NAME.close` | `na` on a bar |
+| bars | `bars` declarations | none |
 
 A series has one value per bar. In arithmetic, a comparison or a helper argument it stands for
 its value on the current bar; `s[n]` is its value `n` bars ago, and `s[0]` the current one. An
 offset before the first bar gives `na`; a negative offset is an error, since a script never reads
 a later bar. Every loaded bar can be read: there is no lookback limit. `time` is the bar's open
 time in milliseconds since 1970-01-01 UTC, and `bar_index` the bar's number from 0. Price series,
-inputs and declared series are constants; a script cannot assign to them.
+inputs, declared series and `bars` are constants; a script cannot assign to them.
 
 Any other value has no history: after `let d = close - open;`, reading `d[1]` is an error that
 asks to declare `series d = close - open;` instead.
@@ -156,6 +157,8 @@ and checked when the script compiles, before any bar runs.
   | `choice(label, default, ["a", "b", ...])` | string, the chosen one |
   | `source(label, PRICE)`, `PRICE` one of `open high low close hl2 hlc3 ohlc4` | series |
   | `text(label, default)` | string |
+  | `symbol(label, default)`, `""` for the chart's symbol | string |
+  | `interval(label, default)`, `""` for the chart's interval | string, such as `"5min"`, `"1h"` or `"1D"` |
 
   The default must lie within the bounds and the label must not be empty. The ids
   `plot_offset`, `calculation_symbol`, `calculation_timeframe` and `wait_for_close` belong to
@@ -178,8 +181,108 @@ and checked when the script compiles, before any bar runs.
 - `fill(A, B, color = "#...", inverted = "#...");` fills the band between two plots, named by
   title, or numbers. The plots come before the fill.
 
-A script declares at most 32 inputs, 64 states and 64 series, and a choice input lists at most 64
-choices.
+- `bars NAME = history(SYMBOL, INTERVAL);` declares another history, see
+  [Other histories](#other-histories).
+
+A script declares at most 32 inputs, 64 states, 64 series and 40 histories, and a choice input lists
+at most 64 choices. The words `display`, `input`, `state`, `series`, `bars`, `plot`, `fill` and
+`study` are reserved: a script cannot use a variable or function of that name.
+
+## Study calls
+
+`study(NAME, ID = EXPR, ..., output = TITLE)` is an expression, the line of a study of the registry
+as a series:
+
+```rust
+use egui_charts::studies::IndicatorFactory;
+use egui_charts_scripting::Script;
+
+let source = r#"
+    let strength = study("RSI", period = 14);
+    let lower = study("BB", std_dev = 2.5, output = "BB Lower");
+    let smooth = study("RSI", source = study("EMA", period = 10));
+    plot("Below the band", if close < lower { strength } else { na });
+    plot("Rising", if smooth > smooth[1] { smooth } else { na });
+"#;
+Script::compile("Band strength", source, &IndicatorFactory::new())?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`NAME` is a name `IndicatorFactory::list` gives. `ID` is the id of an input `Indicator::inputs`
+gives for that study or the settings dialog adds, such as `source`; it is written as a string when
+it is not a name or is a reserved word, as in `"periods [0]" = 5`. An input the call does not give
+has the default the study declares, whatever defaults the host set, so a script computes the same
+on every host.
+
+| Input | Value |
+| --- | --- |
+| length, integer | int, or a number without a fraction |
+| number | number or int |
+| checkbox | bool |
+| choice | string, the label chosen |
+| text, symbol | string |
+| interval | string, as for `bars` |
+| source | price series |
+
+A series given to an input of another kind stands for its value on the current bar. The input
+`source` of a study also takes the script's own input `source` and another `study` call, whose whole
+column it reads. It takes no declared series, which the script computes bar by bar: the helpers
+read those. Colours, times of day, time zones and the intervals a study picks itself take no value.
+
+`output` is the title of a line as the chart shows it, such as `"BB Lower(20, 2.5)"`, or that title
+without its last part in parentheses, `"BB Lower"`, where no other line has the same. Where several
+lines share it, as the averages of a ribbon do, it is the title with the inputs given or the title
+the same line has under the defaults. Without `output` the call reads the first line.
+
+A study is computed once for each call in the source and each set of inputs given there, natively
+and over every bar, so `study(...)[1]` is the study's value on the bar before, whether the call ran
+on that bar or not. A script computes at most 64, so an input that changes on every bar fails on the
+65th bar. Some studies cannot be called: those that calculate on their own, such as another script,
+those without a line, those that need order flow and those that need other histories, as any study
+does with the inputs `calculation_symbol` or `calculation_timeframe`. A called study sees the bars
+alone: no symbol, instrument, session, interval or events of the chart.
+
+A few studies change the values of earlier bars once later ones arrive, as a zigzag does when it
+moves its last point. A script that calls one reads on every bar the values of the latest
+calculation, which later bars shaped, and recalculates in full whenever they change.
+
+## Other histories
+
+`bars NAME = history(SYMBOL, INTERVAL);` declares the bars of another symbol or interval, which the
+study requests from the chart:
+
+```rust
+use egui_charts::studies::IndicatorFactory;
+use egui_charts_scripting::Script;
+
+let source = r#"
+    input other = symbol("Symbol", "SPY");
+    bars day = history("", "1D");
+    bars index = history(other, "");
+    let strength = study("RSI", period = 14);
+    plot("Trend", if close > day.close { strength } else { na });
+    plot("Ratio", close / index.close);
+"#;
+Script::compile("Trend", source, &IndicatorFactory::new())?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`SYMBOL` is a string, `""` for the chart's symbol, or the name of a `symbol` input declared above,
+and `INTERVAL` a string, `""` for the chart's interval, or the name of an `interval` input declared
+above. An interval is written `"30s"`, `"5min"`, `"1h"`, `"1D"`, `"1W"` or `"1M"`. A plain number
+counts minutes, and `m` in either case months: `"5min"` and `"5"` are five minutes, `"5m"` is five
+months.
+
+`NAME.open`, `high`, `low`, `close`, `volume`, `hl2`, `hlc3`, `ohlc4` and `time` are series. On each
+bar of the chart they read the latest bar of the history that has closed when that bar closes, so
+`NAME.close[1]` is what `NAME.close` was on the chart bar before. The latest chart bar is still
+forming and reads the newest bar of the history, but of a longer interval the latest that has closed
+by that chart bar's open, unless the study's Wait for interval close input is off. A field is `na`
+where there is no such bar, and on every bar while the chart has not supplied the history.
+
+A study of a script with `bars` reads prices alone in its input `source`, since the chart supplies a
+study either histories or another study's output. `Script::check` calculates without other
+histories.
 
 ## Helpers
 
@@ -208,34 +311,39 @@ bools.
 ## Errors
 
 `Script::compile` refuses a script with its first error at a one-based line and character
-column: a syntax error, a wrong declaration, a name the script does not declare, or a call to a
+column: a syntax error, a wrong declaration, a name the script does not declare, a study, one of its
+inputs or, in a `study` call that gives no input, an output that does not exist, or a call to a
 function or method that neither the script, the helpers nor Rhai's standard package defines, also
 in a branch no bar takes. A method may be a function a map holds, so a method name the script also
 writes outside a call, as a key, another name or a whole string, passes. The arguments of a call,
-and the function `Fn("name")` names, are checked when they run. A runtime error, such as a type
-mismatch or a negative history offset, stops the bar it happens on: the bars before keep their
-values, the later ones are missing, and `Script::last_error` reports the error with its line,
-column and bar. A host checks a script on the chart's bars before it replaces a study, with
-`Script::check`, or with the new study itself, which it calculates off the chart until its
-calculation is done.
+the values of a study's inputs and the function `Fn("name")` names are checked when they run. A
+runtime error, such as a type mismatch or a negative history offset, stops the bar it happens on:
+the bars before keep their values, the later ones are missing, and `Script::last_error` reports the
+error with its line, column and bar. A host checks a script on the chart's bars before it replaces
+a study, with `Script::check`, or with the new study itself, which it calculates off the chart until
+its calculation is done.
 
 ## Limits
 
 A script study never calculates on the UI thread: natively each study has a worker thread, and on
 the web, which has no threads, each call runs whole bars for 4 ms. The chart keeps drawing the
 previous values meanwhile, and the legend shows the progress, then the last compute time, with a
-slow notice from one second on. A live tick recalculates only the newest bar.
+slow notice from one second on. A live tick recalculates only the newest bar. The studies a script
+calls count against its time limits but are not interrupted: a bar may pass its limit, and a call on
+the web its 4 ms, by the calculation of one study, which costs the same on the chart.
 
 `Limits`, set with `Script::with_limits`, bound each study's runs: by default 500 ms for one bar,
-60 s for a full recompute and 256 MiB for the study's buffers and its script's values. Values count
-with the room they hold, not their length: those the states keep, after each bar, and inside a bar,
-every 256 operations at the next variable read, the variables in scope there, with what the last
-count found in each call waiting on the running one. A run that passes a limit keeps none of its
-bars: the study keeps its previous values, and the legend and `Script::last_error` say which limit
-stopped it and where. It runs again when its inputs change or its bars change from the first one on.
-Whether a run close to a limit finishes depends on the machine and its load. A script with long
-logic on every bar costs time on every bar: on 100,000 bars a restated built-in study takes several
-hundred milliseconds to recompute, off the UI thread.
+60 s for a full recompute and 256 MiB for the study's buffers and its script's values. The buffers
+include the lines of every study called, with a copy of the one read, and the bars of other
+histories, but not what a called study keeps for itself. Values count with the room they hold, not
+their length: those the states keep, after each bar, and inside a bar, every 256 operations at the
+next variable read, the variables in scope there, with what the last count found in each call
+waiting on the running one. A run that passes a limit keeps none of its bars: the study keeps its
+previous values, and the legend and `Script::last_error` say which limit stopped it and where. It
+runs again when its inputs change or its bars change from the first one on. Whether a run close to a
+limit finishes depends on the machine and its load. A script with long logic on every bar costs time
+on every bar: on 100,000 bars a restated built-in study takes several hundred milliseconds to
+recompute, off the UI thread, and a script that calls it with `study` a tenth of that.
 
 `Limits` may gain fields, so a host starts from the defaults and sets the limits it changes:
 

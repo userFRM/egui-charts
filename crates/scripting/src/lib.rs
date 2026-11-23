@@ -35,16 +35,15 @@ impl Script {
     /// Compile `source` as the study `name`. Every declaration is read and checked here, and
     /// every name the script uses must be declared and every function it calls defined, by the
     /// script, the helpers or Rhai's standard package, so the study's inputs and plots exist
-    /// before it runs. `factory` is the registry the study is registered in, which later scripts
-    /// call studies from.
+    /// before it runs. The script's `study(...)` calls are built from the studies of `factory` as
+    /// it is now, at the defaults they declare.
     pub fn compile(
         name: impl Into<String>,
         source: &str,
         factory: &IndicatorFactory,
     ) -> Result<Self, ScriptError> {
-        let _ = factory;
         Ok(Self {
-            compiled: Arc::new(rhai::compile(name.into(), source)?),
+            compiled: Arc::new(rhai::compile(name.into(), source, factory)?),
             last_error: Arc::default(),
             limits: Limits::default(),
         })
@@ -68,10 +67,10 @@ impl Script {
         study::build(self)
     }
 
-    /// Calculate on `bars` with the default inputs and return the first runtime error or limit
-    /// stop, so a host can refuse a script before it replaces the study on a chart. Blocks the
-    /// calling thread, for headless hosts and tests; natively the calculation runs on a thread
-    /// of its own, whose stack fits the deepest scripts.
+    /// Calculate on `bars` with the default inputs, without the other histories the script reads,
+    /// and return the first runtime error or limit stop, so a host can refuse a script before it
+    /// replaces the study on a chart. Blocks the calling thread, for headless hosts and tests;
+    /// natively the calculation runs on a thread of its own, whose stack fits the deepest scripts.
     pub fn check(&self, bars: &[Bar]) -> Result<(), ScriptError> {
         study::check(self, bars)
     }

@@ -9,13 +9,13 @@ pub(crate) mod syntax;
 use crate::ScriptError;
 use crate::runtime::program::{Literal, ScriptSpec, Span};
 use crate::runtime::series::SeriesRef;
-use crate::runtime::{self, BarError, Program};
+use crate::runtime::{self, BarError, Program, bindings};
 use ::rhai::{
     AST, Array, Blob, Dynamic, Engine, EvalAltResult, EvalContext, ImmutableString, Map, Position,
     Scope,
 };
-use egui_charts::studies::{InputKind, InputValue, StudySource};
-use engine::Handle;
+use egui_charts::studies::{IndicatorFactory, InputKind, InputValue, StudySource};
+use engine::{BarsHandle, Handle};
 use std::sync::{Arc, Mutex};
 
 /// A compiled script: its declarations, its program and the engine that runs it.
@@ -23,6 +23,7 @@ pub(crate) struct Compiled {
     pub name: String,
     pub spec: Arc<ScriptSpec>,
     pub series_spans: Arc<[Span]>,
+    pub history_spans: Arc<[Span]>,
     /// Where each `state` declaration is, for size and memory reports.
     state_spans: Vec<Span>,
     engine: Engine,
@@ -31,21 +32,29 @@ pub(crate) struct Compiled {
 }
 
 /// Compile `source` in two passes: the first reads the declarations and reports syntax errors,
-/// the second compiles with every declared name in scope and refuses any other name. A call to a
-/// function nothing defines is refused too; the error returned is the first in the source.
-pub(crate) fn compile(name: String, source: &str) -> Result<Compiled, ScriptError> {
-    let pass = |strict: bool, scope: &Scope| {
-        let collector = Arc::new(Mutex::new(syntax::Collector::default()));
+/// the second compiles with every declared name in scope, refuses any other name and checks the
+/// studies the script calls against `factory`. A call to a function nothing defines is refused
+/// too; the error returned is the first in the source.
+pub(crate) fn compile(
+    name: String,
+    source: &str,
+    factory: &IndicatorFactory,
+) -> Result<Compiled, ScriptError> {
+    let pass = |scope: &Scope, catalogue: Option<syntax::Catalogue>| {
+        let strict = catalogue.is_some();
+        let collector = Arc::new(Mutex::new(syntax::Collector::new(catalogue)));
         let mut engine = engine::engine();
         syntax::register(&mut engine, &collector);
         engine.set_strict_variables(strict);
         let ast = engine
             .compile_with_scope(scope, source)
             .map_err(|error| errors::compile(&error, source))?;
-        let spec = std::mem::take(&mut collector.lock().unwrap_or_else(|e| e.into_inner()).spec);
-        Ok::<_, ScriptError>((engine, ast, spec))
+        let mut collector = collector.lock().unwrap_or_else(|e| e.into_inner());
+        let spec = std::mem::take(&mut collector.spec);
+        let called = std::mem::take(&mut collector.called);
+        Ok::<_, ScriptError>((engine, ast, spec, called))
     };
-    let (_, ast, spec) = pass(false, &Scope::new())?;
+    let (_, ast, spec, called) = pass(&Scope::new(), None)?;
     if spec.plots.is_empty() {
         return Err(ScriptError::at(
             "a script needs at least one plot".into(),
@@ -58,17 +67,25 @@ pub(crate) fn compile(name: String, source: &str) -> Result<Compiled, ScriptErro
         .iter()
         .map(|input| input.default.clone())
         .collect();
+    let mut catalogue = syntax::Catalogue::new();
+    for study in called {
+        catalogue
+            .entry(study)
+            .or_insert_with_key(|study| bindings::prototype(factory, study));
+    }
     // The first of the two errors in the source, a name or a call.
     let unknown = calls::unknown(source, &ast);
-    let strict = pass(true, &scope(&spec, &defaults, false, false));
+    let strict = pass(&scope(&spec, &defaults, false, false), Some(catalogue));
     let first = strict.as_ref().err().into_iter().chain(&unknown);
     if let Some(error) = first.min_by_key(|error| (error.line, error.column)) {
         return Err(error.clone());
     }
-    let (engine, ast, spec) = strict?;
+    let (engine, ast, spec, _) = strict?;
     Ok(Compiled {
         name,
         series_spans: syntax::spans(source, "series", spec.series.iter().map(|s| &*s.name)).into(),
+        history_spans: syntax::spans(source, "bars", spec.histories.iter().map(|h| &*h.name))
+            .into(),
         state_spans: syntax::spans(source, "state", spec.states.iter().map(|s| &*s.name)),
         spec: Arc::new(spec),
         engine,
@@ -78,12 +95,11 @@ pub(crate) fn compile(name: String, source: &str) -> Result<Compiled, ScriptErro
 }
 
 /// The names a script reads, in a fixed order: `na`, the price series, the inputs with
-/// `inputs`, the declared series and the states at their initial values. All but the states
-/// are constants at run time; to compile they are plain variables, so the optimizer folds no
-/// input's default into the program.
+/// `inputs`, the declared series, the other histories and the states at their initial values.
+/// All but the states are constants at run time; to compile they are plain variables, so the
+/// optimizer folds no input's default into the program.
 fn scope(spec: &ScriptSpec, inputs: &[InputValue], fed: bool, constants: bool) -> Scope<'static> {
-    let mut scope =
-        Scope::with_capacity(11 + spec.inputs.len() + spec.series.len() + spec.states.len());
+    let mut scope = Scope::with_capacity(state_slots(spec).end);
     let push = |scope: &mut Scope, name: &str, value: Dynamic| {
         if constants {
             scope.push_constant_dynamic(name.to_owned(), value);
@@ -111,7 +127,10 @@ fn scope(spec: &ScriptSpec, inputs: &[InputValue], fed: bool, constants: bool) -
             (InputValue::Source(StudySource::Price(price)), _) => {
                 Dynamic::from(Handle(SeriesRef::Price(*price)))
             }
-            (InputValue::Text(text), _) => Dynamic::from(text.clone()),
+            (InputValue::Text(text) | InputValue::Symbol(text), _) => Dynamic::from(text.clone()),
+            (InputValue::Timeframe(interval), _) => {
+                Dynamic::from(interval.map_or_else(String::new, |interval| interval.to_string()))
+            }
             _ => Dynamic::from_float(f64::NAN),
         };
         push(&mut scope, &input.id, value);
@@ -122,6 +141,9 @@ fn scope(spec: &ScriptSpec, inputs: &[InputValue], fed: bool, constants: bool) -
             &series.name,
             Dynamic::from(Handle(SeriesRef::Declared(at))),
         );
+    }
+    for (at, history) in spec.histories.iter().enumerate() {
+        push(&mut scope, &history.name, Dynamic::from(BarsHandle(at)));
     }
     for state in &spec.states {
         let value = match &state.initial {
@@ -205,10 +227,11 @@ pub(crate) fn count(context: &EvalContext) -> Result<(), Box<EvalAltResult>> {
     Ok(())
 }
 
-/// Where the states are in the scope of [`scope`], after `na`, the prices, the inputs and the
-/// series.
+/// Where the states are in the scope of [`scope`], after `na`, the prices, the inputs, the
+/// series and the other histories.
 fn state_slots(spec: &ScriptSpec) -> std::ops::Range<usize> {
-    let first = 1 + syntax::PRICES.len() + spec.inputs.len() + spec.series.len();
+    let declared = spec.inputs.len() + spec.series.len() + spec.histories.len();
+    let first = 1 + syntax::PRICES.len() + declared;
     first..first + spec.states.len()
 }
 

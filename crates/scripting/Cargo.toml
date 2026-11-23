@@ -36,3 +36,7 @@ egui = "0.37.0"
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 # The time-slicing test runs in a headless browser.
 wasm-bindgen-test = "0.3.79"
+
+[[bench]]
+name = "scripting"
+harness = false
