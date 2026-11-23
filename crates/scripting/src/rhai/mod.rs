@@ -1,6 +1,7 @@
 //! The Rhai front end: compiles a script into its declarations and a per-bar program, and runs
 //! that program on the runtime's bars.
 
+mod calls;
 pub(crate) mod engine;
 mod errors;
 pub(crate) mod syntax;
@@ -30,7 +31,8 @@ pub(crate) struct Compiled {
 }
 
 /// Compile `source` in two passes: the first reads the declarations and reports syntax errors,
-/// the second compiles with every declared name in scope and refuses any other name.
+/// the second compiles with every declared name in scope and refuses any other name. A call to a
+/// function nothing defines is refused too; the error returned is the first in the source.
 pub(crate) fn compile(name: String, source: &str) -> Result<Compiled, ScriptError> {
     let pass = |strict: bool, scope: &Scope| {
         let collector = Arc::new(Mutex::new(syntax::Collector::default()));
@@ -43,7 +45,7 @@ pub(crate) fn compile(name: String, source: &str) -> Result<Compiled, ScriptErro
         let spec = std::mem::take(&mut collector.lock().unwrap_or_else(|e| e.into_inner()).spec);
         Ok::<_, ScriptError>((engine, ast, spec))
     };
-    let (_, _, spec) = pass(false, &Scope::new())?;
+    let (_, ast, spec) = pass(false, &Scope::new())?;
     if spec.plots.is_empty() {
         return Err(ScriptError::at(
             "a script needs at least one plot".into(),
@@ -56,7 +58,14 @@ pub(crate) fn compile(name: String, source: &str) -> Result<Compiled, ScriptErro
         .iter()
         .map(|input| input.default.clone())
         .collect();
-    let (engine, ast, spec) = pass(true, &scope(&spec, &defaults, false, false))?;
+    // The first of the two errors in the source, a name or a call.
+    let unknown = calls::unknown(source, &ast);
+    let strict = pass(true, &scope(&spec, &defaults, false, false));
+    let first = strict.as_ref().err().into_iter().chain(&unknown);
+    if let Some(error) = first.min_by_key(|error| (error.line, error.column)) {
+        return Err(error.clone());
+    }
+    let (engine, ast, spec) = strict?;
     Ok(Compiled {
         name,
         series_spans: syntax::spans(source, "series", spec.series.iter().map(|s| &*s.name)).into(),
