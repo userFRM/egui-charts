@@ -12,7 +12,7 @@ pub(crate) fn compile(error: &ParseError, source: &str) -> ScriptError {
         // As a method, `x.curry()`, a disabled keyword reads as a missing property.
         (_, Some(word @ ("eval" | "curry"))) => format!("reserved keyword '{word}' is disabled"),
         (ParseErrorType::VariableUndefined(name), _) => {
-            format!("{name} is not declared; declare it with let, input, state or series")
+            format!("{name} is not declared; declare it with let, input, state, series or bars")
         }
         (ParseErrorType::BadInput(LexError::UnexpectedInput(token)), _)
             if token == "|" || token == "||" =>
@@ -94,6 +94,7 @@ fn not_found(signature: &str) -> String {
             "f64" => "number",
             "i64" => "int",
             kind if kind.contains("String") || kind.contains("str") => "string",
+            kind if kind.contains("BarsHandle") => "bars",
             kind if kind.contains("Handle") => "series",
             "()" => "nothing",
             kind => kind,

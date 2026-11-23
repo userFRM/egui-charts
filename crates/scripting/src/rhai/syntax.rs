@@ -1,33 +1,38 @@
-//! The declarations as custom syntax: `display`, `input`, `state`, `series`, `plot` and `fill`.
-//! Their arguments are literals, read when the script compiles into a [`ScriptSpec`] in source
-//! order; at run time `series` and `plot` store their value for the bar and the others do
-//! nothing.
+//! The declarations as custom syntax: `display`, `input`, `state`, `series`, `bars`, `plot` and
+//! `fill`, and the expression `study`. Their literal arguments are read when the script compiles
+//! into a [`ScriptSpec`] in source order; at run time `series` and `plot` store their value for the
+//! bar, `study` gives the line it reads and the others do nothing.
 //!
 //! A parse callback's error lands on the token after the last one it read, so each check runs
 //! as early as the tokens it needs allow: a kind or option name before it is read, a literal
 //! once the token after it is in view.
 
-use super::engine::Handle;
-use crate::runtime::{self, program::*};
+use super::engine::{BarsHandle, Handle, span};
+use crate::runtime::bindings::{self, Arg};
+use crate::runtime::{self, data, program::*};
 use ::rhai::{
     Dynamic, Engine, EvalAltResult, EvalContext, Expression, ImmutableString, LexError, ParseError,
     ParseErrorType, Position,
 };
 use ecolor::Color32;
-use egui_charts::model::PriceSource;
+use egui_charts::model::{PriceSource, Timeframe};
 use egui_charts::scales::StudyFormat;
 use egui_charts::studies::{
     FillBoundary, InputKind, InputValue, PlotType, StudyInput, StudyScale, StudySource,
 };
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-/// Most plots, inputs, series and states a script may declare.
+/// Most plots, inputs, series, states and other histories a script may declare.
 pub(crate) const MAX_PLOTS: usize = 32;
 pub(crate) const MAX_INPUTS: usize = 32;
 pub(crate) const MAX_SERIES: usize = 64;
 pub(crate) const MAX_STATES: usize = 64;
-/// Most choices a choice input may list: a declaration walks its tokens again for each one.
+pub(crate) const MAX_HISTORIES: usize = 40;
+/// Most choices a choice input may list and most inputs a study call may give: a declaration
+/// walks its tokens again for each one.
 const MAX_CHOICES: usize = 64;
+const MAX_GIVEN: usize = 64;
 
 /// The names every script reads, in the order the scope holds them after `na`.
 pub(crate) const PRICES: [(&str, SeriesRef); 10] = [
@@ -63,7 +68,7 @@ const STYLES: [(&str, PlotType); 13] = [
 ];
 
 /// The input kinds and their argument counts.
-const KINDS: [(&str, usize); 7] = [
+const KINDS: [(&str, usize); 9] = [
     ("length", 4),
     ("int", 4),
     ("float", 4),
@@ -71,6 +76,8 @@ const KINDS: [(&str, usize); 7] = [
     ("choice", 3),
     ("source", 2),
     ("text", 2),
+    ("symbol", 2),
+    ("interval", 2),
 ];
 
 /// The ids the chart gives inputs of its own.
@@ -81,11 +88,26 @@ const RESERVED: [&str; 4] = [
     "wait_for_close",
 ];
 
+/// The studies a script calls by name, `None` for a name nothing is registered as.
+pub(crate) type Catalogue = HashMap<String, Option<Prototype>>;
+
 /// The declarations read so far.
 #[derive(Debug, Default)]
 pub(crate) struct Collector {
     pub spec: ScriptSpec,
+    /// The names of the studies called, while there is no catalogue to find them in.
+    pub called: Vec<String>,
+    catalogue: Option<Catalogue>,
     displayed: bool,
+}
+
+impl Collector {
+    pub fn new(catalogue: Option<Catalogue>) -> Self {
+        Self {
+            catalogue,
+            ..Self::default()
+        }
+    }
 }
 
 type Shared = Arc<Mutex<Collector>>;
@@ -203,6 +225,16 @@ impl<'a> Cursor<'a> {
         self.next(Kind::Expr, "").map(|_| ())
     }
 
+    /// A name, or a string where one is in view, and whether it is a string.
+    fn name(&mut self) -> Step<(&'a str, bool)> {
+        let quoted = match self.tokens.get(self.at) {
+            Some((kind, _)) => *kind == Kind::Text,
+            None => self.look.starts_with('"'),
+        };
+        let kind = if quoted { Kind::Text } else { Kind::Ident };
+        Ok((self.next(kind, "")?, quoted))
+    }
+
     /// The symbol read next of `choices`, the look-ahead deciding when it is not read yet.
     fn either(&mut self, choices: &[&'static str]) -> Step<&'a str> {
         if self.at_end() {
@@ -301,6 +333,8 @@ pub(crate) fn register(engine: &mut Engine, collector: &Shared) {
     declare(engine, "input", nothing);
     declare(engine, "state", nothing);
     declare(engine, "series", store_series);
+    declare(engine, "bars", nothing);
+    declare(engine, "study", read_study);
     declare(engine, "plot", store_plot);
     declare(engine, "fill", nothing);
 }
@@ -344,6 +378,7 @@ pub(crate) fn type_name(value: &Dynamic) -> &'static str {
         "array" => "array",
         "map" => "map",
         _ if value.is::<Handle>() => "series",
+        _ if value.is::<BarsHandle>() => "bars",
         _ => "value",
     }
 }
@@ -366,6 +401,54 @@ fn store_plot(context: &mut EvalContext, inputs: &[Expression], state: &Dynamic)
     let value = number(context, &inputs[1], || format!("plot \"{title}\""))?;
     runtime::with(|run| run.row[at] = value);
     Ok(Dynamic::UNIT)
+}
+
+/// The line a `study` call reads with the inputs it gives on this bar, as a series.
+fn read_study(context: &mut EvalContext, inputs: &[Expression], state: &Dynamic) -> RhaiResult {
+    let site = state.as_int().unwrap_or(0) as usize;
+    let spec = runtime::with(|run| run.spec.clone()).unwrap_or_default();
+    let given = spec
+        .studies
+        .get(site)
+        .map_or(&[][..], |study| &study.inputs);
+    let mut args = Vec::with_capacity(given.len());
+    for input in given {
+        let value = context.eval_expression_tree(&inputs[input.place])?;
+        args.push(arg(&value, input.series));
+    }
+    let name = inputs[0].position();
+    match runtime::with(|run| run.study(site, args, span(name))) {
+        None => Ok(Dynamic::from_float(f64::NAN)),
+        Some(Ok(line)) => Ok(Dynamic::from(Handle(line))),
+        Some(Err((at, message))) => {
+            let position = at.map_or(name, |at| inputs[given[at].place].position());
+            Err(EvalAltResult::ErrorRuntime(message.into(), position).into())
+        }
+    }
+}
+
+/// What a study's input is given by `value`: an input that takes a `series` reads its column, any
+/// other its value on the bar.
+fn arg(value: &Dynamic, series: bool) -> Arg {
+    let handle = value.read_lock::<Handle>().map(|handle| *handle);
+    match handle {
+        Some(handle) if series => Arg::Series(handle.0),
+        Some(handle) => Arg::Number(handle.value()),
+        None if series => Arg::Other(type_name(value)),
+        None => {
+            if let Ok(value) = value.as_float() {
+                Arg::Number(value)
+            } else if let Ok(value) = value.as_int() {
+                Arg::Int(value)
+            } else if let Ok(value) = value.as_bool() {
+                Arg::Bool(value)
+            } else if let Some(text) = value.read_lock::<ImmutableString>() {
+                Arg::Text(text.to_string())
+            } else {
+                Arg::Other(type_name(value))
+            }
+        }
+    }
 }
 
 fn parse(
@@ -397,6 +480,8 @@ fn parse(
         "input" => input(&mut cursor, &mut collector),
         "state" => state_decl(&mut cursor, &mut collector),
         "series" => series(&mut cursor, &mut collector),
+        "bars" => bars(&mut cursor, &mut collector),
+        "study" => study(&mut cursor, &mut collector),
         "plot" => plot(&mut cursor, &mut collector),
         _ => fill(&mut cursor, &mut collector),
     };
@@ -547,6 +632,7 @@ fn new_name<'a>(cursor: &mut Cursor<'a>, collector: &Collector) -> Step<&'a str>
         if spec.inputs.iter().any(|input| input.id == name)
             || spec.states.iter().any(|state| state.name == name)
             || spec.series.iter().any(|series| series.name == name)
+            || spec.histories.iter().any(|history| history.name == name)
         {
             return Err(Stop::Fail(format!("{name} is declared twice")));
         }
@@ -636,7 +722,7 @@ fn show(value: &InputValue) -> String {
         InputValue::Length(value) => value.to_string(),
         InputValue::Integer(value) => value.to_string(),
         InputValue::Number(value) => value.to_string(),
-        InputValue::Text(value) => format!("{value:?}"),
+        InputValue::Text(value) | InputValue::Symbol(value) => format!("{value:?}"),
         other => format!("{other:?}"),
     }
 }
@@ -765,8 +851,24 @@ fn input_kind(kind: &str, args: &[Lit], choices: Vec<String>) -> Step<(InputKind
         }
         _ => {
             let default = expect(&args[1], "the default is a string", text)?;
-            (InputKind::Text, InputValue::Text(default))
+            match kind {
+                "symbol" => (InputKind::Symbol, InputValue::Symbol(default)),
+                "interval" => {
+                    let interval = interval(&default)?;
+                    (InputKind::Timeframe, InputValue::Timeframe(interval))
+                }
+                _ => (InputKind::Text, InputValue::Text(default)),
+            }
         }
+    })
+}
+
+/// The interval `text` names, `None` for the chart's.
+fn interval(text: &str) -> Step<Option<Timeframe>> {
+    data::interval(text).ok_or_else(|| {
+        Stop::Fail(format!(
+            "{text:?} is no interval; write it as \"5min\", \"1h\", \"1D\" or \"\" for the chart's"
+        ))
     })
 }
 
@@ -812,6 +914,151 @@ fn series(cursor: &mut Cursor, collector: &mut Collector) -> Step<Option<usize>>
         name: name.to_owned(),
     });
     Ok(Some(collector.spec.series.len() - 1))
+}
+
+/// `bars NAME = history(SYMBOL, INTERVAL)`.
+fn bars(cursor: &mut Cursor, collector: &mut Collector) -> Step<Option<usize>> {
+    let name = new_name(cursor, collector)?;
+    cursor.symbol("=")?;
+    if cursor.at_end() && cursor.look != "history" {
+        return Err(Stop::Fail("expecting history(SYMBOL, INTERVAL)".into()));
+    }
+    cursor.ident()?;
+    cursor.symbol("(")?;
+    let inputs = &collector.spec.inputs;
+    let symbol = text_or_input(&cursor.literal()?, inputs, "a symbol", |kind| {
+        matches!(kind, InputKind::Symbol)
+    })?;
+    cursor.symbol(",")?;
+    let interval = text_or_input(&cursor.literal()?, inputs, "an interval", |kind| {
+        matches!(kind, InputKind::Timeframe)
+    })?;
+    if let TextRef::Literal(text) = &interval {
+        self::interval(text)?;
+    }
+    cursor.symbol(")")?;
+    if collector.spec.histories.len() == MAX_HISTORIES {
+        return Err(Stop::Fail(format!(
+            "a script declares at most {MAX_HISTORIES} histories"
+        )));
+    }
+    collector.spec.histories.push(HistoryDecl {
+        name: name.to_owned(),
+        symbol,
+        interval,
+    });
+    Ok(None)
+}
+
+/// The string `lit`, or the input of `inputs` it names, which holds `what`.
+fn text_or_input(
+    lit: &Lit,
+    inputs: &[InputDecl],
+    what: &str,
+    holds: fn(&InputKind) -> bool,
+) -> Step<TextRef> {
+    let Lit::Ident(name) = lit else {
+        let takes = format!("history takes {what} as a string or an input");
+        return expect(lit, &takes, text).map(TextRef::Literal);
+    };
+    inputs
+        .iter()
+        .position(|input| input.id == *name && holds(&input.kind))
+        .map(TextRef::Input)
+        .ok_or_else(|| Stop::Fail(format!("{name} is not {what} input declared above")))
+}
+
+/// `study(NAME, ID = EXPR, ..., output = TITLE)`, where an id may be a string.
+fn study(cursor: &mut Cursor, collector: &mut Collector) -> Step<Option<usize>> {
+    cursor.symbol("(")?;
+    let name = expect(&cursor.literal()?, "the study's name is a string", text)?;
+    let prototype = match &collector.catalogue {
+        None => None,
+        Some(catalogue) => match catalogue.get(&name) {
+            Some(Some(prototype)) => Some(prototype),
+            _ => return Err(Stop::Fail(format!("no study {name:?} is registered"))),
+        },
+    };
+    if let Some(prototype) = prototype
+        && cursor.at_end()
+    {
+        let study = prototype.lock();
+        if study.calculation().is_some() {
+            return Err(Stop::Fail(format!(
+                "study {name:?} calculates on its own, so a script cannot read it"
+            )));
+        }
+        if study.line_count() == 0 {
+            return Err(Stop::Fail(format!("study {name:?} has no line to read")));
+        }
+    }
+    let mut given: Vec<(&str, usize)> = Vec::new();
+    let mut output = None;
+    // The expressions of a call are its name, then an id and a value for each option.
+    let mut place = 2;
+    while cursor.either(&[",", ")"])? == "," {
+        let (id, quoted) = cursor.name()?;
+        if id == "output" && !quoted {
+            if cursor.at_end() && output.is_some() {
+                return Err(Stop::Fail("output is given twice".into()));
+            }
+            cursor.symbol("=")?;
+            let title = expect(&cursor.literal()?, "output is a string", text)?;
+            // A call that gives no input has the lines of the defaults.
+            if let Some(prototype) = prototype
+                && given.is_empty()
+                && cursor.at_end()
+                && cursor.look == ")"
+            {
+                let names = prototype.lock().line_names();
+                if bindings::line(&names, &names, &title).is_none() {
+                    return Err(Stop::Fail(bindings::no_line(&name, &names, &title)));
+                }
+            }
+            output = Some(title);
+        } else {
+            if cursor.at_end() {
+                if given.iter().any(|(given, _)| *given == id) {
+                    return Err(Stop::Fail(format!("input {id} is given twice")));
+                }
+                if let Some(prototype) = prototype
+                    && !prototype.lock().inputs().iter().any(|input| input.id == id)
+                {
+                    return Err(Stop::Fail(format!("study {name:?} has no input {id}")));
+                }
+            }
+            if given.len() == MAX_GIVEN {
+                return Err(Stop::Fail(format!(
+                    "a study call gives at most {MAX_GIVEN} inputs"
+                )));
+            }
+            cursor.symbol("=")?;
+            cursor.expr()?;
+            given.push((id, place));
+        }
+        place += 2;
+    }
+    let Some(prototype) = prototype else {
+        collector.called.push(name);
+        return Ok(Some(0));
+    };
+    let inputs = prototype.lock().inputs();
+    let inputs = given.into_iter().map(|(id, place)| {
+        // The chart's own input follows a study's of the same id.
+        let input = inputs.iter().rev().find(|input| input.id == id);
+        StudyArg {
+            id: id.to_owned(),
+            place,
+            series: input.is_some_and(|input| matches!(input.kind, InputKind::Source)),
+        }
+    });
+    collector.spec.studies.push(StudyDecl {
+        inputs: inputs.collect(),
+        name,
+        prototype: prototype.clone(),
+        output,
+    });
+    Ok(Some(collector.spec.studies.len() - 1))
 }
 
 /// `plot(TITLE, EXPR, color = .., style = .., offset = ..)`.

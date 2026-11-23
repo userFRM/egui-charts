@@ -1,8 +1,10 @@
-//! The series runtime: the bar loop, the columns and helpers a run reads and writes, the state
-//! kept between bars and runs, and the limits of 1 bar, a full recompute and memory. No type of
-//! a front end appears here; a front end implements [`Program`] and reaches the run being
-//! calculated through [`with`].
+//! The series runtime: the bar loop, the columns and helpers a run reads and writes, the studies
+//! and other histories a script reads, the state kept between bars and runs, and the limits of 1
+//! bar, a full recompute and memory. No type of a front end appears here; a front end implements
+//! [`Program`] and reaches the run being calculated through [`with`].
 
+pub(crate) mod bindings;
+pub(crate) mod data;
 pub(crate) mod kernels;
 pub(crate) mod limits;
 pub(crate) mod program;
@@ -11,6 +13,8 @@ pub(crate) mod state;
 pub(crate) mod worker;
 
 use crate::ScriptError;
+use bindings::Instance;
+use data::Patch;
 use egui_charts::model::Bar;
 use egui_charts::studies::InputValue;
 use kernels::Kernel;
@@ -20,6 +24,7 @@ use series::Columns;
 use state::Snapshot;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
@@ -58,7 +63,7 @@ pub(crate) struct CallSite {
 }
 
 /// What the per-bar functions of a front end read and write while a run is installed.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct Run {
     pub spec: Arc<ScriptSpec>,
     pub columns: Columns,
@@ -71,6 +76,8 @@ pub(crate) struct Run {
     pub kept: Vec<(usize, Span)>,
     pub sites: HashMap<Site, CallSite>,
     occurrences: HashMap<Span, u32>,
+    /// The studies called so far, whose lines are in the columns. One reads only those before it.
+    instances: Vec<Instance>,
     pub clock: Clock,
     /// The operations run so far.
     operations: u64,
@@ -87,8 +94,9 @@ pub(crate) struct Run {
     /// The limit that stopped the run, set by the checks.
     pub stop: Option<Stop>,
     cancel: Option<Arc<AtomicBool>>,
-    /// Where each `series` declaration is, for memory reports.
+    /// Where each `series` and `bars` declaration is, for memory reports.
     series_spans: Arc<[Span]>,
+    history_spans: Arc<[Span]>,
     /// The call sites counted against the memory limit so far.
     sites_counted: usize,
 }
@@ -107,11 +115,19 @@ impl Run {
     pub fn operation(&mut self) -> bool {
         self.operations += 1;
         if self.stop.is_none() && self.operations.is_multiple_of(limits::OPERATIONS_PER_CHECK) {
+            self.due = !self.check_time();
+        }
+        self.stop.is_some()
+    }
+
+    /// The check inside a bar against the time limits and for a dropped study, keeping a stop
+    /// already reached.
+    fn check_time(&mut self) -> bool {
+        if self.stop.is_none() {
             self.stop = self
                 .clock
                 .check()
                 .or_else(|| self.cancelled().then_some(Stop::Cancelled));
-            self.due = self.stop.is_none();
         }
         self.stop.is_some()
     }
@@ -151,7 +167,7 @@ impl Run {
     }
 
     /// Prepare bar `bar`: no plot values yet, no helper reached, a missing value in every
-    /// declared series and the bar's clock not started.
+    /// declared series, the bar it reads of every other history and the bar's clock not started.
     fn start_bar(&mut self, bar: usize) {
         self.bar = bar;
         self.row.fill(f64::NAN);
@@ -160,6 +176,14 @@ impl Run {
         self.clock.next_bar();
         for column in &mut self.columns.declared {
             column.push(f64::NAN);
+        }
+        let time = self.columns.bars[bar].time;
+        let last = bar + 1 == self.columns.bars.len();
+        for (history, aligned) in self.columns.histories.iter().zip(&mut self.columns.aligned) {
+            let at = history
+                .as_ref()
+                .and_then(|history| history.data().closed_at(time, last));
+            aligned.push(at.unwrap_or(usize::MAX));
         }
     }
 
@@ -250,6 +274,8 @@ pub(crate) struct Request {
     pub from: usize,
     pub bars: Vec<Bar>,
     pub fed: Option<Vec<f64>>,
+    /// The changes of the other histories in declaration order, `None` for an unchanged one.
+    pub histories: Vec<Option<Patch>>,
     pub inputs: Vec<InputValue>,
     /// Start over from bar 0 whatever `from` says.
     pub reset: bool,
@@ -272,6 +298,8 @@ pub(crate) struct Outcome {
 #[derive(Debug)]
 struct Flight {
     start: usize,
+    /// The studies called in earlier runs yet to bring up to date, which come before any bar.
+    updating: Range<usize>,
     next: usize,
     rows: Vec<f64>,
     error: Option<ScriptError>,
@@ -301,12 +329,15 @@ impl<P: Program> RunState<P> {
         program: Arc<P>,
         spec: Arc<ScriptSpec>,
         series_spans: Arc<[Span]>,
+        history_spans: Arc<[Span]>,
         limits: Limits,
         cancel: Option<Arc<AtomicBool>>,
     ) -> Self {
         let run = Run {
             columns: Columns {
                 declared: vec![Vec::new(); spec.series.len()],
+                histories: vec![None; spec.histories.len()],
+                aligned: vec![Vec::new(); spec.histories.len()],
                 ..Columns::default()
             },
             row: vec![f64::NAN; spec.plots.len()],
@@ -315,6 +346,7 @@ impl<P: Program> RunState<P> {
             bar: 0,
             sites: HashMap::new(),
             occurrences: HashMap::new(),
+            instances: Vec::new(),
             clock: Clock::start(limits),
             operations: 0,
             due: false,
@@ -323,6 +355,7 @@ impl<P: Program> RunState<P> {
             stop: None,
             cancel,
             series_spans,
+            history_spans,
             sites_counted: 0,
         };
         Self {
@@ -351,6 +384,7 @@ impl<P: Program> RunState<P> {
             from,
             bars,
             fed,
+            histories,
             inputs,
             reset,
         } = request;
@@ -364,6 +398,19 @@ impl<P: Program> RunState<P> {
             column.extend(suffix);
             column
         });
+        for (patch, history) in histories.into_iter().zip(&mut columns.histories) {
+            if let Some(patch) = patch {
+                patch.apply(history);
+            }
+        }
+        // A bar reads the other histories differently while it is the last, so another number of
+        // bars changes the one that was or becomes the last.
+        let len = columns.bars.len();
+        let from = if columns.histories.is_empty() || len == self.done {
+            from
+        } else {
+            from.min(self.done.min(len).saturating_sub(1))
+        };
         let start = if reset || fed_changed || inputs != self.inputs || from + 1 < self.done {
             0
         } else if from + 1 == self.done {
@@ -371,6 +418,7 @@ impl<P: Program> RunState<P> {
                 Some(snapshot) => {
                     self.slots = snapshot.slots;
                     self.run.sites = snapshot.sites;
+                    self.run.instances.truncate(snapshot.studies);
                     self.failed = snapshot.failed;
                     self.done - 1
                 }
@@ -379,22 +427,15 @@ impl<P: Program> RunState<P> {
         } else {
             self.done
         };
-        if start == 0 {
-            self.slots = self.program.slots(&inputs, self.run.columns.fed.is_some());
-            self.run.kept.clear();
-            self.run.sites.clear();
-            self.snapshot = None;
-            self.failed = None;
-        }
         self.inputs = inputs;
-        self.run.columns.truncate(start);
-        self.run.sites_counted = self.run.sites.len();
+        self.start_at(start);
         self.run.clock = Clock::start(self.run.clock.limits);
         self.run.stop = None;
         self.run.running = 0;
         self.progress.store(0f32.to_bits(), Ordering::Relaxed);
         self.flight = Some(Flight {
             start,
+            updating: 0..self.run.instances.len(),
             next: start,
             rows: Vec::new(),
             error: None,
@@ -405,8 +446,23 @@ impl<P: Program> RunState<P> {
         }
     }
 
-    /// Run bars of the current run until it ends, or until `until` once a bar has run, and
-    /// return its outcome when it ends.
+    /// Prepare the run to start at bar `start`, at bar 0 with nothing kept of an earlier run.
+    fn start_at(&mut self, start: usize) {
+        let run = &mut self.run;
+        if start == 0 {
+            self.slots = self.program.slots(&self.inputs, run.columns.fed.is_some());
+            run.kept.clear();
+            run.sites.clear();
+            run.instances.clear();
+            self.snapshot = None;
+            self.failed = None;
+        }
+        run.columns.truncate(start, run.instances.len());
+        run.sites_counted = run.sites.len();
+    }
+
+    /// Run bars of the current run until it ends, or until `until` once a bar has run or a study
+    /// it called before is up to date, and return its outcome when it ends.
     pub fn advance(&mut self, until: Option<Instant>) -> Option<Outcome> {
         let mut flight = self.flight.take()?;
         let began = Instant::now();
@@ -415,6 +471,22 @@ impl<P: Program> RunState<P> {
         let fraction =
             |next: usize, start: usize| ((next - start) as f32 / (len - start) as f32).to_bits();
         let mut stop = self.run.stop.map(|limit| (limit, Span::default(), None));
+        while stop.is_none()
+            && let Some(at) = flight.updating.next()
+        {
+            let span = self.run.instances[at].span;
+            if self.run.update_study(at, flight.start) {
+                // Earlier bars read what the study has changed since.
+                self.start_at(0);
+                (flight.start, flight.next, flight.updating) = (0, 0, 0..0);
+            }
+            stop = self.run.check_bars().map(|limit| (limit, span, None));
+            if stop.is_none() && until.is_some_and(|until| Instant::now() >= until) {
+                flight.took += began.elapsed();
+                self.flight = Some(flight);
+                return None;
+            }
+        }
         if stop.is_none() {
             let _installed = Installed::new(&mut self.run);
             let first = flight.next;
@@ -432,9 +504,12 @@ impl<P: Program> RunState<P> {
                     }
                 }
                 if i + 1 == len {
+                    let (sites, studies) =
+                        with(|run| (run.sites.clone(), run.instances.len())).unwrap_or_default();
                     self.snapshot = Some(Snapshot {
                         slots: self.slots.clone(),
-                        sites: with(|run| run.sites.clone()).unwrap_or_default(),
+                        sites,
+                        studies,
                         failed: self.failed,
                     });
                 }
@@ -534,6 +609,7 @@ impl Run {
             kept: Vec::new(),
             sites: HashMap::new(),
             occurrences: HashMap::new(),
+            instances: Vec::new(),
             clock: Clock::start(Limits::default()),
             operations: 0,
             due: false,
@@ -542,13 +618,15 @@ impl Run {
             stop: None,
             cancel: None,
             series_spans: Arc::from(Vec::new()),
+            history_spans: Arc::from(Vec::new()),
             sites_counted: 0,
         }
     }
 
     /// The bytes the study holds once every bar of the run is calculated: the bars, the fed
-    /// column, the declared series, the plot columns, the helpers and the values kept between
-    /// bars, the last two again for the snapshot's copy.
+    /// column, the declared series, the plot columns, the studies called, the other histories with
+    /// the bars read of them, the helpers and the values kept between bars, the last two again for
+    /// the snapshot's copy.
     fn bytes(&self) -> usize {
         self.holding(self.kept.iter().map(|(bytes, _)| bytes).sum())
     }
@@ -565,8 +643,24 @@ impl Run {
             .values()
             .map(|site| std::mem::size_of::<CallSite>() + site.kernel.bytes(len))
             .sum();
+        let studies: usize = self.instances.iter().map(|study| study.bytes(len)).sum();
+        let histories: usize = self.history_bytes().sum();
         let kept: usize = self.kept.iter().map(|(bytes, _)| bytes).sum();
-        len * (std::mem::size_of::<Bar>() + columns * 8) + 2 * helpers + kept + values
+        len * (std::mem::size_of::<Bar>() + columns * 8)
+            + studies
+            + histories
+            + 2 * helpers
+            + kept
+            + values
+    }
+
+    /// The bytes each other history holds, the bars read of it included.
+    fn history_bytes(&self) -> impl Iterator<Item = usize> {
+        let aligned = self.columns.bars.len() * std::mem::size_of::<usize>();
+        self.columns.histories.iter().map(move |history| {
+            let bars = history.as_ref().map_or(0, |history| history.bars.len());
+            bars * std::mem::size_of::<Bar>() + aligned
+        })
     }
 
     /// Where the declaration or call site holding the most memory is, the first of equals, or
@@ -579,10 +673,17 @@ impl Run {
             .sites
             .iter()
             .map(|((span, _), site)| (site.kernel.bytes(len), *span));
+        let studies = self
+            .instances
+            .iter()
+            .map(|study| (study.bytes(len), study.span));
+        let histories = self.history_bytes().zip(self.history_spans.iter().copied());
         let values = (self.running > 0).then_some((self.running, running));
         series
             .into_iter()
             .chain(helpers)
+            .chain(studies)
+            .chain(histories)
             .chain(self.kept.iter().copied())
             .chain(values)
             .reduce(|largest, next| if next.0 > largest.0 { next } else { largest })

@@ -9,7 +9,7 @@ use std::collections::HashSet;
 /// The words a script may write before a `(` that call no function: Rhai's keywords, then the
 /// declarations.
 const KEYWORDS: &str = "\
-    if while until for in switch return throw break catch display plot fill";
+    if while until for in switch return throw break catch display plot fill study";
 
 /// The functions the engine itself resolves.
 const BUILT_IN: &str = "\
@@ -63,8 +63,10 @@ pub(crate) fn unknown(source: &str, ast: &AST) -> Option<ScriptError> {
         let number = name.starts_with(|c: char| c.is_ascii_digit());
         // A range `a..f(x)` ends in a `.` too.
         let method = at > 1 && symbol(at - 1, '.') && !symbol(at - 2, '.');
-        // `input NAME = KIND(...)`.
-        let kind = at > 2 && symbol(at - 1, '=') && token(at - 3) == Some(Token::Word("input"));
+        // `input NAME = KIND(...)` and `bars NAME = history(...)`.
+        let kind = at > 2
+            && symbol(at - 1, '=')
+            && matches!(token(at - 3), Some(Token::Word("input" | "bars")));
         let passes =
             !called(at) || number || known.contains(name) || kind || method && keys.contains(name);
         (!passes).then(|| {

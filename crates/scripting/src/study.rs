@@ -1,14 +1,16 @@
 //! A compiled script as a [`CustomIndicator`]: its declarations become the study's inputs,
-//! plots and fills, and its calculation resumes from the last bars away from the UI thread.
+//! plots, fills and data requests, and its calculation resumes from the last bars away from the
+//! UI thread.
 
+use crate::runtime::data::{self, History, Patch};
 use crate::runtime::worker::{Poll, Runner};
 use crate::runtime::{Outcome, Request, RunState};
 use crate::{Script, ScriptError};
 use ecolor::Color32;
 use egui_charts::model::Bar;
 use egui_charts::studies::{
-    Calculation, CustomIndicator, IndicatorValues, InputValue, Resume, ResumeRun, StudyFill,
-    StudyInput, palette,
+    Calculation, CustomIndicator, IndicatorValues, InputValue, Resume, ResumeRun, StudyData,
+    StudyFill, StudyInput, palette,
 };
 use std::time::Duration;
 
@@ -63,6 +65,20 @@ pub(crate) fn build(script: &Script) -> CustomIndicator {
     if let Some(scale) = spec.display.scale {
         study = study.with_scale(scale);
     }
+    if !spec.histories.is_empty() {
+        let spec = spec.clone();
+        study = study
+            .with_data_requests(move |inputs| {
+                let mut requests = Vec::new();
+                for request in data::requests(&spec, inputs) {
+                    if !requests.contains(&request) {
+                        requests.push(request);
+                    }
+                }
+                requests
+            })
+            .with_wait_for_close();
+    }
     study
 }
 
@@ -91,6 +107,7 @@ fn calculate(script: &Script, bars: &[Bar]) -> Result<(), ScriptError> {
         compiled.clone(),
         compiled.spec.clone(),
         compiled.series_spans.clone(),
+        compiled.history_spans.clone(),
         script.limits,
         None,
     );
@@ -98,6 +115,7 @@ fn calculate(script: &Script, bars: &[Bar]) -> Result<(), ScriptError> {
         from: 0,
         bars: bars.to_vec(),
         fed: None,
+        histories: Vec::new(),
         inputs: compiled
             .spec
             .inputs
@@ -118,9 +136,11 @@ fn calculate(script: &Script, bars: &[Bar]) -> Result<(), ScriptError> {
 struct ScriptState {
     script: Script,
     runner: Option<Runner>,
-    /// The bars and fed column as last sent to the runner, and the inputs.
+    /// The bars and fed column as last sent to the runner, the histories of its declarations and
+    /// the inputs.
     bars: Vec<Bar>,
     fed: Option<Vec<f64>>,
+    histories: Vec<Supplied>,
     inputs: Option<Vec<InputValue>>,
     /// The first bar changed since the bars of the latest run request.
     changed: Option<usize>,
@@ -133,13 +153,75 @@ struct ScriptState {
     last: Option<Calculation>,
 }
 
+/// A history as the chart supplied it last.
+#[derive(Default)]
+struct Supplied {
+    history: Option<History>,
+    /// The first of its bars changed since the latest run request.
+    changed: Option<usize>,
+}
+
+impl Supplied {
+    /// Take `new` in place of the history supplied before, and return the first bar of `chart`
+    /// that may read it otherwise, if one may.
+    fn replace(&mut self, new: Option<&StudyData<'_>>, chart: &[Bar]) -> Option<usize> {
+        let old = self.history.as_ref();
+        let changed = match (old, new) {
+            (None, None) => return None,
+            (Some(old), Some(new))
+                if old.clock == new.clock
+                    && old.timeframe == new.timeframe
+                    && old.chart == new.chart =>
+            {
+                first_change(&old.bars, new.bars, 0, same_bar)?
+            }
+            _ => 0,
+        };
+        let data = old.map(History::data);
+        let affected = data::first_affected(data.as_ref(), new, changed, chart);
+        let bars = self.history.take().map_or_else(Vec::new, |old| old.bars);
+        self.history = new.map(|new| {
+            let mut bars = bars;
+            bars.truncate(changed);
+            bars.extend_from_slice(&new.bars[changed..]);
+            History {
+                bars,
+                clock: new.clock.clone(),
+                timeframe: new.timeframe,
+                chart: new.chart.clone(),
+            }
+        });
+        self.changed = Some(self.changed.map_or(changed, |first| first.min(changed)));
+        Some(affected)
+    }
+
+    /// The change since the latest run request, the whole history with `reset`.
+    fn patch(&mut self, reset: bool) -> Option<Patch> {
+        let changed = self.changed.take();
+        let from = if reset { 0 } else { changed? };
+        Some(Patch {
+            from,
+            history: self.history.as_ref().map(|history| History {
+                bars: history.bars[from..].to_vec(),
+                clock: history.clock.clone(),
+                timeframe: history.timeframe,
+                chart: history.chart.clone(),
+            }),
+        })
+    }
+}
+
 impl ScriptState {
     fn new(script: &Script) -> Self {
+        let histories = script.compiled.spec.histories.len();
         Self {
             script: script.clone(),
             runner: None,
             bars: Vec::new(),
             fed: None,
+            histories: std::iter::repeat_with(Supplied::default)
+                .take(histories)
+                .collect(),
             inputs: None,
             changed: None,
             running: false,
@@ -149,7 +231,8 @@ impl ScriptState {
     }
 
     /// Record `run`'s changes since the bars sent last: the first bar that differs, trusting
-    /// `run.data[..run.from]` unless `from` is 0, and whether the inputs differ.
+    /// `run.data[..run.from]` unless `from` is 0, and whether the inputs differ. A history changes
+    /// with a `from` of 0, but for its end, which a replay moves; any other call may leave it out.
     fn record(&mut self, run: &ResumeRun<'_>) -> bool {
         let inputs: Vec<_> = run.inputs.iter().map(|input| input.value.clone()).collect();
         let inputs_changed = self.inputs.as_ref() != Some(&inputs);
@@ -165,6 +248,17 @@ impl ScriptState {
             (Some(bars), Some(fed)) => Some(bars.min(fed)),
             (bars, fed) => bars.or(fed),
         };
+        let all = run.from == 0 || self.inputs.is_none();
+        let requests = data::requests(&self.script.compiled.spec, run.inputs);
+        for (request, supplied) in requests.iter().zip(&mut self.histories) {
+            // The chart supplies the available histories of all its studies.
+            let new = run.histories.iter().find(|data| data.request == *request);
+            let seen = supplied.history.as_ref().map(|seen| seen.bars.len());
+            if all || new.is_some_and(|new| seen != Some(new.bars.len())) {
+                let affected = supplied.replace(new, run.data);
+                first = first.into_iter().chain(affected).min();
+            }
+        }
         if inputs_changed {
             first = Some(0);
             self.inputs = Some(inputs);
@@ -240,6 +334,7 @@ impl Resume for ScriptState {
                 compiled.clone(),
                 compiled.spec.clone(),
                 compiled.series_spans.clone(),
+                compiled.history_spans.clone(),
                 self.script.limits,
             )
         });
@@ -277,6 +372,9 @@ impl Resume for ScriptState {
                 .fed
                 .as_ref()
                 .map(|fed| fed[from.min(fed.len())..].to_vec()),
+            histories: (self.histories.iter_mut())
+                .map(|supplied| supplied.patch(self.reset))
+                .collect(),
             inputs: self.inputs.clone().unwrap_or_default(),
             reset: self.reset,
         };

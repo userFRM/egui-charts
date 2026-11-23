@@ -2,9 +2,10 @@
 //! hand computed values, and the update contract of `Indicator`.
 
 use crate::{Limits, Script, examples};
-use egui_charts::model::Bar;
+use egui_charts::model::{Bar, BarClock, PriceSource, Timeframe};
 use egui_charts::studies::{
-    Calculation, CustomIndicator, Indicator, IndicatorFactory, InputValue, RSI, helpers,
+    Calculation, ConfiguredStudy, CustomIndicator, Indicator, IndicatorFactory, InputValue, MACD,
+    RSI, Stochastic, StudyChart, StudyData, StudyDataRequest, StudySource, StudyTemplate, helpers,
 };
 use std::time::Duration;
 
@@ -103,6 +104,36 @@ fn restated_studies_match_native_bar_for_bar() {
             // Fails if the optimizer folds an input's default into the program.
             (relative_strength.to_owned(), Some(5), rsi(5, &fixture)),
         ];
+        let mut macd = MACD::new(12, 26, 9);
+        macd.calculate(&fixture);
+        for (line, plot) in ["m", "s", "m - s"].into_iter().enumerate() {
+            rows.push((
+                format!(
+                    "let m = ema(close, 12) - ema(close, 26);\nlet s = ema(m, 9);\n\
+                     plot(\"x\", {plot});"
+                ),
+                None,
+                macd.values().line(line).to_vec(),
+            ));
+        }
+        // The native study leaves bars with a missing price out of its windows.
+        if closes.iter().all(|close| close.is_finite()) {
+            let mut stochastic = Stochastic::new(14, 3, 3);
+            stochastic.calculate(&fixture);
+            for (line, plot) in ["k", "sma(k, 3)"].into_iter().enumerate() {
+                rows.push((
+                    format!(
+                        "let top = highest(high, 14);\nlet bottom = lowest(low, 14);\n\
+                         let range = top - bottom;\n\
+                         let fast = if bar_index < 13 {{ na }} else if range == 0.0 {{ 50.0 }} \
+                         else {{ clamp(100.0 * (close - bottom) / range, 0.0, 100.0) }};\n\
+                         let k = sma(fast, 3);\nplot(\"x\", {plot});"
+                    ),
+                    None,
+                    stochastic.values().line(line).to_vec(),
+                ));
+            }
+        }
         // The last length is far beyond the bars: a window allocated by its length up front
         // aborts the process.
         for n in [1, 2, 14, 1e12 as usize] {
@@ -148,6 +179,248 @@ fn restated_studies_match_native_bar_for_bar() {
                 "{source} with length {length:?}"
             );
         }
+    }
+}
+
+/// A `study(...)` call is the study it names with the inputs it gives and otherwise those the
+/// study declares, read at one line: bit for bit on every bar, whenever the call is first made.
+#[test]
+fn study_calls_equal_their_studies() {
+    let fixture = bars(300, 1);
+    let native = |name: &str, inputs: &[(&str, InputValue)], line: usize| {
+        let mut study = ConfiguredStudy::new(IndicatorFactory::new().create(name).unwrap());
+        for (id, value) in inputs {
+            study.set_input(id, value.clone()).unwrap();
+        }
+        study.calculate(&fixture);
+        study.values().line(line).to_vec()
+    };
+    let average = |name: &str| native(name, &[("period", InputValue::Length(10))], 0);
+    let rsi = |period| native("RSI", &[("period", InputValue::Length(period))], 0);
+    let minus = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(a, b)| a - b).collect();
+    let chained = {
+        let mut study = RSI::new(14);
+        study.update_source(&fixture, 0, &average("EMA"));
+        study.values().line(0).to_vec()
+    };
+    let mut host = IndicatorFactory::new();
+    let mut defaults = StudyTemplate::from_study(host.create("RSI").unwrap().as_ref());
+    defaults.inputs = vec![("period".into(), InputValue::Length(5))];
+    host.set_defaults(&[defaults]).unwrap();
+    for (source, expected) in [
+        // Not the host's default of 5.
+        (r#"plot("x", study("RSI"));"#, rsi(14)),
+        (r#"plot("x", study("RSI", "period" = 4 + 1.0));"#, rsi(5)),
+        (
+            r#"plot("x", study("RSI", source = hl2));"#,
+            native(
+                "RSI",
+                &[(
+                    "source",
+                    InputValue::Source(StudySource::Price(PriceSource::HL2)),
+                )],
+                0,
+            ),
+        ),
+        (
+            r#"plot("x", study("RSI", source = study("EMA", period = 10)));"#,
+            chained.clone(),
+        ),
+        (
+            r#"plot("x", study("MACD", fast_period = 5, oscillator_average = "Simple", output = "Signal"));"#,
+            native(
+                "MACD",
+                &[
+                    ("fast_period", InputValue::Length(5)),
+                    ("oscillator_average", InputValue::Choice(1)),
+                ],
+                1,
+            ),
+        ),
+        (
+            r#"plot("x", study("BB", std_dev = 2.5, output = "BB Lower"));"#,
+            native("BB", &[("std_dev", InputValue::Number(2.5))], 2),
+        ),
+        (
+            r#"plot("x", study("BB", std_dev = 3, output = "BB Upper(20, 3)"));"#,
+            native("BB", &[("std_dev", InputValue::Number(3.0))], 0),
+        ),
+        // The default title where the titles differ by their length alone.
+        (
+            r#"plot("x", study("GMMA", "periods [1]" = 6, output = "EMA(5)"));"#,
+            native("GMMA", &[("periods [1]", InputValue::Length(6))], 1),
+        ),
+        // Two studies, and two sets of inputs at one call.
+        (
+            r#"plot("x", study("SMA", period = 10) - study("EMA", period = 10));"#,
+            minus(&average("SMA"), &average("EMA")),
+        ),
+        (
+            r#"fn r(n) { study("RSI", period = n) } plot("x", r(5) - r(14));"#,
+            minus(&rsi(5), &rsi(14)),
+        ),
+        // A series stands for its value on the bar.
+        (
+            r#"series n = if bar_index < 150 { 5 } else { 14 }; plot("x", study("RSI", period = n));"#,
+            [&rsi(5)[..150], &rsi(14)[150..]].concat(),
+        ),
+        // The bars before the first call have values too.
+        (
+            r#"plot("x", if bar_index < 200 { na } else { study("RSI")[150] });"#,
+            [&[f64::NAN; 200][..], &rsi(14)[50..150]].concat(),
+        ),
+    ] {
+        let script = Script::compile("Test", source, &host).unwrap();
+        let study = calculated(&script, &fixture);
+        assert!(
+            same(study.values().line(0), &expected),
+            "{source}: {:?}",
+            script.last_error()
+        );
+    }
+    // The output another study feeds the script.
+    let script = compile(
+        "input source = source(\"Source\", close);\nplot(\"x\", study(\"RSI\", source = source));",
+    );
+    let fed = average("EMA");
+    let mut study = script.study();
+    study.update_source(&fixture, 0, &fed);
+    while let Some(Calculation::Running(_)) = study.calculation() {
+        std::thread::sleep(Duration::from_millis(1));
+        study.update_source(&fixture, fixture.len(), &fed);
+    }
+    assert!(
+        same(study.values().line(0), &chained),
+        "{:?}",
+        script.last_error()
+    );
+}
+
+/// A `bars` declaration requests its history and reads on each chart bar the latest of its bars
+/// closed by then, on the latest chart bar the one still forming when the study does not wait for
+/// it, after every change of the chart and of the history.
+#[test]
+fn other_histories_align_to_chart_bars() {
+    let bar = |minutes: i64, close: f64| {
+        let midnight = chrono::DateTime::from_timestamp_secs(1_767_312_000).unwrap();
+        let time = midnight + chrono::Duration::minutes(minutes);
+        Bar::new(time, close, close, close, close, 1.0)
+    };
+    fn request(timeframe: Timeframe) -> StudyDataRequest {
+        StudyDataRequest {
+            symbol: "SPY".into(),
+            timeframe: Some(timeframe),
+            metric: None,
+        }
+    }
+    fn history(timeframe: Timeframe, bars: &[Bar], wait_for_close: bool) -> StudyData<'_> {
+        StudyData {
+            request: request(timeframe),
+            bars,
+            clock: BarClock::new(timeframe),
+            instrument: None,
+            timeframe,
+            chart: Some(StudyChart {
+                clock: BarClock::new(Timeframe::Min30),
+                wait_for_close,
+            }),
+        }
+    }
+    let mut study = compile(
+        "input of = symbol(\"Symbol\", \"SPY\");\ninput every = interval(\"Interval\", \"1h\");\n\
+         bars h = history(of, every);\nplot(\"x\", h.close);",
+    )
+    .study();
+    assert_eq!(study.data_requests(), [request(Timeframe::Hour1)]);
+    assert!(
+        ConfiguredStudy::new(study.clone_box())
+            .inputs()
+            .iter()
+            .any(|input| input.id == "wait_for_close")
+    );
+    // Chart bars at 23:30, 00:00, 00:30 and so on, under the hours from 00:00.
+    let chart: Vec<_> = (-1..6).map(|at| bar(at * 30, 0.0)).collect();
+    let days = [bar(-1440, 1.0), bar(0, 2.0)];
+    let na = f64::NAN;
+    for (step, len, from, hours, wait, expected) in [
+        (
+            "the hour of 02:00 is open",
+            6,
+            0,
+            Some(&[10.0, 11.0, 12.0][..]),
+            true,
+            vec![na, na, 10.0, 10.0, 11.0, 11.0],
+        ),
+        (
+            "no wait for it",
+            6,
+            0,
+            Some(&[10.0, 11.0, 12.0][..]),
+            false,
+            vec![na, na, 10.0, 10.0, 11.0, 12.0],
+        ),
+        // 02:00 is no longer the latest bar.
+        (
+            "02:30 appended",
+            7,
+            6,
+            Some(&[10.0, 11.0, 12.0][..]),
+            false,
+            vec![na, na, 10.0, 10.0, 11.0, 11.0, 12.0],
+        ),
+        (
+            "open hour changed",
+            7,
+            0,
+            Some(&[10.0, 11.0, 12.5][..]),
+            false,
+            vec![na, na, 10.0, 10.0, 11.0, 11.0, 12.5],
+        ),
+        (
+            "first hour changed",
+            7,
+            0,
+            Some(&[9.5, 11.0, 12.5][..]),
+            false,
+            vec![na, na, 9.5, 9.5, 11.0, 11.0, 12.5],
+        ),
+        (
+            "02:30 removed",
+            6,
+            6,
+            Some(&[9.5, 11.0, 12.5][..]),
+            false,
+            vec![na, na, 9.5, 9.5, 11.0, 12.5],
+        ),
+        // A replay moves the end of a history without a full recompute.
+        (
+            "02:00 no longer read",
+            6,
+            6,
+            Some(&[9.5, 11.0][..]),
+            false,
+            vec![na, na, 9.5, 9.5, 11.0, 11.0],
+        ),
+        ("history gone", 6, 0, None, false, vec![na; 6]),
+    ] {
+        let hours = hours.map(|closes: &[f64]| {
+            let hours = closes.iter().zip(0..);
+            hours
+                .map(|(&close, hour)| bar(hour * 60, close))
+                .collect::<Vec<_>>()
+        });
+        // The chart also supplies what other studies request.
+        let mut histories = vec![history(Timeframe::Day1, &days, wait)];
+        if let Some(hours) = &hours {
+            histories.push(history(Timeframe::Hour1, hours, wait));
+        }
+        study.update_data(&chart[..len], from, &histories);
+        settle(&mut study, &chart[..len]);
+        assert!(
+            same(study.values().line(0), &expected),
+            "{step}: {:?}",
+            study.values().line(0)
+        );
     }
 }
 
@@ -225,6 +498,24 @@ fn updates_equal_full_calculations() {
         bars(40_001, 2),
         40_000,
     ));
+    for (title, source) in [
+        ("study", r#"plot("x", study("RSI", period = 14));"#),
+        (
+            "chained study",
+            r#"plot("x", study("RSI", source = study("EMA", period = 10)));"#,
+        ),
+        // Changes values it gave earlier bars.
+        ("revising study", r#"plot("x", study("ZigZag"));"#),
+        // As many studies as a script computes, the last for each value of the last bar.
+        (
+            "studies at the limit",
+            r#"let s = 0.0; for n in 1..64 { s += study("SMA", period = n); }
+            if bar_index == 599 { s += study("SMA", period = 100 + floor(close)); }
+            plot("x", s);"#,
+        ),
+    ] {
+        rows.push((title, source, bars(600, 2), 300));
+    }
     for (title, source, fixture, start) in rows {
         let script = compile(source);
         let fresh = |bars: &[Bar]| calculated(&script, bars).values().columns().to_vec();
@@ -281,6 +572,12 @@ fn scripts_are_refused_at_their_line_and_column() {
         "input c = choice(\"C\", \"c0\", [{}]);\nplot(\"x\", 1.0);",
         choices.join(", ")
     );
+    let histories: String = (10..51)
+        .map(|i| format!("bars b{i} = history(\"\", \"1D\");\n"))
+        .collect();
+    let mut factory = IndicatorFactory::new();
+    let script = compile("plot(\"x\", close);");
+    factory.register("Script", move || Box::new(script.study()));
     for (source, line, column, fragment) in [
         // The `)` where the operand belongs.
         ("plot(\"x\", close +);", 1, 18, "Unexpected ')'"),
@@ -390,8 +687,105 @@ fn scripts_are_refused_at_their_line_and_column() {
             choices.find("\"c64\"").unwrap() + 1,
             "at most 64 choices",
         ),
+        // The token after the name.
+        (
+            "plot(\"x\", study(\"RS\", period = 14));",
+            1,
+            21,
+            "no study \"RS\" is registered",
+        ),
+        (
+            "plot(\"x\", study(RSI));",
+            1,
+            20,
+            "the study's name is a string; got a name",
+        ),
+        (
+            "plot(\"x\", study(\"RSI\" + \"a\"));",
+            1,
+            23,
+            "Expecting ')'",
+        ),
+        // Values that would arrive later, and none to read.
+        (
+            "plot(\"x\", study(\"Script\"));",
+            1,
+            25,
+            "study \"Script\" calculates on its own",
+        ),
+        (
+            "plot(\"x\", study(\"Time Price Opportunity\"));",
+            1,
+            41,
+            "has no line to read",
+        ),
+        // The `=` after the id.
+        (
+            "plot(\"x\", study(\"RSI\", perod = 14));",
+            1,
+            30,
+            "study \"RSI\" has no input perod",
+        ),
+        (
+            "plot(\"x\", study(\"RSI\", \"perods [0]\" = 5));",
+            1,
+            37,
+            "study \"RSI\" has no input perods [0]",
+        ),
+        (
+            "plot(\"x\", study(\"RSI\", period = 5, \"period\" = 6));",
+            1,
+            45,
+            "input period is given twice",
+        ),
+        // The `)` after the title.
+        (
+            "plot(\"x\", study(\"RSI\", output = 3));",
+            1,
+            34,
+            "output is a string; got an int",
+        ),
+        (
+            "plot(\"x\", study(\"BB\", output = \"Lower\"));",
+            1,
+            39,
+            "no output \"Lower\" with these inputs; it has \"BB Upper\", \"BB Middle\", \"BB Lower\"",
+        ),
+        // Every line of this study is an average, shown with its length.
+        (
+            "plot(\"x\", study(\"GMMA\", output = \"EMA\"));",
+            1,
+            39,
+            "it has \"EMA(3)\", \"EMA(5)\"",
+        ),
+        (
+            "bars h = hist(\"SPY\", \"1D\");\nplot(\"x\", h.close);",
+            1,
+            10,
+            "expecting history(SYMBOL, INTERVAL)",
+        ),
+        (
+            "bars h = history(spy, \"1D\");\nplot(\"x\", h.close);",
+            1,
+            21,
+            "spy is not a symbol input declared above",
+        ),
+        (
+            "bars h = history(\"SPY\", \"1X\");\nplot(\"x\", h.close);",
+            1,
+            29,
+            "\"1X\" is no interval",
+        ),
+        (
+            "input every = interval(\"Interval\", \"1X\");\nplot(\"x\", 1.0);",
+            1,
+            41,
+            "\"1X\" is no interval",
+        ),
+        // The `;` after the 41st.
+        (histories.as_str(), 41, 29, "at most 40 histories"),
     ] {
-        let error = Script::compile("Test", source, &IndicatorFactory::new()).unwrap_err();
+        let error = Script::compile("Test", source, &factory).unwrap_err();
         assert_eq!(
             (error.line, error.column, error.bar),
             (line, column, None),
@@ -417,6 +811,9 @@ fn defined_calls_compile() {
         input c = choice("C", "a", ["a", "b"]);
         input s = source("S", close);
         input t = text("T", "smaa(1)");
+        input of = symbol("Symbol", "");
+        input every = interval("Interval", "1D");
+        bars h = history(of, every);
         state kept = 0;
         series d = (close - open);
         plot("smaa(x)", later(close));
@@ -428,6 +825,7 @@ fn defined_calls_compile() {
         sma(d, 2); ema(d, 2); rma(d, 2); wma(d, 2); sum(d, 2); stdev(d, 2); highest(d, 2);
         lowest(d, 2); change(d); change(d, 1); crossover(d, 0); crossunder(d, 0);
         year(time); month(time); day(time); weekday(time); hour(time); minute(time);
+        study("RSI", source = study ("EMA"))[1]; h.close[1];
 
         fn later(x) { nz (x) }
         fn int.twice() { this * 2 }
@@ -549,6 +947,55 @@ fn run_errors_keep_the_bars_before_them() {
             0,
             "Size of object map",
         ),
+        // The value at fault of a study call, and otherwise its name.
+        (
+            "plot(\"x\", if bar_index < 20 { close } else { study(\"RSI\", period = 0) });",
+            68,
+            20,
+            "RSI input period takes an int from 1; got 0",
+        ),
+        (
+            "series d = close - open; \
+             plot(\"x\", if bar_index < 20 { close } else { study(\"RSI\", source = d) });",
+            93,
+            20,
+            "cannot read the series d",
+        ),
+        (
+            "plot(\"x\", if bar_index < 20 { close } else { study(\"RSI\", calculation_symbol = \"SPY\") });",
+            52,
+            20,
+            "RSI needs histories a script cannot supply",
+        ),
+        (
+            "plot(\"x\", if bar_index < 20 { close } else { study(\"Trade Rate\") });",
+            52,
+            20,
+            "Trade Rate needs order flow a script cannot supply",
+        ),
+        // With an input given the lines are known when the call runs.
+        (
+            "plot(\"x\", if bar_index < 20 { close } else { study(\"RSI\", period = 5, output = \"K\") });",
+            52,
+            20,
+            "RSI has no output \"K\" with these inputs; it has \"RSI\"",
+        ),
+        // One study for each of the bars before.
+        (
+            "let s = study(\"SMA\", period = bar_index + 1); plot(\"x\", close);",
+            15,
+            64,
+            "at most 64 studies",
+        ),
+        // The dot, in a script whose history is missing.
+        (
+            "bars h = history(\"SPY\", \"1D\"); \
+             plot(\"x\", if bar_index < 20 { close } else { h.foo });",
+            78,
+            20,
+            "bars have no field foo; expected one of open, high, low, close, volume, hl2, hlc3, \
+             ohlc4, time",
+        ),
     ] {
         let script = compile(source);
         let error = script.check(&fixture).unwrap_err();
@@ -628,6 +1075,17 @@ fn one_bar_limit_stops_the_newest_bar_at_its_line() {
             "{source}: {error}"
         );
     }
+    // A bar of too few operations for a check: the study it calls is checked itself.
+    let script = limited(
+        "plot(\"x\", close);\nplot(\"y\", study(\"RSI\"));",
+        Limits {
+            bar: Duration::ZERO,
+            ..Limits::default()
+        },
+    );
+    let error = script.check(&fixture[..1]).unwrap_err();
+    assert_eq!((error.line, error.bar), (2, Some(0)), "{error}");
+    assert!(error.message.contains("for one bar"), "{error}");
 }
 
 /// The full-recompute limit stops runs of short bars between bars, and runs of long bars inside
@@ -659,10 +1117,10 @@ fn full_recompute_limit_stops_long_runs() {
     }
 }
 
-/// The memory cap counts series buffers, helper windows, the values states keep and the values
-/// a bar holds while it runs at every call level, and stops a script whose buffers pass it at the
-/// declaration or call holding the most, or at the line running when the bar's own values hold
-/// more.
+/// The memory cap counts series buffers, helper windows, the lines of studies, the values states
+/// keep and the values a bar holds while it runs at every call level, and stops a script whose
+/// buffers pass it at the declaration or call holding the most, or at the line running when the
+/// bar's own values hold more.
 #[test]
 fn memory_cap_stops_scripts_whose_buffers_pass_it() {
     let mut source: String = (0..64).map(|i| format!("series s{i} = close;\n")).collect();
@@ -690,6 +1148,9 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
                   let v = []; v.pad(256, []); for j in 0..256 { v[j].pad(1000, 0); v[j].clear(); }\n\
                   if n > 0 { hold(n - 1) + v.len() } else { v.len() }\n\
                   }\nplot(\"x\", hold(8));";
+    // 64 studies of 1,000 values and a copy of each read, 1,024,000 bytes beside the bars.
+    let studies = "let s = 0.0;\nfor i in 1..65 { s += study(\"SMA\", period = i); }\n\
+                   plot(\"x\", s);";
     for (script, fixture, mib, line) in [
         (source.as_str(), &fixture[..], 16, 1),
         (windows, &fixture[..1000], 1, 2),
@@ -698,6 +1159,7 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
         (bar, &fixture[..1], 16, 2),
         (cut, &fixture[..1], 2, 2),
         (levels, &fixture[..1], 8, 5),
+        (studies, &fixture[..1000], 1, 2),
     ] {
         let mut capped = limited(
             script,
@@ -815,6 +1277,10 @@ fn web_deepest_script_stops_at_the_call_limit() {
     let error = compile(&deepest(40, "0")).check(&bars(2, 3)).unwrap_err();
     assert_eq!(error.bar, Some(0), "{error}");
     assert!(error.message.contains("more than 6 deep"), "{error}");
+    // A study calculates in the deepest call.
+    let calls = crate::rhai::engine::MAX_CALL_LEVELS - 1;
+    let checked = compile(&deepest(calls, "study(\"RSI\")[0]")).check(&bars(1, 3));
+    assert!(checked.is_ok(), "{checked:?}");
 }
 
 /// On the web the stack also holds the deepest value the size limits admit in the deepest call the
