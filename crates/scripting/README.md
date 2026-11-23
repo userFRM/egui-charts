@@ -208,12 +208,16 @@ bools.
 ## Errors
 
 `Script::compile` refuses a script with its first error at a one-based line and character
-column: a syntax error, a wrong declaration, or a name the script does not declare. A runtime
-error, such as a type mismatch or a negative history offset, stops the bar it happens on: the
-bars before keep their values, the later ones are missing, and `Script::last_error` reports the
-error with its line, column and bar. A host checks a script on the chart's bars before it replaces
-a study, with `Script::check`, or with the new study itself, which it calculates off the chart
-until its calculation is done.
+column: a syntax error, a wrong declaration, a name the script does not declare, or a call to a
+function or method that neither the script, the helpers nor Rhai's standard package defines, also
+in a branch no bar takes. A method may be a function a map holds, so a method name the script also
+writes outside a call, as a key, another name or a whole string, passes. The arguments of a call,
+and the function `Fn("name")` names, are checked when they run. A runtime error, such as a type
+mismatch or a negative history offset, stops the bar it happens on: the bars before keep their
+values, the later ones are missing, and `Script::last_error` reports the error with its line,
+column and bar. A host checks a script on the chart's bars before it replaces a study, with
+`Script::check`, or with the new study itself, which it calculates off the chart until its
+calculation is done.
 
 ## Limits
 
