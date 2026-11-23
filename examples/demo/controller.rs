@@ -5979,6 +5979,22 @@ mod tests {
         );
     }
 
+    /// Clicks the screener text `label` right of the chart. The filter row paints before the table
+    /// and its popups after it, so a control is the first panel text of its label and a popup
+    /// choice the last.
+    fn screener_click(app: &mut DemoApp, ctx: &egui::Context, label: &str, last: bool) {
+        let texts = hotlist_frame(app, ctx, 10.0, vec![]);
+        let mut found = texts
+            .iter()
+            .filter(|(text, rect)| text == label && rect.left() > 1000.0);
+        let rect = if last { found.last() } else { found.next() };
+        let point = rect
+            .unwrap_or_else(|| panic!("missing {label}: {texts:?}"))
+            .1
+            .center();
+        hotlist_pointer_click(app, ctx, point, egui::PointerButton::Primary);
+    }
+
     /// The demo screener filters its catalog by exchange: the host declares the text column and
     /// its values, the filter row sends "is" and "is not" with the ticked values, and the feed
     /// answers the matching symbols.
@@ -5993,20 +6009,8 @@ mod tests {
         );
         app.open_panel = Some(SidePanel::Screener);
         settle(&mut app, &ctx);
-        // The filter row paints before the table and its popups after it, so a control is the
-        // first panel text of its label and a popup choice the last.
-        let click = |app: &mut DemoApp, label: &str, last: bool| {
-            let texts = hotlist_frame(app, &ctx, 10.0, vec![]);
-            let mut found = texts
-                .iter()
-                .filter(|(text, rect)| text == label && rect.left() > 1000.0);
-            let rect = if last { found.last() } else { found.next() };
-            let point = rect
-                .unwrap_or_else(|| panic!("missing {label}: {texts:?}"))
-                .1
-                .center();
-            hotlist_pointer_click(app, &ctx, point, egui::PointerButton::Primary);
-        };
+        let click =
+            |app: &mut DemoApp, label: &str, last: bool| screener_click(app, &ctx, label, last);
         let tick = |app: &mut DemoApp, shown: &str, value: &str| {
             egui::Popup::close_all(&ctx);
             click(app, shown, false);
@@ -6053,6 +6057,105 @@ mod tests {
             .map(|spec| spec.symbol)
             .collect();
         assert_eq!(shown(&mut app), others);
+    }
+
+    /// The demo screener's "+", heading menu, chart view and refresh choice are reachable: an added
+    /// column heads its values, a heading's menu removes its column, the chart view lays the
+    /// screened symbols out in taller rows, and a picked refresh interval replaces the dropdown's
+    /// label, which the panel shows whole.
+    #[test]
+    fn demo_screener_columns_charts_and_refresh_are_reachable() {
+        let ctx = egui::Context::default();
+        let now = "2026-11-18T15:30:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        app.open_panel = Some(SidePanel::Screener);
+        settle(&mut app, &ctx);
+        // The demo feed answers at once; the next frame shows the answer.
+        let panel = |app: &mut DemoApp| {
+            hotlist_frame(app, &ctx, 10.0, vec![]);
+            let mut texts = hotlist_frame(app, &ctx, 10.0, vec![]);
+            texts.retain(|(_, rect)| rect.left() > 1000.0);
+            texts
+        };
+        screener_click(&mut app, &ctx, "+", false);
+        screener_click(&mut app, &ctx, "Mkt cap", true);
+        let texts = panel(&mut app);
+        let heading = texts
+            .iter()
+            .find(|(text, _)| text == "Mkt cap")
+            .unwrap_or_else(|| panic!("no Mkt cap heading: {texts:?}"))
+            .1;
+        assert!(
+            texts
+                .iter()
+                .any(|(text, rect)| rect.top() > heading.bottom()
+                    && (rect.right() - heading.right()).abs() < 2.0
+                    && text.ends_with(['K', 'M', 'B', 'T'])),
+            "{texts:?}"
+        );
+
+        // A right-aligned heading is painted from its right end, which the frame helper reports
+        // as the left edge, so the click goes just inside that end.
+        let change = texts
+            .iter()
+            .find(|(text, _)| text == "Chg %")
+            .unwrap_or_else(|| panic!("no Chg % heading: {texts:?}"))
+            .1
+            .left_center()
+            - egui::vec2(2.0, 0.0);
+        hotlist_pointer_click(&mut app, &ctx, change, egui::PointerButton::Secondary);
+        screener_click(&mut app, &ctx, "Remove column", true);
+        let texts = panel(&mut app);
+        assert!(
+            texts.iter().any(|(text, _)| text == "Mkt cap")
+                && !texts.iter().any(|(text, _)| text == "Chg %"),
+            "{texts:?}"
+        );
+
+        screener_click(&mut app, &ctx, "Chart", false);
+        let texts = panel(&mut app);
+        let mut tops: Vec<f32> = DemoSymbol::catalog()
+            .iter()
+            .filter_map(|spec| texts.iter().find(|(text, _)| text == spec.symbol))
+            .map(|(_, rect)| rect.top())
+            .collect();
+        tops.sort_by(f32::total_cmp);
+        // Table rows are 26 points apart, chart rows 48.
+        assert!(
+            tops.len() > 1 && tops.windows(2).all(|pair| pair[1] - pair[0] > 47.0),
+            "{tops:?}"
+        );
+
+        screener_click(&mut app, &ctx, "No auto refresh", false);
+        screener_click(&mut app, &ctx, "Refresh every 10 seconds", true);
+        let texts = panel(&mut app);
+        let painted = |label: &str| texts.iter().any(|(text, _)| text == label);
+        assert!(
+            painted("Refresh every 10 seconds") && !painted("No auto refresh"),
+            "{texts:?}"
+        );
+        // A cut label still carries its whole text, so ask the galley whether it was cut.
+        let output = ctx.run_ui(
+            egui::RawInput {
+                time: Some(10.0),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ui| eframe::App::ui(&mut *app, ui, &mut eframe::Frame::_new_kittest()),
+        );
+        let cut = output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text)
+                if text.galley.text() == "Refresh every 10 seconds" && text.galley.elided)
+        });
+        output.drop_without_applying_deltas();
+        assert!(!cut, "the refresh choice is cut short");
     }
 
     /// Row menus update the demo watchlist, and starring a list survives the real settings save
