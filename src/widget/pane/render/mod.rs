@@ -896,12 +896,6 @@ impl Chart {
                 }
                 crosshair_options.horz_label_visible &=
                     panel.draw_axis || host_position && target_panel;
-                let defer_tag = anchor_gesture
-                    && !collapsed
-                    && crosshair_options.horz_label_visible
-                    && pointer.is_some_and(|pointer| pane_plot.contains(pointer));
-                let tag_options = crosshair_options;
-                crosshair_options.horz_label_visible &= !defer_tag;
                 let axis = panel.axis_rect.map(|_| {
                     if self.pane_scale_side(pane_id, assignment)
                         == Some(crate::model::AxisSide::Right)
@@ -911,6 +905,13 @@ impl Chart {
                         crate::scales::PriceScaleId::Left
                     }
                 });
+                let defer_tag = anchor_gesture
+                    && !collapsed
+                    && axis.is_some()
+                    && crosshair_options.horz_label_visible
+                    && pointer.is_some_and(|pointer| pane_plot.contains(pointer));
+                let tag_options = crosshair_options;
+                crosshair_options.horz_label_visible &= !defer_tag;
 
                 // Use show_aligned_interactive to get pane info for hit testing
                 let mut child =

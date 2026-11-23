@@ -424,7 +424,7 @@ impl Chart {
         }
         // The crosshair of the pane under the pointer shows the height a click there gives the
         // next anchor, or a drag below gives the dragged point, whatever the crosshair mode. Only
-        // that pane writes, so a pane drawn later keeps the record of the price pane.
+        // that pane writes, so a pane drawn later cannot clear the price pane's record.
         if let Some(pointer) = snap_pointer.filter(|pointer| price_rect.contains(*pointer)) {
             let tool = drawing_manager.active_tool.filter(|tool| !tool.is_cursor());
             drawing_manager.anchor_crosshair = tool.map(|tool| {

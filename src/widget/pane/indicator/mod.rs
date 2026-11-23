@@ -402,7 +402,7 @@ impl IndicatorPane {
 
     /// Paints the crosshair price tag of `indicator` at `pos` on this pane's axis, as
     /// [`show_aligned_interactive_in`](Self::show_aligned_interactive_in) does, and returns its
-    /// rect; `None` for a study without a scale. `rects` are the pane and its plot.
+    /// rect; `None` for a study without a scale. `rect` is the pane and `chart_rect` its plot.
     pub(super) fn paint_crosshair_tag(
         &self,
         painter: &egui::Painter,
