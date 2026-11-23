@@ -913,82 +913,179 @@ pub(crate) fn spans<'a>(
 ) -> Vec<Span> {
     let names: Vec<_> = names.into_iter().collect();
     let mut found = vec![Span::default(); names.len()];
-    let mut previous: Option<&str> = None;
-    for (word, span) in words(source) {
-        if previous == Some(keyword)
+    let mut previous = None;
+    for (token, span) in tokens(source) {
+        if previous == Some(Token::Word(keyword))
+            && let Token::Word(word) = token
             && let Some(at) = names.iter().position(|name| *name == word)
             && found[at] == Span::default()
         {
             found[at] = span;
         }
-        previous = Some(word);
+        previous = Some(token);
     }
     found
 }
 
-/// The identifiers of `source` with their positions, skipping comments and strings.
-fn words(source: &str) -> Vec<(&str, Span)> {
-    let mut words = Vec::new();
-    let (mut line, mut column) = (1u32, 0u32);
-    let mut chars = source.char_indices().peekable();
-    let mut start: Option<(usize, Span)> = None;
-    let mut in_string = false;
-    let mut in_line_comment = false;
-    let mut block_comments = 0usize;
-    while let Some((at, c)) = chars.next() {
-        column += 1;
-        let next = chars.peek().map(|(_, c)| *c);
-        let word_char = c.is_alphanumeric() || c == '_';
-        if let Some((begin, span)) = start
-            && !word_char
-        {
-            words.push((&source[begin..at], span));
-            start = None;
-        }
+/// A piece of a script's text outside comments.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Token<'a> {
+    /// A name, a keyword or a number.
+    Word(&'a str),
+    /// The text of a string or a character, as written.
+    Text(&'a str),
+    Symbol(char),
+}
+
+/// A script's text, its position moving over each character.
+struct Reader<'a> {
+    rest: &'a str,
+    line: u32,
+    column: u32,
+}
+
+impl<'a> Reader<'a> {
+    fn next(&mut self) -> Option<char> {
+        let c = self.rest.chars().next()?;
+        self.rest = &self.rest[c.len_utf8()..];
         if c == '\n' {
-            line += 1;
-            column = 0;
-            in_line_comment = false;
-            continue;
+            (self.line, self.column) = (self.line + 1, 0);
+        } else {
+            self.column += 1;
         }
-        if in_line_comment {
-            continue;
-        }
-        if block_comments > 0 {
-            if c == '*' && next == Some('/') {
-                block_comments -= 1;
-                chars.next();
-                column += 1;
-            } else if c == '/' && next == Some('*') {
-                block_comments += 1;
-                chars.next();
-                column += 1;
+        Some(c)
+    }
+
+    fn eat(&mut self, text: &str) -> bool {
+        let found = self.rest.starts_with(text);
+        if found {
+            for _ in text.chars() {
+                self.next();
             }
-            continue;
         }
-        if in_string {
-            if c == '\\' {
-                chars.next();
-                column += 1;
-            } else if c == '"' {
-                in_string = false;
+        found
+    }
+
+    /// What was read since the text left was `from`.
+    fn since(&self, from: &'a str) -> &'a str {
+        &from[..from.len() - self.rest.len()]
+    }
+
+    /// A string between backticks up to its end or to the `${` of an expression in it; whether
+    /// an expression follows.
+    fn template(&mut self) -> (&'a str, bool) {
+        let from = self.rest;
+        loop {
+            let text = self.since(from);
+            if self.eat("${") {
+                return (text, true);
             }
-            continue;
-        }
-        match (c, next) {
-            ('/', Some('/')) => in_line_comment = true,
-            ('/', Some('*')) => {
-                block_comments = 1;
-                chars.next();
-                column += 1;
+            if !self.eat("\\${") && matches!(self.next(), Some('`') | None) {
+                return (text, false);
             }
-            ('"', _) => in_string = true,
-            _ if word_char && start.is_none() => start = Some((at, Span { line, column })),
-            _ => {}
         }
     }
-    if let Some((begin, span)) = start {
-        words.push((&source[begin..], span));
+}
+
+/// The tokens of `source`, a script that compiled, with their positions.
+pub(crate) fn tokens(source: &str) -> Vec<(Token<'_>, Span)> {
+    let mut tokens = Vec::new();
+    let mut reader = Reader {
+        rest: source,
+        line: 1,
+        column: 0,
+    };
+    // The braces open in each expression of a string between backticks around this place.
+    let mut braces: Vec<usize> = Vec::new();
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    loop {
+        let from = reader.rest;
+        let span = Span {
+            line: reader.line,
+            column: reader.column + 1,
+        };
+        let Some(c) = reader.next() else {
+            return tokens;
+        };
+        let token = match c {
+            '/' if reader.eat("/") => {
+                while !reader.rest.is_empty() && !reader.rest.starts_with(['\r', '\n']) {
+                    reader.next();
+                }
+                // Rhai ends a comment, and its line, at a lone carriage return too.
+                if reader.eat("\r") && !reader.rest.starts_with('\n') {
+                    (reader.line, reader.column) = (reader.line + 1, 0);
+                }
+                continue;
+            }
+            '/' if reader.eat("*") => {
+                let mut depth = 1;
+                while depth > 0 && !reader.rest.is_empty() {
+                    if reader.eat("/*") {
+                        depth += 1;
+                    } else if reader.eat("*/") {
+                        depth -= 1;
+                    } else {
+                        reader.next();
+                    }
+                }
+                continue;
+            }
+            '"' | '\'' => {
+                let from = reader.rest;
+                loop {
+                    let text = reader.since(from);
+                    match reader.next() {
+                        Some('\\') => {
+                            reader.next();
+                        }
+                        Some(next) if next != c => {}
+                        _ => break Token::Text(text),
+                    }
+                }
+            }
+            '#' if from.trim_start_matches('#').starts_with('"') => {
+                let hashes = from.len() - from.trim_start_matches('#').len();
+                let end = format!("\"{}", "#".repeat(hashes));
+                reader.eat(&from[1..=hashes]);
+                let from = reader.rest;
+                loop {
+                    let text = reader.since(from);
+                    if reader.eat(&end) || reader.next().is_none() {
+                        break Token::Text(text);
+                    }
+                }
+            }
+            '`' => {
+                let (text, expression) = reader.template();
+                if expression {
+                    braces.push(0);
+                }
+                Token::Text(text)
+            }
+            '}' if braces.last() == Some(&0) => {
+                let (text, expression) = reader.template();
+                if !expression {
+                    braces.pop();
+                }
+                Token::Text(text)
+            }
+            c if c.is_whitespace() => continue,
+            c if word(c) => {
+                while reader.rest.starts_with(word) {
+                    reader.next();
+                }
+                Token::Word(reader.since(from))
+            }
+            c => {
+                match (c, braces.last_mut()) {
+                    ('{', Some(open)) => *open += 1,
+                    ('}', Some(open)) => *open -= 1,
+                    _ => {}
+                }
+                Token::Symbol(c)
+            }
+        };
+        tokens.push((token, span));
     }
-    words
 }
