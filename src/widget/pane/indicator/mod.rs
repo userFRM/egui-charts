@@ -400,6 +400,60 @@ impl IndicatorPane {
         Some(interaction)
     }
 
+    /// Paints the crosshair price tag of `indicator` at `pos` on this pane's axis, as
+    /// [`show_aligned_interactive_in`](Self::show_aligned_interactive_in) does, and returns its
+    /// rect; `None` for a study without a scale. `rect` is the pane and `chart_rect` its plot.
+    pub(super) fn paint_crosshair_tag(
+        &self,
+        painter: &egui::Painter,
+        indicator: &dyn Indicator,
+        price: &PriceMap,
+        (rect, chart_rect): (Rect, Rect),
+        left_axis: bool,
+        (pos, options): (Pos2, &crate::config::CrosshairOptions),
+    ) -> Option<Rect> {
+        if indicator.scale() == crate::studies::StudyScale::None {
+            return None;
+        }
+        let label_rect = self.axis_rect.map_or(chart_rect, |axis| {
+            crate::widget::series::axis_label_rect(chart_rect, axis)
+        });
+        crate::chart::rendering::render_crosshair_price_tag(
+            &crate::chart::rendering::RenderContext::new(painter, label_rect),
+            pos,
+            &price.with_price_precision(Some(indicator.precision().unwrap_or(2).min(255) as u8)),
+            options,
+            self.axis_rect.map_or_else(
+                || {
+                    if left_axis {
+                        egui::emath::Rangef::new(rect.left(), chart_rect.left())
+                    } else {
+                        egui::emath::Rangef::new(chart_rect.right(), rect.right())
+                    }
+                },
+                |axis| axis.x_range(),
+            ),
+            None,
+            Some(
+                if self.price_formatter.is_some()
+                    || matches!(
+                        price.transform().mode,
+                        crate::scales::PriceScaleMode::Percentage
+                            | crate::scales::PriceScaleMode::IndexedTo100
+                    )
+                {
+                    price.label(
+                        price.y_to_scale(pos.y),
+                        indicator.precision().unwrap_or(2),
+                        self.price_formatter.as_deref(),
+                    )
+                } else {
+                    indicator.format_value(price.y_to_price(pos.y))
+                },
+            ),
+        )
+    }
+
     /// Shows the pane with attached `primitives`. For a bar series, `indicator` supplies only
     /// its legend; the caller draws its bars and the series primitive pass afterwards.
     pub(super) fn show_aligned_interactive_in(
@@ -512,30 +566,10 @@ impl IndicatorPane {
                     .iter()
                     .find_map(|item| item.custom_view(bars, &mapping)),
             });
+        // The pane sets the height; the panel puts the crosshair on the bar centre.
         let crosshair = hover.map(|(mut pos, options)| {
             if let Some(index) = self.bar_index {
                 pos.x = mapping.idx_to_x(index);
-                if options.mode.snaps()
-                    && !indicator.plots_on_price()
-                    && chart_rect.contains(pos)
-                    && let Some(value) = crate::chart::rendering::snap_to_values(
-                        pos.y,
-                        &mapping.price,
-                        (0..indicator.line_count())
-                            .filter(|line| {
-                                let plot = indicator.plot_style(*line);
-                                plot.visible
-                                    && !matches!(
-                                        plot.plot_type,
-                                        crate::studies::PlotType::BarColor
-                                            | crate::studies::PlotType::BackgroundColor
-                                    )
-                            })
-                            .filter_map(|line| indicator.plot_value(line, index)),
-                    )
-                {
-                    pos.y = mapping.price_to_y(value);
-                }
             }
             (pos, options)
         });
@@ -651,44 +685,13 @@ impl IndicatorPane {
                 .graphics_mut(|graphics| graphics.entry(painter.layer_id()).next_idx());
             let tag = crosshair.and_then(|(pos, options)| {
                 axis?;
-                if indicator.scale() == crate::studies::StudyScale::None {
-                    return None;
-                }
-                crate::chart::rendering::render_crosshair_price_tag(
-                    &crate::chart::rendering::RenderContext::new(painter, label_rect),
-                    pos,
-                    &mapping.price.with_price_precision(Some(
-                        indicator.precision().unwrap_or(2).min(255) as u8,
-                    )),
-                    &options,
-                    self.axis_rect.map_or_else(
-                        || {
-                            if left_axis {
-                                egui::emath::Rangef::new(rect.left(), chart_rect.left())
-                            } else {
-                                egui::emath::Rangef::new(chart_rect.right(), rect.right())
-                            }
-                        },
-                        |axis| axis.x_range(),
-                    ),
-                    None,
-                    Some(
-                        if self.price_formatter.is_some()
-                            || matches!(
-                                mapping.price.transform().mode,
-                                crate::scales::PriceScaleMode::Percentage
-                                    | crate::scales::PriceScaleMode::IndexedTo100
-                            )
-                        {
-                            mapping.price.label(
-                                mapping.price.y_to_scale(pos.y),
-                                indicator.precision().unwrap_or(2),
-                                self.price_formatter.as_deref(),
-                            )
-                        } else {
-                            indicator.format_value(mapping.price.y_to_price(pos.y))
-                        },
-                    ),
+                self.paint_crosshair_tag(
+                    painter,
+                    indicator,
+                    &mapping.price,
+                    (rect, chart_rect),
+                    left_axis,
+                    (pos, &options),
                 )
             });
             axis_foregrounds.extend(crate::widget::primitives::take_shapes(painter, start));

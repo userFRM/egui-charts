@@ -120,7 +120,7 @@ impl Chart {
     }
 
     /// The height at which a click places the next drawing anchor, or a drag puts the dragged
-    /// point, recorded by the price pane this frame for a pointer at `pointer_y`.
+    /// point, recorded this frame by the pane under the pointer for a pointer at `pointer_y`.
     pub(super) fn anchor_crosshair_y(&self, ctx: &egui::Context, pointer_y: f32) -> Option<f32> {
         #[cfg(feature = "drawings")]
         if let Some((frame, pointer, y)) = self.drawings.anchor_crosshair
