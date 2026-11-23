@@ -4661,17 +4661,46 @@ mod tests {
             let original = shared_records(&shared)[0].clone();
             assert!(original["pane"].is_object());
             charts[0].drawings_mut().set_shared_drawings_hidden(true);
+            // A line of the bridge's own whose study goes before the line is first written.
+            charts[0].user_action(|c| {
+                let mut drawing = line("Bridge line");
+                drawing.pane = Some(bridge.0);
+                drawing.folder = vec!["Plan".into()];
+                drawing.folder_sync = vec![Some(FolderSync::AllLayouts)];
+                c.drawings_mut().add_drawing(drawing).unwrap();
+            });
             assert!(charts[0].user_action(|c| c.remove_series(bridge)));
             frames(&mut pair, &mut charts);
             check(&charts[1], peer_pane, 10.);
+            // The writer reads that line before it writes, so that its writes are not refused.
+            frames(&mut window, &mut writer);
 
             // An unrelated write replaces the bridge's manager while it is still filtered.
             writer[0].user_action(|c| draw(c, 11.));
             frames(&mut window, &mut writer);
             frames(&mut pair, &mut charts);
             check(&charts[1], peer_pane, 10.);
+            let own = |c: &Chart| {
+                let manager = c.drawings();
+                let line = manager
+                    .drawings
+                    .iter()
+                    .find(|d| d.label.as_deref() == Some("Bridge line"));
+                c.drawing_pane(line.expect("bridge line").id)
+            };
+            assert_eq!(own(&charts[1]), Some(peer_pane));
             charts[0].drawings_mut().set_shared_drawings_hidden(false);
             frames(&mut pair, &mut charts);
+            // The read kept the removed study, whose lines the price pane draws.
+            let manager = charts[0].drawings();
+            for label in ["RSI line", "Bridge line"] {
+                let line = manager
+                    .drawings
+                    .iter()
+                    .find(|d| d.label.as_deref() == Some(label));
+                let painted = manager.painted_range(line.unwrap().id);
+                assert!(painted.is_some_and(|r| !r.is_empty()), "{label}");
+            }
             writer[0].user_action(|c| {
                 c.drawings_mut()
                     .edit_drawing(id, |d| d.chart_points[0].price = 9.5)
@@ -4706,10 +4735,21 @@ mod tests {
     #[cfg(all(feature = "ui", feature = "studies"))]
     #[test]
     fn shared_drawing_filter_keeps_removed_panes_through_copy_undo_and_snapshot_edits() {
-        for scenario in ["kept copy", "different pane in kept copy", "snapshot"] {
+        for scenario in [
+            "kept copy",
+            "different pane in kept copy",
+            "snapshot",
+            "snapshot after removal",
+        ] {
             let mut w = StudyWindows::new(false);
             let original = shared_records(&w.shared)[0].clone();
-            let expected = if scenario == "snapshot" {
+            let expected = if scenario == "snapshot after removal" {
+                w.hide_and_remove(w.owners[0]);
+                let saved = w.charts[0].snapshot().unwrap();
+                assert!(w.charts[0].restore(&saved).unwrap().is_empty());
+                w.settle();
+                10.
+            } else if scenario == "snapshot" {
                 let saved = w.charts[0].snapshot().unwrap();
                 assert!(w.charts[0].restore(&saved).unwrap().is_empty());
                 let restored = w.charts[0]
@@ -4737,6 +4777,11 @@ mod tests {
                 w.settle();
                 assert_eq!(prices(&w.charts)[0], [11.5]);
                 assert!(w.charts[0].undo());
+                w.settle();
+                // The study comes back and goes again while the copy's pane is still unshown.
+                assert!(w.charts[0].undo());
+                w.settle();
+                assert!(w.charts[0].redo());
                 w.settle();
                 10.
             };
@@ -4773,7 +4818,12 @@ mod tests {
     #[cfg(feature = "studies")]
     #[test]
     fn shared_drawing_filter_keeps_removed_panes_across_remote_deletion_and_undo() {
-        for remove_study in [false, true] {
+        for (remove_study, trip) in [
+            (false, None),
+            (true, None),
+            (false, Some("OTHER")),
+            (false, Some("")),
+        ] {
             let mut w = StudyWindows::new(false);
             w.hide_and_remove(w.owners[0]);
             w.check_peers(10.);
@@ -4787,6 +4837,13 @@ mod tests {
             w.settle();
             assert!(shared_records(&w.shared).as_array().unwrap().is_empty());
             assert!(w.charts.iter().all(|c| c.drawings().drawings.is_empty()));
+            // The bridge leaves the symbol while it holds none of its drawings.
+            if let Some(symbol) = trip {
+                w.charts[0].set_symbol(symbol);
+                w.settle();
+                w.charts[0].set_symbol("SAMPLE");
+                w.settle();
+            }
             assert!(w.writer[0].undo());
             w.settle();
             w.check_peers(10.);
@@ -5233,6 +5290,41 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn shared_drawing_filter_never_writes_a_removed_price_pane_owner() {
+        use crate::studies::SMA;
+
+        let (host, mut charts, mut layouts) = shared_layouts();
+        let average = charts[0].add_indicator(Box::new(SMA::new(5)));
+        assert_eq!(
+            charts[0].series_pane(average),
+            Some(charts[0].main_series_pane())
+        );
+        charts[0].user_action(|c| {
+            let mut drawing = line("average");
+            drawing.pane = Some(average.0);
+            c.drawings_mut().add_drawing(drawing).unwrap();
+        });
+        settle_pair(&mut layouts, &mut charts);
+        assert_eq!(shared_records(&host)[0]["drawing"]["pane"], average.0);
+        charts[0].drawings_mut().set_shared_drawings_hidden(true);
+        // The price pane has no stored identity, so no removed pane is remembered for the line.
+        assert!(charts[0].user_action(|c| c.remove_series(average)));
+        charts[0].user_action(|c| {
+            let mut note = line("local");
+            note.folder = vec!["Notes".into()];
+            note.folder_sync = vec![Some(FolderSync::Chart)];
+            c.drawings_mut().add_drawing(note).unwrap();
+        });
+        settle_pair(&mut layouts, &mut charts);
+        let written = shared_records(&host);
+        assert_eq!(written.as_array().unwrap().len(), 1);
+        assert_eq!(written[0]["drawing"]["label"], "average");
+        assert!(written[0]["drawing"]["pane"].is_null());
+        assert!(written[0].get("pane").is_none());
     }
 
     #[cfg(feature = "studies")]
