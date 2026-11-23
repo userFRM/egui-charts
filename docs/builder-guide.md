@@ -251,6 +251,7 @@ return their per-bar results through [`CustomIndicator`](https://userfrm.github.
 unavailable observations. Recalculate when the source bars or script inputs change;
 report compilation and execution errors in the host UI. A closure may capture an
 `Arc` holding the host evaluator; its calculation must be `Send + Sync`.
+The repository's [`egui-charts-scripting`](https://github.com/userFRM/egui-charts/blob/main/crates/scripting/README.md) package is such a host runtime: it compiles scripts with history, state and plots into studies that calculate away from the UI thread.
 
 ## Runnable examples
 

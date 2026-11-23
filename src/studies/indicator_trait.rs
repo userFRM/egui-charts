@@ -821,6 +821,15 @@ pub trait Indicator: Send + ConcreteStudy {
         self.calculate(data);
     }
 
+    /// The state of a calculation that may run away from the UI thread; `None`, the default,
+    /// for studies that finish inside [`calculate`](Indicator::calculate) and
+    /// [`update`](Indicator::update). While it is [`Running`](super::Calculation::Running) the
+    /// chart keeps drawing the study's values and updates it again on the next frame; the
+    /// legends show the progress, the last compute time or why it stopped.
+    fn calculation(&self) -> Option<super::Calculation> {
+        None
+    }
+
     /// Whether live updates avoid recomputing unaffected history. Causal studies do work
     /// independent of the series length; studies that redraw earlier legs or periods also
     /// revisit the bars whose output changes. Earlier corrections may recompute in full.
