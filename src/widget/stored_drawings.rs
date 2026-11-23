@@ -30,6 +30,38 @@ fn read_missing_pane(
     None
 }
 
+/// Records each drawing of `manager` that `keep` selects as one whose owner leaves: the price pane
+/// draws it until the owner returns, and writes, reads and mirrors use the pane `panes` last read
+/// or wrote for it, else `stored`, never the local owner id.
+fn remember_removed_panes(
+    manager: &mut crate::drawings::DrawingManager,
+    panes: Option<&HashMap<String, SavedPane>>,
+    stored: Option<&StoredPane>,
+    keep: impl Fn(&Drawing) -> bool,
+) {
+    for d in manager.drawings.iter().filter(|d| keep(d)) {
+        let owner = d.pane.expect("removed pane member");
+        if !manager.removed_owners.contains(&owner) {
+            manager.removed_owners.push(owner);
+        }
+        let key = sync_id(d);
+        let last = panes
+            .and_then(|panes| panes.get(&key))
+            .filter(|p| p.created_at == d.created_at);
+        if let Some(pane) = last.map_or(stored, |p| p.pane.as_ref()) {
+            manager.removed_panes.insert(
+                key,
+                RemovedDrawingPane {
+                    created_at: d.created_at,
+                    stored_created_at: last.map(|p| p.stored_created_at).or(d.created_at),
+                    owner,
+                    pane: pane.clone(),
+                },
+            );
+        }
+    }
+}
+
 /// What a chart asked its storage about the kept copies of its symbols' drawings.
 #[derive(Default)]
 struct LocalCopies {
@@ -1311,34 +1343,45 @@ impl Chart {
                         })
                 })
         };
-        let Some(first) = self.drawings.drawings.iter().position(&keep) else {
+        if !self.drawings.drawings.iter().any(&keep) {
             return;
-        };
+        }
         let stored = self.stored_pane(pane);
-        let manager = &mut self.drawings;
-        for d in manager.drawings[first..].iter().filter(|d| keep(d)) {
-            let owner = d.pane.expect("filtered pane member");
-            if !manager.removed_owners.contains(&owner) {
-                manager.removed_owners.push(owner);
-            }
-            let key = sync_id(d);
-            let last = self
-                .drawing_store
-                .as_ref()
-                .and_then(|s| s.panes.get(&self.symbol))
-                .and_then(|panes| panes.get(&key))
-                .filter(|p| p.created_at == d.created_at);
-            if let Some(pane) = last.map_or(stored.as_ref(), |p| p.pane.as_ref()) {
-                manager.removed_panes.insert(
-                    key,
-                    RemovedDrawingPane {
-                        created_at: d.created_at,
-                        stored_created_at: last.map(|p| p.stored_created_at).or(d.created_at),
-                        owner,
-                        pane: pane.clone(),
-                    },
-                );
-            }
+        let panes = (self.drawing_store.as_ref()).and_then(|store| store.panes.get(&self.symbol));
+        remember_removed_panes(&mut self.drawings, panes, stored.as_ref(), keep);
+    }
+
+    /// Keeps the drawings of the symbols this chart left whose owner in `owners`, a series or
+    /// study just removed and its pane, no pane draws any more: they stay as a chart without the
+    /// owner reads them, in the price pane with `stored`, the pane they left, or the pane last
+    /// read or written for them. The chart cannot release them as on the shown symbol.
+    pub(super) fn keep_unshown_symbol_panes(
+        &mut self,
+        owners: [usize; 2],
+        stored: Option<&StoredPane>,
+    ) {
+        if self.symbol_drawings.is_empty() {
+            return;
+        }
+        self.sync_panes();
+        let gone: Vec<usize> = owners
+            .into_iter()
+            .filter(|&owner| {
+                self.series_pane(super::SeriesId(owner)).is_none()
+                    && self.pane_index(super::PaneId(owner)).is_none()
+            })
+            .collect();
+        if gone.is_empty() {
+            return;
+        }
+        let panes = self.drawing_store.as_ref().map(|store| &store.panes);
+        for (symbol, (manager, _)) in &mut self.symbol_drawings {
+            remember_removed_panes(
+                manager,
+                panes.and_then(|panes| panes.get(symbol)),
+                stored,
+                |d| d.pane.is_some_and(|owner| gone.contains(&owner)),
+            );
         }
     }
 
