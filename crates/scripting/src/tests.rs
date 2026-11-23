@@ -313,7 +313,60 @@ fn scripts_are_refused_at_their_line_and_column() {
             9,
             "plot \"x\" is declared twice",
         ),
-        ("plot(\"x\", clse);", 1, 11, "clse is not declared"),
+        // The first error, before a call that is refused too.
+        (
+            "plot(\"x\", clse + smaa(1));",
+            1,
+            11,
+            "clse is not declared",
+        ),
+        // A branch no bar takes; the name of the call, counted by hand.
+        (
+            "if bar_index > 1000000 { smaa(close, 5); }\nplot(\"y\", close);",
+            1,
+            26,
+            "no function smaa",
+        ),
+        // A method, after comments that end at a carriage return, which alone ends a line too.
+        (
+            "// one\r\nlet a = []; // two\rif false { a.psuh /* */ (1); }\nplot(\"x\", 1.0);",
+            3,
+            14,
+            "no function psuh",
+        ),
+        // In the second expression of a string, after quotes that open none and a string that
+        // ends in a function.
+        (
+            "let c = ['\"', '\\'']; fn f() { `${1}` }\n\
+             let s = `a ${1} smab(1) ${#{b: 1}.b +\n  smaa(1)}`;\nplot(\"x\", 1.0);",
+            3,
+            3,
+            "no function smaa",
+        ),
+        // A call in the caller's scope, the first error before an undeclared name.
+        ("plot(\"x\", smaa!(clse, 5));", 1, 11, "no function smaa"),
+        // The end of a range is no method, so the key of the same name does not define it.
+        (
+            "let m = #{n: 1};\nfor i in 0..n(2) {}\nplot(\"x\", m.n);",
+            2,
+            13,
+            "no function n",
+        ),
+        // Nor does a variable that holds a function, which `f.call(1)` calls.
+        (
+            "fn g(x) { x }\nlet f = Fn(\"g\");\nplot(\"x\", f(1));",
+            3,
+            11,
+            "no function f",
+        ),
+        // No clock, and no blocking of the thread, which the standard package's sleep does.
+        ("plot(\"x\", timestamp());", 1, 11, "no function timestamp"),
+        (
+            "plot(\"x\", if bar_index == 20 { sleep(1); close } else { close });",
+            1,
+            32,
+            "no function sleep",
+        ),
         ("plot(\"x\", eval(\"1\"));", 1, 11, "eval"),
         ("import \"x\" as y;\nplot(\"x\", 1);", 1, 1, "import"),
         // A closure shares what it captures behind locks that sleep, and can hold itself.
@@ -346,6 +399,67 @@ fn scripts_are_refused_at_their_line_and_column() {
         );
         assert!(error.message.contains(fragment), "{source:?}: {error}");
     }
+}
+
+/// What a script may call compiles: its own functions, helpers, the functions and methods of
+/// Rhai's values and the functions a map holds; and no text, comment or keyword before a `(` is
+/// a call.
+#[test]
+fn defined_calls_compile() {
+    let source = r####"
+        // smaa(close), it's a "note
+        /* smaa(1) /* ` */ smaa(2) ' " */
+        display(overlay = true);
+        input n = length("smaa(n)", 2, 1, 9);
+        input i = int("I", 1, 0, 2);
+        input x = float("F", 1.0, 0.0, 2.0);
+        input b = bool("B", true);
+        input c = choice("C", "a", ["a", "b"]);
+        input s = source("S", close);
+        input t = text("T", "smaa(1)");
+        state kept = 0;
+        series d = (close - open);
+        plot("smaa(x)", later(close));
+        plot("y", (close + open) / 2);
+        fill("smaa(x)", "y");
+
+        is_na(d); nz(d); nz(d, 1); abs(d); sign(d); sqrt(d); exp(d); ln(d); log10(d); pow(d, 2);
+        min(d, 1); max(d, 1); clamp(d, 0, 1); round(d); round(d, 1); floor(d); ceil(d);
+        sma(d, 2); ema(d, 2); rma(d, 2); wma(d, 2); sum(d, 2); stdev(d, 2); highest(d, 2);
+        lowest(d, 2); change(d); change(d, 1); crossover(d, 0); crossunder(d, 0);
+        year(time); month(time); day(time); weekday(time); hour(time); minute(time);
+
+        fn later(x) { nz (x) }
+        fn int.twice() { this * 2 }
+        fn scoped() { 1 }
+        fn area() { this.w * 2 }
+        fn big(x) { x > 1 }
+        let z = 3;
+        z.twice(); scoped!(); later
+            /* the next line */ (z);
+
+        let a = [1, 2];
+        a.push(3); a.map(Fn("later")).filter(Fn("big")).len(); a?.sort(); a.index_of(1);
+        let m = #{w: 2, plain: Fn("area"), "quoted": Fn("area")};
+        m["indexed"] = area;
+        m.plain(); m.quoted(); m.indexed(); m.keys(); m.contains("w"); m.remove("w");
+        "text".to_upper ().sub_string(1).split("x"); "1".parse_int(); 1.5.to_int(); 'c'.to_upper();
+        (0..2).contains(1); type_of(z); print(z); call(Fn("later"), 1); Fn("later").call(1);
+        is_def_fn("later", 1); is_def_var("z"); is_shared(z); PI();
+
+        let quotes = ['"', '\'', "say ""smaa(1)"" \"smaa(2)\" \\", "a\
+            smaa(3)", #"a" smaa(4) \"#, ##"a"# smaa(5)"##];
+        `smaa(6) ${if z > 1 { `in ${later(z)} smaa(7)` } else { #{q: 1}.q }} smaa(8) \${smaa(9)} ``x`;
+
+        while (z < 0) { break (1); }
+        do { z += 1; } until (z > 5);
+        for (v, k) in (0..2) {}
+        if !(z > 9) && z in (0..9) && z !in (3..4) && z != (2) {}
+        switch (z) { 1if (z > 1) => 1, _ => 2 }
+        try { throw (1); } catch (e) { return (2); }
+    "####;
+    let script = Script::compile("Test", source, &IndicatorFactory::new());
+    assert!(script.is_ok(), "{script:?}");
 }
 
 /// A script as deep as the limits admit: the top level nests calls as deep as it may around a
@@ -391,7 +505,13 @@ fn run_errors_keep_the_bars_before_them() {
             0,
             "string",
         ),
-        ("plot(\"x\", timestamp());", 11, 0, "no function timestamp"),
+        // The name compiles and its argument types are refused when the call runs.
+        (
+            "plot(\"x\", sma(\"text\", 5));",
+            11,
+            0,
+            "no function sma takes (string, int)",
+        ),
         (
             "let d = close - open; plot(\"x\", d[1]);",
             34,
@@ -400,12 +520,6 @@ fn run_errors_keep_the_bars_before_them() {
         ),
         ("plot(\"x\", \"text\");", 11, 0, "holds numbers; got string"),
         // The standard package's sleep blocks the thread, and this argument panics in it.
-        (
-            "plot(\"x\", if bar_index == 20 { sleep(1e20); close } else { close });",
-            32,
-            20,
-            "no function sleep",
-        ),
         (
             "plot(\"x\", if bar_index == 20 { call(Fn(\"sleep\"), 1e20); close } else { close });",
             0,
@@ -417,6 +531,14 @@ fn run_errors_keep_the_bars_before_them() {
             "state m = 0;\nif bar_index == 0 { m = #{}; }\nlet i = bar_index * 1;\n\
              m[\"k\" + i] = 1.0;\nplot(\"x\", close);",
             7,
+            1000,
+            "Size of object map",
+        ),
+        // The declaration is found after a quote that opens no string.
+        (
+            "let c = '\"'; state m = 0; if bar_index == 0 { m = #{}; } let i = bar_index * 1; \
+             m[\"k\" + i] = 1.0; plot(\"x\", close);",
+            20,
             1000,
             "Size of object map",
         ),

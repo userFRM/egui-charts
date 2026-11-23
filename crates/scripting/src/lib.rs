@@ -33,9 +33,10 @@ impl std::fmt::Debug for Script {
 
 impl Script {
     /// Compile `source` as the study `name`. Every declaration is read and checked here, and
-    /// every name the script uses must be declared, so the study's inputs and plots exist before
-    /// it runs. `factory` is the registry the study is registered in, which later scripts call
-    /// studies from.
+    /// every name the script uses must be declared and every function it calls defined, by the
+    /// script, the helpers or Rhai's standard package, so the study's inputs and plots exist
+    /// before it runs. `factory` is the registry the study is registered in, which later scripts
+    /// call studies from.
     pub fn compile(
         name: impl Into<String>,
         source: &str,
