@@ -2079,11 +2079,6 @@ impl Chart {
                 volume_rect.bottom(),
                 false,
             )
-            .with_price_precision(Some(
-                self.instrument()
-                    .and_then(|instrument| instrument.volume_decimals)
-                    .unwrap_or(0),
-            ))
         });
         self.host_events.volume_map = volume_map;
         // The main pane's visual order: overlays listed before the series are drawn under it.
@@ -4156,10 +4151,12 @@ impl Chart {
                         &options,
                         price_axis_rect.x_range(),
                         None,
-                        Some(
-                            crate::scales::StudyFormat::Volume
-                                .format(map.y_to_price(pos.y), map.price_precision()),
-                        ),
+                        Some(rendering::axes::volume_text(
+                            map.y_to_price(pos.y),
+                            self.instrument()
+                                .and_then(|instrument| instrument.volume_decimals),
+                            self.volume_formatter.as_deref(),
+                        )),
                     );
                 }
 

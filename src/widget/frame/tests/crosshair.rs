@@ -1299,6 +1299,57 @@ fn volume_readouts_write_the_legend_text_without_volume_decimals() {
     }
 }
 
+/// Over the volume area the crosshair label writes the volume as the volume tag does: in the
+/// host's volume format, else with the instrument's volume decimals and at least two in K, M and
+/// B values, else in automatic volume units. 1,111,111 is 1.111111M, so it reads 1.11M without
+/// volume decimals and at 0 or 1, 1.111M at 3 and 1.1111M in a host format of 4 decimals.
+#[test]
+fn volume_overlay_crosshair_label_writes_the_volume_rule() {
+    // Volume decimals, the precision of a host volume format, the label.
+    for (decimals, host, expected) in [
+        (None, None, "1.11M"),
+        (Some(0), None, "1.11M"),
+        (Some(1), None, "1.11M"),
+        (Some(3), None, "1.111M"),
+        (None, Some(4), "1.1111M"),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        let mut bars = chart.state.data().bars.clone();
+        bars.last_mut().unwrap().volume = 1_234_567.0;
+        chart.set_data(crate::widget::SeriesId::MAIN, bars);
+        chart.set_instrument(decimals.map(|decimals| {
+            crate::model::Instrument::new("SAMPLE").with_volume_decimals(decimals)
+        }));
+        if let Some(precision) = host {
+            chart.set_volume_formatter(Some(std::sync::Arc::new(crate::scales::VolumeFormatter {
+                precision,
+            })));
+        }
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let map = chart.host_events.volume_map.expect("volume area");
+        let pos = Pos2::new(
+            chart.get_chart_mapping().idx_to_x(99),
+            map.price_to_y(1_111_111.0),
+        );
+        assert!(chart.last_rendered_volume_rect.contains(pos));
+        let price = chart.last_rendered_price_rect;
+        let texts: Vec<_> = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)])
+            .into_iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(shape) if shape.pos.x >= price.right() => {
+                    Some(shape.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|text| text == expected),
+            "{decimals:?} {host:?}: {texts:?}"
+        );
+    }
+}
+
 /// Default options track a touch held for its delay, keep its values until the next tap and
 /// leave mouse hover unchanged; `OnTouchEnd` exits on release. Short taps, cancelled contacts
 /// and a pan started before the delay cannot latch a readout.
