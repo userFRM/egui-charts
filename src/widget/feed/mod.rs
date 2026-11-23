@@ -788,7 +788,10 @@ impl Chart {
                 std::mem::swap(&mut self.drawings, &mut next.0);
                 std::mem::swap(&mut self.marks, &mut next.1);
                 self.attach_pending_drawings();
+                // A pane remembered for a study removed while shared drawings were hidden
+                // places those drawings on charts that mirror this one when they return.
                 if !next.0.drawings.is_empty()
+                    || !next.0.removed_panes.is_empty()
                     || !next.1.is_empty()
                     || !next
                         .0

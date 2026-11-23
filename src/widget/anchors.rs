@@ -260,8 +260,9 @@ impl Chart {
     }
 
     /// Replaces the drawings with `drawings`, in their order, keeping the drawing tools, options
-    /// and defaults, and clears undo history. Returns the position in `drawings` and the reason
-    /// of each drawing the manager refused, which it leaves out.
+    /// and defaults and the studies removed while shared drawings were hidden, and clears undo
+    /// history. Returns the position in `drawings` and the reason of each drawing the manager
+    /// refused, which it leaves out.
     pub(super) fn replace_drawings(
         &mut self,
         drawings: Vec<Drawing>,
@@ -284,6 +285,9 @@ impl Chart {
         manager.shared_filter = self.drawings.shared_filter;
         manager.set_locked(self.drawings.is_locked());
         manager.curr_timeframe = self.drawings.curr_timeframe.clone();
+        // The studies removed while shared drawings were hidden stay removed on this chart.
+        manager.removed_owners = std::mem::take(&mut self.drawings.removed_owners);
+        manager.removed_panes = std::mem::take(&mut self.drawings.removed_panes);
         let refused = drawings
             .into_iter()
             .enumerate()

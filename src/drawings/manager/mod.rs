@@ -1002,8 +1002,6 @@ impl DrawingManager {
             next_id: self.next_id,
             unsaved: self.drawings.iter().filter(stays).cloned().collect(),
             identity: self.identity,
-            removed_owners: std::mem::take(&mut self.removed_owners),
-            removed_panes: std::mem::take(&mut self.removed_panes),
         }
     }
 
@@ -1020,13 +1018,9 @@ impl DrawingManager {
             next_id,
             unsaved,
             identity,
-            removed_owners,
-            removed_panes,
         } = previous;
         // The same drawings to a layout that mirrors them, as their ids are.
         self.identity = identity;
-        self.removed_owners = removed_owners;
-        self.removed_panes = removed_panes;
         self.next_id = self.next_id.max(next_id);
         let read = self.drawings.len();
         let mut taken: HashSet<String> = self.drawings.iter().map(sync_id).collect();
@@ -1209,8 +1203,6 @@ pub(crate) struct BeforeRead {
     unsaved: Vec<Drawing>,
     /// The `DrawingManager::identity` of the manager.
     identity: u64,
-    removed_owners: Vec<usize>,
-    removed_panes: HashMap<String, RemovedDrawingPane>,
 }
 
 /// Coalesces repeated saves and updates of a drawing without reordering them across its delete.
