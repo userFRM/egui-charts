@@ -26,7 +26,7 @@ writing a browser file. Replace the in-memory input with the host's recording st
 production. [Execution coverage](order-flow.md#try-execution-coverage-and-depth-loss) shows
 what happens when only part of the history is retained.
 
-If a playback chart shares drawing storage with a live chart, set `chart.drawings_mut().options.local_placement_folder = Some("Practice".into())` before placing a drawing. New annotations, also pasted or cloned ones, then stay on that chart, including through undo and redo. To share one, move it to a shared folder in the Object Tree. This option changes neither existing drawings nor placement on other charts.
+If a playback chart shares drawing storage with a live chart, set `chart.drawings_mut().options.local_placement_folder = Some("Practice".into())` before placing a drawing. New annotations stay on that chart, including through undo and redo. This includes Paste, Clone, and copies made by Ctrl-drag or Command-drag, whether you drag one drawing or a selection. Dragging without copying leaves the original in its folder. To share a local annotation, move it to a shared folder in the Object Tree. Other charts keep their existing placement rules.
 
 To hide shared drawings on one chart, call `chart.user_action(|c| c.drawings_mut().set_shared_drawings_hidden(true))`. Local annotations remain available. Remove All, layer moves and folder edits skip the hidden drawings. Undo reverses edits made while filtered, then the toggle itself. Pass `false` to show the current shared drawings again, including moves and deletions made on another chart. If you place shared text while the filter is on, finish typing as usual: the label is hidden here after editing, but other charts see the text.
 

@@ -435,6 +435,7 @@ impl DrawingManager {
             copy.stored_id = None;
             copy.created_at = None;
             copy.z_order = self.top_z_order();
+            self.place_locally(copy);
             self.drawings.push(copy.clone());
         }
         let old = copies.remove(primary);

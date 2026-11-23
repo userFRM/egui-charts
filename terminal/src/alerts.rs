@@ -175,7 +175,7 @@ impl Terminal {
         }
     }
 
-    fn open_alert(&mut self, alert: Option<Alert>) {
+    fn prepare_alert_dialog(&mut self) {
         self.alerts.dialog.sources = self.chart().alert_sources();
         self.alerts.dialog.timezone = self
             .chart()
@@ -184,6 +184,10 @@ impl Terminal {
             .timezone
             .to_tz()
             .unwrap_or_else(egui_charts::model::TimezoneId::utc);
+    }
+
+    fn open_alert(&mut self, alert: Option<Alert>) {
+        self.prepare_alert_dialog();
         if let Some(mut alert) = alert {
             self.chart().prepare_alert(&mut alert);
             self.alerts.dialog.edit(alert);
@@ -197,15 +201,23 @@ impl Terminal {
         }
     }
 
+    fn open_alert_at_price(&mut self, price: f64) {
+        self.prepare_alert_dialog();
+        let chart = self.chart();
+        let symbol = chart.symbol().to_owned();
+        self.alerts.dialog.open(symbol, price);
+        self.charts[self.active].prepare_alert(&mut self.alerts.dialog.alert);
+    }
+
     pub(super) fn alerts_perform(&mut self, action: Action) -> Option<Action> {
         if self.services.alerts.is_none() {
             return Some(action);
         }
         match action {
             Action::TopToolbar(TopToolbarAction::CreateAlert)
-            | Action::Alerts(AlertPanelAction::CreateAlert)
-            | Action::ChartMenu(ChartContextAction::Series(SeriesContextMenuAction::AddAlert)) => {
-                self.open_alert(None)
+            | Action::Alerts(AlertPanelAction::CreateAlert) => self.open_alert(None),
+            Action::ChartMenu(ChartContextAction::Series(SeriesContextMenuAction::AddAlert)) => {
+                self.open_alert_at_price(self.menus.series_click_price());
             }
             Action::WidgetBar(WidgetBarAction::Clicked(RightBarIcon::Alerts)) => {
                 self.open_panel(SidePanel::Alerts)
@@ -1186,6 +1198,82 @@ mod tests {
             }
             assert_eq!(engine.alerts().len(), 4, "the bell opens the shared editor");
         }
+    }
+
+    #[test]
+    fn series_menu_alert_starts_at_the_clicked_price() {
+        use chrono::{NaiveTime, Weekday};
+        use egui::{Event, Modifiers, PointerButton};
+        use egui_charts::model::{NotificationSchedule, NotificationWindow, TimezoneId};
+
+        let engine = Arc::new(AlertEngine::new());
+        let mut terminal = Terminal::new(Arc::new(crate::test_support::TestFeed))
+            .with_symbol("AAPL")
+            .with_alerts(engine.clone());
+        frames(&mut terminal);
+
+        let schedule = NotificationSchedule::new(
+            TimezoneId::utc(),
+            vec![Weekday::Mon],
+            vec![NotificationWindow::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+            )],
+        );
+        let mut scheduled = Alert::new("AAPL", AlertCondition::Above(1.0));
+        scheduled.schedule = Some(Box::new(schedule.clone()));
+        terminal.alerts.dialog.edit(scheduled);
+        frames(&mut terminal);
+        let save = frame(&mut terminal, SIZE, vec![])
+            .text_at("Save alert")
+            .expect("the editor offers to save");
+        click(&mut terminal, SIZE, save);
+        frames(&mut terminal);
+        assert_eq!(engine.alerts().len(), 1, "the scheduled alert is saved");
+
+        let chart = terminal.chart();
+        let index = chart.state().shown().len() - 5;
+        let close = chart.state().shown()[index].close;
+        let mapping = chart.get_chart_mapping();
+        let point = egui::pos2(mapping.idx_to_x(index), mapping.price_to_y(close));
+        let expected = terminal.chart().get_chart_mapping().y_to_price(point.y);
+        let last_close = terminal.chart().bars(SeriesId::MAIN).last().unwrap().close;
+        assert_ne!(
+            expected, last_close,
+            "the test point differs from the last close"
+        );
+
+        frame(&mut terminal, SIZE, vec![Event::PointerMoved(point)]);
+        for pressed in [true, false] {
+            frame(
+                &mut terminal,
+                SIZE,
+                vec![Event::PointerButton {
+                    pos: point,
+                    button: PointerButton::Secondary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+        }
+        let menu = frame(&mut terminal, SIZE, vec![]);
+        let alert_item = menu
+            .text_starting_with("Add alert on AAPL at ")
+            .expect("series menu offers an alert at the clicked price");
+        click(&mut terminal, SIZE, alert_item);
+        frames(&mut terminal);
+
+        assert!(terminal.alerts.dialog.is_open);
+        assert_eq!(
+            terminal.alerts.dialog.alert.condition,
+            AlertCondition::Crossing(expected)
+        );
+        assert_eq!(
+            terminal.alerts.dialog.alert.schedule.as_deref(),
+            Some(&schedule),
+            "the new alert starts with the last saved schedule"
+        );
+        assert_eq!(engine.alerts().len(), 1, "the alert is still being edited");
     }
 
     #[test]
