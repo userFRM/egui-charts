@@ -11,6 +11,7 @@ use super::{
 };
 use crate::data::meets_threshold;
 use crate::model::{Signal, SignalId, SignalShape, Tick};
+use crate::scales::VolumeFormatter;
 use crate::services::SignalEvent;
 
 /// An inside-price episode closes after one second without an execution there. It qualifies
@@ -34,6 +35,8 @@ impl Default for AbsorptionRule {
 
 #[derive(Default)]
 pub(super) struct Absorption {
+    /// Writes the sizes in tooltips.
+    sizes_label: VolumeFormatter,
     episodes: BTreeMap<Price, Episode>,
     volumes: VecDeque<f64>,
     next: u64,
@@ -48,6 +51,17 @@ struct Episode {
 }
 
 impl Absorption {
+    /// The detector of a symbol whose sizes are written with `volume_decimals` decimals, or 2
+    /// like the chart's volume readouts.
+    pub(super) fn new(volume_decimals: Option<u8>) -> Self {
+        Self {
+            sizes_label: VolumeFormatter {
+                precision: volume_decimals.map_or(2, usize::from),
+            },
+            ..Self::default()
+        }
+    }
+
     pub(super) fn clear(&mut self) {
         self.episodes.clear();
     }
@@ -152,7 +166,10 @@ impl Absorption {
                     label: Some("Absorption".into()),
                     tooltip: Some(format!(
                         "Absorbed {}, opening shown {}",
-                        episode.volume, episode.shown
+                        self.sizes_label
+                            .format_with_min_unit_decimals(episode.volume, 2),
+                        self.sizes_label
+                            .format_with_min_unit_decimals(episode.shown, 2)
                     )),
                 }));
             }

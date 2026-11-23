@@ -73,7 +73,15 @@ impl Chart {
                     ("high", format!("{:.decimals$}", bar.high)),
                     ("low", format!("{:.decimals$}", bar.low)),
                     ("close", format!("{:.decimals$}", bar.close)),
-                    ("volume", bar.volume.to_string()),
+                    (
+                        "volume",
+                        crate::chart::rendering::axes::volume_text(
+                            bar.volume,
+                            self.instrument()
+                                .and_then(|instrument| instrument.volume_decimals),
+                            self.volume_formatter.as_deref(),
+                        ),
+                    ),
                 ];
                 // A chart type that hides volume has no volume to read.
                 text.push_str(&if self.chart_type.supports_volume() {
@@ -357,5 +365,54 @@ mod tests {
             renko.contains(". Open ") && !renko.contains("volume"),
             "{renko}"
         );
+    }
+
+    /// The summary writes the volume as the legend does: in the host's volume format, else with
+    /// the instrument's volume decimals and at least two in K, M and B values, else in the plain
+    /// volume format.
+    #[test]
+    fn summary_writes_the_volume_as_the_legend() {
+        use super::super::test_frames::frame;
+        use crate::model::Instrument;
+        use crate::scales::{PriceFormatter, VolumeFormatter};
+        let ctx = egui::Context::default();
+        let host: Arc<dyn PriceFormatter> = Arc::new(VolumeFormatter { precision: 4 });
+        let (mut written, mut expected) = (Vec::new(), Vec::new());
+        for (volume, decimals, formatter, text) in [
+            (0.1 + 0.2, None, None, "0"),
+            (1234.5678, None, None, "1.23K"),
+            (0.1 + 0.2, Some(3), None, "0.300"),
+            (1234.5678, Some(3), None, "1.235K"),
+            (2_500_000.0, None, Some(&host), "2.5000M"),
+            (2_500_000.0, Some(3), Some(&host), "2.5000M"),
+        ] {
+            let mut chart = Chart::new(BarData::from_bars(vec![Bar::new(
+                Utc.timestamp_opt(0, 0).unwrap(),
+                10.0,
+                15.0,
+                8.0,
+                12.0,
+                volume,
+            )]));
+            let mut instrument = Instrument::new("TEST");
+            instrument.volume_decimals = decimals;
+            chart.set_instrument(Some(instrument));
+            chart.set_volume_formatter(formatter.cloned());
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let summary = chart
+                .accessibility_info(&ctx, true)
+                .current_text_value
+                .unwrap();
+            // Study values may follow the volume, each in its own sentence.
+            written.push(
+                summary
+                    .split_once(", volume ")
+                    .and_then(|(_, rest)| rest.split(". ").next())
+                    .map(str::to_owned),
+            );
+            expected.push(Some(text.to_owned()));
+        }
+        // Compared once, so that a failure lists every row.
+        assert_eq!(written, expected);
     }
 }
