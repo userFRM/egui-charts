@@ -421,6 +421,20 @@ impl Chart {
             let drawing_tool_active = self.drawings.active_tool.is_some();
             #[cfg(not(feature = "drawings"))]
             let drawing_tool_active = false;
+            // A drawing gesture can set this frame's crosshair height in the pane's drawing input,
+            // which runs after the rows paint: their price tags then wait for it. A press may
+            // start a drag and move it in the same frame.
+            #[cfg(feature = "drawings")]
+            let anchor_gesture = self
+                .drawings
+                .active_tool
+                .is_some_and(|tool| !tool.is_cursor())
+                || self.drawings.dragging_handle.is_some()
+                || ui.input(|input| input.pointer.primary_down());
+            #[cfg(not(feature = "drawings"))]
+            let anchor_gesture = false;
+            let mut crosshair_pointer = None;
+            let mut deferred_tags = Vec::new();
             // A touch that draws or erases follows the finger, as a pointer does.
             let touch_tracking = touch_tracking && !drawing_tool_active && !eraser_mode;
 
@@ -757,6 +771,7 @@ impl Chart {
                         })
                     })
                 };
+                crosshair_pointer = pointer;
                 let host_position = pointer.is_none() && self.synced_crosshair_price.is_some();
                 let target_pane = self.synced_crosshair_series.is_some_and(|target| {
                     members.contains(&target) && self.is_series_visible(target)
@@ -876,9 +891,26 @@ impl Chart {
                 if panel.overlay {
                     crosshair_options.vert_line_visible = false;
                     crosshair_options.horz_line_visible = false;
+                    // Nor a dot: the first row's crosshair is the pane's.
+                    crosshair_options.vert_line_color = egui::Color32::TRANSPARENT;
                 }
                 crosshair_options.horz_label_visible &=
                     panel.draw_axis || host_position && target_panel;
+                let defer_tag = anchor_gesture
+                    && !collapsed
+                    && crosshair_options.horz_label_visible
+                    && pointer.is_some_and(|pointer| pane_plot.contains(pointer));
+                let tag_options = crosshair_options;
+                crosshair_options.horz_label_visible &= !defer_tag;
+                let axis = panel.axis_rect.map(|_| {
+                    if self.pane_scale_side(pane_id, assignment)
+                        == Some(crate::model::AxisSide::Right)
+                    {
+                        crate::scales::PriceScaleId::Right
+                    } else {
+                        crate::scales::PriceScaleId::Left
+                    }
+                });
 
                 // Use show_aligned_interactive to get pane info for hit testing
                 let mut child =
@@ -890,15 +922,7 @@ impl Chart {
                     coords.clone(),
                     Some(plot.x_range()),
                     collapsed,
-                    panel.axis_rect.map(|_| {
-                        if self.pane_scale_side(pane_id, assignment)
-                            == Some(crate::model::AxisSide::Right)
-                        {
-                            crate::scales::PriceScaleId::Right
-                        } else {
-                            crate::scales::PriceScaleId::Left
-                        }
-                    }),
+                    axis,
                     hover.map(|pos| (pos, crosshair_options)),
                     &id.into_iter()
                         .flat_map(|id| self.primitives_of(id))
@@ -1340,6 +1364,16 @@ impl Chart {
                                 mapping: self.pane_study_mapping(pane_id, indicator, &pane_coords),
                             });
                     }
+                    if defer_tag && let Some(pos) = hover {
+                        deferred_tags.push((
+                            panel,
+                            indicator,
+                            axis,
+                            (panel_rect, chart_rect),
+                            pos,
+                            tag_options,
+                        ));
+                    }
                 }
             }
             if let Some((_, chart_rect, _)) = &drawing_response {
@@ -1385,32 +1419,10 @@ impl Chart {
                         crate::model::MarkerZOrder::AboveSeries,
                     );
                 }
+                #[cfg(feature = "drawings")]
                 let painter = ui
                     .painter()
                     .with_clip_rect(panel_rect.intersect(ui.clip_rect()));
-                if !collapsed && let Some((pos, options)) = series_crosshair {
-                    crate::chart::rendering::render_crosshair_lines(
-                        &crate::chart::rendering::RenderContext::new(&painter, chart_rect),
-                        pos,
-                        &options,
-                        chart_rect.bottom(),
-                    );
-                    if let Some(index) = hovered
-                        && options.style != crate::config::CrosshairStyle::Hidden
-                    {
-                        for at in &series {
-                            let item = &self.price_series[*at];
-                            self.paint_series_crosshair_marker(
-                                &painter,
-                                chart_rect,
-                                item,
-                                self.series_map(item, chart_rect),
-                                index,
-                                |point| self.background_at(panel_rect, point),
-                            );
-                        }
-                    }
-                }
                 #[cfg(feature = "drawings")]
                 let drawing_key = members
                     .first()
@@ -1601,6 +1613,47 @@ impl Chart {
                 };
                 #[cfg(not(feature = "drawings"))]
                 let drawing_hit: Option<usize> = None;
+                // Above the drawings, as on the price pane, and at the height the drawing input
+                // set for a pointer in this plot.
+                let anchor_y = crosshair_pointer
+                    .filter(|pointer| chart_rect.contains(*pointer))
+                    .and_then(|pointer| self.anchor_crosshair_y(ui.ctx(), pointer.y));
+                let painter = ui
+                    .painter()
+                    .with_clip_rect(panel_rect.intersect(ui.clip_rect()));
+                if let Some((pos, options)) = series_crosshair {
+                    crate::chart::rendering::render_crosshair_lines(
+                        &crate::chart::rendering::RenderContext::new(&painter, chart_rect),
+                        Pos2::new(pos.x, anchor_y.unwrap_or(pos.y)),
+                        &options,
+                        chart_rect.bottom(),
+                    );
+                    if let Some(index) = hovered
+                        && options.style != crate::config::CrosshairStyle::Hidden
+                    {
+                        for at in &series {
+                            let item = &self.price_series[*at];
+                            self.paint_series_crosshair_marker(
+                                &painter,
+                                chart_rect,
+                                item,
+                                self.series_map(item, chart_rect),
+                                index,
+                                |point| self.background_at(panel_rect, point),
+                            );
+                        }
+                    }
+                }
+                for (panel, indicator, axis, rects, pos, options) in deferred_tags {
+                    panel.paint_crosshair_tag(
+                        &painter,
+                        indicator,
+                        &panel.price_map.expect("member mapping"),
+                        rects,
+                        axis == Some(crate::scales::PriceScaleId::Left),
+                        (Pos2::new(pos.x, anchor_y.unwrap_or(pos.y)), &options),
+                    );
+                }
                 #[cfg(feature = "drawings")]
                 if let Some(id) = ui
                     .input(|input| input.pointer.interact_pos())

@@ -9,10 +9,11 @@ use egui::Color32;
 
 /// Crosshair mode
 ///
-/// While a drawing tool is active, or a drawing is dragged, the price pane's crosshair shows where
-/// a click places the next anchor or where the dragged point lands instead, following the drawing
-/// magnet options (`DrawingManagerOptions`) and their Ctrl or Command inversion. Size and rotation
-/// handles follow the pointer, and so does the crosshair.
+/// While a drawing tool is active, or a drawing is dragged, the crosshair of the pane under the
+/// pointer, the price pane or a study pane, shows where a click places the next anchor or where the
+/// dragged point lands instead, following the drawing magnet options (`DrawingManagerOptions`) and
+/// their Ctrl or Command inversion. Size and rotation handles follow the pointer, and so does the
+/// crosshair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum CrosshairMode {

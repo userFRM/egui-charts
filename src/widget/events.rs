@@ -946,7 +946,11 @@ impl Chart {
                 })
                 .chain(closes)
                 .collect::<Vec<_>>();
-            (owner, magnet(map, values), pane_index(group.id))
+            // The pane's drawings convert heights on the same map.
+            let price = self
+                .anchor_crosshair_y(ui.ctx(), pos.y)
+                .map_or_else(|| magnet(map, values), |y| map.y_to_price(y));
+            (owner, price, pane_index(group.id))
         } else if self.last_rendered_volume_rect.contains(pos)
             && let Some(map) = self.host_events.volume_map
         {
