@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `Chart::set_footprint_history_by_view` sizes the initial prepared footprint page to the visible bars and footprint consumers without shortening candle history. The feed still chooses the prepared/live cutoff. ([#4142](https://github.com/userFRM/egui-charts/issues/4142))
+
 - `Chart::set_trade_history_on_demand` lets a prepared time chart wait for an execution study or tape reader before loading historical trades. Opening Time & Sales requests the active chart’s tape; hosts that do not opt in still load it on subscription. ([#4129](https://github.com/userFRM/egui-charts/issues/4129))
 
 - `DrawingManager::set_shared_drawings_hidden` hides symbol-wide drawings on one chart without hiding its local annotations or changing what peers see. Removing a study while filtered preserves its drawing’s pane on peers through undo and restore. Loading a drawing without its study on an unfiltered chart still mirrors it in the price pane. ([#4082](https://github.com/userFRM/egui-charts/issues/4082))

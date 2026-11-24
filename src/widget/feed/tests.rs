@@ -15,6 +15,9 @@ mod rebinding;
 #[path = "partial_tests.rs"]
 mod partial;
 
+#[path = "footprint_demand_tests.rs"]
+mod footprint_demand;
+
 #[path = "checkpoint_tests.rs"]
 mod checkpoint;
 
