@@ -5,14 +5,15 @@
 //! that fails to compile or to calculate leaves the current study and shows the error at its line
 //! and column.
 //!
-//! Run with `cargo run --example scripting` from `crates/scripting`.
+//! Run with `cargo run --example scripting` from `crates/scripting`. With `--reference` it prints
+//! the script reference for the built-in studies as Markdown and exits.
 
 use chrono::{TimeDelta, Utc};
 use egui_charts::model::{Bar, BarData, Timeframe};
 use egui_charts::studies::{Calculation, CustomIndicator, Indicator, IndicatorFactory};
 use egui_charts::widget::SeriesId;
 use egui_charts::{Chart, theme::Theme};
-use egui_charts_scripting::Script;
+use egui_charts_scripting::{Reference, Script};
 
 /// A script being checked before it replaces the chart's study.
 #[derive(Debug, Default)]
@@ -88,6 +89,10 @@ fn sample_bars(count: usize) -> Vec<Bar> {
 }
 
 fn main() -> eframe::Result {
+    if std::env::args().skip(1).any(|arg| arg == "--reference") {
+        print!("{}", Reference::new(&IndicatorFactory::new()).to_markdown());
+        return Ok(());
+    }
     eframe::run_native(
         "Scripted studies (sample data)",
         Default::default(),

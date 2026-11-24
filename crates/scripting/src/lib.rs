@@ -1,12 +1,14 @@
 #![doc = include_str!("../README.md")]
 #![warn(missing_docs, missing_debug_implementations)]
 
+mod reference;
 mod rhai;
 mod runtime;
 mod study;
 #[cfg(test)]
 mod tests;
 
+pub use reference::{EntryKind, Reference, ReferenceEntry};
 pub use runtime::limits::Limits;
 
 use egui_charts::model::Bar;
