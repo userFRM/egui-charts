@@ -180,6 +180,7 @@ impl DepthPanel {
         use crate::chart::selection::SeriesId;
         use crate::model::{Capabilities, TradingRules};
 
+        chart.request_trade_history();
         chart.pump(ui.ctx());
         crate::ui_kit::PanelHeader::new(&l10n::text(ui.ctx(), "Depth")).show(ui, |_| {});
         if !Self::is_available(chart) {
@@ -2087,6 +2088,19 @@ mod tests {
             ) {
                 reply.send(Ok(crate::data::HistoryPage::new(vec![], true)));
             }
+            fn trades(
+                &self,
+                _: crate::data::TradeRequest,
+                reply: crate::data::Reply<crate::data::TradePage>,
+            ) {
+                let sell = Tick::new(
+                    self.0.ts - chrono::TimeDelta::seconds(1),
+                    100.0,
+                    17.0,
+                    Some(OrderSide::Sell),
+                );
+                reply.send(Ok(crate::data::TradePage::new(vec![sell], true)));
+            }
             fn subscribe(&self, subscription: crate::data::Subscription) {
                 subscription.sink.push_depth_snapshot(1, self.0.clone());
                 subscription
@@ -2098,6 +2112,7 @@ mod tests {
             .with_symbol("ES")
             .with_feed(std::sync::Arc::new(Feed(book.clone())))
             .build();
+        chart.set_trade_history_on_demand(true);
         let mut labels = Vec::new();
         for _ in 0..4 {
             let output = ctx.run_ui(Default::default(), |ui| restored.show(ui, &mut chart));
@@ -2120,6 +2135,7 @@ mod tests {
         );
         assert!(labels.iter().any(|text| text == "5"), "{labels:?}");
         assert!(labels.iter().any(|text| text == "4"), "{labels:?}");
+        assert!(labels.iter().any(|text| text == "17 | 2"), "{labels:?}");
     }
 
     /// Full prices, totals and paired quantities fit their grid cells, including in a narrow ticket.

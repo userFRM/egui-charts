@@ -3,6 +3,14 @@
 The library consumes the host's historical and streaming executions, quotes and synchronized
 book through the existing [`Datafeed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html) and [`Sink`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html). It supplies no market data service.
 
+For a sealed time chart with prepared footprint history, call [`chart.set_trade_history_on_demand(true)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_trade_history_on_demand)
+before the first frame to skip the initial raw trade page. The chart still subscribes and requests
+candles and prepared rows normally. Adding an execution study such as Trade Rate or opening
+Time & Sales in Terminal requests the latest trades once for that chart. A host with its own tape
+panel can call [`chart.request_trade_history()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.request_trade_history) while the panel is open. Until the page arrives,
+missing executions are not evidence of zero trades. Leave the default eager policy in place for
+hosts that expect [`Chart::trades`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.trades) to be populated without declaring demand.
+
 ## Try execution coverage and depth loss
 
 On the published guide, select **Run example** to open an isolated chart with synthetic data.

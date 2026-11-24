@@ -114,6 +114,7 @@ pub(crate) struct FeedLink {
         Option<chrono::DateTime<chrono::Utc>>,
     )>,
     trade_cursor: Option<chrono::DateTime<chrono::Utc>>,
+    initial_trades: InitialTrades,
     depth_cursor: Option<chrono::DateTime<chrono::Utc>>,
     /// No older trades remain to be loaded.
     trades_complete: bool,
@@ -130,6 +131,15 @@ pub(crate) struct FeedLink {
     time: Option<chrono::DateTime<chrono::Utc>>,
     /// A permanent history or resolve failure stops paging until the next reload.
     pub(super) paging_stopped: bool,
+}
+
+/// Demand may arrive before instrument resolution. Once sent, the normal request lifecycle
+/// owns the page (including retries) until the chart subscribes again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InitialTrades {
+    Waiting,
+    Wanted,
+    Requested,
 }
 
 #[derive(Clone)]
@@ -255,6 +265,7 @@ impl FeedLink {
             footprint_unavailable: Vec::new(),
             bar_cursor: None,
             trade_cursor: None,
+            initial_trades: InitialTrades::Waiting,
             depth_cursor: None,
             trades_complete: false,
             trades_from_start: false,
@@ -653,6 +664,7 @@ impl Chart {
             footprint_unavailable: Vec::new(),
             bar_cursor: None,
             trade_cursor: None,
+            initial_trades: InitialTrades::Waiting,
             depth_cursor: None,
             trades_complete: false,
             trades_from_start: false,
@@ -1021,6 +1033,35 @@ impl Chart {
             .as_ref()
             .and_then(|link| link.instrument.as_ref())
             .or(self.legend_instrument.as_ref())
+    }
+
+    /// Defers the first historical trade page on a time chart until something reads executions.
+    /// Set this before showing a sealed recording whose candles and prepared footprint pages
+    /// cover the selected history. By default the chart asks on subscription so callers of
+    /// [`Self::trades`] need not declare interest. Changing the policy does not discard trades
+    /// or cancel an outstanding page. It survives [`Self::set_feed`].
+    ///
+    /// Before drawing the order ticket's DOM tab, call [`Self::request_trade_history`]:
+    /// `TradingPanel::show_ticket` borrows the chart immutably and cannot request the trades
+    /// for its ladder profile.
+    ///
+    /// Live subscriptions, trade-based intervals and market replay still work as before.
+    /// Candle replay uses the trades already held when the host pauses the feed: if its partial
+    /// bars need executions, request the tape and let it arrive before entering replay.
+    pub fn set_trade_history_on_demand(&mut self, on_demand: bool) {
+        self.trade_history_on_demand = on_demand;
+    }
+
+    /// Signals that a host reader (for example Time & Sales) needs this binding's historical
+    /// trades. May be called each frame, including before the instrument resolves. The next
+    /// feed pump with an active subscription sends the usual latest page once, also when a
+    /// study needs it in the same frame. Does nothing without a feed.
+    pub fn request_trade_history(&mut self) {
+        if let Some(link) = &mut self.feed_link
+            && link.initial_trades == InitialTrades::Waiting
+        {
+            link.initial_trades = InitialTrades::Wanted;
+        }
     }
 
     /// The trades of `series` the feed sent, oldest first, at most 100,000. Empty for any id but

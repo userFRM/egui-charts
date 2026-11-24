@@ -601,7 +601,10 @@ impl Terminal {
                         action => emitted.push(Action::Watchlist(action)),
                     }
                 }
-                SidePanel::TimeAndSales => market.time_and_sales.show(ui),
+                SidePanel::TimeAndSales => {
+                    self.charts[self.active].request_trade_history();
+                    market.time_and_sales.show(ui);
+                }
                 SidePanel::Highlights => match market.highlights.show(ui) {
                     NewsAction::None => {}
                     action => emitted.push(Action::News(action)),
@@ -1106,6 +1109,55 @@ mod tests {
     }
 
     #[test]
+    fn time_and_sales_shares_trade_rate_history_and_follows_focus() {
+        use egui_charts::data::OrderFlowKind;
+        use egui_charts::studies::OrderFlowStudy;
+        use egui_charts::ui::top_toolbar::LayoutAction;
+        use egui_charts::widget::ChartLayoutMode;
+
+        let feed = Arc::new(DeferredTape::default());
+        let mut terminal = Terminal::new(feed.clone()).with_symbol("AAA");
+        terminal.chart_mut().set_trade_history_on_demand(true);
+        frame(&mut terminal, SIZE, vec![]);
+        terminal.run(Action::Layout(LayoutAction::SelectGrid(
+            ChartLayoutMode::TwoHorizontal,
+        )));
+        terminal.charts[1].set_trade_history_on_demand(true);
+        terminal.charts[1].set_symbol("BBB");
+        assert!(listed_times(&mut terminal).is_empty());
+        assert!(feed.requested.lock().unwrap().is_empty());
+
+        terminal
+            .chart_mut()
+            .add_indicator(Box::new(OrderFlowStudy::new(OrderFlowKind::TradeRate {
+                volume: false,
+                seconds: 2,
+                instant: 1,
+            })));
+        assert!(listed_times(&mut terminal).is_empty());
+        assert_eq!(*feed.requested.lock().unwrap(), ["AAA"]);
+        terminal.run(Action::WidgetBar(WidgetBarAction::WidgetClicked(u64::MAX)));
+        assert!(listed_times(&mut terminal).is_empty());
+        assert_eq!(*feed.requested.lock().unwrap(), ["AAA"]);
+        let deliver = |timestamp: &str| {
+            let tick = Tick::new(timestamp.parse().unwrap(), 100.0, 1.0, None);
+            let reply = feed.page.lock().unwrap().take().unwrap();
+            reply.send(Ok(TradePage::new(vec![tick], true)));
+        };
+        deliver("2026-01-01T12:34:56Z");
+        assert_eq!(listed_times(&mut terminal), ["12:34:56"]);
+        assert_eq!(*feed.requested.lock().unwrap(), ["AAA"]);
+
+        terminal.activate_slot(1);
+        assert!(listed_times(&mut terminal).is_empty());
+        deliver("2026-01-01T12:34:58Z");
+        assert_eq!(listed_times(&mut terminal), ["12:34:58"]);
+        terminal.activate_slot(0);
+        assert_eq!(listed_times(&mut terminal), ["12:34:56"]);
+        assert_eq!(*feed.requested.lock().unwrap(), ["AAA", "BBB"]);
+    }
+
+    #[test]
     fn time_and_sales_lists_a_late_trade_page_without_alerting() {
         check_late_page(false);
     }
@@ -1120,13 +1172,14 @@ mod tests {
 
         let feed = Arc::new(DeferredTape::default());
         let mut terminal = Terminal::new(feed.clone()).with_symbol("AAPL");
-        terminal.run(Action::WidgetBar(WidgetBarAction::WidgetClicked(u64::MAX)));
+        terminal.chart_mut().set_trade_history_on_demand(true);
         let mut filter = TradeSizeFilter::new(1.0);
         filter.sound = true;
         terminal.panels.market.time_and_sales.filters.push(filter);
         let rows =
             |t: &mut Terminal| painted_times(t, &["10:00:01", "10:00:02", "11:00:03", "11:00:04"]);
         assert!(rows(&mut terminal).is_empty());
+        assert!(feed.page.lock().unwrap().is_none());
         let sink = feed.sink.lock().unwrap().take().unwrap();
         let tick = |time: &str, size| {
             Tick::new(
@@ -1139,6 +1192,12 @@ mod tests {
         let live = tick("11:00:03", 3.0);
         sink.set_server_time(live.ts);
         sink.push_tick(live);
+        assert!(rows(&mut terminal).is_empty());
+        assert_eq!(
+            terminal.toasts.toasts()[0].message,
+            "Large trade: 3 at 171.00"
+        );
+        terminal.run(Action::WidgetBar(WidgetBarAction::WidgetClicked(u64::MAX)));
         assert_eq!(rows(&mut terminal), ["11:00:03"]);
         terminal.toasts.toasts_mut().clear();
 
@@ -1188,6 +1247,7 @@ mod tests {
     struct DeferredTape {
         sink: std::sync::Mutex<Option<egui_charts::data::Sink>>,
         page: std::sync::Mutex<Option<Reply<TradePage>>>,
+        requested: std::sync::Mutex<Vec<String>>,
     }
 
     impl Datafeed for DeferredTape {
@@ -1200,7 +1260,8 @@ mod tests {
         fn subscribe(&self, subscription: egui_charts::data::Subscription) {
             *self.sink.lock().unwrap() = Some(subscription.sink);
         }
-        fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
+        fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
+            self.requested.lock().unwrap().push(request.symbol);
             *self.page.lock().unwrap() = Some(reply);
         }
     }
