@@ -720,9 +720,14 @@ fn fed(feed: &Arc<Script>, symbol: Option<&str>) -> Chart {
 }
 
 fn prepared_chart() -> (Arc<Script>, Chart, Frames) {
+    prepared_chart_with_trade_policy(false)
+}
+
+fn prepared_chart_with_trade_policy(on_demand: bool) -> (Arc<Script>, Chart, Frames) {
     let feed = Arc::new(Script::default());
     feed.prepared_footprints.store(true, Ordering::Relaxed);
     let mut chart = fed(&feed, Some("A"));
+    chart.set_trade_history_on_demand(on_demand);
     chart.set_chart_type(ChartType::VolumeFootprint);
     let mut frames = Frames::new();
     frames.run(&mut chart);
@@ -761,6 +766,55 @@ fn prepared_view(chart: &Chart) -> FootprintView<'_> {
         .as_ref()
         .unwrap()
         .view()
+}
+
+#[cfg(feature = "studies")]
+#[test]
+fn prepared_rows_wait_for_real_executions_to_fill_trade_rate() {
+    let (feed, mut chart, mut frames) = prepared_chart_with_trade_policy(true);
+    let start = bars(1)[0].time;
+    let tape = vec![
+        Tick::new(start + TimeDelta::seconds(2), 100.0, 3.0, None),
+        Tick::new(start + TimeDelta::seconds(8), 100.0, 5.0, None),
+    ];
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(prepared_page(
+            &tape,
+            start + TimeDelta::minutes(5),
+            true,
+        )));
+    frames.run(&mut chart);
+    assert_eq!(prepared_view(&chart).bar_at(start).unwrap().volume(), 8.0);
+    assert!(feed.trades.lock().unwrap().is_empty());
+
+    let factory = crate::studies::IndicatorFactory::new();
+    let rate = chart.add_indicator(factory.create("Trade Rate").unwrap());
+    let count = |chart: &Chart| {
+        let (_, study) = chart.indicators().find(|(id, _)| *id == rate).unwrap();
+        study.values().value(0, 0)
+    };
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(count(&chart), None);
+    assert_eq!(feed.trades.lock().unwrap().len(), 1);
+    chart.request_trade_history();
+    frames.run(&mut chart);
+    assert_eq!(feed.trades.lock().unwrap().len(), 1);
+    feed.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(tape, true)));
+    for _ in 0..3 {
+        chart.request_trade_history();
+        frames.run(&mut chart);
+    }
+    assert_eq!(count(&chart), Some(2.0));
+    assert!(feed.trades.lock().unwrap().is_empty());
 }
 
 fn missing_history_page(
@@ -3314,6 +3368,7 @@ fn footprint_trade_intervals_follow_pages_streams_and_interval_changes() {
             let instrument =
                 || Instrument::new(if canonical { "EX:A" } else { "A" }).with_tick_size(1.0);
             let mut chart = fed(&feed, Some("A"));
+            chart.set_trade_history_on_demand(true);
             let timeframe = interval.parse().unwrap();
             chart.set_timeframe(timeframe);
             chart.set_chart_type(chart_type);
@@ -9054,6 +9109,7 @@ fn market_replay_order_flow_studies_follow_the_cursor() {
     let mut chart = Chart::new(BarData::new());
     chart.set_symbol("A");
     chart.set_timeframe(Timeframe::Min1);
+    chart.set_trade_history_on_demand(true);
     chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false)));
     chart.set_market_replay(Some(driver.clone()));
     let mut frames = Frames::new();
