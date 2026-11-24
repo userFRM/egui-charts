@@ -106,7 +106,7 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: sha256sum -- * > SHA256SUMS && cat SHA256SUMS
-      - name: Move the nightly tag and replace the release assets
+      - name: Publish the nightly release
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ needs.select.outputs.sha }}
