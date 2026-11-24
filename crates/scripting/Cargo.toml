@@ -1,14 +1,11 @@
 [package]
 name = "egui-charts-scripting"
-version = "0.1.0"
+version = "0.3.0-alpha.1"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 description = "Scripts that add studies to egui-charts: a series runtime with a Rhai front end"
 repository = "https://github.com/userFRM/egui-charts"
-# Publishing needs an egui-charts release with the resume API for custom studies and a version
-# requirement beside the path below.
-publish = false
 
 # A package of its own next to the library, like `terminal/`, built on its own and never by the
 # library.
@@ -16,7 +13,7 @@ publish = false
 
 [dependencies]
 # Studies without egui, so the default build of this crate stays headless.
-egui-charts = { path = "../..", default-features = false, features = ["studies"] }
+egui-charts = { path = "../..", version = "=0.3.0-alpha.1", default-features = false, features = ["studies"] }
 # No default features: no runtime random seed, so the wasm32 build needs no JavaScript random
 # source; `no_time` and `no_module` remove the clock and file imports.
 rhai = { version = "1.27.0", default-features = false, features = ["std", "sync", "no_time", "no_module"] }
@@ -29,7 +26,7 @@ chrono = { version = "0.4.43", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # The example is an `eframe` app on the chart widget, built as the library's examples are.
-egui-charts = { path = "../..", default-features = false, features = ["studies", "widget"] }
+egui-charts = { path = "../..", version = "=0.3.0-alpha.1", default-features = false, features = ["studies", "widget"] }
 eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "glow", "x11", "wayland"] }
 egui = "0.37.0"
 

@@ -3,11 +3,11 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use egui_charts::data::{
     CalendarEvent, CalendarQuery, Datafeed, DepthColumn, DepthHistory, DepthPage, DepthRequest,
-    FeedError, FeedStatus, HistoryPage, HistoryRequest, HotlistEntry, HotlistQuery, MetricPage,
-    MetricPoint, MetricRequest, MetricSeries, MetricSubscription, NewsQuery, NewsStory,
-    OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink, OrderFilter, Reply, ScreenerQuery,
-    ScreenerRow, Subscription, SubscriptionId, SymbolDetails, TradePage, TradeRequest,
-    aggregate_trades, resample,
+    FeedError, FeedStatus, Footprint, FootprintPage, FootprintRequest, HistoryPage, HistoryRequest,
+    HotlistEntry, HotlistQuery, MetricPage, MetricPoint, MetricRequest, MetricSeries,
+    MetricSubscription, NewsQuery, NewsStory, OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink,
+    OrderFilter, Reply, ScreenerQuery, ScreenerRow, Subscription, SubscriptionId, SymbolDetails,
+    TradePage, TradeRequest, aggregate_trades, resample,
 };
 use egui_charts::model::{
     Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, FeedService, Instrument,
@@ -70,6 +70,10 @@ pub(super) const ORDER_LEVEL_SYMBOL: &str = "INDEXFZ2026";
 /// The only demo symbol whose feed answers analyst price targets.
 pub(super) const TARGETS_SYMBOL: &str = "SAMPLE";
 
+/// The only demo symbol whose feed prepares footprint rows, for one-minute bars. Its charts
+/// load the trade tape only when a reader such as time and sales asks for it.
+pub(super) const PREPARED_FOOTPRINT_SYMBOL: &str = "INDEXFH2027";
+
 /// Driven by the UI timer on both native and web; there is no background worker.
 pub(super) struct LiveFeed(
     Mutex<Simulation>,
@@ -120,6 +124,8 @@ struct Simulation {
     trade_requests: VecDeque<(TradeRequest, Reply<TradePage>)>,
     /// Depth pages asked for while retained executions are still being generated.
     depth_requests: VecDeque<(DepthRequest, Reply<DepthPage>)>,
+    /// Footprint pages asked for while retained executions are still being generated.
+    footprint_requests: VecDeque<(FootprintRequest, Reply<FootprintPage>)>,
     paused: bool,
     continuous: bool,
     adjusted: bool,
@@ -177,6 +183,7 @@ impl LiveFeed {
             history_requests: VecDeque::new(),
             trade_requests: VecDeque::new(),
             depth_requests: VecDeque::new(),
+            footprint_requests: VecDeque::new(),
             paused: false,
             continuous: true,
             adjusted: false,
@@ -250,6 +257,7 @@ impl LiveFeed {
                 history_requests: VecDeque::new(),
                 trade_requests: VecDeque::new(),
                 depth_requests: VecDeque::new(),
+                footprint_requests: VecDeque::new(),
                 paused: sim.paused,
                 continuous: sim.continuous,
                 adjusted: sim.adjusted,
@@ -663,6 +671,7 @@ impl LiveFeed {
             || !sim.history_requests.is_empty()
             || !sim.trade_requests.is_empty()
             || !sim.depth_requests.is_empty()
+            || !sim.footprint_requests.is_empty()
             || sim.streams.iter().any(LiveFeed::loading)
             || self
                 .2
@@ -706,6 +715,9 @@ impl LiveFeed {
             }
             while let Some((request, reply)) = sim.depth_requests.pop_front() {
                 reply.send(sim.depth_page(&request));
+            }
+            while let Some((request, reply)) = sim.footprint_requests.pop_front() {
+                reply.send(sim.footprint_page(&request));
             }
         }
         if sim.initializing.is_none()
@@ -1045,6 +1057,34 @@ impl Simulation {
             return TradePage::new(page, false).with_continue_before(since);
         }
         TradePage::new(page, end_of_history)
+    }
+
+    /// The footprint rows of the newest four hours at most of `request`'s range, built from the
+    /// executions [`Self::trade_page`] answers for it. A latest range runs from the bar of the
+    /// first retained execution to the open of the bar of the newest one, whose executions reach
+    /// the chart on the stream.
+    fn footprint_page(&self, request: &FootprintRequest) -> Result<FootprintPage, FeedError> {
+        let (Some(first), Some(newest)) = (self.trades.front(), self.trades.back()) else {
+            return Err(FeedError::NotSupported);
+        };
+        let clock = &request.clock;
+        let before = request.before.unwrap_or_else(|| clock.bar_open(newest.ts));
+        let since = request.since.unwrap_or_else(|| clock.bar_open(first.ts));
+        let mut trades = TradeRequest::new(request.symbol.clone(), usize::MAX);
+        trades.before = Some(before);
+        // Re-created minutes hold a few hundred executions each; the chart asks again for the rest.
+        trades.since = Some(since.max(before - TimeDelta::hours(4)));
+        trades.conversion = request.conversion.clone();
+        let page = self.trade_page(&trades);
+        let mut rows = Footprint::new(clock.clone(), request.tick_size, request.ticks_per_row)?;
+        for trade in &page.trades {
+            rows.push(trade)?;
+        }
+        let mut bars: Vec<_> = rows.bars().values().cloned().collect();
+        let start = bars.len().saturating_sub(request.count);
+        let bars = bars.split_off(start);
+        let end_of_history = page.end_of_history && start == 0;
+        Ok(FootprintPage::new(bars, before, end_of_history))
     }
 
     /// Up to `request.count` columns of `[since, before)` on the request's cadence grid, the
@@ -1973,6 +2013,27 @@ impl Datafeed for LiveFeed {
             sim.trade_requests.push_back((request, reply));
         } else {
             reply.send(Ok(sim.trade_page(&request)));
+        }
+    }
+
+    fn footprints(&self, request: FootprintRequest, reply: Reply<FootprintPage>) {
+        let mut sim = self.state();
+        if let Some(feed) = sim
+            .streams
+            .iter()
+            .find(|feed| feed.state().symbol == request.symbol)
+        {
+            feed.footprints(request, reply);
+        } else if request.symbol != sim.symbol
+            || request.symbol != PREPARED_FOOTPRINT_SYMBOL
+            || request.timeframe != Timeframe::Min1
+        {
+            reply.send(Err(FeedError::NotSupported));
+        } else if sim.initializing.is_some() {
+            // Generation may still archive minutes and move the stream's first execution.
+            sim.footprint_requests.push_back((request, reply));
+        } else {
+            reply.send(sim.footprint_page(&request));
         }
     }
 

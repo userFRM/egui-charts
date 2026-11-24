@@ -580,7 +580,7 @@ dependencies = [
 
 [[package]]
 name = "egui-charts"
-version = "0.3.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "chrono",
  "ecolor",
@@ -593,7 +593,7 @@ dependencies = [
 
 [[package]]
 name = "egui-charts-scripting"
-version = "0.1.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "chrono",
  "ecolor",
