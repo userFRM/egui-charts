@@ -48,7 +48,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - { name: linux-x86_64, os: ubuntu-latest }
+          # Ubuntu 24.04, so the program runs on glibc 2.39 and newer: ubuntu-latest links
+          # against a newer glibc than most distributions ship.
+          - { name: linux-x86_64, os: ubuntu-24.04 }
           - { name: windows-x86_64, os: windows-latest }
           - { name: macos-arm64, os: macos-latest }
     runs-on: ${{ matrix.os }}
@@ -117,7 +119,7 @@ jobs:
 
           Changes since $since: the [commits](https://github.com/$repo/compare/$since...$SHA) and the Unreleased section of the [changelog](https://github.com/$repo/blob/$SHA/CHANGELOG.md). To use the library from main in your own application, see the [installation guide](https://userfrm.github.io/egui-charts/docs/installation/).
 
-          These builds are not signed. On macOS, run \`xattr -d com.apple.quarantine egui-charts-demo\` in the extracted folder once before opening it. On Windows, if SmartScreen stops the program, choose More info, then Run anyway. \`SHA256SUMS\` lists the checksum of each archive.
+          The Linux build needs glibc 2.39 or newer, as on Ubuntu 24.04 and Debian 13. These builds are not signed. On macOS, run \`xattr -d com.apple.quarantine egui-charts-demo\` in the extracted folder once before opening it. On Windows, if SmartScreen stops the program, choose More info, then Run anyway. \`SHA256SUMS\` lists the checksum of each archive.
           EOF
           # The `nightly` tag is the one ref this workflow moves; it never touches a branch or a version tag.
           if gh api "repos/$repo/git/ref/tags/nightly" > /dev/null 2>&1; then
