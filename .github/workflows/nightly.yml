@@ -1,7 +1,7 @@
 name: Nightly
 
-# Once a day, the demo as native release builds for Linux, Windows and macOS, from the newest main
-# commit whose CI passed, published as the rolling `nightly` pre-release.
+# Once a day, the demo as native release builds for Linux, Windows and macOS, from main's head once
+# its CI passes, published as the rolling `nightly` pre-release.
 on:
   schedule:
     - cron: "30 3 * * *"
@@ -19,7 +19,8 @@ jobs:
   select:
     name: Select the commit
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Waits for CI on main's head, which can queue behind the run before it.
+    timeout-minutes: 80
     permissions:
       actions: read
       contents: read
@@ -30,16 +31,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          sha=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
-          [ -n "$sha" ] || { echo "::error::no CI run on main has passed"; exit 1; }
+          # The build is main's head once its CI passes: the workflow token may create the tag at
+          # the head of the default branch, but not at an older commit whose workflow files differ.
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
           built=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/nightly" --jq .object.sha 2>/dev/null) || built=
           if [ "$sha" = "$built" ]; then
-            echo "The nightly build is already at $sha, the newest main commit whose CI passed."
-            sha=
-          else
-            echo "Building $sha."
+            echo "The nightly build is already at $sha, main's head."
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          for _ in $(seq 1 70); do
+            result=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$sha" --event push --json status,conclusion --jq '.[0] | "\(.status)/\(.conclusion)"')
+            case "$result" in
+              completed/success) echo "Building $sha."; echo "sha=$sha" >> "$GITHUB_OUTPUT"; exit 0 ;;
+              completed/*) echo "CI on $sha ended $result, so there is no new nightly build."; echo "sha=" >> "$GITHUB_OUTPUT"; exit 0 ;;
+            esac
+            sleep 60
+          done
+          echo "CI on $sha did not finish within 70 minutes, so there is no new nightly build."
+          echo "sha=" >> "$GITHUB_OUTPUT"
 
   build:
     name: Demo (${{ matrix.name }})
@@ -123,7 +133,13 @@ jobs:
           EOF
           # The workflow token may not move a ref across a change to a workflow file, so the release and
           # its `nightly` tag are deleted and created again at the new commit. The tag is the only ref
-          # this workflow touches; the download links keep their address.
+          # this workflow touches; the download links keep their address. If main changed a workflow
+          # file during the build, the tag could not be created, so the current release stays.
+          changed=$(gh api "repos/$repo/compare/$SHA...main" --jq '[.files[]?.filename | select(startswith(".github/workflows/"))] | length')
+          if [ "$changed" != 0 ]; then
+            echo "::warning::main changed a workflow file after $short; the nightly release stays as it is until the next run."
+            exit 0
+          fi
           if gh release view nightly -R "$repo" > /dev/null 2>&1; then
             gh release delete nightly -R "$repo" --cleanup-tag --yes
           elif gh api "repos/$repo/git/ref/tags/nightly" > /dev/null 2>&1; then
