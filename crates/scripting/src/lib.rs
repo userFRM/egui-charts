@@ -7,13 +7,17 @@ mod runtime;
 mod study;
 #[cfg(test)]
 mod tests;
+mod tokens;
 
 pub use reference::{EntryKind, Reference, ReferenceEntry};
 pub use runtime::limits::Limits;
+pub use runtime::profile::Profile;
+pub use tokens::{TokenClass, tokens};
 
 use egui_charts::model::Bar;
 use egui_charts::studies::{CustomIndicator, IndicatorFactory};
 use runtime::program::Span;
+use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 /// A script compiled into a study, checked when it loads. Cheap to clone.
@@ -23,6 +27,10 @@ pub struct Script {
     /// The latest runtime error or stop of any study built from this script.
     last_error: Arc<Mutex<Option<ScriptError>>>,
     limits: Limits,
+    /// Whether the studies built from now on record a profile.
+    profiling: bool,
+    /// The profile of the last full recalculation of any study built from this script.
+    profile: Arc<Mutex<Option<Profile>>>,
 }
 
 impl std::fmt::Debug for Script {
@@ -48,6 +56,8 @@ impl Script {
             compiled: Arc::new(rhai::compile(name.into(), source, factory)?),
             last_error: Arc::default(),
             limits: Limits::default(),
+            profiling: false,
+            profile: Arc::default(),
         })
     }
 
@@ -59,6 +69,13 @@ impl Script {
     /// The same script, whose studies built from now on stop at `limits`.
     pub fn with_limits(mut self, limits: Limits) -> Self {
         self.limits = limits;
+        self
+    }
+
+    /// The same script, whose studies built from now on record for each line the calls and time
+    /// of the runtime operations on it when `on`; off by default.
+    pub fn with_profiling(mut self, on: bool) -> Self {
+        self.profiling = on;
         self
     }
 
@@ -81,6 +98,15 @@ impl Script {
     /// when one of them completes a calculation from bar 0.
     pub fn last_error(&self) -> Option<ScriptError> {
         self.last_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// What the last full recalculation on bars of a study of this script that ended without an
+    /// error or limit spent on each line, when profiling was on; `None` before one.
+    pub fn profile(&self) -> Option<Profile> {
+        self.profile
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
@@ -109,6 +135,38 @@ impl ScriptError {
             column: span.column as usize,
             bar,
         }
+    }
+
+    /// The byte range of `text` the error points at: the name or number at its line and column,
+    /// or the single character there. Empty at the start of the text for an error without a
+    /// position, and at the end of the line for a column past it, or of the text for a line past
+    /// it.
+    pub fn span(&self, text: &str) -> Range<usize> {
+        if self.line == 0 {
+            return 0..0;
+        }
+        // Lines end at `\n`, as the scanner counts them.
+        let mut start = 0;
+        for _ in 1..self.line {
+            match text[start..].find('\n') {
+                Some(end) => start += end + 1,
+                None => return text.len()..text.len(),
+            }
+        }
+        let line = text[start..].split('\n').next().unwrap_or_default();
+        if self.column == 0 {
+            return start..start;
+        }
+        let Some((at, c)) = line.char_indices().nth(self.column - 1) else {
+            return start + line.len()..start + line.len();
+        };
+        let at = start + at;
+        let word = |c: char| c.is_alphanumeric() || c == '_';
+        if !word(c) {
+            return at..at + c.len_utf8();
+        }
+        text[..at].trim_end_matches(word).len()
+            ..text.len() - text[at..].trim_start_matches(word).len()
     }
 }
 

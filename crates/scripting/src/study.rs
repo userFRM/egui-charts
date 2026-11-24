@@ -123,6 +123,7 @@ fn calculate(script: &Script, bars: &[Bar]) -> Result<(), ScriptError> {
             .map(|input| input.default.clone())
             .collect(),
         reset: true,
+        profile: false,
     });
     let outcome = state.advance(None).expect("a run without a slice ends");
     match (outcome.result, outcome.error) {
@@ -294,7 +295,14 @@ impl ScriptState {
                 }
                 match outcome.error {
                     Some(error) => *last_error = Some(error),
-                    None if outcome.start == 0 => *last_error = None,
+                    None if outcome.start == 0 => {
+                        *last_error = None;
+                        // A study built on no bars, as a layout check builds one, measures nothing.
+                        if outcome.profile.is_some() && !self.bars.is_empty() {
+                            let profile = self.script.profile.lock();
+                            *profile.unwrap_or_else(|e| e.into_inner()) = outcome.profile;
+                        }
+                    }
                     None => {}
                 }
                 Calculation::Done(took)
@@ -377,6 +385,7 @@ impl Resume for ScriptState {
                 .collect(),
             inputs: self.inputs.clone().unwrap_or_default(),
             reset: self.reset,
+            profile: self.script.profiling,
         };
         self.reset = false;
         self.running = true;
