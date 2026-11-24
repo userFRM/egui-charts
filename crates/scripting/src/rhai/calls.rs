@@ -1,24 +1,19 @@
 //! The names a script may call, checked when it compiles. Rhai resolves a call when it runs, so
 //! without this check a misspelt function in a branch no bar takes stays hidden.
 
-use super::syntax::{Token, tokens};
+use super::engine::HELPERS;
+use super::syntax::{DECLARATIONS, Token, tokens};
 use crate::ScriptError;
 use ::rhai::AST;
 use std::collections::HashSet;
 
-/// The words a script may write before a `(` that call no function: Rhai's keywords, then the
+/// Rhai's keywords that a script may write before a `(` without calling a function, as it may the
 /// declarations.
-const KEYWORDS: &str = "\
-    if while until for in switch return throw break catch display plot fill study";
+const KEYWORDS: &str = "if while until for in switch return throw break catch";
 
 /// The functions the engine itself resolves.
 const BUILT_IN: &str = "\
     Fn call type_of is_shared is_def_fn is_def_var";
-
-/// The helpers [`super::engine::engine`] registers.
-const HELPERS: &str = "\
-    is_na nz abs sign sqrt exp ln log10 pow min max clamp round floor ceil sma ema rma wma sum \
-    stdev highest lowest change crossover crossunder year month day weekday hour minute";
 
 /// The functions of Rhai's standard package, without `sleep`, which a script does not have.
 const STANDARD: &str = "\
@@ -43,9 +38,11 @@ pub(crate) fn unknown(source: &str, ast: &AST) -> Option<ScriptError> {
     let token = |at: usize| tokens.get(at).map(|(token, _)| *token);
     let symbol = |at: usize, symbol: char| token(at) == Some(Token::Symbol(symbol));
     let called = |at: usize| symbol(at + 1, '(') || symbol(at + 1, '!') && symbol(at + 2, '(');
-    let known: HashSet<&str> = [KEYWORDS, BUILT_IN, HELPERS, STANDARD]
+    let known: HashSet<&str> = [KEYWORDS, BUILT_IN, STANDARD]
         .into_iter()
         .flat_map(str::split_whitespace)
+        .chain(DECLARATIONS.iter().map(|declaration| declaration.name))
+        .chain(HELPERS.iter().map(|helper| helper.name))
         .chain(ast.iter_functions().map(|function| function.name))
         .collect();
     let keys: HashSet<&str> = (0..tokens.len())

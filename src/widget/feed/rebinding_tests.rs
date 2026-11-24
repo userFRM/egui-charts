@@ -36,6 +36,48 @@ fn load(feed: &Script, chart: &mut Chart, frames: &mut Frames, price: f64) {
 }
 
 #[test]
+fn explicit_trade_history_demand_does_not_follow_a_feed_change() {
+    let old = Arc::new(Script::default());
+    let mut chart = fed(&old, Some("A"));
+    chart.set_trade_history_on_demand(true);
+    let mut frames = Frames::new();
+    load(&old, &mut chart, &mut frames, 7.0);
+    assert_eq!(closes(&chart, SeriesId::MAIN), [7.0; 5]);
+    let start = bars(1)[0].time;
+    old.sink()
+        .push_tick(Tick::new(start + TimeDelta::minutes(5), 8.0, 1.0, None));
+    frames.run(&mut chart);
+    assert_eq!(chart.trades(SeriesId::MAIN).count(), 1);
+    assert!(old.trades.lock().unwrap().is_empty());
+
+    chart.request_trade_history();
+    frames.run(&mut chart);
+    let stale = old.trades.lock().unwrap().remove(0);
+    let next = Arc::new(Script::default());
+    chart.set_feed(next.clone());
+    load(&next, &mut chart, &mut frames, 9.0);
+    assert!(next.trades.lock().unwrap().is_empty());
+    chart.request_trade_history();
+    frames.run(&mut chart);
+    stale.send(Ok(TradePage::new(
+        vec![Tick::new(start, 7.0, 1.0, None)],
+        true,
+    )));
+    frames.run(&mut chart);
+    assert_eq!(chart.trades(SeriesId::MAIN).count(), 0);
+    next.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(
+            vec![Tick::new(start, 9.0, 1.0, None)],
+            true,
+        )));
+    frames.run(&mut chart);
+    assert_eq!(chart.trades(SeriesId::MAIN).next().unwrap().price, 9.0);
+}
+
+#[test]
 fn set_feed_isolates_adapters_and_rejects_old_handshake_replies() {
     let backend = Arc::new(Script::default());
     let first: Arc<dyn Datafeed> = Arc::new(Adapter(backend.clone()));

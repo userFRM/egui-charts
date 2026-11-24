@@ -34,19 +34,62 @@ pub(crate) const MAX_HISTORIES: usize = 40;
 const MAX_CHOICES: usize = 64;
 const MAX_GIVEN: usize = 64;
 
-/// The names every script reads, in the order the scope holds them after `na`.
-pub(crate) const PRICES: [(&str, SeriesRef); 10] = [
-    ("open", SeriesRef::Price(PriceSource::Open)),
-    ("high", SeriesRef::Price(PriceSource::High)),
-    ("low", SeriesRef::Price(PriceSource::Low)),
-    ("close", SeriesRef::Price(PriceSource::Close)),
-    ("volume", SeriesRef::Volume),
-    ("hl2", SeriesRef::Price(PriceSource::HL2)),
-    ("hlc3", SeriesRef::Price(PriceSource::HLC3)),
-    ("ohlc4", SeriesRef::Price(PriceSource::OHLC4)),
-    ("time", SeriesRef::Time),
-    ("bar_index", SeriesRef::BarIndex),
+/// The names every script reads, in the order the scope holds them after `na`, with what each is.
+pub(crate) const PRICES: [(&str, SeriesRef, &str); 10] = [
+    (
+        "open",
+        SeriesRef::Price(PriceSource::Open),
+        "The bar's open price.",
+    ),
+    (
+        "high",
+        SeriesRef::Price(PriceSource::High),
+        "The bar's high price.",
+    ),
+    (
+        "low",
+        SeriesRef::Price(PriceSource::Low),
+        "The bar's low price.",
+    ),
+    (
+        "close",
+        SeriesRef::Price(PriceSource::Close),
+        "The bar's close price.",
+    ),
+    ("volume", SeriesRef::Volume, "The bar's volume."),
+    (
+        "hl2",
+        SeriesRef::Price(PriceSource::HL2),
+        "(high + low) / 2.",
+    ),
+    (
+        "hlc3",
+        SeriesRef::Price(PriceSource::HLC3),
+        "(high + low + close) / 3.",
+    ),
+    (
+        "ohlc4",
+        SeriesRef::Price(PriceSource::OHLC4),
+        "(open + high + low + close) / 4.",
+    ),
+    (
+        "time",
+        SeriesRef::Time,
+        "The bar's open time in milliseconds since 1970-01-01 UTC.",
+    ),
+    (
+        "bar_index",
+        SeriesRef::BarIndex,
+        "The bar's number, 0 for the first loaded bar.",
+    ),
 ];
+
+/// The missing number, which every script reads, and what it is.
+pub(crate) const NA: (&str, &str) = (
+    "na",
+    "The missing number: arithmetic with it gives na, and every comparison with it is false \
+     except !=.",
+);
 
 use crate::runtime::series::SeriesRef;
 
@@ -67,17 +110,64 @@ const STYLES: [(&str, PlotType); 13] = [
     ("triangle_down", PlotType::TriangleDown),
 ];
 
-/// The input kinds and their argument counts.
-const KINDS: [(&str, usize); 9] = [
-    ("length", 4),
-    ("int", 4),
-    ("float", 4),
-    ("bool", 2),
-    ("choice", 3),
-    ("source", 2),
-    ("text", 2),
-    ("symbol", 2),
-    ("interval", 2),
+/// The input kinds: their names, argument counts, how a script writes them and what they hold.
+pub(crate) const KINDS: [(&str, usize, &str, &str); 9] = [
+    (
+        "length",
+        4,
+        "length(label, default, min, max)",
+        "A length from min to max, both from 0; the script reads an int.",
+    ),
+    (
+        "int",
+        4,
+        "int(label, default, min, max)",
+        "An int from min to max; the script reads an int.",
+    ),
+    (
+        "float",
+        4,
+        "float(label, default, min, max)",
+        "A number from min to max; the script reads a number.",
+    ),
+    (
+        "bool",
+        2,
+        "bool(label, default)",
+        "A checkbox; the script reads true or false.",
+    ),
+    (
+        "choice",
+        3,
+        "choice(label, default, [\"a\", \"b\", ...])",
+        "One of a list of strings, the default among them; the script reads the one chosen.",
+    ),
+    (
+        "source",
+        2,
+        "source(label, PRICE)",
+        "A price, one of open, high, low, close, hl2, hlc3 and ohlc4; the script reads a series. \
+         The input with id source also reads another study's output when the chart offers it.",
+    ),
+    (
+        "text",
+        2,
+        "text(label, default)",
+        "A line of text; the script reads a string.",
+    ),
+    (
+        "symbol",
+        2,
+        "symbol(label, default)",
+        "A symbol, \"\" for the chart's; the script reads a string.",
+    ),
+    (
+        "interval",
+        2,
+        "interval(label, default)",
+        "An interval such as \"5min\", \"1h\" or \"1D\", \"\" for the chart's; the script reads \
+         a string.",
+    ),
 ];
 
 /// The ids the chart gives inputs of its own.
@@ -188,7 +278,7 @@ impl Lit {
         match self {
             Self::Int(value) => Some(*value as f64),
             Self::Float(value) => Some(*value),
-            Self::Ident(name) if name == "na" => Some(f64::NAN),
+            Self::Ident(name) if name == NA.0 => Some(f64::NAN),
             _ => None,
         }
     }
@@ -315,28 +405,149 @@ impl<'a> Cursor<'a> {
     }
 }
 
+/// A declaration: its keyword, how a script writes it, and how it parses and runs.
+pub(crate) struct Declaration {
+    /// The keyword.
+    pub name: &'static str,
+    /// As a script writes it, such as `bars NAME = history(SYMBOL, INTERVAL)`.
+    pub signature: &'static str,
+    /// What it declares, with the limits the parser holds it to.
+    pub summary: fn() -> String,
+    read: fn(&mut Cursor, &mut Collector) -> Step<Option<usize>>,
+    eval: fn(&mut EvalContext, &[Expression], &Dynamic) -> RhaiResult,
+}
+
+/// The declarations, in the order the reference lists them. These are the only ones registered,
+/// and the compile check knows their names.
+pub(crate) const DECLARATIONS: [Declaration; 8] = [
+    Declaration {
+        name: "display",
+        signature: "display(overlay = BOOL, format = FORMAT, scale = SCALE)",
+        summary: || {
+            "How the study is shown, declared at most once, each option optional. overlay = true \
+             draws it over the prices, and false, the default, in a pane of its own; FORMAT is \
+             \"price\", \"volume\", \"percent\" or a number of decimals from 0 to 12, and SCALE \
+             \"main\", \"independent\" or \"none\", both by default the placement's own."
+                .into()
+        },
+        read: display,
+        eval: nothing,
+    },
+    Declaration {
+        name: "input",
+        signature: "input NAME = KIND(LABEL, DEFAULT, ...)",
+        summary: || {
+            format!(
+                "An input with id NAME, which the settings dialog shows with LABEL and NAME holds, \
+                 of one of the input kinds. A script declares at most {MAX_INPUTS} inputs, and a \
+                 choice input lists at most {MAX_CHOICES} choices. The ids {} belong to inputs \
+                 the chart adds itself.",
+                RESERVED.join(", ")
+            )
+        },
+        read: input,
+        eval: nothing,
+    },
+    Declaration {
+        name: "state",
+        signature: "state NAME = LITERAL",
+        summary: || {
+            format!(
+                "A variable that keeps its value from one bar to the next: LITERAL before the \
+                 first bar, then what the script assigned on the bar before, a series' value for \
+                 a series. A script declares at most {MAX_STATES} states."
+            )
+        },
+        read: state_decl,
+        eval: nothing,
+    },
+    Declaration {
+        name: "series",
+        signature: "series NAME = EXPR",
+        summary: || {
+            format!(
+                "A series the script computes: each time the statement runs it stores EXPR as \
+                 NAME's value on the bar, and a bar on which it does not run holds na. A script \
+                 declares at most {MAX_SERIES} series."
+            )
+        },
+        read: series,
+        eval: store_series,
+    },
+    Declaration {
+        name: "bars",
+        signature: "bars NAME = history(SYMBOL, INTERVAL)",
+        summary: || {
+            format!(
+                "The bars of another symbol or interval, which the study requests from the chart, \
+                 each field such as NAME.close a series. SYMBOL is a string, \"\" for the chart's \
+                 symbol, or a symbol input declared above, and INTERVAL a string such as \
+                 \"5min\", \"1h\" or \"1D\", \"\" for the chart's interval, or an interval \
+                 input declared above. A script declares at most {MAX_HISTORIES} histories."
+            )
+        },
+        read: bars,
+        eval: nothing,
+    },
+    Declaration {
+        name: "plot",
+        signature: "plot(TITLE, EXPR, color = COLOR, style = STYLE, offset = INT)",
+        summary: || {
+            let styles: Vec<_> = STYLES
+                .iter()
+                .map(|(style, _)| format!("{style:?}"))
+                .collect();
+            format!(
+                "An output with a unique title, which stores EXPR on the bar; the last store on a \
+                 bar wins. COLOR is \"#RRGGBB\" or \"#RRGGBBAA\", STYLE one of {}, and offset \
+                 draws the plot from -10000 to 10000 bars later. A script declares at least one \
+                 plot and at most {MAX_PLOTS}.",
+                styles.join(", ")
+            )
+        },
+        read: plot,
+        eval: store_plot,
+    },
+    Declaration {
+        name: "fill",
+        signature: "fill(A, B, color = COLOR, inverted = COLOR)",
+        summary: || {
+            "Fills the band between A and B, each the title of a plot declared before it or a \
+             number, with color where A is at least B and inverted where A is below B, \
+             \"#RRGGBB\" or \"#RRGGBBAA\"."
+                .into()
+        },
+        read: fill,
+        eval: nothing,
+    },
+    Declaration {
+        name: "study",
+        signature: "study(NAME, ID = EXPR, ..., output = TITLE)",
+        summary: || {
+            format!(
+                "The line of a study of the registry as a series, computed over every bar. ID is \
+                 the id of one of its inputs, written as a string where it is no name, output the \
+                 title of the line read, and a call without output reads the first. A call gives \
+                 at most {MAX_GIVEN} inputs."
+            )
+        },
+        read: study,
+        eval: read_study,
+    },
+];
+
 /// Register the declarations on `engine`, reading them into `collector` as they parse.
 pub(crate) fn register(engine: &mut Engine, collector: &Shared) {
-    let declare =
-        |engine: &mut Engine,
-         key: &'static str,
-         eval: fn(&mut EvalContext, &[Expression], &Dynamic) -> RhaiResult| {
-            let collector = collector.clone();
-            engine.register_custom_syntax_with_state_raw(
-                key,
-                move |symbols, look, state| parse(&collector, key, symbols, look, state),
-                false,
-                eval,
-            );
-        };
-    declare(engine, "display", nothing);
-    declare(engine, "input", nothing);
-    declare(engine, "state", nothing);
-    declare(engine, "series", store_series);
-    declare(engine, "bars", nothing);
-    declare(engine, "study", read_study);
-    declare(engine, "plot", store_plot);
-    declare(engine, "fill", nothing);
+    for declaration in &DECLARATIONS {
+        let collector = collector.clone();
+        let read = declaration.read;
+        engine.register_custom_syntax_with_state_raw(
+            declaration.name,
+            move |symbols, look, state| parse(&collector, read, symbols, look, state),
+            false,
+            declaration.eval,
+        );
+    }
 }
 
 type RhaiResult = Result<Dynamic, Box<EvalAltResult>>;
@@ -453,7 +664,7 @@ fn arg(value: &Dynamic, series: bool) -> Arg {
 
 fn parse(
     collector: &Shared,
-    key: &str,
+    read: fn(&mut Cursor, &mut Collector) -> Step<Option<usize>>,
     symbols: &[ImmutableString],
     look: &str,
     state: &mut Dynamic,
@@ -475,17 +686,7 @@ fn parse(
         look,
     };
     let mut collector = collector.lock().unwrap_or_else(|e| e.into_inner());
-    let declared = match key {
-        "display" => display(&mut cursor, &mut collector),
-        "input" => input(&mut cursor, &mut collector),
-        "state" => state_decl(&mut cursor, &mut collector),
-        "series" => series(&mut cursor, &mut collector),
-        "bars" => bars(&mut cursor, &mut collector),
-        "study" => study(&mut cursor, &mut collector),
-        "plot" => plot(&mut cursor, &mut collector),
-        _ => fill(&mut cursor, &mut collector),
-    };
-    match declared {
+    match read(&mut cursor, &mut collector) {
         Ok(index) => {
             *state = index.map_or(Dynamic::UNIT, |index| Dynamic::from_int(index as i64));
             Ok(None)
@@ -626,7 +827,7 @@ fn new_name<'a>(cursor: &mut Cursor<'a>, collector: &Collector) -> Step<&'a str>
     let name = cursor.ident()?;
     if cursor.at_end() {
         let spec = &collector.spec;
-        if name == "na" || PRICES.iter().any(|(price, _)| *price == name) {
+        if name == NA.0 || PRICES.iter().any(|(price, _, _)| *price == name) {
             return Err(Stop::Fail(format!("{name} is a built-in name")));
         }
         if spec.inputs.iter().any(|input| input.id == name)
@@ -649,18 +850,18 @@ fn input(cursor: &mut Cursor, collector: &mut Collector) -> Step<Option<usize>> 
         )));
     }
     cursor.symbol("=")?;
-    if cursor.at_end() && !KINDS.iter().any(|(kind, _)| *kind == cursor.look) {
+    if cursor.at_end() && !KINDS.iter().any(|(kind, ..)| *kind == cursor.look) {
         return Err(Stop::Fail(format!(
             "unknown input kind {}; expected one of {}",
             cursor.look,
-            KINDS.map(|(kind, _)| kind).join(", ")
+            KINDS.map(|(kind, ..)| kind).join(", ")
         )));
     }
     let kind = cursor.ident()?;
     let count = KINDS
         .iter()
-        .find(|(name, _)| *name == kind)
-        .map_or(0, |(_, count)| *count);
+        .find(|(name, ..)| *name == kind)
+        .map_or(0, |(_, count, ..)| *count);
     cursor.symbol("(")?;
     let mut args = Vec::new();
     let mut choices = Vec::new();
@@ -836,10 +1037,12 @@ fn input_kind(kind: &str, args: &[Lit], choices: Vec<String>) -> Step<(InputKind
                 "the default is one of open, high, low, close, hl2, hlc3 and ohlc4",
                 |lit| match lit {
                     Lit::Ident(name) => {
-                        PRICES[..8].iter().find_map(|(price, series)| match series {
-                            SeriesRef::Price(source) if price == name => Some(*source),
-                            _ => None,
-                        })
+                        PRICES[..8]
+                            .iter()
+                            .find_map(|(price, series, _)| match series {
+                                SeriesRef::Price(source) if price == name => Some(*source),
+                                _ => None,
+                            })
                     }
                     _ => None,
                 },
@@ -881,7 +1084,7 @@ fn state_decl(cursor: &mut Cursor, collector: &mut Collector) -> Step<Option<usi
         Lit::Int(value) => Literal::Int(value),
         Lit::Float(value) => Literal::Number(value),
         Lit::Bool(value) => Literal::Bool(value),
-        Lit::Ident(name) if name == "na" => Literal::Number(f64::NAN),
+        Lit::Ident(name) if name == NA.0 => Literal::Number(f64::NAN),
         Lit::Ident(_) => {
             return Err(Stop::Fail(
                 "a state starts from a literal: a number, a string, true, false or na".into(),
@@ -981,16 +1184,9 @@ fn study(cursor: &mut Cursor, collector: &mut Collector) -> Step<Option<usize>> 
     };
     if let Some(prototype) = prototype
         && cursor.at_end()
+        && let Some(message) = bindings::unreadable(&name, &**prototype.lock())
     {
-        let study = prototype.lock();
-        if study.calculation().is_some() {
-            return Err(Stop::Fail(format!(
-                "study {name:?} calculates on its own, so a script cannot read it"
-            )));
-        }
-        if study.line_count() == 0 {
-            return Err(Stop::Fail(format!("study {name:?} has no line to read")));
-        }
+        return Err(Stop::Fail(message));
     }
     let mut given: Vec<(&str, usize)> = Vec::new();
     let mut output = None;
@@ -1234,7 +1430,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// The tokens of `source`, a script that compiled, with their positions.
+/// The tokens of `source`, any text such as a script being written, with their positions.
 pub(crate) fn tokens(source: &str) -> Vec<(Token<'_>, Span)> {
     let mut tokens = Vec::new();
     let mut reader = Reader {

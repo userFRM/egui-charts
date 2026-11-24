@@ -176,17 +176,17 @@ and checked when the script compiles, before any bar runs.
   `color` also takes `"#RRGGBBAA"`. `STYLE` is one of `"line"`, `"line_with_breaks"`,
   `"histogram"`, `"circles"`, `"step_line"`, `"step_line_with_breaks"`,
   `"step_line_with_diamonds"`, `"columns"`, `"crosses"`, `"area"`, `"area_with_breaks"`,
-  `"triangle_up"` and `"triangle_down"`. Titles are unique and not empty. A script has at least
-  one plot and at most 32; a constant line is a plot of a literal.
+  `"triangle_up"` and `"triangle_down"`. Titles are unique and not empty, and a constant line is a
+  plot of a literal.
 - `fill(A, B, color = "#...", inverted = "#...");` fills the band between two plots, named by
   title, or numbers. The plots come before the fill.
 
 - `bars NAME = history(SYMBOL, INTERVAL);` declares another history, see
   [Other histories](#other-histories).
 
-A script declares at most 32 inputs, 64 states, 64 series and 40 histories, and a choice input lists
-at most 64 choices. The words `display`, `input`, `state`, `series`, `bars`, `plot`, `fill` and
-`study` are reserved: a script cannot use a variable or function of that name.
+The [reference](#reference-and-completion) states how many of each a script may declare. The words
+`display`, `input`, `state`, `series`, `bars`, `plot`, `fill` and `study` are reserved: a script
+cannot use a variable or function of that name.
 
 ## Study calls
 
@@ -286,27 +286,43 @@ histories.
 
 ## Helpers
 
-Every helper takes numbers, ints and series where a number is expected.
-
-| Group | Helpers |
-| --- | --- |
-| Missing values | `na`, `is_na(x)`, `nz(x)`, `nz(x, y)` |
-| Math | `abs`, `sign`, `sqrt`, `exp`, `ln`, `log10`, `pow(x, y)`, `min(a, b)`, `max(a, b)`, `clamp(x, lo, hi)`, `round(x)`, `round(x, digits)`, `floor`, `ceil` |
-| Streaming | `sma(x, n)`, `ema(x, n)`, `rma(x, n)`, `wma(x, n)`, `sum(x, n)`, `stdev(x, n)`, `highest(x, n)`, `lowest(x, n)`, `change(x)`, `change(x, n)`, `crossover(a, b)`, `crossunder(a, b)` |
-| Time, in UTC | `year(t)`, `month(t)`, `day(t)`, `weekday(t)` (Monday 1 to Sunday 7), `hour(t)`, `minute(t)` |
-
-The math helpers return numbers, `na` for a missing argument; `min` and `max` give `na` when
-either argument is missing, and `sign(0)` is 0. `round(x, d)` rounds half away from zero at `d`
-decimals. The time helpers return ints and refuse a missing time.
+Every helper takes numbers, ints and series where a number is expected, and the math helpers give
+`na` for a missing argument. The [reference](#reference-and-completion) lists each helper with what
+it gives, in four groups: missing values, such as `is_na(x)` and `nz(x)`; math; streaming helpers,
+such as `sma(x, n)` and `crossover(a, b)`; and the time helpers, which read a time in UTC.
 
 A streaming helper keeps its own history, which belongs to its call: two calls of `sma` keep
 two windows, and a call that does not run on a bar sees `na` there. Its length must stay the same
 from bar to bar at one call; a length below 1 counts as 1, except for `change`, and a negative
 length is an error. On every bar it gives exactly what the function of the same name in
-`egui_charts::studies::helpers` gives for the whole series up to that bar: `sma`, `sum`, `wma` and
-`stdev` over complete windows of finite values, `ema` seeded by the first finite value, `rma` by
-the mean of the first `n`, `highest` and `lowest` ignoring missing values, and the crossings as
-bools.
+`egui_charts::studies::helpers` gives for the whole series up to that bar.
+
+## Reference and completion
+
+`Reference` lists every name a script can use: the declarations with their limits, the input kinds,
+the series, the helpers and the studies of a registry that a script can call, each study with its
+inputs and outputs written as a call takes them. `to_markdown` gives it as one document to read in an
+editor, and `to_json` the same entries for other programs. `complete` gives
+the entries that complete the word before a byte of a script: names, the input kinds after
+`input NAME =`, registry names inside `study("`, and inside a study call the ids of its inputs and,
+after `output = "`, the titles of its outputs:
+
+```rust
+use egui_charts::studies::IndicatorFactory;
+use egui_charts_scripting::Reference;
+
+let reference = Reference::new(&IndicatorFactory::new());
+let text = "let strength = study(\"RSI\", per";
+let names: Vec<_> = reference
+    .complete(text, text.len())
+    .into_iter()
+    .map(|entry| entry.name)
+    .collect();
+assert_eq!(names, ["period"]);
+```
+
+`cargo run --example scripting -- --reference`, from `crates/scripting`, prints the reference for
+the built-in studies.
 
 ## Errors
 

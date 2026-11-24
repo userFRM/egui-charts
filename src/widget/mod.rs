@@ -476,6 +476,8 @@ pub struct Chart {
     pub(crate) timeframe: Option<Timeframe>,
     /// The feed the chart loads from, if it was built with one.
     pub(crate) feed_link: Option<FeedLink>,
+    /// Host policy for the initial historical trade page, independent of the current binding.
+    trade_history_on_demand: bool,
     /// Cursor mode state (Demonstration, Magic, Eraser effects)
     #[cfg(feature = "drawings")]
     pub(crate) cursor_modes: CursorModeState,

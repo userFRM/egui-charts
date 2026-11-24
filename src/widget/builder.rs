@@ -240,6 +240,7 @@ impl Chart {
             event_click: None,
             timeframe: None,
             feed_link: None,
+            trade_history_on_demand: false,
             #[cfg(feature = "drawings")]
             cursor_modes: CursorModeState::new(),
             #[cfg(feature = "drawings")]

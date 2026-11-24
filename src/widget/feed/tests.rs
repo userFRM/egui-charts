@@ -720,9 +720,14 @@ fn fed(feed: &Arc<Script>, symbol: Option<&str>) -> Chart {
 }
 
 fn prepared_chart() -> (Arc<Script>, Chart, Frames) {
+    prepared_chart_with_trade_policy(false)
+}
+
+fn prepared_chart_with_trade_policy(on_demand: bool) -> (Arc<Script>, Chart, Frames) {
     let feed = Arc::new(Script::default());
     feed.prepared_footprints.store(true, Ordering::Relaxed);
     let mut chart = fed(&feed, Some("A"));
+    chart.set_trade_history_on_demand(on_demand);
     chart.set_chart_type(ChartType::VolumeFootprint);
     let mut frames = Frames::new();
     frames.run(&mut chart);
@@ -761,6 +766,55 @@ fn prepared_view(chart: &Chart) -> FootprintView<'_> {
         .as_ref()
         .unwrap()
         .view()
+}
+
+#[cfg(feature = "studies")]
+#[test]
+fn prepared_rows_wait_for_real_executions_to_fill_trade_rate() {
+    let (feed, mut chart, mut frames) = prepared_chart_with_trade_policy(true);
+    let start = bars(1)[0].time;
+    let tape = vec![
+        Tick::new(start + TimeDelta::seconds(2), 100.0, 3.0, None),
+        Tick::new(start + TimeDelta::seconds(8), 100.0, 5.0, None),
+    ];
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(prepared_page(
+            &tape,
+            start + TimeDelta::minutes(5),
+            true,
+        )));
+    frames.run(&mut chart);
+    assert_eq!(prepared_view(&chart).bar_at(start).unwrap().volume(), 8.0);
+    assert!(feed.trades.lock().unwrap().is_empty());
+
+    let factory = crate::studies::IndicatorFactory::new();
+    let rate = chart.add_indicator(factory.create("Trade Rate").unwrap());
+    let count = |chart: &Chart| {
+        let (_, study) = chart.indicators().find(|(id, _)| *id == rate).unwrap();
+        study.values().value(0, 0)
+    };
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(count(&chart), None);
+    assert_eq!(feed.trades.lock().unwrap().len(), 1);
+    chart.request_trade_history();
+    frames.run(&mut chart);
+    assert_eq!(feed.trades.lock().unwrap().len(), 1);
+    feed.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(tape, true)));
+    for _ in 0..3 {
+        chart.request_trade_history();
+        frames.run(&mut chart);
+    }
+    assert_eq!(count(&chart), Some(2.0));
+    assert!(feed.trades.lock().unwrap().is_empty());
 }
 
 fn missing_history_page(
@@ -3314,6 +3368,7 @@ fn footprint_trade_intervals_follow_pages_streams_and_interval_changes() {
             let instrument =
                 || Instrument::new(if canonical { "EX:A" } else { "A" }).with_tick_size(1.0);
             let mut chart = fed(&feed, Some("A"));
+            chart.set_trade_history_on_demand(true);
             let timeframe = interval.parse().unwrap();
             chart.set_timeframe(timeframe);
             chart.set_chart_type(chart_type);
@@ -6001,6 +6056,47 @@ fn footprint_draws_candles_from_the_first_execution_at_the_minimum_spacing() {
         let y = map.price_to_y(price);
         assert!(ys.iter().any(|at| (at - y).abs() < 1.0), "{price}: {y}");
     }
+}
+
+#[test]
+fn switching_from_candles_to_range_requests_deferred_executions() {
+    use crate::model::RangeBarSource::{Executions, OhlcApproximation};
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_trade_history_on_demand(true);
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve().send(Ok(Instrument::new("A")));
+    let mut history = bars(1);
+    let start = history[0].time;
+    (history[0].high, history[0].low) = (104.0, 96.0);
+    feed.page().send(page(history, true));
+    frames.run(&mut chart);
+    assert!(feed.trades.lock().unwrap().is_empty());
+
+    chart.set_chart_type(crate::model::ChartType::Range);
+    chart.set_chart_type_params(crate::model::ChartTypeParams {
+        range_size: 4.0,
+        ..Default::default()
+    });
+    frames.run(&mut chart);
+    assert_eq!(chart.range_bar_source(), Some(OhlcApproximation));
+    let tape = [100.0, 96.0, 104.0, 100.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, price)| Tick::new(start + TimeDelta::seconds(i as i64), price, 1.0, None))
+        .collect();
+    let reply = feed
+        .trades
+        .lock()
+        .unwrap()
+        .pop()
+        .expect("Range needs trades");
+    reply.send(Ok(TradePage::new(tape, true)));
+    frames.run(&mut chart);
+    assert_eq!(chart.range_bar_source(), Some(Executions));
+    let closes: Vec<_> = chart.state.shown().iter().map(|bar| bar.close).collect();
+    assert_eq!(closes, [96.0, 100.0, 104.0, 100.0]);
 }
 
 /// Range bars follow the order of the supplied executions, not only the OHLC of the bars they
@@ -9054,6 +9150,7 @@ fn market_replay_order_flow_studies_follow_the_cursor() {
     let mut chart = Chart::new(BarData::new());
     chart.set_symbol("A");
     chart.set_timeframe(Timeframe::Min1);
+    chart.set_trade_history_on_demand(true);
     chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false)));
     chart.set_market_replay(Some(driver.clone()));
     let mut frames = Frames::new();

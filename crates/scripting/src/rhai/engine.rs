@@ -134,62 +134,428 @@ macro_rules! binary {
 
 /// Registers `clamp` for every triple of numbers, ints and series.
 macro_rules! clamp {
-    ($engine:expr) => {
-        clamp!(@a $engine, FLOAT);
-        clamp!(@a $engine, INT);
-        clamp!(@a $engine, Handle);
+    ($engine:expr, $name:expr) => {
+        clamp!(@a $engine, $name, FLOAT);
+        clamp!(@a $engine, $name, INT);
+        clamp!(@a $engine, $name, Handle);
     };
-    (@a $engine:expr, $a:ty) => {
-        clamp!(@b $engine, $a, FLOAT);
-        clamp!(@b $engine, $a, INT);
-        clamp!(@b $engine, $a, Handle);
+    (@a $engine:expr, $name:expr, $a:ty) => {
+        clamp!(@b $engine, $name, $a, FLOAT);
+        clamp!(@b $engine, $name, $a, INT);
+        clamp!(@b $engine, $name, $a, Handle);
     };
-    (@b $engine:expr, $a:ty, $b:ty) => {
-        clamp!(@c $engine, $a, $b, FLOAT);
-        clamp!(@c $engine, $a, $b, INT);
-        clamp!(@c $engine, $a, $b, Handle);
+    (@b $engine:expr, $name:expr, $a:ty, $b:ty) => {
+        clamp!(@c $engine, $name, $a, $b, FLOAT);
+        clamp!(@c $engine, $name, $a, $b, INT);
+        clamp!(@c $engine, $name, $a, $b, Handle);
     };
-    (@c $engine:expr, $a:ty, $b:ty, $c:ty) => {
-        $engine.register_fn("clamp", |x: $a, lo: $b, hi: $c| clamp(x.num(), lo.num(), hi.num()));
+    (@c $engine:expr, $name:expr, $a:ty, $b:ty, $c:ty) => {
+        $engine.register_fn($name, |x: $a, lo: $b, hi: $c| clamp(x.num(), lo.num(), hi.num()));
     };
 }
 
 /// Registers streaming helper `$name(x, n)` for a number, an int or a series `x` and an int
 /// or whole-number length.
 macro_rules! streaming {
-    ($engine:expr, $name:literal) => {
+    ($engine:expr, $name:expr) => {
         streaming!(@x $engine, $name, FLOAT);
         streaming!(@x $engine, $name, INT);
         streaming!(@x $engine, $name, Handle);
     };
-    (@x $engine:expr, $name:literal, $x:ty) => {
-        $engine.register_fn($name, |context: NativeCallContext, x: $x, n: INT| {
-            step(&context, $name, n, x.num(), f64::NAN)
+    (@x $engine:expr, $name:expr, $x:ty) => {
+        let name = $name;
+        $engine.register_fn(name, move |context: NativeCallContext, x: $x, n: INT| {
+            step(&context, name, n, x.num(), f64::NAN)
         });
-        $engine.register_fn($name, |context: NativeCallContext, x: $x, n: FLOAT| {
-            step(&context, $name, whole($name, n)?, x.num(), f64::NAN)
+        $engine.register_fn(name, move |context: NativeCallContext, x: $x, n: FLOAT| {
+            step(&context, name, whole(name, n)?, x.num(), f64::NAN)
         });
     };
 }
 
 /// Registers crossing helper `$name(a, b)` for every pair of numbers, ints and series.
 macro_rules! crossing {
-    ($engine:expr, $name:literal) => {
+    ($engine:expr, $name:expr) => {
         crossing!(@a $engine, $name, FLOAT);
         crossing!(@a $engine, $name, INT);
         crossing!(@a $engine, $name, Handle);
     };
-    (@a $engine:expr, $name:literal, $a:ty) => {
+    (@a $engine:expr, $name:expr, $a:ty) => {
         crossing!(@b $engine, $name, $a, FLOAT);
         crossing!(@b $engine, $name, $a, INT);
         crossing!(@b $engine, $name, $a, Handle);
     };
-    (@b $engine:expr, $name:literal, $a:ty, $b:ty) => {
-        $engine.register_fn($name, |context: NativeCallContext, a: $a, b: $b| {
-            step(&context, $name, 0, a.num(), b.num()).map(|crosses| crosses != 0.0)
+    (@b $engine:expr, $name:expr, $a:ty, $b:ty) => {
+        let name = $name;
+        $engine.register_fn(name, move |context: NativeCallContext, a: $a, b: $b| {
+            step(&context, name, 0, a.num(), b.num()).map(|crosses| crosses != 0.0)
         });
     };
 }
+
+/// The group a helper is listed under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Group {
+    Missing,
+    Math,
+    Streaming,
+    Time,
+}
+
+impl Group {
+    /// The heading the reference lists the group under.
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Self::Missing => "Missing values",
+            Self::Math => "Math",
+            Self::Streaming => "Streaming",
+            Self::Time => "Time, in UTC",
+        }
+    }
+}
+
+/// One form of a helper: how a script calls it, what it gives and how the engine registers it.
+pub(crate) struct Helper {
+    /// The name a script calls.
+    pub name: &'static str,
+    /// The group the reference lists it under.
+    pub group: Group,
+    /// The call as a script writes it, such as `sma(x, n)`.
+    pub signature: &'static str,
+    /// What it gives.
+    pub summary: &'static str,
+    /// Registers this form under the name, for every number, int and series argument.
+    register: fn(&mut Engine, &'static str),
+}
+
+/// Every helper form, in the order the reference lists them. The engine registers these and no
+/// other helper, and the compile check knows their names.
+pub(crate) const HELPERS: &[Helper] = &[
+    Helper {
+        name: "is_na",
+        group: Group::Missing,
+        signature: "is_na(x)",
+        summary: "Whether x is missing.",
+        register: |engine, name| {
+            engine.register_fn(name, |x: FLOAT| x.is_nan());
+            engine.register_fn(name, |_: INT| false);
+            engine.register_fn(name, |x: Handle| x.value().is_nan());
+        },
+    },
+    Helper {
+        name: "nz",
+        group: Group::Missing,
+        signature: "nz(x)",
+        summary: "x, or 0 when x is missing.",
+        register: |engine, name| unary!(engine, name, |x: f64| if x.is_nan() { 0.0 } else { x }),
+    },
+    Helper {
+        name: "nz",
+        group: Group::Missing,
+        signature: "nz(x, y)",
+        summary: "x, or y when x is missing.",
+        register: |engine, name| {
+            binary!(engine, name, |x: f64, y: f64| if x.is_nan() {
+                y
+            } else {
+                x
+            })
+        },
+    },
+    Helper {
+        name: "abs",
+        group: Group::Math,
+        signature: "abs(x)",
+        summary: "The absolute value of x.",
+        register: |engine, name| unary!(engine, name, f64::abs),
+    },
+    Helper {
+        name: "sign",
+        group: Group::Math,
+        signature: "sign(x)",
+        summary: "1 when x is above 0, -1 when it is below and 0 for 0.",
+        register: |engine, name| {
+            unary!(engine, name, |x: f64| if x == 0.0 {
+                0.0
+            } else {
+                x.signum()
+            })
+        },
+    },
+    Helper {
+        name: "sqrt",
+        group: Group::Math,
+        signature: "sqrt(x)",
+        summary: "The square root of x, na below 0.",
+        register: |engine, name| unary!(engine, name, f64::sqrt),
+    },
+    Helper {
+        name: "exp",
+        group: Group::Math,
+        signature: "exp(x)",
+        summary: "e to the power x.",
+        register: |engine, name| unary!(engine, name, f64::exp),
+    },
+    Helper {
+        name: "ln",
+        group: Group::Math,
+        signature: "ln(x)",
+        summary: "The natural logarithm of x, na below 0.",
+        register: |engine, name| unary!(engine, name, f64::ln),
+    },
+    Helper {
+        name: "log10",
+        group: Group::Math,
+        signature: "log10(x)",
+        summary: "The base 10 logarithm of x, na below 0.",
+        register: |engine, name| unary!(engine, name, f64::log10),
+    },
+    Helper {
+        name: "pow",
+        group: Group::Math,
+        signature: "pow(x, y)",
+        summary: "x to the power y.",
+        register: |engine, name| binary!(engine, name, f64::powf),
+    },
+    Helper {
+        name: "min",
+        group: Group::Math,
+        signature: "min(a, b)",
+        summary: "The smaller of a and b, na when either is missing.",
+        register: |engine, name| {
+            binary!(engine, name, |a: f64, b: f64| if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.min(b)
+            })
+        },
+    },
+    Helper {
+        name: "max",
+        group: Group::Math,
+        signature: "max(a, b)",
+        summary: "The larger of a and b, na when either is missing.",
+        register: |engine, name| {
+            binary!(engine, name, |a: f64, b: f64| if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            })
+        },
+    },
+    Helper {
+        name: "clamp",
+        group: Group::Math,
+        signature: "clamp(x, lo, hi)",
+        summary: "x held between lo and hi, na when a bound is missing; an error when lo is above \
+                  hi.",
+        register: |engine, name| {
+            clamp!(engine, name);
+        },
+    },
+    Helper {
+        name: "round",
+        group: Group::Math,
+        signature: "round(x)",
+        summary: "x rounded to a whole number, half away from zero.",
+        register: |engine, name| unary!(engine, name, f64::round),
+    },
+    Helper {
+        name: "round",
+        group: Group::Math,
+        signature: "round(x, digits)",
+        summary: "x rounded at digits decimals, half away from zero.",
+        register: |engine, name| {
+            engine.register_fn(name, |x: FLOAT, digits: INT| round(x, digits));
+            engine.register_fn(name, |x: INT, digits: INT| round(x.num(), digits));
+            engine.register_fn(name, |x: Handle, digits: INT| round(x.value(), digits));
+        },
+    },
+    Helper {
+        name: "floor",
+        group: Group::Math,
+        signature: "floor(x)",
+        summary: "The largest whole number not above x.",
+        register: |engine, name| unary!(engine, name, f64::floor),
+    },
+    Helper {
+        name: "ceil",
+        group: Group::Math,
+        signature: "ceil(x)",
+        summary: "The smallest whole number not below x.",
+        register: |engine, name| unary!(engine, name, f64::ceil),
+    },
+    Helper {
+        name: "sma",
+        group: Group::Streaming,
+        signature: "sma(x, n)",
+        summary: "The mean of the last n values of x; na until there are n and while one is \
+                  missing.",
+        register: |engine, name| {
+            streaming!(engine, name);
+        },
+    },
+    Helper {
+        name: "ema",
+        group: Group::Streaming,
+        signature: "ema(x, n)",
+        summary: "The exponential average of x with weight 2 / (n + 1), from its first finite \
+                  value; na on a bar where x is missing.",
+        register: |engine, name| {
+            streaming!(engine, name);
+        },
+    },
+    Helper {
+        name: "rma",
+        group: Group::Streaming,
+        signature: "rma(x, n)",
+        summary: "Wilder's average of x with weight 1 / n, seeded by the mean of its first n \
+                  finite values; na on a bar where x is missing.",
+        register: |engine, name| {
+            streaming!(engine, name);
+        },
+    },
+    Helper {
+        name: "wma",
+        group: Group::Streaming,
+        signature: "wma(x, n)",
+        summary: "The mean of the last n values of x, weighted n for the newest down to 1 for the \
+                  oldest; na until there are n and while one is missing.",
+        register: |engine, name| {
+            streaming!(engine, name);
+        },
+    },
+    Helper {
+        name: "sum",
+        group: Group::Streaming,
+        signature: "sum(x, n)",
+        summary: "The sum of the last n values of x; na until there are n and while one is \
+                  missing.",
+        register: |engine, name| {
+            streaming!(engine, name);
+        },
+    },
+    Helper {
+        name: "stdev",
+        group: Group::Streaming,
+        signature: "stdev(x, n)",
+        summary: "The population standard deviation of the last n values of x; na until there \
+                  are n and while one is missing.",
+        register: |engine, name| {
+            streaming!(engine, name);
+        },
+    },
+    Helper {
+        name: "highest",
+        group: Group::Streaming,
+        signature: "highest(x, n)",
+        summary: "The highest of the last n values of x, ignoring missing ones.",
+        register: |engine, name| {
+            streaming!(engine, name);
+        },
+    },
+    Helper {
+        name: "lowest",
+        group: Group::Streaming,
+        signature: "lowest(x, n)",
+        summary: "The lowest of the last n values of x, ignoring missing ones.",
+        register: |engine, name| {
+            streaming!(engine, name);
+        },
+    },
+    Helper {
+        name: "change",
+        group: Group::Streaming,
+        signature: "change(x)",
+        summary: "x minus its value on the bar before, na when either is missing.",
+        register: |engine, name| {
+            engine.register_fn(name, move |context: NativeCallContext, x: FLOAT| {
+                step(&context, name, 1, x, f64::NAN)
+            });
+            engine.register_fn(name, move |context: NativeCallContext, x: INT| {
+                step(&context, name, 1, x.num(), f64::NAN)
+            });
+            engine.register_fn(name, move |context: NativeCallContext, x: Handle| {
+                step(&context, name, 1, x.value(), f64::NAN)
+            });
+        },
+    },
+    Helper {
+        name: "change",
+        group: Group::Streaming,
+        signature: "change(x, n)",
+        summary: "x minus its value n bars before, na when either is missing.",
+        register: |engine, name| {
+            streaming!(engine, name);
+        },
+    },
+    Helper {
+        name: "crossover",
+        group: Group::Streaming,
+        signature: "crossover(a, b)",
+        summary: "Whether a rises above b on this bar after being below it, bars where they are \
+                  equal passed over; a missing value starts over.",
+        register: |engine, name| {
+            crossing!(engine, name);
+        },
+    },
+    Helper {
+        name: "crossunder",
+        group: Group::Streaming,
+        signature: "crossunder(a, b)",
+        summary: "Whether a falls below b on this bar after being above it, bars where they are \
+                  equal passed over; a missing value starts over.",
+        register: |engine, name| {
+            crossing!(engine, name);
+        },
+    },
+    Helper {
+        name: "year",
+        group: Group::Time,
+        signature: "year(t)",
+        summary: "The year of time t; a missing time is an error.",
+        register: |engine, name| time(engine, name, |time| i64::from(time.year())),
+    },
+    Helper {
+        name: "month",
+        group: Group::Time,
+        signature: "month(t)",
+        summary: "The month of time t, 1 to 12; a missing time is an error.",
+        register: |engine, name| time(engine, name, |time| i64::from(time.month())),
+    },
+    Helper {
+        name: "day",
+        group: Group::Time,
+        signature: "day(t)",
+        summary: "The day of the month of time t, 1 to 31; a missing time is an error.",
+        register: |engine, name| time(engine, name, |time| i64::from(time.day())),
+    },
+    Helper {
+        name: "weekday",
+        group: Group::Time,
+        signature: "weekday(t)",
+        summary: "The day of the week of time t, Monday 1 to Sunday 7; a missing time is an error.",
+        register: |engine, name| {
+            time(engine, name, |time| {
+                i64::from(time.weekday().number_from_monday())
+            })
+        },
+    },
+    Helper {
+        name: "hour",
+        group: Group::Time,
+        signature: "hour(t)",
+        summary: "The hour of time t, 0 to 23; a missing time is an error.",
+        register: |engine, name| time(engine, name, |time| i64::from(time.hour())),
+    },
+    Helper {
+        name: "minute",
+        group: Group::Time,
+        signature: "minute(t)",
+        summary: "The minute of time t, 0 to 59; a missing time is an error.",
+        register: |engine, name| time(engine, name, |time| i64::from(time.minute())),
+    },
+];
 
 /// The engine for running and compiling scripts, without the declarations.
 pub(crate) fn engine() -> Engine {
@@ -290,7 +656,7 @@ pub(crate) fn engine() -> Engine {
     // The fields of the chart's bars; `bar_index` is none.
     let fields: Vec<_> = PRICES
         .into_iter()
-        .filter_map(|(name, series)| match series {
+        .filter_map(|(name, series, _)| match series {
             SeriesRef::Price(price) => Some((name, Field::Price(price))),
             SeriesRef::Volume => Some((name, Field::Volume)),
             SeriesRef::Time => Some((name, Field::Time)),
@@ -312,82 +678,9 @@ pub(crate) fn engine() -> Engine {
         })
     });
 
-    engine.register_fn("is_na", |x: FLOAT| x.is_nan());
-    engine.register_fn("is_na", |_: INT| false);
-    engine.register_fn("is_na", |x: Handle| x.value().is_nan());
-    unary!(engine, "nz", |x: f64| if x.is_nan() { 0.0 } else { x });
-    binary!(engine, "nz", |x: f64, y: f64| if x.is_nan() {
-        y
-    } else {
-        x
-    });
-
-    unary!(engine, "abs", f64::abs);
-    unary!(engine, "sign", |x: f64| if x == 0.0 {
-        0.0
-    } else {
-        x.signum()
-    });
-    unary!(engine, "sqrt", f64::sqrt);
-    unary!(engine, "exp", f64::exp);
-    unary!(engine, "ln", f64::ln);
-    unary!(engine, "log10", f64::log10);
-    unary!(engine, "round", f64::round);
-    unary!(engine, "floor", f64::floor);
-    unary!(engine, "ceil", f64::ceil);
-    binary!(engine, "pow", f64::powf);
-    binary!(
-        engine,
-        "min",
-        |a: f64, b: f64| if a.is_nan() || b.is_nan() {
-            f64::NAN
-        } else {
-            a.min(b)
-        }
-    );
-    binary!(
-        engine,
-        "max",
-        |a: f64, b: f64| if a.is_nan() || b.is_nan() {
-            f64::NAN
-        } else {
-            a.max(b)
-        }
-    );
-    clamp!(engine);
-    engine.register_fn("round", |x: FLOAT, digits: INT| round(x, digits));
-    engine.register_fn("round", |x: INT, digits: INT| round(x.num(), digits));
-    engine.register_fn("round", |x: Handle, digits: INT| round(x.value(), digits));
-
-    streaming!(engine, "sma");
-    streaming!(engine, "ema");
-    streaming!(engine, "rma");
-    streaming!(engine, "wma");
-    streaming!(engine, "sum");
-    streaming!(engine, "stdev");
-    streaming!(engine, "highest");
-    streaming!(engine, "lowest");
-    streaming!(engine, "change");
-    engine.register_fn("change", |context: NativeCallContext, x: FLOAT| {
-        step(&context, "change", 1, x, f64::NAN)
-    });
-    engine.register_fn("change", |context: NativeCallContext, x: INT| {
-        step(&context, "change", 1, x.num(), f64::NAN)
-    });
-    engine.register_fn("change", |context: NativeCallContext, x: Handle| {
-        step(&context, "change", 1, x.value(), f64::NAN)
-    });
-    crossing!(engine, "crossover");
-    crossing!(engine, "crossunder");
-
-    time(&mut engine, "year", |time| i64::from(time.year()));
-    time(&mut engine, "month", |time| i64::from(time.month()));
-    time(&mut engine, "day", |time| i64::from(time.day()));
-    time(&mut engine, "weekday", |time| {
-        i64::from(time.weekday().number_from_monday())
-    });
-    time(&mut engine, "hour", |time| i64::from(time.hour()));
-    time(&mut engine, "minute", |time| i64::from(time.minute()));
+    for helper in HELPERS {
+        (helper.register)(&mut engine, helper.name);
+    }
     engine
 }
 
