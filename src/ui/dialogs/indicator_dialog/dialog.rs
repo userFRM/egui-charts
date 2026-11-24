@@ -226,10 +226,17 @@ impl IndicatorDialog {
     }
 
     /// List and create the studies of `factory`, such as the built-ins and the host's own
-    /// added with [`IndicatorFactory::register`]
+    /// added with [`IndicatorFactory::register`]. The metrics and options profile of the feed
+    /// given to [`set_metric_source`](Self::set_metric_source) are fetched again on the next
+    /// [`show`](Self::show) and listed beside them.
     pub fn with_factory(mut self, factory: IndicatorFactory) -> Self {
+        // The feed's metric studies and options profile were registered in the old factory.
         self.option_catalog = None;
         self.option_profile_registered = false;
+        self.option_error = None;
+        self.metric_catalog = None;
+        self.metric_error = None;
+        self.metric_names.clear();
         self.indicators = IndicatorInfo::from_factory(&factory);
         self.factory = factory;
         self.refresh_order_flow_availability();
@@ -1037,8 +1044,8 @@ mod tests {
         dialog.poll_metrics(&ctx);
         dialog.set_metric_source(Some(feed.clone()), "CURRENT");
         dialog.poll_metrics(&ctx);
-        let mut replies = feed.0.lock().unwrap();
-        for (reply, name) in replies.drain(..).zip(["Stale metric", "Funding rate"]) {
+        let replies = std::mem::take(&mut *feed.0.lock().unwrap());
+        for (reply, name) in replies.into_iter().zip(["Stale metric", "Funding rate"]) {
             reply.send(Ok(vec![crate::data::MetricSeries {
                 unit: "%".into(),
                 ..crate::data::MetricSeries::new("funding", name, StudyFormat::Percent)
@@ -1064,6 +1071,19 @@ mod tests {
         assert!(!study.is_overlay());
         assert_eq!(study.value_format(), StudyFormat::Percent);
         assert_eq!(study.data_requests()[0].metric.as_deref(), Some("funding"));
+        // A new factory drops the metric studies of the old one; the feed is asked again.
+        dialog = dialog.with_factory(IndicatorFactory::new());
+        dialog.poll_metrics(&ctx);
+        let replies = std::mem::take(&mut *feed.0.lock().unwrap());
+        assert_eq!(replies.len(), 1, "the feed is asked for its metrics again");
+        for reply in replies {
+            reply.send(Ok(vec![crate::data::MetricSeries {
+                unit: "%".into(),
+                ..crate::data::MetricSeries::new("funding", "Funding rate", StudyFormat::Percent)
+            }]));
+        }
+        dialog.poll_metrics(&ctx);
+        assert_eq!(dialog.metric_names, ["Metric: funding"]);
         use egui_kittest::{Harness, kittest::Queryable};
         for theme in [Theme::light(), Theme::dark()] {
             for width in [640.0, 800.0, 1440.0] {
