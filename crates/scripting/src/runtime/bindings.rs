@@ -86,17 +86,52 @@ pub(crate) fn line(names: &[String], defaults: &[String], title: &str) -> Option
 
 /// What refuses `title` as a line of study `study`, with the titles a script may write.
 pub(crate) fn no_line(study: &str, names: &[String], title: &str) -> String {
-    let titles: Vec<_> = names
+    let titles: Vec<_> = titles(names)
         .iter()
-        .map(|name| match only(names, short(name)) {
-            Some(_) => format!("{:?}", short(name)),
-            None => format!("{name:?}"),
-        })
+        .map(|title| format!("{title:?}"))
         .collect();
     format!(
         "{study} has no output {title:?} with these inputs; it has {}",
         titles.join(", ")
     )
+}
+
+/// The title a script writes for each line of `names`: the name without its last parenthesised
+/// group where no other line shares what is left, else the name as shown.
+pub(crate) fn titles(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .map(|name| match only(names, short(name)) {
+            Some(_) => short(name).to_owned(),
+            None => name.clone(),
+        })
+        .collect()
+}
+
+/// Why a script cannot call study `name`, checked on `study` at its defaults when the script
+/// compiles: its values would arrive later, or it has no line to read.
+pub(crate) fn unreadable(name: &str, study: &dyn Indicator) -> Option<String> {
+    if study.calculation().is_some() {
+        Some(format!(
+            "study {name:?} calculates on its own, so a script cannot read it"
+        ))
+    } else if study.line_count() == 0 {
+        Some(format!("study {name:?} has no line to read"))
+    } else {
+        None
+    }
+}
+
+/// Why study `name`, with the inputs a call gives, cannot run on a script's bars, checked on the
+/// first bar the call runs: it needs data that only the chart supplies.
+pub(crate) fn unsupplied(name: &str, study: &dyn Indicator) -> Option<String> {
+    if !study.data_requests().is_empty() {
+        Some(format!("{name} needs histories a script cannot supply"))
+    } else if !study.order_flow_inputs().is_empty() {
+        Some(format!("{name} needs order flow a script cannot supply"))
+    } else {
+        None
+    }
 }
 
 /// The only line of `names` shown as `title` without its last parenthesised group.
@@ -143,7 +178,7 @@ fn value(kind: &InputKind, arg: &Arg) -> Option<InputValue> {
 }
 
 /// What an input of `kind` takes, for an error; `columns` when it also reads whole columns.
-fn takes(kind: &InputKind, columns: bool) -> String {
+pub(crate) fn takes(kind: &InputKind, columns: bool) -> String {
     let range = |what: &str, min: f64, max: f64| {
         let from = (min > f64::MIN).then(|| format!(" from {min}"));
         let to = (max < f64::MAX).then(|| format!(" to {max}"));
@@ -235,11 +270,8 @@ impl Instance {
                 .map_err(|error| fault(error.to_string()))?;
         }
         let refuse = |message: String| Err((None, message));
-        if !study.data_requests().is_empty() {
-            return refuse(format!("{name} needs histories a script cannot supply"));
-        }
-        if !study.order_flow_inputs().is_empty() {
-            return refuse(format!("{name} needs order flow a script cannot supply"));
+        if let Some(message) = unsupplied(name, &*study) {
+            return refuse(message);
         }
         let names = study.line_names();
         let line = match &decl.output {

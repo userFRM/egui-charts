@@ -1,12 +1,14 @@
 //! Scripts against independent implementations: the native studies and `studies::helpers`,
 //! hand computed values, and the update contract of `Indicator`.
 
-use crate::{Limits, Script, examples};
+use crate::{EntryKind, Limits, Reference, Script, examples};
 use egui_charts::model::{Bar, BarClock, PriceSource, Timeframe};
 use egui_charts::studies::{
-    Calculation, ConfiguredStudy, CustomIndicator, Indicator, IndicatorFactory, InputValue, MACD,
-    RSI, Stochastic, StudyChart, StudyData, StudyDataRequest, StudySource, StudyTemplate, helpers,
+    Calculation, ConfiguredStudy, CustomIndicator, Indicator, IndicatorFactory, IndicatorValue,
+    InputKind, InputValue, MACD, RSI, Stochastic, StudyChart, StudyData, StudyDataRequest,
+    StudyInput, StudySource, StudyTemplate, helpers,
 };
+use std::collections::HashSet;
 use std::time::Duration;
 
 // `wasm-pack test --chrome` skips a suite left on its default, Node.js.
@@ -858,6 +860,209 @@ fn defined_calls_compile() {
     "####;
     let script = Script::compile("Test", source, &IndicatorFactory::new());
     assert!(script.is_ok(), "{script:?}");
+}
+
+/// The reference lists what a script compiles with: the studies a script can call, each input and
+/// output as written, each helper and series as written, and a host study's text intact in both
+/// formats.
+#[test]
+fn reference_names_compile_as_listed() {
+    let host = "Host \"quoted\"";
+    let mut factory = IndicatorFactory::new();
+    factory.register(host, move || {
+        let input = StudyInput::new(
+            "smoothing length",
+            "Smoothing",
+            InputValue::Length(3),
+            InputKind::Length(1, 9),
+        );
+        let none = |bars: &[Bar]| vec![IndicatorValue::None; bars.len()];
+        let study = CustomIndicator::new(host, none)
+            .with_inputs(vec![input], move |bars, _, _, _| none(bars))
+            .unwrap()
+            .with_description("a *b* _c_ `d` \\ e\nf")
+            .with_overlay(false)
+            .with_line_names(vec!["Line \"one\"".into()]);
+        Box::new(study)
+    });
+    let reference = Reference::new(&factory);
+    let entries = reference.entries();
+
+    let callable = |name: &String| {
+        factory.create(name).is_some_and(|mut study| {
+            study.calculate(&[]);
+            study.line_count() > 0
+                && study.calculation().is_none()
+                && study.data_requests().is_empty()
+                && study.order_flow_inputs().is_empty()
+        })
+    };
+    let mut expected: Vec<_> = factory.list().into_iter().filter(callable).collect();
+    // Its list of compared symbols requests their histories; a call can empty it.
+    expected.push("Performance".into());
+    expected.sort();
+    let studies: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.kind == EntryKind::Study)
+        .collect();
+    let names: Vec<_> = studies.iter().map(|study| study.name.clone()).collect();
+    assert_eq!(names, expected);
+    for (name, listed) in [
+        ("RSI", true),
+        ("Time Price Opportunity", false),
+        ("Book Size", false),
+    ] {
+        assert_eq!(names.iter().any(|listed| listed == name), listed, "{name}");
+    }
+    for study in &studies {
+        let created = factory.create(&study.name).unwrap();
+        let items = |kind| study.items.iter().filter(move |item| item.kind == kind);
+        let ids: HashSet<_> = items(EntryKind::Input).map(|item| &item.name).collect();
+        for input in created.inputs() {
+            assert!(ids.contains(&input.id), "{}: {}", study.name, input.id);
+        }
+        let outputs: Vec<_> = items(EntryKind::Output).collect();
+        assert_eq!(outputs.len(), created.line_names().len(), "{}", study.name);
+        // Inputs that take no value from a script are listed by id alone.
+        let given: Vec<_> = items(EntryKind::Input)
+            .map(|item| {
+                if item.signature.contains(" = ") {
+                    item.signature.clone()
+                } else {
+                    format!("{} = 0", item.signature)
+                }
+            })
+            .collect();
+        let mut source = String::new();
+        for chunk in given.chunks(60) {
+            source += &format!("let v = study({:?}, {});\n", study.name, chunk.join(", "));
+        }
+        for output in outputs {
+            source += &format!("let v = study({:?}, {});\n", study.name, output.signature);
+        }
+        source += "plot(\"x\", 1.0);";
+        if let Err(error) = Script::compile("Test", &source, &factory) {
+            panic!("{source}: {error}");
+        }
+    }
+    let performance = studies.iter().find(|study| study.name == "Performance");
+    let summary = &performance.unwrap().summary;
+    assert!(summary.contains("A call gives symbols = \"\""), "{summary}");
+    let call = |inputs: &str| {
+        let source = format!("plot(\"x\", study(\"Performance\"{inputs}));");
+        compile(&source).check(&bars(30, 11))
+    };
+    assert_eq!(call(", symbols = \"\""), Ok(()));
+    assert!(call("").unwrap_err().message.contains("needs histories"));
+
+    let fixture = bars(30, 11);
+    for entry in entries
+        .iter()
+        .filter(|entry| matches!(entry.kind, EntryKind::Helper | EntryKind::Series))
+    {
+        let value = match entry.signature.split_once('(') {
+            None => entry.signature.clone(),
+            Some((name, parameters)) => {
+                let arguments: Vec<_> = parameters
+                    .trim_end_matches(')')
+                    .split(", ")
+                    .map(|parameter| match parameter {
+                        "x" | "a" => "close",
+                        "b" => "open",
+                        "t" => "time",
+                        "y" => "1.0",
+                        "n" => "2",
+                        "lo" => "0.0",
+                        "hi" => "200.0",
+                        "digits" => "1",
+                        other => panic!("{}: no argument for {other}", entry.signature),
+                    })
+                    .collect();
+                format!("{name}({})", arguments.join(", "))
+            }
+        };
+        let script = compile(&format!("let v = {value}; plot(\"x\", 1.0);"));
+        assert_eq!(script.check(&fixture), Ok(()), "{value}");
+    }
+
+    let markdown = reference.to_markdown();
+    assert!(markdown.starts_with("# Script reference\n\n"), "{markdown}");
+    for written in [
+        "\n### Host \"quoted\"\n\n`study(\"Host \\\"quoted\\\"\")`, Custom. a \\*b\\* \\_c\\_ \\`d\\` \\\\ \
+         e f. Drawn in a pane of its own.\n",
+        "\n- `\"smoothing length\" = 3`: Smoothing: an int from 1 to 9.\n",
+    ] {
+        assert!(markdown.contains(written), "{written}");
+    }
+    let json = reference.to_json();
+    let json = ::rhai::Engine::new_raw().parse_json(&json, true).unwrap();
+    assert_eq!(json["format"].as_int(), Ok(1));
+    let listed = json["entries"].clone().into_array().unwrap();
+    assert_eq!(listed.len(), entries.len());
+    let field = |entry: &::rhai::Dynamic, key: &str| {
+        let entry = entry.clone().cast::<::rhai::Map>();
+        entry[key].clone()
+    };
+    let text = |value: ::rhai::Dynamic| value.into_string().unwrap();
+    let host = listed
+        .iter()
+        .find(|entry| text(field(entry, "name")) == host)
+        .unwrap();
+    assert_eq!(text(field(host, "kind")), "study");
+    assert_eq!(
+        text(field(host, "summary")),
+        "a *b* _c_ `d` \\ e\nf. Drawn in a pane of its own."
+    );
+    let items = field(host, "items").into_array().unwrap();
+    assert_eq!(text(field(&items[0], "name")), "smoothing length");
+    assert_eq!(
+        text(field(&items[0], "signature")),
+        "\"smoothing length\" = 3"
+    );
+    let output = items.last().unwrap();
+    assert_eq!(
+        (text(field(output, "kind")), text(field(output, "name"))),
+        ("output".to_owned(), "Line \"one\"".to_owned())
+    );
+}
+
+/// Completion offers what may stand before the cursor: names, the input kinds after
+/// `input NAME =`, registry names in the string of `study("`, and the input ids and output titles
+/// of the innermost study call; nothing in a comment, another string, after a dot or a number.
+#[test]
+fn completion_follows_the_cursor() {
+    let reference = Reference::new(&IndicatorFactory::new());
+    // Past the end of every text, so at its end.
+    let end = usize::MAX;
+    for (text, cursor, expected) in [
+        ("plot(close)", 2, &["plot"][..]),
+        // Inside the two bytes of the e with an acute accent, so before it.
+        ("pl\u{e9}", 3, &["plot"]),
+        ("pl", 0, &[]),
+        ("", 0, &[]),
+        ("study(\"RS", end, &["RSI", "RSI Divergence Indicator"]),
+        ("study(\"RSI\"", end, &[]),
+        ("study(\"RSI\", per", end, &["period"]),
+        ("study(\"RSI\", \"per", end, &["period"]),
+        (
+            "study(\"RSI\", source = study(\"MACD\", fa",
+            end,
+            &["fast_period"],
+        ),
+        ("study(\"RSI\", period = sm", end, &["sma"]),
+        ("study(\"BB\", output = \"BB L", end, &["BB Lower"]),
+        ("ro", end, &["round"]),
+        ("input n = le", end, &["length"]),
+        ("// sm", end, &[]),
+        ("/* x */ pl", end, &["plot"]),
+        ("plot(\"sm", end, &[]),
+        ("close.cl", end, &[]),
+        ("2pl", end, &[]),
+    ] {
+        let found = reference.complete(text, cursor);
+        let names: Vec<_> = found.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, expected, "{text:?} at {cursor}");
+    }
 }
 
 /// A script as deep as the limits admit: the top level nests calls as deep as it may around a

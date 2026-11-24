@@ -107,8 +107,8 @@ fn scope(spec: &ScriptSpec, inputs: &[InputValue], fed: bool, constants: bool) -
             scope.push_dynamic(name.to_owned(), value);
         }
     };
-    push(&mut scope, "na", Dynamic::from_float(f64::NAN));
-    for (name, series) in syntax::PRICES {
+    push(&mut scope, syntax::NA.0, Dynamic::from_float(f64::NAN));
+    for (name, series, _) in syntax::PRICES {
         push(&mut scope, name, Dynamic::from(Handle(series)));
     }
     for (at, input) in spec.inputs.iter().enumerate() {
