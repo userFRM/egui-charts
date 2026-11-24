@@ -544,10 +544,13 @@ reaches its threshold. Automatic thresholds are four times the median non-zero s
 ticks on both sides; an even number uses the mean of the middle pair. A wall has traded at least
 10% of its peak, retains half its peak and sees the inside move three ticks away. Below 20% of
 peak, a level is pulled when withdrawals reach 80% of peak, or swept when executions cover half
-the drop and a later trade prints beyond it. These outcomes end its zone. Aggregate withdrawals
-are each size drop minus executions since the preceding update; individual orders use cancels
-and reductions. Fresh liquidity is size added in one update within five ticks, using its own
-threshold with the same automatic rule. Snapshots establish a baseline, not fresh arrivals.
+the drop and a later trade prints beyond it. These outcomes end its zone. A level below 20% of
+peak that can no longer be pulled or swept, even if the size it still shows all executes or is
+all withdrawn, ends its zone without an outcome, and a later large level at its price opens a
+zone of its own. Aggregate withdrawals are each size drop minus executions since the preceding
+update; individual orders use cancels and reductions. Fresh liquidity is size added in one
+update within five ticks, using its own threshold with the same automatic rule. Snapshots
+establish a baseline, not fresh arrivals.
 
 Only individual orders can show spoofing: an order added within five ticks, at least the large
 level threshold, is withdrawn below 10% within two seconds with less than 10% executed. Aggregate
