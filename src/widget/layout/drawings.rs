@@ -301,8 +301,9 @@ impl DrawingLinks {
     }
 
     /// The drawings on other charts of the symbol and group of `key` that are not linked to a
-    /// drawing of its chart and equal `drawing` in content, one per chart: what a restored
-    /// original and its restored copy are.
+    /// drawing of its chart and equal `drawing` in content and pane, one per chart: what a
+    /// restored original and its restored copy are. A drawing in a study pane equals one in the
+    /// linked pane of the other chart (see [`Chart::linked_pane`]).
     fn equal_drawings(
         &self,
         charts: &[&mut Chart],
@@ -312,9 +313,6 @@ impl DrawingLinks {
         drawing: &Drawing,
         layout_wide: bool,
     ) -> Vec<Key> {
-        if drawing.pane.is_some() {
-            return Vec::new();
-        }
         let own = content(charts[key.0], drawing);
         (0..count)
             .filter(|&slot| {
@@ -326,8 +324,17 @@ impl DrawingLinks {
                         && charts[slot].shares_stored_drawings(charts[key.0]))
             })
             .filter_map(|slot| {
+                // A study-pane drawing equals one in the linked pane only.
+                let pane = match drawing.pane {
+                    Some(_) => Some(linked_study_pane(charts[key.0], drawing, charts[slot])?),
+                    None => None,
+                };
+                let in_pane = |d: &Drawing| match pane {
+                    Some(pane) => charts[slot].owner_pane(d) == Some(pane),
+                    None => d.pane.is_none(),
+                };
                 let other = charts[slot].drawings().drawings.iter().find(|d| {
-                    d.pane.is_none()
+                    in_pane(d)
                         && d.tool_type == drawing.tool_type
                         && d.chart_points.len() == drawing.chart_points.len()
                         && mirrored(d.folder_sync_mode(), layout_wide)
@@ -1005,7 +1012,8 @@ impl DrawingLinks {
     /// The mirrored drawings of its symbol that other charts hold, for each chart that came to the
     /// symbol and has no copy of them: each goes to that chart alone, once, unless a change of its
     /// link in this frame reaches that chart anyway. A drawing on a chart that is equal to one of
-    /// them is linked to it instead.
+    /// them is linked to it instead. A drawing in a study pane goes only to a chart with the
+    /// linked pane.
     fn arrived_drawings(
         &mut self,
         charts: &[&mut Chart],
@@ -1036,7 +1044,8 @@ impl DrawingLinks {
                 for drawing in &charts[source].drawings().drawings {
                     let key = (source, drawing.id);
                     let origin = self.origin_of(key);
-                    if drawing.pane.is_some()
+                    if (drawing.pane.is_some()
+                        && linked_study_pane(charts[source], drawing, charts[slot]).is_none())
                         || !mirrored(drawing.folder_sync_mode(), layout_wide)
                         || sent.iter().any(|&(changed, from)| {
                             changed == origin
@@ -1647,6 +1656,16 @@ fn delete_copy(
     written || kept
 }
 
+/// The study pane of `target` linked to the one of `source` that draws `drawing`: study ids are
+/// local to each chart, so a copy goes to the corresponding pane. `None` for a drawing that no
+/// study pane draws, and where `target` has no such pane.
+fn linked_study_pane(source: &Chart, drawing: &Drawing, target: &Chart) -> Option<PaneId> {
+    let pane = source
+        .owner_pane(drawing)
+        .filter(|pane| *pane != PaneId::MAIN)?;
+    source.linked_pane(pane, target)
+}
+
 /// `drawing` as a drawing of `target`, at the times its points have on `source`. Without bars on
 /// `target`, a copy that `replaces` a drawing there keeps those times, at which the chart puts its
 /// points once the bars load; a new copy waits for them.
@@ -1667,11 +1686,7 @@ fn map_drawing(
     {
         copy.pane = Some(target.stored_pane_owner(pane)?);
     } else if drawing.pane.is_some() {
-        // Study ids are local to each chart, so the copy goes to the corresponding pane.
-        let pane = source
-            .owner_pane(drawing)
-            .filter(|pane| *pane != PaneId::MAIN)?;
-        let pane = source.linked_pane(pane, target)?;
+        let pane = linked_study_pane(source, drawing, target)?;
         copy.pane = target.pane_series(pane).first().map(|id| id.0);
     }
     copy.chart_points = drawing
@@ -3315,6 +3330,39 @@ mod tests {
         assert!(chart.drawings_mut().set_folder_sync(&folder, Some(sync)));
     }
 
+    /// Two charts in a layout with drawing sync on, the first on SAMPLE with RSI(14) and a line at
+    /// 104 in its pane, the second on `symbol`, with RSI(14) too where `rsi`.
+    #[cfg(feature = "studies")]
+    fn rsi_pair(symbol: &str, rsi: bool) -> (ChartLayout, [Chart; 2]) {
+        let mut charts = [bars(60), bars(60)];
+        let study = charts[0].add_indicator(Box::new(crate::studies::RSI::new(14)));
+        if rsi {
+            charts[1].add_indicator(Box::new(crate::studies::RSI::new(14)));
+        }
+        charts[0].set_symbol("SAMPLE");
+        charts[1].set_symbol(symbol);
+        let mut layout = ChartLayout {
+            mode: super::super::ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        layout.sync.sync_drawings = true;
+        let mut drawing = line("");
+        drawing.pane = Some(study.0);
+        drawing.chart_points = vec![ChartPoint::new(2.0, 104.0), ChartPoint::new(4.0, 104.0)];
+        charts[0].drawings_mut().add_drawing(drawing).unwrap();
+        frames(&mut layout, &mut charts);
+        (layout, charts)
+    }
+
+    /// Whether `chart` draws a drawing at `price` in a study pane.
+    #[cfg(feature = "studies")]
+    fn in_study_pane(chart: &Chart, price: f64) -> bool {
+        chart.drawings().drawings.iter().any(|d| {
+            d.chart_points[0].price == price
+                && chart.drawing_pane(d.id) != Some(chart.main_series_pane())
+        })
+    }
+
     /// Three charts on `symbols` in a layout with drawing sync on, the first holding a line at
     /// 104 that the others of its symbol hold too.
     fn three_charts(symbols: [&str; 3]) -> (ChartLayout, [Chart; 3]) {
@@ -4080,7 +4128,8 @@ mod tests {
     /// made while it showed another symbol too, once its bars are in place, and not the ones local
     /// to their chart. It receives each once, in the version the frame ends with, never one
     /// deleted in that frame, also when another chart of the group brings the drawing back in
-    /// that frame.
+    /// that frame. A drawing in a study pane arrives in the linked pane, and not on a chart
+    /// without one.
     #[test]
     fn chart_arriving_at_a_symbol_receives_its_mirrored_drawings() {
         let (mut layout, mut charts) = mirrored_pair(false);
@@ -4188,6 +4237,30 @@ mod tests {
             }
             assert_eq!(steps, edits, "edits of the arriving chart, {name}");
         }
+
+        // A chart that comes to the symbol receives a line of an RSI pane in its own RSI pane,
+        // and nothing without one.
+        #[cfg(feature = "studies")]
+        for rsi in [true, false] {
+            let (mut layout, mut charts) = rsi_pair("OTHER", rsi);
+            draw(&mut charts[0], 90.0);
+            frames(&mut layout, &mut charts);
+            charts[1].set_symbol("SAMPLE");
+            frames(&mut layout, &mut charts);
+            let expected = if rsi { vec![90.0, 104.0] } else { vec![90.0] };
+            assert_eq!(prices(&charts), [vec![90.0, 104.0], expected], "RSI {rsi}");
+            assert_eq!(in_study_pane(&charts[1], 104.0), rsi, "RSI {rsi}");
+            assert!(!in_study_pane(&charts[1], 90.0), "RSI {rsi}");
+            // The RSI line, drawn first, stays linked.
+            move_first(&mut charts[0], 95.0);
+            frames(&mut layout, &mut charts);
+            let expected = if rsi { vec![90.0, 95.0] } else { vec![90.0] };
+            assert_eq!(
+                prices(&charts),
+                [vec![90.0, 95.0], expected],
+                "linked, RSI {rsi}"
+            );
+        }
     }
 
     /// What was done to the drawings of a chart while the switch was off stays on that chart when
@@ -4251,35 +4324,51 @@ mod tests {
     }
 
     /// Charts saved as snapshots and restored into a new layout show each mirrored drawing once,
-    /// still linked, however often that happens. A restore or a load replaces only the drawings
-    /// of the symbol it shows: those a chart put aside on other symbols stay linked, and a chart
-    /// new to a slot starts without links.
+    /// in the price pane or a linked study pane, still linked, however often that happens. A
+    /// restore or a load replaces only the drawings of the symbol it shows: those a chart put
+    /// aside on other symbols stay linked, and a chart new to a slot starts without links.
     #[cfg(feature = "ui")]
     #[test]
     fn mirrored_drawings_restored_from_snapshots_stay_single_and_linked() {
-        let (mut layout, mut charts) = mirrored_pair(false);
-        for restart in 1..=3 {
-            let saved = charts.each_ref().map(|chart| chart.snapshot().unwrap());
-            charts = [bars(60), bars(60)];
-            for (chart, saved) in charts.iter_mut().zip(&saved) {
-                chart.set_symbol("SAMPLE");
-                chart.restore(saved).unwrap();
+        type Start = fn() -> (ChartLayout, [Chart; 2]);
+        let starts: [(bool, Start); 2] = [
+            (false, || mirrored_pair(false)),
+            (true, || rsi_pair("SAMPLE", true)),
+        ];
+        for (study, start) in starts {
+            let (mut layout, mut charts) = start();
+            for restart in 1..=3 {
+                let saved = charts.each_ref().map(|chart| chart.snapshot().unwrap());
+                charts = [bars(60), bars(60)];
+                for (chart, saved) in charts.iter_mut().zip(&saved) {
+                    chart.set_symbol("SAMPLE");
+                    chart.restore(saved).unwrap();
+                }
+                layout = ChartLayout {
+                    mode: super::super::ChartLayoutMode::TwoHorizontal,
+                    ..Default::default()
+                };
+                layout.sync.sync_drawings = true;
+                frames(&mut layout, &mut charts);
+                assert_eq!(
+                    prices(&charts),
+                    [vec![104.0], vec![104.0]],
+                    "restart {restart}, study pane {study}"
+                );
+                assert_eq!(
+                    charts.each_ref().map(|c| in_study_pane(c, 104.0)),
+                    [study; 2],
+                    "restart {restart}"
+                );
             }
-            layout = ChartLayout {
-                mode: super::super::ChartLayoutMode::TwoHorizontal,
-                ..Default::default()
-            };
-            layout.sync.sync_drawings = true;
+            move_first(&mut charts[0], 95.0);
             frames(&mut layout, &mut charts);
             assert_eq!(
                 prices(&charts),
-                [vec![104.0], vec![104.0]],
-                "restart {restart}"
+                [vec![95.0], vec![95.0]],
+                "still linked, study pane {study}"
             );
         }
-        move_first(&mut charts[0], 95.0);
-        frames(&mut layout, &mut charts);
-        assert_eq!(prices(&charts), [vec![95.0], vec![95.0]], "still linked");
 
         // One chart restored from a snapshot of the symbol holding another line, whether it
         // shows the symbol or is away from it, and whether it drew the line here or holds its
