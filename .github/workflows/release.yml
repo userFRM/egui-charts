@@ -24,7 +24,16 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
-          generate_release_notes: true
+          # A version with a pre-release suffix, such as v0.3.0-alpha.1, is a preview and never
+          # the latest release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
+          # The changelog carries the notes: generated notes for a release cycle of this size exceed
+          # the release body limit.
+          body: |
+            ${{ contains(github.ref_name, '-') && format('A preview of the next release. Cargo uses it only when the version requirement names it, as `egui-charts = "={0}"` does, and its API can change in the next preview.', github.ref_name) || '' }}
+
+            The changes are listed in [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md).
 
   crates-publish:
     name: Publish to crates.io
@@ -34,15 +43,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - name: Publish egui-charts
+      - name: Publish egui-charts and egui-charts-scripting
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "egui-charts") | .version')
-          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"; exit 1; }
-          status=$(curl -s -o /dev/null -w '%{http_code}' -A "egui-charts-release (https://github.com/userFRM/egui-charts)" "https://crates.io/api/v1/crates/egui-charts/$version")
-          case "$status" in
-            200) echo "egui-charts $version is already on crates.io, skipping" ;;
-            404) cargo publish ;;
-            *) echo "::error::crates.io answered $status for egui-charts $version"; exit 1 ;;
-          esac
+          # Both crates carry the tag's version. The library goes first: the scripting crate
+          # requires its exact version, and `cargo publish` waits until the index has it.
+          publish() {
+            local dir=$1 name=$2 version status
+            version=$(cargo metadata --no-deps --format-version 1 --manifest-path "$dir/Cargo.toml" | jq -r --arg name "$name" '.packages[] | select(.name == $name) | .version')
+            [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME does not match $name version $version"; exit 1; }
+            status=$(curl -s -o /dev/null -w '%{http_code}' -A "egui-charts-release (https://github.com/userFRM/egui-charts)" "https://crates.io/api/v1/crates/$name/$version")
+            case "$status" in
+              200) echo "$name $version is already on crates.io, skipping" ;;
+              404) cargo publish --manifest-path "$dir/Cargo.toml" ;;
+              *) echo "::error::crates.io answered $status for $name $version"; exit 1 ;;
+            esac
+          }
+          publish . egui-charts
+          publish crates/scripting egui-charts-scripting
