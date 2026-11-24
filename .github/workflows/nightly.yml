@@ -106,7 +106,7 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: sha256sum -- * > SHA256SUMS && cat SHA256SUMS
-      - name: Move the nightly tag and replace the release assets
+      - name: Publish the nightly release
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ needs.select.outputs.sha }}
@@ -121,15 +121,12 @@ jobs:
 
           The Linux build needs glibc 2.39 or newer, as on Ubuntu 24.04 and Debian 13. These builds are not signed. On macOS, run \`xattr -d com.apple.quarantine egui-charts-demo\` in the extracted folder once before opening it. On Windows, if SmartScreen stops the program, choose More info, then Run anyway. \`SHA256SUMS\` lists the checksum of each archive.
           EOF
-          # The `nightly` tag is the one ref this workflow moves; it never touches a branch or a version tag.
-          if gh api "repos/$repo/git/ref/tags/nightly" > /dev/null 2>&1; then
-            gh api -X PATCH "repos/$repo/git/refs/tags/nightly" -f sha="$SHA" -F force=true > /dev/null
-          else
-            gh api -X POST "repos/$repo/git/refs" -f ref=refs/tags/nightly -f sha="$SHA" > /dev/null
-          fi
+          # The workflow token may not move a ref across a change to a workflow file, so the release and
+          # its `nightly` tag are deleted and created again at the new commit. The tag is the only ref
+          # this workflow touches; the download links keep their address.
           if gh release view nightly -R "$repo" > /dev/null 2>&1; then
-            gh release upload nightly dist/* -R "$repo" --clobber
-            gh release edit nightly -R "$repo" --title Nightly --notes-file notes.md --prerelease --latest=false
-          else
-            gh release create nightly dist/* -R "$repo" --title Nightly --notes-file notes.md --prerelease --latest=false --verify-tag
+            gh release delete nightly -R "$repo" --cleanup-tag --yes
+          elif gh api "repos/$repo/git/ref/tags/nightly" > /dev/null 2>&1; then
+            gh api -X DELETE "repos/$repo/git/refs/tags/nightly"
           fi
+          gh release create nightly dist/* -R "$repo" --target "$SHA" --title Nightly --notes-file notes.md --prerelease --latest=false
