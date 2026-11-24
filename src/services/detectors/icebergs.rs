@@ -11,6 +11,7 @@ use super::{
 };
 use crate::data::{OrderEvent, RestingOrder, meets_threshold};
 use crate::model::{Signal, SignalId, SignalShape, Tick};
+use crate::scales::VolumeFormatter;
 use crate::services::SignalEvent;
 
 /// Order-level refills at one price and side. An exact refill follows depletion
@@ -32,6 +33,8 @@ impl Default for IcebergRule {
 
 #[derive(Default)]
 pub(super) struct Icebergs {
+    /// Writes the sizes in tooltips.
+    sizes_label: VolumeFormatter,
     levels: BTreeMap<Price, Episode>,
     orders: HashMap<u64, (f64, f64, DateTime<Utc>)>,
     next: u64,
@@ -48,6 +51,17 @@ struct Episode {
 }
 
 impl Icebergs {
+    /// The detector of a symbol whose sizes are written with `volume_decimals` decimals, or 2
+    /// like the chart's volume readouts.
+    pub(super) fn new(volume_decimals: Option<u8>) -> Self {
+        Self {
+            sizes_label: VolumeFormatter {
+                precision: volume_decimals.map_or(2, usize::from),
+            },
+            ..Self::default()
+        }
+    }
+
     pub(super) fn clear(&mut self) {
         self.levels.clear();
         self.orders.clear();
@@ -105,6 +119,7 @@ impl Icebergs {
             for (&price, episode) in &mut self.levels {
                 Self::report(
                     &mut self.next,
+                    &self.sizes_label,
                     price,
                     time,
                     tick,
@@ -172,6 +187,7 @@ impl Icebergs {
                     episode.refills += 1;
                     Self::report(
                         &mut self.next,
+                        &self.sizes_label,
                         price,
                         time,
                         tick,
@@ -215,6 +231,7 @@ impl Icebergs {
                         episode.refills += 1;
                         Self::report(
                             &mut self.next,
+                            &self.sizes_label,
                             at,
                             time,
                             tick,
@@ -245,6 +262,7 @@ impl Icebergs {
 
     fn report(
         next: &mut u64,
+        sizes_label: &VolumeFormatter,
         price: Price,
         time: DateTime<Utc>,
         tick: f64,
@@ -276,8 +294,8 @@ impl Icebergs {
             tooltip: Some(format!(
                 "{} refills, executed {}, shown {}{}",
                 episode.refills,
-                episode.executed,
-                episode.shown,
+                sizes_label.format_with_min_unit_decimals(episode.executed, 2),
+                sizes_label.format_with_min_unit_decimals(episode.shown, 2),
                 if estimate {
                     "; estimate from aggregated depth"
                 } else {

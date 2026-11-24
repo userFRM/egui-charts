@@ -11,6 +11,7 @@ use super::{
 };
 use crate::data::{OrderEvent, RestingOrder, meets_threshold};
 use crate::model::{OrderBook, Signal, SignalId, SignalShape, Tick};
+use crate::scales::VolumeFormatter;
 use crate::services::SignalEvent;
 
 /// Follows levels within ten ticks of their side's inside, and size added within five ticks.
@@ -36,6 +37,8 @@ impl Default for LiquidityRule {
 
 #[derive(Default)]
 pub(super) struct Liquidity {
+    /// Writes the sizes in tooltips.
+    sizes_label: VolumeFormatter,
     levels: BTreeMap<Price, Level>,
     orders: HashMap<u64, Order>,
     next: u64,
@@ -63,6 +66,17 @@ struct Order {
 }
 
 impl Liquidity {
+    /// The detector of a symbol whose sizes are written with `volume_decimals` decimals, or 2
+    /// like the chart's volume readouts.
+    pub(super) fn new(volume_decimals: Option<u8>) -> Self {
+        Self {
+            sizes_label: VolumeFormatter {
+                precision: volume_decimals.map_or(2, usize::from),
+            },
+            ..Self::default()
+        }
+    }
+
     pub(super) fn clear(&mut self, out: &mut Vec<SignalEvent>) {
         for level in self.levels.values() {
             out.push(SignalEvent::Remove(SignalId(format!(
@@ -143,13 +157,20 @@ impl Liquidity {
         }
         for price in swept {
             let level = self.levels.remove(&price).unwrap();
-            out.push(Self::zone(price, tick, &level, Some(fill.ts)));
+            out.push(Self::zone(
+                price,
+                tick,
+                &level,
+                Some(fill.ts),
+                &self.sizes_label,
+            ));
             out.push(Self::marker(
                 DetectionKind::LiquiditySweep,
                 price,
                 fill.ts,
                 tick,
                 &level,
+                &self.sizes_label,
             ));
         }
     }
@@ -212,7 +233,14 @@ impl Liquidity {
                     .is_some_and(|inside| inside.abs_diff(price.1) >= 3)
             {
                 level.wall = true;
-                out.push(Self::marker(DetectionKind::Wall, price, time, tick, level));
+                out.push(Self::marker(
+                    DetectionKind::Wall,
+                    price,
+                    time,
+                    tick,
+                    level,
+                    &self.sizes_label,
+                ));
             }
             if !meets_threshold(size, level.peak * 0.2) {
                 if level.beyond && meets_threshold(level.executed, (level.peak - size) * 0.5) {
@@ -224,20 +252,39 @@ impl Liquidity {
         }
         for price in swept {
             let level = self.levels.remove(&price).unwrap();
-            out.push(Self::zone(price, tick, &level, Some(time)));
+            out.push(Self::zone(
+                price,
+                tick,
+                &level,
+                Some(time),
+                &self.sizes_label,
+            ));
             out.push(Self::marker(
                 DetectionKind::LiquiditySweep,
                 price,
                 time,
                 tick,
                 &level,
+                &self.sizes_label,
             ));
         }
         for price in pulled {
             let level = self.levels.remove(&price).unwrap();
-            out.push(Self::zone(price, tick, &level, Some(time)));
-            let mut marker =
-                Self::marker(DetectionKind::PulledLiquidity, price, time, tick, &level);
+            out.push(Self::zone(
+                price,
+                tick,
+                &level,
+                Some(time),
+                &self.sizes_label,
+            ));
+            let mut marker = Self::marker(
+                DetectionKind::PulledLiquidity,
+                price,
+                time,
+                tick,
+                &level,
+                &self.sizes_label,
+            );
             if let SignalEvent::Upsert(signal) = &mut marker
                 && out.iter().any(|event| matches!(event, SignalEvent::Upsert(other)
                     if other.category == DetectionKind::Spoofing.category() && other.shape == signal.shape))
@@ -272,6 +319,7 @@ impl Liquidity {
                     time,
                     tick,
                     &level,
+                    &self.sizes_label,
                 ));
             }
             if book.near(price, 10)
@@ -292,7 +340,7 @@ impl Liquidity {
                     beyond: false,
                     largest: shown.largest.map(|(id, _)| id),
                 };
-                out.push(Self::zone(price, tick, &level, None));
+                out.push(Self::zone(price, tick, &level, None, &self.sizes_label));
                 self.levels.insert(price, level);
             }
         }
@@ -387,6 +435,7 @@ impl Liquidity {
                             time,
                             tick,
                             &level,
+                            &self.sizes_label,
                         ));
                     }
                     self.orders.remove(id);
@@ -395,7 +444,13 @@ impl Liquidity {
         }
     }
 
-    fn zone(price: Price, tick: f64, level: &Level, to: Option<DateTime<Utc>>) -> SignalEvent {
+    fn zone(
+        price: Price,
+        tick: f64,
+        level: &Level,
+        to: Option<DateTime<Utc>>,
+        sizes_label: &VolumeFormatter,
+    ) -> SignalEvent {
         SignalEvent::Upsert(Signal {
             id: SignalId(format!("liquidity-{}", level.number)),
             shape: SignalShape::PriceZone {
@@ -406,7 +461,7 @@ impl Liquidity {
             },
             category: DetectionKind::LargeLiquidity.category().into(),
             label: None,
-            tooltip: Some(Self::tooltip(level)),
+            tooltip: Some(Self::tooltip(level, sizes_label)),
         })
     }
 
@@ -416,6 +471,7 @@ impl Liquidity {
         time: DateTime<Utc>,
         tick: f64,
         level: &Level,
+        sizes_label: &VolumeFormatter,
     ) -> SignalEvent {
         SignalEvent::Upsert(Signal {
             id: SignalId(format!("{}-{}", kind.category(), level.number)),
@@ -427,16 +483,21 @@ impl Liquidity {
             category: kind.category().into(),
             label: (!matches!(kind, DetectionKind::FreshLiquidity | DetectionKind::Wall))
                 .then(|| kind.category().into()),
-            tooltip: Some(format!("{}: {}", kind.category(), Self::tooltip(level))),
+            tooltip: Some(format!(
+                "{}: {}",
+                kind.category(),
+                Self::tooltip(level, sizes_label)
+            )),
         })
     }
 
-    fn tooltip(level: &Level) -> String {
+    fn tooltip(level: &Level, sizes_label: &VolumeFormatter) -> String {
+        let size = |size| sizes_label.format_with_min_unit_decimals(size, 2);
         format!(
             "Peak {}, executed {}, withdrawn {}{}",
-            level.peak,
-            level.executed,
-            level.withdrawn,
+            size(level.peak),
+            size(level.executed),
+            size(level.withdrawn),
             level
                 .largest
                 .map_or_else(String::new, |id| format!(", largest resting order {id}"))

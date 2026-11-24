@@ -655,9 +655,9 @@ impl State {
             book: Book::new(Some(tick)),
             orders: None,
             depth: Depth::default(),
-            icebergs: Icebergs::default(),
-            absorption: Absorption::default(),
-            liquidity: Liquidity::default(),
+            icebergs: Icebergs::new(instrument.volume_decimals),
+            absorption: Absorption::new(instrument.volume_decimals),
+            liquidity: Liquidity::new(instrument.volume_decimals),
             trade_ids: VecDeque::new(),
             seen_ids: HashSet::new(),
             detections: VecDeque::new(),
@@ -2761,6 +2761,194 @@ mod tests {
             1,
             "added size holds despite less than half remaining"
         );
+    }
+
+    /// Absorption, iceberg, liquidity and footprint condition texts, and the alerts that carry
+    /// them, write sizes as big trade labels do: with the instrument's volume decimals, two
+    /// without them, and K, M and B values with at least two.
+    #[test]
+    fn detector_texts_write_sizes_with_the_volume_decimals() {
+        use OrderSide::{Buy, Sell};
+        let ms = chrono::TimeDelta::milliseconds;
+        // Volume decimals, the size of each fill, and the texts of the absorption, the iceberg
+        // estimate, the large liquidity zone on arrival and once pulled, and the sell volume level.
+        let rows = [
+            (
+                None,
+                0.1,
+                [
+                    "Absorbed 0.30, opening shown 0.10",
+                    "2 refills, executed 0.30, shown 0.10; estimate from aggregated depth",
+                    "Peak 1.60, executed 0.00, withdrawn 0.00",
+                    "Peak 1.60, executed 0.30, withdrawn 1.30",
+                    "Sell volume 0.30 above 0.25",
+                ],
+            ),
+            (
+                Some(0),
+                0.1,
+                [
+                    "Absorbed 0, opening shown 0",
+                    "2 refills, executed 0, shown 0; estimate from aggregated depth",
+                    "Peak 2, executed 0, withdrawn 0",
+                    "Peak 2, executed 0, withdrawn 1",
+                    "Sell volume 0 above 0",
+                ],
+            ),
+            (
+                Some(2),
+                0.1,
+                [
+                    "Absorbed 0.30, opening shown 0.10",
+                    "2 refills, executed 0.30, shown 0.10; estimate from aggregated depth",
+                    "Peak 1.60, executed 0.00, withdrawn 0.00",
+                    "Peak 1.60, executed 0.30, withdrawn 1.30",
+                    "Sell volume 0.30 above 0.25",
+                ],
+            ),
+            (
+                Some(0),
+                1_234_567.8,
+                [
+                    "Absorbed 3.70M, opening shown 1.23M",
+                    "2 refills, executed 3.70M, shown 1.23M; estimate from aggregated depth",
+                    "Peak 19.75M, executed 0, withdrawn 0",
+                    "Peak 19.75M, executed 3.70M, withdrawn 16.05M",
+                    "Sell volume 3.70M above 3.09M",
+                ],
+            ),
+        ];
+        let (mut written, mut expected) = (Vec::new(), Vec::new());
+        for (decimals, size, texts) in rows {
+            let mut instrument = Instrument::new("ES").with_tick_size(0.25);
+            instrument.volume_decimals = decimals;
+            let host = |configure: &dyn Fn(&mut DetectorSettings)| {
+                let host = Host::tracking(&instrument, Timeframe::Min1, None);
+                let mut settings = host.detectors.settings();
+                configure(&mut settings);
+                host.detectors.set_settings(settings);
+                host
+            };
+            let row = format!("volume decimals {decimals:?}, size {size}");
+            // The text of the only `category` detection among `events`.
+            let text = |events: &[SignalEvent], category| {
+                let signals = of_kind(events.to_vec(), category);
+                assert_eq!(signals.len(), 1, "{category}, {row}");
+                signals[0].tooltip.clone().unwrap()
+            };
+            let alerts = |host: &Host| -> Vec<_> {
+                (host.detectors.take_alerts().into_iter())
+                    .map(|alert| (alert.kind, alert.notification.body))
+                    .collect()
+            };
+            let buys = |host: &Host| {
+                for at in [0, 100, 200] {
+                    let trade = Tick::new(time(0) + ms(at), 100.0, size, Some(Buy));
+                    host.detectors
+                        .push("ES", trade.ts, &MarketEvent::Trade(trade));
+                }
+            };
+
+            // The ask holds its size, so the episode closes a second after the last fill as
+            // absorption, and the depth update estimates two refills.
+            let held = host(&|settings| {
+                settings.absorption.enabled = true;
+                settings.absorption.alert = true;
+                settings.absorption.rule.threshold = Threshold::Fixed(size);
+                settings.icebergs.enabled = true;
+                settings.icebergs.alert = true;
+            });
+            held.detectors.push(
+                "ES",
+                time(0),
+                &MarketEvent::DepthSnapshot {
+                    sequence: 1,
+                    book: depth_book(&[], &[(100.0, size)]),
+                },
+            );
+            buys(&held);
+            held.detectors.push(
+                "ES",
+                time(1) + ms(200),
+                &MarketEvent::DepthDelta {
+                    sequence: 2,
+                    book: depth_book(&[], &[(100.0, size)]),
+                },
+            );
+            let events = held.events();
+            let (absorption, iceberg) = (text(&events, "Absorption"), text(&events, "Icebergs"));
+            assert_eq!(
+                alerts(&held),
+                [
+                    (DetectionKind::Iceberg, iceberg.clone()),
+                    (DetectionKind::Absorption, absorption.clone())
+                ],
+                "{row}"
+            );
+
+            // A resting level of 16 fill sizes, filled three times and then withdrawn, is pulled.
+            let pulled = host(&|settings| {
+                settings.liquidity.enabled = true;
+                settings.liquidity.alert = true;
+                settings.liquidity.rule.threshold = Threshold::Fixed(16.0 * size);
+            });
+            pulled.detectors.push(
+                "ES",
+                time(0),
+                &MarketEvent::DepthSnapshot {
+                    sequence: 1,
+                    book: depth_book(&[], &[(100.0, 16.0 * size)]),
+                },
+            );
+            let arrival = text(&pulled.events(), "Large liquidity");
+            buys(&pulled);
+            pulled.detectors.push(
+                "ES",
+                time(1),
+                &MarketEvent::DepthDelta {
+                    sequence: 2,
+                    book: depth_book(&[], &[(100.0, 0.0)]),
+                },
+            );
+            let events = pulled.events();
+            let liquidity = text(&events, "Large liquidity");
+            let marker = format!("Pulled liquidity: {liquidity}");
+            assert_eq!(text(&events, "Pulled liquidity"), marker, "{row}");
+            assert_eq!(
+                alerts(&pulled),
+                [
+                    (DetectionKind::LargeLiquidity, arrival.clone()),
+                    (DetectionKind::PulledLiquidity, marker)
+                ],
+                "{row}"
+            );
+
+            // The first bar is left out; in the next, sells of one and two fill sizes pass 2.5.
+            let footprint = host(&|settings| {
+                settings.footprint.enabled = true;
+                settings.footprint.alert = true;
+                settings.footprint.rule.sell_volume_above = Some(2.5 * size);
+            });
+            for (second, sizes, side) in [(0, 1.0, Buy), (60, 1.0, Sell), (61, 2.0, Sell)] {
+                let trade = MarketEvent::Trade(fill(second, 100.0, sizes * size, side, None));
+                footprint.detectors.push("ES", time(second), &trade);
+            }
+            let condition = text(&footprint.events(), "Footprint conditions");
+            assert_eq!(
+                alerts(&footprint),
+                [(DetectionKind::FootprintCondition, condition.clone())],
+                "{row}"
+            );
+
+            written.push((
+                decimals,
+                size,
+                [absorption, iceberg, arrival, liquidity, condition],
+            ));
+            expected.push((decimals, size, texts.map(str::to_owned)));
+        }
+        // Compared once, so that a failure lists every row.
+        assert_eq!(written, expected);
     }
 
     #[test]
