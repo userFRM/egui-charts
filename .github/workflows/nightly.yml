@@ -1,0 +1,133 @@
+name: Nightly
+
+# Once a day, the demo as native release builds for Linux, Windows and macOS, from the newest main
+# commit whose CI passed, published as the rolling `nightly` pre-release.
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer run waits for a running publish instead of cancelling it.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  select:
+    name: Select the commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
+          [ -n "$sha" ] || { echo "::error::no CI run on main has passed"; exit 1; }
+          built=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/nightly" --jq .object.sha 2>/dev/null) || built=
+          if [ "$sha" = "$built" ]; then
+            echo "The nightly build is already at $sha, the newest main commit whose CI passed."
+            sha=
+          else
+            echo "Building $sha."
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Demo (${{ matrix.name }})
+    needs: select
+    if: needs.select.outputs.sha != ''
+    strategy:
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-latest }
+          - { name: windows-x86_64, os: windows-latest }
+          - { name: macos-arm64, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.select.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: examples/demo -> target
+          key: nightly-${{ matrix.name }}
+      - name: Build
+        run: cargo build --release --locked --manifest-path examples/demo/Cargo.toml
+      - name: Archive
+        shell: bash
+        run: |
+          dir="egui-charts-demo-${{ matrix.name }}"
+          mkdir -p "$dir" dist
+          cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY-NOTICES.md "$dir/"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp examples/demo/target/release/egui-charts-demo.exe "$dir/"
+            7z a -tzip "dist/$dir.zip" "$dir" > /dev/null
+          else
+            cp examples/demo/target/release/egui-charts-demo "$dir/"
+            tar -czf "dist/$dir.tar.gz" "$dir"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: demo-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: Publish
+    needs: [select, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.select.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: demo-*
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - name: Move the nightly tag and replace the release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.select.outputs.sha }}
+        run: |
+          repo="$GITHUB_REPOSITORY"
+          short=${SHA:0:9}
+          since=$(git describe --tags --abbrev=0 --match 'v*' "$SHA")
+          cat > notes.md <<EOF
+          The demo built from main at [\`$short\`](https://github.com/$repo/commit/$SHA) on $(date -u '+%Y-%m-%d') UTC, after its CI passed. It is rebuilt once a day when main has changed. Published versions are on the releases page.
+
+          Changes since $since: the [commits](https://github.com/$repo/compare/$since...$SHA) and the Unreleased section of the [changelog](https://github.com/$repo/blob/$SHA/CHANGELOG.md). To use the library from main in your own application, see the [installation guide](https://userfrm.github.io/egui-charts/docs/installation/).
+
+          These builds are not signed. On macOS, run \`xattr -d com.apple.quarantine egui-charts-demo\` in the extracted folder once before opening it. On Windows, if SmartScreen stops the program, choose More info, then Run anyway. \`SHA256SUMS\` lists the checksum of each archive.
+          EOF
+          # The `nightly` tag is the one ref this workflow moves; it never touches a branch or a version tag.
+          if gh api "repos/$repo/git/ref/tags/nightly" > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$repo/git/refs/tags/nightly" -f sha="$SHA" -F force=true > /dev/null
+          else
+            gh api -X POST "repos/$repo/git/refs" -f ref=refs/tags/nightly -f sha="$SHA" > /dev/null
+          fi
+          if gh release view nightly -R "$repo" > /dev/null 2>&1; then
+            gh release upload nightly dist/* -R "$repo" --clobber
+            gh release edit nightly -R "$repo" --title Nightly --notes-file notes.md --prerelease --latest=false
+          else
+            gh release create nightly dist/* -R "$repo" --title Nightly --notes-file notes.md --prerelease --latest=false --verify-tag
+          fi

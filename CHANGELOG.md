@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- Nightly builds of the demo for Linux x86_64, Windows x86_64 and macOS arm64. Once a day, the newest main commit whose CI passed is built and published as the `nightly` pre-release on GitHub, with a `SHA256SUMS` file for the archives.
+
 ## [0.3.0-alpha.1] - 2026-11-24
 
 ### Added

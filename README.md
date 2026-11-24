@@ -7,7 +7,7 @@
 
 Financial charts for Rust applications built with egui 0.37.
 
-This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow **main**, where 0.3 is in development, using **egui/eframe 0.37**. Browse the [main API (rustdoc and symbol search)](https://userfrm.github.io/egui-charts/docs/api/egui_charts/index.html). Previews of 0.3 are published on crates.io, starting with **0.3.0-alpha.1**. The stable **0.2.0** crate uses **egui/eframe 0.33.3** and has separate [release API documentation](https://docs.rs/egui-charts/0.2.0/egui_charts/).
+This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow **main**, where 0.3 is in development, using **egui/eframe 0.37**. Browse the [main API (rustdoc and symbol search)](https://userfrm.github.io/egui-charts/docs/api/egui_charts/index.html). Previews of 0.3 are published on crates.io, starting with **0.3.0-alpha.1**, and the demo is built for Linux, Windows and macOS every day as the [nightly](https://github.com/userFRM/egui-charts/releases/tag/nightly) pre-release. The stable **0.2.0** crate uses **egui/eframe 0.33.3** and has separate [release API documentation](https://docs.rs/egui-charts/0.2.0/egui_charts/).
 
 <p>
   <a href="https://userfrm.github.io/egui-charts/demo/"><img src="https://img.shields.io/badge/Live_demo-0969da?style=flat-square" alt="Live demo"></a>
