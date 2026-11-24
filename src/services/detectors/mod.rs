@@ -2961,10 +2961,14 @@ mod tests {
                 "sweep unrelated update",
                 "pull after refill",
                 "wall",
+                "leave",
+                "sweep of the rest",
+                "pull of the rest",
             ] {
                 let mut host = Host::new(Some(1_000.0));
                 let mut settings = host.detectors.settings();
                 settings.liquidity.enabled = true;
+                settings.liquidity.alert = true;
                 settings.liquidity.rule.threshold = Threshold::Fixed(50.0);
                 settings.liquidity.rule.fresh_threshold = Threshold::Fixed(50.0);
                 host.detectors.set_settings(settings);
@@ -2987,6 +2991,8 @@ mod tests {
                     | "sweep before depth"
                     | "sweep unrelated update"
                     | "pull after refill" => 90.0,
+                    "leave" | "sweep of the rest" => 40.0,
+                    "pull of the rest" => 15.0,
                     "wall" => 10.0,
                     _ => 0.0,
                 };
@@ -3013,18 +3019,19 @@ mod tests {
                     );
                 }
                 let away = if bid { 100.75 } else { 99.25 };
+                let beyond = if bid { 99.75 } else { 100.25 };
                 if outcome == "sweep before depth" {
-                    let beyond = if bid { 99.75 } else { 100.25 };
                     host.detectors.push(
                         "ES",
                         time(1),
                         &MarketEvent::Trade(fill(1, beyond, 1.0, side, None)),
                     );
                 }
-                let rows = if outcome == "wall" {
-                    vec![(100.0, 90.0), (away, 1.0)]
-                } else {
-                    vec![(100.0, 10.0)]
+                let rows = match outcome {
+                    "wall" => vec![(100.0, 90.0), (away, 1.0)],
+                    "leave" => vec![(100.0, 0.0)],
+                    "pull of the rest" => vec![(100.0, 15.0)],
+                    _ => vec![(100.0, 10.0)],
                 };
                 host.detectors.push(
                     "ES",
@@ -3034,45 +3041,110 @@ mod tests {
                         book: book(&rows),
                     },
                 );
-                if matches!(outcome, "sweep" | "sweep unrelated update") {
-                    let beyond = if bid { 99.75 } else { 100.25 };
+                if outcome == "sweep of the rest" {
+                    // The rest executes after the update: 50 executed covers half the drop of 90.
+                    host.detectors.push(
+                        "ES",
+                        time(3),
+                        &MarketEvent::Trade(fill(3, 100.0, 10.0, side, None)),
+                    );
+                }
+                if matches!(
+                    outcome,
+                    "sweep" | "sweep unrelated update" | "sweep of the rest" | "leave"
+                ) {
                     host.detectors.push(
                         "ES",
                         time(3),
                         &MarketEvent::Trade(fill(3, beyond, 1.0, side, None)),
                     );
                 }
+                if outcome == "pull of the rest" {
+                    // 70 withdrawn and the rest of 15 make 85 of the peak of 100.
+                    host.detectors.push(
+                        "ES",
+                        time(3),
+                        &MarketEvent::DepthDelta {
+                            sequence: 3,
+                            book: book(&[(100.0, 0.0)]),
+                        },
+                    );
+                }
+                if outcome == "leave" {
+                    // 40 executed and 60 withdrawn can be neither a sweep nor a pull, so the level
+                    // ends and the next large size at its price is a level of its own.
+                    for (sequence, second, size) in [(3, 10, 100.0), (4, 20, 0.0)] {
+                        host.detectors.push(
+                            "ES",
+                            time(second),
+                            &MarketEvent::DepthDelta {
+                                sequence,
+                                book: book(&[(100.0, size)]),
+                            },
+                        );
+                    }
+                }
                 let events = host.events();
                 let category = match outcome {
-                    "pull" | "pull after refill" => "Pulled liquidity",
-                    "sweep" | "sweep before depth" | "sweep unrelated update" => "Liquidity sweeps",
+                    "pull" | "pull after refill" | "pull of the rest" | "leave" => {
+                        "Pulled liquidity"
+                    }
+                    "sweep"
+                    | "sweep before depth"
+                    | "sweep unrelated update"
+                    | "sweep of the rest" => "Liquidity sweeps",
                     _ => "Walls",
                 };
-                assert_eq!(
-                    of_kind(events.clone(), category).len(),
-                    1,
-                    "{outcome} bid={bid}"
-                );
-                let ended = of_kind(events, "Large liquidity");
-                if outcome == "wall" {
-                    assert!(ended.is_empty());
-                } else {
-                    assert_eq!(ended.len(), 1);
-                    assert_eq!(ended[0].id, zones[0].id);
+                let markers = of_kind(events.clone(), category);
+                assert_eq!(markers.len(), 1, "{outcome} bid={bid}");
+                let zone = |id: &SignalId, from, to: Option<i64>| {
+                    let shape = SignalShape::PriceZone {
+                        from: time(from),
+                        to: to.map(time),
+                        price: 100.0,
+                        direction: if bid { Direction::Up } else { Direction::Down },
+                    };
+                    (id.clone(), shape)
+                };
+                let first = &zones[0].id;
+                let second = SignalId("liquidity-3".into());
+                let expected = match outcome {
+                    "wall" => vec![],
+                    "sweep"
+                    | "sweep unrelated update"
+                    | "sweep of the rest"
+                    | "pull of the rest" => {
+                        vec![zone(first, 0, Some(3))]
+                    }
+                    "leave" => vec![
+                        zone(first, 0, Some(2)),
+                        zone(&second, 10, None),
+                        zone(&second, 10, Some(20)),
+                    ],
+                    _ => vec![zone(first, 0, Some(2))],
+                };
+                let ended: Vec<_> = of_kind(events, "Large liquidity")
+                    .into_iter()
+                    .map(|zone| (zone.id, zone.shape))
+                    .collect();
+                assert_eq!(ended, expected, "{outcome} bid={bid}");
+                if outcome == "leave" {
                     assert_eq!(
-                        ended[0].shape,
-                        SignalShape::PriceZone {
-                            from: time(0),
-                            to: Some(time(
-                                if matches!(outcome, "sweep" | "sweep unrelated update") {
-                                    3
-                                } else {
-                                    2
-                                }
-                            )),
-                            price: 100.0,
-                            direction: if bid { Direction::Up } else { Direction::Down }
-                        }
+                        markers[0].tooltip.as_deref(),
+                        Some("Pulled liquidity: Peak 100, executed 0, withdrawn 100")
+                    );
+                    let alerts: Vec<_> = (host.detectors.take_alerts().into_iter())
+                        .map(|alert| alert.kind)
+                        .collect();
+                    assert_eq!(
+                        alerts,
+                        [
+                            DetectionKind::LargeLiquidity,
+                            DetectionKind::FreshLiquidity,
+                            DetectionKind::LargeLiquidity,
+                            DetectionKind::PulledLiquidity
+                        ],
+                        "bid={bid}"
                     );
                 }
                 // Resubscribing retains the final zone and marker, including its end.

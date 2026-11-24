@@ -205,6 +205,7 @@ impl Liquidity {
         });
         let mut pulled = Vec::new();
         let mut swept = Vec::new();
+        let mut left = Vec::new();
         for (&price, level) in &mut self.levels {
             if time < level.from {
                 continue;
@@ -247,6 +248,11 @@ impl Liquidity {
                     swept.push(price);
                 } else if meets_threshold(level.withdrawn, level.peak * 0.8) {
                     pulled.push(price);
+                } else if !meets_threshold(level.executed + size, (level.peak - size) * 0.5)
+                    && !meets_threshold(level.withdrawn + size, level.peak * 0.8)
+                {
+                    // Not even the size it still shows can make it a sweep or a pull any more.
+                    left.push(price);
                 }
             }
         }
@@ -292,6 +298,16 @@ impl Liquidity {
                 signal.label = None;
             }
             out.push(marker);
+        }
+        for price in left {
+            let level = self.levels.remove(&price).unwrap();
+            out.push(Self::zone(
+                price,
+                tick,
+                &level,
+                Some(time),
+                &self.sizes_label,
+            ));
         }
         for (&price, shown) in &book.levels {
             let added = (shown.size - before.size(price)).max(0.0);
