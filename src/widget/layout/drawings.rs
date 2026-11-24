@@ -4942,6 +4942,62 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "studies")]
+    #[test]
+    fn a_study_removed_on_another_symbol_keeps_the_stored_pane_of_its_drawings() {
+        for hidden in [false, true] {
+            let mut w = StudyWindows::new(false);
+            let original = shared_records(&w.shared)[0].clone();
+            let record = |w: &StudyWindows| {
+                let written = shared_records(&w.shared);
+                let found =
+                    (written.as_array().unwrap().iter()).find(|r| r["id"] == original["id"]);
+                found.expect("stored RSI line").clone()
+            };
+            w.charts[0]
+                .drawings_mut()
+                .set_shared_drawings_hidden(hidden);
+            w.charts[0].set_symbol("OTHER");
+            w.settle();
+            assert!(w.charts[0].user_action(|c| c.remove_series(w.owners[0])));
+            w.settle();
+            w.charts[0].set_symbol("SAMPLE");
+            w.settle();
+            // Any change of the symbol's drawings writes the line's record again.
+            w.charts[0].user_action(|c| draw(c, 11.));
+            w.settle();
+            w.check_peers(10.);
+            let written = record(&w);
+            for key in ["pane", "created_at"] {
+                assert_eq!(written[key], original[key], "{key}, hidden {hidden}");
+            }
+            let local = &written["drawing"]["pane"];
+            assert!(local.is_null(), "hidden {hidden}: {local}");
+            if hidden {
+                continue;
+            }
+            let manager = w.charts[0].drawings();
+            let line = manager
+                .drawings
+                .iter()
+                .find(|d| d.label.as_deref() == Some("RSI line"));
+            let line = line.expect("bridge RSI line");
+            // The price pane, the bridge's only pane now, draws it.
+            assert!(manager.owns_pane(line));
+            let line = line.id;
+            w.charts[0].user_action(|c| {
+                c.drawings_mut()
+                    .edit_drawing(line, |d| d.chart_points[0].price = 9.5)
+                    .unwrap()
+            });
+            w.settle();
+            w.check_peers(9.5);
+            let edited = record(&w);
+            assert_eq!(edited["pane"], original["pane"]);
+            assert!(edited["drawing"]["pane"].is_null());
+        }
+    }
+
     #[cfg(feature = "ui")]
     #[test]
     fn chart_local_placement_stays_private_through_undo_and_redo_until_shared() {
