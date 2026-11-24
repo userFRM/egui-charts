@@ -1039,11 +1039,13 @@ fn completion_follows_the_cursor() {
         // Inside the two bytes of the e with an acute accent, so before it.
         ("pl\u{e9}", 3, &["plot"]),
         ("pl", 0, &[]),
+        ("plot ", end, &[]),
         ("", 0, &[]),
         ("study(\"RS", end, &["RSI", "RSI Divergence Indicator"]),
         ("study(\"RSI\"", end, &[]),
         ("study(\"RSI\", per", end, &["period"]),
         ("study(\"RSI\", \"per", end, &["period"]),
+        ("f(study(\"RSI\"), per", end, &[]),
         (
             "study(\"RSI\", source = study(\"MACD\", fa",
             end,
