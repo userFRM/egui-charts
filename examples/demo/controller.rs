@@ -3033,7 +3033,10 @@ impl DemoApp {
                     self.handle_news(ui.ctx(), action);
                     self.show_watchlist(ui);
                 }
-                SidePanel::TimeAndSales => self.time_and_sales.show(ui),
+                SidePanel::TimeAndSales => {
+                    self.chart.request_trade_history();
+                    self.time_and_sales.show(ui);
+                }
                 SidePanel::Depth => self.depth.show(ui, &mut self.chart),
                 SidePanel::OrderFlow => {
                     for (kind, visible) in
@@ -3900,6 +3903,11 @@ impl DemoApp {
                     .map(|c| &mut *c.chart)
                     .collect();
                 charts.insert(self.layout_slot, &mut self.chart);
+                // Only this symbol's feed prepares footprint rows, so its tape can wait for a reader.
+                for chart in &mut charts {
+                    let prepared = chart.symbol() == live::PREPARED_FOOTPRINT_SYMBOL;
+                    chart.set_trade_history_on_demand(prepared);
+                }
                 let rect = self.layout.show(ui, &mut charts).rect;
                 let visible = self.layout.visible_chart_rects(rect, charts.len());
                 self.export_dialog.set_chart_size(
@@ -10519,6 +10527,111 @@ mod tests {
             app.chart.chart_type_params().footprint_color_by,
             FootprintColor::LargerSide
         );
+    }
+
+    /// A chart of the symbol whose feed prepares footprint rows draws them, also for minutes
+    /// before the stream's first execution, without asking for the trade tape. Opening time and
+    /// sales asks for it once.
+    #[test]
+    fn prepared_footprint_chart_loads_its_tape_once_time_and_sales_opens() {
+        use egui_charts::data::{
+            Datafeed, DepthPage, DepthRequest, FootprintPage, FootprintRequest, HistoryPage,
+            HistoryRequest, Reply, Subscription, SubscriptionId, TradePage, TradeRequest,
+        };
+        use egui_charts::model::Instrument;
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+        /// The demo feed, counting the trade pages asked of it.
+        struct Counted(Arc<LiveFeed>, AtomicUsize);
+
+        impl Datafeed for Counted {
+            fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+                self.0.resolve(symbol, reply);
+            }
+            fn resolve_converted(&self, symbol: &str, conversion: &str, reply: Reply<Instrument>) {
+                self.0.resolve_converted(symbol, conversion, reply);
+            }
+            fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+                self.0.history(request, reply);
+            }
+            fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
+                self.1.fetch_add(1, Relaxed);
+                self.0.trades(request, reply);
+            }
+            fn footprints(&self, request: FootprintRequest, reply: Reply<FootprintPage>) {
+                self.0.footprints(request, reply);
+            }
+            fn depth_history(&self, request: DepthRequest, reply: Reply<DepthPage>) {
+                self.0.depth_history(request, reply);
+            }
+            fn subscribe(&self, subscription: Subscription) {
+                self.0.subscribe(subscription);
+            }
+            fn unsubscribe(&self, id: SubscriptionId) {
+                self.0.unsubscribe(id);
+            }
+            fn request_depth_snapshot(&self, id: SubscriptionId) {
+                self.0.request_depth_snapshot(id);
+            }
+        }
+
+        let ctx = egui::Context::default();
+        let now = "2026-10-23T19:07:05Z".parse().unwrap();
+        // Two hours back from the hour: the first execution the stream delivers.
+        let streamed_from: chrono::DateTime<chrono::Utc> = "2026-10-23T17:00:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        let feed = Arc::new(Counted(app.live.clone(), AtomicUsize::new(0)));
+        app.chart.set_feed(feed.clone());
+        app.open_catalog_symbol(live::PREPARED_FOOTPRINT_SYMBOL);
+        app.chart.set_chart_type(ChartType::VolumeFootprint);
+        settle(&mut app, &ctx);
+        settle(&mut app, &ctx);
+        let size = egui::vec2(1440.0, 900.0);
+        let frame = |app: &mut DemoApp| {
+            ui_frame(&ctx, size, vec![], |ui| {
+                eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest())
+            })
+        };
+        // Rows of the minutes before the stream can only come from prepared pages.
+        app.chart.set_visible_bars(8);
+        frame(&mut app);
+        let shown = now - chrono::TimeDelta::minutes(150);
+        app.chart.scroll_to_time(shown);
+        frame(&mut app);
+        frame(&mut app);
+        let texts = frame(&mut app);
+        let first = app.chart.state().visible_range().0;
+        assert!(app.chart.bars(SeriesId::MAIN)[first].time < streamed_from);
+        assert!(
+            texts
+                .iter()
+                .any(|(text, rect)| text == "Total" && rect.max.x < 1080.0),
+            "footprint rows"
+        );
+        assert_eq!(feed.1.load(Relaxed), 0);
+
+        app.execute_search_command(&ctx, "tape");
+        settle(&mut app, &ctx);
+        settle(&mut app, &ctx);
+        let texts = frame(&mut app);
+        assert_eq!(feed.1.load(Relaxed), 1);
+        let times: Vec<_> = texts
+            .iter()
+            .filter(|(text, rect)| {
+                rect.min.x > 1080.0 && text.len() == 8 && text.as_bytes()[2] == b':'
+            })
+            .map(|(text, _)| text.as_str())
+            .collect();
+        assert!(!times.is_empty(), "time and sales rows");
+        assert!(times.iter().all(|time| *time < "19:07:05"), "{times:?}");
+        for _ in 0..3 {
+            frame(&mut app);
+        }
+        assert_eq!(feed.1.load(Relaxed), 1);
     }
 
     /// Bars outside regular hours are shaded only in the extended session, and a saved layout
