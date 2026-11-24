@@ -1105,6 +1105,7 @@ impl Chart {
     fn needs_initial_trades(&self, link: &FeedLink, executions: bool) -> bool {
         if !self.trade_history_on_demand
             || link.initial_trades == InitialTrades::Wanted
+            || self.chart_type == ChartType::Range
             || link.bubbles.is_some()
         {
             return true;

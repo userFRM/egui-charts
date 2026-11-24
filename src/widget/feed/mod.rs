@@ -1041,6 +1041,10 @@ impl Chart {
     /// [`Self::trades`] need not declare interest. Changing the policy does not discard trades
     /// or cancel an outstanding page. It survives [`Self::set_feed`].
     ///
+    /// Before drawing the order ticket's DOM tab, call [`Self::request_trade_history`]:
+    /// `TradingPanel::show_ticket` borrows the chart immutably and cannot request the trades
+    /// for its ladder profile.
+    ///
     /// Live subscriptions, trade-based intervals and market replay still work as before.
     /// Candle replay uses the trades already held when the host pauses the feed: if its partial
     /// bars need executions, request the tape and let it arrive before entering replay.

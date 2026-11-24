@@ -6058,6 +6058,47 @@ fn footprint_draws_candles_from_the_first_execution_at_the_minimum_spacing() {
     }
 }
 
+#[test]
+fn switching_from_candles_to_range_requests_deferred_executions() {
+    use crate::model::RangeBarSource::{Executions, OhlcApproximation};
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_trade_history_on_demand(true);
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve().send(Ok(Instrument::new("A")));
+    let mut history = bars(1);
+    let start = history[0].time;
+    (history[0].high, history[0].low) = (104.0, 96.0);
+    feed.page().send(page(history, true));
+    frames.run(&mut chart);
+    assert!(feed.trades.lock().unwrap().is_empty());
+
+    chart.set_chart_type(crate::model::ChartType::Range);
+    chart.set_chart_type_params(crate::model::ChartTypeParams {
+        range_size: 4.0,
+        ..Default::default()
+    });
+    frames.run(&mut chart);
+    assert_eq!(chart.range_bar_source(), Some(OhlcApproximation));
+    let tape = [100.0, 96.0, 104.0, 100.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, price)| Tick::new(start + TimeDelta::seconds(i as i64), price, 1.0, None))
+        .collect();
+    let reply = feed
+        .trades
+        .lock()
+        .unwrap()
+        .pop()
+        .expect("Range needs trades");
+    reply.send(Ok(TradePage::new(tape, true)));
+    frames.run(&mut chart);
+    assert_eq!(chart.range_bar_source(), Some(Executions));
+    let closes: Vec<_> = chart.state.shown().iter().map(|bar| bar.close).collect();
+    assert_eq!(closes, [96.0, 100.0, 104.0, 100.0]);
+}
+
 /// Range bars follow the order of the supplied executions, not only the OHLC of the bars they
 /// fall in, and the OHLC approximation stands in while the chart holds none.
 #[test]
