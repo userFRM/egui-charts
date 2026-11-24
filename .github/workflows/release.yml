@@ -27,10 +27,9 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
-          # A version with a pre-release suffix, such as v0.3.0-alpha.1, is a preview and never
-          # the latest release.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ !contains(github.ref_name, '-') }}
+          # Every version, previews included, becomes the latest release, so the repository page
+          # shows the newest version. Cargo still installs a preview only when asked for it.
+          make_latest: true
           # The changelog carries the notes: generated notes for a release cycle of this size exceed
           # the release body limit.
           body: |
