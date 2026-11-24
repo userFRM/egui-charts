@@ -10,6 +10,9 @@ Time & Sales in Terminal requests the latest trades once for that chart. A host 
 panel can call [`chart.request_trade_history()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.request_trade_history) while the panel is open. Until the page arrives,
 missing executions are not evidence of zero trades. Leave the default eager policy in place for
 hosts that expect [`Chart::trades`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.trades) to be populated without declaring demand.
+In the demo, INDEXFH2027 answers [`Datafeed::footprints`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.footprints)
+for one-minute bars and its charts opt in, so a footprint chart of it opens without a trade
+request until Time & Sales opens or an execution study is added.
 
 ## Try execution coverage and depth loss
 
