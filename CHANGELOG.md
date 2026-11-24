@@ -6,7 +6,13 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Nightly builds of the demo for Linux x86_64, Windows x86_64 and macOS arm64. Once a day, the newest main commit whose CI passed is built and published as the `nightly` pre-release on GitHub, with a `SHA256SUMS` file for the archives.
+
 - `Chart::set_footprint_history_by_view` sizes the initial prepared footprint page to the visible bars and footprint consumers without shortening candle history. The feed still chooses the prepared/live cutoff. ([#4142](https://github.com/userFRM/egui-charts/issues/4142))
+
+## [0.3.0-alpha.1] - 2026-11-24
+
+### Added
 
 - `Chart::set_trade_history_on_demand` lets a prepared time chart wait for an execution study or tape reader before loading historical trades. Opening Time & Sales requests the active chart’s tape; hosts that do not opt in still load it on subscription. ([#4129](https://github.com/userFRM/egui-charts/issues/4129))
 
@@ -1855,5 +1861,6 @@ All notable changes to this project are documented in this file. The format is b
 
 Thanks to @intelligentnet and @sstscrypto for the reports that became issues #2 and #1.
 
-[Unreleased]: https://github.com/userFRM/egui-charts/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/userFRM/egui-charts/compare/v0.3.0-alpha.1...HEAD
+[0.3.0-alpha.1]: https://github.com/userFRM/egui-charts/compare/v0.2.0...v0.3.0-alpha.1
 [0.2.0]: https://github.com/userFRM/egui-charts/compare/v0.1.0...v0.2.0
