@@ -7,7 +7,7 @@
 
 Financial charts for Rust applications built with egui 0.37.
 
-This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow **main (0.3 in development)**, using **egui/eframe 0.37**. Browse the [main API (rustdoc and symbol search)](https://userfrm.github.io/egui-charts/docs/api/egui_charts/index.html). The published **0.2.0** crate uses **egui/eframe 0.33.3** and has separate [release API documentation](https://docs.rs/egui-charts/0.2.0/egui_charts/).
+This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow **main**, where 0.3 is in development, using **egui/eframe 0.37**. Browse the [main API (rustdoc and symbol search)](https://userfrm.github.io/egui-charts/docs/api/egui_charts/index.html). Previews of 0.3 are published on crates.io, starting with **0.3.0-alpha.1**. The stable **0.2.0** crate uses **egui/eframe 0.33.3** and has separate [release API documentation](https://docs.rs/egui-charts/0.2.0/egui_charts/).
 
 <p>
   <a href="https://userfrm.github.io/egui-charts/demo/"><img src="https://img.shields.io/badge/Live_demo-0969da?style=flat-square" alt="Live demo"></a>
@@ -145,13 +145,15 @@ Each feature in [docs/progress/features.csv](docs/progress/features.csv) is veri
 
 ## Start with a chart
 
-For main (0.3 in development), use the Git dependency and Rust 1.95 or newer. Use egui and eframe 0.37 throughout your application so their types match.
+Use Rust 1.95 or newer, and egui and eframe 0.37 throughout your application so their types match. Add the 0.3 preview from crates.io. Cargo uses a preview only when the version requirement names it, and the API can still change from one preview to the next until 0.3.0.
 
 ```toml
 [dependencies]
-egui-charts = { git = "https://github.com/userFRM/egui-charts", branch = "main" }
+egui-charts = "=0.3.0-alpha.1"
 eframe = "0.37"
 ```
+
+To follow main between previews, use the Git dependency `egui-charts = { git = "https://github.com/userFRM/egui-charts", branch = "main" }` instead.
 
 ```rust,no_run
 use eframe::egui;
@@ -244,7 +246,7 @@ The default build includes the chart, studies, drawings and UI components, plus 
 For example:
 
 ```toml
-egui-charts = { git = "https://github.com/userFRM/egui-charts", branch = "main", default-features = false, features = ["widget", "studies"] }
+egui-charts = { version = "=0.3.0-alpha.1", default-features = false, features = ["widget", "studies"] }
 ```
 
 `Theme::dark()`, `Theme::light()` and `Theme::high_contrast()` provide starting palettes. A `Theme` exposes its UI colours, chart colours, typography, spacing and corner radii as public fields. Apply it at startup and after a theme change:

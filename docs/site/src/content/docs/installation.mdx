@@ -4,13 +4,19 @@ title: Installation
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-This guide follows **main (0.3 in development)**. Use Rust 1.95 or newer and
-**egui/eframe 0.37** so both dependencies share the same egui types.
+This guide follows **main**, where 0.3 is in development. Use Rust 1.95 or newer
+and **egui/eframe 0.37** so both dependencies share the same egui types.
 
 | Documentation | Dependency | egui / eframe |
 | --- | --- | --- |
 | [main API (rustdoc)](https://userfrm.github.io/egui-charts/docs/api/egui_charts/index.html) · 0.3 in development | Git, branch `main` | `0.37` |
+| [0.3.0-alpha.1 API](https://docs.rs/egui-charts/0.3.0-alpha.1/egui_charts/) · preview | `egui-charts = "=0.3.0-alpha.1"` | `0.37` |
 | [Published 0.2.0 API](https://docs.rs/egui-charts/0.2.0/egui_charts/) | `egui-charts = "0.2.0"` | `0.33.3` |
+
+A preview is a snapshot of main published on crates.io. Cargo uses it only when
+the version requirement names it, as `=0.3.0-alpha.1` does, and its API can
+change in the next preview until 0.3.0. The Git dependencies below follow main
+between previews.
 
 <Steps>
 
