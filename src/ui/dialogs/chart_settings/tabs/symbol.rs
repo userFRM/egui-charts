@@ -1718,21 +1718,45 @@ mod tests {
         use egui::Vec2;
         use egui::accesskit::Role;
         use egui_kittest::{Harness, kittest::Queryable};
-        for (label, field) in [
-            ("POC", "poc"),
-            ("VAH", "value_area_high"),
-            ("VAL", "value_area_low"),
-            ("Mid", "midpoint"),
-            ("IBH", "initial_balance_high"),
-            ("IBL", "initial_balance_low"),
-            ("Open", "opening_price"),
-            ("Close", "closing_price"),
-            ("PH", "poor_high"),
-            ("PL", "poor_low"),
-            ("SP", "single_prints"),
-            ("Label prices", "prices"),
-            ("Price scale tags", "tpo_level_tags"),
+        let statistics = serde_json::json!({"tpo_statistics": true});
+        // (settings before the dialog opens, switch, its saved field)
+        for (seed, label, field) in [
+            (serde_json::json!({}), "POC", "/tpo_labels/poc"),
+            (serde_json::json!({}), "VAH", "/tpo_labels/value_area_high"),
+            (serde_json::json!({}), "VAL", "/tpo_labels/value_area_low"),
+            (serde_json::json!({}), "Mid", "/tpo_labels/midpoint"),
+            (
+                serde_json::json!({}),
+                "IBH",
+                "/tpo_labels/initial_balance_high",
+            ),
+            (
+                serde_json::json!({}),
+                "IBL",
+                "/tpo_labels/initial_balance_low",
+            ),
+            (serde_json::json!({}), "Open", "/tpo_labels/opening_price"),
+            (serde_json::json!({}), "Close", "/tpo_labels/closing_price"),
+            (serde_json::json!({}), "PH", "/tpo_labels/poor_high"),
+            (serde_json::json!({}), "PL", "/tpo_labels/poor_low"),
+            (serde_json::json!({}), "SP", "/tpo_labels/single_prints"),
+            (serde_json::json!({}), "Label prices", "/tpo_labels/prices"),
+            (serde_json::json!({}), "Price scale tags", "/tpo_level_tags"),
+            (
+                statistics.clone(),
+                "Statistics: Total volume",
+                "/tpo_statistics_rows/total_volume",
+            ),
+            (
+                statistics.clone(),
+                "Statistics: POC",
+                "/tpo_statistics_rows/poc",
+            ),
         ] {
+            let mut seeded = serde_json::to_value(ChartTypeParams::default()).unwrap();
+            for (name, value) in seed.as_object().unwrap() {
+                seeded[name] = value.clone();
+            }
             for accept in [false, true] {
                 let mut chart = Chart::new(BarData::from_bars(vec![Bar::new(
                     chrono::DateTime::UNIX_EPOCH,
@@ -1743,6 +1767,7 @@ mod tests {
                     1.0,
                 )]));
                 chart.set_chart_type(ChartType::TimePriceOpportunity);
+                chart.set_chart_type_params(serde_json::from_value(seeded.clone()).unwrap());
                 let mut dialog = SettingsDialog::new();
                 dialog.set_control_visible(crate::ui::Control::Templates, false);
                 dialog.open(ChartSettingsState::from_chart(&chart));
@@ -1779,13 +1804,9 @@ mod tests {
                 if let Some(settings) = accepted {
                     settings.apply_to_chart(&mut chart).unwrap();
                 }
-                let mut expected = serde_json::to_value(ChartTypeParams::default()).unwrap();
+                let mut expected = seeded.clone();
                 if accept {
-                    let value = if field == "tpo_level_tags" {
-                        &mut expected[field]
-                    } else {
-                        &mut expected["tpo_labels"][field]
-                    };
+                    let value = expected.pointer_mut(field).unwrap();
                     *value = serde_json::Value::Bool(!value.as_bool().unwrap());
                 }
                 assert_eq!(

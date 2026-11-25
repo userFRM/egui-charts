@@ -63,6 +63,17 @@ struct Evaluation {
     initialized: bool,
     ready: bool,
     start: Option<DateTime<Utc>>,
+    /// What a calculation still running away from this thread was started on.
+    held: Option<Held>,
+}
+
+/// The bars and histories fed to a calculation that did not finish in its call. They are fed
+/// again unchanged until it ends, and the alert then reads them, so the values it reads describe
+/// the bars it reads; a tick that comes meanwhile waits for the next calculation.
+struct Held {
+    bars: Vec<Bar>,
+    /// The bars of each history, in the order of `Evaluation::requests`.
+    histories: Vec<Vec<Bar>>,
 }
 
 impl Evaluation {
@@ -121,6 +132,7 @@ impl Evaluation {
             error: None,
             initialized: false,
             ready: false,
+            held: None,
         };
         for id in required {
             let restored = (|| {
@@ -337,11 +349,12 @@ impl AlertEvaluator {
         self.storage = Some(storage);
     }
 
-    /// Poll live inputs and evaluate ready alerts. An alert waits while one of its studies
-    /// calculates away from this thread. With `ui`, `ctx` wakes the host on new data and while
-    /// such a study calculates, and follows stored drawings. Headless hosts pass an empty `live`
-    /// slice. Detector alerts follow the signals of `live`, as `AlertEngine::detector_signals`
-    /// takes them.
+    /// Poll live inputs and evaluate ready alerts. While one of an alert's studies calculates
+    /// away from this thread, it is fed the bars it started on until it ends, and the alert is
+    /// then evaluated on those bars; newer bars go to its next calculation. With `ui`, `ctx`
+    /// wakes the host on new data and while such a study calculates, and follows stored
+    /// drawings. Headless hosts pass an empty `live` slice. Detector alerts follow the signals of
+    /// `live`, as `AlertEngine::detector_signals` takes them.
     /// `live` lends compatible loaded chart data; event studies retain independent streams.
     /// Errors leave affected sources unavailable and are returned for the host to report.
     pub fn poll(
@@ -419,6 +432,10 @@ impl AlertEvaluator {
             ));
         }
         for ((_, symbol, _), run) in &mut self.runs {
+            // The alert has read the held bars; the next calculation takes the latest ones.
+            if run.ready {
+                run.held = None;
+            }
             run.ready = false;
             let subject = run.subject(symbol, None);
             let reader = &self.feeds[&subject];
@@ -451,17 +468,27 @@ impl AlertEvaluator {
             if run.waiting(symbol, &requests, &self.feeds) {
                 continue;
             }
+            let held = run.held.take();
             let reader = &self.feeds[&subject];
             let all = reader.bars();
-            let bars =
-                &all[all.partition_point(|bar| run.start.is_some_and(|start| bar.time < start))..];
+            let bars = held.as_ref().map_or_else(
+                || {
+                    &all[all
+                        .partition_point(|bar| run.start.is_some_and(|start| bar.time < start))..]
+                },
+                |held| &held.bars[..],
+            );
             let data: Vec<_> = requests
                 .iter()
-                .map(|(request, _)| {
+                .enumerate()
+                .map(|(at, (request, _))| {
                     let reader = &self.feeds[&run.subject(symbol, Some(request))];
                     StudyData {
                         request: request.clone(),
-                        bars: reader.bars(),
+                        bars: held
+                            .as_ref()
+                            .and_then(|held| held.histories.get(at))
+                            .map_or(reader.bars(), |bars| &bars[..]),
                         clock: reader.clock().clone(),
                         instrument: reader.instrument(),
                         timeframe: run.subject(symbol, Some(request)).timeframe,
@@ -471,14 +498,21 @@ impl AlertEvaluator {
                 .collect();
             run.calculate(symbol, bars, reader.clock(), reader.instrument(), &data);
             // A bar that closes meanwhile would be read once without the study's values, so the
-            // alert waits for the run, polled again on the next frame.
+            // alert waits for the run, polled again on the next frame with the same bars.
             if run.calculating() {
+                let fresh = held.is_none().then(|| Held {
+                    bars: bars.to_vec(),
+                    histories: data.iter().map(|data| data.bars.to_vec()).collect(),
+                });
+                run.held = fresh.or(held);
                 #[cfg(feature = "ui")]
                 ctx.request_repaint();
                 continue;
             }
+            let first = bars[0].time;
+            run.held = held;
             // data_start may change after calculation, for example when a profile's span moves.
-            let reaches = run.requests(bars[0].time);
+            let reaches = run.requests(first);
             for (request, start) in &reaches {
                 let subject = run.subject(symbol, Some(request));
                 self.feeds
@@ -497,32 +531,28 @@ impl AlertEvaluator {
             let from = reader
                 .bars()
                 .partition_point(|bar| run.start.is_some_and(|start| bar.time < start));
+            // A held calculation is read on the bars it covered.
+            let bars = run
+                .held
+                .as_ref()
+                .map_or(&reader.bars()[from..], |held| &held.bars[..]);
             subjects
                 .entry((id, symbol))
                 .or_default()
-                .push((run, reader, from));
+                .push((run, reader, from, bars));
         }
         for ((id, symbol), contexts) in subjects {
             let inputs: Vec<_> = contexts
                 .iter()
-                .map(|(run, reader, from)| {
-                    (
-                        reader.clock(),
-                        if run.ready {
-                            &reader.bars()[*from..]
-                        } else {
-                            &[]
-                        },
-                    )
-                })
+                .map(|(run, reader, _, bars)| (reader.clock(), if run.ready { *bars } else { &[] }))
                 .collect();
             let exchange = contexts
                 .iter()
-                .find_map(|(_, reader, _)| reader.instrument()?.exchange.as_deref());
+                .find_map(|(_, reader, ..)| reader.instrument()?.exchange.as_deref());
             let value = |timeframe: Timeframe, source: &AlertSource, at: usize| {
                 let context = contexts
                     .iter()
-                    .find(|(run, _, _)| run.timeframe == timeframe)?;
+                    .find(|(run, ..)| run.timeframe == timeframe)?;
                 match source {
                     AlertSource::Study { id, output } => context
                         .0
@@ -539,8 +569,7 @@ impl AlertEvaluator {
                         .map(|holds| if holds { 1.0 } else { 0.0 }),
                     #[cfg(feature = "ui")]
                     AlertSource::Drawing(_) => {
-                        let (run, reader, from) = context;
-                        let bars = &reader.bars()[*from..];
+                        let (run, reader, from, bars) = context;
                         let scale = if run.inputs.logarithmic {
                             crate::scales::PriceScaleMode::Logarithmic
                         } else {
@@ -575,7 +604,15 @@ impl AlertEvaluator {
                             }),
                             // Removed from its open chart, whatever storage still holds.
                             None if live.iter().any(|data| reader.matches(data)) => None,
-                            None => reader.drawing_value(source, *from + at, scale),
+                            None => match run.held {
+                                // The held bar's place among the latest bars.
+                                Some(_) => reader
+                                    .bars()
+                                    .binary_search_by_key(&bars[at].time, |bar| bar.time)
+                                    .ok()
+                                    .and_then(|index| reader.drawing_value(source, index, scale)),
+                                None => reader.drawing_value(source, *from + at, scale),
+                            },
                         }
                     }
                     _ => None,
@@ -1078,6 +1115,114 @@ mod tests {
             fired_messages(Arc::new(Feed::default()), &factory, alert),
             ["200"]
         );
+    }
+
+    /// A study that calculates away from the thread whenever its bars changed, as a script
+    /// study does when each run outlasts the gap between ticks, with a tick on every poll. Each
+    /// run is fed the bars it began on until it ends, and the alert reads those bars: every
+    /// time, the forming bar at 306 and 308, which its runs covered, then 309 once the ticks
+    /// stop; once per bar close, the bar that closed at 305, once and with the run that
+    /// covered it. The condition holds above 304.
+    #[test]
+    fn alerts_read_the_bars_each_run_of_a_calculating_study_covered() {
+        use crate::model::{AlertCondition, AlertFrequency, AlertStudy};
+        #[derive(Clone, Default)]
+        struct Busy {
+            seen: Vec<Bar>,
+            running: bool,
+            closes: Vec<f64>,
+            values: crate::studies::IndicatorValues,
+        }
+        impl Indicator for Busy {
+            fn name(&self) -> &str {
+                "Busy"
+            }
+            fn calculate(&mut self, bars: &[Bar]) {
+                self.running = bars != self.seen.as_slice();
+                self.seen = bars.to_vec();
+                if !self.running {
+                    self.closes = bars.iter().map(|bar| bar.close).collect();
+                }
+            }
+            fn values(&self) -> &crate::studies::IndicatorValues {
+                &self.values
+            }
+            fn colors(&self) -> Vec<egui::Color32> {
+                Vec::new()
+            }
+            fn set_colors(&mut self, _: Vec<egui::Color32>) {}
+            fn set_visible(&mut self, _: bool) {}
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                Box::new(self.clone())
+            }
+            fn calculation(&self) -> Option<Calculation> {
+                Some(if self.running {
+                    Calculation::Running(0.5)
+                } else {
+                    Calculation::Done(std::time::Duration::ZERO)
+                })
+            }
+            fn alert_conditions(&self) -> Vec<String> {
+                vec!["Above 304".into()]
+            }
+            fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+                let close = self.closes.get(bar).filter(|_| condition == 0)?;
+                Some(*close > 304.0)
+            }
+        }
+        let mut factory = IndicatorFactory::new();
+        factory.register("Busy", || Box::new(Busy::default()));
+        for (frequency, expected) in [
+            (AlertFrequency::EveryTime, &["306", "308", "309"][..]),
+            (AlertFrequency::OncePerBarClose, &["305"]),
+        ] {
+            let mut alert = Alert::new("SYM", AlertCondition::Holds);
+            alert.source = AlertSource::StudyCondition {
+                id: "3".into(),
+                condition: 0,
+            };
+            alert.frequency = frequency;
+            alert.timeframe = Some(Timeframe::Min1);
+            alert.message = "{{close}}".into();
+            alert.inputs = Some(Box::new(AlertInputs {
+                studies: vec![AlertStudy::new(3, "Busy", Vec::new())],
+                ..Default::default()
+            }));
+            let feed = Arc::new(Feed::default());
+            let mut evaluator = AlertEvaluator::new(feed.clone());
+            let delivered = Arc::new(Mutex::new(Vec::new()));
+            let sink = delivered.clone();
+            let engine = AlertEngine::new()
+                .with_alerts(vec![alert])
+                .on_trigger(move |_, event| {
+                    if let crate::services::AlertEvent::TriggeredForSymbol { message, .. } = event {
+                        sink.lock().unwrap().push(message.clone());
+                    }
+                });
+            #[cfg(feature = "ui")]
+            let ctx = egui::Context::default();
+            // History closes 200 and 300. Polls 2 to 5 tick the 00:00 bar up to 305, polls 6 to 9
+            // the 00:01 bar from 306 to 309, and polls 10 and 11 bring nothing.
+            for poll in 0..12 {
+                if (2..10).contains(&poll) {
+                    let minute = if poll < 6 { 0 } else { 1 };
+                    let subscriptions = feed.subscriptions.lock().unwrap();
+                    subscriptions[0]
+                        .sink
+                        .push_bar(bar(minute, 300.0 + poll as f64));
+                }
+                let errors = evaluator.poll(
+                    &engine,
+                    &factory,
+                    &[],
+                    #[cfg(feature = "ui")]
+                    &ctx,
+                    DateTime::from_timestamp(1000, 0).unwrap(),
+                );
+                assert!(errors.is_empty(), "{errors:?}");
+            }
+            assert_eq!(*delivered.lock().unwrap(), expected, "{frequency:?}");
+        }
     }
 
     /// `prepare_alert` saves every study of the chart with the alert; a price alert's message

@@ -3,7 +3,9 @@
 use super::ATR;
 use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
 use crate::model::{Bar, LineStyle};
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues, PlotStyle, PlotType, palette};
+use crate::studies::{
+    Indicator, IndicatorValue, IndicatorValues, PlotStyle, PlotType, ShapeSide, palette,
+};
 use egui::Color32;
 
 /// The most recent bars with prices used to find lines.
@@ -433,6 +435,15 @@ impl Indicator for AutoTrendLines {
                 PlotType::TriangleDown
             },
             visible: true,
+        }
+    }
+
+    fn plot_shape_side(&self, line: usize) -> ShapeSide {
+        // Support lines join pivot lows, resistance lines pivot highs.
+        if line == 0 {
+            ShapeSide::Below
+        } else {
+            ShapeSide::Above
         }
     }
 
