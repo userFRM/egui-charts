@@ -175,10 +175,10 @@ pub struct LinearRegressionSlope {
 }
 
 impl LinearRegressionSlope {
-    /// Create with a lookback of `period` bars, clamped to at least 1.
+    /// Create with a lookback of `period` bars, clamped to at least 2: one bar has no slope.
     pub fn new(period: usize) -> Self {
         Self {
-            period: period.max(1),
+            period: period.max(2),
             values: IndicatorValues::new(),
             color: Color32::from_rgb(255, 82, 82),
             visible: true,
@@ -246,7 +246,7 @@ impl Indicator for LinearRegressionSlope {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Period", 2, usize::MAX)
     ; {});
 
     fn name(&self) -> &str {

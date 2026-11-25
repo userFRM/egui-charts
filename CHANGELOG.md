@@ -14,6 +14,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Trade Rate no longer reports a partial time candle's retained executions as its total. Its rolling rates use their own windows' coverage. ([#4202](https://github.com/userFRM/egui-charts/issues/4202))
+
 - An empty Watchlist keeps its hint above symbol details when the window shrinks. Scroll the list if the hint does not fit. ([#4161](https://github.com/userFRM/egui-charts/issues/4161))
 
 ## [0.3.0-alpha.1] - 2026-11-24
