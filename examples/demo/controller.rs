@@ -404,6 +404,8 @@ pub struct DemoApp {
     drawing_props: Box<DrawingPropertiesDialog>,
     keyboard_shortcuts: KeyboardShortcutsDialog,
     data_table: egui_charts::ui::dialogs::DataTableDialog,
+    /// The table kept on the chart of a layout slot, whichever chart is active.
+    fixed_data_table: (egui_charts::ui::dialogs::DataTableDialog, usize),
     interval_entry: Option<String>,
     interval_focus: bool,
     /// The saved-layout chooser of the Open layout shortcut is open.
@@ -631,6 +633,7 @@ impl DemoApp {
                 .with_icon(&egui_charts::icons::icons::QUICK_SEARCH),
             HostMenuEntry::new("demo-level", "Move demo level here"),
             HostMenuEntry::new("demo-level-remove", "Remove demo level"),
+            HostMenuEntry::new("demo-fixed-data-table", "Open fixed data table"),
         ]);
         let mut widget_bar = WidgetBar::default();
         widget_bar.config.width = 45.0;
@@ -750,6 +753,12 @@ impl DemoApp {
             drawing_props: Box::new(DrawingPropertiesDialog::new()),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
             data_table: egui_charts::ui::dialogs::DataTableDialog::new(),
+            fixed_data_table: (
+                egui_charts::ui::dialogs::DataTableDialog::new()
+                    .with_id(egui::Id::unique("fixed_data_table"))
+                    .with_fixed_symbol(),
+                0,
+            ),
             interval_entry: None,
             interval_focus: false,
             open_layout: false,
@@ -1548,6 +1557,22 @@ impl DemoApp {
                     self.symbol_search.open_with_query(query);
                 }
             }
+            _ => {}
+        }
+        let (table, slot) = &mut self.fixed_data_table;
+        let chart = if *slot == self.layout_slot {
+            Some(&*self.chart)
+        } else {
+            self.extra_charts
+                .get(*slot - usize::from(*slot > self.layout_slot))
+                .map(|extra| &*extra.chart)
+        };
+        // A layout that no longer holds the table's chart closes it.
+        match chart.map(|chart| table.show(ctx, chart)) {
+            Some(egui_charts::ui::dialogs::DataTableAction::Export(csv)) => {
+                self.save_text("chart_data.csv", &csv);
+            }
+            None => table.close(),
             _ => {}
         }
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
@@ -4264,6 +4289,10 @@ impl DemoApp {
             ChartContextAction::Host { id, .. } if id == "demo-level-remove" => {
                 self.remove_demo_level();
             }
+            ChartContextAction::Host { id, .. } if id == "demo-fixed-data-table" => {
+                self.fixed_data_table.1 = self.layout_slot;
+                self.fixed_data_table.0.open();
+            }
             ChartContextAction::Host { id, context } if id == "demo-level" => {
                 self.set_demo_level(context.price);
             }
@@ -4682,6 +4711,7 @@ impl DemoApp {
     fn keyboard_dialog_open(&self) -> bool {
         self.keyboard_shortcuts.is_open
             || self.data_table.is_open
+            || self.fixed_data_table.0.is_open
             || self.annotation_editor
             || self.quick_search.is_open()
             || self.symbol_search.is_open()
@@ -13834,6 +13864,174 @@ mod tests {
         assert!(clock.ends_with(" America/New_York"), "{clock}");
     }
 
+    /// A second chart's menu opens a data table fixed to that chart beside the regular table of
+    /// the active chart: each copies its own chart's rows, closing the fixed one leaves the
+    /// regular one open, and typing over the fixed one starts no symbol search: #4162.
+    #[test]
+    fn fixed_data_table_keeps_its_chart_beside_the_regular_table() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-10T19:29:50Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        // Two charts of SAMPLE: one minute bars in the first slot, hourly bars in the second.
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        app.activate_chart_slot(1);
+        app.switch_timeframe(Timeframe::Hour1);
+        settle(&mut app, &ctx);
+        let frame = |app: &mut DemoApp, events| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest()),
+            );
+            let texts: Vec<(String, egui::Pos2)> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.pos + text.galley.size() / 2.0,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            let commands = output.platform_output.commands.clone();
+            output.drop_without_applying_deltas();
+            (texts, commands)
+        };
+        let click = |app: &mut DemoApp, button, pos| {
+            let mut commands = frame(app, vec![egui::Event::PointerMoved(pos)]).1;
+            for pressed in [true, false] {
+                commands.extend(
+                    frame(
+                        app,
+                        vec![egui::Event::PointerButton {
+                            pos,
+                            button,
+                            pressed,
+                            modifiers: Default::default(),
+                        }],
+                    )
+                    .1,
+                );
+            }
+            commands
+        };
+        let typed = |app: &mut DemoApp| {
+            frame(app, vec![egui::Event::Text("Q".into())]);
+            frame(app, vec![]);
+            app.symbol_search.is_open()
+        };
+        let copies = |texts: &[(String, egui::Pos2)]| -> Vec<egui::Pos2> {
+            texts
+                .iter()
+                .filter(|(text, _)| text == "Copy")
+                .map(|(_, pos)| *pos)
+                .collect()
+        };
+        let copied = |commands: Vec<egui::OutputCommand>| {
+            commands
+                .into_iter()
+                .find_map(|command| match command {
+                    egui::OutputCommand::CopyText(text) => Some(text),
+                    _ => None,
+                })
+                .expect("Copy puts the table on the clipboard")
+        };
+
+        // The chart menu of the second chart, away from its candles, opens the fixed table.
+        let pos = app.chart.get_rendered_price_rect().left_top() + egui::vec2(30.0, 30.0);
+        click(&mut app, egui::PointerButton::Secondary, pos);
+        let texts = frame(&mut app, vec![]).0;
+        let row = texts
+            .iter()
+            .find(|(text, _)| text == "Open fixed data table")
+            .expect("the chart menu offers a fixed data table")
+            .1;
+        click(&mut app, egui::PointerButton::Primary, row);
+        let fixed = ctx
+            .memory(|m| m.area_rect(egui::Id::unique("fixed_data_table")))
+            .expect("the row opens the fixed table");
+        assert_eq!(copies(&frame(&mut app, vec![]).0).len(), 1);
+        assert!(!typed(&mut app), "typing over the fixed table alone");
+
+        // The regular table follows the first chart, the active one now, and opens on top.
+        app.activate_chart_slot(0);
+        app.data_table.open();
+        frame(&mut app, vec![]);
+        let texts = frame(&mut app, vec![]).0;
+        let top = ctx.top_layer_id().expect("a window is on top");
+        let regular = ctx
+            .memory(|m| m.area_rect(top.id))
+            .expect("the regular table is the top window");
+        let buttons = copies(&texts);
+        assert_eq!(buttons.len(), 2, "both tables are open");
+        let regular_copy = *buttons.iter().find(|pos| regular.contains(**pos)).unwrap();
+        let fixed_copy = *buttons
+            .iter()
+            .find(|pos| fixed.contains(**pos) && !regular.contains(**pos))
+            .unwrap();
+        let regular_rows = copied(click(&mut app, egui::PointerButton::Primary, regular_copy));
+        let fixed_rows = copied(click(&mut app, egui::PointerButton::Primary, fixed_copy));
+        // Newest first, at the 19:29:50 clock: the live minute and the live hour lead.
+        let times = |rows: &str| -> Vec<String> {
+            rows.lines()
+                .skip(1)
+                .map(|row| row.split('\t').next().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(
+            times(&regular_rows)[..2],
+            ["2026-11-10T19:29:00+00:00", "2026-11-10T19:28:00+00:00"]
+        );
+        let hours = times(&fixed_rows);
+        assert_eq!(
+            hours[..2],
+            ["2026-11-10T19:00:00+00:00", "2026-11-10T18:00:00+00:00"]
+        );
+        assert!(
+            hours.iter().all(|time| time.ends_with(":00:00+00:00")),
+            "the fixed table holds only the hourly chart's rows"
+        );
+        assert_eq!(
+            hours.len(),
+            app.extra_charts[0].chart.bars(SeriesId::MAIN).len()
+        );
+
+        // Its Copy click raised the fixed table above the regular one.
+        assert!(
+            !typed(&mut app),
+            "typing over the fixed table beside the other"
+        );
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut app, vec![escape]);
+        let buttons = copies(&frame(&mut app, vec![]).0);
+        assert_eq!(
+            buttons,
+            [regular_copy],
+            "Escape closes the fixed table only"
+        );
+        assert!(app.data_table.is_open);
+        assert!(
+            typed(&mut app),
+            "the regular table takes typed search again"
+        );
+    }
     /// The series menu opens an alert and copies a price at the values their rows name.
     #[test]
     fn series_menu_alert_starts_at_the_clicked_price() {
