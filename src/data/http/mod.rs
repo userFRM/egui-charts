@@ -293,7 +293,7 @@ impl Poll {
             count: 500,
             extended_hours: self.subscription.extended_hours,
             overnight_hours: self.subscription.overnight_hours,
-            adjusted: false,
+            adjusted: self.subscription.adjusted,
             conversion: self.subscription.conversion.clone(),
         };
         let target = match history_url(&self.base, &request) {

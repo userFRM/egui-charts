@@ -301,6 +301,10 @@ impl Chart {
         #[cfg(feature = "drawings")]
         self.cursor_modes.render(ui);
         self.menu_open = false;
+        #[cfg(feature = "ui")]
+        {
+            self.touch_order_armed = false;
+        }
         if !self.chart_type.is_time_independent() {
             let source_marks = self.mark_source.as_ref().map(|source| &source.page);
             let mut coords = self.get_chart_mapping();
@@ -538,6 +542,10 @@ impl Chart {
         // A right-click result lives for exactly one frame: clear any stale
         // capture so a target that is never drained does not reappear later.
         self.right_click = None;
+        #[cfg(feature = "ui")]
+        {
+            self.touch_order = None;
+        }
 
         let available_size = ui.available_size();
         let (mut response, mut painter) =
@@ -878,6 +886,9 @@ impl Chart {
 
         // Handle keyboard shortcuts
         self.handle_keyboard_shortcuts(ui, &time_response, chart_width, chart_rect.min.x);
+        // The market order keys press the buttons of the frame the user saw; this frame sets
+        // the flag again where it draws them.
+        self.quote_buttons = false;
 
         // Taken after the shortcuts: a key can remove a study and shift the ones after it.
         let study_indices: Vec<_> = self
@@ -3739,6 +3750,9 @@ impl Chart {
                 });
                 #[cfg(not(feature = "ui"))]
                 let last_price = None;
+                self.quote_buttons = self.main_series_visible
+                    && self.config.show_quote_boxes
+                    && rendering::quote_prices(self.quote.as_ref(), last_price).is_some();
                 let mut legend = super::Legend::new(&self.symbol, &timeframe, &bar);
                 let statuses: Vec<_> = self
                     .legend_statuses
