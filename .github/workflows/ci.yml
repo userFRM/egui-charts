@@ -194,7 +194,8 @@ jobs:
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # A change to a manifest misses the cache, and the Linux job then builds and tests everything in about 30 minutes.
+    timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: 0
     strategy:
