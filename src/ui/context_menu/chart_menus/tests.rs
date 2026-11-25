@@ -3394,3 +3394,188 @@ fn menu_rows_write_and_act_on_prices_as_the_price_scale_does() {
         assert!(labels.iter().any(|label| label == expected), "{labels:?}");
     }
 }
+
+/// Guards #3531: with `TooltipOptions::long_press_order`, a touch held on the price pane
+/// returns the chart menu's limit row at the touched price once, and shows no values, opens no
+/// menu, is no click and does not pan; without the option, in a study pane and where the menu
+/// has no limit row, the hold shows its values and returns nothing.
+#[test]
+fn long_press_asks_for_the_menu_limit_row_only_with_its_option_on() {
+    use crate::model::{Bar, Instrument, OrderRequest, OrderSide, OrderType};
+    use crate::widget::ChartEvent;
+    use egui::{TouchDeviceId, TouchId, TouchPhase};
+    type Setup = fn(&mut Chart, &mut ChartMenus);
+    // (case, option, setup, touched point, the side of the order returned)
+    type Row = (&'static str, bool, Setup, Pos2, Option<OrderSide>);
+    let none: Setup = |_, _| {};
+    // The last bar closes at 40, below the touched price.
+    let market_below: Setup = |chart, _| {
+        let time = chart.bars(SeriesId::MAIN).last().unwrap().time;
+        chart.update(SeriesId::MAIN, Bar::new(time, 30.0, 40.0, 30.0, 40.0, 1.0));
+    };
+    // y 250 lies in the price pane, at a price between 50 and 150, and y 530 in a study pane.
+    let price = egui::pos2(350.0, 250.0);
+    let rows: [Row; 7] = [
+        ("option off", false, none, price, None),
+        ("below the market", true, none, price, Some(OrderSide::Buy)),
+        (
+            "above the market",
+            true,
+            market_below,
+            price,
+            Some(OrderSide::Sell),
+        ),
+        (
+            "study pane",
+            true,
+            |chart, _| {
+                chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            },
+            egui::pos2(350.0, 530.0),
+            None,
+        ),
+        (
+            "trading hidden",
+            true,
+            |_, menus| menus.set_control_visible(Control::Trading, false),
+            price,
+            None,
+        ),
+        (
+            "limit orders refused",
+            true,
+            |_, menus| {
+                let stop = Capabilities {
+                    stop: true,
+                    ..Capabilities::default()
+                };
+                menus.set_order_entries(1.0, stop);
+            },
+            price,
+            None,
+        ),
+        (
+            "menus hidden",
+            true,
+            |_, menus| menus.set_control_visible(Control::ContextMenus, false),
+            price,
+            None,
+        ),
+    ];
+    for (case, option, setup, pos, side) in rows {
+        let ctx = Context::default();
+        // TEST trades between 100 and 110, so with a tick of 100 the touched price is 100.
+        let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+        chart.set_symbol("TEST");
+        chart.set_instrument(Some(Instrument::new("TEST").with_tick_size(100.0)));
+        let mut options = chart.chart_options().clone();
+        options.tooltip.long_press_order = option;
+        chart.set_chart_options(options);
+        let mut menus = ChartMenus::default();
+        setup(&mut chart, &mut menus);
+        let mut frame = |chart: &mut Chart, time, events| {
+            let mut action = None;
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                    action = menus.show(ui.ctx(), chart);
+                },
+            )
+            .drop_without_applying_deltas();
+            action
+        };
+        // The menus arm the chart at the end of each pass.
+        for time in [0.0, 0.1, 0.2] {
+            frame(&mut chart, time, vec![]);
+        }
+        let view = chart.get_time_scale_state();
+        let _ = chart.drain_events().count();
+        let touch = |phase, pos| Event::Touch {
+            device_id: TouchDeviceId(1),
+            id: TouchId(1),
+            phase,
+            pos,
+            force: None,
+        };
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let moved = pos + egui::vec2(40.0, 0.0);
+        let order = side.map(|side| {
+            let order = OrderRequest::new("TEST", side, 1.0, OrderType::Limit(100.0));
+            ChartContextAction::Chart(ContextMenuAction::Order(order))
+        });
+        // (time, events, whether the order is due, whether a value hold shows values); the hold
+        // delay is 0.5 s, and egui's own long touch fires at 0.8 s.
+        for (time, events, due, values) in [
+            (
+                1.0,
+                vec![
+                    touch(TouchPhase::Start, pos),
+                    Event::PointerMoved(pos),
+                    button(pos, true),
+                ],
+                false,
+                false,
+            ),
+            (1.4, vec![], false, false),
+            (1.6, vec![], true, true),
+            (1.7, vec![], false, true),
+            (1.9, vec![], false, true),
+            (
+                2.0,
+                vec![touch(TouchPhase::Move, moved), Event::PointerMoved(moved)],
+                false,
+                true,
+            ),
+            (
+                2.1,
+                vec![
+                    touch(TouchPhase::End, moved),
+                    button(moved, false),
+                    Event::PointerGone,
+                ],
+                false,
+                false,
+            ),
+            (2.2, vec![], false, false),
+        ] {
+            let action = frame(&mut chart, time, events);
+            let expected = if due { order.clone() } else { None };
+            assert_eq!(action, expected, "{case} at {time}");
+            assert!(!chart.menu_open, "{case} at {time}: the hold opens no menu");
+            if order.is_some() {
+                assert_eq!(
+                    chart.hover_time(),
+                    None,
+                    "{case} at {time}: an order hold shows no values"
+                );
+            } else if values {
+                assert!(
+                    chart.hover_time().is_some(),
+                    "{case} at {time}: the hold shows its values"
+                );
+            }
+        }
+        assert_eq!(
+            chart.get_time_scale_state(),
+            view,
+            "{case}: the hold does not pan"
+        );
+        assert!(
+            !chart
+                .drain_events()
+                .any(|event| matches!(event, ChartEvent::Click { .. })),
+            "{case}: the hold is no click"
+        );
+    }
+}
