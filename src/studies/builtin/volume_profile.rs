@@ -1562,6 +1562,7 @@ impl ProfileStudy {
                         self.interval,
                         regular.as_ref(),
                         self.hours_only,
+                        None,
                     )
                     .into_iter()
                     .map(|p| p.bars)

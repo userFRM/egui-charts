@@ -343,6 +343,7 @@ fn whole_sessions(
     visible: Range<usize>,
     sessions: &ExchangeSessionProvider,
     config: &TPOConfig,
+    interval: Option<crate::model::Timeframe>,
 ) -> Range<usize> {
     // Bars are chronological, so the bars before `i` in another session come first.
     let start_of = |i: usize| {
@@ -418,13 +419,7 @@ fn whole_sessions(
             .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC);
         let slice =
             full.partition_point(|b| b.time < first)..full.partition_point(|b| b.time <= last);
-        let parts = custom.parts(
-            full,
-            slice,
-            crate::model::Timeframe::Min1,
-            config.regular_hours.as_ref(),
-            true,
-        );
+        let parts = config.custom_parts(full, slice, interval);
         let key = |session, date| {
             let layer = if custom.overlap == crate::model::SessionOverlap::InBoth {
                 session
@@ -539,16 +534,7 @@ fn build_profiles(
         })
     };
     let mut profile_open = starts.first().copied().unwrap_or(0);
-    let custom_parts = match &config.session {
-        crate::model::ProfileSession::Custom(custom) => custom.parts(
-            bars,
-            0..bars.len(),
-            clock.timeframe().unwrap_or_default(),
-            config.regular_hours.as_ref(),
-            true,
-        ),
-        _ => Vec::new(),
-    };
+    let custom_parts = config.custom_parts(bars, 0..bars.len(), clock.timeframe());
     let breaks = starts.into_iter().skip(1);
     for end in breaks.chain([bars.len()]) {
         if end < bars.len()
@@ -753,7 +739,13 @@ pub fn render_live_tpo(
         return;
     };
     let sessions = clock.sessions();
-    let history = whole_sessions(full_data, 0..visible.start, &sessions, &config);
+    let history = whole_sessions(
+        full_data,
+        0..visible.start,
+        &sessions,
+        &config,
+        clock.timeframe(),
+    );
     let units = cached_profiles(
         &full_data[history.clone()],
         revision,
@@ -818,7 +810,7 @@ pub(crate) fn visit_profiles(
     };
 
     let sessions = clock.sessions();
-    let bars = whole_sessions(full_data, visible, &sessions, &config);
+    let bars = whole_sessions(full_data, visible, &sessions, &config, clock.timeframe());
     let start_idx = bars.start;
     let units = cached_profiles(
         &full_data[bars],
@@ -1074,7 +1066,7 @@ pub(crate) fn profile_at(
     }
     let config = row_config(base_config, instrument_tick, &mapping.price)?;
     let sessions = clock.sessions();
-    let bars = whole_sessions(full_data, visible, &sessions, &config);
+    let bars = whole_sessions(full_data, visible, &sessions, &config, clock.timeframe());
     let units = cached_profiles(
         &full_data[bars.clone()],
         revision,
@@ -3726,7 +3718,7 @@ mod tests {
                 ..Default::default()
             };
             assert_eq!(
-                whole_sessions(&bars, visible.clone(), &sessions, &config),
+                whole_sessions(&bars, visible.clone(), &sessions, &config, None),
                 expected,
                 "{visible:?}, {config:?}"
             );
@@ -3802,7 +3794,7 @@ mod tests {
                     .collect(),
                 ..Default::default()
             };
-            let span = whole_sessions(&bars, 24..25, &clock.sessions(), &config);
+            let span = whole_sessions(&bars, 24..25, &clock.sessions(), &config, clock.timeframe());
             assert_eq!(
                 span,
                 if range.is_none() && profile_period == TPOProfilePeriod::Session {
@@ -3893,7 +3885,7 @@ mod tests {
                 period_minutes: 60,
                 ..Default::default()
             };
-            let span = whole_sessions(&bars, 27..28, &clock.sessions(), &config);
+            let span = whole_sessions(&bars, 27..28, &clock.sessions(), &config, clock.timeframe());
             assert_eq!(
                 span,
                 if overlap == SessionOverlap::OwnProfile {
