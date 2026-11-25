@@ -10,6 +10,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - `Chart::set_footprint_history_by_view` sizes the initial prepared footprint page to the visible bars and footprint consumers without shortening candle history. The feed still chooses the prepared/live cutoff. ([#4142](https://github.com/userFRM/egui-charts/issues/4142))
 
+- Chart data tables can have independent window IDs and display a fixed symbol without intercepting typed input. ([#4156](https://github.com/userFRM/egui-charts/issues/4156))
+
 ## [0.3.0-alpha.1] - 2026-11-24
 
 ### Added
