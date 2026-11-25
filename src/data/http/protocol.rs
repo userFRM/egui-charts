@@ -225,6 +225,11 @@ impl Symbol {
             if self.fractional == Some(true) {
                 instrument.price_fraction = price_fraction(scale, self.minmove2.unwrap_or(0.0));
             }
+            // A decimal pricescale is 10 to the power of the decimals, and a whole minmov counts
+            // ticks in its units. Past the 12 decimals labels keep, the tick gives the same count.
+            if movement.fract() == 0.0 {
+                instrument.price_decimals = (0..=12u8).find(|&n| 10f64.powi(i32::from(n)) == scale);
+            }
         }
         instrument.volume_decimals = self.volume_precision;
         instrument.currency = self.currency_code;

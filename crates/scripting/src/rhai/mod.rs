@@ -3,6 +3,7 @@
 
 mod alerts;
 mod calls;
+mod drawings;
 pub(crate) mod engine;
 mod errors;
 pub(crate) mod syntax;
@@ -37,8 +38,8 @@ pub(crate) struct Compiled {
 /// Compile `source` in two passes: the first reads the declarations and reports syntax errors,
 /// the second compiles with every declared name in scope, refuses any other name and checks the
 /// studies the script calls against `factory`. A call to a function nothing defines is refused
-/// too, as is an `alert` call whose message is not a plain string; the error returned is the first
-/// in the source.
+/// too, as is an `alert` call whose message is not a plain string and a drawing call that names
+/// no declared plot by a plain string; the error returned is the first in the source.
 pub(crate) fn compile(
     name: String,
     source: &str,
@@ -78,18 +79,21 @@ pub(crate) fn compile(
             .entry(study)
             .or_insert_with_key(|study| bindings::prototype(factory, study));
     }
-    // The first of the errors in the source, a name, a call or an alert.
+    // The first of the errors in the source, a name, a call, an alert or a drawing.
     let unknown = calls::unknown(source, &ast);
     let alerts = alerts::declared(source, &ast);
+    let drawings = drawings::called(source, &ast, &spec.plots);
     let strict = pass(&scope(&spec, &defaults, false, false), Some(catalogue));
     let first = (strict.as_ref().err().into_iter())
         .chain(&unknown)
-        .chain(alerts.as_ref().err());
+        .chain(alerts.as_ref().err())
+        .chain(drawings.as_ref().err());
     if let Some(error) = first.min_by_key(|error| (error.line, error.column)) {
         return Err(error.clone());
     }
     let (engine, ast, mut spec, _) = strict?;
     spec.alerts = alerts?;
+    spec.calls = drawings?;
     Ok(Compiled {
         name,
         series_spans: syntax::spans(source, "series", spec.series.iter().map(|s| &*s.name)).into(),
@@ -141,6 +145,7 @@ fn scope(spec: &ScriptSpec, inputs: &[InputValue], fed: bool, constants: bool) -
             (InputValue::Integer(value), _) => Dynamic::from_int(i64::from(*value)),
             (InputValue::Number(value), _) => Dynamic::from_float(*value),
             (InputValue::Toggle(value), _) => Dynamic::from_bool(*value),
+            (InputValue::Color(color), _) => Dynamic::from(drawings::ColorValue(*color)),
             (InputValue::Choice(at), InputKind::Choice(choices)) => {
                 Dynamic::from(choices.get(*at).cloned().unwrap_or_default())
             }

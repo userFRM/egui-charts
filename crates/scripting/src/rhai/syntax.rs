@@ -7,9 +7,10 @@
 //! as early as the tokens it needs allow: a kind or option name before it is read, a literal
 //! once the token after it is in view.
 
+use super::drawings::{self, ColorValue};
 use super::engine::{BarsHandle, Handle, span};
 use crate::runtime::bindings::{self, Arg};
-use crate::runtime::{self, data, program::*};
+use crate::runtime::{self, data, drawings::encode, program::*};
 use ::rhai::{
     Dynamic, Engine, EvalAltResult, EvalContext, Expression, ImmutableString, LexError, ParseError,
     ParseErrorType, Position,
@@ -95,7 +96,7 @@ pub(crate) const NA: (&str, &str) = (
 use crate::runtime::series::SeriesRef;
 
 /// The plot styles a script names, and the plot types they draw.
-const STYLES: [(&str, PlotType); 13] = [
+const STYLES: [(&str, PlotType); 15] = [
     ("line", PlotType::Line),
     ("line_with_breaks", PlotType::LineWithBreaks),
     ("histogram", PlotType::Histogram),
@@ -109,10 +110,12 @@ const STYLES: [(&str, PlotType); 13] = [
     ("area_with_breaks", PlotType::AreaWithBreaks),
     ("triangle_up", PlotType::TriangleUp),
     ("triangle_down", PlotType::TriangleDown),
+    ("bar_color", PlotType::BarColor),
+    ("background_color", PlotType::BackgroundColor),
 ];
 
 /// The input kinds: their names, argument counts, how a script writes them and what they hold.
-pub(crate) const KINDS: [(&str, usize, &str, &str); 9] = [
+pub(crate) const KINDS: [(&str, usize, &str, &str); 10] = [
     (
         "length",
         4,
@@ -136,6 +139,13 @@ pub(crate) const KINDS: [(&str, usize, &str, &str); 9] = [
         2,
         "bool(label, default)",
         "A checkbox; the script reads true or false.",
+    ),
+    (
+        "color",
+        2,
+        "color(label, default)",
+        "A colour the settings dialog lets the user pick; default is \"#RRGGBB\" or \"#RRGGBBAA\". \
+         The script reads a colour.",
     ),
     (
         "choice",
@@ -261,6 +271,8 @@ enum Lit {
     Float(f64),
     Bool(bool),
     Ident(String),
+    /// An expression, the custom syntax input at this index.
+    Expr(usize),
 }
 
 impl Lit {
@@ -271,6 +283,7 @@ impl Lit {
             Self::Float(_) => "a number",
             Self::Bool(_) => "a bool",
             Self::Ident(_) => "a name",
+            Self::Expr(_) => "an expression",
         }
     }
 
@@ -383,8 +396,9 @@ impl<'a> Cursor<'a> {
         })
     }
 
-    /// `, NAME = LITERAL` options up to the closing `)`, each name checked before it is read.
-    fn options(&mut self, names: &[&str]) -> Step<Vec<(&'a str, Lit)>> {
+    /// `, NAME = LITERAL` options up to the closing `)`, each name checked before it is read. An
+    /// option of `exprs` takes an expression too, read as one where no string starts its value.
+    fn options(&mut self, names: &[&str], exprs: &[&str]) -> Step<Vec<(&'a str, Lit)>> {
         let mut options: Vec<(&str, Lit)> = Vec::new();
         while self.either(&[",", ")"])? == "," {
             if self.at_end() && !names.contains(&self.look) {
@@ -399,7 +413,19 @@ impl<'a> Cursor<'a> {
                 return Err(Stop::Fail(format!("option {name} is given twice")));
             }
             self.symbol("=")?;
-            let value = self.literal()?;
+            let expression = match self.tokens.get(self.at) {
+                Some((kind, _)) => *kind == Kind::Expr,
+                None => !self.look.starts_with('"'),
+            };
+            let value = if exprs.contains(&name) && expression {
+                // Every token but a symbol is an input of the custom syntax.
+                let read = self.tokens[..self.at].iter();
+                let input = read.filter(|(kind, _)| *kind != Kind::Symbol).count();
+                self.expr()?;
+                Lit::Expr(input)
+            } else {
+                self.literal()?
+            };
             options.push((name, value));
         }
         Ok(options)
@@ -500,9 +526,13 @@ pub(crate) const DECLARATIONS: [Declaration; 8] = [
                 .collect();
             format!(
                 "An output with a unique title, which stores EXPR on the bar; the last store on a \
-                 bar wins. COLOR is \"#RRGGBB\" or \"#RRGGBBAA\", STYLE one of {}, and offset \
-                 draws the plot from -10000 to 10000 bars later. A script declares at least one \
-                 plot and at most {MAX_PLOTS}.",
+                 bar wins. COLOR is \"#RRGGBB\" or \"#RRGGBBAA\", or an expression giving the \
+                 colour on each bar the plot stores, such as rgb(...) or a color input, where na \
+                 keeps the plot's own colour. STYLE is one of {}: \"bar_color\" repaints the \
+                 price bars, and needs display(overlay = true) before it, and \
+                 \"background_color\" fills the background, each on the bars where the plot has \
+                 a value and a colour. offset draws the plot from -10000 to 10000 bars later. A \
+                 script declares at least one plot and at most {MAX_PLOTS}.",
                 styles.join(", ")
             )
         },
@@ -591,6 +621,7 @@ pub(crate) fn type_name(value: &Dynamic) -> &'static str {
         "map" => "map",
         _ if value.is::<Handle>() => "series",
         _ if value.is::<BarsHandle>() => "bars",
+        _ if value.is::<ColorValue>() => "color",
         _ => "value",
     }
 }
@@ -611,10 +642,38 @@ fn store_series(context: &mut EvalContext, inputs: &[Expression], state: &Dynami
 fn store_plot(context: &mut EvalContext, inputs: &[Expression], state: &Dynamic) -> RhaiResult {
     let at = state.as_int().unwrap_or(0) as usize;
     let title = inputs[0].get_string_value().unwrap_or_default().to_owned();
-    let value = number(context, &inputs[1], || format!("plot \"{title}\""))?;
+    let mut value = number(context, &inputs[1], || format!("plot \"{title}\""))?;
+    let span = span(inputs[0].position());
+    let coloured = runtime::with(|run| {
+        let plot = &run.spec.plots[at];
+        let coloured = plot.dynamic.map(|dynamic| (dynamic, plot.style));
+        if coloured.is_none() {
+            run.row[at] = value;
+            run.mark(span);
+        }
+        coloured
+    });
+    let Some(((input, column), style)) = coloured.flatten() else {
+        return Ok(Dynamic::UNIT);
+    };
+    let expression = &inputs[input];
+    let color = context.eval_expression_tree(expression)?;
+    let color = drawings::color_of(&color).map_err(|got| {
+        let message = format!(
+            "the color of plot \"{title}\" is \"#RRGGBB\", \"#RRGGBBAA\", rgb(r, g, b), \
+             rgba(r, g, b, alpha) or na; got {got}"
+        );
+        EvalAltResult::ErrorRuntime(message.into(), expression.position())
+    })?;
+    // A bar or background colour paints nothing on a bar without a colour.
+    if color.is_none() && matches!(style, PlotType::BarColor | PlotType::BackgroundColor) {
+        value = f64::NAN;
+    }
     runtime::with(|run| {
+        let colours = run.spec.plots.len() + run.spec.alerts.len();
         run.row[at] = value;
-        run.mark(span(inputs[0].position()));
+        run.row[colours + column] = encode(color);
+        run.mark(span);
     });
     Ok(Dynamic::UNIT)
 }
@@ -736,8 +795,12 @@ fn int(lit: &Lit) -> Option<i64> {
 }
 
 fn color(lit: &Lit) -> Option<Color32> {
-    let hex = text(lit)?;
-    let hex = hex.strip_prefix('#')?;
+    hex(&text(lit)?)
+}
+
+/// The colour `text` writes as `"#RRGGBB"` or `"#RRGGBBAA"`.
+pub(crate) fn hex(text: &str) -> Option<Color32> {
+    let hex = text.strip_prefix('#')?;
     if !(hex.len() == 6 || hex.len() == 8) || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
@@ -823,7 +886,7 @@ fn first_options<'a>(cursor: &mut Cursor<'a>, names: &[&str]) -> Step<Vec<(&'a s
     cursor.symbol("=")?;
     let value = cursor.literal()?;
     let mut options = vec![(name, value)];
-    for (name, value) in cursor.options(names)? {
+    for (name, value) in cursor.options(names, &[])? {
         if options.iter().any(|(given, _)| *given == name) {
             return Err(Stop::Fail(format!("option {name} is given twice")));
         }
@@ -1041,6 +1104,18 @@ fn input_kind(kind: &str, args: &[Lit], choices: Vec<String>) -> Step<(InputKind
                 .ok_or_else(|| Stop::Fail(format!("the default {default:?} is not a choice")))?;
             (InputKind::Choice(choices), InputValue::Choice(at))
         }
+        "color" => {
+            let default = match &args[1] {
+                Lit::Text(text) => hex(text).ok_or_else(|| format!("{text:?}")),
+                lit => Err(lit.describe().to_owned()),
+            };
+            let default = default.map_err(|got| {
+                Stop::Fail(format!(
+                    "the default of a color input is \"#RRGGBB\" or \"#RRGGBBAA\"; got {got}"
+                ))
+            })?;
+            (InputKind::Color, InputValue::Color(default))
+        }
         "source" => {
             let price = expect(
                 &args[1],
@@ -1095,7 +1170,7 @@ fn state_decl(cursor: &mut Cursor, collector: &mut Collector) -> Step<Option<usi
         Lit::Float(value) => Literal::Number(value),
         Lit::Bool(value) => Literal::Bool(value),
         Lit::Ident(name) if name == NA.0 => Literal::Number(f64::NAN),
-        Lit::Ident(_) => {
+        Lit::Ident(_) | Lit::Expr(_) => {
             return Err(Stop::Fail(
                 "a state starts from a literal: a number, a string, true, false or na".into(),
             ));
@@ -1287,10 +1362,14 @@ fn plot(cursor: &mut Cursor, collector: &mut Collector) -> Step<Option<usize>> {
         color: None,
         style: PlotType::Line,
         offset: 0,
+        dynamic: None,
     };
-    for (name, value) in cursor.options(&["color", "style", "offset"])? {
+    for (name, value) in cursor.options(&["color", "style", "offset"], &["color"])? {
         match name {
-            "color" => plot.color = Some(expect(&value, COLOR, color)?),
+            "color" => match value {
+                Lit::Expr(input) => plot.dynamic = Some((input, collector.spec.coloured())),
+                value => plot.color = Some(expect(&value, COLOR, color)?),
+            },
             "style" => {
                 plot.style = expect(&value, "style takes a plot style such as \"line\"", |lit| {
                     let style = text(lit)?;
@@ -1310,6 +1389,12 @@ fn plot(cursor: &mut Cursor, collector: &mut Collector) -> Step<Option<usize>> {
                     })?;
             }
         }
+    }
+    if plot.style == PlotType::BarColor && !collector.spec.display.overlay {
+        return Err(Stop::Fail(
+            "a bar_color plot repaints the price bars, so display(overlay = true) comes before it"
+                .into(),
+        ));
     }
     if collector.spec.plots.len() == MAX_PLOTS {
         return Err(Stop::Fail(format!(
@@ -1346,7 +1431,7 @@ fn fill(cursor: &mut Cursor, collector: &mut Collector) -> Step<Option<usize>> {
         color: None,
         inverted: None,
     };
-    for (name, value) in cursor.options(&["color", "inverted"])? {
+    for (name, value) in cursor.options(&["color", "inverted"], &[])? {
         let color = Some(expect(&value, COLOR, color)?);
         match name {
             "color" => fill.color = color,

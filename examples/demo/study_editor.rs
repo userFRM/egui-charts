@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 /// The native sample study, still registered so that charts saved with it open.
 const TITLE: &str = "Sample close difference";
-const GUIDE: &str = "Scripts are Rhai with declarations for inputs, plots and study calls; Examples opens the bundled ones. alert(\"message\", condition) declares an alert condition: after Apply, Add alert offers it as a condition of the study. Apply checks the script on the active chart's bars, then adds it to the chart and saves it locally; Profile lines takes effect at the next Apply. Other charts showing a script of the same title keep the version they run until they are opened again. A script that places orders is a strategy: Apply saves it and selects it in the strategy tester, where Run backtests it.";
+const GUIDE: &str = "Scripts are Rhai with declarations for inputs, plots and study calls; Examples opens the bundled ones. alert(\"message\", condition) declares an alert condition: after Apply, Add alert offers it as a condition of the study. plot(..., color = EXPR) colours a plot per bar with rgb(r, g, b), rgba(r, g, b, alpha), \"#RRGGBB\" or a color input, and the colour set in the study's settings paints the bars where EXPR is na; style = \"bar_color\" or \"background_color\" paints the price bars or the background; label, segment, zone and marker draw on the chart in the colour of the plot they name. Apply checks the script on the active chart's bars, then adds it to the chart and saves it locally; Profile lines takes effect at the next Apply. Other charts showing a script of the same title keep the version they run until they are opened again. A script that places orders is a strategy: Apply saves it and selects it in the strategy tester, where Run backtests it.";
 
 pub(super) struct SampleStudyEditor {
     pub open: bool,
@@ -595,13 +595,9 @@ mod tests {
         fn flush(&mut self) {}
     }
 
-    /// The text shapes of one frame.
-    fn frame(
-        app: &mut DemoApp,
-        ctx: &egui::Context,
-        events: Vec<Event>,
-    ) -> Vec<egui::epaint::TextShape> {
-        let output = ctx.run_ui(
+    /// The shapes of one frame.
+    fn shapes(app: &mut DemoApp, ctx: &egui::Context, events: Vec<Event>) -> Vec<egui::Shape> {
+        let mut output = ctx.run_ui(
             RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     Pos2::ZERO,
@@ -612,14 +608,36 @@ mod tests {
             },
             |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
         );
-        let texts = (output.shapes.iter())
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some(text.clone()),
+        let shapes = output.shapes.drain(..).map(|shape| shape.shape).collect();
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    /// The text shapes of one frame.
+    fn frame(
+        app: &mut DemoApp,
+        ctx: &egui::Context,
+        events: Vec<Event>,
+    ) -> Vec<egui::epaint::TextShape> {
+        (shapes(app, ctx, events).into_iter())
+            .filter_map(|shape| match shape {
+                egui::Shape::Text(text) => Some(text),
                 _ => None,
             })
-            .collect();
-        output.drop_without_applying_deltas();
-        texts
+            .collect()
+    }
+
+    /// Every shape of one frame, those of nested lists included.
+    fn painted(app: &mut DemoApp, ctx: &egui::Context) -> Vec<egui::Shape> {
+        let mut nested = shapes(app, ctx, Vec::new());
+        let mut flat = Vec::new();
+        while let Some(shape) = nested.pop() {
+            match shape {
+                egui::Shape::Vec(shapes) => nested.extend(shapes),
+                shape => flat.push(shape),
+            }
+        }
+        flat
     }
 
     fn render(app: &mut DemoApp, ctx: &egui::Context, events: Vec<Event>) -> Vec<(String, Pos2)> {
@@ -855,6 +873,13 @@ mod tests {
                 "Not saved",
                 "alerts",
             ),
+            // A first label takes away the Offset, Symbol and Interval inputs of the charts.
+            (
+                format!("{LOOKBACK}\nlabel(\"Difference\", bar_index, close, \"x\");"),
+                "Save",
+                "Not saved",
+                "inputs",
+            ),
             (
                 format!("{renamed}\nplot(\"Close\", close);"),
                 "Apply",
@@ -875,6 +900,24 @@ mod tests {
             );
             click(&mut app, &ctx, "Reload saved");
         }
+        // Colours are not part of what the charts restore with.
+        let coloured = LOOKBACK.replace(
+            "close - close[lookback]);",
+            "close - close[lookback], color = if close > open { \"#26A69A\" } else { na });",
+        );
+        edit(&mut app, &ctx, LOOKBACK, &coloured);
+        click(&mut app, &ctx, "Save");
+        assert!(
+            !render(&mut app, &ctx, Vec::new())
+                .iter()
+                .any(|(text, _)| text.starts_with("Not saved"))
+        );
+        click(&mut app, &ctx, "Reload saved");
+        assert!(
+            render(&mut app, &ctx, Vec::new())
+                .iter()
+                .any(|(text, _)| *text == coloured)
+        );
         // The restarted application has storage: its first-visit choice is already answered.
         let answered = super::super::owndata::store::Saved {
             asked: true,
@@ -893,7 +936,7 @@ mod tests {
         assert!(
             render(&mut restored, &ctx, Vec::new())
                 .iter()
-                .any(|(text, _)| text == LOOKBACK)
+                .any(|(text, _)| *text == coloured)
         );
 
         // The workspace kept the applied study with its input and opened it as saved, and the
@@ -1125,6 +1168,115 @@ mod tests {
             .filter(|(text, _)| text.starts_with("40 calls, "))
             .count();
         assert_eq!(notes, 2);
+    }
+
+    #[test]
+    fn editor_scripts_paint_colours_and_drawings() {
+        use egui::{Color32, Shape};
+        use egui_charts::studies::Indicator;
+        let ctx = egui::Context::default();
+        let mut app = editor_app(&ctx);
+        // Bar i opens at 100 + i and rises by 1 on even bars, falls by 0.5 on odd ones.
+        let bar = |i: usize, close: f64| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i as i64);
+            let open = 100.0 + i as f64;
+            Bar::new(time, open, open.max(close), open.min(close), close, 1.0)
+        };
+        let rise = |i: usize| if i % 2 == 0 { 1.0 } else { -0.5 };
+        let bars = (0..12)
+            .map(|i| bar(i, 100.0 + i as f64 + rise(i)))
+            .collect();
+        *app.chart = egui_charts::Chart::new(BarData::from_bars(bars));
+        let script = r##"display(overlay = true);
+input up = color("Up", "#0A7B83");
+plot("Close", close, color = if close > open { up } else { na });
+plot("Bars", close, style = "bar_color", color = if close > open { "#7209B7" } else { na });
+plot("Shade", 1.0, style = "background_color", color = if bar_index % 3 == 0.0 { "#F7258540" } else { na });
+plot("Marks", na, color = "#B5179E");
+if bar_index == 6 {
+    label("Marks", bar_index, high, "Top");
+    segment("Marks", bar_index - 6, low[6], bar_index, high);
+    zone("Marks", bar_index - 3, bar_index, high[3], low);
+    marker(bar_index, low, "up");
+}"##;
+        app.sample_study.editor.open_document("Painted", script);
+        let before = painted(&mut app, &ctx);
+        click(&mut app, &ctx, "Apply");
+        calculated(&mut app, &ctx);
+
+        // What the chart paints beyond what it painted before Apply.
+        let added = |shapes: &[Shape], test: &dyn Fn(&Shape) -> bool| {
+            let count = |shapes: &[Shape]| shapes.iter().filter(|shape| test(shape)).count();
+            count(shapes) - count(&before)
+        };
+        let filled = |fill: Color32| move |shape: &Shape| matches!(shape, Shape::Rect(rect) if rect.fill == fill);
+        let stroked = |color: Color32| {
+            move |shape: &Shape| match shape {
+                Shape::LineSegment { stroke, .. } => stroke.color == color,
+                Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
+                _ => false,
+            }
+        };
+        let up = Color32::from_rgb(0x0A, 0x7B, 0x83);
+        let bars_color = Color32::from_rgb(0x72, 0x09, 0xB7);
+        let shade = Color32::from_rgba_unmultiplied(0xF7, 0x25, 0x85, 0x40);
+        let marks = Color32::from_rgb(0xB5, 0x17, 0x9E);
+        let success = egui_charts::tokens::DESIGN_TOKENS.semantic.extended.success;
+        let after = painted(&mut app, &ctx);
+        // The bodies of the rising bars, the background of bars 0, 3, 6 and 9, and the zone.
+        assert_eq!(added(&after, &filled(bars_color)), 6);
+        assert_eq!(added(&after, &filled(shade)), 4);
+        assert_eq!(added(&after, &filled(marks.gamma_multiply(0.15))), 1);
+        // The segment and the zone's edges, then the rising parts of the close.
+        assert!(added(&after, &stroked(marks)) >= 3);
+        assert!(added(&after, &stroked(up)) >= 1);
+        assert!(after.iter().any(|shape| matches!(shape, Shape::Text(text)
+            if text.galley.text() == "Top" && text.fallback_color == marks)));
+        let triangle = |shape: &Shape| {
+            matches!(shape, Shape::Path(path)
+            if path.closed && path.points.len() == 3 && path.fill == success)
+        };
+        assert_eq!(added(&after, &triangle), 1);
+        let id = study_id(&app.chart, "Painted");
+        let (_, study) = (app.chart.indicators())
+            .find(|(candidate, _)| *candidate == id)
+            .unwrap();
+        let colors: Vec<_> = (0..12).map(|bar| study.plot_color(0, bar)).collect();
+        let expected: Vec<_> = (0..12).map(|bar| (bar % 2 == 0).then_some(up)).collect();
+        assert_eq!(colors, expected);
+
+        // A tick paints the forming bar as a full calculation does, and nothing where its colour
+        // is missing.
+        for (close, rising) in [(113.0, 7), (111.5, 6)] {
+            app.chart.update(SeriesId::MAIN, bar(12, close));
+            calculated(&mut app, &ctx);
+            let shapes = painted(&mut app, &ctx);
+            assert_eq!(added(&shapes, &filled(bars_color)), rising);
+            assert_eq!(added(&shapes, &filled(shade)), 5);
+            let bars = app.chart.bars(SeriesId::MAIN);
+            let mut fresh = app.sample_study.scripts["Painted"].study();
+            fresh.calculate(bars);
+            while matches!(fresh.calculation(), Some(Calculation::Running(_))) {
+                fresh.update(bars, bars.len());
+            }
+            let (_, study) = (app.chart.indicators())
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap();
+            for (line, bar) in (0..4).flat_map(|line| (0..bars.len()).map(move |bar| (line, bar))) {
+                assert_eq!(
+                    study.plot_color(line, bar),
+                    fresh.plot_color(line, bar),
+                    "{line} {bar}"
+                );
+            }
+            assert_eq!(study.labels(), fresh.labels());
+            assert_eq!(study.price_segments(), fresh.price_segments());
+            assert_eq!(study.zones(), fresh.zones());
+            assert_eq!(
+                format!("{:?}", study.markers()),
+                format!("{:?}", fresh.markers())
+            );
+        }
     }
 
     #[test]
