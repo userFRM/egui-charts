@@ -1015,6 +1015,141 @@ fn time_bar_trade_rate_requires_coverage_for_each_output() {
     }
 }
 
+/// Hand counts on a 1-minute chart with candles at 00:01 and 00:02: buys of one lot at
+/// 00:01:05 (price 100), 00:01:15 (101) and 00:02:30 (102), each its own aggressor order. A
+/// page that does not reach the start of history leaves the 00:01 candle blank, and every
+/// window or sum that reaches it, until an empty terminal page proves it whole.
+#[cfg(feature = "studies")]
+#[test]
+fn time_bar_trade_studies_require_coverage_for_each_output() {
+    use crate::data::OrderFlowKind;
+    use crate::model::OrderSide::Buy;
+    use crate::studies::{Indicator, OrderFlowStudy};
+
+    let start = "2025-01-01T00:01:00Z".parse::<DateTime<Utc>>().unwrap();
+    let tape = || {
+        [(5, 100.0), (15, 101.0), (90, 102.0)]
+            .into_iter()
+            .zip(1..)
+            .map(|((secs, price), id)| {
+                Tick::new(start + TimeDelta::seconds(secs), price, 1.0, Some(Buy))
+                    .with_id(id)
+                    .with_aggressor_order_id(id)
+            })
+            .collect::<Vec<_>>()
+    };
+    type Rows = [[Option<f64>; 3]; 2];
+    let n = None;
+    let s = Some;
+    // Price Range over 90 seconds, read from its source: at 00:02:30 the window opens at 00:01:00.
+    let range_kind = OrderFlowKind::PriceRange { seconds: 90 };
+    let range_complete: Rows = [[s(1.0), s(101.0), s(100.0)], [s(2.0), s(102.0), s(100.0)]];
+    let range_partial: Rows = [[n; 3], [n; 3]];
+    for complete in [true, false] {
+        // Each study, its two candles complete, and the same before a terminal page.
+        let studies: [(OrderFlowStudy, Rows, Rows); 6] = [
+            (
+                OrderFlowStudy::new(OrderFlowKind::AggressorRate {
+                    seconds: 60,
+                    instant: 10,
+                }),
+                [
+                    [s(2.0), s(2.0 / 60.0), s(0.1)],
+                    [s(1.0), s(1.0 / 60.0), s(0.1)],
+                ],
+                // The 10-second window from 00:01:05 holds every execution after the page start.
+                [[n, n, s(0.1)], [s(1.0), s(1.0 / 60.0), s(0.1)]],
+            ),
+            (
+                OrderFlowStudy::new(OrderFlowKind::LevelsExecuted {
+                    seconds: 0,
+                    reversal: false,
+                }),
+                [[s(2.0), s(0.0), s(2.0)], [s(1.0), s(0.0), s(1.0)]],
+                [[n, n, n], [s(1.0), s(0.0), s(1.0)]],
+            ),
+            (
+                OrderFlowStudy::new(OrderFlowKind::SizeDelta {
+                    ranges: [[0.0, 10.0], [10.0, 100.0], [100.0, f64::MAX]],
+                }),
+                [[s(2.0), s(0.0), s(0.0)], [s(1.0), s(0.0), s(0.0)]],
+                [[n, n, n], [s(1.0), s(0.0), s(0.0)]],
+            ),
+            (
+                OrderFlowStudy::new(OrderFlowKind::FlowSum { bars: 2 }),
+                [[n, n, n], [s(3.0), s(3.0), n]],
+                [[n, n, n], [n, n, n]],
+            ),
+            (
+                OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
+                    min: 0.0,
+                    max: f64::MAX,
+                }),
+                [[s(2.0), n, n], [s(3.0), n, n]],
+                // The sum starts at the oldest candle with a value.
+                [[n, n, n], [s(1.0), n, n]],
+            ),
+            (
+                OrderFlowStudy::execution_delta(false),
+                [[s(2.0), s(2.0), n], [s(1.0), s(1.0), n]],
+                [[n, n, n], [s(1.0), s(1.0), n]],
+            ),
+        ];
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe(Timeframe::Min1);
+        let ids: Vec<_> = (studies.iter())
+            .map(|(study, ..)| chart.add_indicator(Box::new(study.clone())))
+            .collect();
+        let range = chart.add_indicator(Box::new(OrderFlowStudy::new(range_kind)));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        frames.run(&mut chart);
+        let candle = |open, volume| Bar::new(open, 100.0, 100.0, 100.0, 100.0, volume);
+        feed.page().send(page(
+            vec![
+                candle(start, 2.0),
+                candle(start + TimeDelta::minutes(1), 1.0),
+            ],
+            true,
+        ));
+        let send = |tape, end| {
+            let reply = feed.trades.lock().unwrap().pop().unwrap();
+            reply.send(Ok(TradePage::new(tape, end)));
+        };
+        send(tape(), complete);
+        // A replaced series gets one full recompute per frame.
+        for _ in 0..10 {
+            frames.run(&mut chart);
+        }
+        let check = |chart: &Chart, done: bool, when: &str| {
+            for ((study, whole, partial), id) in studies.iter().zip(&ids) {
+                let shown = chart.indicators().find(|(i, _)| i == id).unwrap().1;
+                let rows = [0, 1].map(|i| [0, 1, 2].map(|line| shown.values().value(line, i)));
+                let want = if done { whole } else { partial };
+                assert_eq!(&rows, want, "{} {when}", study.name());
+            }
+            let shown = chart.indicators().find(|(i, _)| *i == range).unwrap().1;
+            let values = shown.order_flow_inputs()[0].values();
+            let rows = [0, 1].map(|i| {
+                values[&(start + TimeDelta::minutes(i))].map(|v| v.is_finite().then_some(v))
+            });
+            let want = if done { range_complete } else { range_partial };
+            assert_eq!(rows, want, "Price Range {when}");
+        };
+        check(&chart, complete, "after the first page");
+        if !complete {
+            send(Vec::new(), true);
+            for _ in 0..10 {
+                frames.run(&mut chart);
+            }
+            check(&chart, true, "after the terminal page");
+        }
+    }
+}
+
 fn missing_history_page(
     shared: bool,
     from: DateTime<Utc>,
