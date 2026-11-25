@@ -17,8 +17,9 @@
 //! the fractal bar may equal its high, as long as the `n` bars before them are strictly lower,
 //! so a flat top of up to five bars is marked once, on its last bar.
 //!
-//! An up fractal is the high of its bar, drawn as an upward triangle above the bar; a down
-//! fractal is the low, drawn as a downward triangle below it. A fractal is known `n` bars after
+//! An up fractal is the high of its bar, drawn as an upward triangle above the bar; a down fractal
+//! is the low, drawn as a downward triangle below it. These values only place the marks: the legend
+//! lists neither, and the price scale starts without their tags. A fractal is known `n` bars after
 //! its bar, so the last `n` bars have no value yet.
 //!
 //! # Example
@@ -179,6 +180,15 @@ impl Indicator for WilliamsFractals {
         } else {
             crate::studies::ShapeSide::Below
         }
+    }
+
+    // A mark's value only places its triangle at the bar's low or high, so it is no reading.
+    fn legend_lines(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    fn plot_tagged(&self, _line: usize) -> bool {
+        false
     }
 
     fn values(&self) -> &IndicatorValues {
