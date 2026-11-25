@@ -501,7 +501,7 @@ impl DemoApp {
         self.chart.user_action(|chart| {
             let previous: Vec<_> = chart
                 .indicators()
-                .filter(|(_, study)| study.name() == title)
+                .filter(|(_, study)| study.registered_name() == title)
                 .map(|(id, _)| id)
                 .collect();
             for id in previous {
@@ -559,8 +559,10 @@ mod tests {
     use super::DemoApp;
     use eframe::App;
     use egui::{Event, Key, Modifiers, Pos2, RawInput};
+    use egui_charts::data::MetricSeries;
     use egui_charts::model::{Bar, BarData};
-    use egui_charts::studies::{Calculation, IndicatorFactory, InputValue};
+    use egui_charts::scales::StudyFormat;
+    use egui_charts::studies::{Calculation, IndicatorFactory, InputValue, MetricStudy};
     use egui_charts::widget::{ChartLayoutMode, SeriesId};
     use std::time::Duration;
 
@@ -1027,6 +1029,32 @@ mod tests {
             .filter(|(text, _)| text.starts_with("40 calls, "))
             .count();
         assert_eq!(notes, 2);
+    }
+
+    #[test]
+    fn applying_a_script_keeps_a_feed_metric_shown_under_its_title() {
+        let ctx = egui::Context::default();
+        let mut app = editor_app(&ctx);
+        *app.chart = egui_charts::Chart::new(BarData::from_bars(minute_bars([100.0, 103.0])));
+        // A feed's metric is registered, and saved, under its own key, not its display name.
+        let metric = MetricSeries::new("open_interest", "Open interest", StudyFormat::Volume);
+        let mut factory = IndicatorFactory::new();
+        factory.register("Metric: open_interest", move || {
+            Box::new(MetricStudy::new(metric.clone()))
+        });
+        let study = factory.create("Metric: open_interest").unwrap();
+        app.chart.add_indicator(study);
+        app.sample_study
+            .editor
+            .open_document("Open interest", LOOKBACK);
+        click(&mut app, &ctx, "Apply");
+        calculated(&mut app, &ctx);
+        let keys: Vec<_> = (app.chart.indicators())
+            .map(|(_, study)| study.registered_name().to_owned())
+            .collect();
+        for key in ["Metric: open_interest", "Open interest"] {
+            assert!(keys.iter().any(|kept| kept == key), "{key} not in {keys:?}");
+        }
     }
 
     #[test]
