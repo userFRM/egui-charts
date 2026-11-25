@@ -476,7 +476,54 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
         let decimals = crate::scales::instrument_price_precision(&info);
         assert_eq!(decimals, Some(expected), "{symbol}");
     }
+    // A tick table sets the tick of each price range; boundaries belong to the upper range.
+    let example = [
+        (5.0, 0.01),
+        (10.0, 0.02),
+        (20.0, 0.02),
+        (25.0, 0.05),
+        (30.0, 0.05),
+    ];
+    for (symbol, ticks, tick_size, decimals) in [
+        (
+            json!({"name":"ABC", "variable_tick_size":"0.01 10 0.02 25 0.05"}),
+            &example[..],
+            Some(0.01),
+            Some(2),
+        ),
+        (
+            json!({"name":"ABC", "minmov":50, "pricescale":100,
+                "variable_tick_size":"0.01 10 0.02 25 0.05"}),
+            &example[..],
+            Some(0.01),
+            Some(2),
+        ),
+        (
+            json!({"name":"ABC", "variable_tick_size":""}),
+            &[][..],
+            None,
+            None,
+        ),
+    ] {
+        let info = serde_json::from_value::<Symbol>(symbol.clone())
+            .unwrap()
+            .into_instrument()
+            .unwrap();
+        assert_eq!(info.tick_size, tick_size, "{symbol}");
+        assert_eq!(info.tick_tiers.is_empty(), ticks.is_empty(), "{symbol}");
+        for &(price, tick) in ticks {
+            assert_eq!(info.tick_at(price), Some(tick), "{symbol} at {price}");
+        }
+        let precision = crate::scales::instrument_price_precision(&info);
+        assert_eq!(precision, decimals, "{symbol}");
+    }
     for invalid in [
+        json!({"name":"ABC", "variable_tick_size":"0.01 10"}),
+        json!({"name":"ABC", "variable_tick_size":"0.01 10 0"}),
+        json!({"name":"ABC", "variable_tick_size":"0.01 25 0.02 10 0.05"}),
+        json!({"name":"ABC", "variable_tick_size":"0.01 10 0.02 10 0.05"}),
+        json!({"name":"ABC", "variable_tick_size":"0.01 x 0.02"}),
+        json!({"name":"ABC", "variable_tick_size":"0.01 10 inf"}),
         json!({"name":"ABC", "pricescale":0}),
         json!({"name":"ABC", "minmov":-1, "pricescale":100}),
         json!({"name":"ABC", "session":"0930-1600:8"}),
@@ -484,12 +531,15 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
         json!({"name":"ABC", "session_overnight":"2000-0400"}),
         json!({"name":"ABC", "session":"24x7", "session_extended":"0400-0930"}),
     ] {
-        assert!(matches!(
-            serde_json::from_value::<Symbol>(invalid)
-                .unwrap()
-                .into_instrument(),
-            Err(FeedError::InvalidData(_))
-        ));
+        assert!(
+            matches!(
+                serde_json::from_value::<Symbol>(invalid.clone())
+                    .unwrap()
+                    .into_instrument(),
+                Err(FeedError::InvalidData(_))
+            ),
+            "{invalid}"
+        );
     }
 
     // Exercises real asynchronous HTTP and Reply delivery, including a root path prefix.

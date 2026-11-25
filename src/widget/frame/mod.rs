@@ -1218,7 +1218,15 @@ impl Chart {
             && self.chart_type == ChartType::VolumeFootprint)
             .then(|| {
                 let colors = [egui::Color32::TRANSPARENT; 4];
-                FootprintConfig::from_chart_params(&self.chart_type_params, colors, feed_row_ticks)
+                let mut config = FootprintConfig::from_chart_params(
+                    &self.chart_type_params,
+                    colors,
+                    feed_row_ticks,
+                );
+                config.tick_tiers = self
+                    .instrument()
+                    .map_or_else(Vec::new, |instrument| instrument.tick_tiers.clone());
+                config
             });
         // The rows the renderer paints decide the fit, whatever `row_ticks` is: the edges of
         // their minimum group are fitted here, and those of the groups zoom raises above it
@@ -1238,9 +1246,10 @@ impl Chart {
         let footprint_prices = painted_rows
             .into_iter()
             .flat_map(|(flow, config)| {
-                let group = crate::chart::overlays::fixed_row_group(flow, config.row_ticks);
                 let bars = &self.state.shown()[start_idx..end_idx];
-                crate::chart::overlays::row_edges(bars, flow, config, move |_| group)
+                crate::chart::overlays::row_edges(bars, flow, config, move |bar| {
+                    crate::chart::overlays::min_row_group(bar, flow, config)
+                })
             })
             .filter(|price| price.is_finite())
             .map(|price| [price, price])
@@ -1937,6 +1946,11 @@ impl Chart {
         let feed_config = feed.map(|_| FootprintConfig {
             background: plot_background,
             volume_decimals,
+            // Session profiles keep rows of the instrument's tick.
+            tick_tiers: self
+                .instrument()
+                .filter(|_| self.chart_type == ChartType::VolumeFootprint)
+                .map_or_else(Vec::new, |instrument| instrument.tick_tiers.clone()),
             ..FootprintConfig::from_chart_params(
                 &self.chart_type_params,
                 [colors.bullish, colors.bearish, colors.text, colors.text],

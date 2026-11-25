@@ -80,6 +80,144 @@ pub(crate) fn snap_price(price: f64, tick: Option<f64>, decimals: usize) -> f64 
     }
 }
 
+/// The valid prices of an instrument: multiples of `tick` below the first tier, and from each
+/// tier's price upwards in steps of its tick. Positions number the valid prices from 0, so the
+/// difference of two is a count of ticks. Without tiers every method keeps the arithmetic of a
+/// single tick exactly.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TickGrid<'a> {
+    /// The caller's positive finite tick of the lowest range.
+    tick: f64,
+    /// Valid tiers only.
+    tiers: &'a [(f64, f64)],
+}
+
+impl<'a> TickGrid<'a> {
+    pub(crate) fn new(tick: f64, tiers: &'a [(f64, f64)]) -> Self {
+        Self {
+            tick,
+            tiers: crate::model::valid_tick_tiers(tiers),
+        }
+    }
+
+    /// Whether every price moves in the one tick.
+    pub(crate) fn is_flat(&self) -> bool {
+        self.tiers.is_empty()
+    }
+
+    /// The tick of the range `price` lies in; the lowest range's for NaN.
+    #[cfg(feature = "ui")]
+    pub(crate) fn tick_at(&self, price: f64) -> f64 {
+        crate::model::tick_in_tiers(self.tick, self.tiers, price)
+    }
+
+    /// `(from, tick, position of from)` of each tier.
+    #[cfg(feature = "widget")]
+    fn tiers(&self) -> impl Iterator<Item = (f64, f64, f64)> + '_ {
+        let mut previous = (0.0, self.tick, 0.0);
+        self.tiers.iter().map(move |&(from, tick)| {
+            let (start, step, at) = previous;
+            let position = at + ((from - start) / step).round();
+            previous = (from, tick, position);
+            (from, tick, position)
+        })
+    }
+
+    /// The position of the valid price nearest `price`, halfway away from zero.
+    #[cfg(feature = "widget")]
+    pub(crate) fn ticks(&self, price: f64) -> f64 {
+        match self.tiers().filter(|&(from, ..)| price >= from).last() {
+            Some((from, tick, start)) => start + ((price - from) / tick).round(),
+            None => (price / self.tick).round(),
+        }
+    }
+
+    /// The valid price at position `ticks`, rounded to a whole position.
+    #[cfg(feature = "widget")]
+    pub(crate) fn price(&self, ticks: f64) -> f64 {
+        let ticks = ticks.round();
+        match self.tiers().filter(|&(.., start)| ticks >= start).last() {
+            Some((from, tick, start)) => {
+                let scale = 10f64.powi(decimals(from).max(decimals(tick)) as i32);
+                ((from + (ticks - start) * tick) * scale).round() / scale
+            }
+            None => to_step(ticks * self.tick, self.tick, f64::round),
+        }
+    }
+
+    /// The valid price nearest `price`. Flat: `to_step(price, tick, round)`.
+    #[cfg(feature = "widget")]
+    pub(crate) fn snap(&self, price: f64) -> f64 {
+        if self.is_flat() || !price.is_finite() {
+            to_step(price, self.tick, f64::round)
+        } else {
+            self.price(self.ticks(price))
+        }
+    }
+
+    /// The valid price `steps` ticks above `price` (below when negative).
+    /// Flat: `to_step(price + steps * tick, tick, round)`.
+    #[cfg(feature = "widget")]
+    pub(crate) fn offset(&self, price: f64, steps: f64) -> f64 {
+        if self.is_flat() {
+            to_step(price + steps * self.tick, self.tick, f64::round)
+        } else {
+            self.price(self.ticks(price) + steps.round())
+        }
+    }
+
+    /// Ticks from `from` to `to`, negative downwards. Flat: `((to - from) / tick).round()`.
+    #[cfg(feature = "widget")]
+    pub(crate) fn steps_between(&self, from: f64, to: f64) -> f64 {
+        if self.is_flat() {
+            ((to - from) / self.tick).round()
+        } else {
+            self.ticks(to) - self.ticks(from)
+        }
+    }
+
+    /// The smallest price step that is a whole multiple of the tick of every range that
+    /// `low..=high` meets: the coarsest such tick times the smallest of 1 to 1,000 that divides
+    /// by all of them within a relative 1e-9, else the coarsest tick. A bound that is not finite
+    /// meets every range. Flat: `tick`.
+    pub(crate) fn step(&self, low: f64, high: f64) -> f64 {
+        if self.is_flat() {
+            return self.tick;
+        }
+        let (low, high) = if low.is_finite() && high.is_finite() {
+            (low.min(high), low.max(high))
+        } else {
+            (f64::NEG_INFINITY, f64::INFINITY)
+        };
+        let uppers = self
+            .tiers
+            .iter()
+            .map(|&(from, _)| from)
+            .chain([f64::INFINITY]);
+        let lowers = [f64::NEG_INFINITY]
+            .into_iter()
+            .chain(self.tiers.iter().map(|&(from, _)| from));
+        let ticks = [self.tick]
+            .into_iter()
+            .chain(self.tiers.iter().map(|&(_, tick)| tick));
+        let met: Vec<f64> = lowers
+            .zip(uppers)
+            .zip(ticks)
+            .filter(|&((lower, upper), _)| high >= lower && low < upper)
+            .map(|(_, tick)| tick)
+            .collect();
+        let coarsest = met.iter().copied().fold(self.tick, f64::max);
+        let whole = |ratio: f64| (ratio - ratio.round()).abs() <= ratio * 1e-9;
+        (1..=1000)
+            .map(|times| coarsest * f64::from(times))
+            .find(|step| met.iter().all(|tick| whole(step / tick)))
+            .map_or(coarsest, |step| {
+                let scale = 10f64.powi(decimals(coarsest) as i32);
+                (step * scale).round() / scale
+            })
+    }
+}
+
 /// Decimals needed to write `step`, such as 2 for 0.25.
 pub(crate) fn decimals(step: f64) -> usize {
     let rounded = format!("{:.14e}", step.abs())
@@ -126,23 +264,30 @@ pub(crate) fn group_thousands(text: String, separator: Option<char>) -> String {
 /// short enough to leave the plot its room.
 const MAX_PRICE_DECIMALS: usize = 12;
 
-/// Instrument decimals, falling back to the decimal places needed to write its minimum tick in
-/// its shortest form, so a tick computed in floating point, such as `0.1 * 3.0`, has one.
-/// Invalid tick sizes are ignored; explicit decimals take precedence. Both are capped at
-/// 12 decimals.
+/// Instrument decimals, falling back to the decimal places needed to write its finest tick, of
+/// its tick size and the ticks of its price ranges, in its shortest form, so a tick computed in
+/// floating point, such as `0.1 * 3.0`, has one. Invalid tick sizes are ignored; explicit
+/// decimals take precedence. Both are capped at 12 decimals.
 pub fn instrument_price_precision(instrument: &Instrument) -> Option<u8> {
     let count = instrument.price_decimals.map(usize::from).or_else(|| {
         let tick = instrument
             .tick_size
             .filter(|tick| tick.is_finite() && *tick > 0.0)?;
-        Some(match decimals(tick) {
+        let places = |tick: f64| match decimals(tick) {
             // A tick widened from single precision keeps its noise past the cap; its single
             // precision form is the one the host wrote.
             wide if wide > MAX_PRICE_DECIMALS && f64::from(tick as f32) == tick => {
                 decimals((tick as f32).to_string().parse().unwrap_or(tick))
             }
             exact => exact,
-        })
+        };
+        let tiers = crate::model::valid_tick_tiers(&instrument.tick_tiers);
+        Some(
+            tiers
+                .iter()
+                .map(|&(_, tick)| places(tick))
+                .fold(places(tick), usize::max),
+        )
     })?;
     Some(count.min(MAX_PRICE_DECIMALS) as u8)
 }
@@ -654,6 +799,72 @@ mod tests {
         }
         let explicit = Instrument::new("T").with_price_decimals(255);
         assert_eq!(instrument_price_precision(&explicit), Some(12));
+        // Price ranges write their finest tick: 30.025 needs three decimals.
+        let ranged = |tiers: &[(f64, f64)]| {
+            let instrument = tiers.iter().fold(
+                Instrument::new("T").with_tick_size(0.01),
+                |instrument, &(price, tick)| instrument.with_tick_tier(price, tick),
+            );
+            instrument_price_precision(&instrument)
+        };
+        assert_eq!(ranged(&[(10.0, 0.025)]), Some(3));
+        assert_eq!(ranged(&[(10.0, 0.02), (25.0, 0.05)]), Some(2));
+    }
+
+    /// Ticks walk the ranges of a tick table, boundaries belonging to the upper range; tables
+    /// that are not valid count as none, and a single tick keeps its plain arithmetic.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn tick_grid_walks_tick_ranges() {
+        let tiers = [(10.0, 0.02), (25.0, 0.05)];
+        let grid = TickGrid::new(0.01, &tiers);
+        // Positions: 10 is 1000 ticks of 0.01, 25 is 1000 + 15 / 0.02 = 1750.
+        let falling = [(25.0, 0.05), (10.0, 0.02)];
+        let ignored = TickGrid::new(0.01, &falling);
+        let flat = TickGrid::new(0.25, &[]);
+        for (call, actual, expected) in [
+            ("ticks(5)", grid.ticks(5.0), 500.0),
+            ("ticks(20)", grid.ticks(20.0), 1500.0),
+            ("ticks(30)", grid.ticks(30.0), 1850.0),
+            ("price(1749)", grid.price(1749.0), 24.98),
+            ("price(1751)", grid.price(1751.0), 25.05),
+            ("price(1750)", grid.price(1750.0), 25.0),
+            ("snap(24.975)", grid.snap(24.975), 24.98),
+            ("snap(24.995)", grid.snap(24.995), 25.0),
+            ("snap(25.02)", grid.snap(25.02), 25.0),
+            ("snap(25.03)", grid.snap(25.03), 25.05),
+            ("snap(9.996)", grid.snap(9.996), 10.0),
+            ("offset(24.98, 3)", grid.offset(24.98, 3.0), 25.1),
+            ("offset(24.98, -3)", grid.offset(24.98, -3.0), 24.92),
+            ("offset(10.02, -3)", grid.offset(10.02, -3.0), 9.98),
+            (
+                "steps_between(24.98, 25.10)",
+                grid.steps_between(24.98, 25.1),
+                3.0,
+            ),
+            ("step(24.85, 25.25)", grid.step(24.85, 25.25), 0.1),
+            ("step(20, 30)", grid.step(20.0, 30.0), 0.1),
+            ("step(26, 30)", grid.step(26.0, 30.0), 0.05),
+            ("step(5, 9)", grid.step(5.0, 9.0), 0.01),
+            ("step(5, 12)", grid.step(5.0, 12.0), 0.02),
+            ("tick_at(NaN)", grid.tick_at(f64::NAN), 0.01),
+            ("falling tick_at(30)", ignored.tick_at(30.0), 0.01),
+            ("falling snap(30.03)", ignored.snap(30.03), 30.03),
+            ("flat snap(100.13)", flat.snap(100.13), 100.25),
+            ("flat offset(100, 2)", flat.offset(100.0, 2.0), 100.5),
+            (
+                "flat steps_between(100, 100.6)",
+                flat.steps_between(100.0, 100.6),
+                2.0,
+            ),
+        ] {
+            assert!(
+                (actual - expected).abs() < 1e-9,
+                "{call}: {actual} != {expected}"
+            );
+        }
+        assert_eq!(grid.snap(f64::INFINITY), f64::INFINITY);
+        assert!(grid.snap(f64::NAN).is_nan());
     }
 
     /// Fractional counts are padded by denominator, half-32nds use 0/5, and rounding happens

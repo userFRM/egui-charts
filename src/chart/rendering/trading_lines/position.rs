@@ -74,6 +74,7 @@ pub(super) fn show_position(
             gain * size * options.point_value,
             gain,
             entry,
+            direction(side),
             options,
         )
     };
@@ -102,7 +103,9 @@ pub(super) fn show_position(
             })?;
         let (text, value) = match (unit, position.unrealized_pnl) {
             // The broker's own figure, when it reports one.
-            (PnlUnit::Money, Some(pnl)) => pnl_text(ui.ctx(), unit, pnl, gain, entry, options),
+            (PnlUnit::Money, Some(pnl)) => {
+                pnl_text(ui.ctx(), unit, pnl, gain, entry, direction(side), options)
+            }
             _ => result(unit, gain),
         };
         let text_color = if value > 0.0 {
