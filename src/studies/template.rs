@@ -3257,8 +3257,8 @@ mod tests {
         assert_eq!(restored.plot_character(1), Some('d'));
 
         // Booker Reversal opens with teal buys and red sells at half opacity and levels that
-        // take decimals. One saved with green and red marks and whole levels keeps its colours
-        // and restores the same levels as decimals.
+        // take decimals. One saved with green and red marks and whole levels keeps its colours,
+        // restores the same levels as decimals and keeps the price scale tags it was saved with.
         let marks = |study: &dyn Indicator| {
             (0..2)
                 .map(|line| study.plot_style(line))
@@ -3297,6 +3297,7 @@ mod tests {
         .unwrap();
         let restored = saved.create().unwrap();
         assert_eq!(restored.settings().plots, saved.settings.plots);
+        assert!((0..2).all(|line| restored.plot_tagged(line)));
         assert_eq!(
             marks(restored.as_ref()),
             [
