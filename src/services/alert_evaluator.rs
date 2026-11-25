@@ -11,7 +11,8 @@ use crate::model::{
     Alert, AlertId, AlertInputs, AlertSource, Bar, BarClock, Instrument, Timeframe,
 };
 use crate::studies::{
-    Indicator, IndicatorFactory, StudyData, StudyDataRequest, StudySource, StudyTemplate,
+    Calculation, Indicator, IndicatorFactory, StudyData, StudyDataRequest, StudySource,
+    StudyTemplate,
 };
 
 /// History, subscriptions and independent study state for the alert service. Both interactive
@@ -287,6 +288,13 @@ impl Evaluation {
                     }))
         })
     }
+
+    /// Whether a study still calculates away from this thread, so it has not decided the
+    /// newest bars yet.
+    fn calculating(&self) -> bool {
+        (self.studies.iter())
+            .any(|(_, study)| matches!(study.calculation(), Some(Calculation::Running(_))))
+    }
 }
 
 impl Subject {
@@ -329,9 +337,11 @@ impl AlertEvaluator {
         self.storage = Some(storage);
     }
 
-    /// Poll live inputs and evaluate ready alerts. With `ui`, `ctx` wakes the host on new data
-    /// and follows stored drawings. Headless hosts pass an empty `live` slice. Detector alerts
-    /// follow the signals of `live`, as `AlertEngine::detector_signals` takes them.
+    /// Poll live inputs and evaluate ready alerts. An alert waits while one of its studies
+    /// calculates away from this thread. With `ui`, `ctx` wakes the host on new data and while
+    /// such a study calculates, and follows stored drawings. Headless hosts pass an empty `live`
+    /// slice. Detector alerts follow the signals of `live`, as `AlertEngine::detector_signals`
+    /// takes them.
     /// `live` lends compatible loaded chart data; event studies retain independent streams.
     /// Errors leave affected sources unavailable and are returned for the host to report.
     pub fn poll(
@@ -460,6 +470,13 @@ impl AlertEvaluator {
                 })
                 .collect();
             run.calculate(symbol, bars, reader.clock(), reader.instrument(), &data);
+            // A bar that closes meanwhile would be read once without the study's values, so the
+            // alert waits for the run, polled again on the next frame.
+            if run.calculating() {
+                #[cfg(feature = "ui")]
+                ctx.request_repaint();
+                continue;
+            }
             // data_start may change after calculation, for example when a profile's span moves.
             let reaches = run.requests(bars[0].time);
             for (request, start) in &reaches {
@@ -992,6 +1009,74 @@ mod tests {
         assert_eq!(
             fired_messages(Arc::new(Feed::default()), &IndicatorFactory::new(), alert),
             ["300 1"]
+        );
+    }
+
+    /// A study that calculates away from the thread decides its condition only once its run
+    /// ends, two polls in: the closed bar, close 200, is read then, not skipped.
+    #[test]
+    fn bar_close_alerts_wait_for_a_calculating_study() {
+        use crate::model::{AlertCondition, AlertFrequency, AlertStudy};
+        #[derive(Clone, Default)]
+        struct Slow {
+            runs: usize,
+            closes: Vec<f64>,
+            values: crate::studies::IndicatorValues,
+        }
+        impl Indicator for Slow {
+            fn name(&self) -> &str {
+                "Slow"
+            }
+            fn calculate(&mut self, bars: &[Bar]) {
+                self.runs += 1;
+                self.closes = bars.iter().map(|bar| bar.close).collect();
+            }
+            fn values(&self) -> &crate::studies::IndicatorValues {
+                &self.values
+            }
+            fn colors(&self) -> Vec<egui::Color32> {
+                Vec::new()
+            }
+            fn set_colors(&mut self, _: Vec<egui::Color32>) {}
+            fn set_visible(&mut self, _: bool) {}
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                Box::new(self.clone())
+            }
+            fn calculation(&self) -> Option<Calculation> {
+                Some(if self.runs <= 2 {
+                    Calculation::Running(0.5)
+                } else {
+                    Calculation::Done(std::time::Duration::ZERO)
+                })
+            }
+            fn alert_conditions(&self) -> Vec<String> {
+                vec!["Positive".into()]
+            }
+            fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+                let close = self
+                    .closes
+                    .get(bar)
+                    .filter(|_| condition == 0 && self.runs > 2)?;
+                Some(*close > 0.0)
+            }
+        }
+        let mut factory = IndicatorFactory::new();
+        factory.register("Slow", || Box::new(Slow::default()));
+        let mut alert = Alert::new("SYM", AlertCondition::Holds);
+        alert.source = AlertSource::StudyCondition {
+            id: "3".into(),
+            condition: 0,
+        };
+        alert.frequency = AlertFrequency::OncePerBarClose;
+        alert.timeframe = Some(Timeframe::Min1);
+        alert.message = "{{close}}".into();
+        alert.inputs = Some(Box::new(AlertInputs {
+            studies: vec![AlertStudy::new(3, "Slow", Vec::new())],
+            ..Default::default()
+        }));
+        assert_eq!(
+            fired_messages(Arc::new(Feed::default()), &factory, alert),
+            ["200"]
         );
     }
 

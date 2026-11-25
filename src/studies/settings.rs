@@ -58,10 +58,16 @@ pub enum PlotType {
     BarColor,
     /// Colour the full pane height at each defined bar.
     BackgroundColor,
+    /// A character centred at each defined value in the plot colour, drawn at twice the sum of
+    /// the stroke width and 5 logical pixels: 12 at the default width of 1. Saved as
+    /// `{"Character":"d"}`.
+    Character(char),
 }
 
 impl PlotType {
-    /// Every plot type, in the order a style editor lists them.
+    /// Every plot type any plot can take, in the order a style editor lists them. A
+    /// [`Character`](Self::Character) plot is offered for a plot whose study declares one, as
+    /// [`Indicator::plot_character`](super::Indicator::plot_character) reports.
     pub const ALL: [Self; 15] = [
         Self::Line,
         Self::LineWithBreaks,
@@ -98,6 +104,7 @@ impl PlotType {
             Self::TriangleDown => "Triangle down",
             Self::BarColor => "Bar colour",
             Self::BackgroundColor => "Background colour",
+            Self::Character(_) => "Character",
         }
     }
 
@@ -1775,6 +1782,9 @@ impl Indicator for ConfiguredStudy {
     }
     fn plot_tooltip(&self, line: usize, bar: usize) -> Option<String> {
         self.study.plot_tooltip(line, self.inner_bar(bar)?)
+    }
+    fn plot_character(&self, line: usize) -> Option<char> {
+        self.study.plot_character(line)
     }
     fn fills(&self) -> Vec<super::StudyFill> {
         self.study
