@@ -1960,6 +1960,9 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
     // 64 studies of 1,000 values and a copy of each read, 1,024,000 bytes beside the bars.
     let studies = "let s = 0.0;\nfor i in 1..65 { s += study(\"SMA\", period = i); }\n\
                    plot(\"x\", s);";
+    // A label of 9,000 bytes on every bar, kept by the study once its bar is done.
+    let drawn = "plot(\"x\", close);\nlet t = \"x\"; t.pad(9000, \"y\");\n\
+                 label(\"x\", bar_index, close, t);";
     for (script, fixture, mib, line) in [
         (source.as_str(), &fixture[..], 16, 1),
         (windows, &fixture[..1000], 1, 2),
@@ -1969,6 +1972,7 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
         (cut, &fixture[..1], 2, 2),
         (levels, &fixture[..1], 8, 5),
         (studies, &fixture[..1000], 1, 2),
+        (drawn, &fixture[..1000], 8, 3),
     ] {
         let mut capped = limited(
             script,
