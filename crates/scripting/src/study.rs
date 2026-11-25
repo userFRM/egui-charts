@@ -296,8 +296,15 @@ impl ScriptState {
             Ok(took) => {
                 values.truncate(outcome.start);
                 let width = self.script.compiled.spec.plots.len();
-                for row in outcome.rows.chunks(width) {
-                    values.push_lines(row);
+                if width == 0 {
+                    // A strategy script needs no plot; its study keeps a row without a line per bar.
+                    for _ in outcome.start..self.bars.len() {
+                        values.push_lines(&[]);
+                    }
+                } else {
+                    for row in outcome.rows.chunks(width) {
+                        values.push_lines(row);
+                    }
                 }
                 match outcome.error {
                     Some(error) => *last_error = Some(error),
