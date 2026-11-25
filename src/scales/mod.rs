@@ -23,8 +23,6 @@ pub use horizontal::{
 pub(crate) use price_formatter::TickGrid;
 #[cfg(any(feature = "widget", feature = "detectors"))]
 pub(crate) use price_formatter::decimals;
-#[cfg(feature = "ui")]
-pub(crate) use price_formatter::{snap_price, to_step};
 pub use price_formatter::{
     CurrencyFormatter, CustomPriceFormatter, DefaultPriceFormatter, PercentageFormatter,
     PriceFormatter, PriceFormatterBuilder, ScientificFormatter, VolumeFormatter,
@@ -32,6 +30,8 @@ pub use price_formatter::{
 };
 #[cfg(feature = "widget")]
 pub(crate) use price_formatter::{format_decimal, group_thousands, price_decimals};
+#[cfg(feature = "ui")]
+pub(crate) use price_formatter::{snap_price, to_step};
 pub use pricescale::{
     PriceMap, PriceRange, PriceScale, PriceScaleId, PriceScaleMargins, PriceScaleMode,
     PriceScaleOptions, PriceTransform,

@@ -87,13 +87,13 @@ pub use color::ColorType;
 pub use date_range::DateRange;
 #[cfg(any(feature = "studies", feature = "drawings", feature = "strategies"))]
 pub(crate) use instrument::same_currency;
+#[cfg(feature = "ui")]
+pub(crate) use instrument::tick_in_tiers;
+pub(crate) use instrument::valid_tick_tiers;
 pub use instrument::{
     DataStatus, FeedService, IdentifierKind, Instrument, OverrideWindow, ProfileResolution,
     Session, SessionOverride, SessionWindow, SymbolType,
 };
-#[cfg(feature = "ui")]
-pub(crate) use instrument::tick_in_tiers;
-pub(crate) use instrument::valid_tick_tiers;
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{
     LineBreakConfig, LineBreakLine, LineBreakSignal, LineDirection,
