@@ -240,8 +240,14 @@ impl DemoApp {
             StudyEditorAction::Save { title, text } => {
                 let title = title.trim();
                 let saved = self.check_title(title, "saving").and_then(|()| {
-                    let script = Script::compile(title, &text, &IndicatorFactory::new());
-                    self.store_script(title, &text, script.ok())
+                    match Script::compile(title, &text, &IndicatorFactory::new()) {
+                        // Charts and saved layouts hold the registered version, which start-up
+                        // registers again from the stored text only when it compiles.
+                        Err(error) if self.sample_study.scripts.contains_key(title) => Err(
+                            format!("Not saved: {title} is in use and this text does not compile ({error}). Fix it, or save it under another title."),
+                        ),
+                        script => self.store_script(title, &text, script.ok()),
+                    }
                 });
                 self.sample_study.message = match saved {
                     Ok(()) => format!("Saved locally: {title}"),
@@ -668,7 +674,14 @@ mod tests {
 
         edit(&mut app, &ctx, negated, LOOKBACK);
         click(&mut app, &ctx, "Save");
+        // A text that does not compile is not saved over a script charts use.
         edit(&mut app, &ctx, LOOKBACK, &broken);
+        click(&mut app, &ctx, "Save");
+        assert!(
+            render(&mut app, &ctx, Vec::new())
+                .iter()
+                .any(|(text, _)| text.starts_with("Not saved: Close difference is in use"))
+        );
         click(&mut app, &ctx, "Reload saved");
         assert!(
             render(&mut app, &ctx, Vec::new())
