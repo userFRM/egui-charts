@@ -10388,30 +10388,54 @@ mod tests {
             );
         }
 
+        // With the replay bar shown its keys step and play, and the chart keeps its own: the jump
+        // keys, which hold Alt beside the replay's Shift and arrow, and the list keys below.
         app.start_replay();
         app.handle_replay_control(ReplayControlAction::Pause);
         settle(&mut app, &ctx);
-        let before = app.replay.as_ref().unwrap().state.curr_bar;
-        for (key, modifiers, offset, playing) in [
-            (Key::ArrowRight, Modifiers::NONE, 1, false),
-            (Key::ArrowLeft, Modifiers::NONE, 0, false),
-            (Key::Space, Modifiers::NONE, 0, true),
-            (Key::Space, Modifiers::SHIFT, 0, false),
+        let jump = Modifiers::ALT | Modifiers::SHIFT;
+        // The cursor's move, unchecked while the replay plays, and whether it plays afterwards.
+        for (key, modifiers, moved, playing) in [
+            (Key::ArrowRight, Modifiers::NONE, Some(1), false),
+            (Key::ArrowLeft, Modifiers::NONE, Some(-1), false),
+            (Key::ArrowDown, Modifiers::SHIFT, None, true),
+            (Key::ArrowDown, Modifiers::SHIFT, None, false),
+            (Key::ArrowRight, jump, Some(0), false),
+            (Key::ArrowLeft, jump, Some(0), false),
+            (Key::ArrowRight, Modifiers::SHIFT, Some(1), false),
         ] {
+            let before = app.replay.as_ref().unwrap().state.curr_bar;
             press(&mut app, key, modifiers);
             assert_eq!(app.chart.symbol(), "STOCKA");
             let replay = app.replay.as_ref().unwrap();
-            if key != Key::Space {
-                assert_eq!(replay.state.curr_bar, before + offset);
+            if let Some(moved) = moved {
+                assert_eq!(
+                    replay.state.curr_bar as isize - before as isize,
+                    moved,
+                    "{key:?} / {modifiers:?}"
+                );
             }
-            assert_eq!(replay.state.is_playing(), playing);
+            assert_eq!(
+                replay.state.is_playing(),
+                playing,
+                "{key:?} / {modifiers:?}"
+            );
         }
-        press(&mut app, Key::ArrowDown, Modifiers::NONE);
-        assert_eq!(app.chart.symbol(), "STOCKB");
-        assert!(
-            app.replay.is_none(),
-            "a symbol change exits replay as a row click does"
-        );
+        // The list keys flip the list beside the replay bar too. A symbol change exits replay as
+        // a row click does.
+        for (key, modifiers, symbol) in [
+            (Key::Space, Modifiers::NONE, "STOCKB"),
+            (Key::Space, Modifiers::SHIFT, "STOCKA"),
+            (Key::ArrowDown, Modifiers::NONE, "STOCKB"),
+        ] {
+            settle(&mut app, &ctx);
+            app.start_replay();
+            settle(&mut app, &ctx);
+            assert!(app.replay.is_some() && app.replay_control.is_visible());
+            press(&mut app, key, modifiers);
+            assert_eq!(app.chart.symbol(), symbol, "{key:?} / {modifiers:?}");
+            assert!(app.replay.is_none(), "{key:?} / {modifiers:?}");
+        }
     }
 
     #[test]
@@ -10587,6 +10611,62 @@ mod tests {
             panic!("custom hours applied")
         };
         assert_eq!(custom.sessions.len(), 2);
+    }
+
+    /// The demo's chart settings offer the Overnight background switch, and Ok hides the
+    /// overnight background of its chart while the post-market stays shaded.
+    #[test]
+    fn chart_settings_overnight_switch_reaches_the_demo_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.open_chart_settings_dialog();
+        let size = egui::vec2(1440.0, 900.0);
+        let show = |app: &mut DemoApp, events| {
+            ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+        };
+        // The Session backgrounds sit below the fold of the Symbol tab; the footer is fixed.
+        let switch = (0..20)
+            .find_map(|_| {
+                for _ in 0..5 {
+                    show(&mut app, vec![]);
+                }
+                let found = show(&mut app, vec![]).into_iter().find(|(label, rect)| {
+                    label == "Overnight" && (180.0..720.0).contains(&rect.center().y)
+                });
+                if found.is_none() {
+                    show(
+                        &mut app,
+                        vec![
+                            egui::Event::PointerMoved(egui::pos2(900.0, 450.0)),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                source: egui::MouseWheelSource::Wheel,
+                                phase: egui::TouchPhase::Move,
+                                delta: egui::vec2(0.0, -100.0),
+                                modifiers: Default::default(),
+                            },
+                        ],
+                    );
+                }
+                found
+            })
+            .expect("the Overnight switch is offered")
+            .1
+            .center();
+        ui_click(&ctx, size, switch, |ui| app.show_dialogs(ui.ctx()));
+        let ok = show(&mut app, vec![])
+            .into_iter()
+            .find(|(text, _)| text == "Ok")
+            .unwrap()
+            .1
+            .center();
+        ui_click(&ctx, size, ok, |ui| app.show_dialogs(ui.ctx()));
+        let config = app.chart.config();
+        assert!(!config.shade_overnight && config.shade_postmarket);
     }
 
     /// The settings offer the futures data choices on the demo's futures contracts only;
