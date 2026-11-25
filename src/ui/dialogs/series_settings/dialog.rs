@@ -897,6 +897,129 @@ mod tests {
         }
     }
 
+    /// The TPO chart type's Hours row edits a draft of its one-day profiles' hours: Ok applies
+    /// it as one undoable step, writing the choice and turning the legacy Split extended hours
+    /// off, Cancel drops it, a chart saved with that flag opens on Each segment of the day, and
+    /// week profiles, which keep the chart's hours, offer no Hours row.
+    #[test]
+    fn tpo_hours_apply_on_ok_only_and_undo() {
+        use egui::accesskit::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let none = serde_json::json!({});
+        // (settings before the dialog opens, choices picked, `tpo_session` after Ok)
+        let rows = [
+            (
+                none.clone(),
+                &["Pre-market only"][..],
+                serde_json::json!("PreMarket"),
+            ),
+            (
+                serde_json::json!({"tpo_split_sessions": true}),
+                &["Regular hours"][..],
+                serde_json::json!("Regular"),
+            ),
+            (
+                none.clone(),
+                &["Custom", "Add session"][..],
+                serde_json::json!({"Custom": {"sessions": [
+                    {"start": "00:00:00", "end": "00:00:00", "zone": null},
+                    {"start": "00:00:00", "end": "00:00:00", "zone": null}
+                ], "overlap": "OwnProfile", "trading_hours_only": false}}),
+            ),
+            (
+                serde_json::json!({"tpo_profile_period": "Week"}),
+                &[][..],
+                serde_json::Value::Null,
+            ),
+        ];
+        for (seed, picks, expected) in rows {
+            for accept in [false, true] {
+                let mut chart = crate::ChartBuilder::new().build();
+                chart.set_chart_type(ChartType::TimePriceOpportunity);
+                let mut seeded = serde_json::to_value(chart.chart_type_params()).unwrap();
+                for (name, value) in seed.as_object().unwrap() {
+                    seeded[name] = value.clone();
+                }
+                let seeded: crate::model::ChartTypeParams = serde_json::from_value(seeded).unwrap();
+                chart.set_chart_type_params(seeded.clone());
+                let mut dialog = SeriesSettingsDialog::new();
+                dialog.open(SeriesId::MAIN, chart.series_settings());
+                let mut h = Harness::builder()
+                    .with_size(Vec2::new(1440.0, 900.0))
+                    .with_context_setup(|ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                    })
+                    .build_ui_state(
+                        |ui, (dialog, chart): &mut (SeriesSettingsDialog, crate::Chart)| {
+                            if let SeriesSettingsAction::Apply(_, settings) = dialog.show(ui.ctx())
+                            {
+                                chart.user_action(|c| c.apply_series_settings(&settings));
+                            }
+                        },
+                        (dialog, chart),
+                    );
+                h.run();
+                if picks.is_empty() {
+                    assert!(h.query_by_role_and_label(Role::ComboBox, "Hours").is_none());
+                } else {
+                    h.get_by_role_and_label(Role::ComboBox, "Hours")
+                        .scroll_to_me();
+                    h.run();
+                    if seeded.tpo_split_sessions {
+                        let node = h.get_by_role_and_label(Role::ComboBox, "Hours");
+                        assert_eq!(
+                            node.accesskit_node().value().as_deref(),
+                            Some("Each segment of the day")
+                        );
+                    }
+                    h.get_by_role_and_label(Role::ComboBox, "Hours").click();
+                    h.run();
+                    for pick in picks {
+                        h.get_by_label(pick).scroll_to_me();
+                        h.run();
+                        h.get_by_label(pick).click();
+                        h.run();
+                    }
+                    assert_eq!(h.state().1.chart_type_params(), &seeded, "draft only");
+                }
+                h.get_by_label(if accept { "Ok" } else { "Cancel" }).click();
+                h.run();
+                let chart = &mut h.state_mut().1;
+                if !accept || picks.is_empty() {
+                    assert_eq!(
+                        chart.chart_type_params(),
+                        &seeded,
+                        "{seed}, accept {accept}"
+                    );
+                    continue;
+                }
+                let applied = chart.chart_type_params().clone();
+                assert_eq!(
+                    serde_json::to_value(&applied.tpo_session).unwrap(),
+                    expected
+                );
+                assert!(!applied.tpo_split_sessions);
+                assert_eq!(
+                    crate::model::ChartTypeParams {
+                        tpo_session: seeded.tpo_session.clone(),
+                        tpo_split_sessions: seeded.tpo_split_sessions,
+                        ..applied.clone()
+                    },
+                    seeded,
+                    "only the hours change"
+                );
+                assert!(chart.undo());
+                assert_eq!(chart.chart_type_params(), &seeded);
+                assert!(chart.redo());
+                assert_eq!(chart.chart_type_params(), &applied);
+            }
+        }
+    }
+
     #[test]
     fn type_controls_leave_the_footer_inside_short_and_narrow_windows() {
         for dark in [false, true] {
