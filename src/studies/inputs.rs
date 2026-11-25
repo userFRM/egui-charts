@@ -161,9 +161,10 @@ impl StudyInput {
     }
 }
 
-/// `value` in the form `kind` takes now: a minute count below 1440 as a time of day, and text as
-/// a time zone, as the built-in studies saved them before inputs had those kinds. Any other value
-/// is returned unchanged, for `accepts` to judge.
+/// `value` in the form `kind` takes now: a minute count below 1440 as a time of day and text as
+/// a time zone, as the built-in studies saved them before inputs had those kinds, and a whole
+/// number as a decimal, as studies saved inputs that now take decimals. Any other value is
+/// returned unchanged, for `accepts` to judge.
 #[cfg(feature = "studies")]
 pub(crate) fn upgrade_saved_value(kind: &InputKind, value: InputValue) -> InputValue {
     match (kind, value) {
@@ -171,6 +172,7 @@ pub(crate) fn upgrade_saved_value(kind: &InputKind, value: InputValue) -> InputV
             InputValue::TimeOfDay(clock(minutes))
         }
         (InputKind::TimeZone { .. }, InputValue::Text(name)) => InputValue::TimeZone(name),
+        (InputKind::Number(..), InputValue::Length(count)) => InputValue::Number(count as f64),
         (_, value) => value,
     }
 }

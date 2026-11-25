@@ -1733,8 +1733,10 @@ mod tests {
                 "Color bars based on previous close",
             ),
             (ChartType::Bars, "Up and down colors"),
+            (ChartType::Columns, "Rising column colour"),
             (ChartType::Line, "Line width"),
             (ChartType::Baseline, "Base level"),
+            (ChartType::Baseline, "Above fill at base"),
             (ChartType::Renko, "Size method"),
             (ChartType::Range, "Size method"),
         ] {
@@ -2906,6 +2908,8 @@ mod tests {
             harness.run();
             harness.get_by_label("Post-market").click();
             harness.run();
+            harness.get_by_label("Overnight").click();
+            harness.run();
             harness.get_by_label("Highlight extended sessions").click();
             harness.run();
             if !accept {
@@ -2924,6 +2928,7 @@ mod tests {
             let chosen = saved.session_background.as_ref().unwrap();
             assert!(!chosen.show_extended_hours);
             assert!(!chosen.shade_postmarket);
+            assert!(!chosen.shade_overnight);
             assert_eq!(
                 chosen.premarket_color,
                 Some(Color32::from_rgba_unmultiplied(49, 27, 146, 128))

@@ -410,7 +410,8 @@ impl FloatingReplayControl {
     /// Shortcuts act only while no text field has focus, no popup is open and no control
     /// outside the background layer has focus, so keys typed into a field, meant for an open
     /// popup or pressing a focused button in the bar or a dialog never reach the replay. A
-    /// focused chart in a panel keeps them.
+    /// focused chart in a panel keeps them. Each key needs exactly its modifiers: Space, and keys
+    /// with Alt or another extra modifier held, are left to the chart.
     pub fn shortcut(&self, ctx: &Context) -> ReplayControlAction {
         let focus_off_background = ctx
             .memory(|m| m.focused())
@@ -430,9 +431,8 @@ impl FloatingReplayControl {
         } else {
             ReplayControlAction::Play
         };
-        // Shift+arrow first: a pattern without Shift also matches the key with Shift held.
         [
-            (Modifiers::NONE, Key::Space, play_or_pause),
+            (Modifiers::SHIFT, Key::ArrowDown, play_or_pause),
             (Modifiers::NONE, Key::Home, ReplayControlAction::GoToStart),
             (Modifiers::NONE, Key::End, ReplayControlAction::GoToEnd),
             (
@@ -457,7 +457,17 @@ impl FloatingReplayControl {
             ),
         ]
         .into_iter()
-        .find(|(modifiers, key, _)| ctx.input_mut(|i| i.consume_key(*modifiers, *key)))
+        // Exactly these modifiers, as the chart matches its keys, so Alt+Shift+arrows stay its jumps.
+        .find(|(modifiers, key, _)| {
+            ctx.input_mut(|input| {
+                let before = input.events.len();
+                input.events.retain(|event| {
+                    !matches!(event, egui::Event::Key { key: pressed, pressed: true, modifiers: held, .. }
+                        if pressed == key && held.matches_exact(*modifiers))
+                });
+                input.events.len() != before
+            })
+        })
         .map_or(ReplayControlAction::None, |(_, _, action)| action)
     }
 
@@ -537,13 +547,13 @@ impl FloatingReplayControl {
                             let (play_icon, play_tooltip, play_action) = if self.state.is_playing {
                                 (
                                     &icons::MEDIA_PAUSE,
-                                    "Pause (Space)",
+                                    "Pause (Shift+Down arrow)",
                                     ReplayControlAction::Pause,
                                 )
                             } else {
                                 (
                                     &icons::MEDIA_PLAY,
-                                    "Play (Space)",
+                                    "Play (Shift+Down arrow)",
                                     ReplayControlAction::Play,
                                 )
                             };
@@ -849,12 +859,16 @@ mod tests {
     use egui::{Event, Key, Modifiers, RawInput};
 
     fn key(key: Key) -> Event {
+        key_with(key, Modifiers::NONE)
+    }
+
+    fn key_with(key: Key, modifiers: Modifiers) -> Event {
         Event::Key {
             key,
             physical_key: None,
             pressed: true,
             repeat: false,
-            modifiers: Modifiers::NONE,
+            modifiers,
         }
     }
 
@@ -1044,7 +1058,12 @@ mod tests {
             frame(&ctx, &mut bar, vec![], false);
         }
         assert_eq!(
-            frame(&ctx, &mut bar, vec![key(Key::Space)], false),
+            frame(
+                &ctx,
+                &mut bar,
+                vec![key_with(Key::ArrowDown, Modifiers::SHIFT)],
+                false
+            ),
             ReplayControlAction::None
         );
     }
@@ -1097,17 +1116,43 @@ mod tests {
     /// The key a shortcut reads goes to the replay only when nothing else should take it.
     #[test]
     fn shortcuts_leave_keys_to_focused_widgets() {
+        let shift_down = key_with(Key::ArrowDown, Modifiers::SHIFT);
         // (keys before the checked frame, focus the text field, checked key, expected action)
         let cases = [
-            (vec![], false, Key::Space, ReplayControlAction::Pause),
-            (vec![], false, Key::Escape, ReplayControlAction::None),
-            (vec![], true, Key::Space, ReplayControlAction::None),
+            (
+                vec![],
+                false,
+                shift_down.clone(),
+                ReplayControlAction::Pause,
+            ),
+            (vec![], false, key(Key::Escape), ReplayControlAction::None),
+            (vec![], true, shift_down, ReplayControlAction::None),
             // Tab focuses the bar's first button, which Space then presses.
             (
                 vec![key(Key::Tab)],
                 false,
-                Key::Space,
+                key(Key::Space),
                 ReplayControlAction::Start(ReplayStartAction::SelectBar),
+            ),
+            // Space and Shift+Space flip the watchlist, Alt+Shift+Right jumps the chart.
+            (vec![], false, key(Key::Space), ReplayControlAction::None),
+            (
+                vec![],
+                false,
+                key_with(Key::Space, Modifiers::SHIFT),
+                ReplayControlAction::None,
+            ),
+            (
+                vec![],
+                false,
+                key_with(Key::ArrowRight, Modifiers::SHIFT | Modifiers::ALT),
+                ReplayControlAction::None,
+            ),
+            (
+                vec![],
+                false,
+                key_with(Key::ArrowRight, Modifiers::SHIFT),
+                ReplayControlAction::StepForward,
             ),
         ];
         for (before, focus_field, pressed, expected) in cases {
@@ -1119,7 +1164,7 @@ mod tests {
             }
             frame(&ctx, &mut bar, before, focus_field);
             frame(&ctx, &mut bar, vec![], focus_field);
-            let action = frame(&ctx, &mut bar, vec![key(pressed)], focus_field);
+            let action = frame(&ctx, &mut bar, vec![pressed.clone()], focus_field);
             assert_eq!(
                 action, expected,
                 "{pressed:?}, text field focused: {focus_field}"

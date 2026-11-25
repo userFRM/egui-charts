@@ -222,6 +222,17 @@ impl DemoApp {
                 self.chats.open_room(room);
                 self.open_panel = Some(SidePanel::Chats);
             }
+            NotificationsAction::OpenStory(id) => {
+                if let Some((highlight, story)) = super::feeds::story(&id, self.live.now()) {
+                    let (panel, side) = if highlight {
+                        (&mut self.highlights, SidePanel::Highlights)
+                    } else {
+                        (&mut self.news, SidePanel::News)
+                    };
+                    panel.open_story(story);
+                    self.open_panel = Some(side);
+                }
+            }
             _ => {}
         }
     }

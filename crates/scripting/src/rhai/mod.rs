@@ -1,6 +1,7 @@
 //! The Rhai front end: compiles a script into its declarations and a per-bar program, and runs
 //! that program on the runtime's bars.
 
+mod alerts;
 mod calls;
 pub(crate) mod engine;
 mod errors;
@@ -36,7 +37,8 @@ pub(crate) struct Compiled {
 /// Compile `source` in two passes: the first reads the declarations and reports syntax errors,
 /// the second compiles with every declared name in scope, refuses any other name and checks the
 /// studies the script calls against `factory`. A call to a function nothing defines is refused
-/// too; the error returned is the first in the source.
+/// too, as is an `alert` call whose message is not a plain string; the error returned is the first
+/// in the source.
 pub(crate) fn compile(
     name: String,
     source: &str,
@@ -76,14 +78,18 @@ pub(crate) fn compile(
             .entry(study)
             .or_insert_with_key(|study| bindings::prototype(factory, study));
     }
-    // The first of the two errors in the source, a name or a call.
+    // The first of the errors in the source, a name, a call or an alert.
     let unknown = calls::unknown(source, &ast);
+    let alerts = alerts::declared(source, &ast);
     let strict = pass(&scope(&spec, &defaults, false, false), Some(catalogue));
-    let first = strict.as_ref().err().into_iter().chain(&unknown);
+    let first = (strict.as_ref().err().into_iter())
+        .chain(&unknown)
+        .chain(alerts.as_ref().err());
     if let Some(error) = first.min_by_key(|error| (error.line, error.column)) {
         return Err(error.clone());
     }
-    let (engine, ast, spec, _) = strict?;
+    let (engine, ast, mut spec, _) = strict?;
+    spec.alerts = alerts?;
     Ok(Compiled {
         name,
         series_spans: syntax::spans(source, "series", spec.series.iter().map(|s| &*s.name)).into(),

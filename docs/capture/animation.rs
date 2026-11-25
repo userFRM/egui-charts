@@ -357,9 +357,9 @@ fn tour(t: &mut Timeline, home: Pos2) {
         t.hold(150);
     }
     let before = t.h.state().chart.replay_time().expect("replay is active");
-    t.label("Play (Space)", 250);
+    t.label("Play (Shift+Down arrow)", 250);
     t.hold(3000);
-    t.label("Pause (Space)", 250);
+    t.label("Pause (Shift+Down arrow)", 250);
     assert!(
         t.h.state().chart.replay_time().unwrap() > before,
         "automatic playback must advance the historical bars"

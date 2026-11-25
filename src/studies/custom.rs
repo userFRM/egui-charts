@@ -87,6 +87,12 @@ pub type PlotColorFn = Arc<dyn Fn(usize, usize, &IndicatorValues) -> Option<Colo
 ///         }
 ///         Calculation::Done(Duration::ZERO)
 ///     }
+///     fn alert_conditions(&self) -> Vec<String> {
+///         vec!["Sum above 5".into()]
+///     }
+///     fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+///         (condition == 0).then(|| self.sums.get(bar).map(|sum| *sum > 5.0)).flatten()
+///     }
 /// }
 ///
 /// let bar = |close: f64| Bar::new(chrono::DateTime::UNIX_EPOCH, close, close, close, close, 1.0);
@@ -102,6 +108,10 @@ pub type PlotColorFn = Arc<dyn Fn(usize, usize, &IndicatorValues) -> Option<Colo
 /// assert_eq!(format!("{:?}", study.values()), format!("{:?}", fresh.values()));
 /// assert_eq!(study.values().value(0, 2), Some(8.0));
 /// assert_eq!(study.calculation(), Some(Calculation::Done(Duration::ZERO)));
+/// assert_eq!(study.alert_conditions(), ["Sum above 5"]);
+/// assert_eq!(study.alert_condition(0, 1), Some(false));
+/// assert_eq!(study.alert_condition(0, 2), Some(true));
+/// assert_eq!(study.alert_condition(1, 2), None);
 /// ```
 pub trait Resume: Send + Sync {
     /// Bring `values` up to date for `run.data`, given that `run.data[..run.from]` is unchanged
@@ -111,6 +121,22 @@ pub trait Resume: Send + Sync {
     /// keeps drawing them, and while the calculation runs it calls again on a later frame with
     /// the latest bars.
     fn resume(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation;
+
+    /// Names of the study's alert conditions, in the order
+    /// [`alert_condition`](Self::alert_condition) numbers them, which [`CustomIndicator`] gives as
+    /// [`Indicator::alert_conditions`]. Keep the order stable: saved alerts know a condition by
+    /// its number. None by default.
+    fn alert_conditions(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Whether condition `condition` holds at source bar `bar` as of the values the last
+    /// [`resume`](Self::resume) call left, which [`CustomIndicator`] gives as
+    /// [`Indicator::alert_condition`]. `None` for an unknown condition or bar, or one not decided
+    /// there, which an alert counts as not holding. `None` by default.
+    fn alert_condition(&self, _condition: usize, _bar: usize) -> Option<bool> {
+        None
+    }
 }
 
 /// What a [`Resume::resume`] call works on.
@@ -144,12 +170,20 @@ pub enum Calculation {
 /// A [`Resume`] that [`CustomIndicator`] can clone.
 trait ResumeBox: Send + Sync {
     fn resume_box(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation;
+    fn alert_conditions_box(&self) -> Vec<String>;
+    fn alert_condition_box(&self, condition: usize, bar: usize) -> Option<bool>;
     fn clone_box(&self) -> Box<dyn ResumeBox>;
 }
 
 impl<R: Resume + Clone + 'static> ResumeBox for R {
     fn resume_box(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation {
         self.resume(run, values)
+    }
+    fn alert_conditions_box(&self) -> Vec<String> {
+        self.alert_conditions()
+    }
+    fn alert_condition_box(&self, condition: usize, bar: usize) -> Option<bool> {
+        self.alert_condition(condition, bar)
     }
     fn clone_box(&self) -> Box<dyn ResumeBox> {
         Box::new(self.clone())
@@ -608,6 +642,14 @@ impl Indicator for CustomIndicator {
 
     fn calculation(&self) -> Option<Calculation> {
         self.calculation.clone()
+    }
+
+    fn alert_conditions(&self) -> Vec<String> {
+        (self.resume.as_ref()).map_or_else(Vec::new, |resume| resume.alert_conditions_box())
+    }
+
+    fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+        self.resume.as_ref()?.alert_condition_box(condition, bar)
     }
 
     fn source(&self) -> Option<super::StudySource> {

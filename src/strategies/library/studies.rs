@@ -75,11 +75,12 @@ impl StudyStrategy {
             studies.push(Box::new(SMA::new(26)));
         }
         let inputs = match rule {
+            // Indices 0 and 1 keep their meaning for strategies saved with Long or Short.
             Rule::DirectedBollinger => vec![StudyInput::new(
                 "direction",
                 "Direction",
-                InputValue::Choice(0),
-                InputKind::Choice(vec!["Long".into(), "Short".into()]),
+                InputValue::Choice(2),
+                InputKind::Choice(vec!["Long only".into(), "Short only".into(), "Both".into()]),
             )],
             Rule::Rating => vec![StudyInput::new(
                 "timeframe",
@@ -424,10 +425,10 @@ impl Strategy for StudyStrategy {
             return;
         };
         let expired = self.expired(signals, context, at);
-        if matches!(self.rule, Rule::DirectedBollinger) {
-            let InputValue::Choice(direction) = self.inputs[0].value else {
-                unreachable!()
-            };
+        // Both (index 2) trades as Bollinger Bands does, in the loop below.
+        if matches!(self.rule, Rule::DirectedBollinger)
+            && let InputValue::Choice(direction @ 0..=1) = self.inputs[0].value
+        {
             if signals[1 - direction].is_some() {
                 context.cancel(if direction == 0 { "Long" } else { "Short" });
                 if context.position() != 0. {

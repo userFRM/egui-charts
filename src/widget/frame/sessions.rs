@@ -608,17 +608,21 @@ mod tests {
             "2024-03-11T23:59:00Z",
             "2024-03-12T00:00:00Z",
         ];
-        for (shade, custom, metadata, overnight, pre, post, defaults, expected) in [
-            (true, false, false, false, true, true, false, vec![2]),
-            (false, false, false, false, true, true, false, vec![2]),
-            (true, true, false, false, true, true, false, vec![1, 6]),
-            (true, false, true, false, true, true, false, vec![3]),
-            (true, false, true, true, true, true, false, vec![1, 7]),
-            (true, false, true, false, false, true, false, vec![3]),
-            (true, false, true, false, true, false, false, vec![3]),
-            (true, false, true, false, true, true, true, vec![3]),
-            (false, false, true, false, true, true, true, vec![3]),
+        // `night` is the overnight switch of an instrument with overnight windows.
+        for (shade, custom, metadata, night, pre, post, defaults, expected) in [
+            (true, false, false, None, true, true, false, vec![2]),
+            (false, false, false, None, true, true, false, vec![2]),
+            (true, true, false, None, true, true, false, vec![1, 6]),
+            (true, false, true, None, true, true, false, vec![3]),
+            (true, false, true, Some(true), true, true, false, vec![1, 7]),
+            (true, false, true, None, false, true, false, vec![3]),
+            (true, false, true, None, true, false, false, vec![3]),
+            (true, false, true, None, true, true, true, vec![3]),
+            (false, false, true, None, true, true, true, vec![3]),
+            (true, false, true, Some(true), true, true, true, vec![1, 7]),
+            (true, false, true, Some(false), true, true, true, vec![1, 7]),
         ] {
+            let overnight = night.is_some();
             let ctx = egui::Context::default();
             let bars = times
                 .iter()
@@ -666,9 +670,9 @@ mod tests {
             chart.config.session_break_color = egui::Color32::from_rgb(201, 37, 180);
             chart.config.extended_hours_color =
                 egui::Color32::from_rgba_unmultiplied(90, 40, 170, 30);
-            chart.config.overnight_hours_color =
-                egui::Color32::from_rgba_unmultiplied(170, 90, 40, 30);
             if !defaults {
+                chart.config.overnight_hours_color =
+                    egui::Color32::from_rgba_unmultiplied(170, 90, 40, 30);
                 chart.config.premarket_color = Some(PREMARKET);
                 chart.config.postmarket_color = None;
             }
@@ -681,6 +685,7 @@ mod tests {
             settings.apply_to_chart(&mut chart).unwrap();
             chart.config.shade_premarket = pre;
             chart.config.shade_postmarket = post;
+            chart.config.shade_overnight = night != Some(false);
             if custom {
                 chart.set_session_provider(Some(std::sync::Arc::new(
                     crate::model::DailySessionProvider::new(21, 0),
@@ -756,16 +761,20 @@ mod tests {
                     .collect();
                 assert_eq!(fills, expected, "{color:?} pre={pre} post={post}");
             }
+            // The default is #D500F9 at round(255 * 0.08) = 20 alpha, premultiplied.
+            let overnight_color = if defaults {
+                egui::Color32::from_rgba_premultiplied(17, 0, 20, 20)
+            } else {
+                egui::Color32::from_rgba_unmultiplied(170, 90, 40, 30)
+            };
             let overnight_fills: Vec<_> = painted
                 .iter()
                 .filter_map(|shape| match shape {
-                    Shape::Rect(rect) if rect.fill == chart.config.overnight_hours_color => {
-                        Some(rect.rect)
-                    }
+                    Shape::Rect(rect) if rect.fill == overnight_color => Some(rect.rect),
                     _ => None,
                 })
                 .collect();
-            let expected: Vec<_> = if shade && overnight {
+            let expected: Vec<_> = if shade && night == Some(true) {
                 [(1, 3), (7, 8)]
                     .into_iter()
                     .map(|(first, end)| {
