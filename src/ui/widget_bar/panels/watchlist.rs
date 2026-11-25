@@ -1548,7 +1548,15 @@ impl WatchlistPanel {
                 EmptyState::new("This list is empty")
                     .description("Add symbols with the add button above.")
             };
-            empty.icon(&icons::WATCHLIST).fill_height().show(ui);
+            egui::ScrollArea::vertical()
+                .id_salt("empty_watchlist")
+                .min_scrolled_height(0.0)
+                .auto_shrink([false, false])
+                // Keep the instruction in view before the decorative icon when space runs out.
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    empty.icon(&icons::WATCHLIST).fill_height().show(ui);
+                });
             return action;
         }
 
@@ -2565,6 +2573,91 @@ mod tests {
             symbol: symbol.into(),
             flag: None,
         }
+    }
+
+    #[test]
+    fn empty_watchlist_stays_above_the_reserved_panel_after_resize() {
+        let ctx = egui::Context::default();
+        let mut panel = WatchlistPanel::default();
+        let mut frame = |height, events| {
+            let mut bottom = 0.0;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        vec2(300.0, height),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::Panel::bottom("details")
+                        .exact_size(300.0)
+                        .show(ui, |ui| {
+                            ui.label("Symbol details");
+                        });
+                    bottom = ui.available_rect_before_wrap().bottom();
+                    panel.show(ui);
+                },
+            );
+            let visible = |label| {
+                output.shapes.iter().find_map(|s| {
+                    let Shape::Text(t) = &s.shape else {
+                        return None;
+                    };
+                    let rect = (s.transform_after_tessellation * t.visual_bounding_rect())
+                        .intersect(s.clip_rect);
+                    (t.galley.text() == label && rect.is_positive()).then_some(rect)
+                })
+            };
+            let labels = [
+                "This list is empty",
+                "Add symbols with the add button above.",
+            ]
+            .map(visible);
+            let details = visible("Symbol details").expect("sibling stays visible");
+            output.drop_without_applying_deltas();
+            (bottom, labels, details)
+        };
+        let (tall_bottom, [tall_title, tall_hint], _) = frame(700.0, vec![]);
+        let tall_hint = tall_hint.expect("hint visible at normal height");
+        assert!(tall_hint.bottom() < tall_bottom);
+        let (bottom, labels, details) = frame(420.0, vec![]);
+        assert!(details.top() >= bottom);
+        assert!(
+            labels.into_iter().flatten().all(|r| r.bottom() <= bottom),
+            "empty text {labels:?} crosses the panel edge {bottom}"
+        );
+        let wheel = |dy| {
+            vec![
+                egui::Event::PointerMoved(pos2(150.0, bottom - 8.0)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, dy),
+                    modifiers: Modifiers::NONE,
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                },
+            ]
+        };
+        frame(420.0, wheel(180.0));
+        assert!(
+            (0..12).any(|_| frame(420.0, vec![]).1[1].is_none()),
+            "scrolling toward the icon moves the hint out of view"
+        );
+        frame(420.0, wheel(-180.0));
+        let scrolled = (0..12)
+            .find_map(|_| frame(420.0, vec![]).1[1].filter(|r| r.height() == tall_hint.height()));
+        assert!(
+            scrolled.is_some_and(|r| r.bottom() <= bottom),
+            "the whole hint is reachable inside the compact list"
+        );
+        frame(700.0, vec![]);
+        assert_eq!(
+            frame(700.0, vec![]).1,
+            [tall_title, Some(tall_hint)],
+            "growing restores both labels"
+        );
     }
 
     #[test]
