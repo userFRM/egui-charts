@@ -833,6 +833,33 @@ mod tests {
         assert!(marks.iter().all(|mark| mark.price % 10_000.0 == 0.0));
     }
 
+    /// Fractional labels keep a coarser tick as the grid when it lies on the fraction's grid.
+    #[test]
+    #[cfg(feature = "widget")]
+    fn fraction_marks_keep_a_coarser_tick_grid() {
+        let format = crate::model::SeriesDisplayFormat {
+            kind: crate::model::SeriesFormat::Fraction(crate::model::PriceFraction::Eighths),
+            ..Default::default()
+        };
+        let eighths = vec![100.0, 100.125, 100.25, 100.375, 100.5];
+        for (tick, expected) in [
+            (Some(0.25), vec![100.0, 100.25, 100.5]),
+            (None, eighths.clone()),
+            (Some(0.3), eighths.clone()),
+            (Some(0.0625), eighths),
+        ] {
+            let marks = map(PriceScaleMode::Normal, 100.0, 100.6)
+                .with_tick_marks(PriceMarkGeneratorConfig {
+                    min_price_step: tick,
+                    ..Default::default()
+                })
+                .with_display_format(format)
+                .marks();
+            let prices: Vec<f64> = marks.iter().map(|mark| mark.price).collect();
+            assert_eq!(prices, expected, "{tick:?}");
+        }
+    }
+
     #[test]
     #[cfg(feature = "widget")]
     fn volume_format_on_a_narrow_log_axis_repeats_no_label() {

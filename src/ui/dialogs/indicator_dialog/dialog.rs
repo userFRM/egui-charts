@@ -73,6 +73,8 @@ pub struct IndicatorDialog {
     metric_source: Option<(Arc<dyn Datafeed>, String)>,
     metric_catalog: Option<Arc<Inbox>>,
     metric_names: Vec<String>,
+    /// The current source's metric series, listed again in a new factory
+    metric_series: Vec<MetricSeries>,
     metric_error: Option<FeedError>,
     option_catalog: Option<Arc<Inbox>>,
     option_profile_registered: bool,
@@ -214,6 +216,7 @@ impl IndicatorDialog {
             metric_source: None,
             metric_catalog: None,
             metric_names: Vec::new(),
+            metric_series: Vec::new(),
             metric_error: None,
             option_catalog: None,
             option_profile_registered: false,
@@ -226,19 +229,21 @@ impl IndicatorDialog {
     }
 
     /// List and create the studies of `factory`, such as the built-ins and the host's own
-    /// added with [`IndicatorFactory::register`]. The metrics and options profile of the feed
-    /// given to [`set_metric_source`](Self::set_metric_source) are fetched again on the next
-    /// [`show`](Self::show) and listed beside them.
+    /// added with [`IndicatorFactory::register`]. The metric studies of the feed given to
+    /// [`set_metric_source`](Self::set_metric_source) that are already listed move to
+    /// `factory` at once, without asking the feed again, unless `factory` has a study under
+    /// the same name. The feed's options profile is fetched again on the next
+    /// [`show`](Self::show).
     pub fn with_factory(mut self, factory: IndicatorFactory) -> Self {
-        // The feed's metric studies and options profile were registered in the old factory.
+        // The options profile needs a live chain, so it is fetched again; the metric series
+        // are kept and registered in the new factory.
         self.option_catalog = None;
         self.option_profile_registered = false;
         self.option_error = None;
-        self.metric_catalog = None;
-        self.metric_error = None;
         self.metric_names.clear();
         self.indicators = IndicatorInfo::from_factory(&factory);
         self.factory = factory;
+        self.list_metrics();
         self.refresh_order_flow_availability();
         self
     }
@@ -258,6 +263,7 @@ impl IndicatorDialog {
         self.metric_source = feed.map(|feed| (feed, symbol.to_owned()));
         self.metric_catalog = None;
         self.metric_error = None;
+        self.metric_series.clear();
         for name in self.metric_names.drain(..) {
             self.factory.unregister(&name);
         }
@@ -374,28 +380,35 @@ impl IndicatorDialog {
                 .unwrap_or(Err(FeedError::Unanswered));
             match result {
                 Ok(metrics) => {
-                    for metric in metrics {
-                        if metric.id.is_empty() {
-                            continue;
-                        }
-                        let key = format!("Metric: {}", metric.id);
-                        if self.factory.has(&key) {
-                            continue;
-                        }
-                        let mut info = IndicatorInfo::new(&key, &metric.name, &metric.unit);
-                        info.category = "Metrics".into();
-                        self.factory.register(key.clone(), move || {
-                            Box::new(MetricStudy::new(metric.clone()))
-                        });
-                        self.metric_names.push(key);
-                        self.indicators.push(info);
-                    }
-                    self.indicators.sort_by_key(|info| info.name.to_lowercase());
+                    self.metric_series = metrics;
+                    self.list_metrics();
                 }
                 Err(FeedError::NotSupported) => {}
                 Err(error) => self.metric_error = Some(error),
             }
         }
+    }
+
+    /// Register and list each of the feed's metric series whose key the factory does not hold.
+    fn list_metrics(&mut self) {
+        for metric in &self.metric_series {
+            if metric.id.is_empty() {
+                continue;
+            }
+            let key = format!("Metric: {}", metric.id);
+            if self.factory.has(&key) {
+                continue;
+            }
+            let mut info = IndicatorInfo::new(&key, &metric.name, &metric.unit);
+            info.category = "Metrics".into();
+            let metric = metric.clone();
+            self.factory.register(key.clone(), move || {
+                Box::new(MetricStudy::new(metric.clone()))
+            });
+            self.metric_names.push(key);
+            self.indicators.push(info);
+        }
+        self.indicators.sort_by_key(|info| info.name.to_lowercase());
     }
 
     /// The catalogue sorted by display name, including the feed's metrics. Entries hidden by
@@ -1071,18 +1084,20 @@ mod tests {
         assert!(!study.is_overlay());
         assert_eq!(study.value_format(), StudyFormat::Percent);
         assert_eq!(study.data_requests()[0].metric.as_deref(), Some("funding"));
-        // A new factory drops the metric studies of the old one; the feed is asked again.
+        // A new factory given to the closed dialog keeps the metric study creatable from it.
         dialog = dialog.with_factory(IndicatorFactory::new());
-        dialog.poll_metrics(&ctx);
-        let replies = std::mem::take(&mut *feed.0.lock().unwrap());
-        assert_eq!(replies.len(), 1, "the feed is asked for its metrics again");
-        for reply in replies {
-            reply.send(Ok(vec![crate::data::MetricSeries {
-                unit: "%".into(),
-                ..crate::data::MetricSeries::new("funding", "Funding rate", StudyFormat::Percent)
-            }]));
+        for frame in 0..2 {
+            assert!(matches!(
+                dialog.show(&ctx, &Theme::dark()),
+                IndicatorDialogAction::None
+            ));
+            assert!(dialog.factory().has("Metric: funding"), "frame {frame}");
+            let study = dialog.factory().create("Metric: funding");
+            assert_eq!(
+                study.map(|study| study.name().to_owned()),
+                Some("Funding rate".into())
+            );
         }
-        dialog.poll_metrics(&ctx);
         assert_eq!(dialog.metric_names, ["Metric: funding"]);
         use egui_kittest::{Harness, kittest::Queryable};
         for theme in [Theme::light(), Theme::dark()] {
@@ -1117,7 +1132,12 @@ mod tests {
                 assert!(added, "width {width}");
             }
         }
+        assert!(
+            feed.0.lock().unwrap().is_empty(),
+            "the feed is not asked again"
+        );
         dialog.set_metric_source(None, "CURRENT");
+        dialog = dialog.with_factory(IndicatorFactory::new());
         assert!(dialog.add("Metric: funding").is_none());
         assert!(dialog.add("SMA").is_some());
     }

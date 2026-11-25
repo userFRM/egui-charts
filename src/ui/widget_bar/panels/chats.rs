@@ -21,7 +21,7 @@ use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::filter::FilterWidget;
 use crate::ui_kit::status_message::{MessageKind, translated_status_message};
-use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
+use crate::ui_kit::{Card, EmptyState, IconButton, PanelHeader};
 
 /// Messages kept at most across the rooms; past it the room holding the most loses its oldest.
 const KEPT: usize = 5_000;
@@ -34,6 +34,45 @@ const PAGE: usize = 50;
 
 /// Inbox key of the answers to [`Chats::send`]; streams and other requests use keys from 1.
 const SENT: u64 = 0;
+
+/// The marker that opens and closes a code block in a message.
+const CODE: &str = "```";
+
+/// The parts of a message as drawn, in order, each with whether it is code. Text between a pair
+/// of [`CODE`] markers is code, without the line breaks beside its markers and without a first
+/// line of one word, which names its language. Blank parts are left out. A marker without a
+/// closing one is text, and a message with no part left is drawn as written.
+fn message_parts(text: &str) -> Vec<(bool, &str)> {
+    let mut parts = Vec::new();
+    let mut rest = text;
+    while let Some((before, after)) = rest.split_once(CODE)
+        && let Some((code, after)) = after.split_once(CODE)
+    {
+        parts.push((false, before.trim_end_matches(['\r', '\n'])));
+        let code = match code.split_once('\n') {
+            Some((tag, body))
+                if !tag.trim_end_matches('\r').is_empty()
+                    && tag
+                        .trim_end_matches('\r')
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "+#-._".contains(c)) =>
+            {
+                body
+            }
+            _ => code,
+        };
+        parts.push((true, code.trim_matches(['\r', '\n'])));
+        rest = after.trim_start_matches(['\r', '\n']);
+    }
+    parts.push((false, rest));
+    if parts.len() > 1 {
+        parts.retain(|(_, part)| !part.trim().is_empty());
+    }
+    if parts.is_empty() {
+        parts.push((false, text));
+    }
+    parts
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum View {
@@ -891,7 +930,33 @@ impl ChatsPanel {
                                         .truncate(),
                                     );
                                 }
-                                ui.label(&message.text);
+                                for (at, (code, part)) in
+                                    message_parts(&message.text).into_iter().enumerate()
+                                {
+                                    if !code {
+                                        ui.label(part);
+                                        continue;
+                                    }
+                                    Card::new().padding(theme.spacing.sm).show(ui, |ui| {
+                                        // Long lines scroll sideways, so the code keeps its
+                                        // alignment.
+                                        egui::ScrollArea::horizontal()
+                                            .id_salt((
+                                                "chat_code",
+                                                message.time,
+                                                message.id.as_deref(),
+                                                at,
+                                            ))
+                                            .show(ui, |ui| {
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        RichText::new(part).monospace(),
+                                                    )
+                                                    .wrap_mode(egui::TextWrapMode::Extend),
+                                                );
+                                            });
+                                    });
+                                }
                             });
                     });
                     ui.add_space(theme.spacing.sm);
@@ -1554,6 +1619,70 @@ mod tests {
             h.run();
             h.get_by_label(hover);
         }
+    }
+
+    /// Guards code in messages: text between code markers paints in the monospace font with its
+    /// line breaks and indentation, without its language word, and the text around it and a
+    /// message without a pair of markers paint as before.
+    #[test]
+    fn code_between_markers_draws_in_monospace_with_its_lines() {
+        let host = Arc::new(Host::default());
+        let mut panel = ChatsPanel::new();
+        panel.set_service(host.clone());
+        let events = host.events.lock().unwrap().clone().unwrap();
+        for (n, text) in [
+            "Try this:\n```rust\nif ready {\n    go();\n}\n```\nDone",
+            "a ``` b",
+            "```\r\n    let a = 1;\r\n```",
+            "``````",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let time = chrono::DateTime::from_timestamp(60 * n as i64, 0).unwrap();
+            events.push(ChatEvent::Message(ChatMessage::new(
+                "desk", "Ann", time, text,
+            )));
+        }
+        panel.poll(&egui::Context::default());
+        let mut h = Harness::builder()
+            .with_size(Vec2::new(320.0, 600.0))
+            .with_context_setup(|ctx| {
+                crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                egui_extras::install_image_loaders(ctx);
+            })
+            .build_ui_state(|ui, panel: &mut ChatsPanel| panel.show(ui), panel);
+        h.run();
+        let painted: Vec<(String, bool)> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((
+                    text.galley.text().to_owned(),
+                    text.galley.job.sections.iter().all(|section| {
+                        section.format.font_id.family == egui::FontFamily::Monospace
+                    }),
+                )),
+                _ => None,
+            })
+            .collect();
+        for expected in [
+            ("Try this:", false),
+            ("if ready {\n    go();\n}", true),
+            ("Done", false),
+            ("a ``` b", false),
+            ("    let a = 1;", true),
+            ("``````", false),
+        ] {
+            assert!(
+                painted
+                    .iter()
+                    .any(|(text, mono)| (text.as_str(), *mono) == expected),
+                "{expected:?} in {painted:?}"
+            );
+        }
+        assert!(!painted.iter().any(|(text, _)| text == "rust"));
     }
 
     /// Guards the message menu: Reply quotes the message and answers it through the host, Copy
