@@ -20,9 +20,10 @@ use web_time::Instant;
 /// history, and its order calls are placed on the context in the order it made them. Every
 /// decision on a bar, such as one after a fill, runs the whole script on that bar again from the
 /// state before it, and the last one sets the states the next bar starts from. A runtime error or
-/// a time or memory limit ends the strategy's orders from that bar until the next run: the run's
-/// report is then withheld with the error as its reason, through [`Strategy::failure`], and
-/// [`Script::last_error`] reports it at its line and column. Natively the script runs on a thread
+/// a time or memory limit ends the strategy's orders from that bar until the next run: the
+/// backtester cancels its working orders, so none fills later, and withholds the run's report
+/// with the error as its reason, through [`Strategy::failure`], and [`Script::last_error`]
+/// reports it at its line and column. Natively the script runs on a thread
 /// of its own, as a study's does; on the web on the caller's.
 pub struct ScriptStrategy {
     script: Script,

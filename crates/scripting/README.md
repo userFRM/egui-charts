@@ -357,10 +357,11 @@ after a fill runs the whole script on that bar again from the state before it, a
 later decision on the bar; the last one sets the states the next bar starts from. A script that
 skips its orders after a fill updates its states above `if !after_fill()`, not below it.
 
-A runtime error or a limit ends the strategy's orders from its bar until the next run, and the run's
-report is withheld with the error as the reason, as `StrategyReport::unavailable` says, so a report
-never reads as complete when its strategy stopped; `Script::last_error` has it at its line, column
-and bar. `Limits::bar` bounds each decision as it bounds a study's bar, `Limits::full` the time of a
+A runtime error or a limit ends the strategy's orders from its bar until the next run: its working
+orders are cancelled, so none fills on a later bar or live update, and the run's report is
+withheld with the error as the reason, as `StrategyReport::unavailable` says, so a report never
+reads as complete when its strategy stopped; `Script::last_error` has it at its line, column and
+bar. `Limits::bar` bounds each decision as it bounds a study's bar, `Limits::full` the time of a
 run's decisions together, and `Limits::memory` the bars and values the script holds. Natively a
 strategy runs its script on a thread of its own, on the web on the caller's. A decision blocks the
 caller: the strategy asks a cooperative run, such as the strategy tester's, to yield after 4 ms of

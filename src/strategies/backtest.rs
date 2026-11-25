@@ -420,7 +420,9 @@ pub trait Strategy {
     }
 
     /// Why the strategy stopped deciding before the run ended, such as a limit it reached, or
-    /// `None` while it decides. [`Backtest::run`], [`Backtest::run_async`], [`Backtest::update`]
+    /// `None` while it decides. Once a decision ends with this set, the run cancels the
+    /// strategy's working orders and keeps none it places later, so none of them fills on
+    /// later bars or live updates. [`Backtest::run`], [`Backtest::run_async`], [`Backtest::update`]
     /// and [`Backtest::update_closed_async`] read it once a run or update ends and then withhold
     /// the report's trades, equity and margin data with this reason in
     /// [`StrategyReport::unavailable`](crate::model::StrategyReport::unavailable), as for
@@ -1577,6 +1579,10 @@ impl<'a> Run<'a> {
             order_delay: self.settings.order_delay,
             price_increment: self.settings.price_increment,
         });
+        // A strategy that stopped deciding leaves no order working, so nothing of it fills later.
+        if self.strategy.failure().is_some() {
+            self.orders.clear();
+        }
     }
 
     fn fill_bar(&mut self, bar: &Bar) {
@@ -5011,9 +5017,11 @@ mod tests {
                 serde_json::to_value(&yielded).unwrap(),
                 serde_json::to_value(&report).unwrap()
             );
-            // A strategy that stopped withholds the report of a run and of a live run.
+            // A strategy that stopped withholds the report of a run and of a live run, and its
+            // orders never fill.
             let mut live = engine.clone();
-            live.update(&mut Stopped(Script(script)), &source, &[]);
+            let fills = live.update(&mut Stopped(Script(script)), &source, &[]);
+            assert!(fills.is_empty(), "{name}: {fills:?}");
             let ran = engine.run(&mut Stopped(Script(script)), &source, &[]);
             for withheld in [&ran, live.report().unwrap()] {
                 assert_eq!(
