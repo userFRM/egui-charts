@@ -1889,7 +1889,8 @@ mod tests {
     /// A template restores the inputs it holds whatever the study's default has become, with every
     /// line it showed, and an input it lacks takes the value the saved inputs had before the
     /// study offered it. Values outside a narrowed input range load clamped to that range, except
-    /// those of the inputs that restore as saved, which a style edit keeps.
+    /// those of the inputs that restore as saved, which a style edit keeps and an undone edit
+    /// brings back.
     /// Multi-Range Delta ranges saved with an inclusive largest size restore with the smallest
     /// limit above it that has one more decimal place, and their names write it.
     #[test]
@@ -2322,6 +2323,17 @@ mod tests {
                 .apply_settings(&values(study.as_ref()), study.settings())
                 .unwrap();
             assert_eq!(values(edited.as_ref()), values(study.as_ref()), "{name}");
+            // Undoing an edit, or cancelling its preview, brings every input back.
+            let defaults: Vec<_> = (study.inputs().into_iter())
+                .map(|input| (input.id, input.default))
+                .collect();
+            edited.apply_settings(&defaults, study.settings()).unwrap();
+            edited.restore_settings(&study.snapshot_settings()).unwrap();
+            assert_eq!(
+                values(edited.as_ref()),
+                values(study.as_ref()),
+                "{name} undone"
+            );
             assert!(
                 (0..study.line_count()).all(|line| study.plot_style(line).visible),
                 "{name}"
