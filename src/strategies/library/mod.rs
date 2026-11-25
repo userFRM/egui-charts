@@ -31,6 +31,8 @@ type StrategyConstructor = Box<dyn Fn() -> Box<dyn Strategy> + Send + Sync>;
 /// Bar Up/Down's Max Intraday Loss (%) input, 1 by default, cancels its entries and closes its
 /// position once the loss since the start of the UTC day, open profit and fees included, exceeds
 /// that share of the day's highest equity, and places no entry until the next UTC day.
+/// Bollinger Bands Directed trades both sides by default, as Bollinger Bands does, or Long only
+/// or Short only, where a signal on the other side closes the position without reversing it.
 /// Built-ins ignore fill callbacks and decide
 /// at bar close, or on forming-bar updates when tick recalculation is enabled.
 ///

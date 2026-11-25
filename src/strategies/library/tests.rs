@@ -483,8 +483,19 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
         Case {
             name: "Bollinger Bands Directed",
             prices: bb(),
-            inputs: vec![("period", Length(2)), ("std_dev", Number(0.5))],
+            inputs: vec![
+                ("period", Length(2)),
+                ("std_dev", Number(0.5)),
+                ("direction", Choice(0)),
+            ],
             expected: vec![(3, Buy, 8.5), (7, Buy, 8.5)],
+        },
+        // Both, the default, takes the undirected strategy's entries on the same bars.
+        Case {
+            name: "Bollinger Bands Directed",
+            prices: bb(),
+            inputs: vec![("period", Length(2)), ("std_dev", Number(0.5))],
+            expected: vec![(3, Buy, 8.5), (5, Sell, 11.5), (7, Buy, 8.5)],
         },
         Case {
             name: "Bollinger Bands Directed",
