@@ -2019,6 +2019,27 @@ fn script_orders_and_readings_reach_the_backtest() {
         }
     }
 
+    // A live run's updates each get the full time limit, so decisions whose summed time passes
+    // it over many updates never stop the strategy.
+    let script = compile("let i = 0; while i < 300 { i += 1; }\nentry(\"Long\", \"long\");")
+        .with_limits(Limits {
+            full: Duration::from_millis(20),
+            ..Limits::default()
+        });
+    let mut strategy = script.strategy();
+    let mut live = backtest();
+    let bars: Vec<_> = (0..200)
+        .map(|i| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i);
+            Bar::new(time, 100.0, 101.0, 99.0, 100.0, 0.0)
+        })
+        .collect();
+    for end in 1..=bars.len() {
+        live.update(&mut strategy, &bars[..end], &[]);
+    }
+    assert_eq!(script.last_error(), None);
+    assert_eq!(live.report().unwrap().unavailable, None);
+
     // With a decision after each fill, the entry fills at bar 2's open, 103, and the decision
     // right after it reruns bar 1 at that price, placing a take profit at 104, which the path to
     // 105 reaches.

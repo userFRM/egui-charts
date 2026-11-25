@@ -362,10 +362,10 @@ orders are cancelled, so none fills on a later bar or live update, and the run's
 withheld with the error as the reason, as `StrategyReport::unavailable` says, so a report never
 reads as complete when its strategy stopped; `Script::last_error` has it at its line, column and
 bar. `Limits::bar` bounds each decision as it bounds a study's bar, `Limits::full` the time of a
-run's decisions together, and `Limits::memory` the bars and values the script holds. Natively a
-strategy runs its script on a thread of its own, on the web on the caller's. A decision blocks the
-caller: the strategy asks a cooperative run, such as the strategy tester's, to yield after 4 ms of
-decisions, so a slow script keeps the window responsive.
+run's decisions together and of each live update's, and `Limits::memory` the bars and values the
+script holds. Natively a strategy runs its script on a thread of its own, on the web on the
+caller's. A decision blocks the caller: the strategy asks a cooperative run, such as the strategy
+tester's, to yield after 4 ms of decisions, so a slow script keeps the window responsive.
 
 A strategy script cannot read other histories: the strategy tester refuses one that declares
 `bars`, and `Backtest::run` gives such a script `na` for their fields. A study of a strategy script,

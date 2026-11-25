@@ -8,7 +8,7 @@ use crate::runtime::program::Span;
 use crate::runtime::worker::Runner;
 use crate::study::{first_change, same_bar};
 use crate::{Script, ScriptError};
-use egui_charts::model::{Bar, OrderType};
+use egui_charts::model::{Bar, OrderType, Timeframe};
 use egui_charts::strategies::{Strategy, StrategyContext};
 use egui_charts::studies::{InputValue, StudyInput};
 use std::time::Duration;
@@ -36,7 +36,7 @@ pub struct ScriptStrategy {
     reset: bool,
     /// The error or stop that ended this run's orders.
     failure: Option<ScriptError>,
-    /// The calculation time of this run's decisions, against `Limits::full`.
+    /// The calculation time of the decisions of this run or live update, against `Limits::full`.
     spent: Duration,
     /// The time of the decisions since `should_yield` last answered `true`.
     since_yield: Duration,
@@ -87,6 +87,12 @@ impl Strategy for ScriptStrategy {
         input.value = value;
         self.reset = true;
         Ok(())
+    }
+
+    /// Starts the full time limit over: the backtester passes the interval once before each run
+    /// and each live update, so `Limits::full` bounds one of them rather than a live run's life.
+    fn set_timeframe(&mut self, _timeframe: Timeframe) {
+        self.spent = Duration::ZERO;
     }
 
     fn validate_inputs(&self) -> Result<(), &'static str> {
