@@ -586,6 +586,8 @@ fn scripts_are_refused_at_their_line_and_column() {
         // The `)` where the operand belongs.
         ("plot(\"x\", close +);", 1, 18, "Unexpected ')'"),
         ("", 1, 1, "needs at least one plot"),
+        // A reading is not an order, so the script still needs a plot.
+        ("let p = position();", 1, 1, "needs at least one plot"),
         // The kind itself, the token after the `=`.
         (
             "input n = size(\"N\", 1, 0, 9);",
@@ -893,6 +895,28 @@ fn defined_calls_compile() {
     "####;
     let script = Script::compile("Test", source, &IndicatorFactory::new());
     assert!(script.is_ok(), "{script:?}");
+
+    // The names of the orders and readings stay free for a script's own variables, inputs and
+    // functions, and only a call of an order the script does not define makes it a strategy,
+    // which needs no plot.
+    for (source, orders) in [
+        ("entry(\"L\", \"long\");", true),
+        ("let entry = close; plot(\"x\", entry);", false),
+        (
+            "input price = source(\"Price\", close); plot(\"x\", price);",
+            false,
+        ),
+        (
+            "fn entry(a, b) { a + b } plot(\"x\", entry(close, 1.0));",
+            false,
+        ),
+    ] {
+        assert_eq!(compile(source).places_orders(), orders, "{source}");
+    }
+    let fixture = bars(30, 1);
+    let own = compile("fn entry(a, b) { a + b } plot(\"x\", entry(close, 1.0));");
+    let expected: Vec<_> = fixture.iter().map(|bar| bar.close + 1.0).collect();
+    assert!(same(calculated(&own, &fixture).values().line(0), &expected));
 }
 
 /// The reference lists what a script compiles with: the studies a script can call, each input and
@@ -999,6 +1023,7 @@ fn reference_names_compile_as_listed() {
                 let arguments: Vec<_> = parameters
                     .trim_end_matches(')')
                     .split(", ")
+                    .filter(|parameter| !parameter.is_empty())
                     .map(|parameter| match parameter {
                         "x" | "a" => "close",
                         "b" => "open",
@@ -1008,6 +1033,10 @@ fn reference_names_compile_as_listed() {
                         "lo" => "0.0",
                         "hi" => "200.0",
                         "digits" => "1",
+                        "id" => "\"o\"",
+                        "side" => "\"long\"",
+                        "options" => "#{}",
+                        "profit" | "loss" => "1.0",
                         other => panic!("{}: no argument for {other}", entry.signature),
                     })
                     .collect();
@@ -1698,4 +1727,340 @@ fn web_time_slices_finish_over_several_frames() {
     let mut native = RSI::new(14);
     native.calculate(&fixture);
     assert!(same(study.values().line(0), native.values().line(0)));
+}
+
+/// The valid bars of the backtester as a series: 1 for a bar of finite prices whose low and high
+/// hold its open and close, 0 otherwise.
+const VALID: &str = "series valid = if is_na(open) || is_na(high) || is_na(low) || is_na(close)
+    || low > min(open, close) || high < max(open, close) { 0.0 } else { 1.0 };\n";
+
+/// "Consecutive Up/Down" with its counts kept in states.
+const CONSECUTIVE_STATES: &str = r#"input length = length("Consecutive closes", 3, 1, 1000);
+state ups = 0;
+state downs = 0;
+if close > close[1] { ups += 1; } else { ups = 0; }
+if close < close[1] { downs += 1; } else { downs = 0; }
+if !after_fill() {
+    if ups >= length { entry("Long", "long"); }
+    if downs >= length { entry("Short", "short"); }
+}"#;
+
+fn backtest() -> egui_charts::strategies::Backtest {
+    egui_charts::strategies::Backtest::new("Run", "TEST", Timeframe::Min1, 10_000.0)
+}
+
+/// Strategies restated as scripts trade as the library's strategies do on the same bars and
+/// settings, through reruns after fills and historical tick decisions: the same orders, prices,
+/// quantities and input properties.
+#[test]
+fn script_strategies_match_library_strategies() {
+    use egui_charts::strategies::{BacktestSettings, Strategy, StrategyFactory};
+    let consecutive = format!(
+        "input length = length(\"Consecutive closes\", 3, 1, 1000);\n{VALID}\
+         series up = if close > close[1] {{ 1.0 }} else {{ 0.0 }};
+         series down = if close < close[1] {{ 1.0 }} else {{ 0.0 }};
+         let whole = sum(valid, length + 1) == length + 1;
+         let rising = sum(up, length) == length;
+         let falling = sum(down, length) == length;
+         if !after_fill() && whole {{
+             if rising {{ entry(\"Long\", \"long\"); }}
+             if falling {{ entry(\"Short\", \"short\"); }}
+         }}"
+    );
+    let channel = format!(
+        "input length = length(\"Channel length\", 20, 1, 1000);\n{VALID}\
+         let top = highest(high, length);
+         let bottom = lowest(low, length);
+         let whole = sum(valid, length) == length;
+         if !after_fill() && whole {{
+             entry(\"Long\", \"long\", #{{ stop: top }});
+             entry(\"Short\", \"short\", #{{ stop: bottom }});
+         }}"
+    );
+    let volatility = r#"input length = length("ATR length", 14, 1, 1000);
+        input multiplier = float("ATR multiplier", 2.0, 0.0, 1000000.0);
+        let range = if bar_index == 0 { high - low }
+            else { max(max(high - low, abs(high - close[1])), abs(low - close[1])) };
+        let atr = rma(range, length);
+        if !after_fill() && !is_na(atr) {
+            let distance = atr * multiplier;
+            entry("Long", "long", #{ stop: close + distance });
+            entry("Short", "short", #{ stop: close - distance });
+        }"#;
+    let mut after_fills = BacktestSettings::default();
+    after_fills.recalculate_after_fills = true;
+    let mut on_history = BacktestSettings::default();
+    on_history.recalculate_on_history = true;
+    let mut rows = Vec::new();
+    for fixture in [bars(3000, 7), with_gaps(3000, 7)] {
+        for settings in [
+            BacktestSettings::default(),
+            after_fills.clone(),
+            on_history.clone(),
+        ] {
+            let name = "Consecutive Up/Down";
+            rows.push((name, consecutive.as_str(), fixture.clone(), settings, None));
+        }
+    }
+    // Reruns after fills restore the state before the bar, so no rise counts twice.
+    rows.extend([
+        (
+            "Consecutive Up/Down",
+            CONSECUTIVE_STATES,
+            with_gaps(3000, 7),
+            after_fills,
+            None,
+        ),
+        (
+            "Channel Breakout",
+            channel.as_str(),
+            bars(3000, 8),
+            BacktestSettings::default(),
+            None,
+        ),
+        // Stops twice the average range away rarely fill on this walk; half of it does.
+        (
+            "Volatility Expansion Close",
+            volatility,
+            bars(3000, 9),
+            BacktestSettings::default(),
+            Some(("multiplier", InputValue::Number(0.5))),
+        ),
+    ]);
+    for (name, source, fixture, settings, input) in rows {
+        let mut engine = backtest();
+        engine.settings = settings;
+        let mut native = StrategyFactory::new().create(name).unwrap();
+        let mut script = compile(source).strategy();
+        if let Some((id, value)) = input {
+            native.set_input(id, value.clone()).unwrap();
+            script.set_input(id, value).unwrap();
+        }
+        let expected = engine.run(native.as_mut(), &fixture, &[]);
+        let report = engine.run(&mut script, &fixture, &[]);
+        assert!(!expected.trades.is_empty(), "{name}");
+        // Debug text, since a missing value in a report differs from itself.
+        let (report, expected) = (format!("{report:?}"), format!("{expected:?}"));
+        assert!(report == expected, "{name}: {source}\n{report}\n{expected}");
+    }
+}
+
+/// A script strategy continued bar by bar reports what a fresh run on the same bars reports, its
+/// states kept from the decisions that set them, and through a corrected forming bar and back
+/// what the library's strategy reports under the same calls.
+#[test]
+fn script_strategies_continue_as_fresh_runs() {
+    use egui_charts::strategies::StrategyFactory;
+    // The bars held count only while the position each decision read was open.
+    let holding = "state held = 0;
+        if position() > 0.0 { held += 1; } else { held = 0; }
+        if position() == 0.0 && close > close[1] { entry(\"Long\", \"long\"); }
+        if held >= 3 { exit_order(\"Out\"); }";
+    let fixture = bars(300, 7);
+    let mut continued = backtest();
+    let mut script = compile(holding).strategy();
+    for n in 200..=300 {
+        continued.update(&mut script, &fixture[..n], &[]);
+        let fresh = backtest().run(&mut compile(holding).strategy(), &fixture[..n - 1], &[]);
+        assert!(fresh.trades.len() > 10);
+        // Debug text, since a missing value in a report differs from itself.
+        let (continued, fresh) = (
+            format!("{:?}", continued.report()),
+            format!("{:?}", Some(fresh)),
+        );
+        assert!(continued == fresh, "{n} bars\n{continued}\n{fresh}");
+    }
+
+    let fixture = bars(3000, 7);
+    let mut corrected = fixture.clone();
+    let last = corrected.last_mut().unwrap();
+    last.close = last.open;
+    let mut steps: Vec<&[Bar]> = (2000..=3000).map(|n| &fixture[..n]).collect();
+    steps.extend([corrected.as_slice(), fixture.as_slice()]);
+    let mut native = StrategyFactory::new()
+        .create("Consecutive Up/Down")
+        .unwrap();
+    let mut script = compile(CONSECUTIVE_STATES).strategy();
+    let (mut expected, mut run) = (backtest(), backtest());
+    for engine in [&mut expected, &mut run] {
+        engine.settings.recalculate_on_every_update = true;
+    }
+    for bars in steps {
+        expected.update(native.as_mut(), bars, &[]);
+        run.update(&mut script, bars, &[]);
+        assert_eq!(run.report(), expected.report(), "{} bars", bars.len());
+    }
+    assert!(expected.report().unwrap().trades.len() > 10);
+}
+
+/// Orders and readings reach the backtester as the script calls them, checked by hand on six
+/// bars; an error or a limit ends the orders and withholds the report with its line and bar.
+#[test]
+fn script_orders_and_readings_reach_the_backtest() {
+    // (open, high, low, close) of six one-minute bars.
+    let ladder: Vec<_> = [
+        (100.0, 100.0, 100.0, 100.0),
+        (100.0, 101.0, 100.0, 101.0),
+        (103.0, 105.0, 103.0, 104.0),
+        (104.0, 107.0, 104.0, 106.0),
+        (106.0, 106.0, 101.0, 101.0),
+        (101.0, 101.0, 100.0, 100.0),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (open, high, low, close))| {
+        let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i as i64);
+        Bar::new(time, open, high, low, close, 0.0)
+    })
+    .collect();
+    let momentum = "if close > close[1] && position() == 0.0 { entry(\"Long\", \"long\", \
+                    #{ qty: equity() / 1000.0 }); } else if close < close[1] && position() > 0.0 \
+                    { exit_order(\"Close\"); }";
+    let stop = "if bar_index == 1 { entry(\"Long\", \"long\", #{ qty: 10, stop: 106.0 }); }";
+    let cancelled = format!("{stop}\nif bar_index == 2 {{ cancel(\"Long\"); }}");
+    let busy = "if bar_index == 1 { entry(\"Long\", \"long\", #{ qty: 10 }); }\n\
+                if bar_index == 3 { let i = 0; loop { i += 1; } }\n\
+                if bar_index == 4 { exit_order(\"Close\"); }";
+    let bar_limit = Limits {
+        bar: Duration::from_millis(50),
+        ..Limits::default()
+    };
+    let no_time = Limits {
+        full: Duration::ZERO,
+        ..Limits::default()
+    };
+    // The trades as entry price, quantity and the exit's price and profit, or the line and the
+    // end of the error that withholds them.
+    type Trades = Vec<(f64, f64, Option<(f64, f64)>)>;
+    for (source, limits, expected) in [
+        // Bar 1 rises with 10,000 flat: 10 fill at bar 2's open, 103; bar 4 falls, so the exit
+        // fills at bar 5's open, 101.
+        (
+            momentum,
+            Limits::default(),
+            Ok::<Trades, (usize, &str)>(vec![(103.0, 10.0, Some((101.0, -20.0)))]),
+        ),
+        // Bar 2's path 103, 103, 105, 104 reaches the take profit 104 on the way up.
+        (
+            "if bar_index == 1 { entry(\"Long\", \"long\", #{ qty: 10 }); \
+             exit_relative(\"Bracket\", \"long\", 1.0, 50.0); }",
+            Limits::default(),
+            Ok(vec![(103.0, 10.0, Some((104.0, 10.0)))]),
+        ),
+        // Bar 2's high 105 misses the stop; bar 3's path 104, 104, 107 crosses it.
+        (stop, Limits::default(), Ok(vec![(106.0, 10.0, None)])),
+        (&cancelled, Limits::default(), Ok(vec![])),
+        // Lows 103, 104 and 101 stay above the limit; bar 5's path 101, 101, 100 reaches it.
+        (
+            "if bar_index == 1 { entry(\"Long\", \"long\", #{ qty: 10, limit: 100.5 }); }",
+            Limits::default(),
+            Ok(vec![(100.5, 10.0, None)]),
+        ),
+        (
+            "entry(\"Long\", \"up\");",
+            Limits::default(),
+            Err((
+                1,
+                "column 1: side takes \"long\" or \"short\"; got \"up\", on bar 0",
+            )),
+        ),
+        (
+            "entry(\"Long\", \"long\", #{ size: 1 });",
+            Limits::default(),
+            Err((
+                1,
+                "column 1: entry takes the options qty, limit and stop; got size, on bar 0",
+            )),
+        ),
+        (
+            "entry(\"Long\", \"long\", #{ qty: true });",
+            Limits::default(),
+            Err((1, "column 1: qty takes a number; got bool, on bar 0")),
+        ),
+        // The entry of bar 1 filled before the stop at bar 3, which withholds the report. The
+        // column is that of the operation the clock was read at.
+        (
+            busy,
+            bar_limit,
+            Err((2, ": time limit of 50 ms for one bar reached, on bar 3")),
+        ),
+        (
+            momentum,
+            no_time,
+            Err((
+                0,
+                "time limit of 0 ms for a full recompute reached, on bar 0",
+            )),
+        ),
+    ] {
+        let script = compile(source).with_limits(limits);
+        assert!(script.places_orders(), "{source}");
+        let report = backtest().run(&mut script.strategy(), &ladder, &[]);
+        let trades: Trades = (report.trades.iter())
+            .map(|trade| {
+                let exit = trade.exit.as_ref().map(|exit| (exit.price, exit.profit));
+                (trade.entry_price, trade.quantity, exit)
+            })
+            .collect();
+        match expected {
+            Ok(expected) => {
+                assert_eq!(trades, expected, "{source}");
+                assert_eq!(report.unavailable, None, "{source}");
+                assert_eq!(script.last_error(), None, "{source}");
+            }
+            Err((line, end)) => {
+                assert_eq!(trades, [], "{source}");
+                assert!(report.equity.is_empty(), "{source}");
+                let error = script.last_error().expect("the error is reported");
+                assert_eq!(report.unavailable, Some(error.to_string()), "{source}");
+                assert_eq!(error.line, line, "{source}: {error}");
+                assert!(error.to_string().ends_with(end), "{source}: {error}");
+            }
+        }
+    }
+
+    // A live run's updates each get the full time limit, so decisions whose summed time passes
+    // it over many updates never stop the strategy.
+    let script = compile("let i = 0; while i < 300 { i += 1; }\nentry(\"Long\", \"long\");")
+        .with_limits(Limits {
+            full: Duration::from_millis(20),
+            ..Limits::default()
+        });
+    let mut strategy = script.strategy();
+    let mut live = backtest();
+    let bars: Vec<_> = (0..200)
+        .map(|i| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i);
+            Bar::new(time, 100.0, 101.0, 99.0, 100.0, 0.0)
+        })
+        .collect();
+    for end in 1..=bars.len() {
+        live.update(&mut strategy, &bars[..end], &[]);
+    }
+    assert_eq!(script.last_error(), None);
+    assert_eq!(live.report().unwrap().unavailable, None);
+
+    // With a decision after each fill, the entry fills at bar 2's open, 103, and the decision
+    // right after it reruns bar 1 at that price, placing a take profit at 104, which the path to
+    // 105 reaches.
+    let price_exit = compile(
+        "if bar_index == 1 { if after_fill() { exit_order(\"Out\", #{ profit: price() + 1.0 }); \
+         } else { entry(\"Long\", \"long\", #{ qty: 10 }); } }",
+    );
+    let mut engine = backtest();
+    engine.settings.recalculate_after_fills = true;
+    let report = engine.run(&mut price_exit.strategy(), &ladder, &[]);
+    let [trade] = report.trades.as_slice() else {
+        panic!("{:?}", report.trades);
+    };
+    let exit = trade.exit.as_ref().map(|exit| (exit.price, exit.profit));
+    assert_eq!((trade.entry_price, exit), (103.0, Some((104.0, 10.0))));
+
+    // In a study the orders are checked and ignored, and the readings are those of a flat
+    // account.
+    let script = compile("plot(\"Position\", position());\nentry(\"Long\", \"long\");");
+    assert!(script.places_orders());
+    assert_eq!(script.check(&ladder), Ok(()));
+    let study = calculated(&script, &ladder);
+    assert_eq!(study.values().line(0), [0.0; 6]);
 }

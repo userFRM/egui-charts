@@ -396,6 +396,10 @@ impl Backtest {
         if live.unconverted {
             self.withhold(&mut live.report);
         }
+        if let Some(failure) = run.strategy.failure() {
+            self.withhold(&mut live.report);
+            live.report.unavailable = Some(failure);
+        }
         for fill in &mut fills {
             live.sequence += 1;
             fill.sequence = live.sequence;

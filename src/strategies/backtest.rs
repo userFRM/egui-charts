@@ -408,6 +408,30 @@ pub trait Strategy {
     /// Historical tick decisions use this callback with a developing candle too. Calls before
     /// the start time warm the strategy's state, but cannot place orders.
     fn on_bar(&mut self, context: &mut StrategyContext<'_>);
+
+    /// Whether a cooperative run should hand control back to its caller before the next bar, for
+    /// a strategy whose decisions took long since it last answered `true`.
+    /// [`Backtest::run_async`] and [`Backtest::update_closed_async`], and through them the
+    /// strategy tester, yield every 256 chart or finer bars and also before a bar for which this
+    /// returns `true`; [`Backtest::run`] and [`Backtest::update`] never ask. Returns `false` by
+    /// default.
+    fn should_yield(&mut self) -> bool {
+        false
+    }
+
+    /// Why the strategy stopped deciding before the run ended, such as a limit it reached, or
+    /// `None` while it decides. Once a decision ends with this set, the run cancels the
+    /// strategy's working orders and keeps none it places later, so none of them fills on
+    /// later bars or live updates. [`Backtest::run`], [`Backtest::run_async`], [`Backtest::update`]
+    /// and [`Backtest::update_closed_async`] read it once a run or update ends and then withhold
+    /// the report's trades, equity and margin data with this reason in
+    /// [`StrategyReport::unavailable`](crate::model::StrategyReport::unavailable), as for
+    /// missing exchange rates, so that a report never reads as complete when its strategy
+    /// stopped. [`prepare`](Self::prepare) starts a fresh run, which clears it. Returns `None`
+    /// by default.
+    fn failure(&self) -> Option<String> {
+        None
+    }
 }
 
 /// What a [`Strategy`] sees at a decision: the bars up to it and the open position. It places
@@ -914,6 +938,10 @@ impl Backtest {
         if run.unconverted.get() {
             self.withhold(&mut report);
         }
+        if let Some(failure) = run.strategy.failure() {
+            self.withhold(&mut report);
+            report.unavailable = Some(failure);
+        }
         report
     }
 
@@ -1146,9 +1174,9 @@ fn finish_now<T>(future: impl std::future::Future<Output = T>) -> T {
     }
 }
 
-async fn execution_step(processed: &mut Option<usize>) {
+async fn execution_step(processed: &mut Option<usize>, strategy: &mut dyn Strategy) {
     if let Some(processed) = processed {
-        if processed.is_multiple_of(256) {
+        if strategy.should_yield() || processed.is_multiple_of(256) {
             yield_now().await;
         }
         *processed += 1;
@@ -1294,7 +1322,7 @@ impl<'a> Run<'a> {
         walk: bool,
         processed: &mut Option<usize>,
     ) {
-        execution_step(processed).await;
+        execution_step(processed, &mut *self.strategy).await;
         self.forming = false;
         if walk {
             self.range = None;
@@ -1350,7 +1378,7 @@ impl<'a> Run<'a> {
         if valid && walk {
             if from < to {
                 for (offset, lower) in lower[from..to].iter().enumerate() {
-                    execution_step(processed).await;
+                    execution_step(processed, &mut *self.strategy).await;
                     if historical {
                         self.history_ticks(lower, (offset + 1 == to - from).then_some(bar));
                     } else {
@@ -1551,6 +1579,10 @@ impl<'a> Run<'a> {
             order_delay: self.settings.order_delay,
             price_increment: self.settings.price_increment,
         });
+        // A strategy that stopped deciding leaves no order working, so nothing of it fills later.
+        if self.strategy.failure().is_some() {
+            self.orders.clear();
+        }
     }
 
     fn fill_bar(&mut self, bar: &Bar) {
@@ -2780,6 +2812,32 @@ mod tests {
                 assert!(context.position().is_sign_positive());
             }
             (self.0)(context.bars().len() - 1, context);
+        }
+    }
+
+    /// A [`Script`] that asks a cooperative run to yield before every bar.
+    struct Yielding(Script);
+
+    impl Strategy for Yielding {
+        fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+            self.0.on_bar(context);
+        }
+
+        fn should_yield(&mut self) -> bool {
+            true
+        }
+    }
+
+    /// A [`Script`] that reports it stopped deciding.
+    struct Stopped(Script);
+
+    impl Strategy for Stopped {
+        fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+            self.0.on_bar(context);
+        }
+
+        fn failure(&self) -> Option<String> {
+            Some("Stopped at its limit".into())
         }
     }
 
@@ -4943,6 +5001,39 @@ mod tests {
                 serde_json::to_value(&asynchronous).unwrap(),
                 serde_json::to_value(&report).unwrap()
             );
+            // A strategy that asks before every bar hands control back once a bar, with the same
+            // fills.
+            let mut yielding = Yielding(Script(script));
+            let mut future = std::pin::pin!(engine.run_async(&mut yielding, &source, &[]));
+            let mut batches = 0;
+            let yielded = loop {
+                match std::future::Future::poll(future.as_mut(), &mut context) {
+                    std::task::Poll::Ready(report) => break report,
+                    std::task::Poll::Pending => batches += 1,
+                }
+            };
+            assert_eq!(batches, source.len(), "{name}");
+            assert_eq!(
+                serde_json::to_value(&yielded).unwrap(),
+                serde_json::to_value(&report).unwrap()
+            );
+            // A strategy that stopped withholds the report of a run and of a live run, and its
+            // orders never fill.
+            let mut live = engine.clone();
+            let fills = live.update(&mut Stopped(Script(script)), &source, &[]);
+            assert!(fills.is_empty(), "{name}: {fills:?}");
+            let ran = engine.run(&mut Stopped(Script(script)), &source, &[]);
+            for withheld in [&ran, live.report().unwrap()] {
+                assert_eq!(
+                    withheld.unavailable.as_deref(),
+                    Some("Stopped at its limit"),
+                    "{name}"
+                );
+                assert!(
+                    withheld.trades.is_empty() && withheld.equity.is_empty(),
+                    "{name}"
+                );
+            }
 
             assert_eq!(report.currency, engine.settings.currency, "{name}");
             assert_eq!(report.risk_free_rate, 0.02, "{name}");

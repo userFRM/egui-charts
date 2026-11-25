@@ -1,8 +1,9 @@
 //! The engine scripts run on: Rhai's standard package and nothing that reaches outside the
 //! script, the size limits, the series type with its operators and history, the bars of other
-//! histories, and the helpers.
+//! histories, and the helpers, the orders of strategies among them.
 
 use super::syntax::PRICES;
+use crate::runtime::orders::{OrderCall, Readings};
 use crate::runtime::series::{Field, SeriesRef};
 use crate::runtime::{self, bindings, program::Span};
 use ::rhai::packages::{Package, StandardPackage};
@@ -11,6 +12,7 @@ use ::rhai::{
     Position,
 };
 use chrono::{Datelike, Timelike};
+use egui_charts::model::OrderSide;
 use std::fmt::Write;
 
 /// Deepest nesting of script function calls.
@@ -205,6 +207,7 @@ pub(crate) enum Group {
     Math,
     Streaming,
     Time,
+    Orders,
 }
 
 impl Group {
@@ -215,6 +218,7 @@ impl Group {
             Self::Math => "Math",
             Self::Streaming => "Streaming",
             Self::Time => "Time, in UTC",
+            Self::Orders => "Orders",
         }
     }
 }
@@ -560,6 +564,143 @@ pub(crate) const HELPERS: &[Helper] = &[
         summary: "The minute of time t, 0 to 59; a missing time is an error.",
         register: |engine, name| time(engine, name, |time| i64::from(time.minute())),
     },
+    Helper {
+        name: "entry",
+        group: Group::Orders,
+        signature: "entry(id, side)",
+        summary: "An entry at market of the backtest's order size. side is \"long\" or \"short\".",
+        register: |engine, name| {
+            engine.register_fn(
+                name,
+                |context: NativeCallContext, id: ImmutableString, side: ImmutableString| {
+                    entry(&context, &id, &side, Map::new())
+                },
+            );
+        },
+    },
+    Helper {
+        name: "entry",
+        group: Group::Orders,
+        signature: "entry(id, side, options)",
+        summary: "An entry; options is a map of qty, the quantity, limit, a limit price, and stop, a \
+                  stop price, each optional. With a limit and a stop it is a stop-limit order.",
+        register: |engine, name| {
+            engine.register_fn(
+                name,
+                |context: NativeCallContext,
+                 id: ImmutableString,
+                 side: ImmutableString,
+                 options: Map| entry(&context, &id, &side, options),
+            );
+        },
+    },
+    Helper {
+        name: "exit_order",
+        group: Group::Orders,
+        signature: "exit_order(id)",
+        summary: "An exit of the whole position at market.",
+        register: |engine, name| {
+            engine.register_fn(name, |context: NativeCallContext, id: ImmutableString| {
+                exit(&context, &id, Map::new())
+            });
+        },
+    },
+    Helper {
+        name: "exit_order",
+        group: Group::Orders,
+        signature: "exit_order(id, options)",
+        summary: "An exit; options is a map of qty, the quantity to close, profit, a take-profit \
+                  price, and loss, a stop-loss price, each optional.",
+        register: |engine, name| {
+            engine.register_fn(
+                name,
+                |context: NativeCallContext, id: ImmutableString, options: Map| {
+                    exit(&context, &id, options)
+                },
+            );
+        },
+    },
+    Helper {
+        name: "exit_relative",
+        group: Group::Orders,
+        signature: "exit_relative(id, side, profit, loss)",
+        summary: "Closes the position on side at profit and loss distances from its average entry \
+                  price.",
+        register: |engine, name| {
+            engine.register_fn(
+                name,
+                |context: NativeCallContext,
+                 id: ImmutableString,
+                 side: ImmutableString,
+                 profit: Dynamic,
+                 loss: Dynamic|
+                 -> Result<()> {
+                    let side = order_side(&context, &side)?;
+                    let profit = number(&context, "profit", &profit)?;
+                    let loss = number(&context, "loss", &loss)?;
+                    let id = id.to_string();
+                    order(
+                        &context,
+                        OrderCall::Relative {
+                            id,
+                            side,
+                            profit,
+                            loss,
+                        },
+                    );
+                    Ok(())
+                },
+            );
+        },
+    },
+    Helper {
+        name: "cancel",
+        group: Group::Orders,
+        signature: "cancel(id)",
+        summary: "Cancels the working order id.",
+        register: |engine, name| {
+            engine.register_fn(name, |context: NativeCallContext, id: ImmutableString| {
+                let id = id.to_string();
+                order(&context, OrderCall::Cancel { id });
+            });
+        },
+    },
+    Helper {
+        name: "position",
+        group: Group::Orders,
+        signature: "position()",
+        summary: "The open position: positive long, negative short, 0 flat; 0 in a study.",
+        register: |engine, name| {
+            engine.register_fn(name, || reading(|readings| readings.position, 0.0));
+        },
+    },
+    Helper {
+        name: "equity",
+        group: Group::Orders,
+        signature: "equity()",
+        summary: "The account's equity; na in a study.",
+        register: |engine, name| {
+            engine.register_fn(name, || reading(|readings| readings.equity, f64::NAN));
+        },
+    },
+    Helper {
+        name: "price",
+        group: Group::Orders,
+        signature: "price()",
+        summary: "The close on a bar decision, the fill price right after a fill; na in a study.",
+        register: |engine, name| {
+            engine.register_fn(name, || reading(|readings| readings.price, f64::NAN));
+        },
+    },
+    Helper {
+        name: "after_fill",
+        group: Group::Orders,
+        signature: "after_fill()",
+        summary: "Whether this decision follows a fill; false in a study.",
+        register: |engine, name| {
+            engine.register_fn(name, || reading(|readings| readings.after_fill, false));
+        },
+    },
 ];
 
 /// The engine for running and compiling scripts, without the declarations.
@@ -867,6 +1008,126 @@ fn time(engine: &mut Engine, name: &'static str, read: fn(chrono::DateTime<chron
     engine.register_fn(name, move |t: FLOAT| at(t));
     engine.register_fn(name, move |t: INT| at(t.num()));
     engine.register_fn(name, move |t: Handle| at(t.value()));
+}
+
+/// An error of the call at the calling position.
+fn refused(context: &NativeCallContext, message: String) -> Box<EvalAltResult> {
+    EvalAltResult::ErrorRuntime(message.into(), context.call_position()).into()
+}
+
+/// Place an entry on the strategy context.
+fn entry(context: &NativeCallContext, id: &str, side: &str, options: Map) -> Result<()> {
+    let side = order_side(context, side)?;
+    let [qty, limit, stop] = order_options(context, "entry", ["qty", "limit", "stop"], options)?;
+    let id = id.to_owned();
+    order(
+        context,
+        OrderCall::Entry {
+            id,
+            side,
+            qty,
+            limit,
+            stop,
+        },
+    );
+    Ok(())
+}
+
+/// Place an exit on the strategy context.
+fn exit(context: &NativeCallContext, id: &str, options: Map) -> Result<()> {
+    let keys = ["qty", "profit", "loss"];
+    let [qty, profit, loss] = order_options(context, "exit_order", keys, options)?;
+    let id = id.to_owned();
+    order(
+        context,
+        OrderCall::Exit {
+            id,
+            qty,
+            profit,
+            loss,
+        },
+    );
+    Ok(())
+}
+
+/// The side an order names, `"long"` or `"short"`.
+fn order_side(context: &NativeCallContext, side: &str) -> Result<OrderSide> {
+    match side {
+        "long" => Ok(OrderSide::Buy),
+        "short" => Ok(OrderSide::Sell),
+        other => Err(refused(
+            context,
+            format!("side takes \"long\" or \"short\"; got {other:?}"),
+        )),
+    }
+}
+
+/// The values of the options of `call`, in the order of `keys`: `None` for one not given, and an
+/// error for a key outside `keys` or a value that is not a number.
+fn order_options<const N: usize>(
+    context: &NativeCallContext,
+    call: &str,
+    keys: [&str; N],
+    options: Map,
+) -> Result<[Option<f64>; N]> {
+    let mut values = [None; N];
+    for (key, value) in &options {
+        let Some(at) = keys.iter().position(|known| *known == key.as_str()) else {
+            let (last, first) = keys.split_last().expect("a call has options");
+            let known = format!("{} and {last}", first.join(", "));
+            return Err(refused(
+                context,
+                format!("{call} takes the options {known}; got {key}"),
+            ));
+        };
+        values[at] = Some(number(context, key, value)?);
+    }
+    Ok(values)
+}
+
+/// The value a number, an int or a series stands for on the current bar, or an error naming
+/// `name` for any other value.
+fn number(context: &NativeCallContext, name: &str, value: &Dynamic) -> Result<f64> {
+    if let Ok(value) = value.as_float() {
+        Ok(value)
+    } else if let Ok(value) = value.as_int() {
+        Ok(value.num())
+    } else if let Some(series) = value.read_lock::<Handle>() {
+        Ok(series.value())
+    } else {
+        let kind = match context.engine().map_type_name(value.type_name()) {
+            "f64" => "number",
+            "i64" => "int",
+            kind => kind,
+        };
+        Err(refused(
+            context,
+            format!("{name} takes a number; got {kind}"),
+        ))
+    }
+}
+
+/// Count the order call at the calling position, and place it while a strategy decides; a study
+/// ignores it.
+fn order(context: &NativeCallContext, call: OrderCall) {
+    let span = span(context.call_position());
+    runtime::with(|run| {
+        run.mark(span);
+        if let Some(decision) = &mut run.decision {
+            decision.calls.push(call);
+        }
+    });
+}
+
+/// A reading of the decision being run, or `otherwise` in a study.
+fn reading<T>(read: fn(&Readings) -> T, otherwise: T) -> T {
+    runtime::with(|run| {
+        run.decision
+            .as_ref()
+            .map(|decision| read(&decision.readings))
+    })
+    .flatten()
+    .unwrap_or(otherwise)
 }
 
 /// The position Rhai reports as a span.

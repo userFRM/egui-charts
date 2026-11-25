@@ -12,8 +12,8 @@ repository = "https://github.com/userFRM/egui-charts"
 [workspace]
 
 [dependencies]
-# Studies without egui, so the default build of this crate stays headless.
-egui-charts = { path = "../..", version = "=0.3.0-alpha.1", default-features = false, features = ["studies"] }
+# Studies and the backtester without egui, so the default build of this crate stays headless.
+egui-charts = { path = "../..", version = "=0.3.0-alpha.1", default-features = false, features = ["studies", "strategies"] }
 # No default features: no runtime random seed, so the wasm32 build needs no JavaScript random
 # source; `no_time` and `no_module` remove the clock and file imports.
 rhai = { version = "1.27.0", default-features = false, features = ["std", "sync", "no_time", "no_module"] }

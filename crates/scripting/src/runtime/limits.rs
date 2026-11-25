@@ -44,6 +44,11 @@ pub(crate) const OPERATIONS_PER_CHECK: u64 = 256;
 /// Bars between two clock reads of the bar loop.
 pub(crate) const BARS_PER_CHECK: usize = 64;
 
+/// The time a caller's thread runs a script before it hands control back: a study's slice of bars
+/// on the web, whose build has no threads, and the decisions a strategy makes before it asks the
+/// backtester to yield. A bar is never split, nor a study it calls.
+pub(crate) const SLICE: Duration = Duration::from_millis(4);
+
 /// The clock of one run.
 #[derive(Clone, Debug)]
 pub(crate) struct Clock {

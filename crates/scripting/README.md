@@ -51,7 +51,8 @@ assert!(factory.register_in(IndicatorFactory::PERSONAL, "Average close", move ||
 ```
 
 Layouts and study templates store the registered name and the input values, so a host that
-registers its saved scripts at start-up restores charts with script studies unchanged.
+registers its saved scripts at start-up restores charts with script studies unchanged. A script
+that places orders is a strategy for the library's backtester; see [Strategies](#strategies).
 
 `egui_charts_scripting::examples()` returns the scripts written for this crate: a relative
 strength index restated from Wilder's averages, a moving average cross, a price channel breakout
@@ -284,12 +285,100 @@ A study of a script with `bars` reads prices alone in its input `source`, since 
 study either histories or another study's output. `Script::check` calculates without other
 histories.
 
+## Strategies
+
+A script that places orders is a strategy: `Script::places_orders` says whether it calls `entry`,
+`exit_order`, `exit_relative` or `cancel` without defining a function of that name, and such a
+script needs no plot. `Script::strategy` gives a `ScriptStrategy`, an
+`egui_charts::strategies::Strategy` with the script's inputs, which `Backtest::run`, the strategy
+tester and live runs take like any other, and which a host registers in a `StrategyFactory` under
+the name it saves the script by:
+
+```rust
+use egui_charts::model::{Bar, Timeframe};
+use egui_charts::strategies::Backtest;
+use egui_charts::studies::IndicatorFactory;
+use egui_charts_scripting::Script;
+
+let source = r#"
+    // Long while the close rises, flat once it falls.
+    if close > close[1] && position() == 0.0 {
+        entry("Long", "long", #{ qty: 10 });
+    } else if close < close[1] && position() > 0.0 {
+        exit_order("Close");
+    }
+"#;
+let script = Script::compile("Momentum", source, &IndicatorFactory::new())?;
+assert!(script.places_orders());
+
+let bars: Vec<Bar> = [100.0, 101.0, 103.0, 102.0, 101.0]
+    .into_iter()
+    .enumerate()
+    .map(|(i, close)| {
+        let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+        Bar::new(time, close, close, close, close, 0.0)
+    })
+    .collect();
+let backtest = Backtest::new("Momentum", "SAMPLE", Timeframe::Min1, 10_000.0);
+let report = backtest.run(&mut script.strategy(), &bars, &[]);
+// Bought at the next open after the rise to 101, sold at the next open after the fall to 102.
+assert_eq!(report.trades.len(), 1);
+assert_eq!(report.trades[0].entry_price, 103.0);
+assert_eq!(report.trades[0].exit.as_ref().map(|exit| exit.profit), Some(-20.0));
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The orders are functions, so their names stay free for a script's own variables and inputs:
+
+- `entry(id, side)` and `entry(id, side, options)` place an entry, `side` being `"long"` or
+  `"short"`. `options` is a map of `qty`, the quantity, `limit`, a limit price, and `stop`, a stop
+  price, each optional: with neither price the entry is at market, with both a stop-limit order,
+  and without `qty` it takes the backtest's order size.
+- `exit_order(id)` and `exit_order(id, options)` place an exit, of the whole position at market by
+  default; `options` is a map of `qty`, the quantity to close, `profit`, a take-profit price, and
+  `loss`, a stop-loss price. Rhai's own `exit` ends the script.
+- `exit_relative(id, side, profit, loss)` closes the position on `side` at the distances `profit`
+  and `loss` from its average entry price.
+- `cancel(id)` cancels the working order `id`.
+
+An option key outside a call's list, a value that is not a number, an int or a series, and a side
+other than `"long"` and `"short"` are runtime errors at the call. The backtester's rules apply to
+what is placed: an order with the id of a working order replaces it, and one with a missing or
+infinite price or quantity is ignored, so an entry at `#{ limit: sma(close, 20) }` waits out the
+average's first bars. Orders placed before the backtest's start time are ignored.
+
+`position()`, `equity()`, `price()` and `after_fill()` read the decision: the open position,
+positive long, negative short and 0 flat, the account's equity, the close of the bar decided on or
+the fill price right after a fill, and whether the decision follows a fill.
+
+Each decision runs the script on the bar that just closed, with the bars before it as its history,
+and places its order calls in the order it made them. With fill recalculation, the decision right
+after a fill runs the whole script on that bar again from the state before it, and so does every
+later decision on the bar; the last one sets the states the next bar starts from. A script that
+skips its orders after a fill updates its states above `if !after_fill()`, not below it.
+
+A runtime error or a limit ends the strategy's orders from its bar until the next run: its working
+orders are cancelled, so none fills on a later bar or live update, and the run's report is
+withheld with the error as the reason, as `StrategyReport::unavailable` says, so a report never
+reads as complete when its strategy stopped; `Script::last_error` has it at its line, column and
+bar. `Limits::bar` bounds each decision as it bounds a study's bar, `Limits::full` the time of a
+run's decisions together and of each live update's, and `Limits::memory` the bars and values the
+script holds. Natively a strategy runs its script on a thread of its own, on the web on the
+caller's. A decision blocks the caller: the strategy asks a cooperative run, such as the strategy
+tester's, to yield after 4 ms of decisions, so a slow script keeps the window responsive.
+
+A strategy script cannot read other histories: the strategy tester refuses one that declares
+`bars`, and `Backtest::run` gives such a script `na` for their fields. A study of a strategy script,
+from `Script::study`, checks its orders and ignores them, and its readings are those of a flat
+account: 0, `na`, `na` and false.
+
 ## Helpers
 
 Every helper takes numbers, ints and series where a number is expected, and the math helpers give
 `na` for a missing argument. The [reference](#reference-and-completion) lists each helper with what
-it gives, in four groups: missing values, such as `is_na(x)` and `nz(x)`; math; streaming helpers,
-such as `sma(x, n)` and `crossover(a, b)`; and the time helpers, which read a time in UTC.
+it gives, in five groups: missing values, such as `is_na(x)` and `nz(x)`; math; streaming helpers,
+such as `sma(x, n)` and `crossover(a, b)`; the time helpers, which read a time in UTC; and the
+[orders](#strategies) of strategies with their readings.
 
 A streaming helper keeps its own history, which belongs to its call: two calls of `sma` keep
 two windows, and a call that does not run on a bar sees `na` there. Its length must stay the same

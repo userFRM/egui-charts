@@ -420,6 +420,8 @@ pub struct DemoApp {
 
     // A finished host-run sample, independent of subsequent chart navigation.
     strategy_report: Box<egui_charts::ui::strategy_report::StrategyTester>,
+    /// Whether the tester shows before it has a report, as after a strategy script is applied.
+    strategy_open: bool,
     live_strategy: Option<strategy_live::LiveStrategy>,
     strategy_trade: Option<usize>,
     strategy_session: SessionType,
@@ -677,6 +679,10 @@ impl DemoApp {
         let indicator_dialog = Box::new(
             IndicatorDialog::new().with_factory(sample_study.study_factory(theme.ui.accent)),
         );
+        // Saved strategy scripts are listed from start-up.
+        let strategy_report = Box::new(egui_charts::ui::strategy_report::StrategyTester::new(
+            sample_study.strategy_factory(),
+        ));
         // Keep the controller off callers' stacks, including tests that restart it.
         let mut app = Box::new(Self {
             chart,
@@ -768,7 +774,8 @@ impl DemoApp {
             layout_copy_prompt: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
             date_picker: DatePicker::new(),
-            strategy_report: Default::default(),
+            strategy_report,
+            strategy_open: false,
             live_strategy: None,
             strategy_trade: None,
             strategy_session: SessionType::Full24x7,

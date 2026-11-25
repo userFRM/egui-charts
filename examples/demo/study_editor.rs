@@ -1,8 +1,10 @@
-//! The script editor: scripted studies written with completion, checked on the active chart's
-//! bars before they replace its study, and saved locally.
+//! The script editor: scripted studies and strategies written with completion, studies checked on
+//! the active chart's bars before they replace its study, strategies selected in the strategy
+//! tester, and both saved locally.
 
 use super::DemoApp;
 use egui_charts::services::StoreKind;
+use egui_charts::strategies::StrategyFactory;
 use egui_charts::studies::{
     Calculation, CustomIndicator, Indicator, IndicatorFactory, IndicatorValue, InputKind,
     InputValue, StudyInput,
@@ -19,7 +21,7 @@ use std::sync::Arc;
 
 /// The native sample study, still registered so that charts saved with it open.
 const TITLE: &str = "Sample close difference";
-const GUIDE: &str = "Scripts are Rhai with declarations for inputs, plots and study calls; Examples opens the bundled ones. Apply checks the script on the active chart's bars, then adds it to the chart and saves it locally; Profile lines takes effect at the next Apply. Other charts showing a script of the same title keep the version they run until they are opened again.";
+const GUIDE: &str = "Scripts are Rhai with declarations for inputs, plots and study calls; Examples opens the bundled ones. Apply checks the script on the active chart's bars, then adds it to the chart and saves it locally; Profile lines takes effect at the next Apply. Other charts showing a script of the same title keep the version they run until they are opened again. A script that places orders is a strategy: Apply saves it and selects it in the strategy tester, where Run backtests it.";
 
 pub(super) struct SampleStudyEditor {
     pub open: bool,
@@ -28,8 +30,12 @@ pub(super) struct SampleStudyEditor {
     message: String,
     /// The saved scripts, in `StoreKind::Scripts`.
     store: TemplateStore<ScriptDocument>,
-    /// Every saved script that compiles, by title, as registered in the study dialog.
+    /// Every saved script that compiles, by title: the studies as registered in the study dialog,
+    /// the strategies as registered in the strategy tester.
     scripts: BTreeMap<String, Script>,
+    /// The editor's text as last read and whether it places orders, `None` when it does not
+    /// compile.
+    kind: (String, Option<bool>),
     /// Whether the editor completes and colours scripts, set up the first time it shows.
     hooked: bool,
     /// A script being checked before it replaces the chart's study: title, text, script, study.
@@ -77,6 +83,7 @@ impl SampleStudyEditor {
             message: String::new(),
             store,
             scripts,
+            kind: (String::new(), None),
             hooked: false,
             pending: None,
             applied: None,
@@ -85,20 +92,56 @@ impl SampleStudyEditor {
         }
     }
 
-    /// The demo catalogue: the built-in studies, the native sample and every saved script that
-    /// compiles, so that saved charts holding them open from start-up.
+    /// The demo catalogue: the built-in studies, the native sample and every saved study script
+    /// that compiles, so that saved charts holding them open from start-up.
     pub(super) fn study_factory(&self, color: egui::Color32) -> IndicatorFactory {
         let mut factory = IndicatorFactory::new();
         factory.register_in(IndicatorFactory::PERSONAL, TITLE, move || {
             Box::new(sample(color))
         });
-        for (title, script) in &self.scripts {
+        let studies = self
+            .scripts
+            .iter()
+            .filter(|(_, script)| !script.places_orders());
+        for (title, script) in studies {
             let script = script.clone();
             factory.register_in(IndicatorFactory::PERSONAL, title, move || {
                 Box::new(script.study())
             });
         }
         factory
+    }
+
+    /// The strategy tester's catalogue: the built-in strategies and every saved strategy script
+    /// that compiles.
+    pub(super) fn strategy_factory(&self) -> StrategyFactory {
+        let mut factory = StrategyFactory::new();
+        let strategies = self
+            .scripts
+            .iter()
+            .filter(|(_, script)| script.places_orders());
+        for (title, script) in strategies {
+            let script = script.clone();
+            factory.register(title, move || Box::new(script.strategy()));
+        }
+        factory
+    }
+
+    /// What the editor's text is, read again only when it changed.
+    fn kind(&mut self) -> &'static str {
+        let text = self.editor.text();
+        if self.kind.0 != text {
+            let compiled = Script::compile("", text, &IndicatorFactory::new());
+            self.kind = (
+                text.to_owned(),
+                compiled.ok().map(|script| script.places_orders()),
+            );
+        }
+        match self.kind.1 {
+            Some(true) => "This script places orders, so it is a strategy.",
+            Some(false) => "This script is a study.",
+            None => "",
+        }
     }
 }
 
@@ -134,6 +177,14 @@ fn difference(bars: &[egui_charts::model::Bar], lookback: usize) -> Vec<Indicato
                 })
         })
         .collect()
+}
+
+/// The past tense of `doing`, "saving" or "applying", for a refusal.
+fn done(doing: &str) -> &'static str {
+    match doing {
+        "saving" => "saved",
+        _ => "applied",
+    }
 }
 
 /// The colours of a script's words for the editor, from the theme.
@@ -203,6 +254,10 @@ impl DemoApp {
                     }
                 });
                 ui.label(GUIDE);
+                let kind = editor.kind();
+                if !kind.is_empty() {
+                    ui.label(kind);
+                }
                 if !editor.message.is_empty() {
                     ui.label(&editor.message);
                 }
@@ -239,8 +294,10 @@ impl DemoApp {
             StudyEditorAction::Open => self.sample_study.choosing = true,
             StudyEditorAction::Save { title, text } => {
                 let title = title.trim();
-                let saved = self.check_title(title, "saving").and_then(|()| {
-                    match Script::compile(title, &text, &IndicatorFactory::new()) {
+                let compiled = Script::compile(title, &text, &IndicatorFactory::new());
+                let orders = compiled.as_ref().ok().map(Script::places_orders);
+                let saved = self.check_title(title, "saving", orders).and_then(|()| {
+                    match compiled {
                         // Charts and saved layouts hold the registered version, which start-up
                         // registers again from the stored text only when it compiles.
                         Err(error) if self.sample_study.scripts.contains_key(title) => Err(
@@ -259,11 +316,16 @@ impl DemoApp {
                 // A newer Apply replaces the check of an older one.
                 self.sample_study.pending = None;
                 self.sample_study.message.clear();
-                if let Err(message) = self.check_title(title, "applying") {
+                let compiled = Script::compile(title, &text, &IndicatorFactory::new());
+                let orders = compiled.as_ref().ok().map(Script::places_orders);
+                if let Err(message) = self.check_title(title, "applying", orders) {
                     self.sample_study.message = message;
                     return;
                 }
-                match Script::compile(title, &text, &IndicatorFactory::new()) {
+                match compiled {
+                    Ok(script) if script.places_orders() => {
+                        self.apply_strategy(title, &text, script);
+                    }
                     Ok(script) => {
                         let script = script.with_profiling(self.sample_study.profiling);
                         let mut study = script.study();
@@ -288,16 +350,37 @@ impl DemoApp {
         }
     }
 
-    /// Refuses a blank title and the name of a study of the dialog that is not a script, so that
-    /// a script never replaces a built-in study, the native sample or a feed's metric.
-    fn check_title(&self, title: &str, doing: &str) -> Result<(), String> {
+    /// Refuses a blank title, for a study the name of a study of the dialog that is not a script
+    /// and for a strategy the name of a built-in strategy, so that a script never replaces a
+    /// built-in study, the native sample, a feed's metric or a built-in strategy. A title saved
+    /// as a study cannot take a strategy or the reverse, since the charts, layouts and tester
+    /// holding it would no longer open it. `orders` says whether the text places orders, `None`
+    /// when it does not compile.
+    fn check_title(&self, title: &str, doing: &str, orders: Option<bool>) -> Result<(), String> {
+        let saved = self.sample_study.scripts.get(title);
         if title.is_empty() {
             Err(format!("Enter a document title before {doing}."))
-        } else if self.indicator_dialog.factory().has(title)
-            && !self.sample_study.scripts.contains_key(title)
-        {
+        } else if orders == Some(true) {
+            if StrategyFactory::new().create(title).is_some() {
+                Err(format!(
+                    "A built-in strategy is named {title}; choose another title."
+                ))
+            } else if saved.is_some_and(|saved| !saved.places_orders()) {
+                Err(format!(
+                    "Not {}: {title} is saved as a study; save this strategy under another title.",
+                    done(doing)
+                ))
+            } else {
+                Ok(())
+            }
+        } else if self.indicator_dialog.factory().has(title) && saved.is_none() {
             Err(format!(
                 "A built-in study is named {title}; choose another title."
+            ))
+        } else if orders == Some(false) && saved.is_some_and(Script::places_orders) {
+            Err(format!(
+                "Not {}: {title} is saved as a strategy; save this study under another title.",
+                done(doing)
             ))
         } else {
             Ok(())
@@ -305,7 +388,7 @@ impl DemoApp {
     }
 
     /// Saves `text` as the script `title` and registers `script`, when it compiled, in the study
-    /// dialog.
+    /// dialog, or in the strategy tester when it places orders.
     fn store_script(
         &mut self,
         title: &str,
@@ -319,12 +402,39 @@ impl DemoApp {
         editor.store.save(title, document)?;
         editor.editor.mark_saved(text);
         if let Some(script) = script {
+            let orders = script.places_orders();
             editor.scripts.insert(title.to_owned(), script);
-            let factory = editor.study_factory(self.theme.ui.accent);
-            let dialog = std::mem::take(&mut *self.indicator_dialog);
-            *self.indicator_dialog = dialog.with_factory(factory);
+            if orders {
+                self.strategy_report.set_factory(editor.strategy_factory());
+            } else {
+                let factory = editor.study_factory(self.theme.ui.accent);
+                let dialog = std::mem::take(&mut *self.indicator_dialog);
+                *self.indicator_dialog = dialog.with_factory(factory);
+            }
         }
         Ok(())
+    }
+
+    /// Saves the strategy `script` and selects it in the strategy tester, which shows, so that Run
+    /// there backtests it on the active chart's bars.
+    fn apply_strategy(&mut self, title: &str, text: &str, script: Script) {
+        if self.synthetic_only("Strategy tester") {
+            return;
+        }
+        let selected = self
+            .store_script(title, text, Some(script.clone()))
+            .and_then(|()| (self.strategy_report.select_strategy(title)).map_err(String::from));
+        let editor = &mut self.sample_study;
+        if let Err(message) = selected {
+            editor.message = message;
+            return;
+        }
+        self.strategy_open = true;
+        editor.editor.set_diagnostics(Vec::new());
+        editor.editor.apply_result(Ok(()));
+        editor.applied = Some(script);
+        editor.noted = None;
+        editor.message = "Selected in the strategy tester; Run there backtests it.".into();
     }
 
     /// Advances the check of the script being applied by one frame. Once it ends without an
@@ -495,12 +605,12 @@ mod tests {
             .collect()
     }
 
+    /// Clicks the lowest drawn `label`: the bottom panels' control rather than the chart's.
     fn click(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
         let point = render(app, ctx, Vec::new())
             .into_iter()
-            .find_map(|(text, point)| {
-                (text == label && point.y > ctx.content_rect().center().y).then_some(point)
-            })
+            .filter_map(|(text, point)| (text == label).then_some(point))
+            .max_by(|a, b| a.y.total_cmp(&b.y))
             .unwrap_or_else(|| panic!("missing control: {label}"));
         render(
             app,
@@ -730,6 +840,83 @@ mod tests {
         assert_eq!(restored_study(&restored).len(), 2);
         restored.load_study_template(&app.chart.study_template_set());
         assert_eq!(restored_study(&restored), [saved_version]);
+    }
+
+    #[test]
+    fn editor_backtests_strategy_scripts_in_the_strategy_tester() {
+        let ctx = egui::Context::default();
+        let mut app = editor_app(&ctx);
+        // The tester runs on the first five bars; the last is still forming.
+        let bars = minute_bars([100.0, 101.0, 103.0, 102.0, 101.0, 101.0]);
+        *app.chart = egui_charts::Chart::new(BarData::from_bars(bars));
+        let momentum = "if close > close[1] && position() == 0.0 {\n    entry(\"Long\", \"long\", #{ qty: equity() / 1000.0 });\n} else if close < close[1] && position() > 0.0 {\n    exit_order(\"Close\");\n}";
+        app.sample_study
+            .editor
+            .open_document("Momentum script", momentum);
+        let shown = |app: &mut DemoApp, wanted: &dyn Fn(&str) -> bool| {
+            (render(app, &ctx, Vec::new()).iter()).any(|(text, _)| wanted(text))
+        };
+        assert!(shown(&mut app, &|text| text
+            == "This script places orders, so it is a strategy."));
+        click(&mut app, &ctx, "Apply");
+        assert_eq!(app.strategy_report.strategy(), "Momentum script");
+        assert!(shown(&mut app, &|text| text == "Strategy tester"));
+        assert!(!app.indicator_dialog.factory().has("Momentum script"));
+
+        let run = |app: &mut DemoApp| {
+            click(app, &ctx, "Run");
+            for _ in 0..1_000 {
+                if !app.strategy_report.is_stale() {
+                    return;
+                }
+                render(app, &ctx, Vec::new());
+            }
+            panic!("the backtest did not finish");
+        };
+        // Bought 10 at the open of 103 after the rise to 101, sold at the open of 101 after the
+        // fall to 102.
+        run(&mut app);
+        let report = app.strategy_report.report().expect("a report");
+        let [trade] = report.trades.as_slice() else {
+            panic!("{:?}", report.trades);
+        };
+        let exit = trade.exit.as_ref().map(|exit| (exit.price, exit.profit));
+        assert_eq!(
+            (trade.entry_price, trade.quantity, exit),
+            (103.0, 10.0, Some((101.0, -20.0)))
+        );
+
+        // A runtime error withholds the report and is shown at its line and bar.
+        let broken = momentum.replace("\"long\", #{ qty: equity() / 1000.0 }", "\"up\"");
+        edit(&mut app, &ctx, momentum, &broken);
+        click(&mut app, &ctx, "Apply");
+        run(&mut app);
+        assert!(shown(&mut app, &|text| text.starts_with("line 2, column")
+            && text.ends_with(", on bar 1")));
+        assert!(app.strategy_report.report().unwrap().trades.is_empty());
+
+        // A title saved as a strategy takes no study.
+        let study = "plot(\"x\", close);";
+        edit(&mut app, &ctx, &broken, study);
+        click(&mut app, &ctx, "Save");
+        assert!(shown(&mut app, &|text| text
+            == "Not saved: Momentum script is saved as a strategy; save this study under another title."));
+
+        // The restarted application lists the saved strategy in its tester.
+        let answered = super::super::owndata::store::Saved {
+            asked: true,
+            ..Default::default()
+        };
+        answered.save(&app.storage);
+        let mut saved = Memory::default();
+        app.save(&mut saved);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&saved);
+        let mut restored = DemoApp::new(&cc);
+        assert_eq!(
+            restored.strategy_report.select_strategy("Momentum script"),
+            Ok(())
+        );
     }
 
     #[test]

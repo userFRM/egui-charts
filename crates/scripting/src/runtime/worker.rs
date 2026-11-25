@@ -1,5 +1,6 @@
 //! Runs a study's calculation away from the UI thread: on a worker thread of its own natively,
-//! in time slices of the caller on wasm32, whose web build has no threads.
+//! in time slices of the caller on wasm32, whose web build has no threads. A strategy's decision
+//! runs there too, natively on its worker's deep stack, and the caller waits for it.
 
 use super::limits::Limits;
 use super::program::{ScriptSpec, Span};
@@ -39,7 +40,9 @@ impl Runner {
     /// few bars, such as a tick's, ends in the call that asked for it.
     const WAIT: std::time::Duration = std::time::Duration::from_millis(1);
 
+    /// The runner of `program`, whose worker thread is named `thread`.
     pub fn new<P: Program>(
+        thread: &str,
         program: Arc<P>,
         spec: Arc<ScriptSpec>,
         series_spans: Arc<[Span]>,
@@ -59,7 +62,7 @@ impl Runner {
         let (requests, received) = mpsc::channel::<Request>();
         let (finished, outcomes) = mpsc::channel();
         let spawned = std::thread::Builder::new()
-            .name("script study".into())
+            .name(thread.into())
             .stack_size(STACK)
             .spawn(move || {
                 for request in received {
@@ -96,6 +99,15 @@ impl Runner {
         }
     }
 
+    /// Run `request` and wait for its outcome; the previous run must have ended.
+    pub fn decide(&mut self, request: Request) -> Outcome {
+        if self.requests.send(request).is_err() {
+            return super::lost();
+        }
+        let outcomes = self.outcomes.get_mut().unwrap_or_else(|e| e.into_inner());
+        outcomes.recv().unwrap_or_else(|_| super::lost())
+    }
+
     /// The run's outcome once it ended.
     pub fn poll(&mut self) -> Poll {
         let outcomes = self.outcomes.get_mut().unwrap_or_else(|e| e.into_inner());
@@ -117,7 +129,7 @@ impl Drop for Runner {
     }
 }
 
-/// The calculation of one study, run in slices of [`Runner::SLICE`] per call.
+/// The calculation of one study, run in slices of [`SLICE`](super::limits::SLICE) per call.
 #[cfg(target_arch = "wasm32")]
 pub(crate) struct Runner {
     // Behind a mutex only for `Sync`; `&mut self` reaches it without locking.
@@ -128,6 +140,7 @@ pub(crate) struct Runner {
 #[cfg(target_arch = "wasm32")]
 trait Slices: Send {
     fn begin(&mut self, request: Request);
+    fn decide(&mut self, request: Request) -> Option<Outcome>;
     fn advance(&mut self, until: web_time::Instant) -> Option<Outcome>;
     fn fraction(&self) -> f32;
 }
@@ -136,6 +149,10 @@ trait Slices: Send {
 impl<P: Program> Slices for RunState<P> {
     fn begin(&mut self, request: Request) {
         RunState::begin(self, request);
+    }
+    fn decide(&mut self, request: Request) -> Option<Outcome> {
+        RunState::begin(self, request);
+        RunState::advance(self, None)
     }
     fn advance(&mut self, until: web_time::Instant) -> Option<Outcome> {
         RunState::advance(self, Some(until))
@@ -147,10 +164,9 @@ impl<P: Program> Slices for RunState<P> {
 
 #[cfg(target_arch = "wasm32")]
 impl Runner {
-    /// The time a call runs bars before it returns; a bar is never split, nor a study it calls.
-    const SLICE: std::time::Duration = std::time::Duration::from_millis(4);
-
+    /// The runner of `program`; the web has no thread to name `thread`.
     pub fn new<P: Program>(
+        _thread: &str,
         program: Arc<P>,
         spec: Arc<ScriptSpec>,
         series_spans: Arc<[Span]>,
@@ -169,9 +185,15 @@ impl Runner {
         self.poll()
     }
 
+    /// Run `request` on this thread to its end.
+    pub fn decide(&mut self, request: Request) -> Outcome {
+        let state = self.state.get_mut().unwrap_or_else(|e| e.into_inner());
+        state.decide(request).expect("a run without a slice ends")
+    }
+
     pub fn poll(&mut self) -> Poll {
         let state = self.state.get_mut().unwrap_or_else(|e| e.into_inner());
-        match state.advance(web_time::Instant::now() + Self::SLICE) {
+        match state.advance(web_time::Instant::now() + super::limits::SLICE) {
             Some(outcome) => Poll::Done(outcome),
             None => Poll::Running(state.fraction()),
         }
