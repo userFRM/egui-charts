@@ -61,12 +61,14 @@ pub type PlotColorFn = Arc<dyn Fn(usize, usize, &IndicatorValues) -> Option<Colo
 /// The calculation of a custom study that resumes from its last bars instead of starting over,
 /// and may run away from the UI thread. Set it with [`CustomIndicator::with_resume`].
 ///
-/// A running sum of closes that resumes from its last bar:
+/// A running sum of closes that resumes from its last bar, coloured by its value and labelled at
+/// its last bar:
 ///
 /// ```
 /// use egui_charts::model::Bar;
 /// use egui_charts::studies::{
-///     Calculation, CustomIndicator, Indicator, IndicatorValues, Resume, ResumeRun,
+///     Calculation, CustomIndicator, Indicator, IndicatorValues, LabelPlacement, Resume,
+///     ResumeRun, StudyLabel,
 /// };
 /// use std::time::Duration;
 ///
@@ -74,6 +76,7 @@ pub type PlotColorFn = Arc<dyn Fn(usize, usize, &IndicatorValues) -> Option<Colo
 /// struct RunningSum {
 ///     // The sum after each bar calculated so far.
 ///     sums: Vec<f64>,
+///     labels: Vec<StudyLabel>,
 /// }
 /// impl Resume for RunningSum {
 ///     fn resume(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation {
@@ -85,6 +88,17 @@ pub type PlotColorFn = Arc<dyn Fn(usize, usize, &IndicatorValues) -> Option<Colo
 ///             self.sums.push(sum);
 ///             values.push_lines(&[sum]);
 ///         }
+///         let last = self.sums.len().checked_sub(1);
+///         self.labels = (last.zip(self.sums.last()))
+///             .map(|(bar, sum)| StudyLabel {
+///                 bar,
+///                 price: *sum,
+///                 text: format!("{sum}"),
+///                 placement: LabelPlacement::Above,
+///                 plot: 0,
+///             })
+///             .into_iter()
+///             .collect();
 ///         Calculation::Done(Duration::ZERO)
 ///     }
 ///     fn alert_conditions(&self) -> Vec<String> {
@@ -92,6 +106,20 @@ pub type PlotColorFn = Arc<dyn Fn(usize, usize, &IndicatorValues) -> Option<Colo
 ///     }
 ///     fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
 ///         (condition == 0).then(|| self.sums.get(bar).map(|sum| *sum > 5.0)).flatten()
+///     }
+///     fn plot_color(&self, _line: usize, bar: usize) -> Option<ecolor::Color32> {
+///         let sum = self.sums.get(bar)?;
+///         Some(if *sum > 5.0 { ecolor::Color32::GREEN } else { ecolor::Color32::RED })
+///     }
+///     fn labels(&self) -> &[StudyLabel] {
+///         &self.labels
+///     }
+///     // Labels sit on the bars calculated on, which an offset or another interval leaves behind.
+///     fn draws_only_plots(&self) -> bool {
+///         false
+///     }
+///     fn draws_on_other_bars(&self) -> bool {
+///         false
 ///     }
 /// }
 ///
@@ -112,6 +140,10 @@ pub type PlotColorFn = Arc<dyn Fn(usize, usize, &IndicatorValues) -> Option<Colo
 /// assert_eq!(study.alert_condition(0, 1), Some(false));
 /// assert_eq!(study.alert_condition(0, 2), Some(true));
 /// assert_eq!(study.alert_condition(1, 2), None);
+/// assert_eq!(study.plot_color(0, 1), Some(ecolor::Color32::RED));
+/// assert_eq!(study.plot_color(0, 2), Some(ecolor::Color32::GREEN));
+/// assert_eq!(study.labels()[0].text, "8");
+/// assert!(!study.draws_only_plots() && !study.draws_on_other_bars());
 /// ```
 pub trait Resume: Send + Sync {
     /// Bring `values` up to date for `run.data`, given that `run.data[..run.from]` is unchanged
@@ -136,6 +168,52 @@ pub trait Resume: Send + Sync {
     /// there, which an alert counts as not holding. `None` by default.
     fn alert_condition(&self, _condition: usize, _bar: usize) -> Option<bool> {
         None
+    }
+
+    /// The colour of plot `line` at source bar `bar` as of the values the last
+    /// [`resume`](Self::resume) call left, which [`CustomIndicator`] gives as
+    /// [`Indicator::plot_color`] ahead of [`with_plot_color`](CustomIndicator::with_plot_color).
+    /// `None`, the default, keeps the plot's colour.
+    fn plot_color(&self, _line: usize, _bar: usize) -> Option<Color32> {
+        None
+    }
+
+    /// Text beside the study's values, in order of `bar`, which [`CustomIndicator`] gives as
+    /// [`Indicator::labels`]. Empty by default.
+    fn labels(&self) -> &[super::StudyLabel] {
+        &[]
+    }
+
+    /// Straight lines on the price chart, which [`CustomIndicator`] gives as
+    /// [`Indicator::price_segments`]. Empty by default.
+    fn price_segments(&self) -> &[super::StudySegment] {
+        &[]
+    }
+
+    /// Price bands, which [`CustomIndicator`] gives as [`Indicator::zones`]. Empty by default.
+    fn zones(&self) -> &[super::StudyZone] {
+        &[]
+    }
+
+    /// Shapes at study values, which [`CustomIndicator`] gives as [`Indicator::markers`]. Empty
+    /// by default.
+    fn markers(&self) -> &[super::IndicatorMarker] {
+        &[]
+    }
+
+    /// Whether everything the study draws is plots, bands and fills, as
+    /// [`Indicator::draws_only_plots`] asks: return false when it can draw labels, segments,
+    /// zones or markers. True by default; a [`CustomIndicator`] with data requests answers false
+    /// anyway.
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
+
+    /// Whether everything the study draws can follow a calculation on another symbol or
+    /// interval, as [`Indicator::draws_on_other_bars`] asks: return false when it can draw
+    /// labels or price segments. The answer must not depend on the inputs. True by default.
+    fn draws_on_other_bars(&self) -> bool {
+        true
     }
 }
 
@@ -172,6 +250,13 @@ trait ResumeBox: Send + Sync {
     fn resume_box(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation;
     fn alert_conditions_box(&self) -> Vec<String>;
     fn alert_condition_box(&self, condition: usize, bar: usize) -> Option<bool>;
+    fn plot_color_box(&self, line: usize, bar: usize) -> Option<Color32>;
+    fn labels_box(&self) -> &[super::StudyLabel];
+    fn price_segments_box(&self) -> &[super::StudySegment];
+    fn zones_box(&self) -> &[super::StudyZone];
+    fn markers_box(&self) -> &[super::IndicatorMarker];
+    fn draws_only_plots_box(&self) -> bool;
+    fn draws_on_other_bars_box(&self) -> bool;
     fn clone_box(&self) -> Box<dyn ResumeBox>;
 }
 
@@ -184,6 +269,27 @@ impl<R: Resume + Clone + 'static> ResumeBox for R {
     }
     fn alert_condition_box(&self, condition: usize, bar: usize) -> Option<bool> {
         self.alert_condition(condition, bar)
+    }
+    fn plot_color_box(&self, line: usize, bar: usize) -> Option<Color32> {
+        self.plot_color(line, bar)
+    }
+    fn labels_box(&self) -> &[super::StudyLabel] {
+        self.labels()
+    }
+    fn price_segments_box(&self) -> &[super::StudySegment] {
+        self.price_segments()
+    }
+    fn zones_box(&self) -> &[super::StudyZone] {
+        self.zones()
+    }
+    fn markers_box(&self) -> &[super::IndicatorMarker] {
+        self.markers()
+    }
+    fn draws_only_plots_box(&self) -> bool {
+        self.draws_only_plots()
+    }
+    fn draws_on_other_bars_box(&self) -> bool {
+        self.draws_on_other_bars()
     }
     fn clone_box(&self) -> Box<dyn ResumeBox> {
         Box::new(self.clone())
@@ -467,7 +573,8 @@ impl CustomIndicator {
         self
     }
 
-    /// Set a per-bar colour callback. Returning `None` uses the plot colour.
+    /// Set a per-bar colour callback. Returning `None` uses the plot colour. A [`Resume`] that
+    /// answers a colour comes first.
     pub fn with_plot_color<F>(mut self, color: F) -> Self
     where
         F: Fn(usize, usize, &IndicatorValues) -> Option<Color32> + Send + Sync + 'static,
@@ -604,12 +711,33 @@ impl Indicator for CustomIndicator {
     fn draws_only_plots(&self) -> bool {
         // A study reading histories of its own keeps its inputs.
         self.data_requests.is_none()
+            && (self.resume.as_ref()).is_none_or(|resume| resume.draws_only_plots_box())
+    }
+
+    fn draws_on_other_bars(&self) -> bool {
+        (self.resume.as_ref()).is_none_or(|resume| resume.draws_on_other_bars_box())
     }
 
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
-        self.plot_color
-            .as_ref()
-            .and_then(|color| color(line, bar, &self.values))
+        (self.resume.as_ref())
+            .and_then(|resume| resume.plot_color_box(line, bar))
+            .or_else(|| (self.plot_color.as_ref()).and_then(|color| color(line, bar, &self.values)))
+    }
+
+    fn labels(&self) -> &[super::StudyLabel] {
+        (self.resume.as_ref()).map_or(&[], |resume| resume.labels_box())
+    }
+
+    fn price_segments(&self) -> &[super::StudySegment] {
+        (self.resume.as_ref()).map_or(&[], |resume| resume.price_segments_box())
+    }
+
+    fn zones(&self) -> &[super::StudyZone] {
+        (self.resume.as_ref()).map_or(&[], |resume| resume.zones_box())
+    }
+
+    fn markers(&self) -> &[super::IndicatorMarker] {
+        (self.resume.as_ref()).map_or(&[], |resume| resume.markers_box())
     }
 
     fn fills(&self) -> Vec<super::StudyFill> {

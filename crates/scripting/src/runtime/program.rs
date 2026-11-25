@@ -58,6 +58,9 @@ pub(crate) struct PlotDecl {
     pub color: Option<Color32>,
     pub style: PlotType,
     pub offset: isize,
+    /// The `color = EXPR` option: the custom syntax input holding the expression and the plot's
+    /// place among the plots coloured that way, whose colours follow the alert conditions in a row.
+    pub dynamic: Option<(usize, usize)>,
 }
 
 /// A `fill(A, B, ...)` declaration between two plots or levels.
@@ -122,6 +125,16 @@ pub(crate) struct HistoryDecl {
     pub interval: TextRef,
 }
 
+/// Which drawing helpers a script calls, read when it compiles, so the study states before it
+/// runs what it may draw.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct DrawingCalls {
+    pub labels: bool,
+    pub segments: bool,
+    pub zones: bool,
+    pub markers: bool,
+}
+
 /// Every declaration and study call of a script, in source order.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ScriptSpec {
@@ -135,4 +148,21 @@ pub(crate) struct ScriptSpec {
     pub fills: Vec<FillDecl>,
     /// The messages of the script's alert calls, in order of first appearance.
     pub alerts: Vec<String>,
+    /// The drawing helpers the script calls, read when it compiles.
+    pub calls: DrawingCalls,
+}
+
+impl ScriptSpec {
+    /// The plots coloured by an expression.
+    pub fn coloured(&self) -> usize {
+        (self.plots.iter())
+            .filter(|plot| plot.dynamic.is_some())
+            .count()
+    }
+
+    /// The values of a bar's row: the plots, the alert conditions, then the colours of the plots
+    /// coloured by an expression.
+    pub fn width(&self) -> usize {
+        self.plots.len() + self.alerts.len() + self.coloured()
+    }
 }

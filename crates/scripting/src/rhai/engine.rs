@@ -1,7 +1,9 @@
 //! The engine scripts run on: Rhai's standard package and nothing that reaches outside the
 //! script, the size limits, the series type with its operators and history, the bars of other
-//! histories, and the helpers, the orders of strategies and the alerts among them.
+//! histories, the colour type, and the helpers, the orders of strategies, the alerts and the
+//! drawings among them.
 
+use super::drawings::{self, ColorValue};
 use super::syntax::{self, PRICES};
 use crate::runtime::orders::{OrderCall, Readings};
 use crate::runtime::series::{Field, SeriesRef};
@@ -209,6 +211,8 @@ pub(crate) enum Group {
     Time,
     Orders,
     Alerts,
+    Colours,
+    Drawings,
 }
 
 impl Group {
@@ -221,6 +225,8 @@ impl Group {
             Self::Time => "Time, in UTC",
             Self::Orders => "Orders",
             Self::Alerts => "Alerts",
+            Self::Colours => "Colours",
+            Self::Drawings => "Drawings",
         }
     }
 }
@@ -749,6 +755,134 @@ pub(crate) const HELPERS: &[Helper] = &[
             );
         },
     },
+    Helper {
+        name: "rgb",
+        group: Group::Colours,
+        signature: "rgb(r, g, b)",
+        summary: "A colour of red, green and blue, each from 0 to 255: a value outside is held to \
+                  that range and a fraction rounded, and a missing one gives na.",
+        register: |engine, name| {
+            engine.register_fn(
+                name,
+                |context: NativeCallContext, r: Dynamic, g: Dynamic, b: Dynamic| {
+                    drawings::rgba(&context, "rgb", [&r, &g, &b], None)
+                },
+            );
+        },
+    },
+    Helper {
+        name: "rgba",
+        group: Group::Colours,
+        signature: "rgba(r, g, b, alpha)",
+        summary: "A colour as rgb with an opacity alpha from 0, transparent, to 1, opaque, held \
+                  to that range.",
+        register: |engine, name| {
+            engine.register_fn(
+                name,
+                |context: NativeCallContext, r: Dynamic, g: Dynamic, b: Dynamic, alpha: Dynamic| {
+                    drawings::rgba(&context, "rgba", [&r, &g, &b], Some(&alpha))
+                },
+            );
+        },
+    },
+    Helper {
+        name: "label",
+        group: Group::Drawings,
+        signature: "label(plot, bar, price, text)",
+        summary: "Text above price on bar, in the colour of the plot titled plot, a string written \
+                  in the call, while that plot is visible. bar is a bar number such as \
+                  bar_index - 2, from 0 to 10000 bars after the bar calculated, and na draws \
+                  nothing.",
+        register: |engine, name| {
+            engine.register_fn(
+                name,
+                |context: NativeCallContext,
+                 plot: Dynamic,
+                 bar: Dynamic,
+                 price: Dynamic,
+                 text: Dynamic| {
+                    drawings::label(&context, [&plot, &bar, &price, &text], None)
+                },
+            );
+        },
+    },
+    Helper {
+        name: "label",
+        group: Group::Drawings,
+        signature: "label(plot, bar, price, text, placement)",
+        summary: "A label placed \"above\", \"below\", \"above_left\" or \"above_right\" of its \
+                  point.",
+        register: |engine, name| {
+            engine.register_fn(
+                name,
+                |context: NativeCallContext,
+                 plot: Dynamic,
+                 bar: Dynamic,
+                 price: Dynamic,
+                 text: Dynamic,
+                 placement: Dynamic| {
+                    drawings::label(&context, [&plot, &bar, &price, &text], Some(&placement))
+                },
+            );
+        },
+    },
+    Helper {
+        name: "segment",
+        group: Group::Drawings,
+        signature: "segment(plot, bar1, price1, bar2, price2)",
+        summary: "A straight line between two points on the price chart, in the main series' \
+                  prices also for a study in a pane of its own, in the colour, width and pattern \
+                  of the plot titled plot.",
+        register: |engine, name| {
+            engine.register_fn(
+                name,
+                |context: NativeCallContext,
+                 plot: Dynamic,
+                 bar1: Dynamic,
+                 price1: Dynamic,
+                 bar2: Dynamic,
+                 price2: Dynamic| {
+                    drawings::segment(&context, [&plot, &bar1, &price1, &bar2, &price2])
+                },
+            );
+        },
+    },
+    Helper {
+        name: "zone",
+        group: Group::Drawings,
+        signature: "zone(plot, bar1, bar2, top, bottom)",
+        summary: "A band between two prices from the middle of one bar to the middle of the other, \
+                  its edges in the colour and pattern of the plot titled plot and its inside at \
+                  15% of that colour.",
+        register: |engine, name| {
+            engine.register_fn(
+                name,
+                |context: NativeCallContext,
+                 plot: Dynamic,
+                 bar1: Dynamic,
+                 bar2: Dynamic,
+                 top: Dynamic,
+                 bottom: Dynamic| {
+                    drawings::zone(&context, [&plot, &bar1, &bar2, &top, &bottom])
+                },
+            );
+        },
+    },
+    Helper {
+        name: "marker",
+        group: Group::Drawings,
+        signature: "marker(bar, price, direction)",
+        summary: "A triangle at price on bar, pointing \"up\" or \"down\", in the theme's colours \
+                  for up and down, shown while a plot of the study is visible.",
+        register: |engine, name| {
+            engine.register_fn(
+                name,
+                |context: NativeCallContext, bar: Dynamic, price: Dynamic, direction: Dynamic| {
+                    drawings::marker(&context, [&bar, &price, &direction])
+                },
+            );
+        },
+    },
 ];
 
 /// The engine for running and compiling scripts, without the declarations.
@@ -851,6 +985,11 @@ pub(crate) fn engine() -> Engine {
         Err(NO_HISTORY.into())
     });
     engine.register_indexer_get(|_: &mut bool, _: INT| -> Result<FLOAT> { Err(NO_HISTORY.into()) });
+
+    engine.register_type_with_name::<ColorValue>("color");
+    for name in ["print", "to_string", "debug", "to_debug"] {
+        engine.register_fn(name, |color: &mut ColorValue| color.written());
+    }
 
     engine.register_type_with_name::<BarsHandle>("bars");
     // The fields of the chart's bars; `bar_index` is none.
@@ -1059,7 +1198,7 @@ fn time(engine: &mut Engine, name: &'static str, read: fn(chrono::DateTime<chron
 }
 
 /// An error of the call at the calling position.
-fn refused(context: &NativeCallContext, message: String) -> Box<EvalAltResult> {
+pub(crate) fn refused(context: &NativeCallContext, message: String) -> Box<EvalAltResult> {
     EvalAltResult::ErrorRuntime(message.into(), context.call_position()).into()
 }
 
@@ -1135,7 +1274,7 @@ fn order_options<const N: usize>(
 
 /// The value a number, an int or a series stands for on the current bar, or an error naming
 /// `name` for any other value.
-fn number(context: &NativeCallContext, name: &str, value: &Dynamic) -> Result<f64> {
+pub(crate) fn number(context: &NativeCallContext, name: &str, value: &Dynamic) -> Result<f64> {
     if let Ok(value) = value.as_float() {
         Ok(value)
     } else if let Ok(value) = value.as_int() {
