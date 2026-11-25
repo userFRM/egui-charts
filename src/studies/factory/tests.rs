@@ -539,7 +539,7 @@ fn catalogue_inputs_take_their_usual_labels_and_ranges() {
         }
     }
     // The strategies built on these studies take the studies' inputs.
-    #[cfg(feature = "strategies")]
+    #[cfg(all(test, feature = "strategies"))]
     {
         let strategies = crate::strategies::StrategyFactory::new();
         for (name, id, value) in [

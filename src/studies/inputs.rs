@@ -191,7 +191,6 @@ pub(crate) fn holding(mut input: StudyInput) -> StudyInput {
     input
 }
 
-#[cfg(feature = "studies")]
 thread_local! {
     /// The saved values that built-in studies take outside their inputs' ranges while they are
     /// restored, from [`restoring`].
@@ -201,7 +200,6 @@ thread_local! {
 
 /// Run `restore` with the built-in studies it sets up taking each of `saved` by its input id,
 /// even outside the input's range.
-#[cfg(feature = "studies")]
 pub(crate) fn restoring<R>(saved: Vec<(String, InputValue)>, restore: impl FnOnce() -> R) -> R {
     let outer = RESTORED.replace(saved);
     let result = restore();
