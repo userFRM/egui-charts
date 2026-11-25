@@ -1668,19 +1668,17 @@ fn draw_statistics(
         rotation => format!("{rotation:+}"),
     };
     let balance = profile.initial_balance_range();
-    let values: [Option<String>; 12] = [
+    let values: [Option<String>; 14] = [
         Some(price(profile.profile_high - profile.profile_low)),
         Some(price(profile.poc_price)),
-        Some(format!(
-            "{} / {}",
-            price(profile.value_area_low),
-            price(profile.value_area_high)
-        )),
+        Some(price(profile.value_area_high)),
+        Some(price(profile.value_area_low)),
         Some(price(profile.value_area_high - profile.value_area_low)),
         balance.map(|_| price(profile.initial_balance_high)),
         balance.map(|_| price(profile.initial_balance_low)),
         balance.map(price),
-        Some(format!("{below} / {above}")),
+        Some(above.to_string()),
+        Some(below.to_string()),
         Some(profile.price_tpo_count.values().sum::<usize>().to_string()),
         // shortcut: the total prints in the default volume format; pass the instrument's volume
         // decimals to draw_statistics if a host needs fractional totals.
@@ -1690,12 +1688,33 @@ fn draw_statistics(
             .range_extension()
             .map(|(below, above)| format!("{} / {}", price(below), price(above))),
     ];
+    // Both halves of a pair on share one row, as the table drew before each had a switch.
+    let pairs = [
+        (shown.value_area_high && shown.value_area_low).then(|| {
+            let (low, high) = (profile.value_area_low, profile.value_area_high);
+            ("VAL / VAH", format!("{} / {}", price(low), price(high)))
+        }),
+        (shown.tpos_above && shown.tpos_below)
+            .then(|| ("TPO below / above", format!("{below} / {above}"))),
+    ];
     let mut shown = *shown;
-    let rows = shown
-        .switches()
-        .into_iter()
-        .zip(values)
-        .filter_map(|((_, label, shown), value)| Some((label, value.filter(|_| *shown)?)));
+    let rows =
+        shown
+            .switches()
+            .into_iter()
+            .zip(values)
+            .filter_map(|((id, label, shown), value)| {
+                let pair = match id {
+                    "value_area_high" | "value_area_low" => &pairs[0],
+                    "tpos_above" | "tpos_below" => &pairs[1],
+                    _ => &None,
+                };
+                match pair {
+                    Some(_) if matches!(id, "value_area_low" | "tpos_below") => None,
+                    Some((label, value)) => Some((*label, value.clone())),
+                    None => Some((label, value.filter(|_| *shown)?)),
+                }
+            });
 
     let font = FontId::proportional(typography::XS);
     let galleys: Vec<_> = rows
@@ -4533,10 +4552,10 @@ mod tests {
         for (_, _, shown) in all.switches() {
             *shown = true;
         }
-        let only_volume = {
+        let only = |row: &str| {
             let mut rows = all;
             for (id, _, shown) in rows.switches() {
-                *shown = id == "total_volume";
+                *shown = id == row;
             }
             rows
         };
@@ -4565,7 +4584,7 @@ mod tests {
         ];
         // (profile, rows shown, expected (label, value) pairs)
         type Case<'a> = (&'a TPOProfile, TPOStatisticsRows, &'a [(&'a str, &'a str)]);
-        let cases: [Case; 6] = [
+        let cases: [Case; 10] = [
             (
                 &whole,
                 all,
@@ -4618,7 +4637,12 @@ mod tests {
                 ],
             ),
             (&whole, TPOStatisticsRows::default(), &whole_default),
-            (&whole, only_volume, &[("Total volume", "2.50K")]),
+            (&whole, only("total_volume"), &[("Total volume", "2.50K")]),
+            // One half of a pair draws its own row.
+            (&whole, only("value_area_high"), &[("VAH", "105")]),
+            (&whole, only("value_area_low"), &[("VAL", "101")]),
+            (&whole, only("tpos_above"), &[("TPO above", "6")]),
+            (&whole, only("tpos_below"), &[("TPO below", "9")]),
             (&whole, none, &[]),
         ];
         for (profile, rows, expected) in cases {

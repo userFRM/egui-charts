@@ -457,7 +457,16 @@ mod tests {
             .switches()
             .into_iter()
             .map(|(name, label, shown)| (name, label, *shown))
+            .chain([
+                ("value_area_pair", "VAL / VAH", true),
+                ("tpo_pair", "TPO below / above", true),
+            ])
             .collect();
+        // Both halves of a pair on share one row; the other half alone draws its own.
+        let pairs = [
+            ("value_area_high", "value_area_low", "value_area_pair"),
+            ("tpos_above", "tpos_below", "tpo_pair"),
+        ];
         // Painted count of each row's label; `POC` is also a level caption.
         let paint = |study: bool, statistics: bool, flipped: Option<(&str, bool)>| {
             // One session wide enough to leave the table room before the plot's edge.
@@ -505,17 +514,19 @@ mod tests {
                 assert_eq!(counts[rotation.unwrap()], tables, "statistics {statistics}");
             }
             let defaults = paint(study, true, None);
-            for (row, (name, _, shown)) in rows.iter().enumerate() {
+            let index = |name: &str| rows.iter().position(|(row, ..)| *row == name).unwrap();
+            for (name, _, shown) in rows.iter().filter(|(name, ..)| !name.ends_with("_pair")) {
                 let counts = paint(study, true, Some((name, !shown)));
-                let expected: Vec<_> = defaults
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &count)| match i == row {
-                        true if *shown => count - 1,
-                        true => count + 1,
-                        false => count,
-                    })
-                    .collect();
+                let mut expected = defaults.clone();
+                match pairs.iter().find(|(a, b, _)| [a, b].contains(&name)) {
+                    Some((a, b, pair)) => {
+                        // Defaults draw the pair's row; switching one half off leaves the other.
+                        expected[index(pair)] -= 1;
+                        expected[index(if a == name { b } else { a })] += 1;
+                    }
+                    None if *shown => expected[index(name)] -= 1,
+                    None => expected[index(name)] += 1,
+                }
                 assert_eq!(counts, expected, "{name}, study {study}");
             }
         }

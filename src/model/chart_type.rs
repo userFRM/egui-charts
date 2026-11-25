@@ -1750,8 +1750,9 @@ mod tests {
                 "single_prints": true, "prices": true});
         settings["tpo_level_tags"] = true.into();
         settings["tpo_statistics_rows"] = serde_json::json!({"high_low_range": true, "poc": false,
-                "value_area": false, "value_area_range": true, "initial_balance_high": true,
-                "initial_balance_low": true, "initial_balance_range": false, "tpo_counts": false,
+                "value_area_high": false, "value_area_low": true, "value_area_range": true,
+                "initial_balance_high": true, "initial_balance_low": true,
+                "initial_balance_range": false, "tpos_above": true, "tpos_below": false,
                 "total_tpos": true, "total_volume": true, "rotation_factor": false,
                 "range_extension": false});
         settings["tpo_session"] = serde_json::json!({"Custom": {"sessions": [{"start": "08:00:00",
@@ -2011,9 +2012,10 @@ mod tests {
             assert_eq!(
                 legacy["tpo_statistics_rows"],
                 serde_json::json!({
-                    "high_low_range": false, "poc": true, "value_area": true, "value_area_range": false,
+                    "high_low_range": false, "poc": true, "value_area_high": true, "value_area_low": true,
+                    "value_area_range": false,
                     "initial_balance_high": false, "initial_balance_low": false, "initial_balance_range": true,
-                    "tpo_counts": true, "total_tpos": false, "total_volume": false, "rotation_factor": true,
+                    "tpos_above": true, "tpos_below": true, "total_tpos": false, "total_volume": false, "rotation_factor": true,
                     "range_extension": true
                 })
             );

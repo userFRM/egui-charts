@@ -341,8 +341,11 @@ pub struct TPOStatisticsRows {
     pub high_low_range: bool,
     /// `POC`: the point of control. On by default.
     pub poc: bool,
-    /// `VAL / VAH`: the value area low and high. On by default.
-    pub value_area: bool,
+    /// `VAH`: the value area high. On by default. With [`Self::value_area_low`] on too, the two
+    /// share one `VAL / VAH` row.
+    pub value_area_high: bool,
+    /// `VAL`: the value area low. On by default.
+    pub value_area_low: bool,
     /// `VA range`: the value area high minus its low. Off by default.
     pub value_area_range: bool,
     /// `IB high`: the initial balance high. Off by default.
@@ -351,8 +354,11 @@ pub struct TPOStatisticsRows {
     pub initial_balance_low: bool,
     /// `IB range`: the initial balance high minus its low. On by default.
     pub initial_balance_range: bool,
-    /// `TPO below / above`: the TPOs below and above the point of control's row. On by default.
-    pub tpo_counts: bool,
+    /// `TPO above`: the TPOs above the point of control's row. On by default. With
+    /// [`Self::tpos_below`] on too, the two share one `TPO below / above` row.
+    pub tpos_above: bool,
+    /// `TPO below`: the TPOs below the point of control's row. On by default.
+    pub tpos_below: bool,
     /// `Total TPOs`: every TPO of the profile. Off by default.
     pub total_tpos: bool,
     /// `Total volume`: [`TPOProfile::total_volume`], with K, M and B suffixes. Off by default.
@@ -368,12 +374,14 @@ impl Default for TPOStatisticsRows {
         Self {
             high_low_range: false,
             poc: true,
-            value_area: true,
+            value_area_high: true,
+            value_area_low: true,
             value_area_range: false,
             initial_balance_high: false,
             initial_balance_low: false,
             initial_balance_range: true,
-            tpo_counts: true,
+            tpos_above: true,
+            tpos_below: true,
             total_tpos: false,
             total_volume: false,
             rotation_factor: true,
@@ -385,11 +393,12 @@ impl Default for TPOStatisticsRows {
 impl TPOStatisticsRows {
     /// Each row's saved name, table label and switch, in display order.
     #[cfg(any(feature = "widget", feature = "studies"))]
-    pub(crate) fn switches(&mut self) -> [(&'static str, &'static str, &mut bool); 12] {
+    pub(crate) fn switches(&mut self) -> [(&'static str, &'static str, &mut bool); 14] {
         [
             ("high_low_range", "High-low range", &mut self.high_low_range),
             ("poc", "POC", &mut self.poc),
-            ("value_area", "VAL / VAH", &mut self.value_area),
+            ("value_area_high", "VAH", &mut self.value_area_high),
+            ("value_area_low", "VAL", &mut self.value_area_low),
             ("value_area_range", "VA range", &mut self.value_area_range),
             (
                 "initial_balance_high",
@@ -406,7 +415,8 @@ impl TPOStatisticsRows {
                 "IB range",
                 &mut self.initial_balance_range,
             ),
-            ("tpo_counts", "TPO below / above", &mut self.tpo_counts),
+            ("tpos_above", "TPO above", &mut self.tpos_above),
+            ("tpos_below", "TPO below", &mut self.tpos_below),
             ("total_tpos", "Total TPOs", &mut self.total_tpos),
             ("total_volume", "Total volume", &mut self.total_volume),
             ("rotation_factor", "Rotation", &mut self.rotation_factor),
