@@ -363,7 +363,32 @@ impl StudyTemplate {
         if !study.draws_on_other_bars() {
             inputs.retain(|(id, _)| !super::settings::CHART_INPUT_IDS[1..].contains(&id.as_str()));
         }
-        study.apply_settings(&inputs, settings.clone())?;
+        // Studies saved before an input's range narrowed restore with the value they were saved
+        // with, from the bottom of the range the input took then; only edits are bounded.
+        const NARROWED: [(&str, &str); 7] = [
+            ("BB", "std_dev"),
+            ("BBTrend", "multiplier"),
+            ("LinReg Slope", "period"),
+            ("MFI", "period"),
+            ("SuperTrend", "multiplier"),
+            ("Woodies CCI", "turbo_length"),
+            ("Woodies CCI", "cci_length"),
+        ];
+        let saved = inputs
+            .iter()
+            .filter(|(id, value)| {
+                NARROWED.contains(&(study.name(), id.as_str()))
+                    && match value {
+                        InputValue::Length(value) => *value >= 1,
+                        InputValue::Number(value) => *value >= 0.0,
+                        _ => false,
+                    }
+            })
+            .cloned()
+            .collect();
+        crate::studies::inputs::restoring(saved, || {
+            study.apply_settings(&inputs, settings.clone())
+        })?;
         study.set_visible(template.visible);
         if let Some(scale) = template.scale {
             study.set_scale(scale);
@@ -1855,7 +1880,8 @@ mod tests {
 
     /// A template restores the inputs it holds whatever the study's default has become, with every
     /// line it showed, and an input it lacks takes the value the saved inputs had before the
-    /// study offered it. Values outside a narrowed input range load clamped to that range.
+    /// study offered it. Values outside a narrowed input range load clamped to that range, except
+    /// those of the inputs that restore as saved, which a style edit keeps.
     /// Multi-Range Delta ranges saved with an inclusive largest size restore with the smallest
     /// limit above it that has one more decimal place, and their names write it.
     #[test]
@@ -1876,6 +1902,42 @@ mod tests {
                 "%B",
                 vec![("multiplier", Number(80.0))],
                 vec![("multiplier", Number(50.0))],
+            ),
+            // Saved before these ranges narrowed: restored as saved.
+            (
+                "BB",
+                vec![("std_dev", Number(0.0))],
+                vec![("std_dev", Number(0.0))],
+            ),
+            (
+                "BB",
+                vec![("std_dev", Number(80.0))],
+                vec![("std_dev", Number(80.0))],
+            ),
+            (
+                "BBTrend",
+                vec![("multiplier", Number(0.0))],
+                vec![("multiplier", Number(0.0))],
+            ),
+            (
+                "Woodies CCI",
+                vec![("turbo_length", Length(1)), ("cci_length", Length(30))],
+                vec![("turbo_length", Length(1)), ("cci_length", Length(30))],
+            ),
+            (
+                "MFI",
+                vec![("period", Length(5000))],
+                vec![("period", Length(5000))],
+            ),
+            (
+                "SuperTrend",
+                vec![("multiplier", Number(0.005))],
+                vec![("multiplier", Number(0.005))],
+            ),
+            (
+                "LinReg Slope",
+                vec![("period", Length(1))],
+                vec![("period", Length(1))],
             ),
             (
                 "Vol Profile Session",
@@ -2234,6 +2296,18 @@ mod tests {
                 let input = inputs.iter().find(|input| input.id == id);
                 assert_eq!(input.map(|input| &input.value), Some(&value), "{name} {id}");
             }
+            // A style edit applies every input as it stands, which keeps its value.
+            let values = |study: &dyn Indicator| {
+                let inputs = study.inputs().into_iter();
+                inputs
+                    .map(|input| (input.id, input.value))
+                    .collect::<Vec<_>>()
+            };
+            let mut edited = study.clone_box();
+            edited
+                .apply_settings(&values(study.as_ref()), study.settings())
+                .unwrap();
+            assert_eq!(values(edited.as_ref()), values(study.as_ref()), "{name}");
             assert!(
                 (0..study.line_count()).all(|line| study.plot_style(line).visible),
                 "{name}"

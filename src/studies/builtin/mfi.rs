@@ -47,10 +47,10 @@ impl MoneyFlowIndex {
     /// Create a new MFI indicator
     ///
     /// # Arguments
-    /// * `period` - Lookback period (typically 14)
+    /// * `period` - Lookback period (typically 14), clamped into 1 to 2000
     pub fn new(period: usize) -> Self {
         Self {
-            period: period.max(1),
+            period: period.clamp(1, 2000),
             values: IndicatorValues::new(),
             color: palette::PURPLE,
             visible: true,
@@ -128,7 +128,7 @@ impl MoneyFlowIndex {
 
 impl Indicator for MoneyFlowIndex {
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Length", 1, 2000)
     ; {});
 
     fn name(&self) -> &str {

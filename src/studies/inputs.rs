@@ -175,6 +175,50 @@ pub(crate) fn upgrade_saved_value(kind: &InputKind, value: InputValue) -> InputV
     }
 }
 
+/// `input` with its range widened to the value it holds, so that a study restored with a value
+/// saved before its range narrowed shows and applies that value until it is edited.
+#[cfg(feature = "studies")]
+pub(crate) fn holding(mut input: StudyInput) -> StudyInput {
+    match (&mut input.kind, &input.value) {
+        (InputKind::Length(min, max), InputValue::Length(value)) => {
+            (*min, *max) = ((*min).min(*value), (*max).max(*value));
+        }
+        (InputKind::Number(min, max), InputValue::Number(value)) if value.is_finite() => {
+            (*min, *max) = (min.min(*value), max.max(*value));
+        }
+        _ => {}
+    }
+    input
+}
+
+#[cfg(feature = "studies")]
+thread_local! {
+    /// The saved values that built-in studies take outside their inputs' ranges while they are
+    /// restored, from [`restoring`].
+    static RESTORED: std::cell::RefCell<Vec<(String, InputValue)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Run `restore` with the built-in studies it sets up taking each of `saved` by its input id,
+/// even outside the input's range.
+#[cfg(feature = "studies")]
+pub(crate) fn restoring<R>(saved: Vec<(String, InputValue)>, restore: impl FnOnce() -> R) -> R {
+    let outer = RESTORED.replace(saved);
+    let result = restore();
+    RESTORED.set(outer);
+    result
+}
+
+/// Whether a study being restored takes `value` for input `id` as saved, from [`restoring`].
+#[cfg(feature = "studies")]
+pub(crate) fn restores(id: &str, value: &InputValue) -> bool {
+    RESTORED.with_borrow(|saved| {
+        saved
+            .iter()
+            .any(|(saved, held)| saved == id && held == value)
+    })
+}
+
 /// The time `minutes` after midnight, for `minutes` below 1440.
 #[cfg(feature = "studies")]
 pub(crate) fn clock(minutes: usize) -> chrono::NaiveTime {
@@ -321,14 +365,14 @@ macro_rules! study_inputs {
     ($this:ident; $($field:ident $([$index:literal])? : $kind:ident($($args:expr),*) $(if $choice:ident $([$choice_index:literal])? in $shown:expr)?),+ $(,)? ; $($changed:ident $(, $previous:ident)? =>)? $after:block) => {
         fn inputs(&$this) -> Vec<crate::studies::StudyInput> {
             let defaults = Self::default();
-            vec![$(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), $this.$field $([$index])?, $kind($($args),*))
+            vec![$(crate::studies::inputs::holding(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), $this.$field $([$index])?, $kind($($args),*)))
                 .with_default(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), defaults.$field $([$index])?, $kind($($args),*)).value)
                 $(.shown_when(stringify!($choice $([$choice_index])?), $shown))?),+]
         }
 
         fn set_input(&mut $this, id: &str, value: crate::studies::InputValue) -> Result<(), crate::studies::StudyError> {
             let schema = $this.inputs().into_iter().find(|input| input.id == id).ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
-            if !schema.accepts(&value) { return Err(crate::studies::StudyError::invalid_input(id)); }
+            if !schema.accepts(&value) && !crate::studies::inputs::restores(id, &value) { return Err(crate::studies::StudyError::invalid_input(id)); }
             match id {
                 $(stringify!($field $([$index])?) => { $this.$field $([$index])? = crate::studies::inputs::input_assign!(value, $kind($($args),*)); }),+
                 _ => return Err(crate::studies::StudyError::UnknownInput(id.into())),

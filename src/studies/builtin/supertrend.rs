@@ -75,11 +75,11 @@ impl SuperTrend {
     ///
     /// # Arguments
     /// * `atr_period` - ATR period (typically 10)
-    /// * `multiplier` - ATR multiplier (typically 3.0), clamped into 0 to `f64::MAX`, NaN to 0
+    /// * `multiplier` - ATR multiplier (typically 3.0), clamped into 0.01 to `f64::MAX`, NaN to 0.01
     pub fn new(atr_period: usize, multiplier: f64) -> Self {
         Self {
             atr_period: atr_period.max(1),
-            multiplier: clamp_param(multiplier, 0.0, f64::MAX),
+            multiplier: clamp_param(multiplier, 0.01, f64::MAX),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             bullish_color: palette::GREEN, // Green
@@ -106,7 +106,7 @@ impl Default for SuperTrend {
 impl Indicator for SuperTrend {
     crate::studies::inputs::study_inputs!(self;
         atr_period: length("ATR period", 1, usize::MAX),
-        multiplier: number("Multiplier", 0.0, f64::MAX)
+        multiplier: number("Multiplier", 0.01, f64::MAX)
     ; {});
 
     fn name(&self) -> &str {
