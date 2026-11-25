@@ -430,7 +430,10 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
             Some(PriceFraction::OneTwentyEighths),
         ),
         (json!({"name":"ABC", "pricescale":32}), None),
-        (json!({"name":"ABC", "pricescale":100, "fractional":true}), None),
+        (
+            json!({"name":"ABC", "pricescale":100, "fractional":true}),
+            None,
+        ),
     ] {
         let info = serde_json::from_value::<Symbol>(symbol.clone())
             .unwrap()
