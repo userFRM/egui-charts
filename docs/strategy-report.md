@@ -13,7 +13,7 @@ of 10 units bought at 100, sold at 105 and 98, with a fee of 2 on each round tri
 The net results are `(105 - 100) * 10 - 2 = 48` and `(98 - 100) * 10 - 2 = -22`.
 The library computes net profit 26, a 50% win rate and profit factor `48 / 22`, about 2.18.
 The supplied equity curve is 10,000, 10,048, 10,026, so maximum drawdown is 22.
-It is too short to annualize: Sharpe displays N/A.
+It holds no monthly return: Sharpe displays N/A.
 
 <!-- example -->
 
@@ -47,7 +47,7 @@ impl Strategy for Long {
 }
 let mut engine = Backtest::new("Long", "SAMPLE", Timeframe::Hour1, 10_000.0);
 engine.settings.currency = Some("USD".into());
-engine.settings.risk_free_rate = 0.02;
+engine.settings.risk_free_rate = 0.03; // 0.02 unless set
 engine.settings.order_size = OrderSize::EquityFraction(0.1);
 engine.settings.commission = Commission::PerOrder(1.0);
 engine.settings.slippage = Slippage::Ticks { ticks: 1, tick_size: 0.01 };
@@ -405,11 +405,30 @@ assert_eq!(analysis.by_weekday[1].closed_trades, 1);
 
 [`StrategyReport::performance`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.performance) retains the base definitions on [`StrategyPerformance`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyPerformance.html):
 net and gross profit/loss use the host's net closed-trade profits; drawdown uses running
-equity peaks. Sharpe uses sample standard deviation, Sortino uses the root mean square
-of downside excess returns over all steps, and both use the curve's actual steps per
-365.25-day year and require at least 13 weeks. Non-finite equity points are skipped;
-unordered finite points invalidate the entire curve. [`equity_curve()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.equity_curve) exposes those same
+equity peaks. Non-finite equity points are skipped; unordered finite points invalidate the
+entire curve. [`equity_curve()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.equity_curve) exposes those same
 validated points for rendering.
+
+Sharpe and Sortino ratios use monthly returns. A monthly return compares the equity at two
+successive month starts, 00:00 UTC on the 1st, from the first month start at or after the
+curve's first point to the last at or before its last point. The equity at a month start is the
+last usable point at or before it, so the path within a month does not change the ratios, a
+month without a point returns 0, and the parts of a month before the first month start and
+after the last are left out. The monthly risk-free rate is `(1 + risk_free_rate)^(1 / 12) - 1`.
+Sharpe divides the mean monthly return less that rate by the sample standard deviation of the
+monthly returns; Sortino divides it by the root mean square of the shortfalls below that rate
+over all returns. Both are annualised with the square root of 12; divide by it for the ratio per
+month. They need at least two monthly returns, returns that vary, positive equity at every month
+start before the last and a rate above -1; Sortino also needs a return below the rate. Equity
+100 on 1 January, 110 on 1 February and 99 on 1 March returns 10% and -10%.
+
+Migration: the ratios used the returns between consecutive equity points, annualised by the
+curve's steps per year, and needed 13 weeks of equity. Expect other values for the same report,
+and values for runs of two whole calendar months. `StrategyReport::new` and the default
+`BacktestSettings` now set a yearly risk-free rate of 0.02 instead of 0, and a report read
+without `risk_free_rate` takes 0.02; set it to 0.0 on the report or in the backtest settings for
+the former rate. Saved reports and settings keep the rate they hold. `periods_per_year` still
+counts the curve's steps per year and no longer enters the ratios.
 
 Drawdown and run-up are reported separately from closing marks and from equity inside each bar.
 Close-to-close drawdown is the largest fall below an earlier closing peak. Intrabar drawdown

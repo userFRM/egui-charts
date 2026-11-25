@@ -36,6 +36,11 @@ fn unit_rate() -> f64 {
     1.0
 }
 
+/// The risk-free rate of a report that names none.
+fn default_risk_free_rate() -> f64 {
+    0.02
+}
+
 /// Leaves the rate of an unconverted trade out of saved reports, which stay as they were.
 fn is_unit_rate(rate: &f64) -> bool {
     *rate == 1.0
@@ -92,7 +97,7 @@ fn usable_curve(points: &[(DateTime<Utc>, f64)]) -> Vec<(DateTime<Utc>, f64)> {
 /// assert_eq!(performance.all.net_profit, 48.0);
 /// assert_eq!(performance.all.win_rate, Some(1.0));
 /// assert_eq!(performance.max_drawdown, Some(2.0));
-/// // Three hours of equity are too short to annualise.
+/// // Three hours of equity hold no monthly return.
 /// assert_eq!(performance.sharpe_ratio, None);
 /// # #[cfg(feature = "csv")]
 /// assert!(report.trades_csv().starts_with("number,side,quantity,"));
@@ -114,8 +119,9 @@ pub struct StrategyReport {
     #[serde(default)]
     pub currency: Option<String>,
     /// Annual risk-free rate as a fraction (0.02 for 2%), used by the Sharpe and Sortino ratios.
-    /// Finite and above -1, or the ratios are unavailable.
-    #[serde(default, deserialize_with = "null_as_nan")]
+    /// Finite and above -1, or the ratios are unavailable. [`StrategyReport::new`] sets 0.02, and a
+    /// report read without this field takes 0.02 too.
+    #[serde(default = "default_risk_free_rate", deserialize_with = "null_as_nan")]
     pub risk_free_rate: f64,
     /// Settings of the run as the host wants them shown (parameters, commission, sizing), in order.
     /// Display only.
@@ -369,29 +375,29 @@ pub struct StrategyPerformance {
     /// 365.25 days; -1 when the curve ends at 0. `None` unless the usable curve spans at least
     /// 13 weeks, when its first point is not positive, or when its last point is negative.
     pub compound_annual_growth: Option<f64>,
-    /// Annualised Sharpe ratio: the mean excess return per step of the curve over the sample standard
-    /// deviation of the returns, times the square root of `periods_per_year`. Returns are simple
-    /// returns between consecutive usable points, and the excess is over the risk-free rate per step,
-    /// `(1 + risk_free_rate)^(1 / periods_per_year) - 1`. `None` when `periods_per_year` is, with
-    /// fewer than 2 returns, when the returns do not vary beyond rounding (a deviation of at most 16
-    /// machine epsilons, as for a curve growing at a constant rate), when equity before the last
-    /// point is not positive, or when the risk-free rate is not finite or not above -1.
+    /// Annualised Sharpe ratio of the monthly returns: their mean less the monthly risk-free
+    /// rate, over their sample standard deviation, times the square root of 12. A monthly return
+    /// compares the equity at two successive month starts, 00:00 UTC on the 1st, from the first
+    /// month start at or after the curve's first point to the last at or before its last point.
+    /// The equity at a month start is the last usable point at or before it, so a month without
+    /// a point returns 0. The monthly rate is `(1 + risk_free_rate)^(1 / 12) - 1`. `None` with
+    /// fewer than 2 monthly returns, when the returns do not vary beyond rounding (a deviation
+    /// of at most 16 machine epsilons, as for a curve growing at a constant rate), when the
+    /// equity at a month start before the last is not positive, or when the risk-free rate is
+    /// not finite or not above -1.
     pub sharpe_ratio: Option<f64>,
-    /// Annualised Sortino ratio: as `sharpe_ratio`, over the downside deviation instead, the root mean
-    /// square of the shortfalls of the returns below the risk-free rate per step, taken over all
-    /// returns. `None` when `sharpe_ratio` is, or when no return falls short.
+    /// Annualised Sortino ratio: as `sharpe_ratio`, over the downside deviation instead, the root
+    /// mean square of the shortfalls of the monthly returns below the monthly risk-free rate,
+    /// taken over all returns. `None` when `sharpe_ratio` is, or when no return falls short.
     pub sortino_ratio: Option<f64>,
     /// Steps of the usable curve per year: the number of returns over the span from the first to the
     /// last point, in years of 365.25 days. Counting the bars a run actually contains follows the
-    /// interval and the market's sessions without configuration.
+    /// interval and the market's sessions without configuration. The ratios do not use it.
     ///
     /// `None` unless the curve spans at least 13 weeks. The span leaves out the closed time before
-    /// the first point and after the last, so a short run overstates the periods per year of a
+    /// the first point and after the last, so a shorter run overstates the periods per year of a
     /// market with sessions: two sessions of 1-minute bars of a stock count about 224,000 a year
-    /// instead of about 98,000, and the ratios come out about 1.5 times too high. Thirteen weeks
-    /// contain every weekly closed period (nights, weekends) many times over, so from 13 weeks on the
-    /// estimate is at most about 6% high, and the ratios about 3%, a small fraction of the sampling
-    /// error of a ratio measured over a quarter.
+    /// instead of about 98,000. From 13 weeks on the estimate is at most about 6% high.
     pub periods_per_year: Option<f64>,
     /// Invalid trades, left out of every metric (see [`StrategyTrade`]).
     pub skipped_trades: usize,
@@ -767,6 +773,50 @@ fn curve_phases(curve: &[(DateTime<Utc>, f64)]) -> Phases {
     phases
 }
 
+/// Annualised Sharpe and Sortino ratios of the monthly returns of a usable equity curve, as
+/// [`StrategyPerformance::sharpe_ratio`] defines them, at the yearly risk-free `rate`.
+fn monthly_ratios(curve: &[(DateTime<Utc>, f64)], rate: f64) -> (Option<f64>, Option<f64>) {
+    let (Some(&(start, _)), Some(&(end, _))) = (curve.first(), curve.last()) else {
+        return (None, None);
+    };
+    // Equity at each month start from the first point to the last: the last point at or before
+    // it, so a month without a point repeats the value before it.
+    let mut values = Vec::new();
+    let mut month = Utc
+        .with_ymd_and_hms(start.year(), start.month(), 1, 0, 0, 0)
+        .single();
+    while let Some(at) = month.filter(|at| *at <= end) {
+        if at >= start {
+            values.push(curve[curve.partition_point(|p| p.0 <= at) - 1].1);
+        }
+        month = at.checked_add_months(Months::new(1));
+    }
+    let months = values.len().saturating_sub(1);
+    // Simple returns from a non-positive equity have no meaning, and a rate of -1 or below has
+    // no monthly equivalent.
+    if months < 2 || rate <= -1.0 || values[..months].iter().any(|&e| e <= 0.0) {
+        return (None, None);
+    }
+    let returns: Vec<f64> = values.windows(2).map(|w| w[1] / w[0] - 1.0).collect();
+    let n = months as f64;
+    let mean = returns.iter().sum::<f64>() / n;
+    let deviation = (returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0)).sqrt();
+    let monthly_rate = (1.0 + rate).powf(1.0 / 12.0) - 1.0;
+    let downside = (returns
+        .iter()
+        .map(|r| (r - monthly_rate).min(0.0).powi(2))
+        .sum::<f64>()
+        / n)
+        .sqrt();
+    // Returns that are equal up to rounding do not vary.
+    if deviation > 16.0 * f64::EPSILON {
+        let excess = (mean - monthly_rate) * 12f64.sqrt();
+        (finite(excess / deviation), finite(excess / downside))
+    } else {
+        (None, None)
+    }
+}
+
 /// How a summary figure reads, named as the `unit` column of [`StrategyReport::summary_csv`].
 #[cfg(feature = "csv")]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1019,7 +1069,7 @@ impl StrategyReport {
     }
 
     /// A report with no trades, equity, equity ranges, margin data, properties, currency or price
-    /// decimals, a risk-free rate of zero and figures available.
+    /// decimals, a risk-free rate of 0.02 and figures available.
     pub fn new(
         name: impl Into<String>,
         symbol: impl Into<String>,
@@ -1032,7 +1082,7 @@ impl StrategyReport {
             timeframe,
             initial_capital,
             currency: None,
-            risk_free_rate: 0.0,
+            risk_free_rate: 0.02,
             properties: Vec::new(),
             price_decimals: None,
             trades: Vec::new(),
@@ -1147,6 +1197,7 @@ impl StrategyReport {
         p.average_drawdown_days = average(phases.drawdown_seconds / 86_400.0, phases.drawdowns);
         p.average_run_up = average(phases.run_up, phases.run_ups);
         p.average_run_up_days = average(phases.run_up_seconds / 86_400.0, phases.run_ups);
+        (p.sharpe_ratio, p.sortino_ratio) = monthly_ratios(&curve, self.risk_free_rate);
 
         let steps = curve.len() - 1;
         if end - start < TimeDelta::weeks(13) {
@@ -1156,32 +1207,7 @@ impl StrategyReport {
         p.compound_annual_growth = (first > 0.0 && last >= 0.0)
             .then(|| (last / first).powf(1.0 / years) - 1.0)
             .and_then(finite);
-        let periods_per_year = steps as f64 / years;
-        p.periods_per_year = finite(periods_per_year);
-        // Simple returns from a non-positive equity have no meaning, and a rate of -1 or below has no
-        // per-step equivalent.
-        let rate = self.risk_free_rate;
-        if steps < 2 || rate <= -1.0 || curve[..steps].iter().any(|&(_, e)| e <= 0.0) {
-            return p;
-        }
-        let returns: Vec<f64> = curve.windows(2).map(|w| w[1].1 / w[0].1 - 1.0).collect();
-        let n = steps as f64;
-        let mean = returns.iter().sum::<f64>() / n;
-        let deviation =
-            (returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0)).sqrt();
-        let rate_per_step = (1.0 + rate).powf(1.0 / periods_per_year) - 1.0;
-        let downside = (returns
-            .iter()
-            .map(|r| (r - rate_per_step).min(0.0).powi(2))
-            .sum::<f64>()
-            / n)
-            .sqrt();
-        // Returns that are equal up to rounding do not vary.
-        if deviation > 16.0 * f64::EPSILON {
-            let excess = (mean - rate_per_step) * periods_per_year.sqrt();
-            p.sharpe_ratio = finite(excess / deviation);
-            p.sortino_ratio = finite(excess / downside);
-        }
+        p.periods_per_year = finite(steps as f64 / years);
         p
     }
 
@@ -2484,8 +2510,32 @@ mod tests {
 
         let mut constant_growth = report(10_000.0);
         constant_growth.risk_free_rate = 0.02;
-        let growth: Vec<f64> = (0..10).map(|i| 100.0 * 1.0001_f64.powf(i as f64)).collect();
-        constant_growth.equity = curve(&growth, TimeDelta::days(41));
+        constant_growth.equity = (0..10)
+            .map(|i| {
+                (
+                    date(2024, 1 + i, 1, 0),
+                    100.0 * 1.0001_f64.powf(f64::from(i)),
+                )
+            })
+            .collect();
+
+        // Equity on the 1st of 16 months from January 2024, and 10% lower on each 16th.
+        let mut monthly_dip = report(10_000.0);
+        for (k, start) in [
+            10000.0, 10300.0, 10200.0, 10400.0, 10450.0, 10250.0, 10650.0, 10700.0, 10600.0,
+            10900.0, 11000.0, 10950.0, 11200.0, 11300.0, 11250.0, 11500.0,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let first = date(2024 + k as i32 / 12, k as u32 % 12 + 1, 1, 0);
+            monthly_dip.equity.push((first, start));
+            if k < 15 {
+                monthly_dip
+                    .equity
+                    .push((first + TimeDelta::days(15), 0.9 * start));
+            }
+        }
 
         // A non-finite number in every kind of field: one invalid trade, one skipped equity point.
         let mut non_finite = report(f64::NAN);
@@ -2826,6 +2876,8 @@ mod tests {
                         average_drawdown_days: Some(57.0),
                         average_run_up: Some(210.0),
                         average_run_up_days: Some(12.5),
+                        sharpe_ratio: Some(-0.7042209222250093),
+                        sortino_ratio: Some(-1.093937972676382),
                         ..curve_from(
                             (340.0, 340.0 / 1300.0, Some(120.0 / 340.0)),
                             (-40.0, 300.0, 1000.0),
@@ -3054,8 +3106,7 @@ mod tests {
                     average_run_up_days: Some(0.15616531165311653),
                     compound_annual_growth: Some(6.5726938646276025),
                     periods_per_year: Some(8766.0),
-                    sharpe_ratio: Some(5.864663773071857),
-                    sortino_ratio: Some(7.742250169261054),
+                    sharpe_ratio: Some(44.29779289168512),
                     ..Default::default()
                 },
             ),
@@ -3078,8 +3129,8 @@ mod tests {
                     average_run_up_days: Some(5.239130434782608),
                     compound_annual_growth: Some(0.0819914006635325),
                     periods_per_year: Some(261.74591280653954),
-                    sharpe_ratio: Some(1.08244877567277),
-                    sortino_ratio: Some(1.433886945862868),
+                    sharpe_ratio: Some(5.48019216794915),
+                    sortino_ratio: Some(104.17107483111391),
                     ..Default::default()
                 },
             ),
@@ -3195,10 +3246,10 @@ mod tests {
                     short: side(Some(0.0)),
                     max_drawdown: Some(0.0),
                     max_drawdown_fraction: Some(0.0),
-                    compound_annual_growth: Some(0.0008912060071077921),
-                    periods_per_year: Some(8.908536585365853),
+                    compound_annual_growth: Some(0.001200386182512947),
+                    periods_per_year: Some(11.997262773722627),
                     average_run_up: Some(0.09003600840125614),
-                    average_run_up_days: Some(369.0),
+                    average_run_up_days: Some(274.0),
                     ..Default::default()
                 },
             ),
@@ -3269,6 +3320,30 @@ mod tests {
                     periods_per_year: Some(1.0),
                     return_over_max_drawdown: Some(0.0),
                     compound_annual_growth: Some(-1.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "monthly returns with a 10% dip inside each month",
+                monthly_dip,
+                StrategyPerformance {
+                    open_profit: Some(0.0),
+                    all: side(Some(0.0)),
+                    long: side(Some(0.0)),
+                    short: side(Some(0.0)),
+                    max_drawdown: Some(1225.0),
+                    max_drawdown_fraction: Some(0.11722488038277512),
+                    max_run_up: Some(2500.0),
+                    max_run_up_fraction: Some(0.25),
+                    return_over_max_drawdown: Some(0.0),
+                    average_drawdown: Some(1114.0),
+                    average_drawdown_days: Some(45.6),
+                    average_run_up: Some(1264.0),
+                    average_run_up_days: Some(15.7),
+                    compound_annual_growth: Some(0.11845411439096676),
+                    periods_per_year: Some(24.029605263157894),
+                    sharpe_ratio: Some(1.5939455747630757),
+                    sortino_ratio: Some(3.8233863147038796),
                     ..Default::default()
                 },
             ),
@@ -3346,6 +3421,11 @@ mod tests {
                 ..expected_d()
             },
         );
+        // A saved report keeps its rate; one written without a rate takes the default.
+        assert_eq!(loaded.risk_free_rate, 0.0);
+        let bare: StrategyReport =
+            serde_json::from_str(&saved.replace("\"risk_free_rate\":0.0,", "")).unwrap();
+        assert_eq!(bare.risk_free_rate, 0.02);
     }
 
     #[test]
@@ -3688,8 +3768,8 @@ mod tests {
             return_over_max_drawdown: Some(0.6),
             compound_annual_growth: Some(0.1),
             periods_per_year: Some(1.0),
-            sharpe_ratio: Some(0.3889087296526013),
-            sortino_ratio: Some(1.7284832429004509),
+            sharpe_ratio: Some(-0.9966964115962125),
+            sortino_ratio: Some(-0.977667787494181),
             ..Default::default()
         };
         let mut overlap = report(1_000.0);
@@ -4335,7 +4415,7 @@ mod tests {
              properties,Interval,1h,text,,\n\
              properties,Initial capital,10000,money,USD,\n\
              properties,Currency,USD,text,,\n\
-             properties,Risk-free rate,0,percent,,\n\
+             properties,Risk-free rate,2,percent,,\n\
              properties,\"Fast, length\",\"say \"\"hi\"\"\",text,,\n"
         );
         for (text, expected) in [

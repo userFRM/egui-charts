@@ -703,7 +703,7 @@ fn summary(
     ui.label(
         RichText::new(l10n::text(
             ui.ctx(),
-            "N/A means unavailable. Ratios and compound growth require at least 13 weeks of equity; holding times and buy-and-hold figures require the source bars.",
+            "N/A means unavailable. Ratios require two whole calendar months of equity and compound growth at least 13 weeks; holding times and buy-and-hold figures require the source bars.",
         ))
         .color(theme.ui.text_muted)
         .size(theme.text.small),
