@@ -1318,8 +1318,9 @@ pub struct ChartTypeParams {
     /// TPO: the hours of one-day profiles, chosen as for session volume profiles: the chart's
     /// hours by default, only the regular, extended, pre-market or post-market hours, each
     /// segment of the day, or up to five custom windows. A profile keeps only the bars of its
-    /// hours and counts its periods from their open. Week and month profiles keep the chart's
-    /// hours.
+    /// hours and counts its periods from their open; custom hours keep whole periods on their
+    /// grid, as [`to_tpo_profiles`](super::to_tpo_profiles) describes. Week and month profiles
+    /// keep the chart's hours.
     pub tpo_session: ProfileSession,
     /// TPO: highlight the rows touched by a single period.
     pub tpo_single_prints: bool,
