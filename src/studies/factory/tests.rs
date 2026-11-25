@@ -508,6 +508,18 @@ fn catalogue_inputs_take_their_usual_labels_and_ranges() {
         ("KAMA", "period", "ER length", vec![]),
         ("KAMA", "fast_period", "Fast length", vec![]),
         ("KAMA", "slow_period", "Slow length", vec![]),
+        ("RCI", "period", "RCI Length", vec![]),
+        (
+            "RCI",
+            "smoothing_deviation",
+            "BB StdDev",
+            vec![
+                (Number(0.0), false),
+                (Number(0.001), true),
+                (Number(50.0), true),
+                (Number(50.5), false),
+            ],
+        ),
     ];
     let factory = IndicatorFactory::new();
     for (name, id, label, values) in rows {

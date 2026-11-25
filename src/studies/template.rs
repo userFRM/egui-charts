@@ -365,11 +365,12 @@ impl StudyTemplate {
         }
         // Studies saved before an input's range narrowed restore with the value they were saved
         // with, from the bottom of the range the input took then; only edits are bounded.
-        const NARROWED: [(&str, &str); 7] = [
+        const NARROWED: [(&str, &str); 8] = [
             ("BB", "std_dev"),
             ("BBTrend", "multiplier"),
             ("LinReg Slope", "period"),
             ("MFI", "period"),
+            ("RCI", "smoothing_deviation"),
             ("SuperTrend", "multiplier"),
             ("Woodies CCI", "turbo_length"),
             ("Woodies CCI", "cci_length"),
@@ -749,7 +750,7 @@ impl StudyTemplate {
             }
             // A Rank Correlation had no average, and drew no levels, before it opened with an
             // average, three levels and the band between them filled.
-            "RankCorr" if !has("smoothing") || self.settings.levels.is_empty() => {
+            "RCI" if !has("smoothing") || self.settings.levels.is_empty() => {
                 if !has("smoothing") {
                     template
                         .inputs
@@ -1938,6 +1939,12 @@ mod tests {
                 "LinReg Slope",
                 vec![("period", Length(1))],
                 vec![("period", Length(1))],
+            ),
+            // Saved under the earlier name.
+            (
+                "RankCorr",
+                vec![("smoothing_deviation", Number(80.0))],
+                vec![("smoothing_deviation", Number(80.0))],
             ),
             (
                 "Vol Profile Session",

@@ -87,20 +87,20 @@ impl Indicator for RankCorrelationIndex {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 2, usize::MAX),
+        period: length("RCI Length", 2, usize::MAX),
         smoothing: choice("Smoothing", SmoothingType::ALL),
         smoothing_length: length("Smoothing length", 1, usize::MAX)
             if smoothing in SmoothingType::WITH_LENGTH,
-        smoothing_deviation: number("Band deviation", 0.0, f64::MAX)
+        smoothing_deviation: number("BB StdDev", 0.001, 50.0)
             if smoothing in SmoothingType::WITH_BANDS
     ; {});
 
     fn name(&self) -> &str {
-        "RankCorr"
+        "RCI"
     }
 
     fn desc(&self) -> &str {
-        "Rank Correlation Index (Spearman) - Price vs time rank correlation [-100, 100]"
+        "Rank Correlation Index - Spearman rank correlation of price and time [-100, 100]"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
@@ -207,8 +207,8 @@ impl Indicator for RankCorrelationIndex {
     }
 
     fn line_names(&self) -> Vec<String> {
-        let mut names = vec![format!("RankCorr({})", self.period)];
-        names.extend(self.smoothing.line_names("RankCorr MA"));
+        let mut names = vec![format!("RCI({})", self.period)];
+        names.extend(self.smoothing.line_names("RCI-based MA"));
         names
     }
 }

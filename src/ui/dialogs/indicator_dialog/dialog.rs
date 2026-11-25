@@ -2104,6 +2104,8 @@ mod tests {
             ("PVT", &["PVT", "PVT Enhanced"], &[]),
             ("VPT", &["PVT"], &[]),
             ("Volume Price Trend", &["PVT"], &[]),
+            ("RCI", &["RCI", "RCI Ribbon"], &[]),
+            ("RankCorr", &["RCI"], &["RCI Ribbon"]),
             (
                 "Session Volume Profile",
                 &["Vol Profile Session"],
@@ -2213,7 +2215,8 @@ mod tests {
     }
 
     /// Each study is added with the parameters the factory creates it with until the user
-    /// changes them.
+    /// changes them. Price Volume Trend and the Rank Correlation Index are listed under those
+    /// titles with their own readouts.
     #[test]
     fn each_study_is_added_with_its_own_defaults() {
         use crate::model::Bar;
@@ -2250,13 +2253,18 @@ mod tests {
             }
         }
         assert!(differ.is_empty(), "added with other parameters: {differ:?}");
-        let pvt = dialog
-            .indicators
-            .iter()
-            .find(|info| info.id == "PVT")
-            .expect("PVT is listed");
-        assert_eq!(pvt.name, "Price Volume Trend");
-        assert_eq!(factory.create("PVT").unwrap().line_names(), ["PVT"]);
+        for (id, title, lines) in [
+            ("PVT", "Price Volume Trend", vec!["PVT"]),
+            (
+                "RCI",
+                "Rank Correlation Index",
+                vec!["RCI(10)", "RCI-based MA"],
+            ),
+        ] {
+            let info = dialog.indicators.iter().find(|info| info.id == id);
+            assert_eq!(info.map(|info| info.name.as_str()), Some(title), "{id}");
+            assert_eq!(factory.create(id).unwrap().line_names(), lines, "{id}");
+        }
     }
 
     /// The light chooser has distinct hint inks; other palettes keep their supplied roles.

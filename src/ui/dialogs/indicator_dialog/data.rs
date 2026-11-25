@@ -125,6 +125,7 @@ impl IndicatorInfo {
             "OHLC4" => &["Average Price"],
             "PVT" => &["Volume Price Trend", "VPT"],
             "Price Momentum Oscillator" => &["PMO"],
+            "RCI" => &["RankCorr"],
             "SMA/EMA Cross" => &[
                 "MA with EMA Cross",
                 "Double Moving Average",
