@@ -106,7 +106,7 @@ impl Stamp {
                 late_ticks: chart.feed.late_ticks,
                 repeated_ticks: chart.feed.repeated_ticks,
                 trades_complete: link.trades_complete,
-                trades_from_start: link.trades_from_start,
+                trades_from_start: link.trades.from_start,
             },
         }
     }
@@ -429,7 +429,7 @@ impl Chart {
         link.time = checkpoint.time;
         link.pushed_from = checkpoint.pushed_from;
         link.trades_complete = checkpoint.progress.trades_complete;
-        link.trades_from_start = checkpoint.progress.trades_from_start;
+        link.trades.from_start = checkpoint.progress.trades_from_start;
         #[cfg(feature = "studies")]
         for ((_, seen), revision) in link.study_inputs.iter_mut().zip(revisions) {
             *seen = revision;

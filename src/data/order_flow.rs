@@ -726,6 +726,14 @@ impl OrderFlowInput {
         matches!(self.state().source, Source::Footprint)
     }
 
+    #[cfg(feature = "widget")]
+    pub(crate) fn is_trade_rate(&self) -> bool {
+        matches!(
+            self.state().source,
+            Source::Fixed(OrderFlowKind::TradeRate { .. })
+        )
+    }
+
     /// Clears values on a new symbol, interval or subscription. The aggregation, order filter,
     /// size basis, tick size and any replay cutoff stay.
     pub fn clear(&self) {
@@ -1277,6 +1285,18 @@ impl OrderFlowInput {
                 state.extremes.lost_until = lost;
                 for distinct in &mut state.distinct {
                     distinct.lost_until = lost;
+                }
+                if !trade_based
+                    && let Source::Fixed(OrderFlowKind::TradeRate { .. }) = state.source
+                    && let Some(first) = trades.unconfirmed_page_start()
+                {
+                    // Keep the prints. Each (now - window, now] becomes known independently.
+                    state.window.lost_until = Some(first);
+                    state.instant.lost_until = Some(first);
+                    let open = clock.instant_open(first);
+                    state.cut = open.checked_sub_signed(TimeDelta::nanoseconds(1));
+                    // A page can split a timestamp even at the candle open.
+                    state.bars.insert(open, ([f64::NAN; 3], 0));
                 }
             }
             let rebuilt = run.is_some();
