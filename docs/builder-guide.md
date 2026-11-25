@@ -85,7 +85,11 @@ currency above the price scale, such as `barrel`), `timezone`, `session`,
 overnight windows, as below), `supported_resolutions`, `data_status`
 (`streaming`, `delayed_streaming` or `endofday`) and `dividend_adjustment`
 (`true` when `/history` serves dividend-adjusted bars for `adjusted=true`). Price tick size
-is `minmov / pricescale`, with `minmov` defaulting to one. Time zones use the
+is `minmov / pricescale`, with `minmov` defaulting to one. A `pricescale` that is
+a power of ten, such as 100, also sets the price decimals (two), so `minmov` 50 with
+`pricescale` 100 writes `101.50` on a 0.50 tick; another `pricescale`, or a `minmov`
+that is not a whole number, takes the decimals from the tick. A precision chosen in
+the chart settings takes precedence. Time zones use the
 library's [`TimezoneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.TimezoneId.html) parser. Sessions accept `24x7` or
 `HHMM-HHMM[,HHMM-HHMM]:days` windows (one day suffix for all windows), where 1 is Sunday and 7 is Saturday; an overnight
 window belongs to its closing day. Omitted days mean Monday through Friday.
