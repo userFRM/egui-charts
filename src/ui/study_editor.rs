@@ -18,6 +18,8 @@ use egui::{
     Align, Align2, AtomExt, Color32, Event, EventFilter, Frame, Galley, Id, Key, LayerId, Order,
     RichText, ScrollArea, Stroke, SurrenderFocusOn, TextBuffer, TextEdit, TextStyle, Ui, Visuals,
 };
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -691,17 +693,45 @@ fn layout(
         keep_trailing_whitespace: true,
         ..Default::default()
     };
-    for piece in cuts.windows(2) {
-        let covers = |range: &Range<usize>| range.start <= piece[0] && piece[1] <= range.end;
-        let color = (colours.iter().find(|(range, _)| covers(range))).map_or(base, |(_, c)| *c);
-        let underline = (underlines.iter().find(|(range, ..)| covers(range)))
-            .map_or(Stroke::NONE, |(_, color, _)| Stroke::new(1.0, *color));
+    let colour_of = first_covering(&cuts, colours, |(range, _)| range);
+    let underline_of = first_covering(&cuts, underlines, |(range, ..)| range);
+    for ((piece, colour), underline) in cuts.windows(2).zip(colour_of).zip(underline_of) {
+        let color = colour.map_or(base, |i| colours[i].1);
+        let underline = underline.map_or(Stroke::NONE, |i| Stroke::new(1.0, underlines[i].1));
         job.append(&text[piece[0]..piece[1]], 0.0, format(color, underline));
     }
     if job.sections.is_empty() {
         job.append("", 0.0, format(base, Stroke::NONE));
     }
     ui.fonts_mut(|fonts| fonts.layout_job(job))
+}
+
+/// For each piece between two consecutive sorted `cuts`, the index of the first of `ranges` that
+/// covers it, found in one sweep since the layout runs every frame the editor shows.
+fn first_covering<T>(
+    cuts: &[usize],
+    ranges: &[T],
+    range: impl Fn(&T) -> &Range<usize>,
+) -> Vec<Option<usize>> {
+    let mut order: Vec<_> = (0..ranges.len()).collect();
+    order.sort_by_key(|&i| range(&ranges[i]).start);
+    let mut next = order.into_iter().peekable();
+    // The ranges begun so far, first index on top; one that ends before a piece covers no later one.
+    let mut begun = BinaryHeap::new();
+    let pieces = cuts.windows(2);
+    pieces
+        .map(|piece| {
+            while let Some(i) = next.next_if(|&i| range(&ranges[i]).start <= piece[0]) {
+                begun.push(Reverse(i));
+            }
+            while let Some(&Reverse(i)) = begun.peek()
+                && range(&ranges[i]).end < piece[1]
+            {
+                begun.pop();
+            }
+            begun.peek().map(|&Reverse(i)| i)
+        })
+        .collect()
 }
 
 #[cfg(test)]
