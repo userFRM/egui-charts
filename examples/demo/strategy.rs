@@ -210,7 +210,7 @@ impl DemoApp {
     pub(super) fn show_strategy_report(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         self.update_live_strategy();
         self.follow_instrument_tick();
-        if self.strategy_report.report().is_none() {
+        if self.strategy_report.report().is_none() && !self.strategy_open {
             return;
         }
         self.strategy_report.set_instrument_currency(
@@ -272,6 +272,7 @@ impl DemoApp {
         }
         if clear {
             self.stop_live_strategy();
+            self.strategy_open = false;
             self.strategy_report.set_report(None, &[]);
             self.strategy_trade = None;
             self.refresh_strategy_signals();

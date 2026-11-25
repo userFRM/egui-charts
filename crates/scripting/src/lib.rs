@@ -4,6 +4,7 @@
 mod reference;
 mod rhai;
 mod runtime;
+mod strategy;
 mod study;
 #[cfg(test)]
 mod tests;
@@ -12,6 +13,7 @@ mod tokens;
 pub use reference::{EntryKind, Reference, ReferenceEntry};
 pub use runtime::limits::Limits;
 pub use runtime::profile::Profile;
+pub use strategy::ScriptStrategy;
 pub use tokens::{TokenClass, tokens};
 
 use egui_charts::model::Bar;
@@ -24,7 +26,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub struct Script {
     compiled: Arc<rhai::Compiled>,
-    /// The latest runtime error or stop of any study built from this script.
+    /// The latest runtime error or stop of any study or strategy built from this script.
     last_error: Arc<Mutex<Option<ScriptError>>>,
     limits: Limits,
     /// Whether the studies built from now on record a profile.
@@ -46,7 +48,7 @@ impl Script {
     /// every name the script uses must be declared and every function it calls defined, by the
     /// script, the helpers or Rhai's standard package, so the study's inputs and plots exist
     /// before it runs. The script's `study(...)` calls are built from the studies of `factory` as
-    /// it is now, at the defaults they declare.
+    /// it is now, at the defaults they declare. A script that places orders needs no plot.
     pub fn compile(
         name: impl Into<String>,
         source: &str,
@@ -86,6 +88,20 @@ impl Script {
         study::build(self)
     }
 
+    /// A strategy of this script for the backtester, with the default inputs. Register it with
+    /// [`StrategyFactory::register`](egui_charts::strategies::StrategyFactory::register) under the
+    /// name the host saves it by; see the [crate documentation](crate#strategies).
+    pub fn strategy(&self) -> ScriptStrategy {
+        ScriptStrategy::new(self)
+    }
+
+    /// Whether the script places orders, so that it is a strategy rather than a study: whether it
+    /// calls `entry`, `exit_order`, `exit_relative` or `cancel` and defines no function of that
+    /// name. A study built from such a script ignores its orders.
+    pub fn places_orders(&self) -> bool {
+        self.compiled.orders
+    }
+
     /// Calculate on `bars` with the default inputs, without the other histories the script reads,
     /// and return the first runtime error or limit stop, so a host can refuse a script before it
     /// replaces the study on a chart. Blocks the calling thread, for headless hosts and tests;
@@ -94,8 +110,8 @@ impl Script {
         study::check(self, bars)
     }
 
-    /// The latest runtime error or limit stop of any study built from this script, cleared
-    /// when one of them completes a calculation from bar 0.
+    /// The latest runtime error or limit stop of any study or strategy built from this script,
+    /// cleared when one of them completes a calculation from bar 0 or a strategy prepares a run.
     pub fn last_error(&self) -> Option<ScriptError> {
         self.last_error
             .lock()

@@ -26,6 +26,8 @@ pub(crate) struct Compiled {
     pub history_spans: Arc<[Span]>,
     /// Where each `state` declaration is, for size and memory reports.
     state_spans: Vec<Span>,
+    /// Whether the script places orders, which makes it a strategy.
+    pub orders: bool,
     engine: Engine,
     ast: AST,
     source: String,
@@ -55,7 +57,8 @@ pub(crate) fn compile(
         Ok::<_, ScriptError>((engine, ast, spec, called))
     };
     let (_, ast, spec, called) = pass(&Scope::new(), None)?;
-    if spec.plots.is_empty() {
+    let orders = places_orders(source, &ast);
+    if spec.plots.is_empty() && !orders {
         return Err(ScriptError::at(
             "a script needs at least one plot".into(),
             Span { line: 1, column: 1 },
@@ -87,10 +90,24 @@ pub(crate) fn compile(
         history_spans: syntax::spans(source, "bars", spec.histories.iter().map(|h| &*h.name))
             .into(),
         state_spans: syntax::spans(source, "state", spec.states.iter().map(|s| &*s.name)),
+        orders,
         spec: Arc::new(spec),
         engine,
         ast,
         source: source.to_owned(),
+    })
+}
+
+/// Whether `source`, which compiled into `ast`, calls an order function it does not define.
+fn places_orders(source: &str, ast: &AST) -> bool {
+    const ORDERS: [&str; 4] = ["entry", "exit_order", "exit_relative", "cancel"];
+    let tokens = syntax::tokens(source);
+    tokens.windows(2).any(|pair| match pair {
+        [
+            (syntax::Token::Word(name), _),
+            (syntax::Token::Symbol('('), _),
+        ] => ORDERS.contains(name) && !ast.iter_functions().any(|function| function.name == *name),
+        _ => false,
     })
 }
 

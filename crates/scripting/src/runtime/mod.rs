@@ -7,6 +7,7 @@ pub(crate) mod bindings;
 pub(crate) mod data;
 pub(crate) mod kernels;
 pub(crate) mod limits;
+pub(crate) mod orders;
 pub(crate) mod profile;
 pub(crate) mod program;
 pub(crate) mod series;
@@ -20,6 +21,7 @@ use egui_charts::model::Bar;
 use egui_charts::studies::InputValue;
 use kernels::Kernel;
 use limits::{Clock, Limits, Stop};
+use orders::{Decision, OrderCall, Readings};
 use profile::{Lines, Profile};
 use program::{ScriptSpec, Span};
 use series::Columns;
@@ -103,6 +105,8 @@ pub(crate) struct Run {
     sites_counted: usize,
     /// The calls and time of each line, when the run profiles.
     profile: Option<Lines>,
+    /// The strategy decision being run, `None` in a study.
+    pub decision: Option<Decision>,
 }
 
 impl Run {
@@ -178,11 +182,15 @@ impl Run {
         self.stop
     }
 
-    /// Prepare bar `bar`: no plot values yet, no helper reached, a missing value in every
-    /// declared series, the bar it reads of every other history and the bar's clock not started.
+    /// Prepare bar `bar`: no plot values yet, no helper reached, no order placed, a missing value
+    /// in every declared series, the bar it reads of every other history and the bar's clock not
+    /// started.
     fn start_bar(&mut self, bar: usize) {
         self.bar = bar;
         self.row.fill(f64::NAN);
+        if let Some(decision) = &mut self.decision {
+            decision.calls.clear();
+        }
         self.occurrences.clear();
         self.levels.clear();
         self.clock.next_bar();
@@ -293,6 +301,8 @@ pub(crate) struct Request {
     pub reset: bool,
     /// Record the calls and time of each line.
     pub profile: bool,
+    /// The readings of a strategy decision, `None` for a study.
+    pub decision: Option<Readings>,
 }
 
 /// The end of a run.
@@ -308,6 +318,9 @@ pub(crate) struct Outcome {
     pub error: Option<ScriptError>,
     /// The calls and time of each line, when the request asked for them and the run ended.
     pub profile: Option<Profile>,
+    /// The order calls of the last bar, in call order, when it ran without an error; empty for a
+    /// study and after a stop.
+    pub orders: Vec<OrderCall>,
 }
 
 /// A run in progress.
@@ -374,6 +387,7 @@ impl<P: Program> RunState<P> {
             history_spans,
             sites_counted: 0,
             profile: None,
+            decision: None,
         };
         Self {
             slots: program.slots(&[], false),
@@ -405,8 +419,13 @@ impl<P: Program> RunState<P> {
             inputs,
             reset,
             profile,
+            decision,
         } = request;
         self.run.profile = profile.then(Lines::new);
+        self.run.decision = decision.map(|readings| Decision {
+            readings,
+            calls: Vec::new(),
+        });
         let columns = &mut self.run.columns;
         columns.bars.truncate(from);
         columns.bars.extend(bars);
@@ -582,6 +601,7 @@ impl<P: Program> RunState<P> {
                 result: Err(ScriptError::at(self.run.clock.message(limit), span, bar)),
                 error: None,
                 profile: None,
+                orders: Vec::new(),
             });
         }
         if flight.next < len {
@@ -591,12 +611,18 @@ impl<P: Program> RunState<P> {
             return None;
         }
         self.done = len;
+        // A failed bar's calls are dropped with it, and no bar after it runs.
+        let orders = match (self.failed, &mut self.run.decision) {
+            (None, Some(decision)) => std::mem::take(&mut decision.calls),
+            _ => Vec::new(),
+        };
         Some(Outcome {
             start: flight.start,
             rows: flight.rows,
             result: Ok(flight.took),
             error: flight.error,
             profile: self.run.profile.as_ref().map(Lines::profile),
+            orders,
         })
     }
 
@@ -620,6 +646,7 @@ pub(crate) fn lost() -> Outcome {
         )),
         error: None,
         profile: None,
+        orders: Vec::new(),
     }
 }
 
@@ -646,6 +673,7 @@ impl Run {
             history_spans: Arc::from(Vec::new()),
             sites_counted: 0,
             profile: None,
+            decision: None,
         }
     }
 

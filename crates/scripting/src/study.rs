@@ -17,11 +17,10 @@ use std::time::Duration;
 /// The colour of a plot that names none.
 const PLOT_COLOR: Color32 = palette::BLUE;
 
-/// The study of `script` with its default inputs.
-pub(crate) fn build(script: &Script) -> CustomIndicator {
+/// The inputs `script` declares, at their defaults.
+pub(crate) fn inputs(script: &Script) -> Vec<StudyInput> {
     let spec = &script.compiled.spec;
-    let inputs = spec
-        .inputs
+    spec.inputs
         .iter()
         .map(|input| {
             StudyInput::new(
@@ -31,7 +30,13 @@ pub(crate) fn build(script: &Script) -> CustomIndicator {
                 input.kind.clone(),
             )
         })
-        .collect();
+        .collect()
+}
+
+/// The study of `script` with its default inputs.
+pub(crate) fn build(script: &Script) -> CustomIndicator {
+    let spec = &script.compiled.spec;
+    let inputs = self::inputs(script);
     let mut study = CustomIndicator::new(script.compiled.name.clone(), |_| Vec::new())
         .with_inputs(inputs, |_, _, _, _| Vec::new())
         .expect("inputs are checked when the script compiles")
@@ -124,6 +129,7 @@ fn calculate(script: &Script, bars: &[Bar]) -> Result<(), ScriptError> {
             .collect(),
         reset: true,
         profile: false,
+        decision: None,
     });
     let outcome = state.advance(None).expect("a run without a slice ends");
     match (outcome.result, outcome.error) {
@@ -339,6 +345,7 @@ impl Resume for ScriptState {
         let runner = self.runner.get_or_insert_with(|| {
             let compiled = &self.script.compiled;
             Runner::new(
+                "script study",
                 compiled.clone(),
                 compiled.spec.clone(),
                 compiled.series_spans.clone(),
@@ -386,6 +393,7 @@ impl Resume for ScriptState {
             inputs: self.inputs.clone().unwrap_or_default(),
             reset: self.reset,
             profile: self.script.profiling,
+            decision: None,
         };
         self.reset = false;
         self.running = true;
@@ -399,7 +407,7 @@ impl Resume for ScriptState {
 
 /// The first bar from which `seen` and `data` differ, given that `data[..from]` is unchanged
 /// unless `from` is 0, or `None` when they are the same.
-fn first_change<T>(
+pub(crate) fn first_change<T>(
     seen: &[T],
     data: &[T],
     from: usize,
@@ -413,7 +421,7 @@ fn first_change<T>(
 }
 
 /// Whether two bars hold the same time and prices, missing ones included.
-fn same_bar(a: &Bar, b: &Bar) -> bool {
+pub(crate) fn same_bar(a: &Bar, b: &Bar) -> bool {
     a.time == b.time
         && [
             (a.open, b.open),
