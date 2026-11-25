@@ -126,6 +126,15 @@ impl Indicator for Reversal {
         }
     }
 
+    fn plot_shape_side(&self, line: usize) -> crate::studies::ShapeSide {
+        // The upward output holds the bar's low, the downward one its high.
+        if line == 0 {
+            crate::studies::ShapeSide::Below
+        } else {
+            crate::studies::ShapeSide::Above
+        }
+    }
+
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
