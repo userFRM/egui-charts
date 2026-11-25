@@ -187,10 +187,11 @@ fn done(doing: &str) -> &'static str {
     }
 }
 
-/// What `script` changes of the shape the charts, layouts and templates holding the study `saved`
-/// restore it with: its plot count, or the ids and accepted values of the inputs a chart saves for
-/// it. `None` when the shape is the same.
-fn changed_shape(saved: &Script, script: &Script) -> Option<&'static str> {
+/// What `script` changes of the shape the charts, layouts, templates and alerts holding the study
+/// `saved` restore it with: its plot count, the ids and accepted values of the inputs a chart saves
+/// for it, or its alert conditions in order, which saved alerts know by position. `None` when the
+/// shape is the same.
+fn changed_shape(saved: &Script, script: &Script) -> Option<String> {
     let shape = |script: &Script| {
         let study = ConfiguredStudy::new(Box::new(script.study()));
         // `InputKind` has no `PartialEq`; its `Debug` text names every bound and choice.
@@ -198,14 +199,22 @@ fn changed_shape(saved: &Script, script: &Script) -> Option<&'static str> {
             .map(|input| (input.id, format!("{:?}", input.kind)))
             .collect();
         inputs.sort();
-        (study.line_count(), inputs)
+        (study.line_count(), inputs, study.alert_conditions())
     };
-    let ((plots, inputs), (new_plots, new_inputs)) = (shape(saved), shape(script));
-    match (plots != new_plots, inputs != new_inputs) {
-        (true, true) => Some("plots and inputs"),
-        (true, false) => Some("plots"),
-        (false, true) => Some("inputs"),
-        (false, false) => None,
+    let ((plots, inputs, alerts), (new_plots, new_inputs, new_alerts)) =
+        (shape(saved), shape(script));
+    let changed: Vec<_> = [
+        (plots != new_plots, "plots"),
+        (inputs != new_inputs, "inputs"),
+        (alerts != new_alerts, "alerts"),
+    ]
+    .into_iter()
+    .filter_map(|(changed, what)| changed.then_some(what))
+    .collect();
+    match changed.as_slice() {
+        [] => None,
+        [what] => Some((*what).to_owned()),
+        [first @ .., last] => Some(format!("{} and {last}", first.join(", "))),
     }
 }
 
@@ -374,8 +383,9 @@ impl DemoApp {
     /// and for a strategy the name of a built-in strategy, so that a script never replaces a
     /// built-in study, the native sample, a feed's metric or a built-in strategy. A title saved
     /// as a study cannot take a strategy or the reverse, since the charts, layouts and tester
-    /// holding it would no longer open it, and a saved study cannot take other plots or inputs,
-    /// which they restore with. `script` is the compiled text, `None` when it does not compile.
+    /// holding it would no longer open it, and a saved study cannot take other plots, inputs or
+    /// alerts, which they restore with. `script` is the compiled text, `None` when it does not
+    /// compile.
     fn check_title(&self, title: &str, doing: &str, script: Option<&Script>) -> Result<(), String> {
         let saved = self.sample_study.scripts.get(title);
         let orders = script.map(Script::places_orders);
@@ -829,7 +839,7 @@ mod tests {
                 .iter()
                 .any(|(text, _)| text == LOOKBACK)
         );
-        // Nor one with other plots or inputs, which the charts holding it restore with.
+        // Nor one with other plots, inputs or alerts, which the charts holding it restore with.
         let renamed = LOOKBACK.replace("lookback", "bars_back");
         for (text, button, refused, changed) in [
             (
@@ -839,6 +849,12 @@ mod tests {
                 "plots",
             ),
             (renamed.clone(), "Save", "Not saved", "inputs"),
+            (
+                format!("{LOOKBACK}\nalert(\"Rising\", close > close[1]);"),
+                "Save",
+                "Not saved",
+                "alerts",
+            ),
             (
                 format!("{renamed}\nplot(\"Close\", close);"),
                 "Apply",
