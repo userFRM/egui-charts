@@ -843,6 +843,16 @@ impl WatchlistPanel {
     }
 
     fn show_with(&mut self, ui: &mut Ui, wide: Option<&WatchlistDetails>) -> WatchlistAction {
+        // A host's bottom panel, such as symbol details, ends the space left in `ui` but not its
+        // clip rect, so nothing here may paint or take clicks below that space.
+        let clip = ui.clip_rect();
+        ui.set_clip_rect(clip.with_max_y(clip.max.y.min(ui.available_rect_before_wrap().bottom())));
+        let action = self.show_contents(ui, wide);
+        ui.set_clip_rect(clip);
+        action
+    }
+
+    fn show_contents(&mut self, ui: &mut Ui, wide: Option<&WatchlistDetails>) -> WatchlistAction {
         self.wide = wide.is_some();
         let mut action = WatchlistAction::None;
         let shown_symbols: Vec<String> = self.symbols().map(str::to_owned).collect();
@@ -1602,6 +1612,8 @@ impl WatchlistPanel {
             })
             .collect();
         egui::ScrollArea::vertical()
+            // Scroll inside whatever height is left, never egui's 64-point minimum.
+            .min_scrolled_height(0.0)
             .max_height(if show_summary {
                 (ui.available_height() - 4.0 * SUMMARY_ROW_HEIGHT - 1.0).max(0.0)
             } else {
@@ -2575,40 +2587,62 @@ mod tests {
         }
     }
 
+    /// One frame of `panel`, 300 points wide, above a 300-point bottom panel: the bottom
+    /// panel's top edge and the visible part of every text, in painting order.
+    fn above_details(
+        ctx: &egui::Context,
+        panel: &mut WatchlistPanel,
+        height: f32,
+        events: Vec<egui::Event>,
+    ) -> (f32, Vec<(String, egui::Rect)>) {
+        let mut bottom = 0.0;
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    vec2(300.0, height),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                egui::Panel::bottom("details")
+                    .exact_size(300.0)
+                    .show(ui, |ui| {
+                        ui.label("Symbol details");
+                    });
+                bottom = ui.available_rect_before_wrap().bottom();
+                panel.show(ui);
+            },
+        );
+        let texts = output
+            .shapes
+            .iter()
+            .filter_map(|s| {
+                let Shape::Text(t) = &s.shape else {
+                    return None;
+                };
+                let rect = (s.transform_after_tessellation * t.visual_bounding_rect())
+                    .intersect(s.clip_rect);
+                rect.is_positive()
+                    .then(|| (t.galley.text().to_owned(), rect))
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        (bottom, texts)
+    }
+
     #[test]
     fn empty_watchlist_stays_above_the_reserved_panel_after_resize() {
         let ctx = egui::Context::default();
         let mut panel = WatchlistPanel::default();
         let mut frame = |height, events| {
-            let mut bottom = 0.0;
-            let output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        vec2(300.0, height),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ui| {
-                    egui::Panel::bottom("details")
-                        .exact_size(300.0)
-                        .show(ui, |ui| {
-                            ui.label("Symbol details");
-                        });
-                    bottom = ui.available_rect_before_wrap().bottom();
-                    panel.show(ui);
-                },
-            );
+            let (bottom, texts) = above_details(&ctx, &mut panel, height, events);
             let visible = |label| {
-                output.shapes.iter().find_map(|s| {
-                    let Shape::Text(t) = &s.shape else {
-                        return None;
-                    };
-                    let rect = (s.transform_after_tessellation * t.visual_bounding_rect())
-                        .intersect(s.clip_rect);
-                    (t.galley.text() == label && rect.is_positive()).then_some(rect)
-                })
+                texts
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .map(|(_, rect)| *rect)
             };
             let labels = [
                 "This list is empty",
@@ -2616,7 +2650,6 @@ mod tests {
             ]
             .map(visible);
             let details = visible("Symbol details").expect("sibling stays visible");
-            output.drop_without_applying_deltas();
             (bottom, labels, details)
         };
         let (tall_bottom, [tall_title, tall_hint], _) = frame(700.0, vec![]);
@@ -2657,6 +2690,72 @@ mod tests {
             frame(700.0, vec![]).1,
             [tall_title, Some(tall_hint)],
             "growing restores both labels"
+        );
+    }
+
+    #[test]
+    fn populated_watchlist_stays_above_the_reserved_panel_when_short() {
+        let ctx = egui::Context::default();
+        let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "AAA,BBB,CCC")]);
+        let mut settled = |height, events| {
+            above_details(&ctx, &mut panel, height, events);
+            let mut frame = (0.0, Vec::new());
+            for _ in 0..10 {
+                frame = above_details(&ctx, &mut panel, height, vec![]);
+            }
+            frame
+        };
+        let find = |texts: &[(String, egui::Rect)], label: &str| {
+            texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .map(|(_, rect)| *rect)
+        };
+        // A 40-point header, 3-point item spacing, the 22-point column header, then 30-point rows.
+        let (_, texts) = settled(700.0, vec![]);
+        for (label, centre) in [
+            ("Symbol", 54.0),
+            ("AAA", 83.0),
+            ("BBB", 113.0),
+            ("CCC", 143.0),
+        ] {
+            let rect =
+                find(&texts, label).unwrap_or_else(|| panic!("{label} shown at normal height"));
+            assert!(
+                (rect.center().y - centre).abs() <= 1.0,
+                "{label} at {rect:?} moved from its normal centre {centre}"
+            );
+        }
+        let last_row = find(&texts, "CCC").unwrap();
+        // List heights of 100 and 50 points: short of the rows, then of the column header too.
+        for height in [400.0, 350.0] {
+            let (bottom, texts) = settled(height, vec![]);
+            let details = find(&texts, "Symbol details").expect("sibling stays visible");
+            assert!(details.top() >= bottom);
+            let crossing: Vec<_> = texts
+                .iter()
+                .filter(|(text, rect)| text != "Symbol details" && rect.bottom() > bottom)
+                .collect();
+            assert!(
+                crossing.is_empty(),
+                "{crossing:?} cross the panel edge {bottom}"
+            );
+        }
+        let wheel = vec![
+            egui::Event::PointerMoved(pos2(150.0, 90.0)),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -500.0),
+                modifiers: Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Wheel,
+            },
+        ];
+        let (bottom, texts) = settled(400.0, wheel);
+        let scrolled = find(&texts, "CCC");
+        assert!(
+            scrolled.is_some_and(|r| r.size() == last_row.size() && r.bottom() <= bottom),
+            "the last row {scrolled:?} scrolls into view inside the list edge {bottom}"
         );
     }
 
