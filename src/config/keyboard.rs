@@ -188,7 +188,7 @@ pub enum KeyboardAction {
     // Watchlist
     /// Show the next symbol of the active watchlist (Down or Space). The chart passes it to the
     /// host as a shortcut request; answer it with `WatchlistPanel::select_next_symbol`. A
-    /// selected drawing takes Down first, and a shown replay bar takes Space.
+    /// selected drawing takes Down first.
     NextWatchlistSymbol,
     /// Show the previous symbol of the active watchlist (Up or Shift+Space), as
     /// [`NextWatchlistSymbol`](Self::NextWatchlistSymbol) does the next one.
