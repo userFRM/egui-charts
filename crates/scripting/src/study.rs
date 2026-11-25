@@ -303,6 +303,7 @@ impl ScriptState {
                 let (plots, alerts) = (spec.plots.len(), spec.alerts.len());
                 self.conditions.truncate(outcome.start * alerts);
                 let width = plots + alerts;
+                // A script without a plot, as a strategy may be, still keeps a row per bar.
                 for bar in 0..outcome.bars {
                     let row = &outcome.rows[bar * width..][..width];
                     values.push_lines(&row[..plots]);

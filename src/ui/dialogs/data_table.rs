@@ -493,6 +493,31 @@ mod tests {
         chart.remove_series(study);
         show(&mut dialog, &chart);
         assert!(!headers(&dialog).iter().any(|name| name.starts_with("SMA")));
+        chart.set_horizontal_scale(Some(std::sync::Arc::new(
+            crate::scales::PriceHorizontalScale::new(1),
+        )));
+        show(&mut dialog, &chart);
+        let times = |dialog: &DataTableDialog| {
+            let rows = &dialog.cached.as_ref().unwrap().1.rows;
+            (
+                rows.first().unwrap()[0].clone(),
+                rows.last().unwrap()[0].clone(),
+            )
+        };
+        // Keys are seconds since the epoch: 1_700_000_000 + 5000 days of 86_400 s.
+        assert_eq!(
+            times(&dialog),
+            ("2132000000.0".to_owned(), "1700000000.0".to_owned())
+        );
+        chart.set_horizontal_scale(None);
+        show(&mut dialog, &chart);
+        assert_eq!(
+            times(&dialog),
+            (
+                (start + chrono::Duration::days(5000)).to_rfc3339(),
+                start.to_rfc3339()
+            )
+        );
     }
 
     /// Watchlist picks and symbol search remain usable while the table keeps column choices.
