@@ -203,6 +203,7 @@ fn instrument_bytes(instrument: &Instrument) -> Option<usize> {
         tick_size: _,
         pip_size: _,
         price_decimals: _,
+        price_fraction: _,
         volume_decimals: _,
         currency,
         unit,

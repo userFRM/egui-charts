@@ -1,7 +1,7 @@
 //! Instrument metadata reported by a feed or a search service.
 
-use super::{Timeframe, TimezoneId};
-use chrono::{NaiveDate, NaiveTime, TimeDelta, Weekday};
+use super::{PriceFraction, Timeframe, TimezoneId};
+use chrono::{DateTime, NaiveDate, NaiveTime, TimeDelta, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 
 /// Symbol type categories for instrument classification.
@@ -184,6 +184,12 @@ pub struct Instrument {
     pub pip_size: Option<f64>,
     /// Decimals of price labels.
     pub price_decimals: Option<u8>,
+    /// The fraction prices are quoted in, such as thirty-seconds for `117'16`. A chart then
+    /// labels its price scale, price tags, crosshair and legend in it, unless decimals or
+    /// another fraction are chosen in the chart settings or on the
+    /// [`PriceScale`](crate::scales::PriceScale). Other readouts keep
+    /// [`price_decimals`](Self::price_decimals). `None`, the default, writes decimals.
+    pub price_fraction: Option<PriceFraction>,
     /// Decimals of volume readouts, of studies in volume units without a precision chosen in
     /// their settings, of measured volume, of footprint volumes and of volume profile row values.
     /// They describe the whole number: an abbreviated K, M or B value keeps the decimals its
@@ -220,9 +226,9 @@ pub struct Instrument {
     /// [`HistoryRequest::adjusted`](crate::data::HistoryRequest::adjusted) is set.
     pub dividend_adjustment: bool,
     /// Bar intervals the feed suggests for volume profile studies and drawings, by profile
-    /// length. A study whose source follows the chart, or a fixed range or anchored drawing
-    /// without executions, reads the shortest suggested interval shorter than the chart's that
-    /// serves its length. Empty, the default, suggests none; profiles then spread each chart
+    /// length and dates. A study whose source follows the chart, or a fixed range or anchored
+    /// drawing without executions, reads the shortest suggested interval shorter than the
+    /// chart's that serves its length and holds its dates. Empty, the default, suggests none; profiles then spread each chart
     /// bar's volume over its range.
     pub profile_resolutions: Vec<ProfileResolution>,
 }
@@ -245,6 +251,7 @@ impl Instrument {
             tick_size: None,
             pip_size: None,
             price_decimals: None,
+            price_fraction: None,
             volume_decimals: None,
             currency: None,
             unit: None,
@@ -367,6 +374,22 @@ impl Instrument {
         self
     }
 
+    /// Sets [`price_fraction`](Self::price_fraction).
+    ///
+    /// ```
+    /// use egui_charts::model::{Instrument, PriceFraction};
+    ///
+    /// // A bond future that trades in thirty-seconds of a point.
+    /// let bond = Instrument::new("ZB")
+    ///     .with_tick_size(1.0 / 32.0)
+    ///     .with_price_fraction(PriceFraction::ThirtySeconds);
+    /// # let _ = bond;
+    /// ```
+    pub fn with_price_fraction(mut self, fraction: PriceFraction) -> Self {
+        self.price_fraction = Some(fraction);
+        self
+    }
+
     /// Sets [`volume_decimals`](Self::volume_decimals).
     pub fn with_volume_decimals(mut self, decimals: u8) -> Self {
         self.volume_decimals = Some(decimals);
@@ -462,24 +485,64 @@ pub struct ProfileResolution {
     /// The longest profile this interval serves, from the open of the profile's first chart
     /// bar to the close of its last. `None` serves profiles of any length.
     pub max_span: Option<TimeDelta>,
+    /// The start of the feed's history at this interval, for a feed that holds it for part of
+    /// the symbol's dates only. A profile that opens earlier reads the next suggested interval.
+    /// `None`, the default, serves profiles from any date.
+    pub since: Option<DateTime<Utc>>,
+    /// The end of that history. A profile that closes later reads the next suggested interval.
+    /// `None`, the default, serves profiles up to the latest bar.
+    pub before: Option<DateTime<Utc>>,
 }
 
 impl ProfileResolution {
-    /// Suggests `timeframe` for profiles up to `max_span` long, or of any length for `None`.
+    /// Suggests `timeframe` for profiles up to `max_span` long, or of any length for `None`,
+    /// for every date; see [`with_history`](Self::with_history).
     pub fn new(timeframe: Timeframe, max_span: Option<TimeDelta>) -> Self {
         Self {
             timeframe,
             max_span,
+            since: None,
+            before: None,
         }
     }
 
-    /// The shortest time interval shorter than `interval` that serves `span`, from the open of
-    /// the profile's first bar to the close of its last.
+    /// Limits the suggestion to profiles inside the history the feed holds at this interval:
+    /// those that open at or after `since` and close at or before `before`. `None` leaves that
+    /// end open.
+    ///
+    /// ```
+    /// use chrono::{DateTime, TimeDelta, Utc};
+    /// use egui_charts::model::{Instrument, ProfileResolution, Timeframe};
+    ///
+    /// // One-minute bars are kept from 1 March 2026 on, hourly bars for every date: a one-day
+    /// // profile of February reads hourly bars, one of March one-minute bars.
+    /// let kept: DateTime<Utc> = "2026-03-01T00:00:00Z".parse()?;
+    /// let instrument = Instrument::new("ABC").with_profile_resolutions([
+    ///     ProfileResolution::new(Timeframe::Min1, Some(TimeDelta::days(1)))
+    ///         .with_history(Some(kept), None),
+    ///     ProfileResolution::new(Timeframe::Hour1, None),
+    /// ]);
+    /// # let _ = instrument;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_history(
+        mut self,
+        since: Option<DateTime<Utc>>,
+        before: Option<DateTime<Utc>>,
+    ) -> Self {
+        self.since = since;
+        self.before = before;
+        self
+    }
+
+    /// The shortest time interval shorter than `interval` that serves `span` and holds a
+    /// profile from `start`, the open of its first bar, to `end`, the close of its last.
     #[cfg(any(feature = "studies", feature = "drawings"))]
     pub(crate) fn suggested(
         resolutions: &[Self],
         interval: Timeframe,
         span: TimeDelta,
+        (start, end): (DateTime<Utc>, DateTime<Utc>),
     ) -> Option<Timeframe> {
         resolutions
             .iter()
@@ -487,6 +550,8 @@ impl ProfileResolution {
                 !hint.timeframe.is_trade_based()
                     && hint.timeframe.duration_ms() < interval.duration_ms()
                     && hint.max_span.is_none_or(|max| span <= max)
+                    && hint.since.is_none_or(|since| since <= start)
+                    && hint.before.is_none_or(|before| end <= before)
             })
             .min_by_key(|hint| hint.timeframe.duration_ms())
             .map(|hint| hint.timeframe)
@@ -761,5 +826,37 @@ mod tests {
         assert_eq!(SymbolType::Crypto.to_string(), "crypto");
         assert_eq!(SymbolType::Futures.to_string(), "futures");
         assert_eq!(SymbolType::Forex.to_string(), "forex");
+    }
+
+    /// A dated suggestion serves the profiles inside its history, bounds included; one without
+    /// dates serves every date.
+    #[test]
+    #[cfg(any(feature = "studies", feature = "drawings"))]
+    fn dated_suggestions_serve_the_profiles_they_hold() {
+        let since: DateTime<Utc> = "2026-03-02T00:00:00Z".parse().unwrap();
+        let before: DateTime<Utc> = "2026-03-03T00:00:00Z".parse().unwrap();
+        let second = TimeDelta::seconds(1);
+        let year = TimeDelta::days(365);
+        let dated =
+            ProfileResolution::new(Timeframe::Min1, None).with_history(Some(since), Some(before));
+        let undated = ProfileResolution::new(Timeframe::Min1, None);
+        for (hint, (start, end), expected) in [
+            (dated, (since, before), Timeframe::Min1),
+            (dated, (since - second, before - second), Timeframe::Hour1),
+            (dated, (since + second, before + second), Timeframe::Hour1),
+            (undated, (since - year, before - year), Timeframe::Min1),
+        ] {
+            let hints = [hint, ProfileResolution::new(Timeframe::Hour1, None)];
+            assert_eq!(
+                ProfileResolution::suggested(
+                    &hints,
+                    Timeframe::Day1,
+                    TimeDelta::days(1),
+                    (start, end)
+                ),
+                Some(expected),
+                "{start} {end}"
+            );
+        }
     }
 }

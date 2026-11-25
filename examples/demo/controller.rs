@@ -5450,8 +5450,11 @@ mod tests {
         h.get_by_role_and_label(egui::Role::Button, "Rates");
     }
 
+    /// Guards the demo's news alerts: a new story of the alert whose selection the open News
+    /// panel shows stays quiet, the next one notifies while the panel is closed, and its Open
+    /// story button reopens News on that headline among the alert's stories.
     #[test]
-    fn calendar_news_demo_delivers_named_alerts_after_the_feed_advances() {
+    fn calendar_news_demo_alert_quiet_while_shown_opens_its_story() {
         let mut h = calendar_news_harness(SidePanel::News);
         h.run_steps(5);
         h.get_by_role(egui::Role::TextInput).focus();
@@ -5464,14 +5467,27 @@ mod tests {
         h.get_by_label("Alert: Rates alert");
         finish_feed(&h.state().live);
         let now = chrono::Utc::now();
-        h.state().live.set_paused(false);
-        h.state().live.advance(now + chrono::Duration::hours(1));
-        assert_eq!(h.state().live.now(), now + chrono::Duration::hours(1));
-        h.state().live.set_paused(true);
-        h.run_steps(8);
+        let advance = |h: &mut Harness<'static, Box<DemoApp>>, hours| {
+            h.state().live.set_paused(false);
+            h.state().live.advance(now + chrono::Duration::hours(hours));
+            assert_eq!(h.state().live.now(), now + chrono::Duration::hours(hours));
+            h.state().live.set_paused(true);
+            h.run_steps(8);
+        };
+        advance(&mut h, 1);
         h.state_mut().open_panel = Some(SidePanel::Notifications);
         h.run_steps(5);
+        assert!(h.query_by_label("Rates alert").is_none());
+        advance(&mut h, 2);
         h.get_by_label("Rates alert");
+        h.get_by_label("Open story").click();
+        h.run_steps(5);
+        assert!(h.state().open_panel == Some(SidePanel::News));
+        let mut query = egui_charts::data::NewsQuery::new(1);
+        query.symbols = vec![h.state().chart.symbol().into()];
+        let story = feeds::news(&query, h.state().live.now()).remove(0);
+        h.get_by_role_and_label(egui::Role::Label, &story.headline);
+        h.get_by_role_and_label(egui::Role::Button, "Next");
     }
 
     /// Guards the demo's chat author menu: Reply answers the message through the demo host, View
