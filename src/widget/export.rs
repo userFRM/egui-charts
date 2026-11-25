@@ -297,8 +297,11 @@ impl Chart {
     /// take the main series' precision, and without a chosen one the main series and price
     /// studies write the decimals the main series' prices hold, and an added series those its
     /// closes hold, at least two and at most twelve, so a price the chart shows does not read as
-    /// another number; an added series keeps at least four significant digits. Study overrides and
-    /// non-price units retain their precision. Missing/non-finite values are empty cells.
+    /// another number; an added series keeps at least four significant digits. Volumes take the
+    /// instrument's volume decimals, at most twelve as volume studies take them, and without them
+    /// the shortest text that holds their first 15 significant digits; they are never abbreviated.
+    /// Study overrides and non-price units retain their precision. Missing/non-finite values are
+    /// empty cells.
     #[cfg(feature = "csv")]
     #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -332,6 +335,12 @@ impl Chart {
                         .flat_map(|bar| [bar.open, bar.high, bar.low, bar.close]),
                 )
             });
+        // The main series' volumes take the instrument's volume decimals, capped as volume studies
+        // cap them so both columns agree; without them each keeps the digits it holds.
+        let volume_precision = self
+            .instrument()
+            .and_then(|instrument| instrument.volume_decimals)
+            .map(|decimals| usize::from(decimals).min(12));
         let mut studies: Vec<_> = self
             .indicators()
             .map(|(_, study)| study.clone_box())
@@ -425,11 +434,10 @@ impl Chart {
                 [bar.open, bar.high, bar.low, bar.close]
                     .map(|value| number(value, price_precision)),
             );
-            row.push(if bar.volume.is_finite() {
-                bar.volume.to_string()
-            } else {
-                String::new()
-            });
+            row.push(number(
+                bar.volume,
+                volume_precision.unwrap_or_else(|| crate::scales::decimals(bar.volume)),
+            ));
             row.extend(series.iter().map(|&(bars, _, _, precision)| {
                 bars.binary_search_by_key(&bar.time, |other| other.time)
                     .ok()
@@ -1069,7 +1077,8 @@ mod tests {
             assert_eq!(&rows[1][0], expected_times[1]);
             assert_eq!(&rows[0][1], "10.000");
             assert_eq!(&rows[2][4], "22.000");
-            assert_eq!(&rows[0][5], "1234.5");
+            // The volume column writes the volume decimals, as the Volume study column (12) does.
+            assert_eq!(&rows[0][5], "1234.500");
             // Two-bar means are 12 and (14 + 22) / 2 = 18; displacement -1 moves them left.
             assert_eq!(
                 rows.iter().map(|row| &row[6]).collect::<Vec<_>>(),
@@ -1188,6 +1197,58 @@ mod tests {
                 .unwrap();
             assert_eq!([&last[4], &last[6], &last[7]], expected, "{case}");
         }
+    }
+
+    /// The volume column writes the main series' volumes with the instrument's volume decimals,
+    /// at most twelve as a Volume study column of the row does, and without them the volume each
+    /// bar holds without binary noise; the CSV export and the copied text take the same cells.
+    #[test]
+    #[cfg(feature = "csv")]
+    fn data_table_writes_volumes_with_the_volume_decimals() {
+        let (mut written, mut expected) = (Vec::new(), Vec::new());
+        for (volume, decimals, text) in [
+            (0.1 + 0.2, Some(2), "0.30"),
+            (0.1 + 0.2, None, "0.3"),
+            (1234.0, None, "1234"),
+            (2500000.5, Some(2), "2500000.50"),
+            (0.1 + 0.2, Some(15), "0.300000000000"),
+        ] {
+            let bar = Bar::new(DateTime::UNIX_EPOCH, 10.0, 10.0, 10.0, 10.0, volume);
+            let mut chart = Chart::new(BarData::from_bars(vec![bar]));
+            if let Some(decimals) = decimals {
+                chart.set_instrument(Some(Instrument::new("TEST").with_volume_decimals(decimals)));
+            }
+            chart.add_indicator(Box::new(
+                CustomIndicator::new("Volume", |bars| {
+                    bars.iter()
+                        .map(|bar| IndicatorValue::Single(bar.volume))
+                        .collect()
+                })
+                .with_value_format(StudyFormat::Volume),
+            ));
+            let table = chart.data_table();
+            let csv = chart.export_csv().unwrap();
+            let record = csv::Reader::from_reader(csv.as_bytes())
+                .records()
+                .next()
+                .unwrap()
+                .unwrap();
+            written.push((
+                table.rows[0][5].clone(),
+                record[5].to_owned(),
+                table.tsv(&[5]).lines().nth(1).map(str::to_owned),
+                // Without volume decimals the study keeps its own two.
+                decimals.map(|_| table.rows[0][6].clone()),
+            ));
+            expected.push((
+                text.to_owned(),
+                text.to_owned(),
+                Some(text.to_owned()),
+                decimals.map(|_| text.to_owned()),
+            ));
+        }
+        // Compared once, so that a failure lists every row.
+        assert_eq!(written, expected);
     }
 
     /// An export's studies read the events the chart holds, as on screen, not the mark source page
