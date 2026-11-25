@@ -303,6 +303,19 @@ impl Drawing {
         }
     }
 
+    /// Shown bars whose executed rows this drawing reads.
+    pub(crate) fn execution_span<'b>(&self, bars: &'b [Bar]) -> Option<&'b [Bar]> {
+        if !self.reads_executions() {
+            return None;
+        }
+        let (_, span) = if self.tool_type == DrawingToolType::AnchoredVWAP {
+            bars_between(bars, self.chart_points.first()?.bar_idx, f32::INFINITY)?
+        } else {
+            self.profile_span(bars)?
+        };
+        Some(span)
+    }
+
     /// The suggested history this visible profile reads, with the first open of its span.
     pub(crate) fn profile_history(
         &self,
