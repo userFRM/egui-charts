@@ -1819,6 +1819,7 @@ mod tests {
         options.time_scale.max_bar_spacing = 12.0;
         options.time_scale.right_offset = 7.0;
         options.tooltip.show_volume_details = true;
+        options.tooltip.long_press_order = true;
         chart.set_chart_options(options);
         chart.apply_synced_time_scale(0.25, 4.0);
         let empty = chart.add_pane();
@@ -1989,6 +1990,8 @@ mod tests {
         tooltip.remove("show_volume_details");
         // Layouts saved before `touch_long_press` existed hold a touch for its readout.
         assert!(tooltip.remove("touch_long_press").is_some());
+        // Layouts saved before `long_press_order` existed show values on a long press.
+        assert!(tooltip.remove("long_press_order").is_some());
         // A saved exit choice survives the new default, including the former default.
         tooltip.insert("touch_exit_mode".into(), "OnTouchEnd".into());
         let config = &mut legacy["charts"][0]["config"];
@@ -2026,6 +2029,7 @@ mod tests {
         restored.restore(&migrated.charts[0]).unwrap();
         assert!(!restored.chart_options().tooltip.show_volume_details);
         assert!(restored.chart_options().tooltip.touch_long_press);
+        assert!(!restored.chart_options().tooltip.long_press_order);
         assert_eq!(
             restored.chart_options().tooltip.touch_exit_mode,
             crate::config::TouchTrackingExitMode::OnTouchEnd

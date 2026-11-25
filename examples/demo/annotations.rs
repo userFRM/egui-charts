@@ -34,6 +34,7 @@ impl DemoApp {
             TouchTrackingExitMode::OnTouchEnd,
             "Clear touch values on release",
         );
+        ui.checkbox(&mut options.long_press_order, "Long press opens an order");
         if options.mode == TooltipMode::Magnifier {
             ui.add(
                 egui::Slider::new(&mut options.magnifier_size, 60.0..=360.0).text("Lens diameter"),

@@ -19,11 +19,11 @@
 //! [`helpers::crossover`](crate::studies::helpers::crossover) does. The buy output holds the
 //! bar's low and the sell output its high, so the triangles sit beneath and above the bar. A mark
 //! is known when its bar closes and never moves. The defaults are a fast period of 12, a slow
-//! period of 26, a %K of 70 bars slowed over 10, and levels of 70 and 30.
+//! period of 26, a %K of 70 bars slowed over 10, and levels of 70 and 30, which take decimals.
+//! The buy triangles are teal and the sell triangles red, both at half opacity.
 
-use super::{MACD, Stochastic};
+use super::{MACD, Stochastic, clamp_param};
 use crate::model::Bar;
-use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -36,8 +36,8 @@ pub struct BookerReversal {
     slow_period: usize,
     k_period: usize,
     slowing: usize,
-    stoch_upper: usize,
-    stoch_lower: usize,
+    stoch_upper: f64,
+    stoch_lower: f64,
     macd: MACD,
     stochastic: Stochastic,
     values: IndicatorValues,
@@ -67,21 +67,26 @@ impl BookerReversal {
             slow_period,
             k_period,
             slowing,
-            stoch_upper: 70,
-            stoch_lower: 30,
+            stoch_upper: 70.0,
+            stoch_lower: 30.0,
             macd: MACD::new(fast_period, slow_period, 1),
             stochastic: Stochastic::new(k_period, slowing, 1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            colors: [palette::GREEN, palette::RED],
+            // Teal and red at half opacity.
+            colors: [
+                Color32::from_rgba_unmultiplied(0x00, 0x96, 0x88, 128),
+                Color32::from_rgba_unmultiplied(0xF4, 0x43, 0x36, 128),
+            ],
             visible: true,
         }
     }
 
-    /// The %K levels a sell must exceed and a buy must stay under, each at most 100.
-    pub fn with_levels(mut self, upper: usize, lower: usize) -> Self {
-        self.stoch_upper = upper.min(100);
-        self.stoch_lower = lower.min(100);
+    /// The %K levels a sell must exceed and a buy must stay under, each clamped to 0 to 100;
+    /// NaN counts as 0.
+    pub fn with_levels(mut self, upper: f64, lower: f64) -> Self {
+        self.stoch_upper = clamp_param(upper, 0.0, 100.0);
+        self.stoch_lower = clamp_param(lower, 0.0, 100.0);
         self
     }
 }
@@ -99,8 +104,8 @@ impl Indicator for BookerReversal {
         slow_period: length("Slow MA Period", 1, 2000),
         k_period: length("K Period", 1, 100),
         slowing: length("Slowing", 0, 100),
-        stoch_upper: length("Stochastic Upper", 0, 100),
-        stoch_lower: length("Stochastic Lower", 0, 100)
+        stoch_upper: number("Stochastic Upper", 0.0, 100.0),
+        stoch_lower: number("Stochastic Lower", 0.0, 100.0)
     ; {
         self.macd = MACD::new(self.fast_period, self.slow_period, 1);
         self.stochastic = Stochastic::new(self.k_period, self.slowing, 1);
@@ -128,7 +133,7 @@ impl Indicator for BookerReversal {
         self.macd.update(data, from);
         self.stochastic.update(data, from);
         let (macd, stochastic) = (self.macd.values(), self.stochastic.values());
-        let (upper, lower) = (self.stoch_upper as f64, self.stoch_lower as f64);
+        let (upper, lower) = (self.stoch_upper, self.stoch_lower);
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
                 let at = state.bar;
@@ -221,23 +226,31 @@ mod tests {
     /// 100 (close - lowest low) / (highest high - lowest low) over bars 0 to 2, and only the first
     /// bar's high or low moves it: (11 - 3) / (13 - 3) = 80 and (11 - 8) / (13 - 8) = 60 on the
     /// way down, (9 - 7) / (17 - 7) = 20 and (9 - 7) / (12 - 7) = 40 on the way up.
+    ///
+    /// The levels take decimals. With an upper level of 72.5 and the first bar's low at 3, a
+    /// last bar of high 12 and low 10 leaves the range at 3 to 13: a close of 10.26 gives a MACD
+    /// of (10.26 - 12) / 3 and a %K of 100 (10.26 - 3) / 10 = 72.6, a sell, and a close of 10.24
+    /// a %K of 72.4, no sell. A level cut to 72 would mark both and one rounded to 73 neither.
     #[test]
     fn marks_need_a_macd_zero_cross_at_a_stochastic_extreme() {
+        // (label, (high, low, close) bars, MACD, %K on bar 2, upper and lower level, marks)
         type Row = (
             &'static str,
             [(f64, f64, f64); 3],
             [f64; 3],
             f64,
+            [f64; 2],
             [Option<f64>; 2],
         );
         let down = [0.0, 1.0, -1.0 / 3.0];
         let up = [0.0, -1.0, 1.0 / 3.0];
-        let rows: [Row; 4] = [
+        let rows: [Row; 6] = [
             (
                 "sell",
                 [(10.0, 3.0, 10.0), (13.0, 12.0, 13.0), (12.0, 10.5, 11.0)],
                 down,
                 80.0,
+                [70.0, 30.0],
                 [None, Some(12.0)],
             ),
             (
@@ -245,6 +258,7 @@ mod tests {
                 [(10.0, 8.0, 10.0), (13.0, 12.0, 13.0), (12.0, 10.5, 11.0)],
                 down,
                 60.0,
+                [70.0, 30.0],
                 [None, None],
             ),
             (
@@ -252,6 +266,7 @@ mod tests {
                 [(17.0, 9.0, 10.0), (8.0, 7.0, 7.0), (9.5, 8.5, 9.0)],
                 up,
                 20.0,
+                [70.0, 30.0],
                 [Some(8.5), None],
             ),
             (
@@ -259,10 +274,27 @@ mod tests {
                 [(12.0, 9.0, 10.0), (8.0, 7.0, 7.0), (9.5, 8.5, 9.0)],
                 up,
                 40.0,
+                [70.0, 30.0],
+                [None, None],
+            ),
+            (
+                "sell over a decimal level",
+                [(10.0, 3.0, 10.0), (13.0, 12.0, 13.0), (12.0, 10.0, 10.26)],
+                [0.0, 1.0, (10.26 - 12.0) / 3.0],
+                72.6,
+                [72.5, 30.0],
+                [None, Some(12.0)],
+            ),
+            (
+                "sell under a decimal level",
+                [(10.0, 3.0, 10.0), (13.0, 12.0, 13.0), (12.0, 10.0, 10.24)],
+                [0.0, 1.0, (10.24 - 12.0) / 3.0],
+                72.4,
+                [72.5, 30.0],
                 [None, None],
             ),
         ];
-        for (label, hlc, macd, k, marks) in rows {
+        for (label, hlc, macd, k, levels, marks) in rows {
             let bars = super::super::hlc_bars(&hlc);
             let mut line = MACD::new(1, 2, 1);
             line.calculate(&bars);
@@ -276,6 +308,11 @@ mod tests {
             assert!((got - k).abs() < 1e-12, "{label}: %K {got}");
 
             let mut study = BookerReversal::new(1, 2, 3, 0);
+            for (id, level) in [("stoch_upper", levels[0]), ("stoch_lower", levels[1])] {
+                study
+                    .set_input(id, crate::studies::InputValue::Number(level))
+                    .unwrap();
+            }
             super::super::assert_replay_matches_batch(&study, &bars);
             study.calculate(&bars);
             for (plot, want) in marks.into_iter().enumerate() {

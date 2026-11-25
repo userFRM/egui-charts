@@ -45,6 +45,8 @@ pub struct IndicatorSettingsDialog {
     /// The plots offered only a visibility and a colour, which their study draws in a look of
     /// its own.
     color_only_plots: Vec<usize>,
+    /// The character each plot's study declares for a character plot.
+    plot_characters: Vec<Option<char>>,
     levels: Vec<(f64, &'static str)>,
     gradient_names: Vec<&'static str>,
     tab: Tab,
@@ -82,6 +84,15 @@ fn pattern_combo(ui: &mut egui::Ui, pattern: &mut LineStyle) {
         })
         .response
         .accessible_name(l10n::text(ui.ctx(), "Line pattern"));
+}
+
+/// The Style tab's name for `kind`, with the character of a character plot.
+fn plot_type_label(ctx: &egui::Context, kind: PlotType) -> String {
+    let name = l10n::text(ctx, kind.name());
+    match kind {
+        PlotType::Character(character) => format!("{name} {character}"),
+        _ => name,
+    }
 }
 
 fn width_picker(ui: &mut egui::Ui, width: &mut f32) {
@@ -135,8 +146,8 @@ impl IndicatorSettingsDialog {
         self.sources.clear();
     }
 
-    /// Reads the plot names, the plots without values, the plots offered only a colour and the
-    /// guide levels of `study`.
+    /// Reads the plot names, the plots without values, the plots offered only a colour, the
+    /// characters declared for the plots and the guide levels of `study`.
     fn read_plots(&mut self, study: &dyn Indicator) {
         self.line_names = study.line_names();
         self.valueless_plots = (0..study.line_count())
@@ -144,6 +155,9 @@ impl IndicatorSettingsDialog {
             .collect();
         self.color_only_plots = (0..study.line_count())
             .filter(|&line| study.plot_color_only(line))
+            .collect();
+        self.plot_characters = (0..study.line_count())
+            .map(|line| study.plot_character(line))
             .collect();
         self.levels = study
             .pane()
@@ -473,15 +487,32 @@ impl IndicatorSettingsDialog {
                                             if self.valueless_plots.contains(&line) {
                                                 return;
                                             }
+                                            // The character the study declares for the
+                                            // plot, and the one a saved plot holds.
+                                            let declared =
+                                                self.plot_characters.get(line).copied().flatten();
+                                            let current = match plot.plot_type {
+                                                PlotType::Character(character)
+                                                    if Some(character) != declared =>
+                                                {
+                                                    Some(character)
+                                                }
+                                                _ => None,
+                                            };
+                                            let kinds = PlotType::ALL.into_iter().chain(
+                                                declared
+                                                    .into_iter()
+                                                    .chain(current)
+                                                    .map(PlotType::Character),
+                                            );
                                             egui::ComboBox::from_id_salt("plot_type")
-                                                .selected_text(l10n::text(
+                                                .selected_text(plot_type_label(
                                                     ui.ctx(),
-                                                    plot.plot_type.name(),
+                                                    plot.plot_type,
                                                 ))
                                                 .show_ui(ui, |ui| {
-                                                    for kind in PlotType::ALL {
-                                                        let label =
-                                                            l10n::text(ui.ctx(), kind.name());
+                                                    for kind in kinds {
+                                                        let label = plot_type_label(ui.ctx(), kind);
                                                         // A saved choice stays listed and selected.
                                                         match kind
                                                             .incompatibility(

@@ -9271,11 +9271,11 @@ fn leaving_a_market_replay_restores_the_live_executions() {
 }
 
 /// Answers every request at once with bars closing at the symbol's base plus their index:
-/// AAPL from 100, MSFT from 40. It records the history requests.
+/// AAPL from 100, MSFT from 40. It records the history requests and subscriptions.
 #[derive(Default)]
 struct Instant {
     requests: Mutex<Vec<HistoryRequest>>,
-    subscriptions: Mutex<Vec<(String, crate::data::Sink)>>,
+    subscriptions: Mutex<Vec<Subscription>>,
     stopped: Mutex<Vec<SubscriptionId>>,
 }
 
@@ -9300,10 +9300,7 @@ impl Datafeed for Instant {
         reply.send(page(bars, true));
     }
     fn subscribe(&self, subscription: Subscription) {
-        self.subscriptions
-            .lock()
-            .unwrap()
-            .push((subscription.symbol, subscription.sink));
+        self.subscriptions.lock().unwrap().push(subscription);
     }
     fn unsubscribe(&self, id: SubscriptionId) {
         self.stopped.lock().unwrap().push(id);
@@ -9393,9 +9390,9 @@ fn comparisons_are_filled_from_the_feed_and_survive_a_snapshot() {
         .unwrap()
         .iter()
         .rev()
-        .find(|(symbol, sink)| symbol == "MSFT" && sink.is_active())
+        .find(|subscription| subscription.symbol == "MSFT" && subscription.sink.is_active())
         .unwrap()
-        .1
+        .sink
         .clone();
     let time = chart.bars(msft).last().unwrap().time;
     sink.push_bar(Bar::new(time, 50.0, 50.0, 50.0, 50.0, 1.0));
@@ -9615,8 +9612,8 @@ fn undo_of_a_removed_fed_series_keeps_its_bars() {
     }
 }
 
-/// Dividend adjustment is asked of the feed for the main series and the comparisons, and
-/// changing it loads them again.
+/// Dividend adjustment is asked of the feed in the history and live subscriptions of the main
+/// series and the comparisons, and changing it loads and subscribes them again.
 #[test]
 fn dividend_adjustment_is_requested_for_the_chart_and_its_comparisons() {
     let feed = Arc::new(Instant::default());
@@ -9643,6 +9640,17 @@ fn dividend_adjustment_is_requested_for_the_chart_and_its_comparisons() {
         asked.sort();
         assert_eq!(
             asked,
+            [("AAPL".into(), adjusted), ("MSFT".into(), adjusted)],
+            "adjusted {adjusted}"
+        );
+        let mut subscribed: Vec<_> = std::mem::take(&mut *feed.subscriptions.lock().unwrap())
+            .into_iter()
+            .map(|subscription| (subscription.symbol, subscription.adjusted))
+            .collect();
+        subscribed.sort();
+        subscribed.dedup();
+        assert_eq!(
+            subscribed,
             [("AAPL".into(), adjusted), ("MSFT".into(), adjusted)],
             "adjusted {adjusted}"
         );
