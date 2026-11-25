@@ -211,7 +211,11 @@ impl DemoApp {
         let first = self.extra_charts.remove(0);
         self.extra_charts.insert(slot - 1, first);
         self.layout.swap_slots(0, slot);
-        for replayed in &mut self.replay_slots {
+        for replayed in self
+            .replay_slots
+            .iter_mut()
+            .chain([&mut self.fixed_data_table.1])
+        {
             if *replayed == 0 {
                 *replayed = slot;
             } else if *replayed == slot {
@@ -405,6 +409,8 @@ impl DemoApp {
             slot: std::mem::take(&mut self.layout_slot),
         };
         self.layout_tabs[self.layout_tab].workspace = Some(workspace);
+        // The fixed table names its chart by slot, which now holds another workspace's chart.
+        self.fixed_data_table.0.close();
     }
 
     /// Brings back the workspace `park_workspace` set aside and points the toolbars at it.
@@ -424,6 +430,8 @@ impl DemoApp {
 
     /// Points storage, the toolbars and the grid selector at the workspace on show.
     fn refresh_workspace(&mut self) {
+        // The fixed table names its chart by slot, which now holds another workspace's chart.
+        self.fixed_data_table.0.close();
         // Other tabs may have edited the same symbol since this workspace was last shown.
         self.chart.set_storage(self.storage.clone());
         for chart in &mut self.extra_charts {
