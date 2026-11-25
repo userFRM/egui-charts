@@ -795,6 +795,7 @@ impl Chart {
             clock: link.clock.clone(),
             extended_hours: self.extended_hours,
             overnight_hours: self.overnight_hours,
+            adjusted: link.adjusted,
             conversion: self.conversion.clone(),
             sink,
         };

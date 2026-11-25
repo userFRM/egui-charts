@@ -248,12 +248,19 @@ impl super::Chart {
         {
             return;
         }
+        let market_keys = self.quote_buttons;
         while let Some((action, event)) = {
             #[cfg(feature = "drawings")]
             while self.nudge_selected_drawing(ctx) {}
-            self.keyboard
-                .map
-                .consume(ctx, true, |action, shortcut| !replay_key(action, shortcut))
+            self.keyboard.map.consume(ctx, true, |action, shortcut| {
+                !replay_key(action, shortcut)
+                    // Without the Buy and Sell buttons their keys are left to typing.
+                    && (market_keys
+                        || !matches!(
+                            action,
+                            KeyboardAction::BuyMarket | KeyboardAction::SellMarket
+                        ))
+            })
         } {
             // Drawing edits wait for a drawing drag to end, as undo does: the release records the
             // drag from the state it started in, which an edit meanwhile would no longer lead to.
@@ -266,6 +273,14 @@ impl super::Chart {
                         | KeyboardAction::PasteDrawing
                         | KeyboardAction::ToggleDrawings
                 )
+            {
+                continue;
+            }
+            // A held market order key acts once: its repeats are taken and do nothing.
+            if matches!(
+                action,
+                KeyboardAction::BuyMarket | KeyboardAction::SellMarket
+            ) && matches!(event, Event::Key { repeat: true, .. })
             {
                 continue;
             }
@@ -436,6 +451,8 @@ impl super::Chart {
             KeyboardAction::BuyLimitAtPointer | KeyboardAction::SellLimitAtPointer => {
                 self.keyboard.order_key = Some(action);
             }
+            KeyboardAction::BuyMarket => self.quote_action = Some(super::QuoteSide::Buy),
+            KeyboardAction::SellMarket => self.quote_action = Some(super::QuoteSide::Sell),
             _ => self.user_action(|chart| chart.apply_keyboard_edit(action, chart_rect)),
         }
     }
@@ -1164,6 +1181,117 @@ mod tests {
             if expected != Some(A::ZoomIn) {
                 assert_eq!(spacing, before_spacing, "{key:?} keeps the zoom");
             }
+        }
+    }
+
+    /// Guards #3531: Shift+B and Shift+S press the chart's Buy and Sell buttons through the
+    /// shared action map, once per press and only while a frame drew the buttons; without them
+    /// the keys type their letter, which starts symbol search.
+    #[test]
+    fn market_order_keys_press_the_quote_buttons_while_they_are_drawn() {
+        use crate::widget::{QuoteSide, SeriesId};
+        let key = |key| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::SHIFT,
+        };
+        let text = |text: &str| Event::Text(text.into());
+        let search = |text: &str| vec![ShortcutRequest::SymbolSearch(text.into())];
+        // The case, whether a quote is set and the buttons are switched on, the events of the
+        // first frame and of the third, the button pressed and the requests left for the host.
+        type Row = (
+            &'static str,
+            bool,
+            bool,
+            Vec<Event>,
+            Vec<Event>,
+            Option<QuoteSide>,
+            Vec<ShortcutRequest>,
+        );
+        let rows: [Row; 5] = [
+            (
+                "buy",
+                true,
+                true,
+                vec![],
+                vec![key(Key::B), text("B")],
+                Some(QuoteSide::Buy),
+                vec![],
+            ),
+            // A browser reports the text before its key.
+            (
+                "sell",
+                true,
+                true,
+                vec![],
+                vec![text("S"), key(Key::S)],
+                Some(QuoteSide::Sell),
+                vec![],
+            ),
+            // The key went down before the buttons were drawn, so the press is a repeat.
+            (
+                "held key",
+                true,
+                true,
+                vec![key(Key::B)],
+                vec![key(Key::B), text("B")],
+                None,
+                vec![],
+            ),
+            (
+                "no quote",
+                false,
+                true,
+                vec![],
+                vec![key(Key::B), text("B")],
+                None,
+                search("B"),
+            ),
+            (
+                "buttons off",
+                true,
+                false,
+                vec![],
+                vec![key(Key::S), text("S")],
+                None,
+                search("S"),
+            ),
+        ];
+        for (case, quote, buttons, first, events, pressed, requests) in rows {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            if quote {
+                chart.set_quote(Some(crate::model::Level1Quote {
+                    symbol: chart.symbol().into(),
+                    ts: chart.bars(SeriesId::MAIN)[99].time,
+                    bid: 19.0,
+                    ask: 21.0,
+                    bid_size: 1.0,
+                    ask_size: 1.0,
+                }));
+            }
+            chart.config_mut().show_quote_boxes = buttons;
+            // Two frames draw the buttons, or leave them out; the keys arrive in the third.
+            for events in [first, vec![], events] {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.show(ui);
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+            assert_eq!(chart.take_quote_action(), pressed, "{case}");
+            assert_eq!(chart.take_shortcut_requests(), requests, "{case}");
         }
     }
 

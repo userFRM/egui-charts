@@ -107,6 +107,9 @@ pub(crate) struct Run {
     profile: Option<Lines>,
     /// The strategy decision being run, `None` in a study.
     pub decision: Option<Decision>,
+    /// The readings each bar of a strategy was last decided with, which a bar run again inside a
+    /// later decision is decided with again, counted against the memory limit; empty in a study.
+    decided: Vec<Readings>,
 }
 
 impl Run {
@@ -190,6 +193,9 @@ impl Run {
         self.row.fill(f64::NAN);
         if let Some(decision) = &mut self.decision {
             decision.calls.clear();
+            if let Some(readings) = self.decided.get(bar) {
+                decision.readings = *readings;
+            }
         }
         self.occurrences.clear();
         self.levels.clear();
@@ -388,6 +394,7 @@ impl<P: Program> RunState<P> {
             sites_counted: 0,
             profile: None,
             decision: None,
+            decided: Vec::new(),
         };
         Self {
             slots: program.slots(&[], false),
@@ -441,9 +448,15 @@ impl<P: Program> RunState<P> {
                 patch.apply(history);
             }
         }
+        let len = columns.bars.len();
+        // The bars from `from` are decided with this decision's readings, the earlier ones with
+        // those they were last decided with, also when they run again.
+        if let Some(readings) = decision {
+            self.run.decided.truncate(from);
+            self.run.decided.resize(len, readings);
+        }
         // A bar reads the other histories differently while it is the last, so another number of
         // bars changes the one that was or becomes the last.
-        let len = columns.bars.len();
         let from = if columns.histories.is_empty() || len == self.done {
             from
         } else {
@@ -674,6 +687,7 @@ impl Run {
             sites_counted: 0,
             profile: None,
             decision: None,
+            decided: Vec::new(),
         }
     }
 
@@ -706,6 +720,7 @@ impl Run {
             + 2 * helpers
             + kept
             + values
+            + self.decided.len() * std::mem::size_of::<Readings>()
     }
 
     /// The bytes each other history holds, the bars read of it included.
