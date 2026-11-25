@@ -105,8 +105,8 @@ impl Default for SuperTrend {
 
 impl Indicator for SuperTrend {
     crate::studies::inputs::study_inputs!(self;
-        atr_period: length("ATR period", 1, usize::MAX),
-        multiplier: number("Multiplier", 0.01, f64::MAX)
+        atr_period: length("ATR Length", 1, usize::MAX),
+        multiplier: number("Factor", 0.01, f64::MAX)
     ; {});
 
     fn name(&self) -> &str {

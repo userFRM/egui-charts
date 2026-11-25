@@ -163,9 +163,9 @@ impl Indicator for BollingerBands {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX),
+        period: length("Length", 1, usize::MAX),
         basis: choice("Basis MA type", [AverageType::Simple, AverageType::Exponential, AverageType::Weighted, AverageType::Smoothed, AverageType::VolumeWeighted]),
-        std_dev: number("Std dev", 0.001, 50.0)
+        std_dev: number("StdDev", 0.001, 50.0)
     ; {});
 
     fn fills(&self) -> Vec<crate::studies::StudyFill> {

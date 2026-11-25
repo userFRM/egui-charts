@@ -437,7 +437,7 @@ fn catalogue_inputs_take_their_usual_labels_and_ranges() {
         (
             "BB",
             "std_dev",
-            "Std dev",
+            "StdDev",
             vec![
                 (Number(0.0), false),
                 (Number(0.001), true),
@@ -491,7 +491,7 @@ fn catalogue_inputs_take_their_usual_labels_and_ranges() {
         (
             "SuperTrend",
             "multiplier",
-            "Multiplier",
+            "Factor",
             vec![
                 (Number(0.0), false),
                 (Number(0.005), false),
@@ -505,6 +505,8 @@ fn catalogue_inputs_take_their_usual_labels_and_ranges() {
             "Period",
             vec![(Length(1), false), (Length(2), true)],
         ),
+        ("BB", "period", "Length", vec![]),
+        ("SuperTrend", "atr_period", "ATR Length", vec![]),
         ("KAMA", "period", "ER length", vec![]),
         ("KAMA", "fast_period", "Fast length", vec![]),
         ("KAMA", "slow_period", "Slow length", vec![]),
