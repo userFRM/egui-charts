@@ -87,6 +87,8 @@ pub struct TPOProfile {
     pub opening_price: f64,
     /// Closing price: the close of the profile's last bar.
     pub closing_price: f64,
+    /// Volume of the profile's bars: the sum of the volumes that are positive and finite.
+    pub total_volume: f64,
     /// Single prints: the prices of the rows with exactly one TPO, in ascending order
     pub single_prints: Vec<f64>,
     /// Poor highs (multiple TPOs at high)
@@ -147,8 +149,10 @@ pub struct TPOConfig {
     pub extend_poor_extremes: bool,
     /// Show single prints
     pub show_single_prints: bool,
-    /// Show the session statistics table below the profile
+    /// Show the session statistics table below the profile, with the rows of `statistics_rows`.
     pub show_statistics: bool,
+    /// Rows of the statistics table; see [`TPOStatisticsRows`].
+    pub statistics_rows: TPOStatisticsRows,
     /// Mark each profile's opening price with a triangle left of the profile.
     pub show_opening_range: bool,
     /// Level captions and their prices; see [`TPOLabels`].
@@ -223,6 +227,7 @@ impl Default for TPOConfig {
             extend_poor_extremes: false,
             show_single_prints: false,
             show_statistics: false,
+            statistics_rows: TPOStatisticsRows::default(),
             show_opening_range: true,
             labels: TPOLabels::default(),
             show_closing_price: false,
@@ -307,6 +312,120 @@ impl Default for TPOLabels {
             single_prints: false,
             prices: false,
         }
+    }
+}
+
+/// Rows of the session statistics table below a TPO profile, in display order. The table is
+/// drawn with [`TPOConfig::show_statistics`]. A row that is off is left out, the initial
+/// balance rows are left out of a profile without one, and no table is drawn when no row is
+/// left. Defaults show the six rows drawn before the rows could be chosen.
+///
+/// ```
+/// use egui_charts::model::{ChartTypeParams, TPOStatisticsRows};
+///
+/// let mut rows = TPOStatisticsRows::default();
+/// rows.total_volume = true;
+/// rows.rotation_factor = false;
+/// let params = ChartTypeParams {
+///     tpo_statistics: true,
+///     tpo_statistics_rows: rows,
+///     ..Default::default()
+/// };
+/// assert!(params.tpo_config(None).statistics_rows.total_volume);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct TPOStatisticsRows {
+    /// `High-low range`: the profile's high minus its low. Off by default.
+    pub high_low_range: bool,
+    /// `POC`: the point of control. On by default.
+    pub poc: bool,
+    /// `VAH`: the value area high. On by default. With [`Self::value_area_low`] on too, the two
+    /// share one `VAL / VAH` row.
+    pub value_area_high: bool,
+    /// `VAL`: the value area low. On by default.
+    pub value_area_low: bool,
+    /// `VA range`: the value area high minus its low. Off by default.
+    pub value_area_range: bool,
+    /// `IB high`: the initial balance high. Off by default.
+    pub initial_balance_high: bool,
+    /// `IB low`: the initial balance low. Off by default.
+    pub initial_balance_low: bool,
+    /// `IB range`: the initial balance high minus its low. On by default.
+    pub initial_balance_range: bool,
+    /// `TPO above`: the TPOs above the point of control's row. On by default. With
+    /// [`Self::tpos_below`] on too, the two share one `TPO below / above` row.
+    pub tpos_above: bool,
+    /// `TPO below`: the TPOs below the point of control's row. On by default.
+    pub tpos_below: bool,
+    /// `Total TPOs`: every TPO of the profile. Off by default.
+    pub total_tpos: bool,
+    /// `Total volume`: [`TPOProfile::total_volume`], with K, M and B suffixes. Off by default.
+    pub total_volume: bool,
+    /// `Rotation`: [`TPOProfile::rotation_factor`]. On by default.
+    pub rotation_factor: bool,
+    /// `IB ext. below / above`: [`TPOProfile::range_extension`]. On by default.
+    pub range_extension: bool,
+}
+
+impl Default for TPOStatisticsRows {
+    fn default() -> Self {
+        Self {
+            high_low_range: false,
+            poc: true,
+            value_area_high: true,
+            value_area_low: true,
+            value_area_range: false,
+            initial_balance_high: false,
+            initial_balance_low: false,
+            initial_balance_range: true,
+            tpos_above: true,
+            tpos_below: true,
+            total_tpos: false,
+            total_volume: false,
+            rotation_factor: true,
+            range_extension: true,
+        }
+    }
+}
+
+impl TPOStatisticsRows {
+    /// Each row's saved name, table label and switch, in display order.
+    #[cfg(any(feature = "widget", feature = "studies"))]
+    pub(crate) fn switches(&mut self) -> [(&'static str, &'static str, &mut bool); 14] {
+        [
+            ("high_low_range", "High-low range", &mut self.high_low_range),
+            ("poc", "POC", &mut self.poc),
+            ("value_area_high", "VAH", &mut self.value_area_high),
+            ("value_area_low", "VAL", &mut self.value_area_low),
+            ("value_area_range", "VA range", &mut self.value_area_range),
+            (
+                "initial_balance_high",
+                "IB high",
+                &mut self.initial_balance_high,
+            ),
+            (
+                "initial_balance_low",
+                "IB low",
+                &mut self.initial_balance_low,
+            ),
+            (
+                "initial_balance_range",
+                "IB range",
+                &mut self.initial_balance_range,
+            ),
+            ("tpos_above", "TPO above", &mut self.tpos_above),
+            ("tpos_below", "TPO below", &mut self.tpos_below),
+            ("total_tpos", "Total TPOs", &mut self.total_tpos),
+            ("total_volume", "Total volume", &mut self.total_volume),
+            ("rotation_factor", "Rotation", &mut self.rotation_factor),
+            (
+                "range_extension",
+                "IB ext. below / above",
+                &mut self.range_extension,
+            ),
+        ]
     }
 }
 
@@ -435,6 +554,7 @@ impl TPOProfile {
             profile_low: f64::MAX,
             opening_price: 0.0,
             closing_price: 0.0,
+            total_volume: 0.0,
             single_prints: Vec::new(),
             has_poor_high: false,
             has_poor_low: false,
@@ -509,6 +629,7 @@ impl TPOProfile {
         }
         self.letters.extend(later.letters);
         self.closing_price = later.closing_price;
+        self.total_volume += later.total_volume;
         self.profile_high = self.profile_high.max(later.profile_high);
         self.profile_low = self.profile_low.min(later.profile_low);
     }
@@ -922,10 +1043,13 @@ fn profiles_for_parts(
         touched = (*touched.start()).min(lo)..=(*touched.end()).max(hi);
 
         if let Some(ref mut profile) = current_profile {
-            if config.show_volume_profile && bar.volume.is_finite() && bar.volume > 0.0 {
-                let volume = bar.volume / (high_key.abs_diff(low_key) + 1) as f64;
-                for key in low_key..=high_key {
-                    *profile.row_volume.entry(key).or_insert(0.0) += volume;
+            if bar.volume.is_finite() && bar.volume > 0.0 {
+                profile.total_volume += bar.volume;
+                if config.show_volume_profile {
+                    let volume = bar.volume / (high_key.abs_diff(low_key) + 1) as f64;
+                    for key in low_key..=high_key {
+                        *profile.row_volume.entry(key).or_insert(0.0) += volume;
+                    }
                 }
             }
             profile.closing_price = bar.close;
@@ -1452,6 +1576,8 @@ mod tests {
             &clock,
         );
         let merged = &composite[0];
+        // Seven bars of volume 1 in the first week; merging sums the sessions' volumes.
+        assert_eq!((first.total_volume, merged.total_volume), (7.0, 7.0));
         assert_eq!(
             (
                 first.poc_price,
@@ -2187,12 +2313,15 @@ mod tests {
     #[test]
     fn session_statistics_follow_a_hand_counted_session() {
         let start = Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap();
-        let bars = [
+        let mut bars = [
             bar_at(start, 0, 101.0, 103.0, 100.0, 102.0),
             bar_at(start, 30, 102.0, 104.0, 101.0, 103.0),
             bar_at(start, 60, 104.0, 106.0, 103.0, 105.0),
             bar_at(start, 90, 104.0, 105.0, 99.0, 100.0),
         ];
+        for (bar, volume) in bars.iter_mut().zip([400.0, 600.0, 700.0, 800.0]) {
+            bar.volume = volume;
+        }
         let config = TPOConfig {
             tick_size: 1.0,
             ..Default::default()
@@ -2212,6 +2341,14 @@ mod tests {
         // B over A +2, C over B +2, D under C -2.
         assert_eq!(session.rotation_factor(), 2);
         assert_eq!(session.range_extension(), Some((1.0, 2.0)));
+        // Summed without the volume profile; unusable volumes add none.
+        assert_eq!(session.total_volume, 2500.0);
+        for volume in [f64::NAN, f64::INFINITY, -5.0, 0.0] {
+            let mut bars = bars.clone();
+            bars[3].volume = volume;
+            let session = to_tpo_profiles(&bars, &config, &clock).remove(0);
+            assert_eq!(session.total_volume, 1700.0, "volume {volume}");
+        }
 
         // After A and B: rows 100 to 104 hold 1, 2, 2, 2 and 1, and a tie takes the lower price.
         let partial = to_tpo_profiles(&bars[..2], &config, &clock).remove(0);
@@ -2220,5 +2357,6 @@ mod tests {
         assert_eq!(partial.tpo_counts_around_poc(), (1, 5));
         assert_eq!(partial.rotation_factor(), 2);
         assert_eq!(partial.range_extension(), Some((0.0, 0.0)));
+        assert_eq!(partial.total_volume, 1000.0);
     }
 }

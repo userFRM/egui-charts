@@ -1448,6 +1448,7 @@ mod tests {
             extend_poor_extremes: false,
             show_single_prints: false,
             show_statistics: false,
+            statistics_rows: crate::model::TPOStatisticsRows::default(),
             show_opening_range: true,
             labels: crate::model::TPOLabels::default(),
             show_closing_price: false,
@@ -1486,11 +1487,32 @@ mod tests {
             ("poor_low", InputValue::Toggle(true)),
             ("extend_poor", InputValue::Toggle(true)),
             ("volume_profile", InputValue::Toggle(true)),
+            ("statistics_high_low_range", InputValue::Toggle(true)),
+            ("statistics_poc", InputValue::Toggle(false)),
+            ("statistics_value_area_high", InputValue::Toggle(false)),
+            ("statistics_value_area_low", InputValue::Toggle(true)),
+            ("statistics_value_area_range", InputValue::Toggle(true)),
+            ("statistics_initial_balance_high", InputValue::Toggle(true)),
+            ("statistics_initial_balance_low", InputValue::Toggle(true)),
+            (
+                "statistics_initial_balance_range",
+                InputValue::Toggle(false),
+            ),
+            ("statistics_tpos_above", InputValue::Toggle(true)),
+            ("statistics_tpos_below", InputValue::Toggle(false)),
+            ("statistics_total_tpos", InputValue::Toggle(true)),
+            ("statistics_total_volume", InputValue::Toggle(true)),
+            ("statistics_rotation_factor", InputValue::Toggle(false)),
+            ("statistics_range_extension", InputValue::Toggle(false)),
+            // Merges and splits are saved after the period and row size they were made for.
             (
                 "composites",
-                InputValue::Text("1970-01-01T00:00:00Z/1970-01-02T00:00:00Z".into()),
+                InputValue::Text("30,0|1970-01-01T00:00:00Z/1970-01-02T00:00:00Z".into()),
             ),
-            ("splits", InputValue::Text("1970-01-02T01:00:00Z".into())),
+            (
+                "splits",
+                InputValue::Text("30,0|1970-01-02T01:00:00Z".into()),
+            ),
         ] {
             tpo.set_input(id, value.clone()).unwrap();
             assert_eq!(
