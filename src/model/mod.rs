@@ -143,7 +143,7 @@ pub use timezone::{TimezoneId, TimezoneOffset};
 pub(crate) use timezone::{local_instant, local_time};
 pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLabels, TPOLetter,
-    TPOProfile, TPOProfilePeriod, derive_tick_size, to_tpo_profiles,
+    TPOProfile, TPOProfilePeriod, TPOStatisticsRows, derive_tick_size, to_tpo_profiles,
 };
 pub(crate) use trading::rounding_tolerance;
 #[cfg(feature = "widget")]

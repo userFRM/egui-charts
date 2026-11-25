@@ -186,6 +186,7 @@ impl Chart {
                 heikin_ashi: &item.heikin_ashi,
                 start_idx: start,
                 clock: &clock,
+                tpo: None,
                 tick_size: None,
                 price_formatter: None,
             },

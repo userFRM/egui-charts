@@ -17,9 +17,9 @@
 //! the fractal bar may equal its high, as long as the `n` bars before them are strictly lower,
 //! so a flat top of up to five bars is marked once, on its last bar.
 //!
-//! An up fractal is the high of its bar, drawn as an upward triangle; a down fractal is the
-//! low, drawn as a downward triangle. A fractal is known `n` bars after its bar, so the last
-//! `n` bars have no value yet.
+//! An up fractal is the high of its bar, drawn as an upward triangle above the bar; a down
+//! fractal is the low, drawn as a downward triangle below it. A fractal is known `n` bars after
+//! its bar, so the last `n` bars have no value yet.
 //!
 //! # Example
 //!
@@ -169,6 +169,15 @@ impl Indicator for WilliamsFractals {
                 crate::studies::PlotType::TriangleDown
             },
             visible: true,
+        }
+    }
+
+    fn plot_shape_side(&self, line: usize) -> crate::studies::ShapeSide {
+        // An up fractal is its bar's high, a down fractal its low.
+        if line == 0 {
+            crate::studies::ShapeSide::Above
+        } else {
+            crate::studies::ShapeSide::Below
         }
     }
 

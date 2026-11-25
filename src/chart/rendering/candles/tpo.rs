@@ -26,7 +26,8 @@ use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 use crate::model::tpo::OUTSIDE_VALUE_AREA_OPACITY;
 use crate::model::{
     Bar, BarClock, ExchangeSessionProvider, SessionProvider, TPOColorMode, TPOConfig,
-    TPODisplayMode, TPOProfile, TPOProfilePeriod, derive_tick_size, to_tpo_profiles,
+    TPODisplayMode, TPOProfile, TPOProfilePeriod, TPOStatisticsRows, derive_tick_size,
+    to_tpo_profiles,
 };
 use crate::styles::typography;
 use crate::theme::{ChartColors, ThemeExt, contrast, readable_color};
@@ -1634,7 +1635,15 @@ fn draw_session_profile(
         // The next session's captions sit in the strip that ends this session's room.
         let captions = label_room > 0.0 && config.shows_captions();
         let room = if captions { room - label_room } else { room };
-        draw_statistics(painter, price_rect, coords, profile, anchor_x, room);
+        draw_statistics(
+            painter,
+            price_rect,
+            coords,
+            profile,
+            anchor_x,
+            room,
+            &config.statistics_rows,
+        );
     }
     poor_ends
 }
@@ -1648,6 +1657,7 @@ fn draw_statistics(
     profile: &TPOProfile,
     anchor_x: f32,
     room: f32,
+    shown: &TPOStatisticsRows,
 ) {
     let chart = painter.ctx().active_theme().chart;
     let decimals = crate::scales::decimals(profile.instrument_tick);
@@ -1657,30 +1667,54 @@ fn draw_statistics(
         0 => "0".to_owned(),
         rotation => format!("{rotation:+}"),
     };
-    let mut rows = vec![
-        ("POC", price(profile.poc_price)),
-        (
-            "VAL / VAH",
-            format!(
-                "{} / {}",
-                price(profile.value_area_low),
-                price(profile.value_area_high)
-            ),
-        ),
-    ];
-    rows.extend(
+    let balance = profile.initial_balance_range();
+    let values: [Option<String>; 14] = [
+        Some(price(profile.profile_high - profile.profile_low)),
+        Some(price(profile.poc_price)),
+        Some(price(profile.value_area_high)),
+        Some(price(profile.value_area_low)),
+        Some(price(profile.value_area_high - profile.value_area_low)),
+        balance.map(|_| price(profile.initial_balance_high)),
+        balance.map(|_| price(profile.initial_balance_low)),
+        balance.map(price),
+        Some(above.to_string()),
+        Some(below.to_string()),
+        Some(profile.price_tpo_count.values().sum::<usize>().to_string()),
+        // shortcut: the total prints in the default volume format; pass the instrument's volume
+        // decimals to draw_statistics if a host needs fractional totals.
+        Some(crate::scales::StudyFormat::Volume.format(profile.total_volume, None)),
+        Some(rotation),
         profile
-            .initial_balance_range()
-            .map(|range| ("IB range", price(range))),
-    );
-    rows.push(("TPO below / above", format!("{below} / {above}")));
-    rows.push(("Rotation", rotation));
-    rows.extend(profile.range_extension().map(|(below, above)| {
-        (
-            "IB ext. below / above",
-            format!("{} / {}", price(below), price(above)),
-        )
-    }));
+            .range_extension()
+            .map(|(below, above)| format!("{} / {}", price(below), price(above))),
+    ];
+    // Both halves of a pair on share one row, as the table drew before each had a switch.
+    let pairs = [
+        (shown.value_area_high && shown.value_area_low).then(|| {
+            let (low, high) = (profile.value_area_low, profile.value_area_high);
+            ("VAL / VAH", format!("{} / {}", price(low), price(high)))
+        }),
+        (shown.tpos_above && shown.tpos_below)
+            .then(|| ("TPO below / above", format!("{below} / {above}"))),
+    ];
+    let mut shown = *shown;
+    let rows =
+        shown
+            .switches()
+            .into_iter()
+            .zip(values)
+            .filter_map(|((id, label, shown), value)| {
+                let pair = match id {
+                    "value_area_high" | "value_area_low" => &pairs[0],
+                    "tpos_above" | "tpos_below" => &pairs[1],
+                    _ => &None,
+                };
+                match pair {
+                    Some(_) if matches!(id, "value_area_low" | "tpos_below") => None,
+                    Some((label, value)) => Some((*label, value.clone())),
+                    None => Some((label, value.filter(|_| *shown)?)),
+                }
+            });
 
     let font = FontId::proportional(typography::XS);
     let galleys: Vec<_> = rows
@@ -1693,6 +1727,9 @@ fn draw_statistics(
             )
         })
         .collect();
+    if galleys.is_empty() {
+        return;
+    }
     let (label_width, value_width, line) = galleys.iter().fold(
         (0.0_f32, 0.0_f32, 0.0_f32),
         |(labels, values, line), (label, value)| {
@@ -4469,7 +4506,8 @@ mod tests {
             let ctx = egui::Context::default();
             ctx.begin_pass(egui::RawInput::default());
             let painter = ctx.layer_painter(egui::LayerId::background());
-            draw_statistics(&painter, rect, &coords, &profile, anchor, room);
+            let rows = TPOStatisticsRows::default();
+            draw_statistics(&painter, rect, &coords, &profile, anchor, room, &rows);
             let mut output = ctx.end_pass();
             output.textures_delta.clear();
             let painted = output
@@ -4477,6 +4515,162 @@ mod tests {
                 .iter()
                 .any(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Rotation"));
             assert_eq!(painted, drawn, "anchor {anchor}, room {room}");
+        }
+    }
+
+    #[test]
+    fn statistics_rows_follow_their_switches() {
+        // The hand-counted session of the model's statistics test, with volumes 400 to 800.
+        let start = chrono::DateTime::parse_from_rfc3339("2024-01-02T14:30:00Z")
+            .unwrap()
+            .to_utc();
+        let bars: Vec<_> = [
+            (101.0, 103.0, 100.0, 102.0, 400.0),
+            (102.0, 104.0, 101.0, 103.0, 600.0),
+            (104.0, 106.0, 103.0, 105.0, 700.0),
+            (104.0, 105.0, 99.0, 100.0, 800.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (o, h, l, c, v))| {
+            Bar::new(start + Duration::minutes(30 * i as i64), o, h, l, c, v)
+        })
+        .collect();
+        let clock = Timeframe::Min30.into();
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let whole = to_tpo_profiles(&bars, &config, &clock).remove(0);
+        let first_two = to_tpo_profiles(&bars[..2], &config, &clock).remove(0);
+        let split = TPOConfig {
+            splits: vec![start + Duration::minutes(60)],
+            ..config.clone()
+        };
+        let second_part = to_tpo_profiles(&bars, &split, &clock).remove(1);
+        let mut all = TPOStatisticsRows::default();
+        for (_, _, shown) in all.switches() {
+            *shown = true;
+        }
+        let only = |row: &str| {
+            let mut rows = all;
+            for (id, _, shown) in rows.switches() {
+                *shown = id == row;
+            }
+            rows
+        };
+        let none = {
+            let mut rows = all;
+            for (_, _, shown) in rows.switches() {
+                *shown = false;
+            }
+            rows
+        };
+        let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        let whole_default = [
+            ("POC", "103"),
+            ("VAL / VAH", "101 / 105"),
+            ("IB range", "4"),
+            ("TPO below / above", "9 / 6"),
+            ("Rotation", "+2"),
+            ("IB ext. below / above", "1 / 2"),
+        ];
+        // (profile, rows shown, expected (label, value) pairs)
+        type Case<'a> = (&'a TPOProfile, TPOStatisticsRows, &'a [(&'a str, &'a str)]);
+        let cases: [Case; 10] = [
+            (
+                &whole,
+                all,
+                &[
+                    ("High-low range", "7"),
+                    ("POC", "103"),
+                    ("VAL / VAH", "101 / 105"),
+                    ("VA range", "4"),
+                    ("IB high", "104"),
+                    ("IB low", "100"),
+                    ("IB range", "4"),
+                    ("TPO below / above", "9 / 6"),
+                    ("Total TPOs", "19"),
+                    ("Total volume", "2.50K"),
+                    ("Rotation", "+2"),
+                    ("IB ext. below / above", "1 / 2"),
+                ],
+            ),
+            (
+                &first_two,
+                all,
+                &[
+                    ("High-low range", "4"),
+                    ("POC", "101"),
+                    ("VAL / VAH", "101 / 103"),
+                    ("VA range", "2"),
+                    ("IB high", "104"),
+                    ("IB low", "100"),
+                    ("IB range", "4"),
+                    ("TPO below / above", "1 / 5"),
+                    ("Total TPOs", "8"),
+                    ("Total volume", "1.00K"),
+                    ("Rotation", "+2"),
+                    ("IB ext. below / above", "0 / 0"),
+                ],
+            ),
+            // After the balance window: no initial balance rows.
+            (
+                &second_part,
+                all,
+                &[
+                    ("High-low range", "7"),
+                    ("POC", "103"),
+                    ("VAL / VAH", "101 / 105"),
+                    ("VA range", "4"),
+                    ("TPO below / above", "4 / 5"),
+                    ("Total TPOs", "11"),
+                    ("Total volume", "1.50K"),
+                    ("Rotation", "-2"),
+                ],
+            ),
+            (&whole, TPOStatisticsRows::default(), &whole_default),
+            (&whole, only("total_volume"), &[("Total volume", "2.50K")]),
+            // One half of a pair draws its own row.
+            (&whole, only("value_area_high"), &[("VAH", "105")]),
+            (&whole, only("value_area_low"), &[("VAL", "101")]),
+            (&whole, only("tpos_above"), &[("TPO above", "6")]),
+            (&whole, only("tpos_below"), &[("TPO below", "9")]),
+            (&whole, none, &[]),
+        ];
+        for (profile, rows, expected) in cases {
+            let ctx = egui::Context::default();
+            ctx.begin_pass(egui::RawInput::default());
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            draw_statistics(&painter, rect, &coords, profile, 10.0, f32::INFINITY, &rows);
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            let pairs: Vec<_> = texts
+                .chunks(2)
+                .map(|pair| (pair[0].as_str(), pair[1].as_str()))
+                .collect();
+            assert_eq!(pairs, expected, "rows {rows:?}");
+            // An empty table paints no background either.
+            assert_eq!(
+                output.shapes.is_empty(),
+                expected.is_empty(),
+                "rows {rows:?}"
+            );
         }
     }
 
@@ -4638,9 +4832,15 @@ mod tests {
             rect.max.y,
             false,
         );
+        let statistics_rows = TPOStatisticsRows {
+            value_area_range: true,
+            high_low_range: true,
+            ..Default::default()
+        };
         let config = TPOConfig {
             tick_size: 0.0,
             show_statistics: true,
+            statistics_rows,
             ..Default::default()
         };
         let ctx = egui::Context::default();
@@ -4678,7 +4878,10 @@ mod tests {
             })
             .collect();
         assert!(
-            texts.iter().any(|t| t == "120.000") && texts.iter().any(|t| t == "110.100 / 145.050"),
+            texts.iter().any(|t| t == "120.000")
+                && texts.iter().any(|t| t == "110.100 / 145.050")
+                && texts.iter().any(|t| t == "34.950")
+                && texts.iter().any(|t| t == "60.000"),
             "statistics texts {texts:?}"
         );
     }

@@ -1129,6 +1129,7 @@ mod tests {
                         range_phantoms: &[],
                         start_idx: 0,
                         clock: &BarClock::new(Timeframe::Min1),
+                        tpo: None,
                         tick_size: None,
                         price_formatter: None,
                     },

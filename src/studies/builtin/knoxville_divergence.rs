@@ -221,6 +221,15 @@ impl Indicator for KnoxvilleDivergence {
         }
     }
 
+    fn plot_shape_side(&self, line: usize) -> crate::studies::ShapeSide {
+        // A bullish divergence marks its bar's low, a bearish one its high.
+        match line {
+            1 => crate::studies::ShapeSide::Below,
+            2 => crate::studies::ShapeSide::Above,
+            _ => crate::studies::ShapeSide::Centred,
+        }
+    }
+
     fn readout_only(&self, line: usize) -> bool {
         // Momentum is far from the prices it would share the price scale with.
         line == 0

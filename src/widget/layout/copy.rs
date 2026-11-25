@@ -396,6 +396,7 @@ fn apply_to_other_chart(
             tpo_midpoint: source.tpo_midpoint,
             tpo_letters: source.tpo_letters,
             tpo_statistics: source.tpo_statistics,
+            tpo_statistics_rows: source.tpo_statistics_rows,
             tpo_colored_blocks: source.tpo_colored_blocks,
             tpo_block_colors: source.tpo_block_colors,
             tpo_block_color: source.tpo_block_color,
@@ -438,6 +439,7 @@ fn apply_to_other_chart(
             tpo_row_ticks: own.tpo_row_ticks,
             tpo_value_area: own.tpo_value_area,
             tpo_split_sessions: own.tpo_split_sessions,
+            tpo_session: own.tpo_session,
             tpo_profile_period: own.tpo_profile_period,
             tpo_composites: own.tpo_composites,
             tpo_splits: own.tpo_splits,
@@ -1160,6 +1162,7 @@ mod tests {
         params.tpo_poor_high = true;
         params.tpo_poor_low = true;
         params.tpo_split_sessions = true;
+        params.tpo_session = ProfileSession::Regular;
         params.tpo_split_periods = true;
         params.tpo_period_minutes = 15;
         params.tpo_profile_period = crate::model::TPOProfilePeriod::Week;
@@ -1226,6 +1229,7 @@ mod tests {
         params.tpo_midpoint = true;
         params.tpo_letters = false;
         params.tpo_statistics = true;
+        params.tpo_statistics_rows.total_volume = true;
         params.tpo_colored_blocks = false;
         params.tpo_outside_value_area_opacity = 80;
         let labels = TPOLabels {
@@ -1389,16 +1393,30 @@ mod tests {
         assert_eq!(
             (
                 params.tpo_split_sessions,
+                &params.tpo_session,
                 params.tpo_period_minutes,
                 params.tpo_profile_period,
             ),
-            (true, 15, crate::model::TPOProfilePeriod::Week),
+            (
+                true,
+                &ProfileSession::Regular,
+                15,
+                crate::model::TPOProfilePeriod::Week
+            ),
             "the TPO session and period grouping stay the chart's own"
         );
+        let statistics_rows = crate::model::TPOStatisticsRows {
+            total_volume: true,
+            ..Default::default()
+        };
         assert_eq!(
-            (params.tpo_labels, params.tpo_level_tags),
-            (labels, true),
-            "the TPO captions and price scale tags follow the source"
+            (
+                params.tpo_labels,
+                params.tpo_level_tags,
+                params.tpo_statistics_rows
+            ),
+            (labels, true, statistics_rows),
+            "the TPO captions, price scale tags and statistics rows follow the source"
         );
         assert_eq!(
             [

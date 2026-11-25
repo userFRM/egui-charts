@@ -1173,8 +1173,8 @@ mod tests {
     }
 
     /// Bars supplied at 00:00 UTC on their trading date keep that date in every display zone,
-    /// in the readout and in the day, month and year marks of the axis; intraday bars keep the
-    /// clock of the display zone.
+    /// in the readout, the data table and the day, month and year marks of the axis; intraday
+    /// bars keep the clock of the display zone.
     #[cfg(feature = "timezones")]
     #[test]
     fn supplied_calendar_bars_keep_their_date_in_every_display_zone() {
@@ -1185,13 +1185,14 @@ mod tests {
         let months = [
             "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
         ];
-        // (interval, first bar, bar read, its label, marks that must be painted)
-        for (timeframe, first, at, expected, required) in [
+        // (interval, first bar, bar read, its label and date, marks that must be painted)
+        for (timeframe, first, at, expected, date, required) in [
             (
                 Timeframe::Day1,
                 day(2024, 1, 1),
                 95,
                 "Apr 05, 2024",
+                "2024-04-05",
                 &["Feb", "Mar", "Apr"][..],
             ),
             (
@@ -1199,6 +1200,7 @@ mod tests {
                 day(2023, 1, 2),
                 95,
                 "Oct 28, 2024",
+                "2024-10-28",
                 &["2024"][..],
             ),
             (
@@ -1206,6 +1208,7 @@ mod tests {
                 day(2016, 1, 1),
                 95,
                 "Dec 01, 2023",
+                "2023-12-01",
                 &["2020"][..],
             ),
         ] {
@@ -1234,6 +1237,14 @@ mod tests {
                 assert_eq!(
                     chart.format_time(times[at]),
                     expected,
+                    "{timeframe:?} {zone:?}"
+                );
+                // The data table and the CSV export write the same date and the bar's instant.
+                let cell = chart.data_table().rows.swap_remove(at).swap_remove(0);
+                assert_eq!(cell.get(..10), Some(date), "{timeframe:?} {zone:?}: {cell}");
+                assert_eq!(
+                    chrono::DateTime::parse_from_rfc3339(&cell).map(|time| time.to_utc()),
+                    Ok(times[at]),
                     "{timeframe:?} {zone:?}"
                 );
                 let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
