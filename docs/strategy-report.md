@@ -426,7 +426,7 @@ start before the last and a rate above -1; Sortino also needs a return below the
 
 Migration: the ratios used the returns between consecutive equity points, annualised by the
 curve's steps per year, and needed 13 weeks of equity. Expect other values for the same report,
-and values for runs of two whole calendar months. `StrategyReport::new` and the default
+and values for runs of two whole calendar months. [`StrategyReport::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.new) and the default
 `BacktestSettings` now set a yearly risk-free rate of 0.02 instead of 0, and a report read
 without `risk_free_rate` takes 0.02; set it to 0.0 on the report or in the backtest settings for
 the former rate. Saved reports and settings keep the rate they hold. `periods_per_year` still
