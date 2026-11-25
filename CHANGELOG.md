@@ -12,6 +12,10 @@ All notable changes to this project are documented in this file. The format is b
 
 - Chart data tables can have independent window IDs and display a fixed symbol without intercepting typed input. ([#4156](https://github.com/userFRM/egui-charts/issues/4156))
 
+### Fixed
+
+- An empty Watchlist keeps its hint above symbol details when the window shrinks. Scroll the list if the hint does not fit. ([#4161](https://github.com/userFRM/egui-charts/issues/4161))
+
 ## [0.3.0-alpha.1] - 2026-11-24
 
 ### Added
