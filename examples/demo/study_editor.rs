@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 /// The native sample study, still registered so that charts saved with it open.
 const TITLE: &str = "Sample close difference";
-const GUIDE: &str = "Scripts are Rhai with declarations for inputs, plots and study calls; Examples opens the bundled ones. Apply checks the script on the active chart's bars, then adds it to the chart and saves it locally. Other charts showing a script of the same title keep the version they run until they are opened again.";
+const GUIDE: &str = "Scripts are Rhai with declarations for inputs, plots and study calls; Examples opens the bundled ones. Apply checks the script on the active chart's bars, then adds it to the chart and saves it locally; Profile lines takes effect at the next Apply. Other charts showing a script of the same title keep the version they run until they are opened again.";
 
 pub(super) struct SampleStudyEditor {
     pub open: bool,
