@@ -1736,6 +1736,7 @@ mod tests {
             (ChartType::Columns, "Rising column colour"),
             (ChartType::Line, "Line width"),
             (ChartType::Baseline, "Base level"),
+            (ChartType::Baseline, "Above fill at base"),
             (ChartType::Renko, "Size method"),
             (ChartType::Range, "Size method"),
         ] {

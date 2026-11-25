@@ -87,7 +87,7 @@ pub struct SeriesOptions {
     #[serde(default)]
     pub last_price_animation: LastPriceAnimation,
     /// Independent baseline line and fill styles. `None` uses `up_color`, `down_color` and
-    /// `width`, with flat fills at the default opacity.
+    /// `width`, with flat fills at 12% opacity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_style: Option<BaselineStyle>,
     /// Line width in logical pixels.
@@ -201,6 +201,8 @@ impl SeriesOptions {
                 below: line(self.down_color),
                 above_fill: fill(self.up_color, 30),
                 below_fill: fill(self.down_color, 30),
+                above_fill_at_base: None,
+                below_fill_at_base: None,
                 ..Default::default()
             });
         if let Some(radius) = self.marker_radius {
@@ -1089,6 +1091,11 @@ mod tests {
                 assert_eq!(
                     params.styles.baseline.below_fill,
                     Color32::from_rgba_unmultiplied(255, 0, 0, 30)
+                );
+                let baseline = &params.styles.baseline;
+                assert_eq!(
+                    (baseline.above_fill_at_base, baseline.below_fill_at_base),
+                    (None, None)
                 );
             }
             assert_eq!(

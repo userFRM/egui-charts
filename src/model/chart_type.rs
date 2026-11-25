@@ -1814,6 +1814,12 @@ mod tests {
                 older_expected.styles.columns.up_color,
                 older_expected.styles.columns.down_color,
             ] = placeholder;
+            // Flat Baseline fills: rgb(8, 153, 129) and rgb(242, 54, 69) at alpha 30.
+            let baseline = &mut older_expected.styles.baseline;
+            baseline.above_fill = egui::Color32::from_rgba_premultiplied(1, 18, 15, 30);
+            baseline.below_fill = egui::Color32::from_rgba_premultiplied(28, 6, 8, 30);
+            baseline.above_fill_at_base = None;
+            baseline.below_fill_at_base = None;
             for (json, expected) in [
                 (legacy.to_string(), expected),
                 (older.to_owned(), older_expected),

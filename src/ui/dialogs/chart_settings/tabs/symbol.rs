@@ -1897,8 +1897,9 @@ mod tests {
         }
     }
 
-    /// Choosing a palette colour for an HLC area fill or a column colour keeps its opacity, which
-    /// has no control of its own, and leaves the other colours alone. Expected: white at the seeded alpha.
+    /// Choosing a palette colour for an HLC area fill, a column colour or a Baseline fill at the
+    /// base keeps its opacity, which has no control of its own, and leaves the other colours
+    /// alone. Expected: white at the seeded alpha.
     #[test]
     fn palette_colour_keeps_the_fill_and_column_opacity() {
         use crate::model::{ChartTypeParams, ChartTypeStyles, HlcAreaStyle, LinePlotStyle};
@@ -1915,7 +1916,7 @@ mod tests {
             fn(&ChartTypeStyles) -> Color32,
             [u8; 4],
         );
-        let rows: [Row; 2] = [
+        let rows: [Row; 3] = [
             (
                 ChartType::HlcArea,
                 |styles| {
@@ -1945,6 +1946,25 @@ mod tests {
                 "#003264",
                 |styles| styles.columns.up_color,
                 [255, 255, 255, 128],
+            ),
+            (
+                ChartType::Baseline,
+                |styles| {
+                    let style = &mut styles.baseline;
+                    style.above_fill = Color32::from_rgba_unmultiplied(200, 50, 0, 51);
+                    style.above_fill_at_base =
+                        Some(Color32::from_rgba_unmultiplied(0, 50, 200, 51));
+                    style.below_fill = Color32::from_rgba_unmultiplied(50, 200, 0, 51);
+                    style.below_fill_at_base =
+                        Some(Color32::from_rgba_unmultiplied(0, 200, 50, 51));
+                },
+                "#0032C8",
+                // What the fill draws at the base.
+                |styles| {
+                    let style = &styles.baseline;
+                    style.above_fill_at_base.unwrap_or(style.above_fill)
+                },
+                [255, 255, 255, 51],
             ),
         ];
         for (chart_type, seed, well, read, expected) in rows {

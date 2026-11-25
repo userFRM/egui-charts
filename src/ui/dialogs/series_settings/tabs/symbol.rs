@@ -129,10 +129,22 @@ impl SymbolTab {
                     ui.end_row();
                     Self::line_style(ui, &mut styles.baseline.above, "above_style");
                     Self::fill_row(ui, "Above fill", &mut styles.baseline.above_fill);
+                    Self::fill_at_base_row(
+                        ui,
+                        "Above fill at base",
+                        &mut styles.baseline.above_fill_at_base,
+                        styles.baseline.above_fill,
+                    );
                     ui.label(l10n::text(ui.ctx(), "Below base"));
                     ui.end_row();
                     Self::line_style(ui, &mut styles.baseline.below, "below_style");
                     Self::fill_row(ui, "Below fill", &mut styles.baseline.below_fill);
+                    Self::fill_at_base_row(
+                        ui,
+                        "Below fill at base",
+                        &mut styles.baseline.below_fill_at_base,
+                        styles.baseline.below_fill,
+                    );
                     Self::marker_radius_row(ui, &mut styles.baseline.marker_radius);
                 }
                 ChartType::HighLow => Self::high_low(ui, &mut styles.high_low),
@@ -1513,6 +1525,17 @@ impl SymbolTab {
     fn fill_row(ui: &mut Ui, label: &str, color: &mut Color32) {
         ui.label(l10n::text(ui.ctx(), label));
         Self::color_picker(ui, color);
+        ui.end_row();
+    }
+
+    /// A fill at the base that, while `None`, shows `edge`, the colour of a flat fill, and becomes
+    /// a gradient endpoint once picked.
+    fn fill_at_base_row(ui: &mut Ui, label: &str, color: &mut Option<Color32>, edge: Color32) {
+        ui.label(l10n::text(ui.ctx(), label));
+        let mut shown = color.unwrap_or(edge);
+        if Self::color_picker(ui, &mut shown) {
+            *color = Some(shown);
+        }
         ui.end_row();
     }
 
