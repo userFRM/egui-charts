@@ -241,6 +241,7 @@ impl Chart {
             timeframe: None,
             feed_link: None,
             trade_history_on_demand: false,
+            footprint_history_by_view: false,
             #[cfg(feature = "drawings")]
             cursor_modes: CursorModeState::new(),
             #[cfg(feature = "drawings")]
