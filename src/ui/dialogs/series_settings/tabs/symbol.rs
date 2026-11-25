@@ -1281,19 +1281,20 @@ impl SymbolTab {
                 ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Statistics rows"));
                 ui.label_inputs_by(label.id, |ui| {
-                    ui.add_enabled_ui(params.tpo_statistics, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            for (_, name, shown) in params.tpo_statistics_rows.switches() {
-                                let name = l10n::text(ui.ctx(), name);
-                                // A name of its own: the Labels row has a `POC` switch too.
-                                let row = l10n::format_text(
-                                    ui.ctx(),
-                                    "Statistics: {row}",
-                                    &[("row", name.clone())],
-                                );
-                                ui.checkbox(shown, name).accessible_name(row);
-                            }
-                        })
+                    // One switch a line: the longer names would wrap into each other.
+                    ui.vertical(|ui| {
+                        let enabled = params.tpo_statistics;
+                        for (_, name, shown) in params.tpo_statistics_rows.switches() {
+                            let name = l10n::text(ui.ctx(), name);
+                            // A name of its own: the Labels row has a `POC` switch too.
+                            let row = l10n::format_text(
+                                ui.ctx(),
+                                "Statistics: {row}",
+                                &[("row", name.clone())],
+                            );
+                            ui.add_enabled(enabled, egui::Checkbox::new(shown, name))
+                                .accessible_name(row);
+                        }
                     })
                 });
                 ui.end_row();
