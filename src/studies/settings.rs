@@ -1841,30 +1841,34 @@ impl Indicator for ConfiguredStudy {
         snapshot: &StudySettingsSnapshot,
     ) -> Result<(), crate::studies::StudyError> {
         let mut inputs: Vec<_> = snapshot.inputs.iter().collect();
-        while !inputs.is_empty() {
-            let remaining = inputs.len();
-            let mut error = None;
-            // An input can change another input's accepted range.
-            inputs.retain(|(id, value)| {
-                if self
-                    .study
-                    .inputs()
-                    .iter()
-                    .any(|input| input.id == *id && input.value == *value)
-                {
-                    return false;
+        // The study held these values, a restored one outside its input's range included.
+        super::inputs::restoring(snapshot.inputs.clone(), || {
+            while !inputs.is_empty() {
+                let remaining = inputs.len();
+                let mut error = None;
+                // An input can change another input's accepted range.
+                inputs.retain(|(id, value)| {
+                    if self
+                        .study
+                        .inputs()
+                        .iter()
+                        .any(|input| input.id == *id && input.value == *value)
+                    {
+                        return false;
+                    }
+                    if let Err(message) = self.study.set_input(id, value.clone()) {
+                        error = Some(message);
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if inputs.len() == remaining {
+                    return Err(error.expect("a retained input failed to apply"));
                 }
-                if let Err(message) = self.study.set_input(id, value.clone()) {
-                    error = Some(message);
-                    true
-                } else {
-                    false
-                }
-            });
-            if inputs.len() == remaining {
-                return Err(error.expect("a retained input failed to apply"));
             }
-        }
+            Ok(())
+        })?;
         self.study.set_colors(snapshot.colors.clone());
         self.study.set_visible(snapshot.visible);
         self.study.set_label_precision(snapshot.settings.precision);
