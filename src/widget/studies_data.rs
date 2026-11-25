@@ -682,6 +682,7 @@ impl Chart {
                         clock: series.clock.clone(),
                         extended_hours: extended,
                         overnight_hours: overnight,
+                        adjusted,
                         conversion: stream.conversion.clone(),
                         sink,
                     });
