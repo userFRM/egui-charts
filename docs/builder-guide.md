@@ -73,7 +73,7 @@ with CORS. The adapter uses GET with percent-encoded query values.
 | `/config` | No parameters | `{"supported_resolutions":["1","15","1D"],"exchanges":[{"value":"X"}],"symbols_types":[{"value":"stock"}]}` |
 | `/symbols` | `symbol`; optional `conversion` | One symbol object as below |
 | `/search` | `query`, `type`, `exchange`, `offset`, [`limit`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.SymbolQuery.html#structfield.limit); `country`, `sector`, `source` when set | Array of symbol objects, best first, after the requested offset, at most the limit; empty filters mean all |
-| `/history` | `symbol`, `resolution`, `countback`, `extended_hours`; optional `from`, `to`, `conversion` | Column history as below |
+| `/history` | `symbol`, `resolution`, `countback`, `extended_hours`, `overnight_hours`, `adjusted`; optional `from`, `to`, `conversion` | Column history as below |
 
 A symbol object requires `name` (`symbol` is also accepted). Optional `ticker`
 is the identifier used for subsequent requests. Metadata fields are `description`,
@@ -81,12 +81,18 @@ is the identifier used for subsequent requests. Metadata fields are `description
 `type` (lowercase model symbol type), `minmov`, `pricescale`,
 `volume_precision`, `currency_code`, `unit` (the price unit shown beside the
 currency above the price scale, such as `barrel`), `timezone`, `session`,
-`supported_resolutions` and `data_status` (`streaming`, `delayed_streaming` or
-`endofday`). Price tick size
+`session_extended` and `session_overnight` (pre-market and post-market, and
+overnight windows, as below), `supported_resolutions`, `data_status`
+(`streaming`, `delayed_streaming` or `endofday`) and `dividend_adjustment`
+(`true` when `/history` serves dividend-adjusted bars for `adjusted=true`). Price tick size
 is `minmov / pricescale`, with `minmov` defaulting to one. Time zones use the
 library's [`TimezoneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.TimezoneId.html) parser. Sessions accept `24x7` or
 `HHMM-HHMM[,HHMM-HHMM]:days` windows (one day suffix for all windows), where 1 is Sunday and 7 is Saturday; an overnight
-window belongs to its closing day. Omitted days mean Monday through Friday. Unsupported
+window belongs to its closing day. Omitted days mean Monday through Friday.
+`session_extended` lists the pre-market and post-market windows and
+`session_overnight` the overnight windows in the same syntax; both need a
+regular `session` other than `24x7`. With `session_overnight`, the time axis
+offers overnight hours. Unsupported
 session syntax or unavailable time zones report invalid data rather than guessing;
 search leaves out a result it cannot read and lists the others.
 
@@ -106,9 +112,13 @@ date of its timestamp, such as 00:00 UTC on its trading date or a session open
 that falls on that date in UTC. The adapter
 places it in the day, week or month holding that date in the time zone the
 chart displays, and bounds such requests at 00:00 UTC on a date. Return the
-newest `countback` bars within those bounds. Keep interval, extended-hours and
-conversion semantics on the server; return an HTTP error for
-an unsupported request rather than serving different prices under those labels.
+newest `countback` bars within those bounds. `extended_hours=true` adds the
+pre-market and post-market windows to regular hours; `overnight_hours=true`
+comes only with it and adds the overnight windows as well. `adjusted=true` asks
+for dividend-adjusted bars; a symbol without them answers its unadjusted bars.
+Keep interval, hours and conversion semantics on the server; return an HTTP
+error for an unsupported interval or conversion rather than serving different
+prices under those labels.
 For example:
 
 ```json
@@ -136,7 +146,8 @@ has not arrived within 10 seconds also reports a recoverable network error, and
 a later response is discarded. Historical request retries follow the chart's
 normal retry policy.
 
-Live subscriptions poll the same history endpoint every five seconds, starting
+Live subscriptions poll the same history endpoint every five seconds, with the
+subscription's hours and adjustment, starting
 with the latest 500 bars and then including the newest received timestamp so the
 forming bar can change. Each response replaces full bars, including volume;
 no trades are synthesized. The server must return the complete requested window

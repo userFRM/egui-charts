@@ -1,8 +1,8 @@
 //! The engine scripts run on: Rhai's standard package and nothing that reaches outside the
 //! script, the size limits, the series type with its operators and history, the bars of other
-//! histories, and the helpers, the orders of strategies among them.
+//! histories, and the helpers, the orders of strategies and the alerts among them.
 
-use super::syntax::PRICES;
+use super::syntax::{self, PRICES};
 use crate::runtime::orders::{OrderCall, Readings};
 use crate::runtime::series::{Field, SeriesRef};
 use crate::runtime::{self, bindings, program::Span};
@@ -208,6 +208,7 @@ pub(crate) enum Group {
     Streaming,
     Time,
     Orders,
+    Alerts,
 }
 
 impl Group {
@@ -219,6 +220,7 @@ impl Group {
             Self::Streaming => "Streaming",
             Self::Time => "Time, in UTC",
             Self::Orders => "Orders",
+            Self::Alerts => "Alerts",
         }
     }
 }
@@ -699,6 +701,52 @@ pub(crate) const HELPERS: &[Helper] = &[
         summary: "Whether this decision follows a fill; false in a study.",
         register: |engine, name| {
             engine.register_fn(name, || reading(|readings| readings.after_fill, false));
+        },
+    },
+    Helper {
+        name: "alert",
+        group: Group::Alerts,
+        signature: "alert(message, condition)",
+        summary: "An alert condition named message, a string written in the call, which holds on a \
+                  bar when the last call with that message on the bar gives true; condition is \
+                  true or false. The alert dialog offers it as the study's condition. A script \
+                  declares at most 32 messages.",
+        register: |engine, name| {
+            engine.register_fn(
+                name,
+                |context: NativeCallContext,
+                 message: ImmutableString,
+                 condition: Dynamic|
+                 -> Result<()> {
+                    let at = runtime::with(|run| {
+                        (run.spec.alerts.iter()).position(|declared| **declared == *message)
+                    })
+                    .flatten();
+                    let Some(at) = at else {
+                        return Err(refused(
+                            &context,
+                            format!(
+                                "alert {message:?} is not declared; write its message as a \
+                                 string in the call"
+                            ),
+                        ));
+                    };
+                    let Ok(condition) = condition.as_bool() else {
+                        let kind = syntax::type_name(&condition);
+                        return Err(refused(
+                            &context,
+                            format!("alert {message:?} takes true or false; got {kind}"),
+                        ));
+                    };
+                    let span = span(context.call_position());
+                    runtime::with(|run| {
+                        let column = run.spec.plots.len() + at;
+                        run.row[column] = if condition { 1.0 } else { 0.0 };
+                        run.mark(span);
+                    });
+                    Ok(())
+                },
+            );
         },
     },
 ];

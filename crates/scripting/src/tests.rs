@@ -54,6 +54,16 @@ fn with_gaps(n: usize, seed: u64) -> Vec<Bar> {
     bars
 }
 
+/// One-minute bars from 1970 with these opens and closes, high and low at the larger and the
+/// smaller of the two.
+fn opens_closes(prices: &[(f64, f64)]) -> Vec<Bar> {
+    let bar = |(i, &(open, close)): (usize, &(f64, f64))| {
+        let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+        Bar::new(time, open, open.max(close), open.min(close), close, 1.0)
+    };
+    prices.iter().enumerate().map(bar).collect()
+}
+
 /// Ask `study` again, as a host does once a frame, until its calculation no longer runs.
 fn settle(study: &mut dyn Indicator, bars: &[Bar]) -> Option<Calculation> {
     while let Some(Calculation::Running(_)) = study.calculation() {
@@ -579,6 +589,10 @@ fn scripts_are_refused_at_their_line_and_column() {
     let histories: String = (10..51)
         .map(|i| format!("bars b{i} = history(\"\", \"1D\");\n"))
         .collect();
+    let alerts: String = (0..33)
+        .map(|i| format!("alert(\"a{i}\", true);\n"))
+        .chain(["plot(\"x\", 1.0);".into()])
+        .collect();
     let mut factory = IndicatorFactory::new();
     let script = compile("plot(\"x\", close);");
     factory.register("Script", move || Box::new(script.study()));
@@ -790,6 +804,42 @@ fn scripts_are_refused_at_their_line_and_column() {
         ),
         // The `;` after the 41st.
         (histories.as_str(), 41, 29, "at most 40 histories"),
+        // An alert's message is read when the script compiles: the token after the `(`.
+        (
+            "let m = \"x\";\nalert(m, true);\nplot(\"x\", 1.0);",
+            2,
+            7,
+            "a string in double quotes",
+        ),
+        (
+            "alert('x', true);\nplot(\"x\", 1.0);",
+            1,
+            7,
+            "a string in double quotes",
+        ),
+        (
+            "alert(\"a\\\"b\", true);\nplot(\"x\", 1.0);",
+            1,
+            7,
+            "without escapes",
+        ),
+        (
+            "alert(\" \", true);\nplot(\"x\", 1.0);",
+            1,
+            7,
+            "the message is empty",
+        ),
+        // The `)` where the condition belongs.
+        (
+            "alert(\"x\");\nplot(\"x\", 1.0);",
+            1,
+            10,
+            "a message and a condition",
+        ),
+        // The 33rd message.
+        (alerts.as_str(), 33, 7, "at most 32 alerts"),
+        // An alert is no plot.
+        ("alert(\"x\", true);", 1, 1, "needs at least one plot"),
     ] {
         let error = Script::compile("Test", source, &factory).unwrap_err();
         assert_eq!(
@@ -1037,6 +1087,8 @@ fn reference_names_compile_as_listed() {
                         "side" => "\"long\"",
                         "options" => "#{}",
                         "profit" | "loss" => "1.0",
+                        "message" => "\"m\"",
+                        "condition" => "true",
                         other => panic!("{}: no argument for {other}", entry.signature),
                     })
                     .collect();
@@ -1335,6 +1387,13 @@ fn run_errors_keep_the_bars_before_them() {
             64,
             "at most 64 studies",
         ),
+        // A condition is true or false; the call's name.
+        (
+            "plot(\"x\", if bar_index < 20 { close } else { alert(\"Up\", close); close });",
+            46,
+            20,
+            "alert \"Up\" takes true or false; got series",
+        ),
         // The dot, in a script whose history is missing.
         (
             "bars h = history(\"SPY\", \"1D\"); \
@@ -1359,6 +1418,65 @@ fn run_errors_keep_the_bars_before_them() {
         assert!(same(&line[..bar], &closes), "{source}");
         assert!(line[bar..].iter().all(|value| value.is_nan()), "{source}");
         assert_eq!(script.last_error(), Some(error), "{source}");
+    }
+}
+
+#[test]
+fn alert_conditions_follow_the_last_call_on_each_bar() {
+    let prices = [(100.0, 101.0), (101.0, 102.0), (102.0, 99.0), (99.0, 103.0)];
+    let script = compile(
+        "alert(\"Up\", close > open);\n\
+         if bar_index == 1 { alert(\"Up\", false); }\n\
+         if bar_index >= 2 { alert(\"Late\", close > 100.0); }\n\
+         plot(\"Close\", close);",
+    );
+    let conditions = |study: &CustomIndicator, bars: usize| -> Vec<Vec<Option<bool>>> {
+        (0..2)
+            .map(|condition| {
+                (0..bars)
+                    .map(|bar| study.alert_condition(condition, bar))
+                    .collect()
+            })
+            .collect()
+    };
+    let (yes, no) = (Some(true), Some(false));
+    let mut study = calculated(&script, &opens_closes(&prices));
+    assert_eq!(study.alert_conditions(), ["Up", "Late"]);
+    // Bar 1 calls Up with true, then false; Late runs from bar 2, where 99 is not above 100.
+    assert_eq!(
+        conditions(&study, 4),
+        [vec![yes, no, no, yes], vec![None, None, no, yes]]
+    );
+    assert_eq!(study.alert_condition(2, 0), None);
+    assert_eq!(study.alert_condition(0, 4), None);
+    // A new bar, then the same bar as it forms further: each as a full calculation gives.
+    for (bar, up, late) in [((103.0, 104.0), yes, yes), ((103.0, 102.0), no, yes)] {
+        let bars = opens_closes(&[prices.as_slice(), &[bar]].concat());
+        study.update(&bars, 4);
+        settle(&mut study, &bars);
+        let fresh = calculated(&script, &bars);
+        assert_eq!(conditions(&study, 5), conditions(&fresh, 5), "{bar:?}");
+        let last = (study.alert_condition(0, 4), study.alert_condition(1, 4));
+        assert_eq!(last, (up, late), "{bar:?}");
+    }
+    // `alert` stays free as a name, and a script's own function is called.
+    for (source, plot) in [
+        (
+            "let alert = close > open; plot(\"x\", if alert { 1.0 } else { 0.0 });",
+            [1.0, 1.0, 0.0, 1.0],
+        ),
+        (
+            "fn alert(m, c) { 7.0 } plot(\"x\", alert(\"m\", true));",
+            [7.0; 4],
+        ),
+        (
+            "input alert = bool(\"Alert\", true); let m = #{ alert: 2.0 }; plot(\"x\", m.alert);",
+            [2.0; 4],
+        ),
+    ] {
+        let study = calculated(&compile(source), &opens_closes(&prices));
+        assert!(study.alert_conditions().is_empty(), "{source}");
+        assert_eq!(study.values().line(0), plot, "{source}");
     }
 }
 
@@ -1893,6 +2011,77 @@ fn script_strategies_continue_as_fresh_runs() {
     assert!(expected.report().unwrap().trades.len() > 10);
 }
 
+/// A decision that runs earlier bars again runs each with the readings it was last decided with,
+/// so a state that reads them is rebuilt as it was: after a fill on a forming bar decided on
+/// before, after a called study revised earlier bars, and for a declared history, which runs the
+/// previous bar again.
+#[test]
+fn bars_run_again_keep_the_readings_they_were_decided_with() {
+    let flat_count = "state flat = 0;
+        if position() == 0.0 { flat += 1; }
+        if after_fill() {
+            if position() > 0.0 { exit_order(\"Out\", #{ qty: flat }); }
+        } else if bar_index == 2 && position() == 0.0 {
+            entry(\"Long\", \"long\", #{ qty: 10 });
+        }";
+    let minute = |i: i64, close: f64| {
+        let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i);
+        Bar::new(time, 100.0, close.max(100.0), 100.0, close, 1.0)
+    };
+    let mut live = backtest();
+    live.settings.recalculate_on_every_update = true;
+    live.settings.recalculate_after_fills = true;
+    let mut strategy = compile(flat_count).strategy();
+    // Bars 0 and 1 are decided flat and bar 2 last with the position open, so every exit closes
+    // 2. The entry of bar 2 fills at the forming bar's open, 100, and each exit at the next price
+    // the forming bar reaches: 100, then 101 and 102 on the next updates.
+    let fills: Vec<Vec<_>> = [100.0, 101.0, 102.0]
+        .into_iter()
+        .map(|close| {
+            let bars: Vec<_> = (0..3)
+                .map(|i| minute(i, 100.0))
+                .chain([minute(3, close)])
+                .collect();
+            (live.update(&mut strategy, &bars, &[]).iter())
+                .map(|fill| (fill.order_id.clone(), fill.quantity, fill.price))
+                .collect()
+        })
+        .collect();
+    let out = |price| ("Out".to_owned(), 2.0, price);
+    assert_eq!(
+        fills,
+        [
+            vec![("Long".to_owned(), 10.0, 100.0), out(100.0)],
+            vec![out(101.0)],
+            vec![out(102.0)],
+        ]
+    );
+
+    // The entry of bar 30 fills at bar 31's open, so bars 0 to 30 are decided flat and the exit
+    // of bar 200 closes 31 of the 50, whatever the script declares and never reads.
+    let held = "state flat = 0;
+        if position() == 0.0 { flat += 1; }
+        if bar_index == 30 && position() == 0.0 { entry(\"Long\", \"long\", #{ qty: 50 }); }
+        if bar_index == 200 { exit_order(\"Out\", #{ qty: flat }); }";
+    let fixture = bars(260, 7);
+    for unread in [
+        "",
+        "let zz = study(\"ZigZag\");\n",
+        "bars day = history(\"\", \"1D\");\n",
+    ] {
+        let report = backtest().run(
+            &mut compile(&format!("{unread}{held}")).strategy(),
+            &fixture,
+            &[],
+        );
+        let closed: Vec<_> = (report.trades.iter())
+            .filter(|trade| trade.exit.is_some())
+            .map(|trade| trade.quantity)
+            .collect();
+        assert_eq!(closed, [31.0], "{unread}");
+    }
+}
+
 /// Orders and readings reach the backtester as the script calls them, checked by hand on six
 /// bars; an error or a limit ends the orders and withholds the report with its line and bar.
 #[test]
@@ -2063,4 +2252,15 @@ fn script_orders_and_readings_reach_the_backtest() {
     assert_eq!(script.check(&ladder), Ok(()));
     let study = calculated(&script, &ladder);
     assert_eq!(study.values().line(0), [0.0; 6]);
+
+    // A strategy script needs no plot, and its study then calculates a row without a line for
+    // every bar, so that the chart updates it from its last bar.
+    let plotless = compile("entry(\"Long\", \"long\");");
+    let study = calculated(&plotless, &ladder);
+    assert!(matches!(study.calculation(), Some(Calculation::Done(_))));
+    assert_eq!(plotless.last_error(), None);
+    assert_eq!(
+        (study.values().len(), study.values().columns().len()),
+        (6, 0)
+    );
 }

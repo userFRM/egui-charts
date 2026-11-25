@@ -372,13 +372,68 @@ A strategy script cannot read other histories: the strategy tester refuses one t
 from `Script::study`, checks its orders and ignores them, and its readings are those of a flat
 account: 0, `na`, `na` and false.
 
+## Alerts
+
+`alert(message, condition)` declares an alert condition of the study a script builds, named
+`message`, which the chart's alert dialog offers as a condition of the study, beside its plots:
+
+```rust
+use egui_charts::model::Bar;
+use egui_charts::studies::{Calculation, Indicator, IndicatorFactory};
+use egui_charts_scripting::Script;
+
+let source = r#"
+    alert("Close above open", close > open);
+    plot("Close", close);
+"#;
+let script = Script::compile("Rising bars", source, &IndicatorFactory::new())?;
+let bars: Vec<Bar> = [(1.0, 2.0), (2.0, 1.0), (1.0, 1.0)]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (open, close))| {
+        let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+        Bar::new(time, open, open.max(close), open.min(close), close, 1.0)
+    })
+    .collect();
+let mut study = script.study();
+study.calculate(&bars);
+while matches!(study.calculation(), Some(Calculation::Running(_))) {
+    study.update(&bars, bars.len());
+}
+assert_eq!(study.alert_conditions(), ["Close above open"]);
+// Open 1, close 2; open 2, close 1; open and close 1.
+assert_eq!(study.alert_condition(0, 0), Some(true));
+assert_eq!(study.alert_condition(0, 1), Some(false));
+assert_eq!(study.alert_condition(0, 2), Some(false));
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The message is read when the script compiles, so it is a string in double quotes written in the
+call, without escapes and not empty; anything else, such as a variable or a string in single
+quotes, is refused at its line and column. A script declares at most 32 messages, and `condition`
+is true or false: a number, a series or `na` is a runtime error at the call.
+
+Calls with the same message are one condition, which holds on a bar when the last of them to run on
+the bar gives true; on a bar where none runs, such as inside an `if` not taken, the condition is
+undecided and an alert counts it as not holding. A comparison with a missing value is false, so
+during a helper's first bars `close > sma(close, 20)` is false. Conditions are numbered by the
+first appearance of their message in the script, and a saved alert knows its condition by that
+number: add new alerts after the existing ones. On the forming bar a condition follows each update,
+so an alert set to fire once per bar may fire while the bar forms; choose "Once per bar close" to
+read closed bars only.
+
+`alert` is a function, so the name stays free for a script's own variables, inputs and keys, and a
+script that defines its own function `alert` calls it and declares no condition. Alerts do not
+count as plots: a script still needs one. A strategy script runs and checks its alert calls and
+otherwise ignores them.
+
 ## Helpers
 
 Every helper takes numbers, ints and series where a number is expected, and the math helpers give
 `na` for a missing argument. The [reference](#reference-and-completion) lists each helper with what
-it gives, in five groups: missing values, such as `is_na(x)` and `nz(x)`; math; streaming helpers,
-such as `sma(x, n)` and `crossover(a, b)`; the time helpers, which read a time in UTC; and the
-[orders](#strategies) of strategies with their readings.
+it gives, in six groups: missing values, such as `is_na(x)` and `nz(x)`; math; streaming helpers,
+such as `sma(x, n)` and `crossover(a, b)`; the time helpers, which read a time in UTC; the
+[orders](#strategies) of strategies with their readings; and [alerts](#alerts).
 
 A streaming helper keeps its own history, which belongs to its call: two calls of `sma` keep
 two windows, and a call that does not run on a bar sees `na` there. Its length must stay the same

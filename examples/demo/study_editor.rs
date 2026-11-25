@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 /// The native sample study, still registered so that charts saved with it open.
 const TITLE: &str = "Sample close difference";
-const GUIDE: &str = "Scripts are Rhai with declarations for inputs, plots and study calls; Examples opens the bundled ones. Apply checks the script on the active chart's bars, then adds it to the chart and saves it locally; Profile lines takes effect at the next Apply. Other charts showing a script of the same title keep the version they run until they are opened again. A script that places orders is a strategy: Apply saves it and selects it in the strategy tester, where Run backtests it.";
+const GUIDE: &str = "Scripts are Rhai with declarations for inputs, plots and study calls; Examples opens the bundled ones. alert(\"message\", condition) declares an alert condition: after Apply, Add alert offers it as a condition of the study. Apply checks the script on the active chart's bars, then adds it to the chart and saves it locally; Profile lines takes effect at the next Apply. Other charts showing a script of the same title keep the version they run until they are opened again. A script that places orders is a strategy: Apply saves it and selects it in the strategy tester, where Run backtests it.";
 
 pub(super) struct SampleStudyEditor {
     pub open: bool,
@@ -980,6 +980,86 @@ mod tests {
             restored.strategy_report.select_strategy("Momentum script"),
             Ok(())
         );
+    }
+
+    /// An applied script's alert call is a condition of its study: Add alert offers it, the
+    /// alert fires on it, and it is still there after a restart.
+    #[test]
+    fn editor_alerts_fire_on_script_conditions() {
+        use egui_charts::model::{AlertCondition, AlertSource};
+        let ctx = egui::Context::default();
+        // A fixed time keeps the generated feed the same on every run.
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-04T17:30:00Z".parse().unwrap(),
+            false,
+        );
+        app.live.set_paused(true);
+        super::super::tests::finish_feed(&app.live);
+        app.apply_session();
+        app.execute_search_command(&ctx, "sample-study");
+        app.sample_study.editor.open_document(
+            "Positive close",
+            "alert(\"Close above zero\", close > 0.0);\nplot(\"Close\", close);",
+        );
+        click(&mut app, &ctx, "Apply");
+        calculated(&mut app, &ctx);
+
+        app.open_alert(None);
+        let (source, _) = (app.alert_dialog.sources.iter())
+            .find(|(_, name)| name.to_string() == "Positive close: Close above zero")
+            .cloned()
+            .expect("the dialog offers the script's condition");
+        assert!(matches!(
+            source,
+            AlertSource::StudyCondition { condition: 0, .. }
+        ));
+        app.alert_dialog.alert.source = source.clone();
+        app.alert_dialog.alert.condition = AlertCondition::Holds;
+        let created = app.alert_host.engine().alerts().len();
+        // The modal places its controls from its second frame on.
+        render(&mut app, &ctx, Vec::new());
+        click(&mut app, &ctx, "Save alert");
+        let alerts = app.alert_host.engine().alerts();
+        assert_eq!(alerts.len(), created + 1);
+        let alert = alerts.last().unwrap().clone();
+        assert_eq!(alert.source, source);
+
+        // Every close of the generated feed is above zero, so the alert fires once.
+        let fired = app.alerts.log().len();
+        for _ in 0..1_000 {
+            super::super::tests::finish_feed(&app.alert_live);
+            app.poll_alerts(&ctx);
+            if app.alerts.log().len() > fired {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        for _ in 0..4 {
+            super::super::tests::finish_feed(&app.alert_live);
+            app.poll_alerts(&ctx);
+        }
+        assert_eq!(app.alerts.log().len(), fired + 1);
+        assert_eq!(
+            Some(&app.alerts.log().back().unwrap().id),
+            alert.id.as_ref()
+        );
+
+        // The restarted application keeps the alert and the study its condition belongs to.
+        let answered = super::super::owndata::store::Saved {
+            asked: true,
+            ..Default::default()
+        };
+        answered.save(&app.storage);
+        let mut saved = Memory::default();
+        app.save(&mut saved);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&saved);
+        let restored = DemoApp::new(&cc);
+        let restored_alerts = restored.alert_host.engine().alerts();
+        let kept = restored_alerts.iter().find(|kept| kept.id == alert.id);
+        assert_eq!(kept.map(|kept| &kept.source), Some(&source));
+        assert!(restored.indicator_dialog.factory().has("Positive close"));
     }
 
     #[test]
