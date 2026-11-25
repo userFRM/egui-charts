@@ -1990,6 +1990,18 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
             (day(1) + Duration::minutes(60), "CCCDDD".to_owned(), 100.0),
         ];
         assert_eq!(profiles(&study_chart), divided);
+        // The menu's edits were made for 30-minute periods: another period drops them, and one
+        // undo brings both back.
+        study_chart.user_action(|chart| {
+            let study = chart.indicator_mut(study_id).unwrap();
+            let settings = study.settings();
+            let period = [("period".into(), crate::studies::InputValue::Length(60))];
+            study.apply_settings(&period, settings).unwrap();
+        });
+        let config = study_chart.indicators().next().unwrap().1.tpo().unwrap();
+        assert!(config.composites.is_empty() && config.splits.is_empty());
+        assert!(study_chart.undo());
+        assert_eq!(profiles(&study_chart), divided);
         assert!(study_chart.undo());
         assert_eq!(profiles(&study_chart), joined);
         assert!(study_chart.undo());
@@ -2211,6 +2223,194 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
         assert_eq!(weekly.chart_type_params().tpo_splits, [day(1)]);
         assert!(weekly.undo());
         assert_eq!(counts(&weekly), [8, 6]);
+    }
+}
+
+/// Merges and splits are made for a period length, row size and profile period: changing one of
+/// them in the settings drops the edits carried over, as one undoable step, while other settings
+/// and edits supplied with the new settings keep them. The study records what its lists were
+/// made for, so the settings dialog's full input list, which still holds the old lists, drops
+/// them too, while lists saved before the record apply whatever the settings.
+#[test]
+fn tpo_edits_drop_when_their_period_or_rows_change() {
+    use crate::model::{Bar, BarData, ChartType, ChartTypeParams, TPOProfilePeriod, Timeframe};
+    use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
+    use crate::widget::settings::ChartSettingsState;
+    use chrono::{DateTime, Duration};
+    let day = |d| DateTime::UNIX_EPOCH + Duration::days(d);
+    let composites = vec![day(0)..=day(1)];
+    let splits = vec![day(2) + Duration::minutes(60)];
+    let bars: Vec<_> = (0..12)
+        .map(|i| {
+            let time = day(i / 4) + Duration::minutes(i % 4 * 30);
+            Bar::new(time, 100.0, 102.0, 100.0, 102.0, 1.0)
+        })
+        .collect();
+    let chart = || {
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        chart.set_timeframe(Timeframe::Min30);
+        chart
+    };
+    type Edit = fn(&mut ChartTypeParams);
+    let period: Edit = |params| params.tpo_period_minutes = 60;
+    let rows: Edit = |params| params.tpo_row_ticks = 2;
+    let week: Edit = |params| params.tpo_profile_period = TPOProfilePeriod::Week;
+    let value_area: Edit = |params| params.tpo_value_area = 60.0;
+    let supplied: Edit = |params| {
+        params.tpo_period_minutes = 60;
+        params.tpo_splits = vec![DateTime::UNIX_EPOCH + Duration::days(1) + Duration::minutes(60)];
+    };
+    // (series dialog or chart dialog, change, edits kept)
+    for (series_dialog, edit, kept) in [
+        (true, period, false),
+        (true, rows, false),
+        (true, week, false),
+        (true, value_area, true),
+        (true, supplied, true),
+        (false, period, false),
+        (false, value_area, true),
+    ] {
+        let mut chart = chart();
+        chart.set_chart_type(ChartType::TimePriceOpportunity);
+        let mut params = chart.chart_type_params().clone();
+        params.tpo_composites = composites.clone();
+        params.tpo_splits = splits.clone();
+        chart.set_chart_type_params(params.clone());
+        let mut changed = params.clone();
+        edit(&mut changed);
+        chart.user_action(|chart| {
+            if series_dialog {
+                let mut settings = chart.series_settings();
+                settings.chart_type_params = changed.clone();
+                chart.apply_series_settings(&settings);
+            } else {
+                let mut settings = ChartSettingsState::from_chart(chart);
+                settings.chart_type_params = Some(changed.clone());
+                settings.apply_to_chart(chart).unwrap();
+            }
+        });
+        let mut expected = changed.clone();
+        if !kept {
+            (expected.tpo_composites, expected.tpo_splits) = (Vec::new(), Vec::new());
+        }
+        let row = format!("series dialog {series_dialog}, {changed:?}");
+        assert_eq!(chart.chart_type_params(), &expected, "{row}");
+        assert!(chart.undo());
+        assert_eq!(chart.chart_type_params(), &params, "undo, {row}");
+        assert!(chart.redo());
+        assert_eq!(chart.chart_type_params(), &expected, "redo, {row}");
+    }
+
+    let made_for_30 =
+        TimePriceOpportunity::profile_edit_inputs(Some((30, 0)), &composites, &splits);
+    // (input changed, its new value, the dialog's whole list or that input alone, edits kept)
+    for (id, value, whole_list, kept) in [
+        ("period", InputValue::Length(60), true, false),
+        ("row_ticks", InputValue::Length(2), true, false),
+        ("value_area", InputValue::Number(60.0), true, true),
+        ("period", InputValue::Length(60), false, false),
+    ] {
+        let mut chart = chart();
+        let id_of_study = chart.add_indicator(Box::new(TimePriceOpportunity::default()));
+        let study = chart.indicator_mut(id_of_study).unwrap();
+        let settings = study.settings();
+        study.apply_settings(&made_for_30, settings).unwrap();
+        let read = |chart: &Chart| {
+            let study = chart.indicators().next().unwrap().1;
+            let inputs: Vec<_> = study
+                .inputs()
+                .into_iter()
+                .map(|input| (input.id, input.value))
+                .collect();
+            let config = study.tpo().unwrap();
+            (inputs, config.composites.clone(), config.splits.clone())
+        };
+        let before = read(&chart);
+        chart.user_action(|chart| {
+            let study = chart.indicator_mut(id_of_study).unwrap();
+            let settings = study.settings();
+            let inputs: Vec<_> = if whole_list {
+                before
+                    .0
+                    .iter()
+                    .map(|(input, old)| {
+                        let new = if input == id {
+                            value.clone()
+                        } else {
+                            old.clone()
+                        };
+                        (input.clone(), new)
+                    })
+                    .collect()
+            } else {
+                vec![(id.to_owned(), value.clone())]
+            };
+            study.apply_settings(&inputs, settings).unwrap();
+        });
+        let (inputs, edits) = {
+            let (inputs, composites, splits) = read(&chart);
+            (inputs, (composites, splits))
+        };
+        let row = format!("{id} {value:?}, whole list {whole_list}");
+        if kept {
+            assert_eq!(edits, (composites.clone(), splits.clone()), "{row}");
+        } else {
+            assert_eq!(edits, (Vec::new(), Vec::new()), "{row}");
+            for list in ["composites", "splits"] {
+                let text = &inputs.iter().find(|(input, _)| input == list).unwrap().1;
+                assert_eq!(text, &InputValue::Text(String::new()), "{list}, {row}");
+            }
+        }
+        let after = read(&chart);
+        assert!(chart.undo());
+        assert_eq!(read(&chart), before, "undo, {row}");
+        assert!(chart.redo());
+        assert_eq!(read(&chart), after, "redo, {row}");
+    }
+
+    // A study without a chart, its inputs set one at a time in any order.
+    let text = |text: &str| InputValue::Text(text.into());
+    let merge = "1970-01-01T00:00:00Z/1970-01-02T00:00:00Z";
+    let split = "1970-01-03T01:00:00Z";
+    // Lists restored before the period they were made for apply once it is set.
+    let mut tpo = TimePriceOpportunity::default();
+    tpo.set_input("composites", text(&format!("60,0|{merge}")))
+        .unwrap();
+    tpo.set_input("splits", text(&format!("60,0|{split}")))
+        .unwrap();
+    assert!(tpo.tpo().unwrap().composites.is_empty());
+    tpo.set_input("period", InputValue::Length(60)).unwrap();
+    assert_eq!(tpo.tpo().unwrap().composites, composites);
+    assert_eq!(tpo.tpo().unwrap().splits, [day(2) + Duration::minutes(60)]);
+    // A list saved before the record applies under any period and is saved with the current one.
+    let mut tpo = TimePriceOpportunity::default();
+    tpo.set_input("splits", text(split)).unwrap();
+    tpo.set_input("period", InputValue::Length(60)).unwrap();
+    assert_eq!(tpo.tpo().unwrap().splits, [day(2) + Duration::minutes(60)]);
+    let saved = |tpo: &TimePriceOpportunity, id: &str| {
+        tpo.inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .unwrap()
+            .value
+    };
+    assert_eq!(saved(&tpo, "splits"), text(&format!("60,0|{split}")));
+    // A list made for another period does not apply and is not saved.
+    tpo.set_input("composites", text(&format!("30,0|{merge}")))
+        .unwrap();
+    assert!(tpo.tpo().unwrap().composites.is_empty());
+    assert_eq!(saved(&tpo, "composites"), text(""));
+    // An unreadable record is rejected and changes nothing.
+    for invalid in [
+        format!("x,0|{split}"),
+        format!("60|{split}"),
+        format!("60,0|bad"),
+    ] {
+        assert!(
+            tpo.set_input("splits", text(&invalid)).is_err(),
+            "{invalid}"
+        );
+        assert_eq!(saved(&tpo, "splits"), text(&format!("60,0|{split}")));
     }
 }
 

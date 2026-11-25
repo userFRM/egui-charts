@@ -21,6 +21,11 @@ fn display_choice(mode: TPODisplayMode) -> InputValue {
     InputValue::Choice(DISPLAYS.iter().position(|d| *d == mode).unwrap())
 }
 
+/// A merge or split list as its input holds it, after the period length and row size it was
+/// made for. The profiles take it only while both still match. `None` is a list saved before
+/// the two were recorded, which applies whatever they are.
+type ProfileEdits<T> = (Option<(usize, usize)>, Vec<T>);
+
 /// Each session's TPO profile on the price pane, starting at the session's first bar, with its
 /// point of control, value area and initial balance.
 ///
@@ -42,6 +47,8 @@ pub struct TimePriceOpportunity {
     custom_count: usize,
     overlap: SessionOverlap,
     clip_hours: bool,
+    composites: ProfileEdits<RangeInclusive<DateTime<Utc>>>,
+    splits: ProfileEdits<DateTime<Utc>>,
     config: TPOConfig,
     values: IndicatorValues,
     visible: bool,
@@ -68,6 +75,8 @@ impl TimePriceOpportunity {
             custom_count: 1,
             overlap: SessionOverlap::OwnProfile,
             clip_hours: false,
+            composites: (None, Vec::new()),
+            splits: (None, Vec::new()),
             config: TPOConfig {
                 // A zero row lets the chart fit the rows to the visible range.
                 tick_size: 0.0,
@@ -79,28 +88,83 @@ impl TimePriceOpportunity {
         }
     }
 
-    /// Input values that store the profile menu's merges and splits.
+    /// Input values that store the profile menu's merges and splits. With `made_for`, the
+    /// period length and row size the edits were made for, each list that holds any is saved
+    /// after them as `<minutes>,<ticks per row>|<list>`.
     pub(crate) fn profile_edit_inputs(
+        made_for: Option<(usize, usize)>,
         composites: &[RangeInclusive<DateTime<Utc>>],
         splits: &[DateTime<Utc>],
     ) -> [(String, InputValue); 2] {
         let instant = |time: &DateTime<Utc>| time.to_rfc3339_opts(SecondsFormat::AutoSi, true);
+        let text = |list: Vec<String>| {
+            let list = list.join(";");
+            match made_for {
+                Some((minutes, ticks)) if !list.is_empty() => {
+                    InputValue::Text(format!("{minutes},{ticks}|{list}"))
+                }
+                _ => InputValue::Text(list),
+            }
+        };
         [
             (
                 "composites".into(),
-                InputValue::Text(
+                text(
                     composites
                         .iter()
                         .map(|r| format!("{}/{}", instant(r.start()), instant(r.end())))
-                        .collect::<Vec<_>>()
-                        .join(";"),
+                        .collect(),
                 ),
             ),
-            (
-                "splits".into(),
-                InputValue::Text(splits.iter().map(instant).collect::<Vec<_>>().join(";")),
-            ),
+            ("splits".into(), text(splits.iter().map(instant).collect())),
         ]
+    }
+
+    /// Ranges of a `composites` list, or `None` when one is not `<start>/<end>` in order.
+    fn parse_composites(text: &str) -> Option<Vec<RangeInclusive<DateTime<Utc>>>> {
+        if text.is_empty() {
+            return Some(Vec::new());
+        }
+        text.split(';')
+            .map(|range| {
+                let (start, end) = range.split_once('/')?;
+                let start = DateTime::parse_from_rfc3339(start)
+                    .ok()?
+                    .with_timezone(&Utc);
+                let end = DateTime::parse_from_rfc3339(end).ok()?.with_timezone(&Utc);
+                (start <= end).then_some(start..=end)
+            })
+            .collect()
+    }
+
+    /// Instants of a `splits` list, or `None` when one does not parse.
+    fn parse_splits(text: &str) -> Option<Vec<DateTime<Utc>>> {
+        if text.is_empty() {
+            return Some(Vec::new());
+        }
+        text.split(';')
+            .map(|time| {
+                DateTime::parse_from_rfc3339(time)
+                    .ok()
+                    .map(|time| time.with_timezone(&Utc))
+            })
+            .collect()
+    }
+
+    /// Hands the profiles the edits made for the current period length and row size.
+    fn update_edits(&mut self) {
+        let now = (self.config.period_minutes as usize, self.row_ticks);
+        let live = |made_for: Option<(usize, usize)>| made_for.is_none_or(|made| made == now);
+        self.config.composites = if live(self.composites.0) {
+            self.composites.1.clone()
+        } else {
+            Vec::new()
+        };
+        self.config.splits = if live(self.splits.0) {
+            self.splits.1.clone()
+        } else {
+            Vec::new()
+        };
     }
 
     fn update_tick_size(&mut self) {
@@ -490,7 +554,10 @@ impl Indicator for TimePriceOpportunity {
             .unwrap()
             + 1;
         inputs.splice(position..position, statistics_rows);
-        for (id, value) in Self::profile_edit_inputs(&self.config.composites, &self.config.splits) {
+        let made_for = (self.config.period_minutes as usize, self.row_ticks);
+        for (id, value) in
+            Self::profile_edit_inputs(Some(made_for), &self.config.composites, &self.config.splits)
+        {
             let label = if id == "composites" {
                 "Merged profiles"
             } else {
@@ -614,45 +681,30 @@ impl Indicator for TimePriceOpportunity {
             ("poor_low", InputValue::Toggle(show)) => self.config.show_poor_low = show,
             ("extend_poor", InputValue::Toggle(show)) => self.config.extend_poor_extremes = show,
             ("volume_profile", InputValue::Toggle(show)) => self.config.show_volume_profile = show,
-            ("composites", InputValue::Text(text)) => {
-                let ranges = if text.is_empty() {
-                    Some(Vec::new())
-                } else {
-                    text.split(';')
-                        .map(|range| {
-                            let (start, end) = range.split_once('/')?;
-                            let start = DateTime::parse_from_rfc3339(start)
-                                .ok()?
-                                .with_timezone(&Utc);
-                            let end = DateTime::parse_from_rfc3339(end).ok()?.with_timezone(&Utc);
-                            (start <= end).then_some(start..=end)
-                        })
-                        .collect::<Option<Vec<_>>>()
+            ("composites" | "splits", InputValue::Text(text)) => {
+                let rejected = || crate::studies::StudyError::rejected(&self.inputs(), id);
+                let (made_for, text) = match text.split_once('|') {
+                    Some((made_for, list)) => {
+                        let (minutes, ticks) = made_for.split_once(',').ok_or_else(rejected)?;
+                        let made_for = minutes.parse().ok().zip(ticks.parse().ok());
+                        (Some(made_for.ok_or_else(rejected)?), list)
+                    }
+                    None => (None, text.as_str()),
                 };
-                self.config.composites = ranges
-                    .ok_or_else(|| crate::studies::StudyError::rejected(&self.inputs(), id))?;
-            }
-            ("splits", InputValue::Text(text)) => {
-                let instants = if text.is_empty() {
-                    Some(Vec::new())
+                if id == "composites" {
+                    self.composites =
+                        (made_for, Self::parse_composites(text).ok_or_else(rejected)?);
                 } else {
-                    text.split(';')
-                        .map(|time| {
-                            DateTime::parse_from_rfc3339(time)
-                                .ok()
-                                .map(|time| time.with_timezone(&Utc))
-                        })
-                        .collect::<Option<Vec<_>>>()
-                };
-                let mut instants = instants
-                    .ok_or_else(|| crate::studies::StudyError::rejected(&self.inputs(), id))?;
-                instants.sort_unstable();
-                instants.dedup();
-                self.config.splits = instants;
+                    let mut instants = Self::parse_splits(text).ok_or_else(rejected)?;
+                    instants.sort_unstable();
+                    instants.dedup();
+                    self.splits = (made_for, instants);
+                }
             }
             _ => return Err(crate::studies::StudyError::rejected(&self.inputs(), id)),
         }
         self.update_session();
+        self.update_edits();
         Ok(())
     }
     fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {

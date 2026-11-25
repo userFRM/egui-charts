@@ -1495,6 +1495,28 @@ impl ChartTypeParams {
         }
     }
 
+    /// Drops the TPO merges and splits that these settings carry over from `current` when they
+    /// change the period length, the row size or the profile period: the edits were made for
+    /// `current`'s, and a split would fall inside a period or a merge join profiles that no
+    /// longer exist. Edits that differ from `current`'s were supplied with the settings and stay.
+    #[cfg(feature = "widget")]
+    pub(crate) fn drop_stale_tpo_edits(&mut self, current: &Self) {
+        let made_for = |params: &Self| {
+            (
+                params.tpo_period_minutes,
+                params.tpo_row_ticks,
+                params.tpo_profile_period,
+            )
+        };
+        if made_for(self) != made_for(current)
+            && self.tpo_composites == current.tpo_composites
+            && self.tpo_splits == current.tpo_splits
+        {
+            self.tpo_composites.clear();
+            self.tpo_splits.clear();
+        }
+    }
+
     /// Create with ATR-based Renko brick size
     pub fn with_atr_renko(atr: f64, multiplier: f64) -> Self {
         Self {

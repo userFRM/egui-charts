@@ -1469,11 +1469,15 @@ mod tests {
             ("statistics_total_volume", InputValue::Toggle(true)),
             ("statistics_rotation_factor", InputValue::Toggle(false)),
             ("statistics_range_extension", InputValue::Toggle(false)),
+            // Merges and splits are saved after the period and row size they were made for.
             (
                 "composites",
-                InputValue::Text("1970-01-01T00:00:00Z/1970-01-02T00:00:00Z".into()),
+                InputValue::Text("30,0|1970-01-01T00:00:00Z/1970-01-02T00:00:00Z".into()),
             ),
-            ("splits", InputValue::Text("1970-01-02T01:00:00Z".into())),
+            (
+                "splits",
+                InputValue::Text("30,0|1970-01-02T01:00:00Z".into()),
+            ),
         ] {
             tpo.set_input(id, value.clone()).unwrap();
             assert_eq!(
