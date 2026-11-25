@@ -102,6 +102,15 @@ impl DialogFrame {
 
     /// Show the dialog. The closure receives `&mut Ui` for the dialog content.
     pub fn show(self, ctx: &Context, add_contents: impl FnOnce(&mut Ui)) {
+        self.show_with_id(ctx, None, add_contents);
+    }
+
+    pub(crate) fn show_with_id(
+        self,
+        ctx: &Context,
+        window_id: Option<egui::Id>,
+        add_contents: impl FnOnce(&mut Ui),
+    ) {
         let mut frame = dialog_frame(ctx);
         if let Some(r) = self.rounding {
             frame = frame.corner_radius(r);
@@ -114,12 +123,15 @@ impl DialogFrame {
         let inner = self.size.min(max).max(Vec2::ZERO);
 
         let window = egui::Window::new(&self.id)
-            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
             .max_width((max.x + frame.total_margin().sum().x).max(0.0))
             .frame(frame);
+        let window = match window_id {
+            Some(id) => window.id(id),
+            None => window.anchor(Align2::CENTER_CENTER, Vec2::ZERO),
+        };
         let window = if self.auto_height {
             window
                 .default_width(inner.x)
