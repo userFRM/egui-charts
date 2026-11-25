@@ -335,6 +335,8 @@ impl Chart {
         let positions = numeric.then(|| crate::model::numeric_positions(self.state.shown(), None));
         self.state.time_scale_mut().set_numeric_positions(positions);
         self.horizontal_scale = scale;
+        // The data table writes its time column through the scale.
+        self.readout_revision = crate::model::next_revision();
     }
 
     /// Finds a bar by its host key in the shared custom horizontal domain. Returns `None` for
