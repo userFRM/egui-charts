@@ -554,7 +554,7 @@ fn catalogue_inputs_take_their_usual_labels_and_ranges() {
 }
 
 /// The study browser opens the channel studies with their usual inputs, and every band they
-/// fill lies between two of their drawn plots in a colour that shows.
+/// fill lies between two of their drawn plots at its usual opacity.
 #[test]
 fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
     use crate::studies::{FillBoundary, InputValue};
@@ -563,7 +563,7 @@ fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
         (
             "Envelopes",
             vec![("percent", InputValue::Number(10.0))],
-            vec![(0, 2)],
+            vec![(0, 2, 13)],
         ),
         (
             "LinReg Channel",
@@ -572,7 +572,7 @@ fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
                 ("upper_multiplier", InputValue::Number(2.0)),
                 ("lower_multiplier", InputValue::Number(2.0)),
             ],
-            vec![(0, 1), (1, 2)],
+            vec![(0, 1, 13), (1, 2, 13)],
         ),
         (
             "MA Channel",
@@ -582,7 +582,7 @@ fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
                 ("upper_offset", InputValue::Integer(0)),
                 ("lower_offset", InputValue::Integer(0)),
             ],
-            vec![(0, 1)],
+            vec![(0, 1, 26)],
         ),
     ];
     for (name, inputs, bands) in rows {
@@ -607,8 +607,7 @@ fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
                         "{name}: plot {line} is not drawn"
                     );
                 }
-                assert_ne!(fill.color.a(), 0, "{name}: transparent fill");
-                (first, second)
+                (first, second, fill.color.a())
             })
             .collect();
         assert_eq!(fills, bands, "{name}");

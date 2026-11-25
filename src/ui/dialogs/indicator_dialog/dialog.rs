@@ -2085,6 +2085,7 @@ mod tests {
             ("ADL", &["A/D"], &[]),
             ("Moving Average Convergence Divergence", &["MACD"], &[]),
             ("Triple EMA", &["TEMA"], &["Triple MA"]),
+            ("Double EMA", &["DEMA"], &["TEMA"]),
             ("Volume-Weighted Moving Average", &["VWMA"], &[]),
             ("Bollinger BandWidth", &["BBW"], &["BB"]),
             ("Bollinger Bands %b", &["%B"], &["BB", "BBW"]),

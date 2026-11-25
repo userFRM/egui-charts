@@ -542,6 +542,13 @@ impl StudyTemplate {
                     }
                 }
             }
+            // A Moving Average Channel saved before band styles were saved fills its band as it
+            // opened then, fainter than it opens now.
+            "MA Channel" if self.settings.fills.is_empty() => {
+                template.settings.fills = vec![crate::studies::FillStyle::new(
+                    crate::studies::palette::LIGHT_BLUE.gamma_multiply_u8(13),
+                )];
+            }
             // Pivot levels had no labels before they could be labelled.
             "Pivot Points Standard" | "Intraday Pivot Points" | "Projected Pivot Points"
                 if !has("show_labels") =>
@@ -2604,8 +2611,9 @@ mod tests {
     /// and a Rank Correlation saved before it had an average, levels and a filled band, and a
     /// Majority Rule saved before its guide at 50, restore without them. So do an SMI, a
     /// Stochastic RSI and a Connors RSI saved before their guides, a Stochastic saved before its
-    /// guides had styles, a Donchian channel saved before its band and a band saved with its
-    /// boundary plots hidden before it could be drawn without them. Older per-bar studies keep
+    /// guides had styles, a Donchian channel saved before its band, a Moving Average Channel saved
+    /// before its band had a style and a band saved with its boundary plots hidden before it
+    /// could be drawn without them. Studies whose default colours changed keep the saved ones. Older per-bar studies keep
     /// the colours and widths they drew before every state had its own style control. Renamed
     /// input labels retain the ids, values and styles of the saved studies.
     #[test]
@@ -3013,6 +3021,21 @@ mod tests {
         let mut band = restored.settings().fills;
         band[0].visible = true;
         assert_eq!(band, fresh.settings().fills);
+
+        // HMA, Advance/Decline Line and MA Channel as the release before their default colours
+        // changed saved them keep the colours they drew, and an MA Channel saved before its band
+        // had a style fills it as faintly as that release did.
+        let hma = r#"{"name":"HMA","inputs":[["period",{"Length":9}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.HMA.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let breadth = r#"{"name":"Advance/Decline Line","inputs":[["advancing_symbol",{"Symbol":"ADVANCING_ISSUES"}],["declining_symbol",{"Symbol":"DECLINING_ISSUES"}],["timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/type.AdvanceDeclineLine.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let channel = r#"{"name":"MA Channel","inputs":[["upper_length",{"Length":20}],["upper_offset",{"Integer":0}],["lower_length",{"Length":20}],["lower_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MAChannel.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,8,12,13],"inverted_color":null,"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        for saved in [hma, breadth, channel] {
+            let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
+            let restored = saved.create().unwrap();
+            assert_eq!(restored.settings(), saved.settings, "{}", saved.name);
+        }
+        let mut older: StudyTemplate = serde_json::from_str(channel).unwrap();
+        let band = std::mem::take(&mut older.settings.fills);
+        assert_eq!(older.create().unwrap().settings().fills, band);
 
         // Bollinger Bands as a release before bands ignored their boundary plots saved them, the
         // upper and lower lines hidden and the band switch on: no band is drawn, and its switch
