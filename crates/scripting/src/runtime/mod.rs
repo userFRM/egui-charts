@@ -7,6 +7,7 @@ pub(crate) mod bindings;
 pub(crate) mod data;
 pub(crate) mod kernels;
 pub(crate) mod limits;
+pub(crate) mod profile;
 pub(crate) mod program;
 pub(crate) mod series;
 pub(crate) mod state;
@@ -19,6 +20,7 @@ use egui_charts::model::Bar;
 use egui_charts::studies::InputValue;
 use kernels::Kernel;
 use limits::{Clock, Limits, Stop};
+use profile::{Lines, Profile};
 use program::{ScriptSpec, Span};
 use series::Columns;
 use state::Snapshot;
@@ -99,9 +101,19 @@ pub(crate) struct Run {
     history_spans: Arc<[Span]>,
     /// The call sites counted against the memory limit so far.
     sites_counted: usize,
+    /// The calls and time of each line, when the run profiles.
+    profile: Option<Lines>,
 }
 
 impl Run {
+    /// Count a runtime operation at `span` in the profile, charging it the time since the last
+    /// one, when the run profiles.
+    pub fn mark(&mut self, span: Span) {
+        if let Some(lines) = &mut self.profile {
+            lines.mark(span);
+        }
+    }
+
     /// The occurrence of the helper call at `span` on this bar, counting from 0.
     pub fn occurrence(&mut self, span: Span) -> u32 {
         let count = self.occurrences.entry(span).or_insert(0);
@@ -279,6 +291,8 @@ pub(crate) struct Request {
     pub inputs: Vec<InputValue>,
     /// Start over from bar 0 whatever `from` says.
     pub reset: bool,
+    /// Record the calls and time of each line.
+    pub profile: bool,
 }
 
 /// The end of a run.
@@ -292,6 +306,8 @@ pub(crate) struct Outcome {
     pub result: Result<Duration, ScriptError>,
     /// The first runtime error, whose bar and later bars are missing.
     pub error: Option<ScriptError>,
+    /// The calls and time of each line, when the request asked for them and the run ended.
+    pub profile: Option<Profile>,
 }
 
 /// A run in progress.
@@ -357,6 +373,7 @@ impl<P: Program> RunState<P> {
             series_spans,
             history_spans,
             sites_counted: 0,
+            profile: None,
         };
         Self {
             slots: program.slots(&[], false),
@@ -387,7 +404,9 @@ impl<P: Program> RunState<P> {
             histories,
             inputs,
             reset,
+            profile,
         } = request;
+        self.run.profile = profile.then(Lines::new);
         let columns = &mut self.run.columns;
         columns.bars.truncate(from);
         columns.bars.extend(bars);
@@ -488,6 +507,9 @@ impl<P: Program> RunState<P> {
             }
         }
         if stop.is_none() {
+            if let Some(lines) = &mut self.run.profile {
+                lines.resume();
+            }
             let _installed = Installed::new(&mut self.run);
             let first = flight.next;
             while flight.next < len {
@@ -559,6 +581,7 @@ impl<P: Program> RunState<P> {
                 rows: Vec::new(),
                 result: Err(ScriptError::at(self.run.clock.message(limit), span, bar)),
                 error: None,
+                profile: None,
             });
         }
         if flight.next < len {
@@ -573,6 +596,7 @@ impl<P: Program> RunState<P> {
             rows: flight.rows,
             result: Ok(flight.took),
             error: flight.error,
+            profile: self.run.profile.as_ref().map(Lines::profile),
         })
     }
 
@@ -595,6 +619,7 @@ pub(crate) fn lost() -> Outcome {
             None,
         )),
         error: None,
+        profile: None,
     }
 }
 
@@ -620,6 +645,7 @@ impl Run {
             series_spans: Arc::from(Vec::new()),
             history_spans: Arc::from(Vec::new()),
             sites_counted: 0,
+            profile: None,
         }
     }
 

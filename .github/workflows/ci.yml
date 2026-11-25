@@ -63,7 +63,7 @@ jobs:
             case "$path" in
               README.md|ROADMAP.md) docs=true counts=true ;;
               docs/builder-guide.md|docs/study-data.md|docs/strategy-report.md|docs/site/src/content/docs/*.mdx) docs=true ;;
-              crates/scripting/*) scripting=true fmt=true security=true ;;
+              crates/scripting/*) scripting=true native=true fmt=true security=true ;;
               *.md|docs/site/*|docs/progress/*) ;;
               terminal/*) terminal=true fmt=true security=true ;;
               examples/demo/*) native=true fmt=true security=true ;;

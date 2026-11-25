@@ -57,10 +57,15 @@ impl Handle {
         runtime::with(|run| run.columns.value(self.0, run.bar)).unwrap_or(f64::NAN)
     }
 
-    fn at(self, offset: INT) -> Result<FLOAT> {
-        runtime::with(|run| run.columns.at(self.0, run.bar, offset))
-            .unwrap_or(Ok(f64::NAN))
-            .map_err(Into::into)
+    /// The value `offset` bars ago, read at the calling position.
+    fn at(self, context: &NativeCallContext, offset: INT) -> Result<FLOAT> {
+        let span = span(context.call_position());
+        runtime::with(|run| {
+            run.mark(span);
+            run.columns.at(self.0, run.bar, offset)
+        })
+        .unwrap_or(Ok(f64::NAN))
+        .map_err(Into::into)
     }
 }
 
@@ -638,13 +643,19 @@ pub(crate) fn engine() -> Engine {
     engine.register_fn("-", |a: Handle| -a.value());
     engine.register_fn("+", |a: Handle| a.value());
 
-    engine.register_indexer_get(|series: &mut Handle, offset: INT| series.at(offset));
-    engine.register_indexer_get(|series: &mut Handle, offset: FLOAT| {
-        series.at(whole("history", offset)?)
-    });
-    engine.register_indexer_get(|series: &mut Handle, offset: Handle| {
-        series.at(whole("history", offset.value())?)
-    });
+    engine.register_indexer_get(
+        |context: NativeCallContext, series: &mut Handle, offset: INT| series.at(&context, offset),
+    );
+    engine.register_indexer_get(
+        |context: NativeCallContext, series: &mut Handle, offset: FLOAT| {
+            series.at(&context, whole("history", offset)?)
+        },
+    );
+    engine.register_indexer_get(
+        |context: NativeCallContext, series: &mut Handle, offset: Handle| {
+            series.at(&context, whole("history", offset.value())?)
+        },
+    );
     engine
         .register_indexer_get(|_: &mut FLOAT, _: INT| -> Result<FLOAT> { Err(NO_HISTORY.into()) });
     engine.register_indexer_get(|_: &mut FLOAT, _: Handle| -> Result<FLOAT> {
@@ -664,7 +675,13 @@ pub(crate) fn engine() -> Engine {
         })
         .collect();
     for &(name, field) in &fields {
-        engine.register_get(name, move |bars: &mut BarsHandle| bars.field(field));
+        engine.register_get(
+            name,
+            move |context: NativeCallContext, bars: &mut BarsHandle| {
+                runtime::with(|run| run.mark(span(context.call_position())));
+                bars.field(field)
+            },
+        );
     }
     // Rhai asks this for a field that has no getter.
     engine.register_indexer_get(move |bars: &mut BarsHandle, name: ImmutableString| {
@@ -809,7 +826,9 @@ fn step(context: &NativeCallContext, name: &str, length: INT, x: f64, b: f64) ->
     let span = span(context.call_position());
     runtime::with(|run| {
         let occurrence = run.occurrence(span);
-        run.step((span, occurrence), name, length, x, b)
+        let value = run.step((span, occurrence), name, length, x, b);
+        run.mark(span);
+        value
     })
     .unwrap_or(Ok(f64::NAN))
     .map_err(|message| EvalAltResult::ErrorRuntime(message.into(), context.call_position()).into())
