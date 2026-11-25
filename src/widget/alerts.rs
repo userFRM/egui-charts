@@ -100,6 +100,7 @@ impl Chart {
             sources: self.alert_sources(),
             extended_hours: self.extended_hours(),
             overnight_hours: self.overnight_hours(),
+            dividend_adjusted: self.dividend_adjusted(),
             conversion: self.conversion().map(str::to_owned),
             count: if bars.is_empty() { 1000 } else { bars.len() },
             start: bars.first().map(|bar| bar.time),
