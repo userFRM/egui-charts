@@ -314,6 +314,7 @@ fn custom_ranges(
             clock.timeframe().unwrap_or_default(),
             regular,
             true,
+            None,
         )
         .into_iter()
         .filter(|p| p.bars.end > shown.start && p.bars.start < shown.end)
@@ -1103,5 +1104,91 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(chart.tpo_chart_division().1.session, ProfileSession::Chart);
+    }
+
+    /// Custom hours keep whole TPO periods on the grid of the period length: a period that opens
+    /// before the custom start is left out, the last one keeps its bars past the custom end, and
+    /// clipped hours use the grid of the regular hours. Bar `i` opens at `5 * i` minutes past
+    /// midnight and trades only `100 + i`, so prices read as times.
+    #[test]
+    fn tpo_custom_hours_keep_whole_periods_on_their_grid() {
+        use crate::model::to_tpo_profiles;
+        use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
+        use Weekday::*;
+        let start: DateTime<Utc> = "2024-03-05T00:00:00Z".parse().unwrap();
+        let bars: Vec<_> = (0..288)
+            .map(|i| Bar::from_value(start + TimeDelta::minutes(5 * i), 100.0 + i as f64))
+            .collect();
+        let at = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        let regular = Session::new([SessionWindow::new(
+            [Mon, Tue, Wed, Thu, Fri],
+            at(9, 30),
+            at(16, 0),
+        )]);
+        // (start, end, period, clip) in minutes past midnight.
+        let rows = [
+            (8 * 60, 12 * 60 + 30, 240, false),
+            (9 * 60 + 45, 12 * 60, 60, false),
+            (8 * 60 + 10, 12 * 60 + 30, 30, false),
+            (9 * 60 + 45, 12 * 60, 60, true),
+            (8 * 60 + 10, 8 * 60 + 25, 30, false),
+        ];
+        let mut observed = Vec::new();
+        for (from, to, period, clip) in rows {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.set_timeframe(Timeframe::Min5);
+            chart.set_instrument(Some(
+                Instrument::new("X")
+                    .with_time_zone(TimezoneId::utc())
+                    .with_session(regular.clone()),
+            ));
+            let mut study = TimePriceOpportunity::default();
+            for (id, value) in [
+                ("hours", InputValue::Choice(2)),
+                ("session_start", InputValue::Length(from)),
+                ("session_end", InputValue::Length(to)),
+                ("clip_hours", InputValue::Toggle(clip)),
+                ("period", InputValue::Length(period)),
+            ] {
+                study.set_input(id, value).unwrap();
+            }
+            let (clock, mut config) = chart.tpo_division(study.tpo().unwrap());
+            config.tick_size = 1.0;
+            let mut row = Vec::new();
+            for profile in
+                to_tpo_profiles(chart.bars(crate::widget::SeriesId::MAIN), &config, &clock)
+            {
+                row.push(format!(
+                    "{} {}-{}",
+                    profile.session_date.format("%H:%M"),
+                    profile.profile_low,
+                    profile.profile_high
+                ));
+                let mut periods = std::collections::BTreeMap::new();
+                for l in &profile.letters {
+                    let (_, _, lo, hi) = periods
+                        .entry(l.period_idx)
+                        .or_insert((l.letter, l.ts, l.price, l.price));
+                    *lo = l.price.min(*lo);
+                    *hi = l.price.max(*hi);
+                }
+                for (letter, ts, lo, hi) in periods.into_values() {
+                    row.push(format!("{letter} {} {lo}-{hi}", ts.format("%H:%M")));
+                }
+            }
+            observed.push(row.join(", "));
+        }
+        assert_eq!(
+            observed,
+            [
+                "08:00 196-291, A 08:00 196-243, B 12:00 244-291",
+                "10:00 220-243, A 10:00 220-231, B 11:00 232-243",
+                "08:30 202-249, A 08:30 202-207, B 09:00 208-213, C 09:30 214-219, \
+                 D 10:00 220-225, E 10:30 226-231, F 11:00 232-237, G 11:30 238-243, \
+                 H 12:00 244-249",
+                "10:30 226-249, A 10:30 226-237, B 11:30 238-249",
+                "",
+            ]
+        );
     }
 }

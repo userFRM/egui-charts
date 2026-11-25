@@ -36,8 +36,9 @@ type ProfileEdits<T> = (Option<(usize, usize)>, Vec<T>);
 /// plotted values.
 ///
 /// Its Hours input keeps each profile to the trading day, the regular hours, custom hours, or the
-/// pre-market or post-market alone, counting only the bars of those hours, and Split extended
-/// hours divides the trading day into its pre-market, regular and post-market profiles.
+/// pre-market or post-market alone, counting only the bars of those hours, and custom hours keep
+/// whole periods on the period grid. Split extended hours divides the trading day into its
+/// pre-market, regular and post-market profiles.
 #[derive(Clone, Debug)]
 pub struct TimePriceOpportunity {
     row_ticks: usize,
