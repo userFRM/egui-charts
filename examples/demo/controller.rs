@@ -5701,57 +5701,63 @@ mod tests {
         }
     }
 
+    /// One frame of the demo's dialogs with `events`, returning its AccessKit nodes.
+    fn draw(
+        ctx: &egui::Context,
+        app: &mut DemoApp,
+        events: Vec<egui::Event>,
+    ) -> Vec<(egui::accesskit::NodeId, egui::accesskit::Node)> {
+        ctx.enable_accesskit();
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| app.show_dialogs(ui.ctx()),
+        );
+        let nodes = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .clone();
+        output.drop_without_applying_deltas();
+        nodes
+    }
+
+    /// The control among `nodes` named `label`, by its own name or by the label it is tied to.
+    fn control<'a>(
+        nodes: &'a [(egui::accesskit::NodeId, egui::accesskit::Node)],
+        label: &str,
+    ) -> &'a (egui::accesskit::NodeId, egui::accesskit::Node) {
+        use egui::accesskit::Role;
+        nodes
+            .iter()
+            .find(|(_, node)| {
+                !matches!(node.role(), Role::Label | Role::TextRun)
+                    && (node.label() == Some(label)
+                        || node.labelled_by().iter().any(|id| {
+                            nodes.iter().any(|(other, label_node)| {
+                                other == id
+                                    && label_node.label().or(label_node.value()) == Some(label)
+                            })
+                        }))
+            })
+            .unwrap_or_else(|| panic!("missing control: {label}"))
+    }
+
     /// Study settings use the own-data chart's zones and apply the edited session clock.
     #[test]
     fn study_settings_edit_session_time_and_offer_the_own_data_zone() {
-        use egui::accesskit::{Action, ActionData, ActionRequest, Node, NodeId, Role, TreeId};
+        use egui::accesskit::{Action, ActionData, ActionRequest, TreeId};
         use egui_charts::model::TimezoneId;
         use egui_charts::studies::{Indicator, InputValue, TradingSessions};
         use owndata::feed::tests::{Server, pages, profile};
-
-        fn draw(
-            ctx: &egui::Context,
-            app: &mut DemoApp,
-            events: Vec<egui::Event>,
-        ) -> Vec<(NodeId, Node)> {
-            ctx.enable_accesskit();
-            let output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1440.0, 900.0),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ui| app.show_dialogs(ui.ctx()),
-            );
-            let nodes = output
-                .platform_output
-                .accesskit_update
-                .as_ref()
-                .unwrap()
-                .nodes
-                .clone();
-            output.drop_without_applying_deltas();
-            nodes
-        }
-
-        fn control<'a>(nodes: &'a [(NodeId, Node)], label: &str) -> &'a (NodeId, Node) {
-            nodes
-                .iter()
-                .find(|(_, node)| {
-                    !matches!(node.role(), Role::Label | Role::TextRun)
-                        && (node.label() == Some(label)
-                            || node.labelled_by().iter().any(|id| {
-                                nodes.iter().any(|(other, label_node)| {
-                                    other == id
-                                        && label_node.label().or(label_node.value()) == Some(label)
-                                })
-                            }))
-                })
-                .unwrap_or_else(|| panic!("missing control: {label}"))
-        }
 
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -5819,6 +5825,98 @@ mod tests {
                 "{input}"
             );
         }
+    }
+
+    /// The Style tab offers a plot the character its study declares, also for a plot saved as
+    /// another type: a Ziv Ghost Pivots plot saved as crosses switches to its "8". The Inputs
+    /// tab takes a Booker Reversal level with decimals.
+    #[test]
+    fn study_settings_offer_ziv_characters_and_decimal_booker_levels() {
+        use egui::accesskit::{Action, ActionData, ActionRequest, Role, TreeId};
+        use egui_charts::studies::{IndicatorFactory, InputValue, PlotType};
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        // Clicks the middle of a control.
+        let click = |app: &mut DemoApp, node: &egui::accesskit::Node| {
+            let bounds = node.bounds().unwrap();
+            let at = egui::pos2(
+                ((bounds.x0 + bounds.x1) / 2.0) as f32,
+                ((bounds.y0 + bounds.y1) / 2.0) as f32,
+            );
+            ui_click(&ctx, egui::vec2(1440.0, 900.0), at, |ui| {
+                app.show_dialogs(ui.ctx());
+            });
+        };
+        let factory = IndicatorFactory::new();
+        let id = app
+            .chart
+            .add_indicator(factory.create("Ziv Ghost Pivots").unwrap());
+        // The first plot as a study saved while the pivots were crosses holds it.
+        let study = app.chart.indicator_mut(id).unwrap();
+        let mut settings = study.settings();
+        settings.plots[0].plot_type = PlotType::Crosses;
+        study.apply_settings(&[], settings).unwrap();
+        app.open_indicator_settings(id);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        let nodes = draw(&ctx, &mut app, vec![]);
+        click(&mut app, &control(&nodes, "Style").1);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        // AccessKit lists the nodes in no layout order: the first plot's picker is the topmost.
+        let top = |node: &egui::accesskit::Node| node.bounds().unwrap().y0;
+        let picker = nodes
+            .iter()
+            .filter(|(_, node)| node.role() == Role::ComboBox && node.label() == Some("Plot type"))
+            .min_by(|a, b| top(&a.1).total_cmp(&top(&b.1)))
+            .expect("a plot type picker");
+        assert_eq!(picker.1.value(), Some("Crosses"));
+        click(&mut app, &picker.1);
+        // The list is longer than its popup, so the entry is scrolled into view first: the list
+        // moves in the frame after the one that asks.
+        let nodes = draw(&ctx, &mut app, vec![]);
+        let request = egui::Event::AccessKitActionRequest(ActionRequest {
+            action: Action::ScrollIntoView,
+            target_tree: TreeId::ROOT,
+            target_node: control(&nodes, "Character 8").0,
+            data: None,
+        });
+        draw(&ctx, &mut app, vec![request]);
+        draw(&ctx, &mut app, vec![]);
+        for label in ["Character 8", "Apply"] {
+            let nodes = draw(&ctx, &mut app, vec![]);
+            click(&mut app, &control(&nodes, label).1);
+        }
+        assert!(!app.indicator_settings.is_open());
+        let study = app.chart.indicator_mut(id).unwrap();
+        assert_eq!(study.plot_style(0).plot_type, PlotType::Character('8'));
+
+        let id = app
+            .chart
+            .add_indicator(factory.create("Booker Reversal").unwrap());
+        app.open_indicator_settings(id);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        let nodes = draw(&ctx, &mut app, vec![]);
+        let request = egui::Event::AccessKitActionRequest(ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: control(&nodes, "Stochastic Upper").0,
+            data: Some(ActionData::NumericValue(72.5)),
+        });
+        draw(&ctx, &mut app, vec![request]);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        click(&mut app, &control(&nodes, "Apply").1);
+        assert!(!app.indicator_settings.is_open());
+        let inputs = app.chart.indicator_mut(id).unwrap().inputs();
+        let upper = inputs.iter().find(|input| input.id == "stoch_upper");
+        assert_eq!(
+            upper.map(|input| &input.value),
+            Some(&InputValue::Number(72.5))
+        );
     }
 
     /// The menu actions reach the other chart, which lacks nothing, without a prompt; a chart
@@ -10290,30 +10388,54 @@ mod tests {
             );
         }
 
+        // With the replay bar shown its keys step and play, and the chart keeps its own: the jump
+        // keys, which hold Alt beside the replay's Shift and arrow, and the list keys below.
         app.start_replay();
         app.handle_replay_control(ReplayControlAction::Pause);
         settle(&mut app, &ctx);
-        let before = app.replay.as_ref().unwrap().state.curr_bar;
-        for (key, modifiers, offset, playing) in [
-            (Key::ArrowRight, Modifiers::NONE, 1, false),
-            (Key::ArrowLeft, Modifiers::NONE, 0, false),
-            (Key::Space, Modifiers::NONE, 0, true),
-            (Key::Space, Modifiers::SHIFT, 0, false),
+        let jump = Modifiers::ALT | Modifiers::SHIFT;
+        // The cursor's move, unchecked while the replay plays, and whether it plays afterwards.
+        for (key, modifiers, moved, playing) in [
+            (Key::ArrowRight, Modifiers::NONE, Some(1), false),
+            (Key::ArrowLeft, Modifiers::NONE, Some(-1), false),
+            (Key::ArrowDown, Modifiers::SHIFT, None, true),
+            (Key::ArrowDown, Modifiers::SHIFT, None, false),
+            (Key::ArrowRight, jump, Some(0), false),
+            (Key::ArrowLeft, jump, Some(0), false),
+            (Key::ArrowRight, Modifiers::SHIFT, Some(1), false),
         ] {
+            let before = app.replay.as_ref().unwrap().state.curr_bar;
             press(&mut app, key, modifiers);
             assert_eq!(app.chart.symbol(), "STOCKA");
             let replay = app.replay.as_ref().unwrap();
-            if key != Key::Space {
-                assert_eq!(replay.state.curr_bar, before + offset);
+            if let Some(moved) = moved {
+                assert_eq!(
+                    replay.state.curr_bar as isize - before as isize,
+                    moved,
+                    "{key:?} / {modifiers:?}"
+                );
             }
-            assert_eq!(replay.state.is_playing(), playing);
+            assert_eq!(
+                replay.state.is_playing(),
+                playing,
+                "{key:?} / {modifiers:?}"
+            );
         }
-        press(&mut app, Key::ArrowDown, Modifiers::NONE);
-        assert_eq!(app.chart.symbol(), "STOCKB");
-        assert!(
-            app.replay.is_none(),
-            "a symbol change exits replay as a row click does"
-        );
+        // The list keys flip the list beside the replay bar too. A symbol change exits replay as
+        // a row click does.
+        for (key, modifiers, symbol) in [
+            (Key::Space, Modifiers::NONE, "STOCKB"),
+            (Key::Space, Modifiers::SHIFT, "STOCKA"),
+            (Key::ArrowDown, Modifiers::NONE, "STOCKB"),
+        ] {
+            settle(&mut app, &ctx);
+            app.start_replay();
+            settle(&mut app, &ctx);
+            assert!(app.replay.is_some() && app.replay_control.is_visible());
+            press(&mut app, key, modifiers);
+            assert_eq!(app.chart.symbol(), symbol, "{key:?} / {modifiers:?}");
+            assert!(app.replay.is_none(), "{key:?} / {modifiers:?}");
+        }
     }
 
     #[test]
@@ -10489,6 +10611,62 @@ mod tests {
             panic!("custom hours applied")
         };
         assert_eq!(custom.sessions.len(), 2);
+    }
+
+    /// The demo's chart settings offer the Overnight background switch, and Ok hides the
+    /// overnight background of its chart while the post-market stays shaded.
+    #[test]
+    fn chart_settings_overnight_switch_reaches_the_demo_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.open_chart_settings_dialog();
+        let size = egui::vec2(1440.0, 900.0);
+        let show = |app: &mut DemoApp, events| {
+            ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+        };
+        // The Session backgrounds sit below the fold of the Symbol tab; the footer is fixed.
+        let switch = (0..20)
+            .find_map(|_| {
+                for _ in 0..5 {
+                    show(&mut app, vec![]);
+                }
+                let found = show(&mut app, vec![]).into_iter().find(|(label, rect)| {
+                    label == "Overnight" && (180.0..720.0).contains(&rect.center().y)
+                });
+                if found.is_none() {
+                    show(
+                        &mut app,
+                        vec![
+                            egui::Event::PointerMoved(egui::pos2(900.0, 450.0)),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                source: egui::MouseWheelSource::Wheel,
+                                phase: egui::TouchPhase::Move,
+                                delta: egui::vec2(0.0, -100.0),
+                                modifiers: Default::default(),
+                            },
+                        ],
+                    );
+                }
+                found
+            })
+            .expect("the Overnight switch is offered")
+            .1
+            .center();
+        ui_click(&ctx, size, switch, |ui| app.show_dialogs(ui.ctx()));
+        let ok = show(&mut app, vec![])
+            .into_iter()
+            .find(|(text, _)| text == "Ok")
+            .unwrap()
+            .1
+            .center();
+        ui_click(&ctx, size, ok, |ui| app.show_dialogs(ui.ctx()));
+        let config = app.chart.config();
+        assert!(!config.shade_overnight && config.shade_postmarket);
     }
 
     /// The settings offer the futures data choices on the demo's futures contracts only;

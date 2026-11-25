@@ -94,8 +94,10 @@ impl Default for AreaStyle {
 }
 
 /// The Baseline chart's independent colours and vertical fills on either side of its base.
+/// A saved style reads each field it lacks as it was drawn before the fills faded: flat at 12%
+/// opacity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default = "BaselineStyle::saved_flat")]
 #[non_exhaustive]
 pub struct BaselineStyle {
     /// Line above the base in price units, also on an inverted scale.
@@ -106,13 +108,17 @@ pub struct BaselineStyle {
     /// the default. Each marker takes its point's line colour on its side of the base.
     pub marker_radius: f32,
     /// Fill at the pane's high-price edge, including opacity, also on an inverted scale.
+    /// Default: the rising colour at 28% opacity.
     pub above_fill: Color32,
     /// Fill at the pane's low-price edge, including opacity.
+    /// Default: the falling colour at 28% opacity.
     pub below_fill: Color32,
-    /// Fill at the base on its higher-price side. `None` uses `above_fill` for a flat fill.
-    /// The gradient interpolates in screen space between the pane edge and the base.
+    /// Fill at the base on its higher-price side. `None` uses `above_fill` for a flat fill, as
+    /// documents saved before the faded default read. The gradient interpolates in screen space
+    /// between the pane edge and the base. Default: the rising colour at 5% opacity.
     pub above_fill_at_base: Option<Color32>,
-    /// Fill at the base on its lower-price side. `None` uses `below_fill` for a flat fill.
+    /// Fill at the base on its lower-price side. `None` uses `below_fill` for a flat fill, as
+    /// documents saved before the faded default read. Default: the falling colour at 5% opacity.
     pub below_fill_at_base: Option<Color32>,
 }
 
@@ -120,6 +126,9 @@ impl Default for BaselineStyle {
     fn default() -> Self {
         let up = DESIGN_TOKENS.semantic.extended.bullish;
         let down = DESIGN_TOKENS.semantic.extended.bearish;
+        // Each side fades from 28% opacity at the pane edge, round(0.28 * 255) = 71, to 5% at the
+        // base, round(0.05 * 255) = 13.
+        let fill = HlcAreaStyle::fill_tint;
         Self {
             above: LinePlotStyle {
                 color: up,
@@ -130,10 +139,25 @@ impl Default for BaselineStyle {
                 ..Default::default()
             },
             marker_radius: 0.0,
-            above_fill: Color32::from_rgba_unmultiplied(up.r(), up.g(), up.b(), 30),
-            below_fill: Color32::from_rgba_unmultiplied(down.r(), down.g(), down.b(), 30),
+            above_fill: fill(up, 71),
+            below_fill: fill(down, 71),
+            above_fill_at_base: Some(fill(up, 13)),
+            below_fill_at_base: Some(fill(down, 13)),
+        }
+    }
+}
+
+impl BaselineStyle {
+    /// How a Baseline chart drew before its fills faded: both flat at 12% opacity,
+    /// round(0.12 * 255) = 30.
+    fn saved_flat() -> Self {
+        let style = Self::default();
+        Self {
+            above_fill: HlcAreaStyle::fill_tint(style.above.color, 30),
+            below_fill: HlcAreaStyle::fill_tint(style.below.color, 30),
             above_fill_at_base: None,
             below_fill_at_base: None,
+            ..style
         }
     }
 }
@@ -297,13 +321,45 @@ impl Default for BarsStyle {
     }
 }
 
-/// The Columns chart's height.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// The Columns chart's height and colours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct ColumnsStyle {
     /// The price each column reaches. Its colour still compares closes.
     pub price_source: PriceSource,
+    /// Colour of a column whose close is at or above the close before it, including opacity.
+    /// [`Color32::PLACEHOLDER`] draws it in the chart's rising candle body colour, as documents
+    /// saved before this colour read.
+    #[serde(default = "candle_body_color")]
+    pub up_color: Color32,
+    /// Colour of a column whose close is below the close before it, including opacity.
+    /// [`Color32::PLACEHOLDER`] draws it in the chart's falling candle body colour, as documents
+    /// saved before this colour read.
+    #[serde(default = "candle_body_color")]
+    pub down_color: Color32,
+}
+
+impl Default for ColumnsStyle {
+    fn default() -> Self {
+        // The rising and falling colours at 50% opacity: round(0.5 * 255) = 128.
+        Self {
+            price_source: PriceSource::default(),
+            up_color: HlcAreaStyle::fill_tint(DESIGN_TOKENS.semantic.extended.bullish, 128),
+            down_color: HlcAreaStyle::fill_tint(DESIGN_TOKENS.semantic.extended.bearish, 128),
+        }
+    }
+}
+
+impl ColumnsStyle {
+    /// How a Columns chart drew before it had colours of its own: in the candle body colours.
+    fn saved_without_colors() -> Self {
+        Self {
+            up_color: Color32::PLACEHOLDER,
+            down_color: Color32::PLACEHOLDER,
+            ..Self::default()
+        }
+    }
 }
 
 /// The Candles chart's bodies, wicks and colouring. Borders are drawn while the chart's candle
@@ -773,7 +829,9 @@ pub struct RangeStyle {
 /// let mut line_break = LineBreakStyle::default();
 /// line_break.border_visible = false;
 /// styles.line_break = line_break;
-/// styles.columns = ColumnsStyle::default();
+/// let mut columns = ColumnsStyle::default();
+/// columns.up_color = egui::Color32::BLUE;
+/// styles.columns = columns;
 /// styles.step_line_price_source = Some(PriceSource::High);
 /// styles.line_gradient = true;
 /// styles.line_gradient_end = egui::Color32::from_rgba_premultiplied(0, 0, 120, 120);
@@ -803,7 +861,9 @@ pub struct ChartTypeStyles {
     pub marker_radius: f32,
     /// Area chart.
     pub area: AreaStyle,
-    /// Baseline chart.
+    /// Baseline chart. Documents saved before its fills faded draw them flat, as they were
+    /// drawn.
+    #[serde(default = "BaselineStyle::saved_flat")]
     pub baseline: BaselineStyle,
     /// Price the Line chart draws. `None`, as in documents saved before each line-based chart
     /// type had a source of its own, draws `ChartConfig::price_source`.
@@ -835,7 +895,9 @@ pub struct ChartTypeStyles {
     pub heikin: HeikinStyle,
     /// Bars chart.
     pub bars: BarsStyle,
-    /// Columns chart.
+    /// Columns chart. Documents saved before its colours draw in the candle body colours, as
+    /// they were drawn.
+    #[serde(default = "ColumnsStyle::saved_without_colors")]
     pub columns: ColumnsStyle,
     /// High-low chart. Documents saved before this style restore without price labels, as they
     /// were drawn.
@@ -960,6 +1022,8 @@ impl ChartTypeStyles {
         Self {
             volume_candles: VolumeCandlesStyle::saved_without_style(),
             heikin: HeikinStyle::saved_without_style(),
+            baseline: BaselineStyle::saved_flat(),
+            columns: ColumnsStyle::saved_without_colors(),
             high_low: HighLowStyle::saved_without_style(),
             kagi: KagiStyle::saved_without_colors(),
             point_figure: PointFigureStyle::saved_without_style(),
@@ -974,7 +1038,7 @@ mod tests {
     use crate::model::BarColors;
 
     #[test]
-    fn baseline_saved_colours_keep_legacy_flat_fills_and_gradient_endpoints() {
+    fn saved_documents_keep_flat_baseline_fills_and_candle_coloured_columns() {
         for gradient in [false, true] {
             let mut saved = serde_json::json!({
                 "above_fill": [0, 200, 0, 200], "below_fill": [200, 0, 0, 200]
@@ -1002,6 +1066,48 @@ mod tests {
             }
             for key in ["top_fill_at_base", "bottom_fill_at_base"] {
                 assert_eq!(restored_point[key], point[key]);
+            }
+        }
+
+        // A Columns entry, styles and parameters saved before the column colours.
+        let empty = || serde_json::json!({});
+        let entry: ColumnsStyle =
+            serde_json::from_value(serde_json::json!({"price_source": "Close"})).unwrap();
+        let styles: ChartTypeStyles = serde_json::from_value(empty()).unwrap();
+        let params: crate::model::ChartTypeParams = serde_json::from_value(empty()).unwrap();
+        for (saved, columns) in [
+            ("entry", entry),
+            ("styles", styles.columns),
+            ("parameters", params.styles.columns),
+        ] {
+            assert_eq!(
+                [columns.up_color, columns.down_color],
+                [Color32::PLACEHOLDER; 2],
+                "{saved}"
+            );
+        }
+
+        // A Baseline entry, styles and parameters saved without the fills draw them as they
+        // were drawn: flat, rgb(8, 153, 129) and rgb(242, 54, 69) at alpha 30, premultiplied.
+        let entry: BaselineStyle = serde_json::from_value(empty()).unwrap();
+        for (saved, baseline) in [
+            ("entry", entry),
+            ("styles", styles.baseline),
+            ("parameters", params.styles.baseline),
+        ] {
+            let baseline = serde_json::to_value(&baseline).unwrap();
+            assert_eq!(
+                baseline["above_fill"],
+                serde_json::json!([1, 18, 15, 30]),
+                "{saved}"
+            );
+            assert_eq!(
+                baseline["below_fill"],
+                serde_json::json!([28, 6, 8, 30]),
+                "{saved}"
+            );
+            for key in ["above_fill_at_base", "below_fill_at_base"] {
+                assert!(baseline[key].is_null(), "{saved} {key}");
             }
         }
     }

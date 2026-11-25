@@ -183,6 +183,7 @@ impl ChartSettingsState {
                 postmarket_color: config.postmarket_color,
                 shade_premarket: config.shade_premarket,
                 shade_postmarket: config.shade_postmarket,
+                shade_overnight: config.shade_overnight,
                 overnight_hours_color: config.overnight_hours_color,
             }),
             order_flow: super::OrderFlowSettings {
@@ -564,6 +565,7 @@ impl ChartSettingsState {
             config.postmarket_color = background.postmarket_color;
             config.shade_premarket = background.shade_premarket;
             config.shade_postmarket = background.shade_postmarket;
+            config.shade_overnight = background.shade_overnight;
             config.overnight_hours_color = background.overnight_hours_color;
         }
         chart.chart_options.time_scale.timezone = timezone;
