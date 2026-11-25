@@ -118,6 +118,7 @@ array function such as `filter` takes a declared function as `Fn("name")`.
 | string | `"text"`, `choice`, `text`, `symbol` and `interval` inputs | none |
 | series | `open high low close volume hl2 hlc3 ohlc4 time bar_index`, `series` declarations, `source` inputs, `study(...)` calls, the fields of `bars` such as `NAME.close` | `na` on a bar |
 | bars | `bars` declarations | none |
+| color | `rgb(...)`, `rgba(...)`, `color` inputs; `"#RRGGBB"` where a colour is taken | `na` |
 
 A series has one value per bar. In arithmetic, a comparison or a helper argument it stands for
 its value on the current bar; `s[n]` is its value `n` bars ago, and `s[0]` the current one. An
@@ -160,6 +161,7 @@ and checked when the script compiles, before any bar runs.
   | `text(label, default)` | string |
   | `symbol(label, default)`, `""` for the chart's symbol | string |
   | `interval(label, default)`, `""` for the chart's interval | string, such as `"5min"`, `"1h"` or `"1D"` |
+  | `color(label, default)`, `default` `"#RRGGBB"` or `"#RRGGBBAA"` | color |
 
   The default must lie within the bounds and the label must not be empty. The ids
   `plot_offset`, `calculation_symbol`, `calculation_timeframe` and `wait_for_close` belong to
@@ -172,13 +174,16 @@ and checked when the script compiles, before any bar runs.
 - `series NAME = EXPR;` declares a series the script computes. Each time the statement runs it
   stores a number as `NAME`'s value on the current bar; a bar on which it does not run holds
   `na`.
-- `plot(TITLE, EXPR, color = "#RRGGBB", style = STYLE, offset = INT);` declares an output, numbered
+- `plot(TITLE, EXPR, color = COLOR, style = STYLE, offset = INT);` declares an output, numbered
   from 0 in source order, and stores its value on the current bar; the last store on a bar wins.
-  `color` also takes `"#RRGGBBAA"`. `STYLE` is one of `"line"`, `"line_with_breaks"`,
-  `"histogram"`, `"circles"`, `"step_line"`, `"step_line_with_breaks"`,
-  `"step_line_with_diamonds"`, `"columns"`, `"crosses"`, `"area"`, `"area_with_breaks"`,
-  `"triangle_up"` and `"triangle_down"`. Titles are unique and not empty, and a constant line is a
-  plot of a literal.
+  `COLOR` is `"#RRGGBB"` or `"#RRGGBBAA"`, the plot's colour, or an expression the plot stores
+  with its value, which colours each bar, see [Colours and drawings](#colours-and-drawings).
+  `STYLE` is one of `"line"`, `"line_with_breaks"`, `"histogram"`, `"circles"`, `"step_line"`,
+  `"step_line_with_breaks"`, `"step_line_with_diamonds"`, `"columns"`, `"crosses"`, `"area"`,
+  `"area_with_breaks"`, `"triangle_up"`, `"triangle_down"`, `"bar_color"` and
+  `"background_color"`. The last two paint the price bars or the pane's background in the plot's
+  colour on each bar whose value is a number; `"bar_color"` needs `display(overlay = true)` before
+  the plot. Titles are unique and not empty, and a constant line is a plot of a literal.
 - `fill(A, B, color = "#...", inverted = "#...");` fills the band between two plots, named by
   title, or numbers. The plots come before the fill.
 
@@ -427,13 +432,102 @@ script that defines its own function `alert` calls it and declares no condition.
 count as plots: a script still needs one. A strategy script runs and checks its alert calls and
 otherwise ignores them.
 
+## Colours and drawings
+
+A colour is a value of its own: `rgb(r, g, b)`, each part from 0 to 255, `rgba(r, g, b, alpha)`,
+with an opacity from 0, transparent, to 1, opaque, or a `color` input. A part outside its range is
+held to it and rounded, so `rgb(300, -5, 12.6)` is `rgb(255, 0, 13)`, and a missing part gives
+`na`, no colour. Where a colour is taken, the strings `"#RRGGBB"` and `"#RRGGBBAA"` stand for one
+too. Written as text, as in `"" + c`, a colour is `#RRGGBBAA`.
+
+`color = EXPR` in a `plot` colours the plot on each bar where the statement runs. The expression
+gives a colour, a hex string or `na`; anything else is a runtime error at the expression. A bar
+whose colour is `na` keeps the plot's own colour, the one the settings dialog edits, and a
+`"bar_color"` or `"background_color"` plot paints nothing there. As for the value, the last store on
+a bar wins, its colour included:
+
+```rust
+use egui_charts::model::Bar;
+use egui_charts::studies::{Calculation, Indicator, IndicatorFactory};
+use egui_charts_scripting::Script;
+
+let source = r##"
+    display(overlay = true);
+    plot("Close", close, color = if close > open { "#26A69A" } else { na });
+    plot("Marks", na, color = "#FF6D00");
+    if close < open { label("Marks", bar_index, high, "Down"); }
+"##;
+let script = Script::compile("Falls", source, &IndicatorFactory::new())?;
+let bars: Vec<Bar> = [(1.0, 2.0), (2.0, 1.0), (1.0, 1.0)]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (open, close))| {
+        let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+        Bar::new(time, open, open.max(close), open.min(close), close, 1.0)
+    })
+    .collect();
+let mut study = script.study();
+study.calculate(&bars);
+while matches!(study.calculation(), Some(Calculation::Running(_))) {
+    study.update(&bars, bars.len());
+}
+// Open 1, close 2 rises; open 2, close 1 falls; open and close 1 is neither.
+assert_eq!(study.plot_color(0, 0), Some(ecolor::Color32::from_rgb(0x26, 0xA6, 0x9A)));
+assert_eq!(study.plot_color(0, 1), None);
+let labels = study.labels();
+assert_eq!(labels.len(), 1);
+assert_eq!((labels[0].bar, labels[0].price, labels[0].text.as_str()), (1, 2.0, "Down"));
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Four helpers draw on the chart:
+
+- `label(plot, bar, price, text)` writes `text` above `price` on `bar`, and
+  `label(plot, bar, price, text, placement)` places it `"above"`, `"below"`, `"above_left"` or
+  `"above_right"` of that point.
+- `segment(plot, bar1, price1, bar2, price2)` draws a straight line between two points, in the
+  prices of the main series, also for a study in a pane of its own.
+- `zone(plot, bar1, bar2, top, bottom)` shades the band between two prices from the middle of one
+  bar to the middle of the other, its edges in the plot's colour and its inside at 15% of it; one
+  bar gives a band without width.
+- `marker(bar, price, direction)` puts a triangle pointing `"up"` or `"down"` at the point, in the
+  theme's colours for up and down, while any plot of the study is visible.
+
+`plot` is the title of a plot the script declares, a string in double quotes written in the call,
+without escapes, which is checked when the script compiles. The drawing takes that plot's colour,
+width and pattern, and shows while the plot is visible. A plot of `na` with a colour draws no line,
+so two of them give labels in two colours:
+
+```text
+plot("Rises", na, color = "#26A69A");
+plot("Falls", na, color = "#EF5350");
+if close > open { label("Rises", bar_index, high, "Up"); }
+if close < open { label("Falls", bar_index, low, "Down", "below"); }
+```
+
+A bar is a bar number, such as `bar_index - 2`: a whole number from 0 to 10000 bars after the bar
+calculated, so a drawing may stand right of the last bar. A missing bar or price draws nothing.
+Every drawing belongs to the bar whose run made it: a bar run again, such as the forming bar on each
+update, replaces its drawings, and a runtime error drops those of its bar and of the bars after
+it. Drawings count against the memory limit, see [Limits](#limits). A strategy script checks its
+drawing calls and draws nothing.
+
+The chart's own inputs move or recalculate plots only, so a script that draws offers fewer of
+them: one that calls `label` or `segment` offers no Symbol, Interval or Wait for interval close,
+and one that calls any of the four offers no Offset, unless it has an input with id `source`,
+whose Offset moves its plots and colours but not its drawings. The calls are read when the script
+compiles, beside its declarations. The helpers are functions, so the names stay free for a script's
+own variables and keys, and a script that defines its own function `label` calls it and draws no
+label.
+
 ## Helpers
 
 Every helper takes numbers, ints and series where a number is expected, and the math helpers give
 `na` for a missing argument. The [reference](#reference-and-completion) lists each helper with what
-it gives, in six groups: missing values, such as `is_na(x)` and `nz(x)`; math; streaming helpers,
-such as `sma(x, n)` and `crossover(a, b)`; the time helpers, which read a time in UTC; the
-[orders](#strategies) of strategies with their readings; and [alerts](#alerts).
+it gives, in eight groups: missing values, such as `is_na(x)` and `nz(x)`; math; streaming
+helpers, such as `sma(x, n)` and `crossover(a, b)`; the time helpers, which read a time in UTC; the
+[orders](#strategies) of strategies with their readings; [alerts](#alerts); and
+[colours and drawings](#colours-and-drawings).
 
 A streaming helper keeps its own history, which belongs to its call: two calls of `sma` keep
 two windows, and a call that does not run on a bar sees `na` there. Its length must stay the same
@@ -531,17 +625,18 @@ calls count against its time limits but are not interrupted: a bar may pass its 
 the web its 4 ms, by the calculation of one study, which costs the same on the chart.
 
 `Limits`, set with `Script::with_limits`, bound each study's runs: by default 500 ms for one bar,
-60 s for a full recompute and 256 MiB for the study's buffers and its script's values. The buffers
-include the lines of every study called, with a copy of the one read, and the bars of other
-histories, but not what a called study keeps for itself. Values count with the room they hold, not
-their length: those the states keep, after each bar, and inside a bar, every 256 operations at the
-next variable read, the variables in scope there, with what the last count found in each call
+60 s for a full recompute and 256 MiB for the study's buffers, its drawings and its script's values.
+The buffers include the lines of every study called, with a copy of the one read, and the bars of
+other histories, but not what a called study keeps for itself. Values count with the room they hold,
+not their length: those the states keep, after each bar, and inside a bar, every 256 operations at
+the next variable read, the variables in scope there, with what the last count found in each call
 waiting on the running one. A run that passes a limit keeps none of its bars: the study keeps its
-previous values, and the legend and `Script::last_error` say which limit stopped it and where. It
-runs again when its inputs change or its bars change from the first one on. Whether a run close to a
-limit finishes depends on the machine and its load. A script with long logic on every bar costs time
-on every bar: on 100,000 bars a restated built-in study takes several hundred milliseconds to
-recompute, off the UI thread, and a script that calls it with `study` a tenth of that.
+previous values, colours and drawings, and the legend and `Script::last_error` say which limit
+stopped it and where. It runs again when its inputs change or its bars change from the first one on.
+Whether a run close to a limit finishes depends on the machine and its load. A script with long
+logic on every bar costs time on every bar: on 100,000 bars a restated built-in study takes several
+hundred milliseconds to recompute, off the UI thread, and a script that calls it with `study` a
+tenth of that.
 
 `Limits` may gain fields, so a host starts from the defaults and sets the limits it changes:
 

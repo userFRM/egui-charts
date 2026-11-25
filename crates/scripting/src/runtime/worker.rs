@@ -21,7 +21,7 @@ pub(crate) const STACK: usize = 32 << 20;
 /// Where a request stands.
 pub(crate) enum Poll {
     Running(f32),
-    Done(Outcome),
+    Done(Box<Outcome>),
 }
 
 /// The calculation of one study, started by its first request.
@@ -89,13 +89,13 @@ impl Runner {
     pub fn send(&mut self, request: Request) -> Poll {
         self.progress.store(0f32.to_bits(), Ordering::Relaxed);
         if self.requests.send(request).is_err() {
-            return Poll::Done(super::lost());
+            return Poll::Done(Box::new(super::lost()));
         }
         let outcomes = self.outcomes.get_mut().unwrap_or_else(|e| e.into_inner());
         match outcomes.recv_timeout(Self::WAIT) {
-            Ok(outcome) => Poll::Done(outcome),
+            Ok(outcome) => Poll::Done(Box::new(outcome)),
             Err(mpsc::RecvTimeoutError::Timeout) => Poll::Running(0.0),
-            Err(mpsc::RecvTimeoutError::Disconnected) => Poll::Done(super::lost()),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Poll::Done(Box::new(super::lost())),
         }
     }
 
@@ -112,11 +112,11 @@ impl Runner {
     pub fn poll(&mut self) -> Poll {
         let outcomes = self.outcomes.get_mut().unwrap_or_else(|e| e.into_inner());
         match outcomes.try_recv() {
-            Ok(outcome) => Poll::Done(outcome),
+            Ok(outcome) => Poll::Done(Box::new(outcome)),
             Err(mpsc::TryRecvError::Empty) => {
                 Poll::Running(f32::from_bits(self.progress.load(Ordering::Relaxed)))
             }
-            Err(mpsc::TryRecvError::Disconnected) => Poll::Done(super::lost()),
+            Err(mpsc::TryRecvError::Disconnected) => Poll::Done(Box::new(super::lost())),
         }
     }
 }
@@ -194,7 +194,7 @@ impl Runner {
     pub fn poll(&mut self) -> Poll {
         let state = self.state.get_mut().unwrap_or_else(|e| e.into_inner());
         match state.advance(web_time::Instant::now() + super::limits::SLICE) {
-            Some(outcome) => Poll::Done(outcome),
+            Some(outcome) => Poll::Done(Box::new(outcome)),
             None => Poll::Running(state.fraction()),
         }
     }

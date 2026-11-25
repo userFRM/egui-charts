@@ -461,6 +461,21 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
             .unwrap();
         assert_eq!(info.price_fraction, expected, "{symbol}");
     }
+    // A decimal pricescale sets the decimals; minmov only sets the tick.
+    for (symbol, expected) in [
+        (json!({"name":"ABC", "minmov":50, "pricescale":100}), 2),
+        (json!({"name":"ABC", "minmov":20, "pricescale":100}), 2),
+        (json!({"name":"ABC", "minmov":250, "pricescale":1000}), 3),
+        (json!({"name":"ABC", "minmov":0.5, "pricescale":100}), 3),
+        (json!({"name":"ABC", "pricescale":32}), 5),
+    ] {
+        let info = serde_json::from_value::<Symbol>(symbol.clone())
+            .unwrap()
+            .into_instrument()
+            .unwrap();
+        let decimals = crate::scales::instrument_price_precision(&info);
+        assert_eq!(decimals, Some(expected), "{symbol}");
+    }
     for invalid in [
         json!({"name":"ABC", "pricescale":0}),
         json!({"name":"ABC", "minmov":-1, "pricescale":100}),

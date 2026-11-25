@@ -5,6 +5,7 @@
 
 pub(crate) mod bindings;
 pub(crate) mod data;
+pub(crate) mod drawings;
 pub(crate) mod kernels;
 pub(crate) mod limits;
 pub(crate) mod orders;
@@ -17,6 +18,7 @@ pub(crate) mod worker;
 use crate::ScriptError;
 use bindings::Instance;
 use data::Patch;
+use drawings::Drawn;
 use egui_charts::model::Bar;
 use egui_charts::studies::InputValue;
 use kernels::Kernel;
@@ -73,9 +75,15 @@ pub(crate) struct Run {
     pub columns: Columns,
     /// The bar being calculated.
     pub bar: usize,
-    /// The plot values of the current bar, then its alert conditions (1 for true, 0 for false),
-    /// each missing until the script stores one.
+    /// The plot values of the current bar, its alert conditions (1 for true, 0 for false), then
+    /// the colours of the plots coloured by an expression ([`drawings::encode`]), each missing
+    /// until the script stores one.
     pub row: Vec<f64>,
+    /// The drawings of the bar being calculated, in call order.
+    pub drawn: Vec<Drawn>,
+    /// The bytes of the drawings made up to and including each bar calculated, the bar being
+    /// calculated last.
+    drawn_bytes: Vec<usize>,
     /// The bytes each value kept between bars holds after the last bar, with where it is
     /// declared; the front end sets them after each bar.
     pub kept: Vec<(usize, Span)>,
@@ -192,6 +200,9 @@ impl Run {
     fn start_bar(&mut self, bar: usize) {
         self.bar = bar;
         self.row.fill(f64::NAN);
+        self.drawn.clear();
+        let made = self.drawn_bytes.last().copied().unwrap_or(0);
+        self.drawn_bytes.push(made);
         if let Some(decision) = &mut self.decision {
             decision.calls.clear();
             if let Some(readings) = self.decided.get(bar) {
@@ -211,6 +222,32 @@ impl Run {
                 .as_ref()
                 .and_then(|history| history.data().closed_at(time, last));
             aligned.push(at.unwrap_or(usize::MAX));
+        }
+    }
+
+    /// Keep `drawn`, made by the bar being calculated, and whether the study then holds more than
+    /// the memory limit, which stops the run.
+    pub fn draw(&mut self, drawn: Drawn) -> bool {
+        if let Some(made) = self.drawn_bytes.last_mut() {
+            *made += drawn.bytes();
+        }
+        self.drawn.push(drawn);
+        if self.stop.is_none() && self.bytes() > self.clock.limits.memory {
+            self.stop = Some(Stop::Memory);
+        }
+        self.stop.is_some()
+    }
+
+    /// Drop the drawings of the bar being calculated, which failed.
+    fn forget_drawn(&mut self) {
+        self.drawn.clear();
+        let before = self
+            .bar
+            .checked_sub(1)
+            .and_then(|bar| self.drawn_bytes.get(bar));
+        let before = before.copied().unwrap_or(0);
+        if let Some(made) = self.drawn_bytes.last_mut() {
+            *made = before;
         }
     }
 
@@ -318,8 +355,10 @@ pub(crate) struct Outcome {
     /// The first bar of `rows`.
     pub start: usize,
     /// The values of the bars from `start`, one row of every plot, then of every alert condition,
-    /// per bar.
+    /// then of the colour of every plot coloured by an expression, per bar.
     pub rows: Vec<f64>,
+    /// The drawings of the bars from `start`, with the bar that made each.
+    pub drawn: Vec<(usize, Drawn)>,
     /// The bars the rows cover, from `start`.
     pub bars: usize,
     /// How long the run took, or the limit that stopped it, whose rows are empty.
@@ -341,6 +380,7 @@ struct Flight {
     updating: Range<usize>,
     next: usize,
     rows: Vec<f64>,
+    drawn: Vec<(usize, Drawn)>,
     error: Option<ScriptError>,
     /// The time spent running it, summed over its slices.
     took: Duration,
@@ -379,7 +419,9 @@ impl<P: Program> RunState<P> {
                 aligned: vec![Vec::new(); spec.histories.len()],
                 ..Columns::default()
             },
-            row: vec![f64::NAN; spec.plots.len() + spec.alerts.len()],
+            row: vec![f64::NAN; spec.width()],
+            drawn: Vec::new(),
+            drawn_bytes: Vec::new(),
             kept: Vec::new(),
             spec,
             bar: 0,
@@ -493,6 +535,7 @@ impl<P: Program> RunState<P> {
             updating: 0..self.run.instances.len(),
             next: start,
             rows: Vec::new(),
+            drawn: Vec::new(),
             error: None,
             took: Duration::ZERO,
         });
@@ -513,6 +556,7 @@ impl<P: Program> RunState<P> {
             self.failed = None;
         }
         run.columns.truncate(start, run.instances.len());
+        run.drawn_bytes.truncate(start);
         run.sites_counted = run.sites.len();
     }
 
@@ -522,7 +566,7 @@ impl<P: Program> RunState<P> {
         let mut flight = self.flight.take()?;
         let began = Instant::now();
         let len = self.run.columns.bars.len();
-        let width = self.run.spec.plots.len() + self.run.spec.alerts.len();
+        let width = self.run.spec.width();
         let fraction =
             |next: usize, start: usize| ((next - start) as f32 / (len - start) as f32).to_bits();
         let mut stop = self.run.stop.map(|limit| (limit, Span::default(), None));
@@ -591,9 +635,16 @@ impl<P: Program> RunState<P> {
                 }
                 match result {
                     Ok(()) => {
-                        with(|run| flight.rows.extend_from_slice(&run.row));
+                        with(|run| {
+                            flight.rows.extend_from_slice(&run.row);
+                            flight
+                                .drawn
+                                .extend(run.drawn.drain(..).map(|drawn| (i, drawn)));
+                        });
                     }
                     Err(error) => {
+                        // A failed bar's drawings are dropped with it, as its orders are.
+                        with(Run::forget_drawn);
                         self.failed = Some(i);
                         flight.error = Some(ScriptError::at(error.message, error.span, Some(i)));
                         flight.rows.extend(std::iter::repeat_n(f64::NAN, width));
@@ -615,6 +666,7 @@ impl<P: Program> RunState<P> {
             return Some(Outcome {
                 start: flight.start,
                 rows: Vec::new(),
+                drawn: Vec::new(),
                 bars: 0,
                 result: Err(ScriptError::at(self.run.clock.message(limit), span, bar)),
                 error: None,
@@ -637,6 +689,7 @@ impl<P: Program> RunState<P> {
         Some(Outcome {
             start: flight.start,
             rows: flight.rows,
+            drawn: flight.drawn,
             bars: len - flight.start,
             result: Ok(flight.took),
             error: flight.error,
@@ -658,6 +711,7 @@ pub(crate) fn lost() -> Outcome {
     Outcome {
         start: 0,
         rows: Vec::new(),
+        drawn: Vec::new(),
         bars: 0,
         result: Err(ScriptError::at(
             "the calculation ended unexpectedly".to_owned(),
@@ -678,6 +732,8 @@ impl Run {
             columns: Columns::default(),
             bar: 0,
             row: Vec::new(),
+            drawn: Vec::new(),
+            drawn_bytes: Vec::new(),
             kept: Vec::new(),
             sites: HashMap::new(),
             occurrences: HashMap::new(),
@@ -699,10 +755,10 @@ impl Run {
     }
 
     /// The bytes the study holds once every bar of the run is calculated: the bars, the fed
-    /// column, the declared series, the plot and alert condition columns, the studies called, the
-    /// other histories with the bars read of them, the helpers and the values kept between bars,
-    /// the last two again for the snapshot's copy, and the readings each bar of a strategy was
-    /// decided with.
+    /// column, the declared series, the plot, alert condition and colour columns, the drawings,
+    /// the studies called, the other histories with the bars read of them, the helpers and the
+    /// values kept between bars, the last two again for the snapshot's copy, and the readings
+    /// each bar of a strategy was decided with.
     fn bytes(&self) -> usize {
         self.holding(self.kept.iter().map(|(bytes, _)| bytes).sum())
     }
@@ -711,10 +767,8 @@ impl Run {
     /// kept ones, which the snapshot's copy may still hold.
     fn holding(&self, values: usize) -> usize {
         let len = self.columns.bars.len();
-        let columns = usize::from(self.columns.fed.is_some())
-            + self.spec.series.len()
-            + self.spec.plots.len()
-            + self.spec.alerts.len();
+        let columns =
+            usize::from(self.columns.fed.is_some()) + self.spec.series.len() + self.spec.width();
         let helpers: usize = self
             .sites
             .values()
@@ -724,12 +778,18 @@ impl Run {
         let histories: usize = self.history_bytes().sum();
         let kept: usize = self.kept.iter().map(|(bytes, _)| bytes).sum();
         len * (std::mem::size_of::<Bar>() + columns * 8)
+            + self.drawings()
             + studies
             + histories
             + 2 * helpers
             + kept
             + values
             + self.decided.len() * std::mem::size_of::<Readings>()
+    }
+
+    /// The bytes of the drawings made so far.
+    fn drawings(&self) -> usize {
+        self.drawn_bytes.last().copied().unwrap_or(0)
     }
 
     /// The bytes each other history holds, the bars read of it included.
@@ -742,8 +802,8 @@ impl Run {
     }
 
     /// Where the declaration or call site holding the most memory is, the first of equals, or
-    /// `running`, where the bar was when the count of its running values stopped it, if those
-    /// held more.
+    /// `running`, where the bar was when the count of its running values or a drawing stopped
+    /// it, if those held more.
     fn largest(&self, running: Span) -> Span {
         let len = self.columns.bars.len();
         let series = self.series_spans.first().map(|span| (len * 8, *span));
@@ -757,6 +817,7 @@ impl Run {
             .map(|study| (study.bytes(len), study.span));
         let histories = self.history_bytes().zip(self.history_spans.iter().copied());
         let values = (self.running > 0).then_some((self.running, running));
+        let drawings = (self.drawings() > 0).then_some((self.drawings(), running));
         series
             .into_iter()
             .chain(helpers)
@@ -764,6 +825,7 @@ impl Run {
             .chain(histories)
             .chain(self.kept.iter().copied())
             .chain(values)
+            .chain(drawings)
             .reduce(|largest, next| if next.0 > largest.0 { next } else { largest })
             .map_or(Span::default(), |(_, span)| span)
     }
