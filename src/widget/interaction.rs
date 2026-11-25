@@ -16,6 +16,8 @@ struct TouchContact {
     position: Pos2,
     started: f64,
     tracking: bool,
+    /// The hold asked for an order: it owns the gesture as a readout does and shows no values.
+    order: bool,
 }
 
 /// UI state belongs to the chart response, like egui's own pointer gesture state.
@@ -126,6 +128,7 @@ impl Chart {
                                 position: *pos,
                                 started: input.time,
                                 tracking: false,
+                                order: false,
                             });
                         } else {
                             state.contact = None;
@@ -145,7 +148,7 @@ impl Chart {
                                 }
                             }
                             contact.position = plot.clamp(*pos);
-                            if contact.tracking {
+                            if contact.tracking && !contact.order {
                                 state.position = Some(contact.position);
                             }
                         }
@@ -155,6 +158,7 @@ impl Chart {
                             && contact.id == contact_id
                         {
                             if !contact.tracking
+                                || contact.order
                                 || options.touch_exit_mode == TouchTrackingExitMode::OnTouchEnd
                             {
                                 state.position = None;
@@ -181,7 +185,21 @@ impl Chart {
                     let remaining = options.long_press_delay.saturating_sub(elapsed);
                     if remaining.is_zero() {
                         contact.tracking = true;
-                        state.position = Some(contact.position);
+                        // On the price pane, while the chart menus offered a limit order last
+                        // frame, the hold asks for that order in place of its values. The panes
+                        // are laid out again while this frame draws, so this reads the price
+                        // pane of the last one, which the menus check the order against.
+                        #[cfg(feature = "ui")]
+                        let order = options.long_press_order && self.touch_order_armed && {
+                            let mapping = self.get_chart_mapping();
+                            mapping.rect.height() > 24.0
+                                && mapping.rect.contains(contact.position)
+                                && mapping.price.y_to_price(contact.position.y).is_finite()
+                        };
+                        #[cfg(not(feature = "ui"))]
+                        let order = false;
+                        contact.order = order;
+                        state.position = (!order).then_some(contact.position);
                     } else {
                         repaint_after = Some(remaining);
                     }
@@ -190,6 +208,13 @@ impl Chart {
         });
         if let Some(delay) = repaint_after {
             ui.ctx().request_repaint_after(delay);
+        }
+        // A contact that became an order contact during this frame: tell the menus where.
+        #[cfg(feature = "ui")]
+        if !owned_gesture
+            && let Some(contact) = state.contact.as_ref().filter(|contact| contact.order)
+        {
+            self.touch_order = Some(contact.position);
         }
         state.owns_gesture = owned_gesture
             || state

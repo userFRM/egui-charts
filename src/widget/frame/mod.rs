@@ -301,6 +301,10 @@ impl Chart {
         #[cfg(feature = "drawings")]
         self.cursor_modes.render(ui);
         self.menu_open = false;
+        #[cfg(feature = "ui")]
+        {
+            self.touch_order_armed = false;
+        }
         if !self.chart_type.is_time_independent() {
             let source_marks = self.mark_source.as_ref().map(|source| &source.page);
             let mut coords = self.get_chart_mapping();
@@ -538,6 +542,10 @@ impl Chart {
         // A right-click result lives for exactly one frame: clear any stale
         // capture so a target that is never drained does not reappear later.
         self.right_click = None;
+        #[cfg(feature = "ui")]
+        {
+            self.touch_order = None;
+        }
 
         let available_size = ui.available_size();
         let (mut response, mut painter) =

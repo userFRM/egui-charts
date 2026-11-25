@@ -597,6 +597,15 @@ pub struct Chart {
     /// Set by the context menus while one is open, so the next frame draws no crosshair or
     /// tooltip under it. Cleared by every frame.
     pub(crate) menu_open: bool,
+    /// Set by the context menus while they would answer a touch held on the price pane with
+    /// a limit order, so the next frame's hold asks for one in place of its values. Cleared by
+    /// every frame.
+    #[cfg(feature = "ui")]
+    pub(crate) touch_order_armed: bool,
+    /// Where a touch held on the price pane asked for an order during the last frame, for the
+    /// context menus to answer. It lives for one frame, as a right-click does.
+    #[cfg(feature = "ui")]
+    pub(crate) touch_order: Option<egui::Pos2>,
     /// Size to allocate instead of the available space; see [`Chart::set_size`].
     size: Option<Vec2>,
     /// The main bars in groups that fall within one pixel, while zoomed out that far.
