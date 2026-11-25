@@ -40,7 +40,7 @@ impl HMA {
         Self {
             period: period.max(2),
             values: IndicatorValues::new(),
-            color: palette::LIGHT_BLUE,
+            color: palette::BLUE,
             visible: true,
         }
     }
