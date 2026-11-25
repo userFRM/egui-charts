@@ -16,11 +16,12 @@
 //!
 //! A cross compares the MACD with the sign of its latest nonzero value: a value of exactly zero
 //! keeps that sign, and a bar without a MACD value forgets it, as
-//! [`helpers::crossover`](crate::studies::helpers::crossover) does. The buy output holds the
-//! bar's low and the sell output its high, so the triangles sit beneath and above the bar. A mark
-//! is known when its bar closes and never moves. The defaults are a fast period of 12, a slow
-//! period of 26, a %K of 70 bars slowed over 10, and levels of 70 and 30, which take decimals.
-//! The buy triangles are teal and the sell triangles red, both at half opacity.
+//! [`helpers::crossover`](crate::studies::helpers::crossover) does. The buy output holds the bar's
+//! low and the sell output its high, so the triangles sit beneath and above the bar. These values
+//! only place the marks: the legend lists neither, and the price scale starts without their tags. A
+//! mark is known when its bar closes and never moves. The defaults are a fast period of 12, a slow
+//! period of 26, a %K of 70 bars slowed over 10, and levels of 70 and 30, which take decimals. The
+//! buy triangles are teal and the sell triangles red, both at half opacity.
 
 use super::{MACD, Stochastic, clamp_param};
 use crate::model::Bar;
@@ -193,6 +194,15 @@ impl Indicator for BookerReversal {
         }
     }
 
+    // A mark's value only places its triangle at the bar's low or high, so it is no reading.
+    fn legend_lines(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    fn plot_tagged(&self, _line: usize) -> bool {
+        false
+    }
+
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
@@ -329,5 +339,111 @@ mod tests {
                 assert_eq!(got, [None, None, want], "{label}: plot {plot}");
             }
         }
+    }
+
+    /// The marks place triangles and hold no reading of the study: a chart whose last bar
+    /// carries a mark lists the study's title in the legend with no value and no `∅` after it,
+    /// and shows no text on the price scale at the mark's price. Each mark price lies between
+    /// the scale's ticks, so any text there is a study tag.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn marks_show_no_values_in_the_legend_or_on_the_price_scale() {
+        use crate::model::BarData;
+        use crate::studies::{Reversal, WilliamsFractals};
+        use crate::widget::test_frames::{frame, shapes};
+        // (title, study, (high, low, close) bars, price of the mark on the last bar)
+        type Row = (
+            &'static str,
+            Box<dyn Indicator>,
+            Vec<(f64, f64, f64)>,
+            Option<f64>,
+        );
+        let rows: [Row; 3] = [
+            // Labelled in the test above: a buy on the low of 8.5.
+            (
+                "Booker Reversal",
+                Box::new(BookerReversal::new(1, 2, 3, 0)),
+                vec![(17.0, 9.0, 10.0), (8.0, 7.0, 7.0), (9.5, 8.5, 9.0)],
+                Some(8.5),
+            ),
+            // A new high of 12.3 over bars 4 to 6 that closes below the 10.5 before it.
+            (
+                "Reversal",
+                Box::new(Reversal::new(3)),
+                vec![
+                    (10.0, 8.0, 9.0),
+                    (9.5, 7.5, 8.0),
+                    (8.5, 7.0, 7.5),
+                    (8.0, 6.5, 7.0),
+                    (8.5, 6.0, 8.2),
+                    (9.0, 7.8, 8.8),
+                    (11.0, 8.5, 10.5),
+                    (12.3, 7.4, 7.5),
+                ],
+                Some(12.3),
+            ),
+            // Bar 2 is a fractal both ways; the last bar has none yet.
+            (
+                "Williams Fractals",
+                Box::new(WilliamsFractals::new(2)),
+                vec![
+                    (10.0, 7.0, 8.0),
+                    (11.0, 6.0, 8.0),
+                    (12.0, 5.0, 8.0),
+                    (11.0, 6.0, 8.0),
+                    (10.0, 7.0, 8.0),
+                ],
+                None,
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (title, study, hlc, mark) in rows {
+            let bars = super::super::hlc_bars(&hlc);
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.config_mut().show_volume = false;
+            chart.add_indicator(study);
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let texts: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text) => Some(text),
+                    _ => None,
+                })
+                .collect();
+            let Some(name) = texts.iter().find(|text| text.galley.text() == title) else {
+                wrong.push(format!("{title}: no legend title"));
+                continue;
+            };
+            // The fields after the title on its row: the inputs, then any values.
+            let row: Vec<_> = texts
+                .iter()
+                .filter(|text| (text.pos.y - name.pos.y).abs() < 1.0 && text.pos.x > name.pos.x)
+                .map(|text| text.galley.text())
+                .collect();
+            let value = mark.map(|mark| mark.to_string());
+            if row.iter().any(|text| {
+                text.contains('∅') || value.as_deref().is_some_and(|value| text.contains(value))
+            }) {
+                wrong.push(format!("{title}: legend {row:?}"));
+            }
+            if let Some(mark) = mark {
+                let plot = chart.get_rendered_price_rect();
+                let y = chart.get_chart_mapping().price.price_to_y(mark);
+                let axis: Vec<_> = texts
+                    .iter()
+                    .filter(|text| {
+                        text.pos.x >= plot.right()
+                            && (text.pos.y..=text.pos.y + text.galley.size().y).contains(&y)
+                    })
+                    .map(|text| text.galley.text())
+                    .collect();
+                if !axis.is_empty() {
+                    wrong.push(format!("{title}: price scale at {mark}: {axis:?}"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 }
