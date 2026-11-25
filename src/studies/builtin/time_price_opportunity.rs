@@ -469,6 +469,27 @@ impl Indicator for TimePriceOpportunity {
             .unwrap()
             + 1;
         inputs.splice(position..position, custom_inputs);
+        let (mut rows, mut default_rows) = (self.config.statistics_rows, defaults.statistics_rows);
+        let statistics_rows = rows
+            .switches()
+            .into_iter()
+            .zip(default_rows.switches())
+            .map(|((name, label, shown), (_, _, default))| {
+                StudyInput::new(
+                    format!("statistics_{name}"),
+                    label,
+                    InputValue::Toggle(*shown),
+                    InputKind::Toggle,
+                )
+                .with_default(InputValue::Toggle(*default))
+                .shown_when("statistics", [1])
+            });
+        let position = inputs
+            .iter()
+            .position(|input| input.id == "statistics")
+            .unwrap()
+            + 1;
+        inputs.splice(position..position, statistics_rows);
         for (id, value) in Self::profile_edit_inputs(&self.config.composites, &self.config.splits) {
             let label = if id == "composites" {
                 "Merged profiles"
@@ -546,6 +567,14 @@ impl Indicator for TimePriceOpportunity {
             ("single_prints", InputValue::Toggle(show)) => self.config.show_single_prints = show,
             ("midpoint", InputValue::Toggle(show)) => self.config.show_midpoint = show,
             ("statistics", InputValue::Toggle(show)) => self.config.show_statistics = show,
+            (row, InputValue::Toggle(show)) if row.starts_with("statistics_") => {
+                let name = &row["statistics_".len()..];
+                for (id, _, shown) in self.config.statistics_rows.switches() {
+                    if id == name {
+                        *shown = show;
+                    }
+                }
+            }
             ("display", InputValue::Choice(choice @ 0..=2)) => {
                 self.config.display_mode = DISPLAYS[choice]
             }

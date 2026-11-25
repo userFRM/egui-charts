@@ -351,10 +351,17 @@ mod tests {
     #[cfg(feature = "studies")]
     #[test]
     fn tpo_study_draws_the_table_of_its_statistics_input() {
-        use crate::model::{Bar, BarData, Timeframe};
+        use crate::model::{Bar, BarData, ChartType, TPOStatisticsRows, Timeframe};
         use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
         let start: chrono::DateTime<chrono::Utc> = "2024-01-02T02:00:00Z".parse().unwrap();
-        for (statistics, tables) in [(false, 0), (true, 1)] {
+        let mut rows = TPOStatisticsRows::default();
+        let rows: Vec<_> = rows
+            .switches()
+            .into_iter()
+            .map(|(name, label, shown)| (name, label, *shown))
+            .collect();
+        // Painted count of each row's label; `POC` is also a level caption.
+        let paint = |study: bool, statistics: bool, flipped: Option<(&str, bool)>| {
             // One session wide enough to leave the table room before the plot's edge.
             let bars = (0..40)
                 .map(|i| {
@@ -364,16 +371,55 @@ mod tests {
                 .collect();
             let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
             chart.set_timeframe(Timeframe::Min30);
-            let mut tpo = TimePriceOpportunity::default();
-            tpo.set_input("statistics", InputValue::Toggle(statistics))
-                .unwrap();
-            chart.add_indicator(Box::new(tpo));
+            if study {
+                let mut tpo = TimePriceOpportunity::default();
+                tpo.set_input("statistics", InputValue::Toggle(statistics))
+                    .unwrap();
+                if let Some((name, show)) = flipped {
+                    tpo.set_input(&format!("statistics_{name}"), InputValue::Toggle(show))
+                        .unwrap();
+                }
+                chart.add_indicator(Box::new(tpo));
+            } else {
+                chart.set_chart_type(ChartType::TimePriceOpportunity);
+                let mut saved = serde_json::json!({"tpo_statistics": statistics});
+                if let Some((name, show)) = flipped {
+                    saved["tpo_statistics_rows"] = serde_json::json!({ name: show });
+                }
+                chart.set_chart_type_params(serde_json::from_value(saved).unwrap());
+            }
             let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
-            let drawn = painted
+            rows.iter()
+                .map(|(_, label, _)| {
+                    painted
+                        .iter()
+                        .filter(|s| matches!(s, Shape::Text(t) if t.galley.text() == *label))
+                        .count()
+                })
+                .collect::<Vec<_>>()
+        };
+        for study in [false, true] {
+            let rotation = rows
                 .iter()
-                .filter(|s| matches!(s, Shape::Text(t) if t.galley.text() == "Rotation"))
-                .count();
-            assert_eq!(drawn, tables, "statistics {statistics}");
+                .position(|(name, ..)| *name == "rotation_factor");
+            for (statistics, tables) in [(false, 0), (true, 1)] {
+                let counts = paint(study, statistics, None);
+                assert_eq!(counts[rotation.unwrap()], tables, "statistics {statistics}");
+            }
+            let defaults = paint(study, true, None);
+            for (row, (name, _, shown)) in rows.iter().enumerate() {
+                let counts = paint(study, true, Some((name, !shown)));
+                let expected: Vec<_> = defaults
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &count)| match i == row {
+                        true if *shown => count - 1,
+                        true => count + 1,
+                        false => count,
+                    })
+                    .collect();
+                assert_eq!(counts, expected, "{name}, study {study}");
+            }
         }
     }
 

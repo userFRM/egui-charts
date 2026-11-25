@@ -396,6 +396,7 @@ fn apply_to_other_chart(
             tpo_midpoint: source.tpo_midpoint,
             tpo_letters: source.tpo_letters,
             tpo_statistics: source.tpo_statistics,
+            tpo_statistics_rows: source.tpo_statistics_rows,
             tpo_colored_blocks: source.tpo_colored_blocks,
             tpo_block_colors: source.tpo_block_colors,
             tpo_block_color: source.tpo_block_color,
@@ -1226,6 +1227,7 @@ mod tests {
         params.tpo_midpoint = true;
         params.tpo_letters = false;
         params.tpo_statistics = true;
+        params.tpo_statistics_rows.total_volume = true;
         params.tpo_colored_blocks = false;
         params.tpo_outside_value_area_opacity = 80;
         let labels = TPOLabels {
@@ -1395,10 +1397,16 @@ mod tests {
             (true, 15, crate::model::TPOProfilePeriod::Week),
             "the TPO session and period grouping stay the chart's own"
         );
+        let mut statistics_rows = crate::model::TPOStatisticsRows::default();
+        statistics_rows.total_volume = true;
         assert_eq!(
-            (params.tpo_labels, params.tpo_level_tags),
-            (labels, true),
-            "the TPO captions and price scale tags follow the source"
+            (
+                params.tpo_labels,
+                params.tpo_level_tags,
+                params.tpo_statistics_rows
+            ),
+            (labels, true, statistics_rows),
+            "the TPO captions, price scale tags and statistics rows follow the source"
         );
         assert_eq!(
             [

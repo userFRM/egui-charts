@@ -1277,6 +1277,10 @@ pub struct ChartTypeParams {
     pub tpo_letters: bool,
     /// TPO: draw the session statistics table below each profile.
     pub tpo_statistics: bool,
+    /// TPO: rows of the statistics table, as in
+    /// [`TPOConfig::statistics_rows`](super::TPOConfig::statistics_rows). Settings saved without
+    /// this field keep the six rows the table always had.
+    pub tpo_statistics_rows: super::TPOStatisticsRows,
     /// TPO: colour blocks along `tpo_block_colors`; off uses `tpo_block_color`. On by default.
     pub tpo_colored_blocks: bool,
     /// TPO: the four colours of [`TPOConfig::period_colors`](super::TPOConfig::period_colors).
@@ -1416,6 +1420,7 @@ impl Default for ChartTypeParams {
             tpo_midpoint: false,
             tpo_letters: true,
             tpo_statistics: false,
+            tpo_statistics_rows: super::TPOStatisticsRows::default(),
             tpo_colored_blocks: true,
             tpo_block_colors: [
                 egui::Color32::from_rgb(214, 56, 100),
@@ -1468,6 +1473,7 @@ impl ChartTypeParams {
             show_single_prints: self.tpo_single_prints,
             show_midpoint: self.tpo_midpoint,
             show_statistics: self.tpo_statistics,
+            statistics_rows: self.tpo_statistics_rows,
             color_mode: if self.tpo_colored_blocks {
                 super::TPOColorMode::ByPeriod
             } else {
@@ -1694,6 +1700,11 @@ mod tests {
                 "opening_price": true, "closing_price": true, "poor_high": false, "poor_low": true,
                 "single_prints": true, "prices": true});
         settings["tpo_level_tags"] = true.into();
+        settings["tpo_statistics_rows"] = serde_json::json!({"high_low_range": true, "poc": false,
+                "value_area": false, "value_area_range": true, "initial_balance_high": true,
+                "initial_balance_low": true, "initial_balance_range": false, "tpo_counts": false,
+                "total_tpos": true, "total_volume": true, "rotation_factor": false,
+                "range_extension": false});
         assert_eq!(TradeProfileSettings::default().rows, ProfileRows::Count(24));
         for (saved, expected) in [
             (r#"{}"#, ProfileRows::Count(24)),
@@ -1945,6 +1956,15 @@ mod tests {
                 })
             );
             assert_eq!(legacy["tpo_level_tags"], false);
+            assert_eq!(
+                legacy["tpo_statistics_rows"],
+                serde_json::json!({
+                    "high_low_range": false, "poc": true, "value_area": true, "value_area_range": false,
+                    "initial_balance_high": false, "initial_balance_low": false, "initial_balance_range": true,
+                    "tpo_counts": true, "total_tpos": false, "total_volume": false, "rotation_factor": true,
+                    "range_extension": true
+                })
+            );
             assert_eq!(
                 legacy["footprint_colors"],
                 serde_json::json!([null, null, null, null])
