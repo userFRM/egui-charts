@@ -145,6 +145,15 @@ impl Chart {
         };
         (clock, config)
     }
+
+    /// The calendar and settings the TPO chart type draws with: its parameters at the
+    /// instrument's tick, their hours resolved as a TPO study's are.
+    pub(crate) fn tpo_chart_division(&self) -> (crate::model::BarClock, crate::model::TPOConfig) {
+        let tick = self
+            .instrument()
+            .and_then(|instrument| instrument.tick_size);
+        self.tpo_division(&self.chart_type_params.tpo_config(tick))
+    }
 }
 
 /// The sessions of `clock` that the bars `shown` of `bars` belong to, each from the open of its
@@ -230,6 +239,95 @@ mod tests {
             })
             .count();
         assert_eq!(profiles, 2);
+    }
+
+    /// The TPO chart type's hours choice reaches its painted profiles: pre-market only keeps
+    /// the six bars from 04:00 to 09:00 New York time, and two custom windows from 05:00 to 08:00
+    /// and 12:00 to 14:00 profile their bars apart, each counting its periods from its own open.
+    #[test]
+    fn tpo_chart_type_profiles_the_hours_it_chooses() {
+        use crate::model::{
+            Bar, BarData, ChartType, Instrument, Session, SessionWindow, Timeframe, TimezoneId,
+        };
+        use chrono::{NaiveTime, Weekday::*};
+        let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        let week = [Mon, Tue, Wed, Thu, Fri];
+        let instrument = Instrument::new("NQ")
+            .with_tick_size(1.0)
+            .with_time_zone(TimezoneId::fixed_offset(-5 * 3600).unwrap())
+            .with_session(
+                Session::new([SessionWindow::new(week, at(10), at(16))]).with_extended_windows([
+                    SessionWindow::new(week, at(4), at(10)),
+                    SessionWindow::new(week, at(16), at(20)),
+                ]),
+            );
+        // Hourly bars from 04:00 New York time on a Tuesday, bar i trading only 100 + i.
+        let start: chrono::DateTime<chrono::Utc> = "2024-03-05T09:00:00Z".parse().unwrap();
+        let custom = serde_json::json!({"Custom": {"sessions": [
+            {"start": "05:00:00", "end": "08:00:00", "zone": null},
+            {"start": "12:00:00", "end": "14:00:00", "zone": null}
+        ]}});
+        // (saved hours, painted letters with their rows)
+        let rows: [(serde_json::Value, &[(&str, i64)]); 2] = [
+            (
+                serde_json::json!("PreMarket"),
+                &[
+                    ("A", 100),
+                    ("B", 101),
+                    ("C", 102),
+                    ("D", 103),
+                    ("E", 104),
+                    ("F", 105),
+                ],
+            ),
+            (
+                custom,
+                &[("A", 101), ("A", 108), ("B", 102), ("B", 109), ("C", 103)],
+            ),
+        ];
+        for (hours, expected) in rows {
+            let bars = (0..16)
+                .map(|i| {
+                    let price = 100.0 + i as f64;
+                    let time = start + chrono::Duration::hours(i);
+                    Bar::new(time, price, price, price, price, 1.0)
+                })
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Hour1);
+            chart.set_instrument(Some(instrument.clone()));
+            chart.config_mut().show_ohlc_info = false;
+            chart.set_chart_type(ChartType::TimePriceOpportunity);
+            let saved =
+                serde_json::json!({"tpo_row_ticks": 1, "tpo_letters": true, "tpo_session": hours});
+            chart.set_chart_type_params(serde_json::from_value(saved).unwrap());
+            let ctx = egui::Context::default();
+            shapes(&ctx, &mut chart, 0.0, vec![]);
+            chart.price_scale_mut().set_range(90.0, 130.0);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.get_chart_mapping();
+            let mut letters: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text)
+                        if text.galley.text().len() == 1
+                            && text.galley.text().chars().all(|c| c.is_ascii_uppercase()) =>
+                    {
+                        // Off the rows, such as the legend's symbol badge, is no profile letter.
+                        let y = text.visual_bounding_rect().center().y;
+                        let row = (90..=130).find(|&p| (map.price_to_y(p as f64) - y).abs() < 1.0);
+                        Some((text.galley.text().to_owned(), row?))
+                    }
+                    _ => None,
+                })
+                .collect();
+            letters.sort_unstable();
+            let expected: Vec<_> = expected
+                .iter()
+                .map(|&(letter, row)| (letter.to_owned(), row))
+                .collect();
+            assert_eq!(letters, expected, "hours {hours}");
+        }
     }
 
     #[cfg(feature = "studies")]

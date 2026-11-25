@@ -470,7 +470,14 @@ pub fn render_chart_type(
 
         // === Advanced Types ===
         ChartType::TimePriceOpportunity => {
-            let tpo_config = params.type_params.tpo_config(ctx.tick_size);
+            let built;
+            let tpo_config = match ctx.tpo {
+                Some(config) => config,
+                None => {
+                    built = params.type_params.tpo_config(ctx.tick_size);
+                    &built
+                }
+            };
             tpo::render_live_tpo(
                 painter,
                 price_rect,
@@ -478,7 +485,7 @@ pub fn render_chart_type(
                 ctx.start_idx..ctx.start_idx + ctx.visible_data.len(),
                 ctx.revision,
                 ctx.price_scale,
-                &tpo_config,
+                tpo_config,
                 ctx.tick_size,
                 ctx.clock,
                 &idx_to_coord,

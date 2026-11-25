@@ -247,7 +247,7 @@ impl TpoMenu {
             TpoOwner::ChartType
                 if chart.chart_type() != ChartType::TimePriceOpportunity
                     || chart.chart_type_params() != &self.params
-                    || chart.profile_clock() != self.clock =>
+                    || chart.tpo_chart_division().0 != self.clock =>
             {
                 return;
             }

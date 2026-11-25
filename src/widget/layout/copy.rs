@@ -439,6 +439,7 @@ fn apply_to_other_chart(
             tpo_row_ticks: own.tpo_row_ticks,
             tpo_value_area: own.tpo_value_area,
             tpo_split_sessions: own.tpo_split_sessions,
+            tpo_session: own.tpo_session,
             tpo_profile_period: own.tpo_profile_period,
             tpo_composites: own.tpo_composites,
             tpo_splits: own.tpo_splits,
@@ -1161,6 +1162,7 @@ mod tests {
         params.tpo_poor_high = true;
         params.tpo_poor_low = true;
         params.tpo_split_sessions = true;
+        params.tpo_session = ProfileSession::Regular;
         params.tpo_split_periods = true;
         params.tpo_period_minutes = 15;
         params.tpo_profile_period = crate::model::TPOProfilePeriod::Week;
@@ -1391,10 +1393,16 @@ mod tests {
         assert_eq!(
             (
                 params.tpo_split_sessions,
+                &params.tpo_session,
                 params.tpo_period_minutes,
                 params.tpo_profile_period,
             ),
-            (true, 15, crate::model::TPOProfilePeriod::Week),
+            (
+                true,
+                &ProfileSession::Regular,
+                15,
+                crate::model::TPOProfilePeriod::Week
+            ),
             "the TPO session and period grouping stay the chart's own"
         );
         let mut statistics_rows = crate::model::TPOStatisticsRows::default();

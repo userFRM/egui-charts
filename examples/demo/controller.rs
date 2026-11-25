@@ -5751,6 +5751,76 @@ mod tests {
             .unwrap_or_else(|| panic!("missing control: {label}"))
     }
 
+    /// The demo's series settings reach the TPO chart type's statistics rows and hours, and the
+    /// study settings the Time Price Opportunity study's statistics rows.
+    #[test]
+    fn tpo_statistics_and_hours_reach_the_demo_chart() {
+        use egui::accesskit::{Action, ActionRequest, TreeId};
+        use egui_charts::model::{ChartType, ProfileSession};
+        use egui_charts::studies::{IndicatorFactory, InputValue};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T17:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        // Clicks through AccessKit, which reaches rows below the fold of the dialog.
+        let click = |app: &mut DemoApp, label: &str| {
+            let nodes = draw(&ctx, app, vec![]);
+            let target_node = control(&nodes, label).0;
+            draw(
+                &ctx,
+                app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node,
+                    data: None,
+                })],
+            );
+        };
+        app.chart.set_chart_type(ChartType::TimePriceOpportunity);
+        app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        for label in [
+            "Statistics",
+            "Statistics: Total volume",
+            "Hours",
+            "Regular hours",
+            "Ok",
+        ] {
+            click(&mut app, label);
+        }
+        assert!(!app.series_settings.is_open);
+        let params = app.chart.chart_type_params();
+        assert!(params.tpo_statistics && params.tpo_statistics_rows.total_volume);
+        assert_eq!(params.tpo_session, ProfileSession::Regular);
+
+        let study = IndicatorFactory::new()
+            .create("Time Price Opportunity")
+            .unwrap();
+        let id = app.chart.add_indicator(study);
+        app.open_indicator_settings(id);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        for label in ["Statistics", "Total volume", "Apply"] {
+            click(&mut app, label);
+        }
+        assert!(!app.indicator_settings.is_open());
+        let inputs = app.chart.indicator_mut(id).unwrap().inputs();
+        for input in ["statistics", "statistics_total_volume"] {
+            assert_eq!(
+                inputs.iter().find(|i| i.id == input).map(|i| &i.value),
+                Some(&InputValue::Toggle(true)),
+                "{input}"
+            );
+        }
+    }
+
     /// Study settings use the own-data chart's zones and apply the edited session clock.
     #[test]
     fn study_settings_edit_session_time_and_offer_the_own_data_zone() {

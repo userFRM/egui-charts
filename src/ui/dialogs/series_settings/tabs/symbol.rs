@@ -749,7 +749,7 @@ impl SymbolTab {
                 profile.width = percent / 100.0;
             }
             ui.end_row();
-            Self::profile_session(ui, &mut profile.session);
+            Self::profile_session(ui, "Session", &mut profile.session);
             Self::profile_rows(ui, &mut profile.rows);
             Self::value_area(ui, &mut profile.value_area);
             let colors = SessionColors::new(&TradeProfileSettings::default(), &ui.active_theme());
@@ -849,8 +849,8 @@ impl SymbolTab {
 
     /// Session hours: the chart's calendar, the instrument's regular or extended windows, its
     /// pre-market or post-market alone or each segment apart, or up to five custom windows.
-    fn profile_session(ui: &mut Ui, session: &mut ProfileSession) {
-        let label = ui.label(l10n::text(ui.ctx(), "Session"));
+    fn profile_session(ui: &mut Ui, name: &str, session: &mut ProfileSession) {
+        let label = ui.label(l10n::text(ui.ctx(), name));
         let custom = || ProfileSession::Custom(crate::model::CustomProfileSessions::default());
         let choice = |session: &ProfileSession| match session {
             ProfileSession::Chart => 0,
@@ -1224,13 +1224,15 @@ impl SymbolTab {
                 )
                 .labelled_by(label.id);
                 ui.end_row();
-                let label = ui.label(l10n::text(ui.ctx(), "Split extended hours"));
-                ui.add_enabled(
-                    params.tpo_profile_period == TPOProfilePeriod::Session,
-                    egui::Checkbox::without_text(&mut params.tpo_split_sessions),
-                )
-                .labelled_by(label.id);
-                ui.end_row();
+                // One-day profiles choose their hours as session volume profiles do.
+                if params.tpo_profile_period == TPOProfilePeriod::Session {
+                    let mut hours = params.tpo_hours();
+                    Self::profile_session(ui, "Hours", &mut hours);
+                    if hours != params.tpo_hours() {
+                        params.tpo_session = hours;
+                        params.tpo_split_sessions = false;
+                    }
+                }
                 let label = ui.label(l10n::text(ui.ctx(), "Single prints"));
                 ui.checkbox(&mut params.tpo_single_prints, "")
                     .labelled_by(label.id);

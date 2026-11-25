@@ -1262,8 +1262,16 @@ pub struct ChartTypeParams {
     pub tpo_row_ticks: u32,
     /// TPO: share of the TPOs in the value area, in percent.
     pub tpo_value_area: f64,
-    /// TPO: separate profiles for pre-market, regular and post-market hours.
+    /// TPO: saved by earlier releases for a profile of each segment of the day. When on while
+    /// `tpo_session` is [`ProfileSession::Chart`], the segments are profiled. The settings write
+    /// `tpo_session` and turn it off.
     pub tpo_split_sessions: bool,
+    /// TPO: the hours of one-day profiles, chosen as for session volume profiles: the chart's
+    /// hours by default, only the regular, extended, pre-market or post-market hours, each
+    /// segment of the day, or up to five custom windows. A profile keeps only the bars of its
+    /// hours and counts its periods from their open. Week and month profiles keep the chart's
+    /// hours.
+    pub tpo_session: ProfileSession,
     /// TPO: highlight the rows touched by a single period.
     pub tpo_single_prints: bool,
     /// TPO: caption and mark the middle of each profile's range. Off for a new chart; settings
@@ -1416,6 +1424,7 @@ impl Default for ChartTypeParams {
             tpo_row_ticks: 0,
             tpo_value_area: 70.0,
             tpo_split_sessions: false,
+            tpo_session: ProfileSession::Chart,
             tpo_single_prints: false,
             tpo_midpoint: false,
             tpo_letters: true,
@@ -1448,8 +1457,11 @@ impl Default for ChartTypeParams {
 
 impl ChartTypeParams {
     /// The TPO settings for an instrument with minimum price increment `tick_size`, as the TPO
-    /// chart type builds its profiles with them.
+    /// chart type builds its profiles with them. The chart reads the hours of `tpo_session` on a
+    /// calendar of those hours, which it builds from the instrument; on another calendar the
+    /// choice keeps the bars that calendar opens in its hours.
     pub fn tpo_config(&self, tick_size: Option<f64>) -> super::TPOConfig {
+        let session = self.tpo_hours();
         super::TPOConfig {
             // A zero row lets the renderer fit the rows to the visible range.
             tick_size: tick_size.map_or(0.0, |tick| tick * f64::from(self.tpo_row_ticks)),
@@ -1467,7 +1479,9 @@ impl ChartTypeParams {
             extend_poor_extremes: self.tpo_extend_poor,
             show_initial_balance_extensions: self.tpo_initial_balance_extensions,
             value_area_pct: self.tpo_value_area / 100.0,
-            split_sessions: self.tpo_split_sessions,
+            // As the study pairs them: the segment choice also splits the trading day.
+            split_sessions: session == ProfileSession::Segments,
+            session,
             profile_period: self.tpo_profile_period,
             split_periods: self.tpo_split_periods,
             show_single_prints: self.tpo_single_prints,
@@ -1492,6 +1506,19 @@ impl ChartTypeParams {
             splits: self.tpo_splits.clone(),
             instrument_tick: tick_size,
             ..Default::default()
+        }
+    }
+
+    /// The hours the TPO profiles keep: `tpo_session` for one-day profiles, the segments of the
+    /// day for settings saved with `tpo_split_sessions` on, and the chart's hours for week and
+    /// month profiles.
+    pub(crate) fn tpo_hours(&self) -> ProfileSession {
+        match &self.tpo_session {
+            _ if self.tpo_profile_period != super::TPOProfilePeriod::Session => {
+                ProfileSession::Chart
+            }
+            ProfileSession::Chart if self.tpo_split_sessions => ProfileSession::Segments,
+            session => session.clone(),
         }
     }
 
@@ -1727,6 +1754,8 @@ mod tests {
                 "initial_balance_low": true, "initial_balance_range": false, "tpo_counts": false,
                 "total_tpos": true, "total_volume": true, "rotation_factor": false,
                 "range_extension": false});
+        settings["tpo_session"] = serde_json::json!({"Custom": {"sessions": [{"start": "08:00:00",
+                "end": "12:30:00", "zone": null}], "overlap": "InBoth", "trading_hours_only": true}});
         assert_eq!(TradeProfileSettings::default().rows, ProfileRows::Count(24));
         for (saved, expected) in [
             (r#"{}"#, ProfileRows::Count(24)),
@@ -1978,6 +2007,7 @@ mod tests {
                 })
             );
             assert_eq!(legacy["tpo_level_tags"], false);
+            assert_eq!(legacy["tpo_session"], "Chart");
             assert_eq!(
                 legacy["tpo_statistics_rows"],
                 serde_json::json!({
