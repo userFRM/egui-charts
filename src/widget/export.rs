@@ -256,8 +256,9 @@ impl std::fmt::Display for ExportError {
 impl std::error::Error for ExportError {}
 
 impl Chart {
-    fn export_time(&self, time: DateTime<Utc>) -> String {
-        match self.display_timezone() {
+    /// `time` with the UTC offset of `zone`, the zone [`Self::bar_date_timezone`] gives.
+    fn export_time(time: DateTime<Utc>, zone: &crate::scales::TimezoneMode) -> String {
+        match zone {
             crate::scales::TimezoneMode::Local => time.with_timezone(&chrono::Local).to_rfc3339(),
             zone => time
                 .with_timezone(&zone.to_tz().unwrap_or(crate::model::TimezoneId::utc()))
@@ -289,9 +290,11 @@ impl Chart {
     /// Recalculates copies of the studies so streaming updates and pending refreshes are included
     /// without altering the live chart. Price-based charts export source-bar calculations, aligned
     /// by source index and plot displacement, rather than mixing element values with source bars.
-    /// Times include the chart's UTC offset, including DST changes and subsecond timestamps; on a
-    /// [horizontal scale](Self::set_horizontal_scale) other than time, keys read as the crosshair
-    /// label does.
+    /// Times include the UTC offset of the zone that dates the bars, including DST changes and
+    /// subsecond timestamps: the display zone, or UTC for bars of a day or longer that
+    /// [`format_time`](Self::format_time) reads in UTC, so each row keeps the date the chart gives
+    /// its bar. On a [horizontal scale](Self::set_horizontal_scale) other than time, keys read as
+    /// the crosshair label does.
     /// Prices use the instrument's decimals, and the main series the precision chosen for the
     /// price scale in their place. Without `price_decimals` or a valid `tick_size`, price studies
     /// take the main series' precision, and without a chosen one the main series and price
@@ -423,12 +426,14 @@ impl Chart {
                 String::new()
             }
         };
+        // Rows date the bars as the chart labels them: a calendar bar keeps its trading date.
+        let zone = self.bar_date_timezone();
         let mut rows = Vec::with_capacity(bars.len());
         for (index, bar) in bars.iter().enumerate() {
             let mut row = vec![if self.horizontal_scale.is_some() {
                 self.format_time(bar.time)
             } else {
-                self.export_time(bar.time)
+                Self::export_time(bar.time, &zone)
             }];
             row.extend(
                 [bar.open, bar.high, bar.low, bar.close]
