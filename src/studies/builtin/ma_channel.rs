@@ -32,7 +32,7 @@ impl MAChannel {
             colors: vec![
                 palette::LIGHT_BLUE,                       // Upper
                 palette::ORANGE,                           // Lower
-                palette::LIGHT_BLUE.gamma_multiply_u8(13), // Fill
+                palette::LIGHT_BLUE.gamma_multiply_u8(26), // Fill
             ],
             visible: true,
         }

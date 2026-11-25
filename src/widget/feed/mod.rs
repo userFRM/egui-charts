@@ -118,9 +118,6 @@ pub(crate) struct FeedLink {
     depth_cursor: Option<chrono::DateTime<chrono::Utc>>,
     /// No older trades remain to be loaded.
     trades_complete: bool,
-    /// A trade page reported that nothing exists before its oldest trade, or came back empty
-    /// without `continue_before`: no trade before the oldest held one was missed.
-    trades_from_start: bool,
     pub(super) heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
     heatmap_config: crate::chart::overlays::LiquidityHeatmapConfig,
     /// How the live book is shown by the heatmap's profile and the depth ladder.
@@ -186,7 +183,7 @@ impl FeedLink {
 
     fn rebuild_paged_trade_rate(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
         if let Some(tf) = self.clock.timeframe().filter(|tf| tf.is_trade_based())
-            && self.trades_from_start
+            && self.trades.from_start
             && self.pushed_from.is_none()
             && self.trades.live().next().is_none()
             && self.trades.unheld_live().is_none()
@@ -268,7 +265,6 @@ impl FeedLink {
             initial_trades: InitialTrades::Waiting,
             depth_cursor: None,
             trades_complete: false,
-            trades_from_start: false,
             heatmap: self.heatmap.is_some().then(Default::default),
             heatmap_config: self.heatmap_config,
             book_view: self.book_view.clone(),
@@ -420,7 +416,7 @@ impl FeedLink {
         let first = self.unconfirmed_start().or_else(|| {
             // Without bars to match, paged trades group from the oldest held one. Matched ones
             // start after any loss, and live bars carry their own marks.
-            let unsure = !self.trades_from_start || lost.is_some();
+            let unsure = !self.trades.from_start || lost.is_some();
             if trade_based && history.is_empty() && unsure {
                 self.trades.iter().next().map(|trade| trade.ts)
             } else {
@@ -468,7 +464,7 @@ impl FeedLink {
     /// store lost none. A loss is marked exactly by `drop_through` instead. Paged trades on a
     /// trade-based interval need no mark: they fill only bars they were proven to rebuild.
     fn unconfirmed_start(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        if self.trades_from_start || self.trades.lost_until().is_some() {
+        if self.trades.from_start || self.trades.lost_until().is_some() {
             return None;
         }
         let oldest = self.trades.iter().next()?;
@@ -667,7 +663,6 @@ impl Chart {
             initial_trades: InitialTrades::Waiting,
             depth_cursor: None,
             trades_complete: false,
-            trades_from_start: false,
             heatmap: None,
             heatmap_config: Default::default(),
             book_view: Default::default(),

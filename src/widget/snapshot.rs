@@ -2080,8 +2080,12 @@ mod tests {
             assert_eq!(restored.symbol(), "B", "{pointer} {value}");
         }
 
-        // Bands half of f64::MAX from the closes overflow the autoscaled range with its margins.
-        original.add_indicator(Box::new(crate::studies::BollingerBands::new(2, f64::MAX)));
+        // Bands half of f64::MAX from the middle line overflow the autoscaled range with its
+        // margins.
+        original.add_indicator(Box::new(
+            crate::studies::KeltnerChannels::new(2, 2, f64::MAX / 2.0)
+                .with_band(crate::studies::KeltnerBand::TrueRange),
+        ));
         frame(&egui::Context::default(), &mut original, 0.0, Vec::new());
         let json = SavedLayout {
             mode: ChartLayoutMode::Single,

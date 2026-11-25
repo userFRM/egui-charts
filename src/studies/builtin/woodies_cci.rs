@@ -81,11 +81,12 @@ pub struct WoodiesCCI {
 }
 
 impl WoodiesCCI {
-    /// Create the study with the turbo and trading CCI lengths (6 and 14 by convention).
+    /// Create the study with the turbo and trading CCI lengths (6 and 14 by convention), clamped
+    /// into 3 to 14 and 7 to 20.
     pub fn new(turbo_length: usize, cci_length: usize) -> Self {
         Self {
-            turbo_length: turbo_length.max(1),
-            cci_length: cci_length.max(1),
+            turbo_length: turbo_length.clamp(3, 14),
+            cci_length: cci_length.clamp(7, 20),
             values: IndicatorValues::new(),
             flat: Vec::new(),
             colors: vec![palette::DEEP_TEAL, palette::DEEP_TEAL, palette::BRIGHT_RED],
@@ -151,8 +152,8 @@ impl Indicator for WoodiesCCI {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        turbo_length: length("CCI Turbo length", 1, usize::MAX),
-        cci_length: length("CCI 14 length", 1, usize::MAX),
+        turbo_length: length("CCI Turbo length", 3, 14),
+        cci_length: length("CCI 14 length", 7, 20),
         down_color: color("Established down colour"),
         transition_color: color("Transition colour"),
         neutral_color: color("Neutral colour")
@@ -319,6 +320,15 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
 
+    /// The study at lengths 2 and 3, below the input ranges, which the hand-computed fixtures use.
+    fn short() -> WoodiesCCI {
+        WoodiesCCI {
+            turbo_length: 2,
+            cci_length: 3,
+            ..WoodiesCCI::default()
+        }
+    }
+
     /// Bars closing at `closes`, one minute apart.
     fn bars_closing_at(closes: &[f64]) -> Vec<Bar> {
         closes
@@ -343,7 +353,7 @@ mod tests {
     fn windows_of_equal_closes_have_no_value() {
         for price in [100.0, 0.1, 1e-17] {
             let bars = bars_closing_at(&[price / 2.0, price, price, price]);
-            let mut study = WoodiesCCI::new(2, 3);
+            let mut study = short();
             study.calculate(&bars);
             // Per bar: CCI 14 columns, CCI Turbo, CCI 14 line.
             let present: Vec<_> = (0..bars.len())
@@ -409,7 +419,7 @@ mod tests {
             6.5,
         ];
         let bars = bars_closing_at(&closes);
-        let mut study = WoodiesCCI::new(2, 3);
+        let mut study = short();
         study.calculate(&bars);
         let (g, r) = (study.colors[0], study.down_color);
         let expected = [
@@ -456,7 +466,7 @@ mod tests {
         assert_eq!(colours(&study), expected);
         // Streamed bars give the same colours. Each bar first arrives one higher, as a live bar
         // whose close then moves, so the flat window at bar 31 first has a value.
-        let mut stepped = WoodiesCCI::new(2, 3);
+        let mut stepped = short();
         for end in 1..=bars.len() {
             let mut live = bars[..end].to_vec();
             live[end - 1].close += 1.0;
