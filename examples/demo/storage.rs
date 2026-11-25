@@ -152,7 +152,7 @@ impl super::DemoApp {
             }
         }
         if self.workspace_recovery.unreadable {
-            self.toasts.add(Toast::warning("Opened a default chart. The unreadable workspace was kept; save a named layout to keep new work.").permanent());
+            self.toasts.add(Toast::warning("Opened a default chart. The unreadable workspace was kept; save a named layout to keep new work. If a script it holds was saved since with other plots or inputs, saving that script back as it was opens the workspace again.").permanent());
         }
     }
 
