@@ -967,7 +967,7 @@ impl Chart {
         let end = page.end_of_history || (empty && page.continue_before.is_none());
         // The oldest held trade's bar is complete once nothing is left before it.
         let reached_start = end && !link.trades.from_start;
-        let confirmed_rate = reached_start
+        let confirmed = reached_start
             && link.trades.unconfirmed_page_start().is_some()
             && !link.clock.timeframe().is_some_and(|tf| tf.is_trade_based());
         link.trades.from_start |= end;
@@ -1061,7 +1061,8 @@ impl Chart {
             let rebuild = if prepared {
                 tail_changed
             } else {
-                changed || (confirmed_rate && input.is_trade_rate())
+                // Spread and book sources ignore a rebuild.
+                changed || (confirmed && !input.is_footprint())
             };
             if rebuild {
                 input.replace_trades(
