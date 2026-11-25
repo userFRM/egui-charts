@@ -92,6 +92,19 @@ pub(crate) fn paint_study_plot(
                 }
             }
         }
+        PlotType::Character(character) => {
+            let galley = painter.layout_no_wrap(
+                character.to_string(),
+                egui::FontId::proportional(character_size(plot.width)),
+                plot.color,
+            );
+            for &point in points {
+                let at = egui::Align2::CENTER_CENTER
+                    .anchor_size(point, galley.size())
+                    .min;
+                painter.galley(at, galley.clone(), plot.color);
+            }
+        }
         PlotType::TriangleUp | PlotType::TriangleDown => {
             let sign = if plot.plot_type == PlotType::TriangleUp {
                 -1.0
@@ -186,6 +199,12 @@ fn paint_diamond(painter: &egui::Painter, at: Pos2, half: f32, color: Color32) {
         color,
         Stroke::NONE,
     ));
+}
+
+/// The font size of a character plot of stroke `width`: its half, the width plus the hit
+/// tolerance, is the radius within which a click selects a marker plot.
+pub(crate) fn character_size(width: f32) -> f32 {
+    2.0 * (width + crate::chart::hit_test::HIT_TOLERANCE)
 }
 
 /// Split crossing boundaries at their intersection, so neither triangle crosses the band.
@@ -720,6 +739,7 @@ impl IndicatorRenderer {
                     | PlotType::Crosses
                     | PlotType::TriangleUp
                     | PlotType::TriangleDown
+                    | PlotType::Character(_)
             ) {
                 for i in source_start..source_end {
                     let (Some(display_bar), Some(value)) =
@@ -731,17 +751,21 @@ impl IndicatorRenderer {
                     if !at.is_finite() {
                         continue;
                     }
-                    // Covers the shape, whose half-size is the stroke width plus 2.
-                    let mut target = egui::Rect::from_center_size(
-                        at,
-                        egui::Vec2::splat(2.0 * (plot.width + 2.0)),
-                    );
+                    // Covers the shape: a character's box, or a half-size of the stroke width
+                    // plus 2.
+                    let size = match plot.plot_type {
+                        PlotType::Character(_) => character_size(plot.width),
+                        _ => 2.0 * (plot.width + 2.0),
+                    };
+                    let mut target = egui::Rect::from_center_size(at, egui::Vec2::splat(size));
                     if let Some(text) = indicator.plot_text(line_idx, i) {
                         // Clear of the shape.
-                        let (gap, anchor) = if plot.plot_type == PlotType::TriangleUp {
-                            (plot.width + 4.0, egui::Align2::CENTER_TOP)
-                        } else {
-                            (-(plot.width + 4.0), egui::Align2::CENTER_BOTTOM)
+                        let (gap, anchor) = match plot.plot_type {
+                            PlotType::TriangleUp => (plot.width + 4.0, egui::Align2::CENTER_TOP),
+                            PlotType::Character(_) => {
+                                (-(size / 2.0 + 2.0), egui::Align2::CENTER_BOTTOM)
+                            }
+                            _ => (-(plot.width + 4.0), egui::Align2::CENTER_BOTTOM),
                         };
                         let color = indicator.plot_color(line_idx, i).unwrap_or(plot.color);
                         let (background, foreground) = indicator
@@ -1154,6 +1178,7 @@ mod tests {
             (PlotType::StepLineWithDiamonds, LineStyle::Solid, 4.0),
             (PlotType::BackgroundColor, LineStyle::Solid, 4.0),
             (PlotType::Circles, LineStyle::Solid, 4.0),
+            (PlotType::Character('d'), LineStyle::Solid, 4.0),
             (PlotType::Line, LineStyle::Dashed, 4.0),
             (PlotType::Line, LineStyle::Dotted, 4.0),
         ] {
@@ -1274,6 +1299,24 @@ mod tests {
                 }
                 PlotType::BackgroundColor => {
                     assert_eq!(painted.iter().filter(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == color && rect.rect.height() == 100.0)).count(), 2);
+                }
+                // A "d" centred on each point, 2 x (4 + 5) = 18 px, in the plot colour.
+                PlotType::Character(_) => {
+                    let texts: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Text(text) => Some(text),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(texts.len(), 2);
+                    for (text, point) in texts.into_iter().zip(points) {
+                        assert_eq!(text.galley.text(), "d");
+                        let format = &text.galley.job.sections[0].format;
+                        assert_eq!((format.font_id.size, format.color), (18.0, color));
+                        let centre = text.pos + text.galley.size() / 2.0;
+                        assert!((centre - point).length() < 1e-3, "{centre:?}");
+                    }
                 }
                 _ => {
                     assert!(painted.iter().any(|s| {

@@ -2526,7 +2526,8 @@ mod tests {
     /// guides had styles, a Donchian channel saved before its band and a band saved with its
     /// boundary plots hidden before it could be drawn without them. Older per-bar studies keep
     /// the colours and widths they drew before every state had its own style control. Renamed
-    /// input labels retain the ids, values and styles of the saved studies.
+    /// input labels retain the ids, values and styles of the saved studies. Ziv Ghost Pivots
+    /// saved before its pivots were characters keeps its crosses.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
         // A metric descriptor saved before plot declarations and the Symbol input keeps its look.
@@ -3083,6 +3084,37 @@ mod tests {
                 json
             );
         }
+
+        // Ziv Ghost Pivots opens with a character for each pivot. One saved while the pivots
+        // were crosses keeps them, and its plots still name their characters for the Style tab.
+        use crate::studies::PlotType;
+        let factory = IndicatorFactory::new();
+        let fresh = ConfiguredStudy::new(factory.create("Ziv Ghost Pivots").unwrap());
+        let kinds: Vec<_> = fresh
+            .settings()
+            .plots
+            .iter()
+            .map(|plot| plot.plot_type)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                PlotType::Character('8'),
+                PlotType::Character('d'),
+                PlotType::Character('w'),
+                PlotType::Character('m'),
+                PlotType::Line,
+            ]
+        );
+        // Saved on origin/main ebd125251.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Ziv Ghost Pivots","inputs":[["show_four_hour",{"Toggle":true}],["show_day",{"Toggle":true}],["show_week",{"Toggle":true}],["show_month",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ZivGhostPivots.html","plots":[{"color":[0,188,212,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true},{"color":[103,58,183,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true},{"color":[233,30,99,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true},{"color":[0,188,212,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[0,12,13,16],"untagged_plots":[0,1,2,3,4],"price_line_plots":[],"plot_variants":[[],[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        )
+        .unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.settings().plots, saved.settings.plots);
+        assert_eq!(restored.plot_style(1).plot_type, PlotType::Crosses);
+        assert_eq!(restored.plot_character(1), Some('d'));
     }
 
     /// A Connors RSI saved with guides at 70, 50 and 30 and a Correlation Coefficient saved with
