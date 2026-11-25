@@ -2,10 +2,12 @@
 //! channels include it because their entries first become eligible on the following bar.
 //! Pivots prefer the newest equal extreme and become usable only at confirmation.
 
+use chrono::NaiveDate;
+
 use super::{StrategyFactory, length, length_input, number, number_input, set_input};
 use crate::model::{Bar, OrderSide, OrderType};
 use crate::strategies::backtest::valid_bar;
-use crate::strategies::{Strategy, StrategyContext};
+use crate::strategies::{OrderSize, Strategy, StrategyContext};
 use crate::studies::{InputValue, StudyInput, helpers};
 
 #[derive(Clone, Copy)]
@@ -45,11 +47,34 @@ struct PriceAction {
     atr: Vec<f64>,
     pivot_high: Option<f64>,
     pivot_low: Option<f64>,
+    day: Option<Day>,
+}
+
+/// The trading day of the latest decision, for the Max Intraday Loss input.
+#[derive(Clone, Copy)]
+struct Day {
+    /// UTC date of the decision bar's open.
+    date: NaiveDate,
+    /// Equity at the last decision before this day, or at the run's first decision.
+    start: f64,
+    /// Highest equity at the day's start and at its decisions.
+    peak: f64,
+    /// Equity at the latest decision with a finite value.
+    equity: f64,
+    /// Whether the day's loss went past the limit.
+    halted: bool,
 }
 
 impl PriceAction {
     fn new(rule: Rule) -> Self {
         let mut inputs = match rule {
+            Rule::BarUpDown => vec![number_input(
+                "max_intraday_loss",
+                "Max Intraday Loss (%)",
+                1.0,
+                0.0,
+                f64::MAX,
+            )],
             Rule::Consecutive => vec![length_input("length", "Consecutive closes", 3)],
             Rule::Channel | Rule::PriceChannel => {
                 vec![length_input("length", "Channel length", 20)]
@@ -77,7 +102,47 @@ impl PriceAction {
             atr: Vec::new(),
             pivot_high: None,
             pivot_low: None,
+            day: None,
         }
+    }
+
+    /// Applies Max Intraday Loss at a decision. Once the loss since the start of the UTC day
+    /// exceeds that share of the day's highest equity, cancels the entries, closes the position
+    /// and returns `true` until the date changes.
+    fn day_halted(&mut self, context: &mut StrategyContext<'_>) -> bool {
+        let Some(date) = context.bars().last().map(|bar| bar.time.date_naive()) else {
+            return false;
+        };
+        let equity = context.equity();
+        if equity.is_finite() {
+            let mut day = match self.day {
+                Some(day) if day.date == date => day,
+                previous => {
+                    let start = previous.map_or(equity, |day| day.equity);
+                    Day {
+                        date,
+                        start,
+                        peak: start,
+                        equity,
+                        halted: false,
+                    }
+                }
+            };
+            day.peak = day.peak.max(equity);
+            day.equity = equity;
+            day.halted |=
+                day.start - equity > number(&self.inputs, "max_intraday_loss") / 100.0 * day.peak;
+            self.day = Some(day);
+        }
+        let halted = self.day.is_some_and(|day| day.date == date && day.halted);
+        if halted {
+            context.cancel("Long");
+            context.cancel("Short");
+            if context.position() != 0.0 {
+                context.exit("Close", None, None, None);
+            }
+        }
+        halted
     }
 
     fn entry(&self, context: &mut StrategyContext<'_>, side: OrderSide, order: OrderType) {
@@ -131,9 +196,18 @@ impl Strategy for PriceAction {
         Ok(())
     }
 
+    fn default_order_size(&self) -> Option<OrderSize> {
+        matches!(self.rule, Rule::BarUpDown).then_some(OrderSize::EquityFraction(0.1))
+    }
+
     fn prepare(&mut self, bars: &[Bar]) {
         self.pivot_high = None;
         self.pivot_low = None;
+        self.day = None;
+        self.prepare_update(bars);
+    }
+
+    fn prepare_update(&mut self, bars: &[Bar]) {
         self.atr.clear();
         if matches!(self.rule, Rule::Volatility) {
             let mut previous: Option<f64> = None;
@@ -156,14 +230,11 @@ impl Strategy for PriceAction {
         }
     }
 
-    fn prepare_update(&mut self, bars: &[Bar]) {
-        let pivots = (self.pivot_high, self.pivot_low);
-        self.prepare(bars);
-        (self.pivot_high, self.pivot_low) = pivots;
-    }
-
     fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
         if context.is_after_fill() {
+            return;
+        }
+        if matches!(self.rule, Rule::BarUpDown) && self.day_halted(context) {
             return;
         }
         let bars = context.bars();

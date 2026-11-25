@@ -744,6 +744,7 @@ fn selecting_a_strategy_applies_its_declared_order_size() {
         ("SuperTrend", OrderSize::EquityFraction(0.15)),
         ("Technical Ratings", OrderSize::EquityFraction(0.05)),
         ("Consecutive Up/Down", OrderSize::Fixed(1.0)),
+        ("Bar Up/Down", OrderSize::EquityFraction(0.1)),
     ] {
         let mut settings = tester.settings().clone();
         settings.order_size = OrderSize::Cash(500.0);

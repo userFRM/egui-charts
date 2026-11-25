@@ -20,14 +20,17 @@ type StrategyConstructor = Box<dyn Fn() -> Box<dyn Strategy> + Send + Sync>;
 /// Ten price-action strategies need only `strategies`; twelve more use the public study
 /// calculations when `studies` is enabled. Inputs are available through
 /// [`Strategy::study_inputs`] and edited through [`Strategy::set_input`]. Entry size and
-/// pyramiding come from [`super::BacktestSettings`]. SuperTrend suggests 15% of equity and
-/// Technical Ratings 5% through [`Strategy::default_order_size`], which the strategy tester
-/// applies on selection. Technical Ratings protects positions at 3 ATR(14) from their average
+/// pyramiding come from [`super::BacktestSettings`]. SuperTrend suggests 15% of equity,
+/// Technical Ratings 5% and Bar Up/Down 10% through [`Strategy::default_order_size`], which the
+/// strategy tester applies on selection. Technical Ratings protects positions at 3 ATR(14) from their average
 /// price, or with a stop activated at 5 ATR(14) in profit that trails the best price by 2 ATR(14).
 /// Its Indicator timeframe input uses the chart interval by default, or the last longer-interval
 /// bar closed by each chart bar's end. Higher bars use UTC boundaries and are built from chart
 /// bars, so input validation refuses another interval that is shorter, trade-based or not made
 /// of whole chart bars, such as 5 minutes on a 3-minute chart or a month on a weekly one.
+/// Bar Up/Down's Max Intraday Loss (%) input, 1 by default, cancels its entries and closes its
+/// position once the loss since the start of the UTC day, open profit and fees included, exceeds
+/// that share of the day's highest equity, and places no entry until the next UTC day.
 /// Built-ins ignore fill callbacks and decide
 /// at bar close, or on forming-bar updates when tick recalculation is enabled.
 ///

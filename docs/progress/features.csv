@@ -870,7 +870,7 @@ Studies,Strategy tester,Built-in inside bar strategy,verified,library,src/strate
 Studies,Strategy tester,Built-in outside bar strategy,verified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,1154
 Studies,Strategy tester,Built-in price and moving average crossover strategy,verified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/sma.rs,1155
 Studies,Strategy tester,Built-in two moving average crossover strategy,verified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/sma.rs,1155
-Studies,Strategy tester,Built-in up and down bar strategy,incomplete,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,1154;3184
+Studies,Strategy tester,Built-in up and down bar strategy,unverified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/ui/strategy_report/tester.rs,1154;3184
 Studies,Strategy tester,Built-in volatility expansion close strategy,verified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,1154
 Studies,Strategy tester,Commission models,verified,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md,1152;3185
 Studies,Strategy tester,Deep backtesting and bar magnifier,verified,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md;examples/demo/strategy.rs;examples/demo/live.rs;examples/demo/sampledata.rs;src/ui/strategy_report/tester.rs;src/ui/strategy_report/properties.rs,1153;1927;3184;3903
