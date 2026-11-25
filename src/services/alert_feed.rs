@@ -506,6 +506,7 @@ impl AlertFeed {
                             clock: self.request.clock.clone(),
                             extended_hours: self.request.extended_hours,
                             overnight_hours: self.request.overnight_hours,
+                            adjusted: self.request.adjusted,
                             conversion: self.request.conversion.clone(),
                             sink,
                         });
