@@ -3110,6 +3110,29 @@ impl DemoApp {
                         }),
                     ),
                     HotlistsAction::Starred(names) => self.hotlist_favorites = names,
+                    HotlistsAction::CopyToWatchlist {
+                        hotlist,
+                        list: None,
+                        symbols,
+                    } => {
+                        self.watchlist.import(hotlist, &symbols.join(","));
+                        self.open_panel = Some(SidePanel::Watchlist);
+                    }
+                    HotlistsAction::CopyToWatchlist {
+                        list: Some(list),
+                        symbols,
+                        ..
+                    } if list < self.watchlist.lists().len() => {
+                        let mut added = 0;
+                        for symbol in &symbols {
+                            added += usize::from(self.watchlist.add_symbol_to(list, symbol));
+                        }
+                        if added == 0 {
+                            self.notify("These symbols are already in that watchlist");
+                        }
+                        self.watchlist.set_active_list(list);
+                        self.open_panel = Some(SidePanel::Watchlist);
+                    }
                     _ => {}
                 },
                 SidePanel::Notifications => {
@@ -6204,6 +6227,62 @@ mod tests {
         });
         output.drop_without_applying_deltas();
         assert!(!cut, "the refresh choice is cut short");
+    }
+
+    /// The list menu copies the shown hotlist, in its order, into a new watchlist named after it
+    /// and into an existing one, appending only the symbols that list lacks, and shows the list.
+    #[test]
+    fn demo_hotlist_copies_into_a_new_and_a_given_watchlist() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.open_panel = Some(SidePanel::Hotlists);
+        settle(&mut app, &ctx);
+        hotlist_click(&mut app, &ctx, "Top gainers");
+        hotlist_click(&mut app, &ctx, "Most volatile");
+        egui::Popup::close_all(&ctx);
+        let texts = hotlist_frame(&mut app, &ctx, 10.0, vec![]);
+        let heading = texts
+            .iter()
+            .find(|(text, _)| text == "Symbol")
+            .unwrap_or_else(|| panic!("no Symbol heading: {texts:?}"))
+            .1;
+        let mut rows: Vec<&(String, egui::Rect)> = texts
+            .iter()
+            .filter(|(text, rect)| {
+                DemoSymbol::catalog().iter().any(|spec| spec.symbol == text)
+                    && (rect.left() - heading.left()).abs() < 1.0
+                    && rect.top() > heading.top()
+            })
+            .collect();
+        rows.sort_by(|a, b| a.1.top().total_cmp(&b.1.top()));
+        let shown: Vec<String> = rows.into_iter().map(|(text, _)| text.clone()).collect();
+        assert_eq!(shown.len(), DemoSymbol::catalog().len(), "{texts:?}");
+
+        hotlist_click(&mut app, &ctx, "Most volatile");
+        hotlist_click(&mut app, &ctx, "Copy to new watchlist");
+        let lists = app.watchlist.lists();
+        let copy = lists.last().unwrap();
+        assert_eq!(copy.name, "Most volatile");
+        assert_eq!(copy.symbols().collect::<Vec<_>>(), shown);
+        assert_eq!(app.watchlist.active_list(), lists.len() - 1);
+        assert!(app.open_panel == Some(SidePanel::Watchlist));
+
+        let old: Vec<String> = lists[0].symbols().map(str::to_owned).collect();
+        let mut expected = old.clone();
+        expected.extend(shown.iter().filter(|symbol| !old.contains(symbol)).cloned());
+        assert!(expected.len() > old.len(), "nothing left to append");
+        app.open_panel = Some(SidePanel::Hotlists);
+        hotlist_click(&mut app, &ctx, "Most volatile");
+        hotlist_click(&mut app, &ctx, "Copy to Watchlist");
+        assert_eq!(
+            app.watchlist.lists()[0].symbols().collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(app.watchlist.active_list(), 0);
     }
 
     /// Row menus update the demo watchlist, and starring a list survives the real settings save

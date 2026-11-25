@@ -982,6 +982,7 @@ mod tests {
                     clock: Timeframe::Min1.into(),
                     extended_hours: true,
                     overnight_hours: true,
+                    adjusted: false,
                     conversion: None,
                     sink: sink.clone(),
                 });
@@ -1160,6 +1161,7 @@ mod tests {
             clock: Timeframe::Min1.into(),
             extended_hours: true,
             overnight_hours: true,
+            adjusted: false,
             conversion: None,
             sink,
         });
@@ -1201,6 +1203,7 @@ mod tests {
             clock,
             extended_hours: hours.0,
             overnight_hours: hours.1,
+            adjusted: false,
             conversion: None,
             sink,
         });
