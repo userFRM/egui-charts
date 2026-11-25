@@ -47,13 +47,13 @@ pub struct BBTrend {
 
 impl BBTrend {
     /// Create a BBTrend from the lengths of its two bands and their deviation multiplier.
-    /// The multiplier is clamped into 0 to `f64::MAX`, NaN to 0.
+    /// The multiplier is clamped into 0.001 to `f64::MAX`, NaN to 0.001.
     pub fn new(short_length: usize, long_length: usize, multiplier: f64) -> Self {
         let (up, down) = (palette::TEAL, palette::RED);
         Self {
             short_length: short_length.max(1),
             long_length: long_length.max(1),
-            multiplier: clamp_param(multiplier, 0.0, f64::MAX),
+            multiplier: clamp_param(multiplier, 0.001, f64::MAX),
             values: IndicatorValues::new(),
             colors: [
                 up.gamma_multiply_u8(191),
@@ -68,7 +68,7 @@ impl BBTrend {
     /// The values over `data`, every bar of which has a finite close.
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let bands = |length| {
-            let mut bands = BollingerBands::new(length, self.multiplier);
+            let mut bands = BollingerBands::bands(length, self.multiplier);
             bands.calculate(data);
             bands
         };
@@ -105,7 +105,7 @@ impl Indicator for BBTrend {
     crate::studies::inputs::study_inputs!(self;
         short_length: length("Short BB Length", 1, usize::MAX),
         long_length: length("Long BB Length", 1, usize::MAX),
-        multiplier: number("StdDev", 0.0, f64::MAX)
+        multiplier: number("StdDev", 0.001, f64::MAX)
     ; {});
 
     fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {
