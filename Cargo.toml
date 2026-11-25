@@ -194,13 +194,15 @@ locales = ["chrono/unstable-locales"]
 timezones = ["dep:chrono-tz"]
 
 # The web builds: `trunk build --release` of `examples/demo`, whose own profile matches this one,
-# and of the bare chart in `scripts/web-size.sh`. Whole-program optimisation for size: at `s` the
-# frame of `benches/bare_chart.rs` costs 30% more instructions than at `release`, at `z` 60% more
-# for a download only 1.5% smaller. `panic` and `strip` stay as they are: wasm32-unknown-unknown
-# aborts on panic anyway, and the web build keeps no symbols.
+# and of the bare chart in `scripts/web-size.sh`. Whole-program optimisation for size: `z` makes the
+# demo's module 14% smaller with gzip than `s` and the bare chart's 5.5%, for 32% more instructions
+# in the frame of `benches/bare_chart.rs`; a visitor waits for the whole download before the first
+# frame. `panic` and `strip` stay as they are: wasm32-unknown-unknown aborts on panic anyway, and
+# `strip` removes the section that tells wasm-opt which wasm features the module uses, which fails
+# the build; wasm-opt drops the symbols itself.
 [profile.wasm-release]
 inherits = "release"
-opt-level = "s"
+opt-level = "z"
 lto = "fat"
 codegen-units = 1
 

@@ -52,7 +52,7 @@ console_error_panic_hook = "0.1.7"
 # The same as the library's `wasm-release`, which explains the settings.
 [profile.wasm-release]
 inherits = "release"
-opt-level = "s"
+opt-level = "z"
 lto = "fat"
 codegen-units = 1
 
