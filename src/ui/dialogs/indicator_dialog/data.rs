@@ -102,6 +102,7 @@ impl IndicatorInfo {
             "Booker Reversal" => &["Rob Booker Reversal", "Rob Booker - Reversal"],
             "C2C Vol" => &["Volatility Close-to-Close"],
             "Connors RSI" => &["CRSI"],
+            "DEMA" => &["Double EMA"],
             "Donchian" => &["DC"],
             "EMA Cross" | "MA Cross" => &["Double Moving Average", "Moving Average Double"],
             "Elliott Wave" => &["Elliott Waves"],
@@ -125,6 +126,7 @@ impl IndicatorInfo {
             "OHLC4" => &["Average Price"],
             "PVT" => &["Volume Price Trend", "VPT"],
             "Price Momentum Oscillator" => &["PMO"],
+            "RCI" => &["RankCorr"],
             "SMA/EMA Cross" => &[
                 "MA with EMA Cross",
                 "Double Moving Average",
