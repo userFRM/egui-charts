@@ -88,7 +88,7 @@ pub use plots::{
 pub use projection::StudyProjection;
 pub use settings::{
     ConfiguredStudy, FillStyle, GradientStyle, LevelStyle, PlotStyle, PlotType, PlotVariant,
-    StudySettings, StudySettingsSnapshot,
+    ShapeSide, StudySettings, StudySettingsSnapshot,
 };
 pub use table::{StudyCell, StudyTable, TablePosition, TableTextSize};
 mod values;

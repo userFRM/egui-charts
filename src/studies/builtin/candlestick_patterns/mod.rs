@@ -407,6 +407,15 @@ impl Indicator for CandlestickPatterns {
         }
     }
 
+    fn plot_shape_side(&self, line: usize) -> crate::studies::ShapeSide {
+        // Bullish marks hold the bar's low, bearish and neutral ones its high.
+        if self.combined_line(line) == 0 {
+            crate::studies::ShapeSide::Below
+        } else {
+            crate::studies::ShapeSide::Above
+        }
+    }
+
     fn plot_label_colors(&self, line: usize) -> Option<(Color32, Color32)> {
         self.colors
             .get(self.combined_line(line))
