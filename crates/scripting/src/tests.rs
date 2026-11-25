@@ -2134,4 +2134,15 @@ fn script_orders_and_readings_reach_the_backtest() {
     assert_eq!(script.check(&ladder), Ok(()));
     let study = calculated(&script, &ladder);
     assert_eq!(study.values().line(0), [0.0; 6]);
+
+    // A strategy script needs no plot, and its study then calculates a row without a line for
+    // every bar, so that the chart updates it from its last bar.
+    let plotless = compile("entry(\"Long\", \"long\");");
+    let study = calculated(&plotless, &ladder);
+    assert!(matches!(study.calculation(), Some(Calculation::Done(_))));
+    assert_eq!(plotless.last_error(), None);
+    assert_eq!(
+        (study.values().len(), study.values().columns().len()),
+        (6, 0)
+    );
 }
