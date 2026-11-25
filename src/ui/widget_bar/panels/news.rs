@@ -13,7 +13,7 @@ use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, NewsQuery, NewsStory};
 use crate::icons::icons;
 use crate::model::TimezoneId;
-use crate::services::{ConflictChoice, Notification, Storage, StoreKind};
+use crate::services::{ConflictChoice, Notification, NotificationTarget, Storage, StoreKind};
 use crate::theme::ThemeExt;
 use crate::ui::dialogs::templates::TemplateStore;
 use crate::ui_kit::buttons::Button;
@@ -25,6 +25,9 @@ use super::controls::dropdown;
 
 /// Stories asked for at most.
 const LIMIT: usize = 50;
+
+/// Stories kept at most of those one alert reported; past it the alert loses its oldest.
+const REPORTED: usize = 100;
 
 // Escape can clear focus before rendering, so remember it after the host draws its widgets.
 #[derive(Default)]
@@ -67,6 +70,22 @@ struct NewsView {
     topics: Vec<String>,
     providers: Vec<String>,
     countries: Vec<String>,
+}
+
+impl NewsView {
+    /// The view with each list sorted and without repeats, to compare what two views ask for.
+    fn sorted(mut self) -> Self {
+        for list in [
+            &mut self.symbols,
+            &mut self.topics,
+            &mut self.providers,
+            &mut self.countries,
+        ] {
+            list.sort_unstable();
+            list.dedup();
+        }
+        self
+    }
 }
 
 /// The views of one panel and the one shown last, as kept in [`StoreKind::NewsViews`].
@@ -112,7 +131,10 @@ struct SeenNews {
 /// Named alerts keep the current filter, including its symbols, through storage. Call
 /// [`refresh`](Self::refresh) when the host learns of new stories, even while hidden, and drain
 /// [`take_notifications`](Self::take_notifications) after polling for host delivery. Historical
-/// stories from before an alert starts or resumes do not notify.
+/// stories from before an alert starts or resumes do not notify. Nor do the stories of an alert
+/// that asks for the stories the panel listed when it was last shown: they show in the list and
+/// are marked as seen. Each notification names its story, and [`open_story`](Self::open_story)
+/// reads it among the stories its alert reported.
 pub struct NewsPanel {
     highlights: bool,
     feed: Option<Arc<dyn Datafeed>>,
@@ -146,6 +168,12 @@ pub struct NewsPanel {
     alerts_refresh: bool,
     alert_errors: BTreeMap<String, FeedError>,
     notifications: Vec<Notification>,
+    /// The stories each alert reported, oldest first and at most [`REPORTED`].
+    alert_stories: BTreeMap<String, Vec<NewsStory>>,
+    /// The alert and the story read among the stories it reported, shown in place of the list.
+    reading: Option<(String, NewsStory)>,
+    /// Whether `show` ran since the last poll.
+    shown: bool,
 }
 
 impl std::fmt::Debug for NewsPanel {
@@ -210,6 +238,9 @@ impl NewsPanel {
             alerts_refresh: false,
             alert_errors: BTreeMap::new(),
             notifications: Vec::new(),
+            alert_stories: BTreeMap::new(),
+            reading: None,
+            shown: false,
         }
     }
 
@@ -229,6 +260,7 @@ impl NewsPanel {
         self.alert_seen.clear();
         self.alert_errors.clear();
         self.notifications.clear();
+        self.alert_stories.clear();
         self.refresh();
     }
 
@@ -285,6 +317,7 @@ impl NewsPanel {
         self.alert_seen.clear();
         self.alert_errors.clear();
         self.notifications.clear();
+        self.alert_stories.clear();
         self.alerts_refresh = true;
     }
 
@@ -312,11 +345,32 @@ impl NewsPanel {
         self.timezone = timezone;
     }
 
-    /// Open the story the host resolved from an event's id, even when the current filter did
-    /// not return it. The filter and saved view stay selected; the next refresh replaces the list.
+    /// Open the story the host resolved from an event's id or from the
+    /// [`NotificationTarget::Story`] of a notification, even when the current filter did not
+    /// return it. The filter and saved view stay selected.
+    ///
+    /// A story that an alert of this panel reported opens apart from the list, among the newest
+    /// 100 stories of that alert: Previous and Next, or the Left and Right keys, move to the
+    /// story it reported before or after. It is found by its identifier, at its publication time
+    /// or else its newest publication with that identifier, and the given story takes the
+    /// reported one's place; of several alerts that reported it, the first by name is read. Any
+    /// other story joins the list, which the next refresh replaces.
     pub fn open_story(&mut self, story: NewsStory) {
-        self.open = Some(story.id.clone());
         self.focus_back = false;
+        for (alert, stories) in &mut self.alert_stories {
+            let at = stories
+                .iter()
+                .rposition(|held| held.id == story.id && held.time == story.time)
+                .or_else(|| stories.iter().rposition(|held| held.id == story.id));
+            if let Some(at) = at {
+                stories[at] = story.clone();
+                self.open = None;
+                self.reading = Some((alert.clone(), story));
+                return;
+            }
+        }
+        self.reading = None;
+        self.open = Some(story.id.clone());
         if let Some(existing) = self
             .stories
             .iter_mut()
@@ -357,8 +411,9 @@ impl NewsPanel {
         feed.news(query, self.inbox.reply(self.request));
     }
 
-    /// New stories matching active named alerts, each naming its alert in the title and its
-    /// headline in the body. The host delivers or logs them. Drain after each `poll`; at most
+    /// New stories matching active named alerts, each naming its alert in the title, its
+    /// headline in the body and its story in the target, which the notifications panel offers
+    /// to open. The host delivers or logs them. Drain after each `poll`; at most
     /// 10,000 notifications are retained, dropping the oldest if the host stops draining.
     pub fn take_notifications(&mut self) -> Vec<Notification> {
         std::mem::take(&mut self.notifications)
@@ -374,6 +429,8 @@ impl NewsPanel {
             .retain(|name, _| alerts.get(name).is_some_and(|alert| alert.active));
         self.alert_seen
             .retain(|name, _| alerts.get(name).is_some_and(|alert| alert.active));
+        self.alert_stories
+            .retain(|name, _| alerts.contains_key(name));
         for (name, alert) in alerts.into_iter().filter(|(_, alert)| alert.active) {
             self.alert_seen
                 .entry(name.clone())
@@ -418,6 +475,23 @@ impl NewsPanel {
             .unwrap_or_default()
     }
 
+    /// The selection as an alert keeps it: the followed symbol joins the chosen ones, and the
+    /// whole market has none.
+    fn alert_view(&self) -> NewsView {
+        let mut view = self.view();
+        if !view.market {
+            view.symbols = self
+                .symbol
+                .iter()
+                .chain(chosen(&self.more_symbols))
+                .cloned()
+                .collect();
+        } else {
+            view.symbols.clear();
+        }
+        view
+    }
+
     /// The selection shown, as a view.
     fn view(&self) -> NewsView {
         NewsView {
@@ -459,6 +533,7 @@ impl NewsPanel {
 
     /// Receive the feed's answer and wake the UI when the next one arrives.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        let shown = std::mem::take(&mut self.shown);
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
         let repaint = ctx.clone();
@@ -508,6 +583,7 @@ impl NewsPanel {
             self.refresh_alerts();
         }
         let alerts = self.views().alerts;
+        let listed = shown.then(|| self.alert_view().sorted());
         for (key, answer) in self.alert_inbox.drain().answers {
             let Some((name, requested)) = self.alert_requests.remove(&key) else {
                 continue;
@@ -525,8 +601,9 @@ impl NewsPanel {
                     let Some(seen) = self.alert_seen.get_mut(&name) else {
                         continue;
                     };
+                    let quiet = listed.as_ref() == Some(&requested.view.clone().sorted());
                     for story in stories {
-                        let publication = (story.time, story.id);
+                        let publication = (story.time, story.id.clone());
                         if story.time < seen.since
                             || seen.publications.contains(&publication)
                             || (!requested.view.symbols.is_empty()
@@ -542,8 +619,12 @@ impl NewsPanel {
                         if seen.publications.len() > 10_000 {
                             seen.publications.pop_first();
                         }
+                        // The list shows it: `refresh` asks for the list and the alerts together.
+                        if quiet {
+                            continue;
+                        }
                         let mut notification = Notification::new(story.time, name.clone());
-                        notification.body = story.headline;
+                        notification.body.clone_from(&story.headline);
                         notification.symbol = story
                             .symbols
                             .iter()
@@ -552,7 +633,12 @@ impl NewsPanel {
                                     || requested.view.symbols.contains(symbol)
                             })
                             .cloned();
+                        notification.target = Some(NotificationTarget::Story(story.id.clone()));
                         self.notifications.push(notification);
+                        let reported = self.alert_stories.entry(name.clone()).or_default();
+                        reported.push(story);
+                        let extra = reported.len().saturating_sub(REPORTED);
+                        reported.drain(..extra);
                     }
                 }
                 Err(error) => {
@@ -566,6 +652,7 @@ impl NewsPanel {
 
     /// Render the stories, or the open story, after [`poll`](Self::poll).
     pub fn show(&mut self, ui: &mut Ui) -> NewsAction {
+        self.shown = true;
         let focus = ui.ctx().plugin_or_default::<NewsFocus>();
         let had_focus = *focus
             .lock()
@@ -579,13 +666,24 @@ impl NewsPanel {
         } else {
             "News"
         };
-        if let Some(story) = self
-            .open
-            .as_ref()
-            .and_then(|id| self.stories.iter().find(|story| story.id == *id))
-        {
-            let mut controls = [None; 3];
+        // A story read for an alert is held apart from the list, with that alert's stories and
+        // its place among them.
+        let reading = self.reading.take();
+        let walk = reading.as_ref().and_then(|(alert, story)| {
+            let stories = self.alert_stories.get(alert)?;
+            Some((stories, stories.iter().position(|held| held == story)?))
+        });
+        let story = match &reading {
+            Some((_, story)) => Some(story),
+            None => self
+                .open
+                .as_ref()
+                .and_then(|id| self.stories.iter().find(|story| story.id == *id)),
+        };
+        if let Some(story) = story {
+            let mut controls = [None; 5];
             let mut back = false;
+            let mut step = None;
             PanelHeader::new(title).show(ui, |ui| {
                 let response = IconButton::new(&icons::CHEVRON_LEFT)
                     .tooltip("Back to the stories")
@@ -596,7 +694,26 @@ impl NewsPanel {
                 controls[0] = Some(response.id);
                 back = response.clicked();
             });
+            if let Some((stories, at)) = walk {
+                ui.horizontal(|ui| {
+                    let response = Button::new("Previous").small().enabled(at > 0).show(ui);
+                    controls[3] = Some(response.id);
+                    if response.clicked() {
+                        step = Some(at - 1);
+                    }
+                    let response = Button::new("Next")
+                        .small()
+                        .enabled(at + 1 < stories.len())
+                        .show(ui);
+                    controls[4] = Some(response.id);
+                    if response.clicked() {
+                        step = Some(at + 1);
+                    }
+                });
+            }
+            // Each story keeps its own place, so the next one starts at its top.
             egui::ScrollArea::vertical()
+                .id_salt(("news_story", story.id.as_str()))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.label(
@@ -646,11 +763,36 @@ impl NewsPanel {
                             .any(|id| memory.had_focus_last_frame(id))
                 }
             });
+            if story_focused && let Some((stories, at)) = walk {
+                let (left, right) = ui.input_mut(|i| {
+                    (
+                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft),
+                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight),
+                    )
+                });
+                if left || right {
+                    // The arrows move between stories here, not the focus between controls.
+                    ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+                }
+                if right && at + 1 < stories.len() {
+                    step = Some(at + 1);
+                } else if left && at > 0 {
+                    step = Some(at - 1);
+                }
+            }
             back |= story_focused
                 && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            let next = step.and_then(|at| walk.map(|(stories, _)| stories[at].clone()));
             if back {
-                self.refocus = Some(story.id.clone());
+                // Back on the list, the story keeps the focus only where the list holds it.
+                self.refocus = self
+                    .stories
+                    .iter()
+                    .any(|listed| listed.id == story.id)
+                    .then(|| story.id.clone());
                 self.open = None;
+            } else if let Some((alert, story)) = reading {
+                self.reading = Some((alert, next.unwrap_or(story)));
             }
             return action;
         }
@@ -979,17 +1121,7 @@ impl NewsPanel {
         } else if save || alert {
             views.views.insert(name.clone(), self.view());
             if alert || views.alerts.contains_key(&name) {
-                let mut view = self.view();
-                if !view.market {
-                    view.symbols = self
-                        .symbol
-                        .iter()
-                        .chain(chosen(&self.more_symbols))
-                        .cloned()
-                        .collect();
-                } else {
-                    view.symbols.clear();
-                }
+                let view = self.alert_view();
                 let active = alert || views.alerts.get(&name).is_some_and(|alert| alert.active);
                 views
                     .alerts
@@ -1017,6 +1149,16 @@ impl NewsPanel {
                 self.alert_seen.remove(&name);
                 if let Some(seen) = seen {
                     self.alert_seen.insert(name.clone(), seen);
+                }
+                let reported = self.alert_stories.remove(&old);
+                self.alert_stories.remove(&name);
+                if let Some(reported) = reported {
+                    self.alert_stories.insert(name.clone(), reported);
+                }
+                if let Some((reading, _)) = &mut self.reading
+                    && *reading == old
+                {
+                    reading.clone_from(&name);
                 }
                 let error = self.alert_errors.remove(&old);
                 self.alert_errors.remove(&name);
@@ -1533,6 +1675,9 @@ mod tests {
             h.get_by_label("Create alert").click();
             h.run_steps(3);
         }
+        // Leave both alerts' filters, whose stories the list would show.
+        h.state_mut().set_symbol("CCC");
+        h.run_steps(3);
         let requests = std::mem::take(&mut *feed.0.lock().unwrap());
         for (symbol, topic, provider, country) in
             [("AAA", "fx", "wire", "US"), ("BBB", "oil", "other", "DE")]
@@ -1551,7 +1696,7 @@ mod tests {
         ]
         .into_iter()
         .map(|(id, symbols)| {
-            let mut story = NewsStory::new(id, time, id);
+            let mut story = NewsStory::new(id, time, id.to_uppercase());
             story.symbols = symbols.iter().map(|symbol| (*symbol).to_owned()).collect();
             story
         })
@@ -1568,10 +1713,14 @@ mod tests {
         let mut titles: Vec<_> = notifications
             .iter()
             .map(|notification| {
+                let Some(NotificationTarget::Story(story)) = &notification.target else {
+                    panic!("no story in {notification:?}");
+                };
                 (
                     notification.title.as_str(),
                     notification.body.as_str(),
                     notification.symbol.as_deref().unwrap(),
+                    story.as_str(),
                 )
             })
             .collect();
@@ -1579,11 +1728,11 @@ mod tests {
         assert_eq!(
             titles,
             [
-                ("Alpha", "a1", "AAA"),
-                ("Alpha", "a2", "AAA"),
-                ("Alpha", "both", "AAA"),
-                ("Beta", "b1", "BBB"),
-                ("Beta", "both", "BBB")
+                ("Alpha", "A1", "AAA", "a1"),
+                ("Alpha", "A2", "AAA", "a2"),
+                ("Alpha", "BOTH", "AAA", "both"),
+                ("Beta", "B1", "BBB", "b1"),
+                ("Beta", "BOTH", "BBB", "both")
             ]
         );
 
@@ -1703,5 +1852,92 @@ mod tests {
         restored.poll(&egui::Context::default());
         assert_eq!(restored.views().alerts.len(), 1);
         assert!(!restored.views().alerts["Beta"].active);
+    }
+
+    /// Guards the quiet rule and reading an alert's stories: while the panel shows the
+    /// selection an alert asks for, the alert's new stories join the list without a
+    /// notification, and once the selection differs they notify; a notified story opens among
+    /// the stories its alert reported, with Previous, Next and the arrow keys moving between
+    /// them and Escape back to the list.
+    #[test]
+    fn a_shown_alert_stays_quiet_and_its_stories_read_in_turn() {
+        let feed = Arc::new(Feed::default());
+        let mut panel = NewsPanel::new();
+        panel.set_symbol("AAA");
+        panel.set_storage(Arc::new(Documents::default()));
+        panel.set_feed(feed.clone());
+        let mut h = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, panel: &mut NewsPanel| {
+                    panel.poll(ui.ctx());
+                    panel.show(ui);
+                },
+                panel,
+            );
+        h.run_steps(3);
+        *h.state_mut().name.query_mut() = "Alpha".into();
+        h.run_steps(3);
+        h.get_by_label("Create alert").click();
+        h.run_steps(3);
+        let time = Utc::now();
+        let [first, second, third] =
+            [(1, "First"), (2, "Second"), (3, "Third")].map(|(seconds, headline)| {
+                let mut story = NewsStory::new(
+                    headline.to_lowercase(),
+                    time + chrono::Duration::seconds(seconds),
+                    headline,
+                );
+                story.symbols = vec!["AAA".into()];
+                story
+            });
+        let answer = |h: &mut Harness<'_, NewsPanel>, stories: &[NewsStory]| {
+            h.run_steps(3);
+            for (_, reply) in std::mem::take(&mut *feed.0.lock().unwrap()) {
+                reply.send(Ok(stories.to_vec()));
+            }
+            h.run_steps(3);
+        };
+        h.state_mut().refresh();
+        answer(&mut h, &[first.clone()]);
+        assert!(h.state_mut().take_notifications().is_empty());
+        h.get_by_role_and_label(egui::Role::Button, "First");
+
+        h.get_by_label("Market").click();
+        answer(&mut h, &[third, second.clone(), first]);
+        let notifications = h.state_mut().take_notifications();
+        let delivered: Vec<_> = notifications
+            .iter()
+            .map(|notification| (notification.body.as_str(), notification.target.clone()))
+            .collect();
+        assert_eq!(
+            delivered,
+            [
+                ("Second", Some(NotificationTarget::Story("second".into()))),
+                ("Third", Some(NotificationTarget::Story("third".into())))
+            ]
+        );
+
+        h.state_mut().open_story(second);
+        h.run_steps(3);
+        let disabled = |h: &Harness<'_, NewsPanel>, label| {
+            h.get_by_role_and_label(egui::Role::Button, label)
+                .accesskit_node()
+                .is_disabled()
+        };
+        h.get_by_label("Second");
+        assert!(disabled(&h, "Previous"));
+        assert!(!disabled(&h, "Next"));
+        h.get_by_label("Next").click();
+        h.run_steps(3);
+        h.get_by_label("Third");
+        assert!(disabled(&h, "Next"));
+        h.key_press(egui::Key::ArrowLeft);
+        h.run_steps(3);
+        h.get_by_label("Second");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        h.get_by_role_and_label(egui::Role::Button, "First");
+        assert!(h.query_by_label("Previous").is_none());
     }
 }
