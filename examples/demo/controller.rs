@@ -673,8 +673,9 @@ impl DemoApp {
 
         let alert_live = Arc::new(live.fork());
         alert_live.set_view(SessionType::RTH, false);
+        let sample_study = study_editor::SampleStudyEditor::new(storage.clone(), &cc.egui_ctx);
         let indicator_dialog = Box::new(
-            IndicatorDialog::new().with_factory(study_editor::study_factory(theme.ui.accent)),
+            IndicatorDialog::new().with_factory(sample_study.study_factory(theme.ui.accent)),
         );
         // Keep the controller off callers' stacks, including tests that restart it.
         let mut app = Box::new(Self {
@@ -748,7 +749,7 @@ impl DemoApp {
                 Vec::new(),
             ),
             sample_scene: None,
-            sample_study: Default::default(),
+            sample_study,
             alert_dialog: Box::new(AlertDialog::new()),
             drawing_props: Box::new(DrawingPropertiesDialog::new()),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),

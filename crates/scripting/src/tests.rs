@@ -1,7 +1,9 @@
 //! Scripts against independent implementations: the native studies and `studies::helpers`,
 //! hand computed values, and the update contract of `Indicator`.
 
-use crate::{EntryKind, Limits, Reference, Script, examples};
+use crate::{
+    EntryKind, Limits, Profile, Reference, Script, ScriptError, TokenClass, examples, tokens,
+};
 use egui_charts::model::{Bar, BarClock, PriceSource, Timeframe};
 use egui_charts::studies::{
     Calculation, ConfiguredStudy, CustomIndicator, Indicator, IndicatorFactory, IndicatorValue,
@@ -800,6 +802,37 @@ fn scripts_are_refused_at_their_line_and_column() {
 /// What a script may call compiles: its own functions, helpers, the functions and methods of
 /// Rhai's values and the functions a map holds; and no text, comment or keyword before a `(` is
 /// a call.
+/// An error's span is the name or number at its line and column, counted in characters, or the
+/// single character there, clamped to the text.
+#[test]
+fn script_error_spans_cover_the_token_at_the_position() {
+    let error = |line, column| ScriptError {
+        message: String::new(),
+        line,
+        column,
+        bar: None,
+    };
+    for (text, line, column, expected) in [
+        ("let x = foo(1);", 1, 9, 8..11),
+        // Two-byte characters before the line and before the column: `foo` starts at byte 25.
+        ("let \u{e9} = 1;\nlet y = \u{e9} + foo;", 2, 13, 25..28),
+        ("x + ;", 1, 5, 4..5),
+        // No position.
+        ("let x = 1;", 0, 0, 0..0),
+        ("a\nb", 3, 1, 3..3),
+        ("let x = 1;", 1, 40, 10..10),
+    ] {
+        assert_eq!(
+            error(line, column).span(text),
+            expected,
+            "{text:?} {line}:{column}"
+        );
+    }
+    let text = "plot(\"x\", nope(close));";
+    let compiled = Script::compile("t", text, &IndicatorFactory::new()).unwrap_err();
+    assert_eq!(&text[compiled.span(text)], "nope", "{compiled}");
+}
+
 #[test]
 fn defined_calls_compile() {
     let source = r####"
@@ -1064,6 +1097,85 @@ fn completion_follows_the_cursor() {
         let found = reference.complete(text, cursor);
         let names: Vec<_> = found.iter().map(|entry| entry.name.as_str()).collect();
         assert_eq!(names, expected, "{text:?} at {cursor}");
+    }
+}
+
+/// The classified pieces of a text are its keywords, declarations, built-in names, numbers,
+/// strings with their quotes and comments, in order and on character boundaries.
+#[test]
+fn tokens_cover_the_text_in_order() {
+    use TokenClass::*;
+    for (text, expected) in [
+        (
+            "input n = int(\"N\", 14, 1, 50);",
+            &[
+                ("input", Declaration),
+                ("\"N\"", Text),
+                ("14", Number),
+                ("1", Number),
+                ("50", Number),
+            ][..],
+        ),
+        (
+            "plot(\"x\", sma(close, 14)); // note",
+            &[
+                ("plot", Declaration),
+                ("\"x\"", Text),
+                ("sma", Builtin),
+                ("close", Builtin),
+                ("14", Number),
+                ("// note", Comment),
+            ],
+        ),
+        (
+            "if x > 1.5 { let y = na; }",
+            &[
+                ("if", Keyword),
+                ("1.5", Number),
+                ("let", Keyword),
+                ("na", Builtin),
+            ],
+        ),
+        (
+            "bars day = history(\"\", \"1D\"); plot(\"c\", day.close[1]);",
+            &[
+                ("bars", Declaration),
+                ("\"\"", Text),
+                ("\"1D\"", Text),
+                ("plot", Declaration),
+                ("\"c\"", Text),
+                ("close", Builtin),
+                ("1", Number),
+            ],
+        ),
+        (
+            "let e = \"\u{e9}\";",
+            &[("let", Keyword), ("\"\u{e9}\"", Text)],
+        ),
+        // Unterminated, so to the end of the text.
+        ("let s = \"open", &[("let", Keyword), ("\"open", Text)]),
+        ("/* a\nb", &[("/* a\nb", Comment)]),
+        ("", &[]),
+    ] {
+        let found = tokens(text);
+        assert!(
+            found
+                .windows(2)
+                .all(|pair| pair[0].0.end <= pair[1].0.start),
+            "{text:?}: {found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .all(|(range, _)| text.is_char_boundary(range.start)
+                    && text.is_char_boundary(range.end)),
+            "{text:?}: {found:?}"
+        );
+        let found: Vec<_> = found
+            .into_iter()
+            .map(|(range, class)| (&text[range], class))
+            .collect();
+        assert_eq!(found, expected, "{text:?}");
     }
 }
 
@@ -1474,6 +1586,51 @@ fn history_reads_reach_the_first_loaded_bar() {
             "{source}"
         );
     }
+}
+
+/// The profile of a full recalculation counts each line's runtime operations, the helper call
+/// and the plot here, once a bar, and charges the arithmetic between them to the next one. An
+/// update of the last bar and a study of no bars keep it, and the next full recalculation counts
+/// afresh.
+#[test]
+fn profile_counts_the_calls_on_each_line_of_a_full_recalculation() {
+    let source = "let a = sma(close, 5);\nlet b = 1.0 + 2.0;\nplot(\"x\", a);";
+    let mut fixture = bars(100, 10);
+    let script = compile(source).with_profiling(true);
+    let mut study = calculated(&script, &fixture);
+    let profile = script
+        .profile()
+        .expect("a profile of the full recalculation");
+    let calls = |profile: &Profile| -> Vec<_> {
+        (profile.lines().iter())
+            .map(|&(line, calls, _)| (line, calls))
+            .collect()
+    };
+    assert_eq!(calls(&profile), [(1, 100), (3, 100)]);
+    assert!(
+        profile
+            .lines()
+            .iter()
+            .all(|&(.., time)| time > Duration::ZERO)
+    );
+
+    fixture[99].close += 1.0;
+    study.update(&fixture, 99);
+    settle(&mut study, &fixture);
+    // A layout check builds a study and calculates it on no bars.
+    calculated(&script, &[]);
+    assert_eq!(script.profile().as_ref(), Some(&profile));
+    fixture[0].close += 1.0;
+    study.update(&fixture, 0);
+    settle(&mut study, &fixture);
+    let profile = script
+        .profile()
+        .expect("a profile of the second recalculation");
+    assert_eq!(calls(&profile), [(1, 100), (3, 100)]);
+
+    let unprofiled = compile(source);
+    calculated(&unprofiled, &fixture);
+    assert_eq!(unprofiled.profile(), None);
 }
 
 /// On the web a script runs on the page's thread, whose stack holds the deepest script until the
