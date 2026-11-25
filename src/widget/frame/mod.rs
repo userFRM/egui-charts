@@ -878,6 +878,9 @@ impl Chart {
 
         // Handle keyboard shortcuts
         self.handle_keyboard_shortcuts(ui, &time_response, chart_width, chart_rect.min.x);
+        // The market order keys press the buttons of the frame the user saw; this frame sets
+        // the flag again where it draws them.
+        self.quote_buttons = false;
 
         // Taken after the shortcuts: a key can remove a study and shift the ones after it.
         let study_indices: Vec<_> = self
@@ -3739,6 +3742,9 @@ impl Chart {
                 });
                 #[cfg(not(feature = "ui"))]
                 let last_price = None;
+                self.quote_buttons = self.main_series_visible
+                    && self.config.show_quote_boxes
+                    && rendering::quote_prices(self.quote.as_ref(), last_price).is_some();
                 let mut legend = super::Legend::new(&self.symbol, &timeframe, &bar);
                 let statuses: Vec<_> = self
                     .legend_statuses

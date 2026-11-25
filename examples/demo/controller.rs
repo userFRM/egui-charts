@@ -13566,6 +13566,72 @@ mod tests {
         }
     }
 
+    /// Shift+B and Shift+S open the order ticket for the chart symbol at market, through the
+    /// chart's Buy and Sell buttons, and type nothing.
+    #[test]
+    fn market_order_keys_open_the_ticket_for_the_chart_symbol() {
+        use eframe::App;
+        for (key, letter, side) in [(egui::Key::B, "B", "Buy"), (egui::Key::S, "S", "Sell")] {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = DemoApp::new_at(&cc, "2026-11-12T15:00:00Z".parse().unwrap(), true);
+            app.connect_paper();
+            settle(&mut app, &ctx);
+            let symbol = app.chart.symbol().to_owned();
+            let size = egui::vec2(1440.0, 900.0);
+            let press = vec![
+                egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::SHIFT,
+                },
+                egui::Event::Text(letter.into()),
+            ];
+            let mut send = Vec::new();
+            // A frame without the key, which shows no ticket, then the key and up to three more.
+            for frame in 0..5 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        events: if frame == 1 { press.clone() } else { vec![] },
+                        ..Default::default()
+                    },
+                    |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                );
+                send = output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .filter_map(|(_, node)| {
+                        let label = node.label()?;
+                        (node.role() == egui::accesskit::Role::Button
+                            && label.ends_with(&format!(" {symbol} MKT")))
+                        .then(|| label.to_owned())
+                    })
+                    .collect::<Vec<_>>();
+                output.drop_without_applying_deltas();
+                if frame == 0 {
+                    assert!(send.is_empty(), "{letter}: no ticket before the key");
+                } else if !send.is_empty() {
+                    break;
+                }
+            }
+            // The send button is labelled with its side and order, as in "Buy 1 ES MKT".
+            assert!(
+                send.iter()
+                    .any(|label| label.starts_with(&format!("{side} "))),
+                "{letter}: {send:?}"
+            );
+            assert!(!app.symbol_search.is_open(), "{letter} was not typed");
+        }
+    }
+
     /// A day picked in the dialog is a day on the chart's clock. New York is five hours behind
     /// UTC in November, so its 10 November starts at 05:00 UTC, and the days 9 and 10 November
     /// run from 05:00 UTC on the 9th to 05:00 UTC on the 11th.

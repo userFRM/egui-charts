@@ -421,6 +421,8 @@ pub struct Chart {
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
     quote_action: Option<QuoteSide>,
+    /// Whether the last frame drew the Buy and Sell buttons, which the market order keys press.
+    quote_buttons: bool,
     /// The quote panel's place as shares of its available horizontal and vertical room.
     quote_panel_at: Option<[f32; 2]>,
     server_time_offset: Option<chrono::TimeDelta>,
@@ -805,7 +807,9 @@ impl Chart {
         std::mem::take(&mut self.scale_settings_requested)
     }
 
-    /// Takes the last legend quote click. No order is submitted by the chart.
+    /// Takes the last press of a quote button: a click, or the key of
+    /// [`KeyboardAction::BuyMarket`](crate::config::KeyboardAction::BuyMarket) or `SellMarket`
+    /// while the buttons are drawn. No order is submitted by the chart.
     pub fn take_quote_action(&mut self) -> Option<QuoteSide> {
         self.quote_action.take()
     }
