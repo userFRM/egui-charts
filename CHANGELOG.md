@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `Reply::view_id` and `Sink::view_id` return an opaque `ViewId` for one chart feed attachment, so a feed serving two charts of the same symbol and interval can tie a history reply to its live sink. The id changes with `Chart::set_feed` and is not shared across attachments, but it survives a symbol or interval change: providers still match the request's symbol and interval. ([#4291](https://github.com/userFRM/egui-charts/issues/4291))
+
 - Built-in volume footprints can resume a drained trade replay from an in-memory checkpoint. The checkpoint retains price levels and the forming bar's trade allocation; a different row grouping or an unbounded footprint is refused without changing the destination. ([#3911](https://github.com/userFRM/egui-charts/issues/3911))
 
 - Volume-bar charts driven by a trade replay feed can plan, capture and restore in-memory checkpoints, including a partially filled candle, the execution tape and supported study inputs. The host controls the recording cursor and cache budget. ([#3724](https://github.com/userFRM/egui-charts/issues/3724))
