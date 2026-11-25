@@ -4,8 +4,8 @@ use crate::chart::rendering;
 use crate::data::FeedState;
 use crate::model::{
     AreaStyle, Bar, BarsStyle, BaselineStyle, ChartType, ChartTypeParams, ChartTypeStyles,
-    LastPriceAnimation, LinePlotStyle, LineStyle, Marker, MarkerOptions, PriceLine, SeriesScale,
-    SeriesStyle, Timeframe,
+    ColumnsStyle, LastPriceAnimation, LinePlotStyle, LineStyle, Marker, MarkerOptions, PriceLine,
+    SeriesScale, SeriesStyle, Timeframe,
 };
 use crate::scales::StudyFormat;
 use crate::scales::{PriceMap, PriceScale, PriceScaleMode};
@@ -253,6 +253,11 @@ impl SeriesOptions {
                 ..Default::default()
             },
             bars: self.bars_style.clone(),
+            columns: ColumnsStyle {
+                up_color: self.up_color,
+                down_color: self.down_color,
+                ..Default::default()
+            },
             high_low: crate::model::HighLowStyle {
                 bar_color: self.color,
                 labels_visible: false,

@@ -98,6 +98,23 @@ pub(crate) fn follow_candle_colors(
             *down = new.bearish_color;
         }
     }
+    // So do the Columns colours, each keeping its opacity.
+    let style = &mut styles.columns;
+    for (color, side) in [
+        (
+            &mut style.up_color,
+            (|config| config.bullish_color) as fn(&ChartConfig) -> egui::Color32,
+        ),
+        (&mut style.down_color, |config| config.bearish_color),
+    ] {
+        let alpha = color.a();
+        if old
+            .iter()
+            .any(|old| *color == HlcAreaStyle::fill_tint(side(old), alpha))
+        {
+            *color = HlcAreaStyle::fill_tint(side(new), alpha);
+        }
+    }
     // So do the HLC area's high and low lines and fills; a fill keeps its opacity.
     let style = &mut styles.hlc_area;
     for (line, fill, side) in [

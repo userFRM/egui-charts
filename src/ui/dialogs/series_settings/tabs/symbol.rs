@@ -173,6 +173,18 @@ impl SymbolTab {
                         candles,
                     );
                 }
+                ChartType::Columns => {
+                    let candles = [settings.bullish_color, settings.bearish_color];
+                    let style = &mut styles.columns;
+                    Self::own_color_rows(
+                        ui,
+                        [
+                            ("Rising column colour", &mut style.up_color),
+                            ("Falling column colour", &mut style.down_color),
+                        ],
+                        candles,
+                    );
+                }
                 ChartType::Renko => {
                     Self::candle_colors_section(ui, settings);
                     let body = [settings.bullish_color, settings.bearish_color];
@@ -1505,15 +1517,7 @@ impl SymbolTab {
     }
 
     fn candle_colors_section(ui: &mut Ui, settings: &mut SeriesSettings) {
-        let columns = settings.chart_type == ChartType::Columns;
-        ui.label(l10n::text(
-            ui.ctx(),
-            if columns {
-                "Up and down colors"
-            } else {
-                "Body"
-            },
-        ));
+        ui.label(l10n::text(ui.ctx(), "Body"));
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             Self::color_picker(ui, &mut settings.bullish_color);
@@ -1521,8 +1525,7 @@ impl SymbolTab {
         });
         ui.end_row();
 
-        // A column is one filled rectangle, so it has no border or wick.
-        if settings.chart_type.is_time_independent() || columns {
+        if settings.chart_type.is_time_independent() {
             return;
         }
 

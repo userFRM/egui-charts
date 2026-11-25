@@ -340,8 +340,14 @@ pub fn render_chart_type(
                 params.volume_width(),
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
-                params.bearish_color(),
+                crate::model::or_candle(
+                    params.type_params.styles.columns.up_color,
+                    params.bullish_color(),
+                ),
+                crate::model::or_candle(
+                    params.type_params.styles.columns.down_color,
+                    params.bearish_color(),
+                ),
                 params.type_params.columns_base,
                 params.type_params.styles.columns.price_source,
             );

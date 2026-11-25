@@ -1733,6 +1733,7 @@ mod tests {
                 "Color bars based on previous close",
             ),
             (ChartType::Bars, "Up and down colors"),
+            (ChartType::Columns, "Rising column colour"),
             (ChartType::Line, "Line width"),
             (ChartType::Baseline, "Base level"),
             (ChartType::Renko, "Size method"),

@@ -1217,9 +1217,10 @@ mod tests {
     }
 
     /// Bars colour by their own open or the previous close, and columns reach the selected price
-    /// while their colour still compares closes, through the dialog and the painter after
-    /// acceptance only, in both themes. Undo and saved charts keep these values apart from the
-    /// candle and line settings.
+    /// in their own colours while their colour still compares closes, through the dialog and the
+    /// painter after acceptance only, in both themes. Undo and saved charts keep these values
+    /// apart from the candle and line settings, and a layout saved before columns had colours
+    /// draws them in its candle body colours.
     #[test]
     fn bars_and_columns_dialog_edits_reach_the_painter_and_keep_independent_saved_values() {
         use crate::model::{BarsStyle, ColumnsStyle, PriceSource};
@@ -1227,6 +1228,9 @@ mod tests {
         use egui::Color32;
 
         let (up, down) = (Color32::from_rgb(1, 100, 2), Color32::from_rgb(101, 2, 3));
+        // The default column colours, rgb(8, 153, 129) and rgb(242, 54, 69) at 50% opacity.
+        const COLUMN_UP: Color32 = Color32::from_rgba_premultiplied(4, 77, 65, 128);
+        const COLUMN_DOWN: Color32 = Color32::from_rgba_premultiplied(121, 27, 35, 128);
         let chart_of = |kind, bars: &[(f64, f64, f64, f64)]| {
             let mut chart = Chart::new(BarData::from_bars(
                 bars.iter()
@@ -1365,30 +1369,38 @@ mod tests {
                     crate::theme::apply_to_egui(&ctx, &theme);
                     let mut chart = chart_of(ChartType::Columns, &columns);
                     edit(&ctx, &mut chart, &theme, &["Close", source.label()], accept);
-                    let expected = ColumnsStyle {
-                        price_source: if accept { source } else { PriceSource::Close },
-                    };
+                    let mut expected = ColumnsStyle::default();
+                    if accept {
+                        expected.price_source = source;
+                    }
                     let prices = if accept { prices } else { [14.0, 12.0] };
                     assert_eq!(chart.chart_type_params().styles.columns, expected);
-                    assert_eq!(chart.config().price_source, PriceSource::OHLC4);
-                    let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0, vec![]);
-                    let plot = chart.get_rendered_price_rect();
+                    let config = chart.config();
+                    assert_eq!(config.price_source, PriceSource::OHLC4);
+                    assert_eq!((config.bullish_color, config.bearish_color), (up, down));
+                    // The columns of `chart` filled in one of `colours`, as (fill, top).
+                    let columns_of = |chart: &mut Chart, colours: [Color32; 2]| {
+                        let painted = crate::widget::test_frames::shapes(&ctx, chart, 1.0, vec![]);
+                        let plot = chart.get_rendered_price_rect();
+                        painted
+                            .iter()
+                            .filter_map(|s| match s {
+                                Shape::Rect(r)
+                                    if plot.contains(r.rect.center())
+                                        && colours.contains(&r.fill) =>
+                                {
+                                    Some((r.fill, r.rect.top()))
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    let drawn = columns_of(&mut chart, [COLUMN_UP, COLUMN_DOWN]);
                     let mapping = chart.get_chart_mapping();
-                    let drawn: Vec<_> = painted
-                        .iter()
-                        .filter_map(|s| match s {
-                            Shape::Rect(r)
-                                if plot.contains(r.rect.center())
-                                    && [up, down].contains(&r.fill) =>
-                            {
-                                Some((r.fill, r.rect.top()))
-                            }
-                            _ => None,
-                        })
-                        .collect();
                     assert_eq!(drawn.len(), 2, "{source:?}");
-                    for ((fill, top), (colour, price)) in
-                        drawn.into_iter().zip([up, down].into_iter().zip(prices))
+                    for ((fill, top), (colour, price)) in drawn
+                        .into_iter()
+                        .zip([COLUMN_UP, COLUMN_DOWN].into_iter().zip(prices))
                     {
                         assert_eq!(fill, colour);
                         assert!((top - mapping.price_to_y(price)).abs() < 0.01, "{source:?}");
@@ -1406,6 +1418,22 @@ mod tests {
                         assert!(chart.redo());
                         chart.restore(&saved).unwrap();
                         assert_eq!(chart.chart_type_params().styles.columns, expected);
+
+                        // The entry as saved before its colours.
+                        let mut former = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+                        for params in ["/chart_type_params", "/settings/chart_type_params"] {
+                            former.pointer_mut(params).unwrap()["styles"]["columns"] =
+                                serde_json::json!({ "price_source": source });
+                        }
+                        let former: ChartSnapshot = serde_json::from_value(former).unwrap();
+                        let mut restored = chart_of(ChartType::Columns, &columns);
+                        restored.restore(&former).unwrap();
+                        crate::widget::test_frames::frame(&ctx, &mut restored, 1.0, vec![]);
+                        let fills: Vec<_> = columns_of(&mut restored, [up, down])
+                            .into_iter()
+                            .map(|(fill, _)| fill)
+                            .collect();
+                        assert_eq!(fills, [up, down], "{source:?}");
                     }
                 }
             }
@@ -1869,73 +1897,100 @@ mod tests {
         }
     }
 
-    /// Choosing a palette colour for an HLC area fill keeps the fill's opacity, which has no
-    /// control of its own. Expected: white at the seeded alpha of 51.
+    /// Choosing a palette colour for an HLC area fill or a column colour keeps its opacity, which
+    /// has no control of its own, and leaves the other colours alone. Expected: white at the seeded alpha.
     #[test]
-    fn palette_colour_keeps_the_hlc_fill_opacity() {
-        use crate::model::{ChartTypeParams, HlcAreaStyle, LinePlotStyle};
+    fn palette_colour_keeps_the_fill_and_column_opacity() {
+        use crate::model::{ChartTypeParams, ChartTypeStyles, HlcAreaStyle, LinePlotStyle};
         use egui::accesskit::Role;
         use egui::{Color32, Vec2};
         use egui_kittest::{Harness, kittest::Queryable};
 
-        let line = |r| LinePlotStyle {
-            color: Color32::from_rgb(r, 2, 3),
-            ..Default::default()
-        };
-        let fill = Color32::from_rgba_unmultiplied(0, 50, 200, 51);
-        let mut params = ChartTypeParams::default();
-        params.styles.hlc_area = HlcAreaStyle {
-            high_line: line(101),
-            low_line: line(102),
-            close_line: line(103),
-            high_to_close_fill: fill,
-            close_to_low_fill: Color32::from_rgba_unmultiplied(200, 50, 0, 51),
-            ..Default::default()
-        };
-        let mut dialog = SettingsDialog::new();
-        dialog.set_control_visible(crate::ui::Control::Templates, false);
-        dialog.open(ChartSettingsState {
-            chart_type: ChartType::HlcArea,
-            chart_type_params: Some(params),
-            ..Default::default()
-        });
-        let theme = Theme::light();
-        let setup_theme = theme.clone();
-        let mut harness = Harness::builder()
-            .with_context_setup(move |ctx| {
-                egui_extras::install_image_loaders(ctx);
-                crate::theme::apply_to_egui(ctx, &setup_theme);
-            })
-            .with_size(Vec2::new(1440.0, 900.0))
-            .build_ui_state(
-                move |ui, (dialog, accepted): &mut (SettingsDialog, _)| {
-                    if let SettingsAction::Apply(settings) = dialog.show(ui.ctx(), &theme) {
-                        *accepted = Some(settings);
-                    }
+        // Chart type, seeded colours, the well to click by its colour, the colour it edits and
+        // that colour afterwards.
+        type Row = (
+            ChartType,
+            fn(&mut ChartTypeStyles),
+            &'static str,
+            fn(&ChartTypeStyles) -> Color32,
+            [u8; 4],
+        );
+        let rows: [Row; 2] = [
+            (
+                ChartType::HlcArea,
+                |styles| {
+                    let line = |r| LinePlotStyle {
+                        color: Color32::from_rgb(r, 2, 3),
+                        ..Default::default()
+                    };
+                    styles.hlc_area = HlcAreaStyle {
+                        high_line: line(101),
+                        low_line: line(102),
+                        close_line: line(103),
+                        high_to_close_fill: Color32::from_rgba_unmultiplied(0, 50, 200, 51),
+                        close_to_low_fill: Color32::from_rgba_unmultiplied(200, 50, 0, 51),
+                        ..Default::default()
+                    };
                 },
-                (dialog, None),
+                "#0032C8",
+                |styles| styles.hlc_area.high_to_close_fill,
+                [255, 255, 255, 51],
+            ),
+            (
+                ChartType::Columns,
+                |styles| {
+                    styles.columns.up_color = Color32::from_rgba_unmultiplied(0, 50, 100, 128);
+                    styles.columns.down_color = Color32::from_rgba_unmultiplied(100, 50, 0, 128);
+                },
+                "#003264",
+                |styles| styles.columns.up_color,
+                [255, 255, 255, 128],
+            ),
+        ];
+        for (chart_type, seed, well, read, expected) in rows {
+            let mut params = ChartTypeParams::default();
+            seed(&mut params.styles);
+            let mut dialog = SettingsDialog::new();
+            dialog.set_control_visible(crate::ui::Control::Templates, false);
+            dialog.open(ChartSettingsState {
+                chart_type,
+                chart_type_params: Some(params),
+                ..Default::default()
+            });
+            let theme = Theme::light();
+            let setup_theme = theme.clone();
+            let mut harness = Harness::builder()
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &setup_theme);
+                })
+                .with_size(Vec2::new(1440.0, 900.0))
+                .build_ui_state(
+                    move |ui, (dialog, accepted): &mut (SettingsDialog, _)| {
+                        if let SettingsAction::Apply(settings) = dialog.show(ui.ctx(), &theme) {
+                            *accepted = Some(settings);
+                        }
+                    },
+                    (dialog, None),
+                );
+            harness.run();
+            harness.get_by_role_and_label(Role::ColorWell, well).click();
+            harness.run();
+            harness
+                .get_by_role_and_label(Role::ColorWell, "#FFFFFF")
+                .click();
+            harness.run();
+            harness.get_by_label("Ok").click();
+            harness.run();
+            let (_, accepted) = harness.state();
+            let accepted: &ChartSettingsState = accepted.as_ref().expect("accepted");
+            let styles = &accepted.chart_type_params.as_ref().unwrap().styles;
+            assert_eq!(
+                read(styles).to_srgba_unmultiplied(),
+                expected,
+                "{chart_type:?}"
             );
-        harness.run();
-        harness
-            .get_by_role_and_label(Role::ColorWell, "#0032C8")
-            .click();
-        harness.run();
-        harness
-            .get_by_role_and_label(Role::ColorWell, "#FFFFFF")
-            .click();
-        harness.run();
-        harness.get_by_label("Ok").click();
-        harness.run();
-        let (_, accepted) = harness.state();
-        let accepted: &ChartSettingsState = accepted.as_ref().expect("accepted");
-        let picked = accepted
-            .chart_type_params
-            .as_ref()
-            .unwrap()
-            .styles
-            .hlc_area
-            .high_to_close_fill;
-        assert_eq!(picked.to_srgba_unmultiplied(), [255, 255, 255, 51]);
+        }
     }
 
     /// Every footprint edit is staged until Ok; Cancel leaves the opening settings intact.

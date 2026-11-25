@@ -1810,6 +1810,10 @@ mod tests {
                 older_expected.styles.point_figure.up_color,
                 older_expected.styles.point_figure.down_color,
             ] = placeholder;
+            [
+                older_expected.styles.columns.up_color,
+                older_expected.styles.columns.down_color,
+            ] = placeholder;
             for (json, expected) in [
                 (legacy.to_string(), expected),
                 (older.to_owned(), older_expected),
