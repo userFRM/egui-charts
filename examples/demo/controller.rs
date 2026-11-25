@@ -10211,30 +10211,54 @@ mod tests {
             );
         }
 
+        // With the replay bar shown its keys step and play, and the chart keeps its own: the jump
+        // keys, which hold Alt beside the replay's Shift and arrow, and the list keys below.
         app.start_replay();
         app.handle_replay_control(ReplayControlAction::Pause);
         settle(&mut app, &ctx);
-        let before = app.replay.as_ref().unwrap().state.curr_bar;
-        for (key, modifiers, offset, playing) in [
-            (Key::ArrowRight, Modifiers::NONE, 1, false),
-            (Key::ArrowLeft, Modifiers::NONE, 0, false),
-            (Key::Space, Modifiers::NONE, 0, true),
-            (Key::Space, Modifiers::SHIFT, 0, false),
+        let jump = Modifiers::ALT | Modifiers::SHIFT;
+        // The cursor's move, unchecked while the replay plays, and whether it plays afterwards.
+        for (key, modifiers, moved, playing) in [
+            (Key::ArrowRight, Modifiers::NONE, Some(1), false),
+            (Key::ArrowLeft, Modifiers::NONE, Some(-1), false),
+            (Key::ArrowDown, Modifiers::SHIFT, None, true),
+            (Key::ArrowDown, Modifiers::SHIFT, None, false),
+            (Key::ArrowRight, jump, Some(0), false),
+            (Key::ArrowLeft, jump, Some(0), false),
+            (Key::ArrowRight, Modifiers::SHIFT, Some(1), false),
         ] {
+            let before = app.replay.as_ref().unwrap().state.curr_bar;
             press(&mut app, key, modifiers);
             assert_eq!(app.chart.symbol(), "STOCKA");
             let replay = app.replay.as_ref().unwrap();
-            if key != Key::Space {
-                assert_eq!(replay.state.curr_bar, before + offset);
+            if let Some(moved) = moved {
+                assert_eq!(
+                    replay.state.curr_bar as isize - before as isize,
+                    moved,
+                    "{key:?} / {modifiers:?}"
+                );
             }
-            assert_eq!(replay.state.is_playing(), playing);
+            assert_eq!(
+                replay.state.is_playing(),
+                playing,
+                "{key:?} / {modifiers:?}"
+            );
         }
-        press(&mut app, Key::ArrowDown, Modifiers::NONE);
-        assert_eq!(app.chart.symbol(), "STOCKB");
-        assert!(
-            app.replay.is_none(),
-            "a symbol change exits replay as a row click does"
-        );
+        // The list keys flip the list beside the replay bar too. A symbol change exits replay as
+        // a row click does.
+        for (key, modifiers, symbol) in [
+            (Key::Space, Modifiers::NONE, "STOCKB"),
+            (Key::Space, Modifiers::SHIFT, "STOCKA"),
+            (Key::ArrowDown, Modifiers::NONE, "STOCKB"),
+        ] {
+            settle(&mut app, &ctx);
+            app.start_replay();
+            settle(&mut app, &ctx);
+            assert!(app.replay.is_some() && app.replay_control.is_visible());
+            press(&mut app, key, modifiers);
+            assert_eq!(app.chart.symbol(), symbol, "{key:?} / {modifiers:?}");
+            assert!(app.replay.is_none(), "{key:?} / {modifiers:?}");
+        }
     }
 
     #[test]
