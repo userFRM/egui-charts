@@ -872,5 +872,25 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(shown);
+
+        // Examples opens a bundled script, drawn with its declarations coloured apart from names.
+        let (title, example) = egui_charts_scripting::examples()[1];
+        click(&mut app, &ctx, "Examples");
+        click(&mut app, &ctx, title);
+        assert_eq!(app.sample_study.editor.text(), example);
+        let shapes = frame(&mut app, &ctx, Vec::new());
+        let drawn = (shapes.iter())
+            .find(|shape| shape.galley.text() == example)
+            .expect("the example is drawn");
+        let colour_at = |word: &str| {
+            let at = example.find(word).unwrap();
+            let mut sections = drawn.galley.job.sections.iter();
+            sections
+                .find(|section| {
+                    (section.byte_range.start.0..section.byte_range.end.0).contains(&at)
+                })
+                .map(|section| section.format.color)
+        };
+        assert_ne!(colour_at("input fast"), colour_at("fast ="));
     }
 }
