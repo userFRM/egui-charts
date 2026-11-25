@@ -247,7 +247,7 @@ impl TpoMenu {
             TpoOwner::ChartType
                 if chart.chart_type() != ChartType::TimePriceOpportunity
                     || chart.chart_type_params() != &self.params
-                    || chart.profile_clock() != self.clock =>
+                    || chart.tpo_chart_division().0 != self.clock =>
             {
                 return;
             }
@@ -309,10 +309,18 @@ impl TpoMenu {
             TpoOwner::Study(id) => {
                 if let Some(study) = chart.indicator_mut(id) {
                     let settings = study.settings();
-                    let _ = study.apply_settings(
-                        &TimePriceOpportunity::profile_edit_inputs(&composites, &splits),
-                        settings,
-                    );
+                    // Record the period length and row size the edits are made for.
+                    let inputs = study.inputs();
+                    let length = |id: &str| {
+                        inputs.iter().find_map(|input| match input.value {
+                            crate::studies::InputValue::Length(n) if input.id == id => Some(n),
+                            _ => None,
+                        })
+                    };
+                    let made_for = length("period").zip(length("row_ticks"));
+                    let edits =
+                        TimePriceOpportunity::profile_edit_inputs(made_for, &composites, &splits);
+                    let _ = study.apply_settings(&edits, settings);
                 }
             }
         }

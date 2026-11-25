@@ -184,6 +184,15 @@ impl Indicator for BookerReversal {
         }
     }
 
+    fn plot_shape_side(&self, line: usize) -> crate::studies::ShapeSide {
+        // The buy output holds the bar's low, the sell one its high.
+        if line == 0 {
+            crate::studies::ShapeSide::Below
+        } else {
+            crate::studies::ShapeSide::Above
+        }
+    }
+
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
