@@ -3,14 +3,16 @@
 //! UI thread.
 
 use crate::runtime::data::{self, History, Patch};
+use crate::runtime::drawings::{self, Drawings};
+use crate::runtime::program::DrawingCalls;
 use crate::runtime::worker::{Poll, Runner};
 use crate::runtime::{Outcome, Request, RunState};
 use crate::{Script, ScriptError};
 use ecolor::Color32;
 use egui_charts::model::Bar;
 use egui_charts::studies::{
-    Calculation, CustomIndicator, IndicatorValues, InputValue, Resume, ResumeRun, StudyData,
-    StudyFill, StudyInput, palette,
+    Calculation, CustomIndicator, IndicatorMarker, IndicatorValues, InputValue, Resume, ResumeRun,
+    StudyData, StudyFill, StudyInput, StudyLabel, StudySegment, StudyZone, palette,
 };
 use std::time::Duration;
 
@@ -161,6 +163,11 @@ struct ScriptState {
     /// The alert conditions of the bars calculated, one row of every condition per bar: NaN where
     /// no call stored one, else 1 or 0.
     conditions: Vec<f64>,
+    /// The colours of the bars calculated, one row of every plot coloured by an expression per
+    /// bar, as [`drawings::encode`] writes them.
+    colors: Vec<f64>,
+    /// The drawings of the bars calculated.
+    drawings: Drawings,
 }
 
 /// A history as the chart supplied it last.
@@ -238,6 +245,8 @@ impl ScriptState {
             reset: true,
             last: None,
             conditions: Vec::new(),
+            colors: Vec::new(),
+            drawings: Drawings::default(),
         }
     }
 
@@ -302,13 +311,17 @@ impl ScriptState {
                 let spec = &self.script.compiled.spec;
                 let (plots, alerts) = (spec.plots.len(), spec.alerts.len());
                 self.conditions.truncate(outcome.start * alerts);
-                let width = plots + alerts;
+                self.colors.truncate(outcome.start * spec.coloured());
+                let width = spec.width();
                 // A script without a plot, as a strategy may be, still keeps a row per bar.
                 for bar in 0..outcome.bars {
                     let row = &outcome.rows[bar * width..][..width];
                     values.push_lines(&row[..plots]);
-                    self.conditions.extend_from_slice(&row[plots..]);
+                    self.conditions
+                        .extend_from_slice(&row[plots..plots + alerts]);
+                    self.colors.extend_from_slice(&row[plots + alerts..]);
                 }
+                self.drawings.replace(outcome.start, outcome.drawn);
                 match outcome.error {
                     Some(error) => *last_error = Some(error),
                     None if outcome.start == 0 => {
@@ -344,10 +357,12 @@ impl ScriptState {
 impl Clone for ScriptState {
     /// A clone keeps the script and starts its own calculation from bar 0 on its first call;
     /// the study it belongs to keeps drawing the values cloned with it until then, and answers
-    /// its alert conditions from them.
+    /// its alert conditions, colours and drawings from them.
     fn clone(&self) -> Self {
         Self {
             conditions: self.conditions.clone(),
+            colors: self.colors.clone(),
+            drawings: self.drawings.clone(),
             ..Self::new(&self.script)
         }
     }
@@ -371,7 +386,7 @@ impl Resume for ScriptState {
             match runner.poll() {
                 Poll::Running(done) => return Calculation::Running(done),
                 Poll::Done(outcome) => {
-                    let calculation = self.install(outcome, values);
+                    let calculation = self.install(*outcome, values);
                     if self.changed.is_none() {
                         return calculation;
                     }
@@ -414,7 +429,7 @@ impl Resume for ScriptState {
         let runner = self.runner.as_mut().expect("the runner was started above");
         match runner.send(request) {
             Poll::Running(done) => Calculation::Running(done),
-            Poll::Done(outcome) => self.install(outcome, values),
+            Poll::Done(outcome) => self.install(*outcome, values),
         }
     }
 
@@ -431,6 +446,38 @@ impl Resume for ScriptState {
             .conditions
             .get(bar.checked_mul(alerts)?.checked_add(condition)?)?;
         (!value.is_nan()).then_some(value != 0.0)
+    }
+
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        let spec = &self.script.compiled.spec;
+        let (_, column) = spec.plots.get(line)?.dynamic?;
+        let at = bar.checked_mul(spec.coloured())?.checked_add(column)?;
+        drawings::decode(*self.colors.get(at)?)
+    }
+
+    fn labels(&self) -> &[StudyLabel] {
+        self.drawings.labels()
+    }
+
+    fn price_segments(&self) -> &[StudySegment] {
+        self.drawings.segments()
+    }
+
+    fn zones(&self) -> &[StudyZone] {
+        self.drawings.zones()
+    }
+
+    fn markers(&self) -> &[IndicatorMarker] {
+        self.drawings.markers()
+    }
+
+    fn draws_only_plots(&self) -> bool {
+        self.script.compiled.spec.calls == DrawingCalls::default()
+    }
+
+    fn draws_on_other_bars(&self) -> bool {
+        let calls = self.script.compiled.spec.calls;
+        !calls.labels && !calls.segments
     }
 }
 
