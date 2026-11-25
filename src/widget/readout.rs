@@ -40,6 +40,37 @@ impl Chart {
             .collect()
     }
 
+    /// What the table writes its price cells with besides their values: the thousands
+    /// separator, the display format of the main series and of each visible added series, and
+    /// the host's price formatters by address. The table is current while this is unchanged too.
+    #[cfg(feature = "ui")]
+    pub(crate) fn data_table_format(
+        &self,
+    ) -> (
+        Option<char>,
+        Vec<Option<crate::model::SeriesDisplayFormat>>,
+        Vec<usize>,
+    ) {
+        (
+            self.config.thousands_sep,
+            std::iter::once(SeriesId::MAIN)
+                .chain(
+                    self.price_series
+                        .iter()
+                        .filter(|item| item.visible)
+                        .map(|item| item.id),
+                )
+                .map(|id| self.display_format(id))
+                .collect(),
+            self.price_formatter
+                .iter()
+                .chain(self.series_formatters.values())
+                .chain(self.study_formatters.values())
+                .map(|formatter| std::sync::Arc::as_ptr(formatter).cast::<()>().addr())
+                .collect(),
+        )
+    }
+
     /// Tells this chart from the others a host shows one data table over, through a restore of
     /// its saved state, which adds its studies again under new ids.
     #[cfg(feature = "ui")]

@@ -533,7 +533,8 @@ pub struct CustomProfileSessions {
     /// Whether shared hours get their own profile or stay in both sessions.
     pub overlap: SessionOverlap,
     /// Clip to the instrument's regular hours, including its nontrading days. Without instrument
-    /// hours, keep every bar. Periods count from the later of the custom and regular opens.
+    /// hours, keep every bar. TPO periods stay on the period grid of the regular hours, starting
+    /// with the first that opens at or after the later of the custom and regular opens.
     pub trading_hours_only: bool,
 }
 
@@ -618,6 +619,13 @@ impl CustomProfileSessions {
 
     /// Divide `range` on each window's clock, then share or cut overlaps. With `hours_only` off
     /// and no clipping, retain each whole trading date, as the other session choices do.
+    ///
+    /// `block` is the length of TPO periods: with `hours_only`, each window's part then keeps
+    /// whole periods on their grid, which is that of the regular hours when clipping to them, or
+    /// else whole periods from midnight in the window's zone. The part starts with the first
+    /// period that opens at or after the window's open (or the later regular open), and its open
+    /// is that period's; its last period opened inside the hours and keeps its bars past their
+    /// end, up to the window's next open. A window in which no period opens has no part.
     pub(crate) fn parts(
         &self,
         bars: &[super::Bar],
@@ -625,6 +633,7 @@ impl CustomProfileSessions {
         interval: super::Timeframe,
         regular: Option<&super::BarClock>,
         hours_only: bool,
+        block: Option<super::Timeframe>,
     ) -> Vec<CustomPart> {
         use super::SessionProvider;
         use chrono::Weekday::*;
@@ -641,7 +650,7 @@ impl CustomProfileSessions {
                 custom.end,
             );
             let clock = super::BarClock::new(interval).with_session(
-                zone,
+                zone.clone(),
                 super::Session::new([window]),
                 false,
             );
@@ -656,7 +665,7 @@ impl CustomProfileSessions {
                     provider.is_open(bars[i].time, true)
                         && regular.is_none_or(|r| r.is_open(bars[i].time))
                 });
-                let kept = if !hours_only && regular.is_none() {
+                let mut kept = if !hours_only && regular.is_none() {
                     day[0]..day[1]
                 } else {
                     let Some(first) = inside.next() else { continue };
@@ -670,6 +679,46 @@ impl CustomProfileSessions {
                 if let Some(regular) = regular.and_then(|r| r.sessions().session_open(time, false))
                 {
                     open = open.max(regular);
+                }
+                if let Some(period) = block.filter(|p| hours_only && p.duration_ms() > 0) {
+                    // The regular hours' grid when clipped to them; a day-long period opens at
+                    // midnight either way, so it takes the window zone's midnight.
+                    let grid = match regular {
+                        Some(regular)
+                            if period.duration_ms() < super::Timeframe::Day1.duration_ms() =>
+                        {
+                            regular.for_timeframe(period)
+                        }
+                        _ => super::BarClock::new(period).with_timezone(zone.clone()),
+                    };
+                    // A period that opens before the hours is left out.
+                    let start = grid.bar_open(open);
+                    open = if start < open {
+                        let Some(next) = grid.next_open(start) else {
+                            continue;
+                        };
+                        next
+                    } else {
+                        start
+                    };
+                    kept.start += bars[kept.clone()].partition_point(|bar| bar.time < open);
+                    if kept.is_empty() {
+                        continue;
+                    }
+                    // The last period opened inside the hours: it keeps its bars past their end,
+                    // up to the window's next open, so two days never share a bar.
+                    let length = period.duration_ms();
+                    let elapsed = (bars[kept.end - 1].time - open).num_milliseconds();
+                    let close = open
+                        .checked_add_signed(chrono::TimeDelta::milliseconds(
+                            (elapsed / length + 1).saturating_mul(length),
+                        ))
+                        .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC);
+                    kept.end += (kept.end..day[1])
+                        .take_while(|&i| {
+                            bars[i].time < close && regular.is_none_or(|r| r.is_open(bars[i].time))
+                        })
+                        .count();
                 }
                 parts.push(CustomPart {
                     bars: kept,
@@ -1269,8 +1318,9 @@ pub struct ChartTypeParams {
     /// TPO: the hours of one-day profiles, chosen as for session volume profiles: the chart's
     /// hours by default, only the regular, extended, pre-market or post-market hours, each
     /// segment of the day, or up to five custom windows. A profile keeps only the bars of its
-    /// hours and counts its periods from their open. Week and month profiles keep the chart's
-    /// hours.
+    /// hours and counts its periods from their open; custom hours keep whole periods on their
+    /// grid, as [`to_tpo_profiles`](super::to_tpo_profiles) describes. Week and month profiles
+    /// keep the chart's hours.
     pub tpo_session: ProfileSession,
     /// TPO: highlight the rows touched by a single period.
     pub tpo_single_prints: bool,
@@ -2085,6 +2135,7 @@ mod tests {
                     crate::model::Timeframe::Hour1,
                     None,
                     true,
+                    None,
                 )
                 .iter()
                 .map(|p| (p.bars.clone(), 8 + (p.open - start).num_hours()))
@@ -2098,7 +2149,8 @@ mod tests {
                         0..bars.len(),
                         crate::model::Timeframe::Hour1,
                         None,
-                        true
+                        true,
+                        None
                     )
                     .len(),
                 if overlap == SessionOverlap::InBoth {
@@ -2120,7 +2172,8 @@ mod tests {
                     0..bars.len(),
                     crate::model::Timeframe::Hour1,
                     None,
-                    true
+                    true,
+                    None
                 )
                 .len(),
             5
@@ -2133,7 +2186,8 @@ mod tests {
                     0..bars.len(),
                     crate::model::Timeframe::Hour1,
                     None,
-                    true
+                    true,
+                    None
                 )
                 .is_empty()
         );
@@ -2146,7 +2200,8 @@ mod tests {
                 0..bars.len(),
                 crate::model::Timeframe::Hour1,
                 None,
-                true
+                true,
+                None
             )[0]
             .bars,
             0..10
