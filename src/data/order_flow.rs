@@ -1295,10 +1295,8 @@ impl OrderFlowInput {
                     state.instant.lost_until = Some(first);
                     let open = clock.instant_open(first);
                     state.cut = open.checked_sub_signed(TimeDelta::nanoseconds(1));
-                    if clock.instant_start(first) < first {
-                        // Adding subsequent fills preserves an unknown total in this bar only.
-                        state.bars.insert(open, ([f64::NAN; 3], 0));
-                    }
+                    // A page can split a timestamp even at the candle open.
+                    state.bars.insert(open, ([f64::NAN; 3], 0));
                 }
             }
             let rebuilt = run.is_some();

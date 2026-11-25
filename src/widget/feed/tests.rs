@@ -826,10 +826,18 @@ fn time_bar_trade_rate_requires_coverage_for_each_output() {
     use crate::data::OrderFlowKind;
     use crate::studies::OrderFlowStudy;
 
-    let start = bars(1)[0].time;
+    let start = "2025-01-01T00:01:00Z".parse::<DateTime<Utc>>().unwrap();
     let fill = |ts, id| Tick::new(ts, 100.0, 1.0, None).with_id(id);
     let candle = |open, volume| Bar::new(open, 100.0, 100.0, 100.0, 100.0, volume);
-    for (complete, capped) in [(true, false), (false, true), (false, false)] {
+    let ordinary = &[(5, 1), (15, 2)][..];
+    let tied_open = &[(0, 10), (0, 11), (30, 12)][..];
+    for (fills, held, complete) in [
+        (ordinary, 2, true),
+        (ordinary, TRADE_CAPACITY, false),
+        (ordinary, 2, false),
+        (tied_open, 2, false),
+        (tied_open, 3, true),
+    ] {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
         chart.set_timeframe(Timeframe::Min1);
@@ -844,12 +852,15 @@ fn time_bar_trade_rate_requires_coverage_for_each_output() {
             .send(Ok(Instrument::new("A").with_tick_size(1.0)));
         frames.run(&mut chart);
 
-        let mut candles = vec![candle(start, 2.0)];
-        let mut tape = Vec::with_capacity(if capped { TRADE_CAPACITY } else { 2 });
-        if !capped {
-            tape.push(fill(start + TimeDelta::seconds(5), 1));
-        }
-        tape.push(fill(start + TimeDelta::seconds(15), 2));
+        let capped = held == TRADE_CAPACITY;
+        let mut candles = vec![candle(start, fills.len() as f64)];
+        let mut tape = Vec::with_capacity(held);
+        let in_first = if capped { 1 } else { held };
+        tape.extend(
+            fills[fills.len() - in_first..]
+                .iter()
+                .map(|&(secs, id)| fill(start + TimeDelta::seconds(secs), id)),
+        );
         let later = TRADE_CAPACITY - 1;
         if capped {
             let next = start + TimeDelta::minutes(1);
@@ -871,7 +882,8 @@ fn time_bar_trade_rate_requires_coverage_for_each_output() {
             let study = chart.indicators().find(|(id, _)| *id == rate).unwrap().1;
             [0, 1, 2].map(|line| study.values().value(line, i))
         };
-        let full = [Some(2.0), Some(2.0 / 60.0), Some(0.1)];
+        let total = fills.len() as f64;
+        let full = [Some(total), Some(total / 60.0), Some(0.1)];
         if complete {
             assert_eq!(row(&chart, 0), full);
         } else if capped {
@@ -882,14 +894,16 @@ fn time_bar_trade_rate_requires_coverage_for_each_output() {
             );
             assert_eq!(chart.trades(SeriesId::MAIN).count(), TRADE_CAPACITY);
         } else {
-            // (05,15] is known without the rest of the minute. An empty terminal page then
-            // proves that the very same two prints were the whole history.
+            // The 10-second window is covered even if an opening fill is missing.
             assert_eq!(row(&chart, 0), [None, None, Some(0.1)]);
-            send(Vec::new(), true);
-            for _ in 0..3 {
-                frames.run(&mut chart);
+            if held == fills.len() {
+                // An empty terminal page proves these were the whole history.
+                send(Vec::new(), true);
+                for _ in 0..3 {
+                    frames.run(&mut chart);
+                }
+                assert_eq!(row(&chart, 0), full);
             }
-            assert_eq!(row(&chart, 0), full);
         }
     }
 }

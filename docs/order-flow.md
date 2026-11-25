@@ -380,9 +380,10 @@ exceeds the upper one, the low check takes priority. The regime is a legend-only
 available to study alerts; a host formatter or an explicit precision override can format it
 numerically. A lost or overflowing window remains missing until the missing executions expire.
 
-On time bars, if a historical trade page starts inside a candle without reaching the start
-of history, Trade Rate leaves that candle's total blank. Each rolling rate becomes available
-as soon as its own window is covered; the retained executions stay in Time & Sales.
+On time bars, if a historical trade page does not reach the start of history, Trade Rate
+leaves the candle containing its oldest retained execution without a total. This includes an
+execution stamped at the candle open: earlier prints can share its timestamp. Each rolling
+rate becomes available as soon as its own window is covered; the executions stay in Time & Sales.
 
 On history-only tick-count, range, volume and delta intervals, Trade Rate uses the recorded executions
 when the tape reaches its start without a gap and reproduces every candle's key and OHLCV.
