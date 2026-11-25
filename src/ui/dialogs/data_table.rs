@@ -499,7 +499,10 @@ mod tests {
         show(&mut dialog, &chart);
         let times = |dialog: &DataTableDialog| {
             let rows = &dialog.cached.as_ref().unwrap().1.rows;
-            (rows.first().unwrap()[0].clone(), rows.last().unwrap()[0].clone())
+            (
+                rows.first().unwrap()[0].clone(),
+                rows.last().unwrap()[0].clone(),
+            )
         };
         // Keys are seconds since the epoch: 1_700_000_000 + 5000 days of 86_400 s.
         assert_eq!(
