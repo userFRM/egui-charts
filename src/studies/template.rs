@@ -373,11 +373,11 @@ impl StudyTemplate {
 
     /// This template under the current input ids of a built-in study whose inputs changed after
     /// it was saved, with inputs added since set to draw what it drew, or `None` when it needs no
-    /// change. Hours saved as minute counts and zones saved as text are converted for the inputs
-    /// `own` declares as a time of day or a time zone. `study` names the study being restored,
-    /// which a host may register under another name. `own` holds the inputs of the study
-    /// registered under the saved name, or the chart's study a stored pane is matched against; a
-    /// saved input that study takes as saved is neither renamed nor converted.
+    /// change. Hours saved as minute counts, zones saved as text and whole numbers are converted
+    /// for the inputs `own` declares as a time of day, a time zone or a decimal. `study` names
+    /// the study being restored, which a host may register under another name. `own` holds the
+    /// inputs of the study registered under the saved name, or the chart's study a stored pane is
+    /// matched against; a saved input that study takes as saved is neither renamed nor converted.
     pub(crate) fn upgraded(&self, study: &str, own: &[StudyInput]) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
         let declares = |id: &str| own.iter().any(|input| input.id == id);
@@ -1035,7 +1035,8 @@ impl StudyTemplate {
             _ => changed = false,
         }
         // Hours saved as minute counts and zones saved as text, before inputs had a time of day
-        // and a time zone, in the form `own` declares them now.
+        // and a time zone, and whole numbers saved for inputs that now take decimals, in the
+        // form `own` declares them now.
         for (id, value) in &mut template.inputs {
             if let Some(input) = own.iter().find(|input| input.id == *id) {
                 let upgraded = super::inputs::upgrade_saved_value(&input.kind, value.clone());
@@ -2526,8 +2527,9 @@ mod tests {
     /// guides had styles, a Donchian channel saved before its band and a band saved with its
     /// boundary plots hidden before it could be drawn without them. Older per-bar studies keep
     /// the colours and widths they drew before every state had its own style control. Renamed
-    /// input labels retain the ids, values and styles of the saved studies. Ziv Ghost Pivots
-    /// saved before its pivots were characters keeps its crosses.
+    /// input labels retain the ids, values and styles of the saved studies. Booker Reversal and
+    /// Ziv Ghost Pivots saved before their marks changed keep their colours and crosses, and
+    /// Booker levels saved as whole numbers restore as the same decimals.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
         // A metric descriptor saved before plot declarations and the Symbol input keeps its look.
@@ -3115,6 +3117,59 @@ mod tests {
         assert_eq!(restored.settings().plots, saved.settings.plots);
         assert_eq!(restored.plot_style(1).plot_type, PlotType::Crosses);
         assert_eq!(restored.plot_character(1), Some('d'));
+
+        // Booker Reversal opens with teal buys and red sells at half opacity and levels that
+        // take decimals. One saved with green and red marks and whole levels keeps its colours
+        // and restores the same levels as decimals.
+        let marks = |study: &dyn Indicator| {
+            (0..2)
+                .map(|line| study.plot_style(line))
+                .map(|plot| (plot.color, plot.plot_type))
+                .collect::<Vec<_>>()
+        };
+        let levels = |study: &dyn Indicator| {
+            let inputs = study.inputs();
+            ["stoch_upper", "stoch_lower"].map(|id| {
+                let input = inputs.iter().find(|input| input.id == id);
+                input.map(|input| input.value.clone())
+            })
+        };
+        let fresh = ConfiguredStudy::new(factory.create("Booker Reversal").unwrap());
+        assert_eq!(
+            marks(&fresh),
+            [
+                (
+                    Color32::from_rgba_unmultiplied(0, 150, 136, 128),
+                    PlotType::TriangleUp
+                ),
+                (
+                    Color32::from_rgba_unmultiplied(244, 67, 54, 128),
+                    PlotType::TriangleDown
+                ),
+            ]
+        );
+        assert_eq!(
+            levels(&fresh),
+            [70.0, 30.0].map(|level| Some(InputValue::Number(level)))
+        );
+        // Saved on origin/main ebd125251, with the levels set to 72 and 25.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Booker Reversal","inputs":[["fast_period",{"Length":12}],["slow_period",{"Length":26}],["k_period",{"Length":70}],["slowing",{"Length":10}],["stoch_upper",{"Length":72}],["stoch_lower",{"Length":25}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.BookerReversal.html","plots":[{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[5,11,5,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        )
+        .unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.settings().plots, saved.settings.plots);
+        assert_eq!(
+            marks(restored.as_ref()),
+            [
+                (Color32::from_rgb(76, 175, 80), PlotType::TriangleUp),
+                (Color32::from_rgb(242, 54, 69), PlotType::TriangleDown),
+            ]
+        );
+        assert_eq!(
+            levels(restored.as_ref()),
+            [72.0, 25.0].map(|level| Some(InputValue::Number(level)))
+        );
     }
 
     /// A Connors RSI saved with guides at 70, 50 and 30 and a Correlation Coefficient saved with

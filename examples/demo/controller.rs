@@ -5805,11 +5805,12 @@ mod tests {
     }
 
     /// The Style tab offers a plot the character its study declares, also for a plot saved as
-    /// another type: a Ziv Ghost Pivots plot saved as crosses switches to its "8".
+    /// another type: a Ziv Ghost Pivots plot saved as crosses switches to its "8". The Inputs
+    /// tab takes a Booker Reversal level with decimals.
     #[test]
-    fn study_settings_offer_ziv_characters() {
-        use egui::accesskit::{Action, ActionRequest, Role, TreeId};
-        use egui_charts::studies::{IndicatorFactory, PlotType};
+    fn study_settings_offer_ziv_characters_and_decimal_booker_levels() {
+        use egui::accesskit::{Action, ActionData, ActionRequest, Role, TreeId};
+        use egui_charts::studies::{IndicatorFactory, InputValue, PlotType};
 
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -5868,6 +5869,31 @@ mod tests {
         assert!(!app.indicator_settings.is_open());
         let study = app.chart.indicator_mut(id).unwrap();
         assert_eq!(study.plot_style(0).plot_type, PlotType::Character('8'));
+
+        let id = app
+            .chart
+            .add_indicator(factory.create("Booker Reversal").unwrap());
+        app.open_indicator_settings(id);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        let nodes = draw(&ctx, &mut app, vec![]);
+        let request = egui::Event::AccessKitActionRequest(ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: control(&nodes, "Stochastic Upper").0,
+            data: Some(ActionData::NumericValue(72.5)),
+        });
+        draw(&ctx, &mut app, vec![request]);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        click(&mut app, &control(&nodes, "Apply").1);
+        assert!(!app.indicator_settings.is_open());
+        let inputs = app.chart.indicator_mut(id).unwrap().inputs();
+        let upper = inputs.iter().find(|input| input.id == "stoch_upper");
+        assert_eq!(
+            upper.map(|input| &input.value),
+            Some(&InputValue::Number(72.5))
+        );
     }
 
     /// The menu actions reach the other chart, which lacks nothing, without a prompt; a chart
