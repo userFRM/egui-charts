@@ -39,6 +39,9 @@ pub struct CandleDataContext<'a> {
     pub start_idx: usize,
     /// Interval and calendar of the bars, whose sessions the TPO profiles follow.
     pub clock: &'a crate::model::BarClock,
+    /// The TPO chart type's settings with their hours resolved for the chart's instrument.
+    /// `None` builds them from the parameters, on the hours of `clock`.
+    pub tpo: Option<&'a crate::model::TPOConfig>,
     /// The instrument's minimum price increment, if known.
     pub tick_size: Option<f64>,
     /// Host formatting of the price labels a chart type prints beside its bars.

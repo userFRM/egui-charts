@@ -87,8 +87,14 @@ impl std::fmt::Debug for BollingerBands {
 }
 
 impl BollingerBands {
-    /// `std_dev` is clamped into 0 to `f64::MAX`, NaN to 0.
+    /// `std_dev` is clamped into 0.001 to 50, NaN to 0.001.
     pub fn new(period: usize, std_dev: f64) -> Self {
+        Self::bands(period, clamp_param(std_dev, 0.001, 50.0))
+    }
+
+    /// Bands `std_dev` deviations from the basis, for a study built on them whose deviation may
+    /// exceed 50. `std_dev` is clamped into 0 to `f64::MAX`, NaN to 0.
+    pub(super) fn bands(period: usize, std_dev: f64) -> Self {
         Self {
             period: period.max(1),
             basis: AverageType::Simple,
@@ -157,9 +163,9 @@ impl Indicator for BollingerBands {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX),
+        period: length("Length", 1, usize::MAX),
         basis: choice("Basis MA type", [AverageType::Simple, AverageType::Exponential, AverageType::Weighted, AverageType::Smoothed, AverageType::VolumeWeighted]),
-        std_dev: number("Std dev", 0.0, f64::MAX)
+        std_dev: number("StdDev", 0.001, 50.0)
     ; {});
 
     fn fills(&self) -> Vec<crate::studies::StudyFill> {

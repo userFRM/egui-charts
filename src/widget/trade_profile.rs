@@ -155,8 +155,9 @@ impl Chart {
     /// bars of their hours, as [`Chart::profile_hours`] resolves the session volume profile's
     /// choice.
     fn profile_division(&self) -> (BarClock, Cow<'_, ProfileSession>) {
-        // The profile settings divide only the session volume profile chart: the market profile
-        // chart and its menu keep the chart's calendar.
+        // The profile settings divide only the session volume profile chart: other chart types
+        // keep the chart's calendar here, and the market profile chart resolves its own hours in
+        // `tpo_chart_division`.
         let selection = match self.chart_type {
             ChartType::SessionVolumeProfile => &self.trade_profile_settings().session,
             _ => &ProfileSession::Chart,
@@ -889,10 +890,11 @@ mod tests {
         );
     }
 
-    /// Each hours choice of the Time Price Opportunity study profiles only the bars of its
-    /// hours, counting its periods from their open, on both sides of the New York clock change:
-    /// custom hours from 08:00 to 12:30 in the exchange zone give one profile a day, and the
-    /// trading day split by extended hours one per segment.
+    /// Each hours choice of the Time Price Opportunity study and the TPO chart type profiles
+    /// only the bars of its hours, counting its periods from their open, on both sides of the
+    /// New York clock change: custom hours from 08:00 to 12:30 in the exchange zone give one
+    /// profile a day, and the trading day split by extended hours one per segment, whether the
+    /// chart type's settings choose the segments or were saved with Split extended hours.
     #[test]
     fn tpo_study_hours_profile_only_their_bars() {
         use crate::model::to_tpo_profiles;
@@ -974,8 +976,9 @@ mod tests {
             ),
             (2, false, 1, true, 30, &["11 13:30 ABCDEF"]),
         ];
+        let time = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
         for (hours, split, count, own_or_clip, minutes, expected) in rows {
-            let chart = bars_every(
+            let mut chart = bars_every(
                 minutes,
                 4800 / minutes,
                 us_equity_hours(),
@@ -1003,20 +1006,58 @@ mod tests {
             let config = study.tpo().unwrap();
             let (clock, mut config) = chart.tpo_division(config);
             config.tick_size = 1.0;
-            let observed: Vec<_> =
-                to_tpo_profiles(chart.bars(crate::widget::SeriesId::MAIN), &config, &clock)
-                    .iter()
-                    .map(|profile| {
-                        let mut periods: Vec<_> = (profile.letters.iter())
-                            .map(|l| (l.period_idx, l.letter))
-                            .collect();
-                        periods.sort_unstable();
-                        periods.dedup();
-                        let letters: String = periods.into_iter().map(|(_, l)| l).collect();
-                        format!("{} {letters}", profile.session_date.format("%d %H:%M"))
-                    })
-                    .collect();
-            assert_eq!(observed, expected, "hours {hours} split {split}");
+            // The chart type with the same choice, and the segments chosen without the legacy flag.
+            let mut params = crate::model::ChartTypeParams {
+                tpo_session: match hours {
+                    1 => ProfileSession::Regular,
+                    2 => ProfileSession::Custom(CustomProfileSessions {
+                        sessions: [
+                            CustomProfileSession::new(time(8, 0), time(12, 30)),
+                            CustomProfileSession::new(time(12, 0), time(16, 0)),
+                        ][..count]
+                            .to_vec(),
+                        overlap: if own_or_clip {
+                            SessionOverlap::OwnProfile
+                        } else {
+                            SessionOverlap::InBoth
+                        },
+                        trading_hours_only: count == 1 && own_or_clip,
+                    }),
+                    3 => ProfileSession::PreMarket,
+                    4 => ProfileSession::PostMarket,
+                    _ => ProfileSession::Chart,
+                },
+                tpo_split_sessions: split,
+                tpo_period_minutes: minutes as u32,
+                ..Default::default()
+            };
+            chart.set_chart_type(ChartType::TimePriceOpportunity);
+            chart.set_chart_type_params(params.clone());
+            let mut divisions = vec![("study", (clock.clone(), config.clone()))];
+            divisions.push(("chart type", chart.tpo_chart_division()));
+            if split {
+                params.tpo_session = ProfileSession::Segments;
+                params.tpo_split_sessions = false;
+                chart.set_chart_type_params(params);
+                divisions.push(("chart type segments", chart.tpo_chart_division()));
+            }
+            for (owner, (clock, mut config)) in divisions {
+                config.tick_size = 1.0;
+                let observed: Vec<_> =
+                    to_tpo_profiles(chart.bars(crate::widget::SeriesId::MAIN), &config, &clock)
+                        .iter()
+                        .map(|profile| {
+                            let mut periods: Vec<_> = (profile.letters.iter())
+                                .map(|l| (l.period_idx, l.letter))
+                                .collect();
+                            periods.sort_unstable();
+                            periods.dedup();
+                            let letters: String = periods.into_iter().map(|(_, l)| l).collect();
+                            format!("{} {letters}", profile.session_date.format("%d %H:%M"))
+                        })
+                        .collect();
+                assert_eq!(observed, expected, "{owner}, hours {hours} split {split}");
+            }
             if count == 2 {
                 let weekly = crate::model::TPOConfig {
                     profile_period: crate::model::TPOProfilePeriod::Week,
@@ -1054,6 +1095,15 @@ mod tests {
                 .unwrap();
             assert_eq!(second.is_shown(&inputs), hours == 2 && count == 2);
         }
+        // Week profiles keep the chart's hours whatever the one-day choice.
+        let mut chart = bars_every(60, 80, us_equity_hours(), ProfileSession::Chart);
+        chart.set_chart_type(ChartType::TimePriceOpportunity);
+        chart.set_chart_type_params(crate::model::ChartTypeParams {
+            tpo_profile_period: crate::model::TPOProfilePeriod::Week,
+            tpo_session: ProfileSession::PreMarket,
+            ..Default::default()
+        });
+        assert_eq!(chart.tpo_chart_division().1.session, ProfileSession::Chart);
     }
 
     /// Custom hours keep whole TPO periods on the grid of the period length: a period that opens

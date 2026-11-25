@@ -1205,6 +1205,15 @@ impl Indicator for ChartPatterns {
         }
     }
 
+    fn plot_shape_side(&self, line: usize) -> crate::studies::ShapeSide {
+        // A bullish confirmation marks its bar's low, a bearish one its high.
+        match line {
+            0 => crate::studies::ShapeSide::Below,
+            1 => crate::studies::ShapeSide::Above,
+            _ => crate::studies::ShapeSide::Centred,
+        }
+    }
+
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
         let text: Vec<&str> = self
             .marked(line, bar)

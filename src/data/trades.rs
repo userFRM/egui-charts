@@ -213,6 +213,9 @@ pub(crate) struct Trades {
     front: usize,
     /// Held trades prepended by history pages, before the live suffix.
     paged: usize,
+    /// A page confirmed that no executions precede the oldest one it supplied.
+    #[cfg(feature = "widget")]
+    pub(crate) from_start: bool,
     /// Time of the newest trade a page added: live trades without an id at or before it repeat it.
     paged_until: Option<DateTime<Utc>>,
     /// Time of the newest trade without an id a page added: any live trade at or before it may
@@ -274,6 +277,8 @@ impl Trades {
             ids: HashMap::new(),
             front: 0,
             paged: 0,
+            #[cfg(feature = "widget")]
+            from_start: false,
             paged_until: None,
             paged_without_id_until: None,
             retained_until: None,
@@ -436,6 +441,14 @@ impl Trades {
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &Tick> {
         self.trades.iter()
+    }
+
+    /// Earliest paged instant without proof of the preceding history. An actual eviction
+    /// has its own, more precise boundary in `lost_until`.
+    #[cfg(feature = "widget")]
+    pub(crate) fn unconfirmed_page_start(&self) -> Option<DateTime<Utc>> {
+        (!self.from_start && self.paged != 0 && self.lost_until.is_none())
+            .then(|| self.trades[0].ts)
     }
 
     /// Time of the oldest held trade.
