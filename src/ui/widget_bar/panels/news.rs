@@ -1899,7 +1899,7 @@ mod tests {
             h.run_steps(3);
         };
         h.state_mut().refresh();
-        answer(&mut h, &[first.clone()]);
+        answer(&mut h, std::slice::from_ref(&first));
         assert!(h.state_mut().take_notifications().is_empty());
         h.get_by_role_and_label(egui::Role::Button, "First");
 
