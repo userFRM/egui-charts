@@ -4564,7 +4564,8 @@ mod tests {
             ("IB ext. below / above", "1 / 2"),
         ];
         // (profile, rows shown, expected (label, value) pairs)
-        let cases: [(&TPOProfile, TPOStatisticsRows, &[(&str, &str)]); 6] = [
+        type Case<'a> = (&'a TPOProfile, TPOStatisticsRows, &'a [(&'a str, &'a str)]);
+        let cases: [Case; 6] = [
             (
                 &whole,
                 all,
@@ -4807,9 +4808,11 @@ mod tests {
             rect.max.y,
             false,
         );
-        let mut statistics_rows = TPOStatisticsRows::default();
-        statistics_rows.value_area_range = true;
-        statistics_rows.high_low_range = true;
+        let statistics_rows = TPOStatisticsRows {
+            value_area_range: true,
+            high_low_range: true,
+            ..Default::default()
+        };
         let config = TPOConfig {
             tick_size: 0.0,
             show_statistics: true,

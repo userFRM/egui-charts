@@ -1405,8 +1405,10 @@ mod tests {
             ),
             "the TPO session and period grouping stay the chart's own"
         );
-        let mut statistics_rows = crate::model::TPOStatisticsRows::default();
-        statistics_rows.total_volume = true;
+        let statistics_rows = crate::model::TPOStatisticsRows {
+            total_volume: true,
+            ..Default::default()
+        };
         assert_eq!(
             (
                 params.tpo_labels,

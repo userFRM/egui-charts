@@ -2404,7 +2404,7 @@ fn tpo_edits_drop_when_their_period_or_rows_change() {
     for invalid in [
         format!("x,0|{split}"),
         format!("60|{split}"),
-        format!("60,0|bad"),
+        "60,0|bad".to_owned(),
     ] {
         assert!(
             tpo.set_input("splits", text(&invalid)).is_err(),
