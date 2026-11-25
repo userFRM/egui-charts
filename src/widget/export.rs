@@ -314,11 +314,14 @@ impl Chart {
     /// cutoff has completed, and on price-based chart types still the source bars. Loads
     /// nothing: only loaded bars are listed.
     pub fn data_table(&self) -> DataTable {
-        self.data_table_with_columns().0
+        self.data_table_with_columns(false).0
     }
 
-    /// Build cells and the identity of each column from the same calculated studies.
-    pub(crate) fn data_table_with_columns(&self) -> (DataTable, Vec<ColumnId>) {
+    /// Build cells and the identity of each column from the same calculated studies. With
+    /// `readable`, the cells of the main series, the added series and the price studies read as
+    /// the data window writes them: in the series' or the study's formatter, else with their
+    /// thousands grouped; other cells, and every cell without it, stay plain numbers.
+    pub(crate) fn data_table_with_columns(&self, readable: bool) -> (DataTable, Vec<ColumnId>) {
         let bars = &self.state.data().bars;
         let instrument_precision = self
             .instrument()
@@ -349,7 +352,13 @@ impl Chart {
         // Each visible added series with its legend title, which falls back to "Series" as the
         // pane menu does, its place among series of that title and the decimals of its closes.
         let mut series: Vec<(&[crate::model::Bar], String, usize, usize)> = Vec::new();
+        let mut series_formatters = Vec::new();
         for item in self.price_series.iter().filter(|item| item.visible) {
+            series_formatters.push(
+                readable
+                    .then(|| self.series_price_formatter(item.id))
+                    .flatten(),
+            );
             let title = match item.options.name.as_str() {
                 "" => "Series".to_owned(),
                 name => name.to_owned(),
@@ -413,7 +422,13 @@ impl Chart {
                     StudyFormat::Fixed(decimals) => decimals.min(12),
                     _ => 2,
                 });
-                columns.push((index, line, precision));
+                // A price study reads as the data window writes it: in its formatter, else grouped.
+                let price_units = readable && study.value_format() == StudyFormat::Price;
+                let own_text = price_units
+                    && self
+                        .study_formatter(self.study_ids[index], StudyFormat::Price)
+                        .is_some();
+                columns.push((index, line, precision, price_units, own_text));
             }
         }
         let number = |value: f64, precision: usize| {
@@ -423,6 +438,24 @@ impl Chart {
                 String::new()
             }
         };
+        // Built-in labels write '.' as the decimal point, so '.' and digits group nothing.
+        let separator = self
+            .config
+            .thousands_sep
+            .filter(|separator| *separator != '.' && !separator.is_ascii_digit());
+        let price =
+            |value: f64,
+             precision: usize,
+             formatter: Option<&std::sync::Arc<dyn crate::scales::PriceFormatter>>| {
+                match formatter {
+                    _ if !readable || !value.is_finite() => number(value, precision),
+                    Some(formatter) => formatter.format(value),
+                    None => crate::scales::group_thousands(number(value, precision), separator),
+                }
+            };
+        let main_formatter = readable
+            .then(|| self.series_price_formatter(super::SeriesId::MAIN))
+            .flatten();
         let mut rows = Vec::with_capacity(bars.len());
         for (index, bar) in bars.iter().enumerate() {
             let mut row = vec![if self.horizontal_scale.is_some() {
@@ -432,24 +465,38 @@ impl Chart {
             }];
             row.extend(
                 [bar.open, bar.high, bar.low, bar.close]
-                    .map(|value| number(value, price_precision)),
+                    .map(|value| price(value, price_precision, main_formatter.as_ref())),
             );
             row.push(number(
                 bar.volume,
                 volume_precision.unwrap_or_else(|| crate::scales::decimals(bar.volume)),
             ));
-            row.extend(series.iter().map(|&(bars, _, _, precision)| {
-                bars.binary_search_by_key(&bar.time, |other| other.time)
-                    .ok()
-                    .map(|at| &bars[at])
-                    .filter(|other| !other.is_whitespace())
-                    .map_or_else(String::new, |other| number(other.close, precision))
-            }));
-            row.extend(columns.iter().map(|&(study, line, precision)| {
-                studies[study]
-                    .plot_value(line, index)
-                    .map_or_else(String::new, |value| number(value, precision))
-            }));
+            row.extend(series.iter().zip(&series_formatters).map(
+                |(&(bars, _, _, precision), formatter)| {
+                    bars.binary_search_by_key(&bar.time, |other| other.time)
+                        .ok()
+                        .map(|at| &bars[at])
+                        .filter(|other| !other.is_whitespace())
+                        .map_or_else(String::new, |other| {
+                            price(other.close, precision, formatter.as_ref())
+                        })
+                },
+            ));
+            row.extend(
+                columns
+                    .iter()
+                    .map(|&(study, line, precision, price_units, own_text)| {
+                        studies[study]
+                            .plot_value(line, index)
+                            .map_or_else(String::new, |value| match (price_units, own_text) {
+                                (true, true) if value.is_finite() => {
+                                    studies[study].format_plot_value(line, value)
+                                }
+                                (true, _) => price(value, precision, None),
+                                _ => number(value, precision),
+                            })
+                    }),
+            );
             rows.push(row);
         }
         let column_ids = (0..6)
@@ -459,7 +506,7 @@ impl Chart {
                     .iter()
                     .map(|item| ColumnId::Series(item.1.clone(), item.2)),
             )
-            .chain(columns.iter().map(|&(study, line, _)| {
+            .chain(columns.iter().map(|&(study, line, ..)| {
                 let id = self.study_ids[study].0;
                 #[cfg(feature = "drawings")]
                 let id = self.study_column_ids.get(&id).copied().unwrap_or(id);

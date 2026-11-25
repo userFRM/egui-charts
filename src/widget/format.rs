@@ -429,7 +429,7 @@ impl Chart {
 
     /// A series' saved display declaration, else the fraction chosen on its scale, else the
     /// instrument's on the scale that takes the instrument's decimals, while none are chosen.
-    fn display_format(&self, id: super::SeriesId) -> Option<SeriesDisplayFormat> {
+    pub(super) fn display_format(&self, id: super::SeriesId) -> Option<SeriesDisplayFormat> {
         self.series_style(id)?.display_format.or_else(|| {
             let scale = self.series_price_scale(id)?;
             let fraction = scale.chosen_fraction().or_else(|| {
