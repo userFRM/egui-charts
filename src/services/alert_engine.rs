@@ -269,17 +269,22 @@ struct Observation {
     /// one, for a shorter bar that closes with it. Only a longer interval of an alert evaluated at
     /// bar close keeps it.
     earlier: Option<Box<Observation>>,
+    /// The lowest and highest price known to have traded since the alert's previous evaluation
+    /// of this interval, see [`traded_since`], which its price rules read. `None` before the
+    /// alert's first evaluation and for an alert at bar close, whose price rules read the close.
+    traded: Option<[f64; 2]>,
 }
 
-/// The inputs of one evaluation: the bar, its close and volume, and for each rule the value of
-/// its source and of the other output it compares with.
+/// The inputs of one evaluation: the bar, its close, volume, high and low, and for each rule the
+/// value of its source and of the other output it compares with.
 #[derive(Clone, PartialEq)]
 struct Seen {
     time: DateTime<Utc>,
     scheduled: bool,
     minute: Option<DateTime<Utc>>,
-    /// The bits of the close and volume, so that a value that is not a number equals itself.
-    bar: (u64, u64),
+    /// The bits of the close, volume, high and low, so that a value that is not a number equals
+    /// itself and a new high or low is a new evaluation.
+    bar: [u64; 4],
     rules: Vec<[Option<f64>; 4]>,
 }
 
@@ -1183,7 +1188,7 @@ fn observe(
             .is_none_or(|schedule| schedule.allows(now)),
         minute: (alert.frequency == AlertFrequency::OncePerMinute)
             .then(|| occurrence(alert.frequency, &bars[at], now)),
-        bar: (bars[at].close.to_bits(), bars[at].volume.to_bits()),
+        bar: [bars[at].close, bars[at].volume, bars[at].high, bars[at].low].map(f64::to_bits),
         rules: read(Some(at)),
     };
     let seen = seen_at(index);
@@ -1193,7 +1198,14 @@ fn observe(
         }
         return true;
     }
+    let traded = intervals
+        .iter()
+        .position(|interval| *interval == timeframe)
+        .and_then(|position| run.joined.get(position))
+        .filter(|_| alert.frequency != AlertFrequency::OncePerBarClose)
+        .map(|last| traded_since(bars, index, last));
     let observed = |at: usize, seen: Seen, before, event, earlier| {
+        let traded = traded.filter(|_| at == index);
         let holds = rules
             .iter()
             .zip(&seen.rules)
@@ -1203,6 +1215,7 @@ fn observe(
                         condition_holds(
                             condition,
                             current,
+                            range(traded, src, current),
                             [None; 4],
                             [a, b, c],
                             &bars[..=at],
@@ -1230,6 +1243,7 @@ fn observe(
             next: bars.get(at + 1).map(|bar| bar.time),
             values: values.into_inner(),
             earlier,
+            traded,
         }
     };
     let event = |at: usize| clock.bar_open(bars[at].time);
@@ -1448,7 +1462,7 @@ fn previous_rules_hold(
         .filter(|(_, _, own)| *own == interval)
         .enumerate()
         .filter(|(_, (_, condition, _))| reads_previous(condition))
-        .all(|(n, (_, condition, _))| {
+        .all(|(n, (source, condition, _))| {
             let [current, a, b, c] = observation.seen.rules[n];
             let previous = match last {
                 Some(last)
@@ -1460,7 +1474,15 @@ fn previous_rules_hold(
                 _ => observation.before[n],
             };
             current.is_some_and(|current| {
-                condition_holds(condition, current, previous, [a, b, c], &[], |_| None)
+                condition_holds(
+                    condition,
+                    current,
+                    range(observation.traded, source, current),
+                    previous,
+                    [a, b, c],
+                    &[],
+                    |_| None,
+                )
             })
         })
 }
@@ -1564,12 +1586,50 @@ fn occurrence(frequency: AlertFrequency, bar: &Bar, now: DateTime<Utc>) -> DateT
     }
 }
 
-/// Whether `condition` holds for `value`, given the previous value of the source, the current and
-/// previous value of the other outputs, the bars up to the evaluated one and the
-/// value of the source `back` bars before it.
+/// The lowest and highest price known to have traded on `bars` up to `at` since `last`, the
+/// inputs of the alert's previous evaluation of this interval: the close at `at`, the low and
+/// high of each bar that opened after the one `last` read, and those of that bar where they
+/// passed what `last` read. A value that is not finite counts for nothing.
+fn traded_since(bars: &[Bar], at: usize, last: &Seen) -> [f64; 2] {
+    let close = bars[at].close;
+    let [_, _, high, low] = last.bar.map(f64::from_bits);
+    bars[..=at]
+        .iter()
+        .rev()
+        .take_while(|bar| bar.time >= last.time)
+        .fold([close, close], |[lowest, highest], bar| {
+            let later = bar.time > last.time;
+            [
+                if bar.low.is_finite() && (later || bar.low < low) {
+                    lowest.min(bar.low)
+                } else {
+                    lowest
+                },
+                if bar.high.is_finite() && (later || bar.high > high) {
+                    highest.max(bar.high)
+                } else {
+                    highest
+                },
+            ]
+        })
+}
+
+/// The range a rule on `source` reads at `value`: `traded` for the price, which may hold one,
+/// and `value` alone otherwise.
+fn range(traded: Option<[f64; 2]>, source: &AlertSource, value: f64) -> [f64; 2] {
+    traded
+        .filter(|_| *source == AlertSource::Price)
+        .unwrap_or([value, value])
+}
+
+/// Whether `condition` holds for `value`, given the lowest and highest value traded since the
+/// previous evaluation, which a level or a drawing is tested against, the previous value of the
+/// source, the current and previous value of the other outputs, the bars up to the evaluated one
+/// and the value of the source `back` bars before it.
 fn condition_holds(
     condition: &AlertCondition,
     value: f64,
+    traded: [f64; 2],
     previous: [Option<f64>; 4],
     other: [Option<f64>; 3],
     bars: &[Bar],
@@ -1583,27 +1643,27 @@ fn condition_holds(
         | AlertCondition::CustomEvents(_) => false,
         AlertCondition::Crossing(level) => compare(
             AlertComparison::Crossing,
-            value,
+            traded,
             previous,
             *level,
             Some(*level),
         ),
         AlertCondition::CrossingUp(level) => compare(
             AlertComparison::CrossingUp,
-            value,
+            traded,
             previous,
             *level,
             Some(*level),
         ),
         AlertCondition::CrossingDown(level) => compare(
             AlertComparison::CrossingDown,
-            value,
+            traded,
             previous,
             *level,
             Some(*level),
         ),
-        AlertCondition::Above(level) => value > *level,
-        AlertCondition::Below(level) => value < *level,
+        AlertCondition::Above(level) => traded[1] > *level,
+        AlertCondition::Below(level) => traded[0] < *level,
         AlertCondition::EnteringChannel { lower, upper } => previous
             .is_some_and(|p| (p < *lower || p > *upper) && value >= *lower && value <= *upper),
         AlertCondition::ExitingChannel { lower, upper } => previous
@@ -1619,8 +1679,18 @@ fn condition_holds(
             bars: back,
         } => lookback(*back)
             .is_some_and(|p| p != 0.0 && reaches(100.0 * (value - p) / p.abs(), *percent)),
-        AlertCondition::Compare { comparison, .. } => other[0]
-            .is_some_and(|level| compare(*comparison, value, previous, level, previous_other)),
+        // A drawing's level does not follow the price, so the range traded meets it.
+        AlertCondition::Compare {
+            other: partner,
+            comparison,
+        } => {
+            let traded = match partner {
+                AlertSource::Drawing(_) => traded,
+                _ => [value, value],
+            };
+            other[0]
+                .is_some_and(|level| compare(*comparison, traded, previous, level, previous_other))
+        }
         AlertCondition::Channel { comparison, .. } => {
             let inside = |value: f64, a: f64, b: f64| {
                 (a != b).then_some(value >= a.min(b) && value <= a.max(b))
@@ -1652,7 +1722,7 @@ fn condition_holds(
                 }
                 _ => compare(
                     AlertComparison::Crossing,
-                    value,
+                    [value, value],
                     previous,
                     entry,
                     previous_other,
@@ -1677,22 +1747,24 @@ fn condition_holds(
     }
 }
 
+/// Whether `comparison` holds for a value that traded between `low` and `high` since the
+/// previous one, `previous`, against `level`, which was `previous_level` then.
 fn compare(
     comparison: AlertComparison,
-    value: f64,
+    [low, high]: [f64; 2],
     previous: Option<f64>,
     level: f64,
     previous_level: Option<f64>,
 ) -> bool {
     let sides = previous.zip(previous_level);
-    let up = sides.is_some_and(|(p, l)| p < l && value >= level);
-    let down = sides.is_some_and(|(p, l)| p > l && value <= level);
+    let up = sides.is_some_and(|(p, l)| p < l && high >= level);
+    let down = sides.is_some_and(|(p, l)| p > l && low <= level);
     match comparison {
         AlertComparison::Crossing => up || down,
         AlertComparison::CrossingUp => up,
         AlertComparison::CrossingDown => down,
-        AlertComparison::Above => value > level,
-        AlertComparison::Below => value < level,
+        AlertComparison::Above => high > level,
+        AlertComparison::Below => low < level,
     }
 }
 
@@ -3850,5 +3922,181 @@ mod tests {
         }
         deliver("Turns", &[event(2, 160, None)]);
         assert_eq!(triggers(&host), []);
+    }
+
+    /// A price level reached and left between two evaluations fires from the high or low the bar
+    /// recorded, but a high or low the previous evaluation saw, or one made before the alert was
+    /// saved, does not. Alerts at bar close, study sources and study partners read the close.
+    #[test]
+    fn price_levels_reached_between_evaluations_fire_from_the_traded_range() {
+        type RangeRow = (
+            AlertCondition,
+            AlertSource,
+            AlertFrequency,
+            bool,
+            Vec<Vec<Bar>>,
+            Vec<usize>,
+        );
+        fn wick(minute: i64, high: f64, low: f64, close: f64) -> Bar {
+            Bar::new(time(minute * 60), close, high, low, close, 1.0)
+        }
+        // The forming bar flat at `start`, then with a wick whose close comes back to `start`
+        // with the same volume, then with no new high or low and its close at `last`.
+        let same_bar = |start, high, low, last| {
+            [
+                wick(1, start, start, start),
+                wick(1, high, low, start),
+                wick(1, high, low, last),
+            ]
+            .map(|forming| vec![bar(0, start, 1.0), forming])
+            .to_vec()
+        };
+        let study = AlertSource::Study {
+            id: "s".into(),
+            output: 0,
+        };
+        let compare = |other, comparison| AlertCondition::Compare { other, comparison };
+        let (price, every) = (AlertSource::Price, AlertFrequency::EveryTime);
+        let up = AlertCondition::CrossingUp(100.0);
+        let skipped = vec![
+            vec![bar(0, 99.0, 1.0), bar(1, 99.0, 1.0)],
+            vec![
+                bar(0, 99.0, 1.0),
+                wick(1, 101.0, 99.0, 99.0),
+                bar(2, 99.0, 1.0),
+            ],
+        ];
+        let rows: Vec<RangeRow> = vec![
+            (
+                up.clone(),
+                price.clone(),
+                every,
+                false,
+                same_bar(99.0, 101.0, 99.0, 99.5),
+                vec![1],
+            ),
+            (
+                AlertCondition::CrossingDown(100.0),
+                price.clone(),
+                every,
+                false,
+                same_bar(101.0, 101.0, 99.0, 100.5),
+                vec![1],
+            ),
+            (
+                AlertCondition::Crossing(100.0),
+                price.clone(),
+                every,
+                false,
+                same_bar(99.0, 101.0, 99.0, 99.5),
+                vec![1],
+            ),
+            (
+                AlertCondition::Above(100.0),
+                price.clone(),
+                every,
+                false,
+                same_bar(99.0, 101.0, 99.0, 99.5),
+                vec![1],
+            ),
+            (
+                AlertCondition::Below(100.0),
+                price.clone(),
+                every,
+                false,
+                same_bar(101.0, 101.0, 99.0, 100.5),
+                vec![1],
+            ),
+            // A drawing's level meets the range; a study's value is known only at the close.
+            (
+                compare(
+                    AlertSource::Drawing("line".into()),
+                    AlertComparison::CrossingUp,
+                ),
+                price.clone(),
+                every,
+                false,
+                same_bar(99.0, 101.0, 99.0, 99.5),
+                vec![1],
+            ),
+            (
+                compare(study.clone(), AlertComparison::CrossingUp),
+                price.clone(),
+                every,
+                false,
+                same_bar(99.0, 101.0, 99.0, 99.0),
+                vec![],
+            ),
+            (
+                up.clone(),
+                study,
+                every,
+                false,
+                same_bar(99.0, 101.0, 99.0, 99.0),
+                vec![],
+            ),
+            // A poll gap across a bar boundary still reads the wick of the bar left behind.
+            (
+                up.clone(),
+                price.clone(),
+                every,
+                false,
+                skipped.clone(),
+                vec![1],
+            ),
+            (
+                up.clone(),
+                price.clone(),
+                AlertFrequency::OncePerBarClose,
+                false,
+                skipped,
+                vec![],
+            ),
+            // The high made before the save never fires; only a later, higher one does.
+            (
+                up,
+                price,
+                every,
+                true,
+                [(101.0, 99.0), (101.0, 99.5), (102.0, 99.0)]
+                    .map(|(high, close)| vec![bar(0, 99.0, 1.0), wick(1, high, 99.0, close)])
+                    .to_vec(),
+                vec![2],
+            ),
+        ];
+        let value = |source: &AlertSource, _| match source {
+            AlertSource::Drawing(_) => Some(100.0),
+            AlertSource::Study { .. } => Some(99.5),
+            _ => None,
+        };
+        for (row, (condition, source, frequency, saved, updates, expected)) in
+            rows.into_iter().enumerate()
+        {
+            let mut alert = alert(condition, frequency);
+            alert.source = source;
+            let host = if saved {
+                let host = Host::new(Vec::new());
+                host.save(alert).unwrap();
+                host
+            } else {
+                Host::new(vec![alert])
+            };
+            host.events();
+            let mut fired = Vec::new();
+            for (update, bars) in updates.iter().enumerate() {
+                host.engine.update(
+                    "SYM",
+                    None,
+                    Timeframe::Min1,
+                    bars,
+                    time(170 + update as i64),
+                    value,
+                );
+                if !host.fired().is_empty() {
+                    fired.push(update);
+                }
+            }
+            assert_eq!(fired, expected, "row {row}");
+        }
     }
 }

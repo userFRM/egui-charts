@@ -1619,4 +1619,52 @@ mod tests {
         );
         assert_eq!(counts, (1, 2, 2));
     }
+
+    /// Trades through the level and back that one poll folds into the bar fire the alert once.
+    #[test]
+    fn a_level_traded_between_two_polls_fires_once() {
+        let feed = Arc::new(Feed::default());
+        let mut evaluator = AlertEvaluator::new(feed.clone());
+        let mut alert = Alert::new("SYM", crate::model::AlertCondition::CrossingUp(350.0));
+        alert.timeframe = Some(Timeframe::Min1);
+        alert.frequency = crate::model::AlertFrequency::EveryTime;
+        let fired = Arc::new(Mutex::new(0));
+        let count = fired.clone();
+        let engine = AlertEngine::new()
+            .with_alerts(vec![alert])
+            .on_trigger(move |_, _| *count.lock().unwrap() += 1);
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        let poll = |evaluator: &mut AlertEvaluator| {
+            evaluator.poll(
+                &engine,
+                &IndicatorFactory::new(),
+                &[],
+                #[cfg(feature = "ui")]
+                &ctx,
+                DateTime::from_timestamp(1000, 0).unwrap(),
+            );
+        };
+        for _ in 0..4 {
+            poll(&mut evaluator);
+        }
+        let trade = |second, price| {
+            feed.subscriptions.lock().unwrap()[0]
+                .sink
+                .push_tick(crate::model::Tick::new(
+                    DateTime::from_timestamp(second, 0).unwrap(),
+                    price,
+                    1.0,
+                    None,
+                ));
+        };
+        trade(61, 340.0);
+        poll(&mut evaluator);
+        assert_eq!(*fired.lock().unwrap(), 0);
+        trade(62, 360.0);
+        trade(63, 340.0);
+        poll(&mut evaluator);
+        poll(&mut evaluator);
+        assert_eq!(*fired.lock().unwrap(), 1);
+    }
 }
