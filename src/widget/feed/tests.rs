@@ -820,6 +820,80 @@ fn prepared_rows_wait_for_real_executions_to_fill_trade_rate() {
     assert!(feed.trades.lock().unwrap().is_empty());
 }
 
+#[cfg(feature = "studies")]
+#[test]
+fn time_bar_trade_rate_requires_coverage_for_each_output() {
+    use crate::data::OrderFlowKind;
+    use crate::studies::OrderFlowStudy;
+
+    let start = bars(1)[0].time;
+    let fill = |ts, id| Tick::new(ts, 100.0, 1.0, None).with_id(id);
+    let candle = |open, volume| Bar::new(open, 100.0, 100.0, 100.0, 100.0, volume);
+    for (complete, capped) in [(true, false), (false, true), (false, false)] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe(Timeframe::Min1);
+        let rate = chart.add_indicator(Box::new(OrderFlowStudy::new(OrderFlowKind::TradeRate {
+            volume: false,
+            seconds: 60,
+            instant: 10,
+        })));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        frames.run(&mut chart);
+
+        let mut candles = vec![candle(start, 2.0)];
+        let mut tape = Vec::with_capacity(if capped { TRADE_CAPACITY } else { 2 });
+        if !capped {
+            tape.push(fill(start + TimeDelta::seconds(5), 1));
+        }
+        tape.push(fill(start + TimeDelta::seconds(15), 2));
+        let later = TRADE_CAPACITY - 1;
+        if capped {
+            let next = start + TimeDelta::minutes(1);
+            candles.push(candle(next, later as f64));
+            tape.extend(
+                (0..later).map(|i| fill(next + TimeDelta::microseconds(i as i64), i as u64 + 3)),
+            );
+        }
+        feed.page().send(page(candles, true));
+        let send = |tape, end| {
+            let reply = feed.trades.lock().unwrap().pop().unwrap();
+            reply.send(Ok(TradePage::new(tape, end)));
+        };
+        send(tape, complete);
+        for _ in 0..3 {
+            frames.run(&mut chart);
+        }
+        let row = |chart: &Chart, i| {
+            let study = chart.indicators().find(|(id, _)| *id == rate).unwrap().1;
+            [0, 1, 2].map(|line| study.values().value(line, i))
+        };
+        let full = [Some(2.0), Some(2.0 / 60.0), Some(0.1)];
+        if complete {
+            assert_eq!(row(&chart, 0), full);
+        } else if capped {
+            assert_eq!(row(&chart, 0), [None; 3]);
+            assert_eq!(
+                row(&chart, 1),
+                [Some(later as f64), None, Some(later as f64 / 10.0)]
+            );
+            assert_eq!(chart.trades(SeriesId::MAIN).count(), TRADE_CAPACITY);
+        } else {
+            // (05,15] is known without the rest of the minute. An empty terminal page then
+            // proves that the very same two prints were the whole history.
+            assert_eq!(row(&chart, 0), [None, None, Some(0.1)]);
+            send(Vec::new(), true);
+            for _ in 0..3 {
+                frames.run(&mut chart);
+            }
+            assert_eq!(row(&chart, 0), full);
+        }
+    }
+}
+
 fn missing_history_page(
     shared: bool,
     from: DateTime<Utc>,
