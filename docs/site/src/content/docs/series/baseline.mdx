@@ -31,16 +31,18 @@ a separate gradient on each side fading to transparent at the base.
 
 The compiled setup is in [series.rs](https://github.com/userFRM/egui-charts/blob/main/examples/docs/scenes/series.rs).
 [`BaselineStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.BaselineStyle.html)
-has independent `above` and `below` line styles and fill colours. Optional
+has independent `above` and `below` line styles and fill colours. By default each
+fill fades from 28% opacity at the pane edge to 5% at the base. Optional
 `above_fill_at_base` and `below_fill_at_base` set the gradient endpoints at the
-reference; `None` keeps each fill flat. Gradient endpoints interpolate in screen
+reference; `None` keeps a fill flat. Gradient endpoints interpolate in screen
 space between the pane edge and the base. Curvature follows the `above` line on
 both sides.
 
 Added baseline series always read close and use the default base at 50% of pane
 height. Set their full line/fill style through
 [`SeriesOptions::baseline_style`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.baseline_style).
-With `None`, `up_color`, `down_color` and `width` provide the lines and flat fills.
+With `None`, `up_color`, `down_color` and `width` provide the lines and flat fills
+at 12% opacity.
 Added options do not expose a fixed-price base. See the
 [added-series restrictions](../chart-types.mdx#added-series-restrictions) before
 choosing the main and added renderers.

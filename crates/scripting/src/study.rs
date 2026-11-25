@@ -158,6 +158,9 @@ struct ScriptState {
     reset: bool,
     /// The result of the latest run that ended.
     last: Option<Calculation>,
+    /// The alert conditions of the bars calculated, one row of every condition per bar: NaN where
+    /// no call stored one, else 1 or 0.
+    conditions: Vec<f64>,
 }
 
 /// A history as the chart supplied it last.
@@ -234,6 +237,7 @@ impl ScriptState {
             running: false,
             reset: true,
             last: None,
+            conditions: Vec::new(),
         }
     }
 
@@ -295,9 +299,15 @@ impl ScriptState {
         let calculation = match outcome.result {
             Ok(took) => {
                 values.truncate(outcome.start);
-                let width = self.script.compiled.spec.plots.len();
-                for row in outcome.rows.chunks(width) {
-                    values.push_lines(row);
+                let spec = &self.script.compiled.spec;
+                let (plots, alerts) = (spec.plots.len(), spec.alerts.len());
+                self.conditions.truncate(outcome.start * alerts);
+                let width = plots + alerts;
+                // A script without a plot, as a strategy may be, still keeps a row per bar.
+                for bar in 0..outcome.bars {
+                    let row = &outcome.rows[bar * width..][..width];
+                    values.push_lines(&row[..plots]);
+                    self.conditions.extend_from_slice(&row[plots..]);
                 }
                 match outcome.error {
                     Some(error) => *last_error = Some(error),
@@ -333,9 +343,13 @@ impl ScriptState {
 
 impl Clone for ScriptState {
     /// A clone keeps the script and starts its own calculation from bar 0 on its first call;
-    /// the study it belongs to keeps drawing the values cloned with it until then.
+    /// the study it belongs to keeps drawing the values cloned with it until then, and answers
+    /// its alert conditions from them.
     fn clone(&self) -> Self {
-        Self::new(&self.script)
+        Self {
+            conditions: self.conditions.clone(),
+            ..Self::new(&self.script)
+        }
     }
 }
 
@@ -402,6 +416,21 @@ impl Resume for ScriptState {
             Poll::Running(done) => Calculation::Running(done),
             Poll::Done(outcome) => self.install(outcome, values),
         }
+    }
+
+    fn alert_conditions(&self) -> Vec<String> {
+        self.script.compiled.spec.alerts.clone()
+    }
+
+    fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+        let alerts = self.script.compiled.spec.alerts.len();
+        if condition >= alerts {
+            return None;
+        }
+        let value = *self
+            .conditions
+            .get(bar.checked_mul(alerts)?.checked_add(condition)?)?;
+        (!value.is_nan()).then_some(value != 0.0)
     }
 }
 

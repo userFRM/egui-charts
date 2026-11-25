@@ -522,12 +522,15 @@ fn last_value_queries_select_loaded_or_visible_on_the_series_scale() {
 /// Columns, hollow candles, and candles coloured by the previous close, take their direction from
 /// the close before them. The last bar opens at 13 and closes at 12.5, above the previous close of
 /// 12, so it is painted in the rising colour, and its price line, label and last value take that
-/// colour too. Candles compared with their open stay falling, and the bar before the first in
-/// view still counts when only the last bar is in view.
+/// colour too. Columns take their own rising colour, at full opacity for the line and the label.
+/// Candles compared with their open stay falling, and the bar before the first in view still
+/// counts when only the last bar is in view.
 #[test]
 fn last_value_colour_follows_the_previous_close_rule() {
     use crate::widget::test_frames::shapes;
     let (up, down) = (Color32::from_rgb(1, 100, 2), Color32::from_rgb(101, 2, 3));
+    // The default rising column colour, rgba(8, 153, 129, 128), made opaque.
+    let column_up = Color32::from_rgb(8, 153, 129);
     let start = "2024-01-01T00:00:00Z"
         .parse::<chrono::DateTime<Utc>>()
         .unwrap();
@@ -537,7 +540,7 @@ fn last_value_colour_follows_the_previous_close_rule() {
     ];
     for (kind, by_previous_close, expected) in [
         (ChartType::HollowCandles, false, up),
-        (ChartType::Columns, false, up),
+        (ChartType::Columns, false, column_up),
         (ChartType::Candles, true, up),
         (ChartType::Candles, false, down),
         (ChartType::VolumeCandles, true, up),
@@ -574,7 +577,8 @@ fn last_value_colour_follows_the_previous_close_rule() {
             );
             let label = painted.iter().find_map(|shape| match shape {
                 egui::Shape::Rect(r)
-                    if !plot.contains(r.rect.center()) && [up, down].contains(&r.fill) =>
+                    if !plot.contains(r.rect.center())
+                        && [up, down, column_up].contains(&r.fill) =>
                 {
                     Some(r.fill)
                 }
@@ -585,7 +589,7 @@ fn last_value_colour_follows_the_previous_close_rule() {
             let line = painted.iter().find_map(|shape| match shape {
                 egui::Shape::LineSegment { points, stroke }
                     if points[0].y == points[1].y
-                        && [up, down].contains(&stroke.color)
+                        && [up, down, column_up].contains(&stroke.color)
                         && !points.iter().any(|point| bar_xs.contains(&Some(point.x))) =>
                 {
                     Some(stroke.color)

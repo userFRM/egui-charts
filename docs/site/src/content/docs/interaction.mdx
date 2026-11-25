@@ -21,7 +21,7 @@ actions and reads notifications after `show`. Try the
 | Double-click the time axis | Return to the latest bars |
 | Double-click a price axis | Restore autoscale |
 | Touch drag or pinch | Pan or zoom when the corresponding handler is enabled |
-| Hold a touch still on a plot | Show the crosshair and readouts after half a second; they follow the finger and stay until the next tap |
+| Hold a touch still on a plot | Show the crosshair and readouts after half a second; they follow the finger and stay until the next tap. With the long press order option, ask for a limit order on the price pane instead |
 
 Wheel input over a price axis scales prices instead. Configure
 [`ChartOptions::handle_scroll`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartOptions.html#structfield.handle_scroll)
@@ -38,7 +38,11 @@ and crosshair notifications report it from then on.
 [`touch_long_press`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TooltipOptions.html#structfield.touch_long_press)
 turns this off, and
 [`touch_exit_mode`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TooltipOptions.html#structfield.touch_exit_mode)
-ends the values on release instead of at the next tap. Mouse hover is unaffected.
+ends the values on release instead of at the next tap.
+[`long_press_order`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TooltipOptions.html#structfield.long_press_order)
+makes a hold on the price pane ask for a limit order at the touched price, which
+[`ChartMenus::show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/context_menu/struct.ChartMenus.html#method.show)
+returns where its menu offers one. Mouse hover is unaffected.
 [`TrackingModeOptions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TrackingModeOptions.html)
 controls when following the live edge ends. Active [drawing tools](drawings.mdx) can
 consume plot gestures for placing and editing their points.

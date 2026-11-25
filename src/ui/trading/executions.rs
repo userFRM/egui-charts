@@ -42,8 +42,8 @@ use super::account_panel::quantity_decimals;
 use super::format::{Numbers, TradingFormatter};
 use super::widgets::{side_color, side_name};
 
-/// A borrowed fill to draw with [`render_executions`], optionally with host colour, hover text
-/// and style.
+/// A borrowed fill to draw with [`render_executions`], optionally with host colour, hover text,
+/// label and style.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct ExecutionMark<'a> {
@@ -59,6 +59,15 @@ pub struct ExecutionMark<'a> {
     /// first of its fills, in the list's order, that has one; without any it keeps the
     /// default look.
     pub style: Option<&'a ExecutionMarkStyle>,
+    /// Text replacing the side and quantity line beside the mark, and its average price with
+    /// [`TradingSettings::show_execution_prices`], such as "Entry" or an account name. Shown
+    /// verbatim. A mark takes the label of the first of its fills, in the list's order, that
+    /// has one; the "+N" count stays, [`TradingSettings::show_execution_labels`] still hides
+    /// it, and empty text draws no label line.
+    pub label: Option<&'a str>,
+    /// The colour of the mark's count and label, replacing the chart's text colour. A mark
+    /// takes it from the first of its fills that has one, independently of the label text.
+    pub label_color: Option<Color32>,
 }
 
 /// The size, spacing and label font of a fill mark, for [`ExecutionMark::with_style`]. The
@@ -116,6 +125,8 @@ impl<'a> ExecutionMark<'a> {
             color: None,
             hover: None,
             style: None,
+            label: None,
+            label_color: None,
         }
     }
 
@@ -136,6 +147,18 @@ impl<'a> ExecutionMark<'a> {
         self.style = Some(style);
         self
     }
+
+    /// Replaces the side and quantity line beside this fill's mark with untranslated host text.
+    pub fn with_label(mut self, label: &'a str) -> Self {
+        self.label = Some(label);
+        self
+    }
+
+    /// Colours the text beside this fill's mark, transparency included.
+    pub fn with_label_color(mut self, color: Color32) -> Self {
+        self.label_color = Some(color);
+        self
+    }
 }
 
 /// Draws host fills on the price pane, using the same marks as
@@ -147,7 +170,8 @@ impl<'a> ExecutionMark<'a> {
 /// [`TradingSettings::show_executions`] hides everything when off. Fills with non-finite
 /// prices or quantities, or quantities at or below zero, are omitted.
 /// A mark takes its size, spacing and label font from the [`ExecutionMarkStyle`] of the first
-/// of its fills that has one.
+/// of its fills that has one, and its label text and label colour from the first of its fills
+/// that has each.
 ///
 /// All supplied fills are treated as belonging to the chart's symbol. Filter a mixed list
 /// with [`Execution::symbol`] first. Call after [`Chart::show`], once per chart with the full
@@ -167,7 +191,8 @@ impl<'a> ExecutionMark<'a> {
 ///     let marks: Vec<_> = imported.iter()
 ///         .filter(|(fill, _)| fill.symbol.as_deref() == Some(chart.symbol()))
 ///         .map(|(fill, note)| ExecutionMark::new(fill)
-///             .with_color(egui::Color32::GOLD).with_hover(note).with_style(&style))
+///             .with_color(egui::Color32::GOLD).with_hover(note).with_style(&style)
+///             .with_label("Imported").with_label_color(egui::Color32::GOLD))
 ///         .collect();
 ///     render_executions(ui, chart, &marks, &TradingSettings::default(), None);
 /// }
@@ -311,7 +336,15 @@ pub(super) fn show(
         let length = drawn as f32 * height + (drawn - 1) as f32 * step;
         let mut rect = Rect::from_two_pos(at(-half_width, 0.0), at(half_width, length));
         let more = (run.len() > MAX_STACK).then(|| format!("+{}", run.len() - MAX_STACK));
+        let own_label = run.iter().find_map(|(_, mark)| mark.label);
+        let text_color = run
+            .iter()
+            .find_map(|(_, mark)| mark.label_color)
+            .unwrap_or(chart.config().text_color);
         let label = display.show_execution_labels.then(|| {
+            if let Some(text) = own_label {
+                return text.to_owned();
+            }
             let quantity = numbers.quantity(quantity, quantity_decimals(quantity));
             let price =
                 (display.show_execution_prices && price.is_finite()).then(|| numbers.price(price));
@@ -330,6 +363,7 @@ pub(super) fn show(
                 ],
             )
         });
+        let label = label.filter(|text| !text.is_empty());
         let font = match &style.label_font {
             Some(font) => {
                 let installed = (ui.ctx())
@@ -348,7 +382,7 @@ pub(super) fn show(
         let lines: Vec<_> = more
             .into_iter()
             .chain(label)
-            .map(|line| painter.layout_no_wrap(line, font.clone(), chart.config().text_color))
+            .map(|line| painter.layout_no_wrap(line, font.clone(), text_color))
             .collect();
         if !lines.is_empty() {
             let height: f32 = lines.iter().map(|line| line.size().y).sum::<f32>()
@@ -543,16 +577,39 @@ mod tests {
     }
 
     /// Hosts can draw fills without a broker, keep their colour and literal hover text, and
-    /// hide them through the shared display switch. Invalid host fills never reach a mark.
+    /// hide them through the shared display switch. A mark takes its label text and colour from
+    /// the first fill with each; the labels switch still hides them. Invalid host fills never
+    /// reach a mark.
     #[test]
     fn host_fills_draw_with_their_own_colour_and_hover() {
+        let teal = Color32::from_rgba_unmultiplied(0, 150, 136, 160);
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for (visible, labels, prices, label) in [
-                (true, true, false, Some("Buy 2")),
-                (false, true, false, None),
-                (true, true, true, Some("Buy 2 @ 101.25")),
-                (true, false, true, None),
+            // The labels of fills a and b, whether b has its own label colour, and the text
+            // expected with whether it is in that colour.
+            let plain = (None, None, false);
+            for (visible, labels, prices, (a_label, b_label, b_color), shown) in [
+                (true, true, false, plain, Some(("Buy 2", false))),
+                (false, true, false, plain, None),
+                (true, true, true, plain, Some(("Buy 2 @ 101.25", false))),
+                (true, false, true, plain, None),
+                (
+                    true,
+                    true,
+                    false,
+                    (Some("Entry"), Some("Exit"), true),
+                    Some(("Entry", true)),
+                ),
+                (
+                    true,
+                    true,
+                    true,
+                    (Some("Entry"), None, false),
+                    Some(("Entry", false)),
+                ),
+                (true, false, false, (Some("Entry"), None, true), None),
+                (true, true, false, (Some(""), None, false), None),
             ] {
+                let label = shown.map(|(text, _)| text);
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut chart = test_frames::chart(&[90.0], &[110.0]);
@@ -580,12 +637,20 @@ mod tests {
                 })
                 .into();
                 let gold = Color32::from_rgb(0xe0, 0xa0, 0x20);
-                let mut marks = vec![
-                    ExecutionMark::new(&a)
-                        .with_color(gold)
-                        .with_hover("Imported"),
-                    ExecutionMark::new(&b),
-                ];
+                let mut a = ExecutionMark::new(&a)
+                    .with_color(gold)
+                    .with_hover("Imported");
+                if let Some(text) = a_label {
+                    a = a.with_label(text);
+                }
+                let mut b = ExecutionMark::new(&b);
+                if let Some(text) = b_label {
+                    b = b.with_label(text);
+                }
+                if b_color {
+                    b = b.with_label_color(teal);
+                }
+                let mut marks = vec![a, b];
                 marks.extend(invalid.iter().map(ExecutionMark::new));
                 let display = TradingSettings {
                     show_executions: visible,
@@ -593,7 +658,7 @@ mod tests {
                     show_execution_prices: prices,
                     ..TradingSettings::default()
                 };
-                let (mut triangles, mut hovered, mut labelled) = (Vec::new(), false, false);
+                let (mut triangles, mut hovered, mut labelled) = (Vec::new(), false, None);
                 for frame in 0..4 {
                     let mapping = chart.get_chart_mapping();
                     let events = chart.index_to_x(95.0).filter(|_| frame == 1).map(|x| {
@@ -632,10 +697,27 @@ mod tests {
                     hovered |= output.shapes.iter().any(|shape| {
                         matches!(&shape.shape, Shape::Text(text) if text.galley.text() == hover)
                     });
-                    labelled |= output.shapes.iter().any(|shape| {
-                        matches!(&shape.shape,
-                            Shape::Text(text) if Some(text.galley.text()) == label)
-                    });
+                    for shape in &output.shapes {
+                        // An empty label leaves no backing either.
+                        if let Shape::Rect(backing) = &shape.shape {
+                            assert!(
+                                backing.fill != theme.chart.bg || backing.rect.width() > 3.0,
+                                "backing of an empty label"
+                            );
+                        }
+                        let Shape::Text(text) = &shape.shape else {
+                            continue;
+                        };
+                        let written = text.galley.text();
+                        if Some(written) == label {
+                            labelled = Some(text.galley.job.sections[0].format.color);
+                        } else {
+                            assert!(
+                                !["Buy 2", "Buy 2 @ 101.25", "Entry", "Exit"].contains(&written),
+                                "{written} drawn instead of {label:?}"
+                            );
+                        }
+                    }
                     output.drop_without_applying_deltas();
                 }
                 let x = chart.index_to_x(95.0).unwrap();
@@ -650,7 +732,12 @@ mod tests {
                 };
                 assert_eq!(triangles, expected);
                 assert_eq!(hovered, visible);
-                assert_eq!(labelled, label.is_some());
+                let text_color = if shown.is_some_and(|(_, host)| host) {
+                    teal
+                } else {
+                    chart.config().text_color
+                };
+                assert_eq!(labelled, label.map(|_| text_color));
             }
         }
     }
