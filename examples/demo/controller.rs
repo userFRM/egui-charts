@@ -3904,10 +3904,12 @@ impl DemoApp {
                     .map(|c| &mut *c.chart)
                     .collect();
                 charts.insert(self.layout_slot, &mut self.chart);
-                // Only this symbol's feed prepares footprint rows, so its tape can wait for a reader.
+                // Only this symbol's feed prepares footprint rows, so its tape can wait for a reader
+                // and its first footprint page can hold only the bars on view.
                 for chart in &mut charts {
                     let prepared = chart.symbol() == live::PREPARED_FOOTPRINT_SYMBOL;
                     chart.set_trade_history_on_demand(prepared);
+                    chart.set_footprint_history_by_view(prepared);
                 }
                 let rect = self.layout.show(ui, &mut charts).rect;
                 let visible = self.layout.visible_chart_rects(rect, charts.len());
@@ -10530,20 +10532,22 @@ mod tests {
         );
     }
 
-    /// A chart of the symbol whose feed prepares footprint rows draws them, also for minutes
-    /// before the stream's first execution, without asking for the trade tape. Opening time and
-    /// sales asks for it once.
+    /// A chart of the symbol whose feed prepares footprint rows first asks for the rows of the
+    /// bars on view, not the whole initial page, and loads older rows as it scrolls back, also
+    /// for minutes before the stream's first execution, without asking for the trade tape.
+    /// Opening time and sales asks for it once.
     #[test]
-    fn prepared_footprint_chart_loads_its_tape_once_time_and_sales_opens() {
+    fn prepared_footprint_chart_pages_rows_by_view_and_loads_its_tape_once_time_and_sales_opens() {
         use egui_charts::data::{
             Datafeed, DepthPage, DepthRequest, FootprintPage, FootprintRequest, HistoryPage,
             HistoryRequest, Reply, Subscription, SubscriptionId, TradePage, TradeRequest,
         };
         use egui_charts::model::Instrument;
+        use std::sync::Mutex;
         use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
-        /// The demo feed, counting the trade pages asked of it.
-        struct Counted(Arc<LiveFeed>, AtomicUsize);
+        /// The demo feed, counting the trade pages and keeping the footprint requests asked of it.
+        struct Counted(Arc<LiveFeed>, AtomicUsize, Mutex<Vec<FootprintRequest>>);
 
         impl Datafeed for Counted {
             fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
@@ -10560,6 +10564,7 @@ mod tests {
                 self.0.trades(request, reply);
             }
             fn footprints(&self, request: FootprintRequest, reply: Reply<FootprintPage>) {
+                self.2.lock().unwrap().push(request.clone());
                 self.0.footprints(request, reply);
             }
             fn depth_history(&self, request: DepthRequest, reply: Reply<DepthPage>) {
@@ -10585,11 +10590,13 @@ mod tests {
             now,
             true,
         );
-        let feed = Arc::new(Counted(app.live.clone(), AtomicUsize::new(0)));
+        let feed = Arc::new(Counted(
+            app.live.clone(),
+            AtomicUsize::new(0),
+            Mutex::default(),
+        ));
         app.chart.set_feed(feed.clone());
         app.open_catalog_symbol(live::PREPARED_FOOTPRINT_SYMBOL);
-        app.chart.set_chart_type(ChartType::VolumeFootprint);
-        settle(&mut app, &ctx);
         settle(&mut app, &ctx);
         let size = egui::vec2(1440.0, 900.0);
         let frame = |app: &mut DemoApp| {
@@ -10597,9 +10604,46 @@ mod tests {
                 eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest())
             })
         };
-        // Rows of the minutes before the stream can only come from prepared pages.
+        let rows = |texts: &[(String, egui::Rect)]| {
+            texts
+                .iter()
+                .any(|(text, rect)| text == "Total" && rect.max.x < 1080.0)
+        };
+        // Eight bars at the live edge, 19:00 to 19:07, when the footprint first asks for rows.
         app.chart.set_visible_bars(8);
         frame(&mut app);
+        app.chart.scroll_to_real_time(false);
+        frame(&mut app);
+        let (first, end) = app.chart.state().visible_range();
+        assert_eq!(end - first, 8);
+        app.chart.set_chart_type(ChartType::VolumeFootprint);
+        settle(&mut app, &ctx);
+        settle(&mut app, &ctx);
+        let texts = frame(&mut app);
+        {
+            let requests = feed.2.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].before, None);
+            // The bars on view and one view of prefetch, not the initial page of 10,080.
+            assert_eq!(requests[0].count, 16);
+        }
+        assert!(rows(&texts), "footprint rows on view");
+        // The first page holds the newest 16 of the minutes from 17:00, so it starts at 18:51.
+        let first_page: chrono::DateTime<chrono::Utc> = "2026-10-23T18:51:00Z".parse().unwrap();
+        app.chart
+            .scroll_to_time("2026-10-23T18:30:00Z".parse().unwrap());
+        frame(&mut app);
+        frame(&mut app);
+        let texts = frame(&mut app);
+        let first = app.chart.state().visible_range().0;
+        assert!(app.chart.bars(SeriesId::MAIN)[first].time < first_page);
+        assert!(rows(&texts), "footprint rows before the first page");
+        {
+            let requests = feed.2.lock().unwrap();
+            assert_eq!(requests.get(1).map(|r| r.before), Some(Some(first_page)));
+            assert!(requests[1..].iter().all(|r| r.before.is_some()));
+        }
+        // Rows of the minutes before the stream can only come from prepared pages.
         let shown = now - chrono::TimeDelta::minutes(150);
         app.chart.scroll_to_time(shown);
         frame(&mut app);
@@ -10607,12 +10651,7 @@ mod tests {
         let texts = frame(&mut app);
         let first = app.chart.state().visible_range().0;
         assert!(app.chart.bars(SeriesId::MAIN)[first].time < streamed_from);
-        assert!(
-            texts
-                .iter()
-                .any(|(text, rect)| text == "Total" && rect.max.x < 1080.0),
-            "footprint rows"
-        );
+        assert!(rows(&texts), "footprint rows before the stream");
         assert_eq!(feed.1.load(Relaxed), 0);
 
         app.execute_search_command(&ctx, "tape");
