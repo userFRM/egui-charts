@@ -2,7 +2,7 @@
 //! channels include it because their entries first become eligible on the following bar.
 //! Pivots prefer the newest equal extreme and become usable only at confirmation.
 
-use chrono::NaiveDate;
+use chrono::{DateTime, Utc};
 
 use super::{StrategyFactory, length, length_input, number, number_input, set_input};
 use crate::model::{Bar, OrderSide, OrderType};
@@ -53,8 +53,9 @@ struct PriceAction {
 /// The trading day of the latest decision, for the Max Intraday Loss input.
 #[derive(Clone, Copy)]
 struct Day {
-    /// UTC date of the decision bar's open.
-    date: NaiveDate,
+    /// Open of the run's daily bar holding the decision bar, see
+    /// [`StrategyContext::trading_day`].
+    date: DateTime<Utc>,
     /// Equity at the last decision before this day, or at the run's first decision.
     start: f64,
     /// Highest equity at the day's start and at its decisions.
@@ -106,11 +107,11 @@ impl PriceAction {
         }
     }
 
-    /// Applies Max Intraday Loss at a decision. Once the loss since the start of the UTC day
-    /// exceeds that share of the day's highest equity, cancels the entries, closes the position
-    /// and returns `true` until the date changes.
+    /// Applies Max Intraday Loss at a decision. Once the loss since the start of the trading
+    /// day exceeds that share of the day's highest equity, cancels the entries, closes the
+    /// position and returns `true` until the trading day changes.
     fn day_halted(&mut self, context: &mut StrategyContext<'_>) -> bool {
-        let Some(date) = context.bars().last().map(|bar| bar.time.date_naive()) else {
+        let Some(date) = context.trading_day() else {
             return false;
         };
         let equity = context.equity();

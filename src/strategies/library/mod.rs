@@ -30,8 +30,11 @@ type StrategyConstructor = Box<dyn Fn() -> Box<dyn Strategy> + Send + Sync>;
 /// bars, so input validation refuses another interval that is shorter, trade-based or not made
 /// of whole chart bars, such as 5 minutes on a 3-minute chart or a month on a weekly one.
 /// Bar Up/Down's Max Intraday Loss (%) input, 1 by default, cancels its entries and closes its
-/// position once the loss since the start of the UTC day, open profit and fees included, exceeds
-/// that share of the day's highest equity, and places no entry until the next UTC day.
+/// position once the loss since the start of the trading day, open profit and fees included,
+/// exceeds that share of the day's highest equity, and places no entry until the next trading
+/// day. A trading day is a daily bar of [`super::Backtest::bar_clock`], the trading date on a
+/// clock with a session, so a session that crosses midnight UTC counts as one day; without a
+/// clock it is the UTC date.
 /// Bollinger Bands Directed trades both sides by default, as Bollinger Bands does, or Long only
 /// or Short only, where a signal on the other side closes the position without reversing it.
 /// Built-ins ignore fill callbacks and decide
