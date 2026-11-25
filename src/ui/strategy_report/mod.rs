@@ -652,7 +652,7 @@ fn summary(
     let cell = |value: Option<f64>, unit: SummaryUnit| match unit {
         SummaryUnit::Money => money(value, report),
         SummaryUnit::Percent => percent(value),
-        SummaryUnit::Ratio | SummaryUnit::Bars => number(value),
+        SummaryUnit::Ratio | SummaryUnit::Bars | SummaryUnit::Days => number(value),
         SummaryUnit::Count | SummaryUnit::Quantity => value
             .filter(|v| v.is_finite())
             .map_or_else(|| "N/A".into(), StrategyReport::quantity_text),

@@ -279,8 +279,8 @@ always `0`. Both exports prefix a text cell that starts with `=`, `+`, `-`, `@`,
 carriage return with an apostrophe, so a spreadsheet shows it as text; numeric cells,
 including negative numbers, are unchanged. The summary CSV ends with a `side` column:
 `all`, `long` or `short` on trade figures, with one row per side in that order, and empty
-on whole-run figures and properties. Largest position uses the unit `quantity` and holding
-times use `bars`.
+on whole-run figures and properties. Largest position uses the unit `quantity`, holding
+times use `bars` and the average drawdown and run-up durations use `days`.
 Both export actions carry a suggested file name, such as
 `First_run_2_EUR___USD_1min_trades_2026-11-21_14-03-07.csv`: the run's name, symbol and
 interval, `trades` or `summary`, and the local time of the export to the second, with every
@@ -439,6 +439,20 @@ capital. A path of equity 10,000, 12,000, 7,000, 10,000 has largest fall 5,000 b
 3,000 (7,000 to 10,000), so knowing only the high and low cannot recover both movements.
 The summary and CSV distinguish close-to-close and intrabar run-up, and the run-up chart shows
 each bar's rise from its trough.
+
+The summary also averages the close-to-close phases. A drawdown phase starts at an equity peak,
+at the last point before equity falls below it, and ends at the first point where equity is back
+at or above that peak; its depth is the peak less the lowest point in between. A run-up phase
+starts at a trough, the lowest point of a drawdown phase or the curve's first point, at the last
+point equity was there, and ends at the next peak, the highest point before the following
+drawdown phase starts, at the first point equity was there; its height is that peak less the
+trough. A phase still open at the curve's last point counts with its extreme so far: an
+unrecovered drawdown with its lowest point and the time up to the last point, a run-up with its
+highest point. Durations are calendar days of 24 hours, so intraday phases give fractions.
+Without a phase the figure is unavailable. On five consecutive days, equity 100, 90, 100, 80,
+100 has drawdowns of 10 and 20, each lasting 2 days, and run-ups of 10 and 20, each lasting 1
+day: the averages are 15 over 2 days and 15 over 1 day. The figures follow `within` as the
+maxima do.
 
 The largest winner is the greatest positive net profit, and the largest loser is the most
 negative net profit. Either is unavailable without a trade of that sign. Consecutive wins

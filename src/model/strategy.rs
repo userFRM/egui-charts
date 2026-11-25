@@ -319,6 +319,15 @@ pub struct StrategyPerformance {
     /// `max_drawdown`, so the two can come from different points. Above 1 when equity falls below zero.
     /// `None` without a usable equity point or when the first point is not positive.
     pub max_drawdown_fraction: Option<f64>,
+    /// Mean depth of the close-to-close drawdown phases, in money. A phase starts at an equity
+    /// peak, at the last point before equity falls below it, and ends at the first point where
+    /// equity is back at or above that peak; its depth is the peak less the lowest point in
+    /// between. A phase still open at the last point counts with its lowest point so far.
+    /// `None` without a phase, or when the mean is not finite.
+    pub average_drawdown: Option<f64>,
+    /// Mean length of those drawdown phases in calendar days of 24 hours, from the peak to the
+    /// recovery, or to the last point for a phase still open there. `None` without a phase.
+    pub average_drawdown_days: Option<f64>,
     /// Largest fall using [`StrategyReport::equity_ranges`]: at each bar the larger of the earlier
     /// peak less its low and its own [`EquityRange::fall`]. At least `max_drawdown`.
     /// `None` without usable ranges.
@@ -337,6 +346,16 @@ pub struct StrategyPerformance {
     /// `max_run_up / initial_capital`. `None` without a run-up, positive finite capital or a
     /// finite result.
     pub max_run_up_fraction: Option<f64>,
+    /// Mean height of the close-to-close run-up phases, in money. A phase starts at a trough:
+    /// the lowest point of a drawdown phase or the curve's first point, at the last point equity
+    /// was there. It ends at the next peak, the highest point before the following drawdown
+    /// phase starts, at the first point equity was there; its height is that peak less the
+    /// trough. A phase still open at the last point counts with its highest point so far.
+    /// `None` without a phase, or when the mean is not finite.
+    pub average_run_up: Option<f64>,
+    /// Mean length of those run-up phases in calendar days of 24 hours, from the trough to the
+    /// peak. `None` without a phase.
+    pub average_run_up_days: Option<f64>,
     /// Largest rise using [`StrategyReport::equity_ranges`]: at each bar the larger of its high
     /// less the earlier trough and its own [`EquityRange::rise`]. At least `max_run_up`.
     /// `None` without usable ranges.
@@ -678,6 +697,76 @@ fn trade_stats(trades: &[&StrategyTrade], capital: f64) -> StrategyTradeStats {
     p
 }
 
+/// Totals of the close-to-close drawdown and run-up phases of a usable equity curve.
+#[derive(Default)]
+struct Phases {
+    drawdowns: usize,
+    /// Sum of the drawdown depths, in money.
+    drawdown: f64,
+    drawdown_seconds: f64,
+    run_ups: usize,
+    /// Sum of the run-up heights, in money.
+    run_up: f64,
+    run_up_seconds: f64,
+}
+
+/// Finds the drawdown and run-up phases [`StrategyPerformance::average_drawdown`] defines.
+fn curve_phases(curve: &[(DateTime<Utc>, f64)]) -> Phases {
+    let mut phases = Phases::default();
+    let (Some(&(start, first)), Some(&(end, _))) = (curve.first(), curve.last()) else {
+        return phases;
+    };
+    // The running peak and the last time equity was at it.
+    let (mut peak, mut peak_time) = (first, start);
+    // The run-up in progress: the lowest point since that peak with the last time at it, and
+    // the highest point since then with the first time at it.
+    let (mut trough, mut trough_time) = (first, start);
+    let (mut top, mut top_time) = (first, start);
+    let mut below = false;
+    for &(time, equity) in &curve[1..] {
+        if equity < peak {
+            if !below || equity <= trough {
+                if !below && top > trough {
+                    // The run-up ended at the peak this drawdown starts from.
+                    phases.run_ups += 1;
+                    phases.run_up += top - trough;
+                    phases.run_up_seconds += (top_time - trough_time).as_seconds_f64();
+                }
+                below = true;
+                (trough, trough_time, top, top_time) = (equity, time, equity, time);
+            } else if equity > top {
+                (top, top_time) = (equity, time);
+            }
+        } else {
+            if below {
+                phases.drawdowns += 1;
+                phases.drawdown += peak - trough;
+                phases.drawdown_seconds += (time - peak_time).as_seconds_f64();
+                below = false;
+            }
+            if equity > top {
+                (top, top_time) = (equity, time);
+            } else if top == trough {
+                // Flat since the first point: the run-up starts at the last such point.
+                (trough_time, top_time) = (time, time);
+            }
+            (peak, peak_time) = (equity, time);
+        }
+    }
+    // Phases still open at the last point count with their extremes so far.
+    if below {
+        phases.drawdowns += 1;
+        phases.drawdown += peak - trough;
+        phases.drawdown_seconds += (end - peak_time).as_seconds_f64();
+    }
+    if top > trough {
+        phases.run_ups += 1;
+        phases.run_up += top - trough;
+        phases.run_up_seconds += (top_time - trough_time).as_seconds_f64();
+    }
+    phases
+}
+
 /// How a summary figure reads, named as the `unit` column of [`StrategyReport::summary_csv`].
 #[cfg(feature = "csv")]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -688,6 +777,7 @@ pub(crate) enum SummaryUnit {
     Count,
     Quantity,
     Bars,
+    Days,
 }
 
 #[cfg(feature = "csv")]
@@ -700,6 +790,7 @@ impl SummaryUnit {
             Self::Count => "count",
             Self::Quantity => "quantity",
             Self::Bars => "bars",
+            Self::Days => "days",
         }
     }
 }
@@ -786,6 +877,16 @@ pub(crate) fn run_figures(
             p.max_drawdown_fraction,
         ),
         (
+            "Average drawdown (close-to-close)",
+            Money,
+            p.average_drawdown,
+        ),
+        (
+            "Average drawdown duration in days (close-to-close)",
+            Days,
+            p.average_drawdown_days,
+        ),
+        (
             "Maximum drawdown (intrabar)",
             Money,
             p.intrabar_max_drawdown,
@@ -805,6 +906,12 @@ pub(crate) fn run_figures(
             "Maximum run-up % (close-to-close)",
             Percent,
             p.max_run_up_fraction,
+        ),
+        ("Average run-up (close-to-close)", Money, p.average_run_up),
+        (
+            "Average run-up duration in days (close-to-close)",
+            Days,
+            p.average_run_up_days,
         ),
         ("Maximum run-up (intrabar)", Money, p.intrabar_max_run_up),
         (
@@ -1033,6 +1140,13 @@ impl StrategyReport {
             .account_size_required
             .filter(|size| *size > 0.0)
             .and_then(|size| finite(p.all.net_profit / size));
+        let phases = curve_phases(&curve);
+        let average =
+            |total: f64, count: usize| (count > 0).then(|| total / count as f64).and_then(finite);
+        p.average_drawdown = average(phases.drawdown, phases.drawdowns);
+        p.average_drawdown_days = average(phases.drawdown_seconds / 86_400.0, phases.drawdowns);
+        p.average_run_up = average(phases.run_up, phases.run_ups);
+        p.average_run_up_days = average(phases.run_up_seconds / 86_400.0, phases.run_ups);
 
         let steps = curve.len() - 1;
         if end - start < TimeDelta::weeks(13) {
@@ -1649,9 +1763,9 @@ impl StrategyReport {
     /// Columns: `section` (`summary` or `properties`), `name` (as the panel labels it), `value`,
     /// `unit`, `currency` and `side`. The unit is `money` (in `currency`, empty when the report
     /// has none), `percent` (100 is 100%), `ratio`, `count`, `quantity` (instrument units, as
-    /// trade quantities), `bars` (source bars) or `text`. Each trade figure has three rows with
-    /// `side` `all`, `long` and `short` in that order; whole-run figures and properties leave
-    /// `side` empty. Percent values round to 15 significant
+    /// trade quantities), `bars` (source bars), `days` (calendar days of 24 hours) or `text`.
+    /// Each trade figure has three rows with `side` `all`, `long` and `short` in that order;
+    /// whole-run figures and properties leave `side` empty. Percent values round to 15 significant
     /// decimal digits to suppress binary multiplication noise; if rounding would overflow `f64`,
     /// the unrounded finite value is kept. Numbers use the shortest form that reads back to the
     /// resulting value, with a dot as the decimal separator and no thousands separator. Every
@@ -2090,6 +2204,10 @@ mod tests {
             max_run_up_fraction: Some(0.013),
             max_drawdown: Some(90.0),
             max_drawdown_fraction: Some(0.008928571428571428),
+            average_drawdown: Some(47.5),
+            average_drawdown_days: Some(1.0 / 12.0),
+            average_run_up: Some(70.0),
+            average_run_up_days: Some(0.052083333333333336),
             return_over_max_drawdown: Some(44.5 / 90.0),
             ..Default::default()
         }
@@ -2134,6 +2252,8 @@ mod tests {
             intrabar_max_run_up_fraction: Some(0.3),
             max_drawdown: Some(1000.0),
             max_drawdown_fraction: Some(0.1),
+            average_drawdown: Some(1000.0),
+            average_drawdown_days: Some(1.0 / 24.0),
             intrabar_max_drawdown: Some(3000.0),
             intrabar_max_drawdown_fraction: Some(0.3),
             intrabar_max_drawdown_initial_capital_fraction: Some(0.3),
@@ -2243,6 +2363,10 @@ mod tests {
                 intrabar_max_run_up_fraction,
                 max_drawdown,
                 max_drawdown_fraction,
+                average_drawdown,
+                average_drawdown_days,
+                average_run_up,
+                average_run_up_days,
                 return_over_max_drawdown,
                 compound_annual_growth,
                 sharpe_ratio,
@@ -2271,6 +2395,10 @@ mod tests {
                 *intrabar_max_run_up_fraction,
                 *max_drawdown,
                 *max_drawdown_fraction,
+                *average_drawdown,
+                *average_drawdown_days,
+                *average_run_up,
+                *average_run_up_days,
                 *return_over_max_drawdown,
                 *compound_annual_growth,
                 *sharpe_ratio,
@@ -2345,6 +2473,12 @@ mod tests {
         let mut zero_start = report(10_000.0);
         zero_start.equity = curve(&[0.0, 10.0, 5.0], TimeDelta::hours(1));
 
+        let mut flat_stretches = report(10_000.0);
+        flat_stretches.equity = curve(
+            &[100.0, 100.0, 110.0, 110.0, 110.0, 90.0, 90.0, 110.0],
+            TimeDelta::days(1),
+        );
+
         let mut negative_capital = report(-1_000.0);
         negative_capital.trades.push(closed(5.0, 0.0));
 
@@ -2391,6 +2525,10 @@ mod tests {
             max_run_up_fraction: None,
             max_drawdown: None,
             max_drawdown_fraction: None,
+            average_drawdown: None,
+            average_drawdown_days: None,
+            average_run_up: None,
+            average_run_up_days: None,
             return_over_max_drawdown: None,
             ..expected_a()
         };
@@ -2623,6 +2761,10 @@ mod tests {
                     open_profit: None,
                     max_run_up: None,
                     max_run_up_fraction: None,
+                    average_drawdown: None,
+                    average_drawdown_days: None,
+                    average_run_up: None,
+                    average_run_up_days: None,
                     account_size_required: None,
                     account_size_return: None,
                     ..margin_metrics
@@ -2679,11 +2821,17 @@ mod tests {
                 fixture_d().within(date(2000, 1, 1, 0)..date(2100, 1, 1, 0)),
                 long_only(
                     d_all,
-                    curve_from(
-                        (340.0, 340.0 / 1300.0, Some(120.0 / 340.0)),
-                        (-40.0, 300.0, 1000.0),
-                        (500.0, 500.0 / 1400.0, 500.0),
-                    ),
+                    StrategyPerformance {
+                        average_drawdown: Some(340.0),
+                        average_drawdown_days: Some(57.0),
+                        average_run_up: Some(210.0),
+                        average_run_up_days: Some(12.5),
+                        ..curve_from(
+                            (340.0, 340.0 / 1300.0, Some(120.0 / 340.0)),
+                            (-40.0, 300.0, 1000.0),
+                            (500.0, 500.0 / 1400.0, 500.0),
+                        )
+                    },
                 ),
             ),
             (
@@ -2691,11 +2839,17 @@ mod tests {
                 fixture_d().within(date(2024, 1, 5, 0)..date(2024, 3, 1, 0)),
                 long_only(
                     d_half.clone(),
-                    curve_from(
-                        (240.0, 0.2, Some(-80.0 / 240.0)),
-                        (-40.0, 120.0, 1200.0),
-                        (350.0, 0.28, 250.0),
-                    ),
+                    StrategyPerformance {
+                        average_drawdown: Some(240.0),
+                        average_drawdown_days: Some(26.0),
+                        average_run_up: Some(120.0),
+                        average_run_up_days: Some(10.0),
+                        ..curve_from(
+                            (240.0, 0.2, Some(-80.0 / 240.0)),
+                            (-40.0, 120.0, 1200.0),
+                            (350.0, 0.28, 250.0),
+                        )
+                    },
                 ),
             ),
             (
@@ -2704,11 +2858,15 @@ mod tests {
                 // Capital 1200 + closed profit -140 + open profit -100 = last equity 960.
                 long_only(
                     d_loss(-0.11666666666666667, 1),
-                    curve_from(
-                        (240.0, 0.2, Some(-140.0 / 240.0)),
-                        (-100.0, 0.0, 1200.0),
-                        (350.0, 0.28, 200.0),
-                    ),
+                    StrategyPerformance {
+                        average_drawdown: Some(240.0),
+                        average_drawdown_days: Some(16.0),
+                        ..curve_from(
+                            (240.0, 0.2, Some(-140.0 / 240.0)),
+                            (-100.0, 0.0, 1200.0),
+                            (350.0, 0.28, 200.0),
+                        )
+                    },
                 ),
             ),
             (
@@ -2870,6 +3028,10 @@ mod tests {
                     return_over_max_drawdown: Some(0.0),
                     max_drawdown: Some(100.0),
                     max_drawdown_fraction: Some(0.5),
+                    average_drawdown: Some(75.0),
+                    average_drawdown_days: Some(0.0625),
+                    average_run_up: Some(950.0),
+                    average_run_up_days: Some(1.0 / 24.0),
                     ..Default::default()
                 },
             ),
@@ -2886,6 +3048,10 @@ mod tests {
                     return_over_max_drawdown: Some(0.0),
                     max_drawdown: Some(82.0),
                     max_drawdown_fraction: Some(0.008104368452263293),
+                    average_drawdown: Some(73.29268292682927),
+                    average_drawdown_days: Some(0.24638663053297202),
+                    average_run_up: Some(91.07046070460704),
+                    average_run_up_days: Some(0.15616531165311653),
                     compound_annual_growth: Some(6.5726938646276025),
                     periods_per_year: Some(8766.0),
                     sharpe_ratio: Some(5.864663773071857),
@@ -2906,6 +3072,10 @@ mod tests {
                     return_over_max_drawdown: Some(0.0),
                     max_drawdown: Some(82.0),
                     max_drawdown_fraction: Some(0.008104368452263293),
+                    average_drawdown: Some(72.41304347826087),
+                    average_drawdown_days: Some(7.934782608695652),
+                    average_run_up: Some(90.32608695652173),
+                    average_run_up_days: Some(5.239130434782608),
                     compound_annual_growth: Some(0.0819914006635325),
                     periods_per_year: Some(261.74591280653954),
                     sharpe_ratio: Some(1.08244877567277),
@@ -2926,6 +3096,10 @@ mod tests {
                     return_over_max_drawdown: Some(0.0),
                     max_drawdown: Some(82.0),
                     max_drawdown_fraction: Some(0.008104368452263293),
+                    average_drawdown: Some(73.29268292682927),
+                    average_drawdown_days: Some(0.24638663053297202),
+                    average_run_up: Some(91.07046070460704),
+                    average_run_up_days: Some(0.15616531165311653),
                     compound_annual_growth: Some(6.5726938646276025),
                     periods_per_year: Some(8766.0),
                     ..Default::default()
@@ -2946,6 +3120,10 @@ mod tests {
                     max_drawdown: Some(150.0),
                     max_drawdown_fraction: Some(1.5),
                     periods_per_year: Some(2.9938524590163933),
+                    average_drawdown: Some(150.0),
+                    average_drawdown_days: Some(366.0),
+                    average_run_up: Some(80.0),
+                    average_run_up_days: Some(244.0),
                     ..Default::default()
                 },
             ),
@@ -2961,6 +3139,10 @@ mod tests {
                     short: side(Some(0.0)),
                     return_over_max_drawdown: Some(0.0),
                     max_drawdown: Some(5.0),
+                    average_drawdown: Some(5.0),
+                    average_drawdown_days: Some(1.0 / 24.0),
+                    average_run_up: Some(10.0),
+                    average_run_up_days: Some(1.0 / 24.0),
                     ..Default::default()
                 },
             ),
@@ -3015,6 +3197,8 @@ mod tests {
                     max_drawdown_fraction: Some(0.0),
                     compound_annual_growth: Some(0.0008912060071077921),
                     periods_per_year: Some(8.908536585365853),
+                    average_run_up: Some(0.09003600840125614),
+                    average_run_up_days: Some(369.0),
                     ..Default::default()
                 },
             ),
@@ -3043,6 +3227,8 @@ mod tests {
                     short: side(Some(0.0)),
                     max_drawdown: Some(300.0),
                     periods_per_year: Some(4.013736263736264),
+                    average_drawdown: Some(300.0),
+                    average_drawdown_days: Some(91.0),
                     return_over_max_drawdown: Some(0.0),
                     ..Default::default()
                 },
@@ -3059,6 +3245,8 @@ mod tests {
                     short: side(Some(0.0)),
                     max_drawdown: Some(150.0),
                     max_drawdown_fraction: Some(1.5),
+                    average_drawdown: Some(150.0),
+                    average_drawdown_days: Some(365.25),
                     periods_per_year: Some(1.0),
                     return_over_max_drawdown: Some(0.0),
                     ..Default::default()
@@ -3076,9 +3264,31 @@ mod tests {
                     short: side(Some(0.0)),
                     max_drawdown: Some(100.0),
                     max_drawdown_fraction: Some(1.0),
+                    average_drawdown: Some(100.0),
+                    average_drawdown_days: Some(365.25),
                     periods_per_year: Some(1.0),
                     return_over_max_drawdown: Some(0.0),
                     compound_annual_growth: Some(-1.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "flat stretches at a peak and at a trough",
+                flat_stretches,
+                StrategyPerformance {
+                    open_profit: Some(0.0),
+                    all: side(Some(0.0)),
+                    long: side(Some(0.0)),
+                    short: side(Some(0.0)),
+                    max_drawdown: Some(20.0),
+                    max_drawdown_fraction: Some(0.18181818181818182),
+                    max_run_up: Some(20.0),
+                    max_run_up_fraction: Some(0.002),
+                    return_over_max_drawdown: Some(0.0),
+                    average_drawdown: Some(20.0),
+                    average_drawdown_days: Some(3.0),
+                    average_run_up: Some(15.0),
+                    average_run_up_days: Some(1.0),
                     ..Default::default()
                 },
             ),
@@ -3471,6 +3681,10 @@ mod tests {
             },
             max_drawdown: Some(100.0),
             max_drawdown_fraction: Some(0.1),
+            average_drawdown: Some(100.0),
+            average_drawdown_days: Some(730.5),
+            average_run_up: Some(310.0),
+            average_run_up_days: Some(365.25),
             return_over_max_drawdown: Some(0.6),
             compound_annual_growth: Some(0.1),
             periods_per_year: Some(1.0),
@@ -4087,11 +4301,15 @@ mod tests {
              summary,Open profit,45.5,money,USD,\n\
              summary,Maximum drawdown (close-to-close),90,money,USD,\n\
              summary,Maximum drawdown % (close-to-close),0.892857142857143,percent,,\n\
+             summary,Average drawdown (close-to-close),47.5,money,USD,\n\
+             summary,Average drawdown duration in days (close-to-close),0.08333333333333333,days,,\n\
              summary,Maximum drawdown (intrabar),,money,USD,\n\
              summary,Maximum drawdown % (intrabar),,percent,,\n\
              summary,Maximum drawdown % of initial capital (intrabar),,percent,,\n\
              summary,Maximum run-up (close-to-close),130,money,USD,\n\
              summary,Maximum run-up % (close-to-close),1.3,percent,,\n\
+             summary,Average run-up (close-to-close),70,money,USD,\n\
+             summary,Average run-up duration in days (close-to-close),0.052083333333333336,days,,\n\
              summary,Maximum run-up (intrabar),,money,USD,\n\
              summary,Maximum run-up % (intrabar),,percent,,\n\
              summary,Return over maximum drawdown,0.49444444444444446,ratio,,\n\
@@ -4230,9 +4448,11 @@ mod tests {
             account_size_required: Some(-0.0),
             margin_efficiency: Some(-0.0),
             max_drawdown: Some(-0.0),
+            average_drawdown: Some(-0.0),
             open_profit: Some(-0.0),
             intrabar_max_drawdown: Some(-0.0),
             max_run_up: Some(-0.0),
+            average_run_up: Some(-0.0),
             intrabar_max_run_up: Some(-0.0),
             return_over_max_drawdown: Some(-0.0),
             sharpe_ratio: Some(-0.0),
