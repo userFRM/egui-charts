@@ -147,7 +147,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [ ] Give Net Volume's output a histogram default.
 - [x] Bollinger Bands select their basis average, and BandWidth has expansion and contraction lookbacks. Each BandWidth extremum starts only once its window spans the whole lookback, or with the width if that comes later.
 - [x] VWAP band multipliers and event dates are editable in applied-study settings.
-- [x] Request finer profile data, from a feed's suggestion or a chosen interval, and adapt session profile rows to the zoom.
+- [x] Request finer profile data, from a feed's suggestion for each profile's length and dates or a chosen interval, and adapt session profile rows to the zoom.
 - [x] Spread, Ratio and Correlation Coefficient read their second symbol from the host; correlation also offers log returns. Correlation Coefficient opens as an area with a dashed guide at zero, with editable visibility, value, colour, style, width and latest value line; one saved as a line restores that way, and one saved with guides at 1 and -1 keeps them.
 - [x] Correlation - Log correlates their log returns over 25 returns by default and opens as a line without a guide.
 - [x] Trend Strength Index plots the rolling correlation of price with bar position, in editable colours above and below zero.
