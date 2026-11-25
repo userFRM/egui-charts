@@ -111,8 +111,8 @@ impl DemoApp {
         }
     }
 
-    /// Marks the samples' fill, which no broker sent, as a fill in a style of its own: the
-    /// host's way to draw imported trades.
+    /// Marks the samples' fill, which no broker sent, as a fill in a style of its own with its
+    /// own label: the host's way to draw imported trades.
     pub(super) fn show_sample_fill(&self, ui: &mut egui::Ui) {
         let Some((time, price)) = (self.chart.markers(SeriesId::MAIN).iter()).find_map(|marker| {
             let sample = marker.text.as_deref() == Some("Fill") && marker.color == FILL;
@@ -134,6 +134,8 @@ impl DemoApp {
         let mark = ExecutionMark::new(&fill)
             .with_color(IMPORT)
             .with_hover("Imported fill (sample)")
+            .with_label("Imported")
+            .with_label_color(IMPORT)
             .with_style(&style);
         render_executions(ui, &self.chart, &[mark], &self.trading.display, None);
     }

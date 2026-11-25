@@ -1994,8 +1994,8 @@ mod tests {
         }
     }
 
-    /// The sample overlays reach the public fill renderer with their own size and font, and
-    /// switching them off removes the imported fill too.
+    /// The sample overlays reach the public fill renderer with their own size, font, label and
+    /// label colour, and switching them off removes the imported fill too.
     #[test]
     fn samples_mark_their_fill_in_its_own_style() {
         let ctx = egui::Context::default();
@@ -2003,7 +2003,7 @@ mod tests {
         app.live.set_paused(true);
         super::super::tests::settle(&mut app, &ctx);
         let draw = |app: &mut DemoApp| {
-            let (mut triangles, mut font) = (Vec::new(), None);
+            let (mut triangles, mut label, mut default_label) = (Vec::new(), None, false);
             for _ in 0..3 {
                 let output = frame(app, &ctx, vec![]);
                 triangles = output
@@ -2020,15 +2020,22 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                font = output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == "Buy 3" => {
-                        Some(text.galley.job.sections[0].format.font_id.clone())
-                    }
-                    _ => None,
-                });
+                let texts = || {
+                    output.shapes.iter().filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text),
+                        _ => None,
+                    })
+                };
+                label = texts()
+                    .find(|text| text.galley.text() == "Imported")
+                    .map(|text| {
+                        let format = &text.galley.job.sections[0].format;
+                        (format.font_id.clone(), format.color)
+                    });
+                default_label = texts().any(|text| text.galley.text() == "Buy 3");
                 output.drop_without_applying_deltas();
             }
-            (triangles, font)
+            (triangles, label, default_label)
         };
         assert!(draw(&mut app).0.is_empty());
         app.execute_search_command(&ctx, "samples");
@@ -2039,12 +2046,19 @@ mod tests {
                 .any(|marker| marker.text.as_deref() == Some("Fill")),
             "the samples must supply their fill before it can be rendered"
         );
-        let (triangles, font) = draw(&mut app);
+        let (triangles, label, default_label) = draw(&mut app);
         assert_eq!(triangles.len(), 1, "one imported sample fill");
         let [tip, right, left] = triangles[0];
         assert!((right.x - left.x - 10.0).abs() < 0.01);
         assert!(((right.y - tip.y).abs() - 12.0).abs() < 0.01);
-        assert_eq!(font, Some(egui::FontId::monospace(11.0)));
+        assert_eq!(
+            label,
+            Some((egui::FontId::monospace(11.0), super::super::marks::IMPORT))
+        );
+        assert!(
+            !default_label,
+            "the host label replaces the side and quantity"
+        );
         app.execute_search_command(&ctx, "samples");
         assert!(draw(&mut app).0.is_empty());
     }
