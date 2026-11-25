@@ -336,8 +336,9 @@ impl AlertEvaluator {
 
     /// Poll live inputs and evaluate ready alerts. An alert waits while one of its studies
     /// calculates away from this thread. With `ui`, `ctx` wakes the host on new data and while
-    /// such a study calculates, and follows stored drawings. Headless hosts pass an empty `live` slice. Detector alerts
-    /// follow the signals of `live`, as `AlertEngine::detector_signals` takes them.
+    /// such a study calculates, and follows stored drawings. Headless hosts pass an empty `live`
+    /// slice. Detector alerts follow the signals of `live`, as `AlertEngine::detector_signals`
+    /// takes them.
     /// `live` lends compatible loaded chart data; event studies retain independent streams.
     /// Errors leave affected sources unavailable and are returned for the host to report.
     pub fn poll(
