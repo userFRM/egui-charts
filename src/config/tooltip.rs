@@ -85,6 +85,17 @@ pub struct TooltipOptions {
     #[serde(default)]
     pub touch_exit_mode: super::TouchTrackingExitMode,
 
+    /// Ask for an order after a long press in place of showing values. With this on, a touch
+    /// held still for `long_press_delay` on the price pane asks for a limit order at the
+    /// touched price: with the `ui` feature, `ChartMenus::show` returns the order of the
+    /// chart menu's limit row there, for the host to open in its order ticket. Where that
+    /// menu offers no limit order, as in a study or added series pane or for an account that
+    /// accepts none, the hold shows its values as before. It replaces what `touch_long_press`
+    /// shows, so it has no effect while that or `enabled` is off. Mouse input is unaffected.
+    /// Default: false.
+    #[serde(default)]
+    pub long_press_order: bool,
+
     /// Tooltip display mode
     pub mode: TooltipMode,
 
@@ -150,6 +161,7 @@ impl Default for TooltipOptions {
             touch_long_press: default_touch_long_press(),
             long_press_delay: default_long_press_delay(),
             touch_exit_mode: super::TouchTrackingExitMode::default(),
+            long_press_order: false,
             mode: TooltipMode::Floating,
             show_ohlc: true,
             show_volume: true,

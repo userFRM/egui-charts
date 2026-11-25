@@ -114,6 +114,12 @@ pub(super) fn history_url(base: &str, request: &HistoryRequest) -> Result<String
         ("resolution", resolution(request.timeframe)?),
         ("countback", request.count.to_string()),
         ("extended_hours", request.extended_hours.to_string()),
+        // Overnight hours without extended hours select regular hours.
+        (
+            "overnight_hours",
+            (request.extended_hours && request.overnight_hours).to_string(),
+        ),
+        ("adjusted", request.adjusted.to_string()),
     ];
     if let Some(before) = request.before {
         params.push(("to", time_param(bound(request, before))));
@@ -187,8 +193,11 @@ pub(super) struct Symbol {
     unit: Option<String>,
     timezone: Option<TimezoneId>,
     session: Option<String>,
+    session_extended: Option<String>,
+    session_overnight: Option<String>,
     supported_resolutions: Option<Vec<String>>,
     data_status: Option<String>,
+    dividend_adjustment: Option<bool>,
 }
 
 impl Symbol {
@@ -222,6 +231,17 @@ impl Symbol {
         instrument.unit = self.unit;
         instrument.time_zone = self.timezone;
         instrument.session = self.session.as_deref().map(session).transpose()?;
+        if self.session_extended.is_some() || self.session_overnight.is_some() {
+            // Beside "24x7" or no regular windows, other windows would close regular hours.
+            let hours = instrument
+                .session
+                .as_mut()
+                .filter(|hours| !hours.windows.is_empty())
+                .ok_or_else(|| invalid("extended and overnight sessions need regular hours"))?;
+            let parse = |text: Option<String>| text.as_deref().map(windows).transpose();
+            hours.extended_windows = parse(self.session_extended)?.unwrap_or_default();
+            hours.overnight_windows = parse(self.session_overnight)?.unwrap_or_default();
+        }
         instrument.supported_timeframes = self
             .supported_resolutions
             .map(|values| values.iter().map(|text| timeframe(text)).collect())
@@ -232,6 +252,7 @@ impl Symbol {
             Some("endofday") => Some(DataStatus::EndOfDay),
             _ => None,
         };
+        instrument.dividend_adjustment = self.dividend_adjustment.unwrap_or(false);
         Ok(instrument)
     }
 }
@@ -270,6 +291,11 @@ fn session(text: &str) -> Result<Session, FeedError> {
     if text == "24x7" {
         return Ok(Session::new([]));
     }
+    windows(text).map(Session::new)
+}
+
+/// The windows of `HHMM-HHMM[,HHMM-HHMM][:days]`, each named by the day on which it closes.
+fn windows(text: &str) -> Result<Vec<SessionWindow>, FeedError> {
     let time = |value: &str| {
         if value == "2400" {
             Ok(NaiveTime::MIN)
@@ -306,7 +332,7 @@ fn session(text: &str) -> Result<Session, FeedError> {
         }
         windows.push(SessionWindow::new(days, time(open)?, time(close)?));
     }
-    Ok(Session::new(windows))
+    Ok(windows)
 }
 
 #[derive(Deserialize)]

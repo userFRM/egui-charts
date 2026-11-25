@@ -17,9 +17,9 @@
 //!
 //! # Output
 //!
-//! Five lines: the 4-hour, day, week and month pivots, drawn as crosses and each labelled with its
-//! period at its latest bar, and the close. A period that is turned off has no values, label or
-//! legend entry. Overlay indicator.
+//! Five lines: the 4-hour, day, week and month pivots, drawn on every bar as the characters 8, d,
+//! w and m and each labelled with its period at its latest bar, and the close. A period that is
+//! turned off has no values, label or legend entry. Overlay indicator.
 
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use crate::model::{Bar, BarClock, Instrument, Timeframe};
@@ -40,6 +40,9 @@ const PERIODS: [Timeframe; 4] = [
 
 /// The label of each pivot plot at its latest bar.
 const LABELS: [&str; 4] = ["4H", "D", "W", "M"];
+
+/// The character drawn at each bar of each pivot plot.
+const CHARACTERS: [char; 4] = ['8', 'd', 'w', 'm'];
 
 /// Ziv Ghost Pivots: the typical price of the 4-hour, day, week and month periods so far.
 #[derive(Clone, Debug)]
@@ -291,7 +294,7 @@ impl Indicator for ZivGhostPivots {
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
             plot_type: if line < 4 {
-                crate::studies::PlotType::Crosses
+                crate::studies::PlotType::Character(CHARACTERS[line])
             } else {
                 crate::studies::PlotType::Line
             },

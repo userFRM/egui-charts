@@ -254,6 +254,8 @@ impl ComparisonSettings {
                                         series_line(&self.options, self.options.down_color);
                                     style.above_fill = fill(self.options.up_color);
                                     style.below_fill = fill(self.options.down_color);
+                                    style.above_fill_at_base = None;
+                                    style.below_fill_at_base = None;
                                     style
                                 });
                             }
@@ -1318,6 +1320,8 @@ mod tests {
                 expected.below = line_of(egui::Color32::from_rgb(10, 10, 200));
                 expected.above_fill = egui::Color32::from_rgba_unmultiplied(200, 10, 10, 30);
                 expected.below_fill = egui::Color32::from_rgba_unmultiplied(10, 10, 200, 30);
+                expected.above_fill_at_base = None;
+                expected.below_fill_at_base = None;
                 assert_eq!(options.baseline_style, Some(expected));
             }
         }
