@@ -430,19 +430,30 @@ pub trait Indicator: Send + ConcreteStudy {
         None
     }
 
-    /// Optional text beside the shape a circle, cross or triangle plot draws at a source bar:
-    /// under an upward triangle and over the other shapes, in the shape's colour.
+    /// Optional text beside the shape a circle, cross, triangle or character plot draws at a
+    /// source bar: under an upward triangle and over the other shapes, in the shape's colour.
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
         let _ = (line, bar);
         None
     }
 
-    /// Optional text shown while the pointer is over the shape a circle, cross or triangle plot
-    /// draws at a source bar, or over that shape's [`plot_text`](Self::plot_text). `None`, the
-    /// default, shows nothing.
+    /// Optional text shown while the pointer is over the shape a circle, cross, triangle or
+    /// character plot draws at a source bar, or over that shape's
+    /// [`plot_text`](Self::plot_text). `None`, the default, shows nothing.
     fn plot_tooltip(&self, line: usize, bar: usize) -> Option<String> {
         let _ = (line, bar);
         None
+    }
+
+    /// The character a [`PlotType::Character`](super::PlotType::Character) plot of the zero-based
+    /// output `line` draws, which a style editor offers with that type. `None`, for a line drawn
+    /// as another type, offers none. The default reads the type
+    /// [`plot_style`](Self::plot_style) declares.
+    fn plot_character(&self, line: usize) -> Option<char> {
+        match self.plot_style(line).plot_type {
+            super::PlotType::Character(character) => Some(character),
+            _ => None,
+        }
     }
 
     /// Filled bands, painted beneath this study's plots. Missing endpoints break a band.

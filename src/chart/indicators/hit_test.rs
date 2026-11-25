@@ -263,7 +263,8 @@ where
             PlotType::Circles
             | PlotType::Crosses
             | PlotType::TriangleUp
-            | PlotType::TriangleDown => click_pos.distance(point) <= plot.width + HIT_TOLERANCE,
+            | PlotType::TriangleDown
+            | PlotType::Character(_) => click_pos.distance(point) <= plot.width + HIT_TOLERANCE,
             PlotType::Line
             | PlotType::LineWithBreaks
             | PlotType::StepLine
@@ -427,6 +428,8 @@ mod tests {
                 (PlotType::Histogram, Pos2::new(99.0, 20.0), false),
                 (PlotType::Circles, Pos2::new(99.0, 20.0), false),
                 (PlotType::Circles, Pos2::new(149.0, 20.0), true),
+                (PlotType::Character('d'), Pos2::new(99.0, 20.0), false),
+                (PlotType::Character('d'), Pos2::new(149.0, 20.0), true),
                 (PlotType::Line, Pos2::new(99.0, 20.0), true),
                 (PlotType::Columns, Pos2::new(79.0, 60.0), true),
                 (PlotType::StepLine, Pos2::new(99.0, 20.0), true),
