@@ -96,6 +96,15 @@ constructor docs include examples of both forms.
 is a [`FootprintBars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.FootprintBars.html);
 its `iter` method reads either form.
 
+To size the first prepared page independently of candle history, call
+[`chart.set_footprint_history_by_view(true)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_footprint_history_by_view)
+before showing the chart. It requests visible bars plus up to one viewport of prefetch
+(at most 150 extra bars), widened for footprint studies and profile anchors, never above
+the configured initial page size. With late candles or no layout it uses the viewport's
+bar-count estimate. The first request still asks for the **latest** rows: only the feed
+knows where live executions take over. A scrolled-back view can therefore need a second,
+time-bounded request. Candle and trade requests are unchanged.
+
 A bounded request names `[since, before)`. Each reply answers one contiguous suffix ending
 at `before`: its first bar starts the answered span, or an empty page uses
 `with_continue_before(from)`. An available empty span certifies that no executions occurred.

@@ -1,19 +1,115 @@
 //! Prepared pages use the normal request lifecycle and retain their rows outside the tape.
 
 use super::pump::non_progressing;
-use super::{FeedLink, MIN_SCROLL_BACK_PAGE, Request};
+use super::{FeedLink, MIN_SCROLL_BACK_PAGE, Request, SCROLL_BACK_MARGIN};
 use crate::data::{FeedError, FootprintPage, FootprintRequest, FootprintState, StudyDataRequest};
 use crate::model::ChartType;
 use crate::widget::Chart;
 use chrono::{DateTime, TimeDelta, Utc};
 
 impl Chart {
+    /// Sizes the first prepared footprint page from the visible bars plus up to one viewport
+    /// of prefetch, widened for footprint studies and profile anchors. By default it uses the
+    /// initial candle count. Set before showing the chart; it survives feed replacement and
+    /// does not cancel outstanding pages, shorten candle history or change trade demand.
+    pub fn set_footprint_history_by_view(&mut self, enabled: bool) {
+        self.footprint_history_by_view = enabled;
+    }
+
+    fn footprint_by_view(&self) -> bool {
+        self.footprint_history_by_view && self.replay.is_none() && self.market_replay.is_none()
+    }
+
+    /// Inclusive bar opens needed by the chart and its footprint consumers.
+    fn footprint_demand(&self, studies: bool) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        let shown = self.state.shown();
+        let (first, end) = self.state.visible_range();
+        let viewport = self.chart_type == ChartType::VolumeFootprint || studies;
+        let mut from = shown.get(first).filter(|_| viewport).map(|bar| bar.time);
+        let mut through = end
+            .checked_sub(1)
+            .and_then(|i| shown.get(i))
+            .filter(|_| viewport)
+            .map(|b| b.time);
+        if studies {
+            let main = StudyDataRequest {
+                symbol: String::new(),
+                timeframe: None,
+                metric: None,
+            };
+            let bars = &self.state.data().bars;
+            for study in self.studies.indicators() {
+                if study.order_flow_inputs().iter().any(|i| i.is_footprint()) {
+                    let start = study
+                        .data_start(&main)
+                        .or_else(|| bars.first().map(|b| b.time));
+                    from = from.into_iter().chain(start).min();
+                }
+            }
+            through = bars.last().map(|b| b.time).or(through);
+        }
+        #[cfg(feature = "drawings")]
+        if self.footprint_by_view()
+            && !self.drawings.is_hidden()
+            && !self.drawings.drawings.is_empty()
+        {
+            let interval = self.timeframe.unwrap_or_default().as_str();
+            for span in self
+                .drawings
+                .unfiltered_drawings()
+                .filter(|drawing| drawing.is_visible_on_timeframe(&interval))
+                .filter_map(|drawing| drawing.execution_span(shown))
+            {
+                from = from.into_iter().chain(span.first().map(|b| b.time)).min();
+                through = through.into_iter().chain(span.last().map(|b| b.time)).max();
+            }
+        }
+        from.into_iter()
+            .chain(self.pending_scroll_time)
+            .min()
+            .zip(through)
+    }
+
+    fn initial_footprint_count(&self, studies: bool, limit: usize) -> usize {
+        // No time bounds yet: the source, not the last visible candle, owns the live join.
+        // A restored view can be far behind it. Page that view by time once the join is known.
+        let (first, end) = self.state.visible_range();
+        let width = if first < end {
+            end - first
+        } else {
+            self.desired_visible_bars
+                .unwrap_or_else(|| self.get_visible_bars())
+                .max(1)
+        };
+        let wanted = self
+            .footprint_demand(studies)
+            .map_or(width, |(from, through)| {
+                let bars = &self.state.data().bars;
+                let first = bars.partition_point(|bar| bar.time < from);
+                bars.partition_point(|bar| bar.time <= through)
+                    .saturating_sub(first)
+                    .max(width)
+            });
+        wanted
+            .saturating_add(width.min(SCROLL_BACK_MARGIN))
+            .min(limit)
+    }
+
     pub(super) fn scroll_footprints(&mut self, link: &mut FeedLink) {
         let studies = link
             .study_inputs
             .iter()
             .any(|(input, _)| input.is_footprint());
-        if (self.chart_type != ChartType::VolumeFootprint && !studies)
+        let cutoff = link
+            .footprint
+            .as_ref()
+            .and_then(|flow| flow.live.prepared_before());
+        // A profile can keep reading the prepared rows after switching back to candles.
+        // Don't start a new prepared page for an otherwise raw-only drawing.
+        let reader = self.chart_type == ChartType::VolumeFootprint
+            || studies
+            || (self.footprint_by_view() && cutoff.is_some());
+        if !reader
             || link.clock.timeframe().is_none_or(|tf| tf.is_trade_based())
             || link.footprints_stopped
             || link.subscription.is_none()
@@ -36,46 +132,8 @@ impl Chart {
         else {
             return;
         };
-        let (before, since) = if let Some(cutoff) = link
-            .footprint
-            .as_ref()
-            .and_then(|flow| flow.live.prepared_before())
-        {
-            let shown = self.state.shown();
-            let (first, end) = self.state.visible_range();
-            let mut from = shown.get(first).map(|bar| bar.time);
-            let mut through = end
-                .checked_sub(1)
-                .and_then(|at| shown.get(at))
-                .map(|bar| bar.time);
-            if studies {
-                let main = StudyDataRequest {
-                    symbol: String::new(),
-                    timeframe: None,
-                    metric: None,
-                };
-                for study in self.studies.indicators() {
-                    if study
-                        .order_flow_inputs()
-                        .iter()
-                        .any(|input| input.is_footprint())
-                    {
-                        let start = study
-                            .data_start(&main)
-                            .or_else(|| self.state.data().bars.first().map(|bar| bar.time));
-                        from = from.into_iter().chain(start).min();
-                    }
-                }
-                through = self
-                    .state
-                    .data()
-                    .bars
-                    .last()
-                    .map(|bar| bar.time)
-                    .or(through);
-            }
-            from = from.into_iter().chain(self.pending_scroll_time).min();
-            let (Some(from), Some(through)) = (from, through) else {
+        let (before, since) = if let Some(cutoff) = cutoff {
+            let Some((from, through)) = self.footprint_demand(studies) else {
                 return;
             };
             // The bar the cutoff joins holds the live executions.
@@ -112,6 +170,8 @@ impl Chart {
             since,
             count: if before.is_some() {
                 link.initial_bars.max(MIN_SCROLL_BACK_PAGE)
+            } else if self.footprint_by_view() {
+                self.initial_footprint_count(studies, link.initial_bars)
             } else {
                 link.initial_bars
             },

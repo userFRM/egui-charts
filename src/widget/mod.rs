@@ -478,6 +478,8 @@ pub struct Chart {
     pub(crate) feed_link: Option<FeedLink>,
     /// Host policy for the initial historical trade page, independent of the current binding.
     trade_history_on_demand: bool,
+    /// Size the first prepared footprint page to its readers rather than candle history.
+    footprint_history_by_view: bool,
     /// Cursor mode state (Demonstration, Magic, Eraser effects)
     #[cfg(feature = "drawings")]
     pub(crate) cursor_modes: CursorModeState,
