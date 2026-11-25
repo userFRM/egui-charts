@@ -238,8 +238,10 @@ range. Charts of equity, drawdown from peak, run-up from trough and, for reports
 margin used default to account units; **Percent of initial capital** switches every chart to
 percentages of the selected range's initial capital, with equity starting at 100. The optional
 fee-free buy-and-hold comparison uses the same equity scale. Drawdown and run-up follow usable
-intrabar ranges, falling back to closes when ranges are unavailable. Replacing the report resets
-the switch to account units; the switch requires positive finite initial capital. The intrabar
+intrabar ranges, falling back to closes when ranges are unavailable. Beside the title of each
+of these two charts stand the largest value it plots, the average drawdown or run-up of the
+summary and the chart's latest value, in the chart's units; a figure that is unavailable reads
+N/A. Replacing the report resets the switch to account units; the switch requires positive finite initial capital. The intrabar
 figures and all charts follow the date range, and so do margin marks, peaks and calls. Engine
 margin points use the equity timestamps; host margin points use their own time span. Without
 usable margin points the margin chart takes no space. Curve positions and hover
