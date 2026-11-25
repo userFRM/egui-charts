@@ -296,7 +296,6 @@ impl Chart {
                 self.quote = None;
                 self.session_quote = None;
                 link.trades = Trades::new(TRADE_CAPACITY);
-                link.trades_from_start = false;
                 link.footprints_complete = false;
                 link.footprints_stopped = false;
                 link.footprint_unavailable.clear();
@@ -603,7 +602,6 @@ impl Chart {
                     if reset {
                         retain_prepared = false;
                         link.trades = Trades::new(TRADE_CAPACITY);
-                        link.trades_from_start = false;
                     }
                     link.trades.append(pending, &mut |_, _| ());
                 }
@@ -662,7 +660,7 @@ impl Chart {
         }
         (link.bar_cursor, link.trade_cursor, link.depth_cursor) = (None, None, None);
         link.trades_complete = false;
-        link.trades_from_start &= retain_trades;
+        link.trades.from_start &= retain_trades;
         self.set_quote(None);
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
@@ -968,8 +966,11 @@ impl Chart {
         }
         let end = page.end_of_history || (empty && page.continue_before.is_none());
         // The oldest held trade's bar is complete once nothing is left before it.
-        let reached_start = end && !link.trades_from_start;
-        link.trades_from_start |= end;
+        let reached_start = end && !link.trades.from_start;
+        let confirmed_rate = reached_start
+            && link.trades.unconfirmed_page_start().is_some()
+            && !link.clock.timeframe().is_some_and(|tf| tf.is_trade_based());
+        link.trades.from_start |= end;
         let unproven = (link.trades.left_out_at(), link.trades.retained_until());
         let bubbles = &mut link.bubbles;
         let prepared_before = link
@@ -1057,7 +1058,11 @@ impl Chart {
             // A prepared footprint input keeps the executions it received: only a page that
             // changes executions from the cutoff on rebuilds it, as it does the chart's footprint.
             let prepared = prepared_before.is_some() && input.is_footprint();
-            let rebuild = if prepared { tail_changed } else { changed };
+            let rebuild = if prepared {
+                tail_changed
+            } else {
+                changed || (confirmed_rate && input.is_trade_rate())
+            };
             if rebuild {
                 input.replace_trades(
                     &link.clock,

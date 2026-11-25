@@ -43,6 +43,7 @@ struct Subject {
     timezone: Option<crate::model::TimezoneId>,
     extended_hours: bool,
     overnight_hours: bool,
+    adjusted: bool,
     conversion: Option<String>,
     count: usize,
     start: Option<DateTime<Utc>>,
@@ -181,6 +182,7 @@ impl Evaluation {
             timezone: self.inputs.timezone.clone(),
             extended_hours: self.inputs.extended_hours,
             overnight_hours: self.inputs.overnight_hours,
+            adjusted: self.inputs.dividend_adjusted,
             conversion: self.inputs.conversion.clone(),
             count: self.inputs.count.max(1),
             start: self.inputs.start,
@@ -322,6 +324,7 @@ impl Subject {
         };
         request.extended_hours = self.extended_hours;
         request.overnight_hours = self.overnight_hours;
+        request.adjusted = self.adjusted;
         request.conversion = self.conversion.clone();
         request.count = self.count.max(1000);
         request
@@ -676,10 +679,12 @@ mod tests {
             if request.symbol == "NO_CANDLES" && request.timeframe == Timeframe::Min1 {
                 return reply.send(Err(FeedError::NotSupported));
             }
+            // Adjusted history is 9 lower throughout, as before a 9.00 dividend.
+            let shift = if request.adjusted { 9.0 } else { 0.0 };
             let bars = if request.timeframe == Timeframe::Min5 {
-                vec![bar(-5, 50.0), bar(0, 150.0)]
+                vec![bar(-5, 50.0 - shift), bar(0, 150.0 - shift)]
             } else {
-                vec![bar(-1, 200.0), bar(0, 300.0)]
+                vec![bar(-1, 200.0 - shift), bar(0, 300.0 - shift)]
             };
             self.requests.lock().unwrap().push(request);
             reply.send(Ok(HistoryPage::new(bars, true)));
@@ -1572,6 +1577,48 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// An alert made on a dividend-adjusted chart asks for adjusted history and live bars and
+    /// fires on its closes, 291 where the prices as traded close at 300. Saved without the choice,
+    /// as alerts were before they kept it, the same alert asks for and fires on the prices as
+    /// traded.
+    #[test]
+    #[cfg(feature = "widget")]
+    fn alerts_evaluate_with_the_dividend_adjustment_of_their_chart() {
+        let mut chart = crate::ChartBuilder::new()
+            .with_feed(Arc::new(Feed::default()))
+            .with_symbol("SYM")
+            .with_timeframe(Timeframe::Min1)
+            .build();
+        chart.set_dividend_adjusted(true);
+        let mut alert = Alert::new("SYM", crate::model::AlertCondition::Above(250.0));
+        alert.timeframe = Some(Timeframe::Min1);
+        alert.message = "{{close}}".into();
+        chart.prepare_alert(&mut alert);
+        let evaluated = |alert: Alert| {
+            let feed = Arc::new(Feed::default());
+            let fired = fired_messages(feed.clone(), &IndicatorFactory::new(), alert);
+            let requests = feed.requests.lock().unwrap();
+            let subscriptions = feed.subscriptions.lock().unwrap();
+            (
+                fired,
+                requests.iter().map(|r| r.adjusted).collect::<Vec<_>>(),
+                subscriptions.iter().map(|s| s.adjusted).collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(
+            evaluated(alert.clone()),
+            (vec!["291".to_owned()], vec![true], vec![true])
+        );
+        let mut older = serde_json::to_value(&alert).unwrap();
+        let saved = older["inputs"].as_object_mut().unwrap();
+        assert_eq!(saved.remove("dividend_adjusted"), Some(true.into()));
+        let older: Alert = serde_json::from_value(older).unwrap();
+        assert_eq!(
+            evaluated(older),
+            (vec!["300".to_owned()], vec![false], vec![false])
+        );
     }
 
     /// A repeating study alert: one study 7 named `name` on one minute, `Above(100)`.
