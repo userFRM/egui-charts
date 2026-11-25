@@ -98,7 +98,7 @@ pub(crate) fn render_extended_hours(
     provider: &crate::model::ExchangeSessionProvider,
     mapping: &ChartMapping,
     start_idx: usize,
-    (premarket, postmarket, overnight): (Option<Color32>, Option<Color32>, Color32),
+    (premarket, postmarket, overnight): (Option<Color32>, Option<Color32>, Option<Color32>),
 ) -> Vec<(egui::Rect, Color32)> {
     use crate::model::session::{MarketSession, WindowKind};
     let mut shaded = Vec::new();
@@ -112,7 +112,7 @@ pub(crate) fn render_extended_hours(
                     Some(MarketSession::PreMarket) => premarket,
                     _ => postmarket,
                 },
-                WindowKind::Overnight => Some(overnight),
+                WindowKind::Overnight => overnight,
             });
         if let Some((first, shade)) = run.filter(|&(_, shade)| Some(shade) != color) {
             run = None;

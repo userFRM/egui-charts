@@ -42,8 +42,11 @@ column base; added column series include their base in the fit.
   code={source.slice(0, source.indexOf('///')) + source.match(/pub fn histogram\b[^]*?\n\}/)[0]} />
 
 The compiled setup is in [series.rs](https://github.com/userFRM/egui-charts/blob/main/examples/docs/scenes/series.rs).
-Main columns use the bullish/bearish colours in
-[`ChartConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.bullish_color).
+Main columns use
+[`ColumnsStyle::up_color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ColumnsStyle.html#structfield.up_color)
+and `down_color` in
+[`ChartTypeParams::styles`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeParams.html#structfield.styles),
+the rising and falling colours at 50% opacity until set.
 Added columns use
 [`SeriesOptions::up_color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.up_color),
 `down_color` and

@@ -43,6 +43,23 @@ pub enum HotlistsAction {
         /// Instrument identifier used by the host.
         symbol: String,
     },
+    /// Copy the shown list into a watchlist: the symbols of its rows, in the order shown, chosen
+    /// in the list menu. With `list` `None` into a new watchlist named after the hotlist, such as
+    /// with [`WatchlistPanel::import`](crate::ui::widget_bar::WatchlistPanel::import); otherwise
+    /// into the watchlist at this index of the names given to
+    /// [`HotlistsPanel::set_watchlists`], such as with
+    /// [`WatchlistPanel::add_symbol_to`](crate::ui::widget_bar::WatchlistPanel::add_symbol_to)
+    /// for each symbol.
+    CopyToWatchlist {
+        /// The hotlist's name as given to [`HotlistsPanel::new`], untranslated.
+        hotlist: String,
+        /// Index into the names given to [`HotlistsPanel::set_watchlists`], or `None` for a new
+        /// watchlist.
+        list: Option<usize>,
+        /// Instrument identifiers of the shown rows, in order and with any repeats, as the feed
+        /// answered them.
+        symbols: Vec<String>,
+    },
     /// The user starred or unstarred a list. These are the names of the starred lists in the order
     /// given to [`HotlistsPanel::new`], for the host to keep and give back with
     /// [`HotlistsPanel::set_starred`].
@@ -145,8 +162,10 @@ impl HotlistsPanel {
     }
 
     /// Offers adding a row's symbol to these watchlists, such as the names of
-    /// [`WatchlistPanel::lists`](crate::ui::widget_bar::WatchlistPanel::lists), in the row's menu.
-    /// The choice returns as [`HotlistsAction::AddToWatchlist`]. Without names rows have no menu.
+    /// [`WatchlistPanel::lists`](crate::ui::widget_bar::WatchlistPanel::lists), in the row's menu,
+    /// returned as [`HotlistsAction::AddToWatchlist`], and copying the shown rows into a new
+    /// watchlist or one of these in the list menu, returned as
+    /// [`HotlistsAction::CopyToWatchlist`]. Without names the panel offers neither.
     pub fn set_watchlists(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
         self.watchlists = names.into_iter().map(Into::into).collect();
     }
@@ -236,6 +255,8 @@ impl HotlistsPanel {
         let mut order: Vec<usize> = (0..self.lists.len()).collect();
         order.sort_by_key(|&index| !self.lists[index].1);
         let mut starred = None;
+        let mut copy: Option<Option<usize>> = None;
+        let has_rows = !self.entries.is_empty();
         ui.horizontal_wrapped(|ui| {
             if let Some((name, _)) = self.lists.get(self.list) {
                 controls::dropdown(ui, "hotlist", name, |ui| {
@@ -261,6 +282,26 @@ impl HotlistsPanel {
                             ui.selectable_value(&mut self.list, index, l10n::text(ui.ctx(), name));
                         });
                     }
+                    if self.watchlists.is_empty() {
+                        return;
+                    }
+                    ui.separator();
+                    let new = egui::Button::new(l10n::text(ui.ctx(), "Copy to new watchlist"));
+                    if ui.add_enabled(has_rows, new).clicked() {
+                        copy = Some(None);
+                        ui.close();
+                    }
+                    for (list, name) in self.watchlists.iter().enumerate() {
+                        let label = l10n::format_text(
+                            ui.ctx(),
+                            "Copy to {watchlist}",
+                            &[("watchlist", l10n::text(ui.ctx(), name).as_str())],
+                        );
+                        if ui.add_enabled(has_rows, egui::Button::new(label)).clicked() {
+                            copy = Some(Some(list));
+                            ui.close();
+                        }
+                    }
                 });
             }
             choices(
@@ -282,6 +323,18 @@ impl HotlistsPanel {
             self.lists[index].1 = !self.lists[index].1;
             let names = self.lists.iter().filter(|(_, star)| *star);
             action = HotlistsAction::Starred(names.map(|(name, _)| name.clone()).collect());
+        }
+        // Before a reload clears the rows; `before.0` is the list whose rows are on screen.
+        if let Some(list) = copy {
+            action = HotlistsAction::CopyToWatchlist {
+                hotlist: self.lists[before.0].0.clone(),
+                list,
+                symbols: self
+                    .entries
+                    .iter()
+                    .map(|entry| entry.symbol.clone())
+                    .collect(),
+            };
         }
         if before != (self.list, self.exchanges.clone(), self.countries.clone()) {
             self.reload();
@@ -486,7 +539,8 @@ impl HotlistsPanel {
 mod tests {
     use super::*;
     use crate::data::{HistoryPage, HistoryRequest, Reply};
-    use egui_kittest::{Harness, kittest::Queryable};
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
     use std::sync::Mutex;
 
     /// A feed that keeps each query and its reply, answered when the test chooses.
@@ -677,5 +731,43 @@ mod tests {
         press(&mut h, "Add to favorites");
         assert_eq!(h.state().1.len(), 4, "set_starred returns no action");
         assert_eq!(h.state().1.last(), Some(&starred(&["Gainers", "Losers"])));
+    }
+
+    /// The list menu copies the shown list's rows, in the feed's order, into a new watchlist or a
+    /// given one, and offers no copy while the list has no rows.
+    #[test]
+    fn list_menu_copies_the_shown_rows_into_a_watchlist() {
+        let feed = Arc::new(Recorder::default());
+        let mut panel = HotlistsPanel::new(vec!["Gainers".into(), "Losers".into()]);
+        panel.set_watchlists(["Main", "Tech"]);
+        panel.set_feed(feed.clone());
+        let mut h = harness(panel);
+        press(&mut h, "Gainers");
+        press(&mut h, "Losers");
+        press(&mut h, "Losers");
+        for label in ["Copy to new watchlist", "Copy to Tech"] {
+            assert!(
+                h.get_by_label(label).accesskit_node().is_disabled(),
+                "{label} offered without rows"
+            );
+        }
+        egui::Popup::close_all(&h.ctx);
+        h.step();
+        let reply = feed.replies.lock().unwrap().pop().unwrap();
+        reply.send(Ok(vec![
+            HotlistEntry::new("BBB", 1.0, -1.0),
+            HotlistEntry::new("AAA", 2.0, -2.0),
+        ]));
+        h.step();
+        press(&mut h, "Losers");
+        press(&mut h, "Copy to new watchlist");
+        press(&mut h, "Losers");
+        press(&mut h, "Copy to Tech");
+        let copied = |list| HotlistsAction::CopyToWatchlist {
+            hotlist: "Losers".into(),
+            list,
+            symbols: vec!["BBB".into(), "AAA".into()],
+        };
+        assert_eq!(h.state().1, [copied(None), copied(Some(1))]);
     }
 }
