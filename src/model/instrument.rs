@@ -1,6 +1,6 @@
 //! Instrument metadata reported by a feed or a search service.
 
-use super::{Timeframe, TimezoneId};
+use super::{PriceFraction, Timeframe, TimezoneId};
 use chrono::{NaiveDate, NaiveTime, TimeDelta, Weekday};
 use serde::{Deserialize, Serialize};
 
@@ -184,6 +184,12 @@ pub struct Instrument {
     pub pip_size: Option<f64>,
     /// Decimals of price labels.
     pub price_decimals: Option<u8>,
+    /// The fraction prices are quoted in, such as thirty-seconds for `117'16`. A chart then
+    /// labels its price scale, price tags, crosshair and legend in it, unless decimals or
+    /// another fraction are chosen in the chart settings or on the
+    /// [`PriceScale`](crate::scales::PriceScale). Other readouts keep
+    /// [`price_decimals`](Self::price_decimals). `None`, the default, writes decimals.
+    pub price_fraction: Option<PriceFraction>,
     /// Decimals of volume readouts, of studies in volume units without a precision chosen in
     /// their settings, of measured volume, of footprint volumes and of volume profile row values.
     /// They describe the whole number: an abbreviated K, M or B value keeps the decimals its
@@ -245,6 +251,7 @@ impl Instrument {
             tick_size: None,
             pip_size: None,
             price_decimals: None,
+            price_fraction: None,
             volume_decimals: None,
             currency: None,
             unit: None,
@@ -364,6 +371,22 @@ impl Instrument {
     /// Sets [`price_decimals`](Self::price_decimals).
     pub fn with_price_decimals(mut self, decimals: u8) -> Self {
         self.price_decimals = Some(decimals);
+        self
+    }
+
+    /// Sets [`price_fraction`](Self::price_fraction).
+    ///
+    /// ```
+    /// use egui_charts::model::{Instrument, PriceFraction};
+    ///
+    /// // A bond future that trades in thirty-seconds of a point.
+    /// let bond = Instrument::new("ZB")
+    ///     .with_tick_size(1.0 / 32.0)
+    ///     .with_price_fraction(PriceFraction::ThirtySeconds);
+    /// # let _ = bond;
+    /// ```
+    pub fn with_price_fraction(mut self, fraction: PriceFraction) -> Self {
+        self.price_fraction = Some(fraction);
         self
     }
 

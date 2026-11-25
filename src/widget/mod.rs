@@ -654,9 +654,9 @@ pub enum RightClickTarget {
 }
 
 impl Chart {
-    /// Supplies instrument metadata for a chart without a feed, including price precision
-    /// and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes precedence,
-    /// and so does a precision chosen in the chart settings or with
+    /// Supplies instrument metadata for a chart without a feed, including the price precision or
+    /// fraction and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes
+    /// precedence, and so does a precision chosen in the chart settings or with
     /// [`PriceScale::set_price_precision`]. Pass `None` to clear the metadata. Feed metadata
     /// takes precedence when available.
     pub fn set_instrument(&mut self, instrument: Option<crate::model::Instrument>) {

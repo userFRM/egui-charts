@@ -343,13 +343,14 @@ impl PriceScale {
 
     /// Chooses the decimals of price ticks and tags, as the precision of the chart settings does.
     /// The choice stays through changes of the instrument, interval and symbol. `None` follows
-    /// the instrument's precision, else derives the decimals from the tick step.
+    /// the instrument's fraction or precision, else derives the decimals from the tick step.
     pub fn set_price_precision(&mut self, decimals: Option<u8>) {
         self.chosen_precision = decimals;
     }
 
     /// Chooses fractional raw-price labels, such as `112'16`, on ticks, tags, the crosshair
-    /// and the legend. `None` restores decimals. A fraction takes precedence over
+    /// and the legend. `None` restores decimals, or the fraction of the chart's instrument while
+    /// no decimals are chosen. A fraction takes precedence over
     /// [`set_price_precision`](Self::set_price_precision) and stays through instrument,
     /// interval and symbol changes. A series'
     /// [`display_format`](crate::model::SeriesStyle::display_format) and the chart's price
@@ -675,10 +676,16 @@ impl PriceMap {
             PriceScaleMode::Normal | PriceScaleMode::Logarithmic
         ) {
             if let crate::model::SeriesFormat::Fraction(fraction) = format.kind {
-                // Nice tick steps round up to whole multiples of the displayed fraction.
-                self.price_precision =
-                    Some(super::price_formatter::decimals(fraction.step()) as u8);
-                self.tick_marks.min_price_step = Some(fraction.step());
+                // Nice tick steps round up to whole multiples of the displayed fraction, and of
+                // a coarser tick that lies on the fraction's grid.
+                let step = fraction.step();
+                self.price_precision = Some(super::price_formatter::decimals(step) as u8);
+                self.tick_marks.min_price_step = Some(
+                    self.tick_marks
+                        .min_price_step
+                        .filter(|tick| *tick > step && (tick / step).fract() == 0.0)
+                        .unwrap_or(step),
+                );
                 return self;
             }
             self.price_precision = Some(format.precision);

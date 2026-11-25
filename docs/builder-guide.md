@@ -78,7 +78,7 @@ with CORS. The adapter uses GET with percent-encoded query values.
 A symbol object requires `name` (`symbol` is also accepted). Optional `ticker`
 is the identifier used for subsequent requests. Metadata fields are `description`,
 `exchange`, `country`, `sector`, `source`, `root`, `logo`, `exchange_logo`,
-`type` (lowercase model symbol type), `minmov`, `pricescale`,
+`type` (lowercase model symbol type), `minmov`, `pricescale`, `minmove2`, `fractional`,
 `volume_precision`, `currency_code`, `unit` (the price unit shown beside the
 currency above the price scale, such as `barrel`), `timezone`, `session`,
 `supported_resolutions` and `data_status` (`streaming`, `delayed_streaming` or
@@ -89,6 +89,8 @@ library's [`TimezoneId`](https://userfrm.github.io/egui-charts/docs/api/egui_cha
 window belongs to its closing day. Omitted days mean Monday through Friday. Unsupported
 session syntax or unavailable time zones report invalid data rather than guessing;
 search leaves out a result it cannot read and lists the others.
+
+`fractional: true` writes prices as whole units and a count of fractions, such as `117'16` for 117 16/32, in place of decimals. `pricescale` is then the number of fractions in one unit: 2, 4, 8, 16, 32, 64, 128 or 256. A `minmove2` other than zero divides thirty-seconds instead: 2 with `pricescale` 64 for halves (`117'165`), 4 with 128 for quarters and 8 with 256 for eighths. Any other combination keeps decimals. The tick size stays `minmov / pricescale`, and a precision chosen in the chart settings takes precedence.
 
 Configuration lists may be omitted (unknown, unrestricted) or empty (none).
 Exchange and type entries use their `value` field. Optional feed services are
