@@ -6,8 +6,8 @@ use super::DemoApp;
 use egui_charts::services::StoreKind;
 use egui_charts::strategies::StrategyFactory;
 use egui_charts::studies::{
-    Calculation, CustomIndicator, Indicator, IndicatorFactory, IndicatorValue, InputKind,
-    InputValue, StudyInput,
+    Calculation, ConfiguredStudy, CustomIndicator, Indicator, IndicatorFactory, IndicatorValue,
+    InputKind, InputValue, StudyInput,
 };
 use egui_charts::ui::dialogs::templates::TemplateStore;
 use egui_charts::ui::study_editor::{
@@ -187,6 +187,37 @@ fn done(doing: &str) -> &'static str {
     }
 }
 
+/// What `script` changes of the shape the charts, layouts, templates and alerts holding the study
+/// `saved` restore it with: its plot count, the ids and accepted values of the inputs a chart saves
+/// for it, or its alert conditions in order, which saved alerts know by position. `None` when the
+/// shape is the same.
+fn changed_shape(saved: &Script, script: &Script) -> Option<String> {
+    let shape = |script: &Script| {
+        let study = ConfiguredStudy::new(Box::new(script.study()));
+        // `InputKind` has no `PartialEq`; its `Debug` text names every bound and choice.
+        let mut inputs: Vec<_> = (study.inputs().into_iter())
+            .map(|input| (input.id, format!("{:?}", input.kind)))
+            .collect();
+        inputs.sort();
+        (study.line_count(), inputs, study.alert_conditions())
+    };
+    let ((plots, inputs, alerts), (new_plots, new_inputs, new_alerts)) =
+        (shape(saved), shape(script));
+    let changed: Vec<_> = [
+        (plots != new_plots, "plots"),
+        (inputs != new_inputs, "inputs"),
+        (alerts != new_alerts, "alerts"),
+    ]
+    .into_iter()
+    .filter_map(|(changed, what)| changed.then_some(what))
+    .collect();
+    match changed.as_slice() {
+        [] => None,
+        [what] => Some((*what).to_owned()),
+        [first @ .., last] => Some(format!("{} and {last}", first.join(", "))),
+    }
+}
+
 /// The colours of a script's words for the editor, from the theme.
 fn colours(text: &str, visuals: &egui::Visuals) -> Vec<(Range<usize>, egui::Color32)> {
     // Dark themes draw links close to the text colour; there keywords take the accent, which
@@ -295,8 +326,7 @@ impl DemoApp {
             StudyEditorAction::Save { title, text } => {
                 let title = title.trim();
                 let compiled = Script::compile(title, &text, &IndicatorFactory::new());
-                let orders = compiled.as_ref().ok().map(Script::places_orders);
-                let saved = self.check_title(title, "saving", orders).and_then(|()| {
+                let saved = (self.check_title(title, "saving", compiled.as_ref().ok())).and_then(|()| {
                     match compiled {
                         // Charts and saved layouts hold the registered version, which start-up
                         // registers again from the stored text only when it compiles.
@@ -317,8 +347,7 @@ impl DemoApp {
                 self.sample_study.pending = None;
                 self.sample_study.message.clear();
                 let compiled = Script::compile(title, &text, &IndicatorFactory::new());
-                let orders = compiled.as_ref().ok().map(Script::places_orders);
-                if let Err(message) = self.check_title(title, "applying", orders) {
+                if let Err(message) = self.check_title(title, "applying", compiled.as_ref().ok()) {
                     self.sample_study.message = message;
                     return;
                 }
@@ -354,10 +383,12 @@ impl DemoApp {
     /// and for a strategy the name of a built-in strategy, so that a script never replaces a
     /// built-in study, the native sample, a feed's metric or a built-in strategy. A title saved
     /// as a study cannot take a strategy or the reverse, since the charts, layouts and tester
-    /// holding it would no longer open it. `orders` says whether the text places orders, `None`
-    /// when it does not compile.
-    fn check_title(&self, title: &str, doing: &str, orders: Option<bool>) -> Result<(), String> {
+    /// holding it would no longer open it, and a saved study cannot take other plots, inputs or
+    /// alerts, which they restore with. `script` is the compiled text, `None` when it does not
+    /// compile.
+    fn check_title(&self, title: &str, doing: &str, script: Option<&Script>) -> Result<(), String> {
         let saved = self.sample_study.scripts.get(title);
+        let orders = script.map(Script::places_orders);
         if title.is_empty() {
             Err(format!("Enter a document title before {doing}."))
         } else if orders == Some(true) {
@@ -380,6 +411,13 @@ impl DemoApp {
         } else if orders == Some(false) && saved.is_some_and(Script::places_orders) {
             Err(format!(
                 "Not {}: {title} is saved as a strategy; save this study under another title.",
+                done(doing)
+            ))
+        } else if let (Some(saved), Some(script)) = (saved, script)
+            && let Some(changed) = changed_shape(saved, script)
+        {
+            Err(format!(
+                "Not {}: {title} is in use by saved charts and this text changes its {changed}; saving it under another title keeps both.",
                 done(doing)
             ))
         } else {
@@ -473,7 +511,7 @@ impl DemoApp {
         self.chart.user_action(|chart| {
             let previous: Vec<_> = chart
                 .indicators()
-                .filter(|(_, study)| study.name() == title)
+                .filter(|(_, study)| study.registered_name() == title)
                 .map(|(id, _)| id)
                 .collect();
             for id in previous {
@@ -531,8 +569,10 @@ mod tests {
     use super::DemoApp;
     use eframe::App;
     use egui::{Event, Key, Modifiers, Pos2, RawInput};
+    use egui_charts::data::MetricSeries;
     use egui_charts::model::{Bar, BarData};
-    use egui_charts::studies::{Calculation, IndicatorFactory, InputValue};
+    use egui_charts::scales::StudyFormat;
+    use egui_charts::studies::{Calculation, IndicatorFactory, InputValue, MetricStudy};
     use egui_charts::widget::{ChartLayoutMode, SeriesId};
     use std::time::Duration;
 
@@ -781,6 +821,7 @@ mod tests {
         // The copy of this test chart is still reading its drawings, which would keep the
         // workspace from being saved below.
         app.ensure_chart_slots(ChartLayoutMode::Single);
+        let layout = app.capture_layout().unwrap();
 
         edit(&mut app, &ctx, negated, LOOKBACK);
         click(&mut app, &ctx, "Save");
@@ -798,6 +839,42 @@ mod tests {
                 .iter()
                 .any(|(text, _)| text == LOOKBACK)
         );
+        // Nor one with other plots, inputs or alerts, which the charts holding it restore with.
+        let renamed = LOOKBACK.replace("lookback", "bars_back");
+        for (text, button, refused, changed) in [
+            (
+                format!("{LOOKBACK}\nplot(\"Close\", close);"),
+                "Save",
+                "Not saved",
+                "plots",
+            ),
+            (renamed.clone(), "Save", "Not saved", "inputs"),
+            (
+                format!("{LOOKBACK}\nalert(\"Rising\", close > close[1]);"),
+                "Save",
+                "Not saved",
+                "alerts",
+            ),
+            (
+                format!("{renamed}\nplot(\"Close\", close);"),
+                "Apply",
+                "Not applied",
+                "plots and inputs",
+            ),
+        ] {
+            edit(&mut app, &ctx, LOOKBACK, &text);
+            click(&mut app, &ctx, button);
+            let message = format!(
+                "{refused}: Close difference is in use by saved charts and this text changes its {changed}; saving it under another title keeps both."
+            );
+            assert!(
+                render(&mut app, &ctx, Vec::new())
+                    .iter()
+                    .any(|(drawn, _)| *drawn == message),
+                "{button} {text}"
+            );
+            click(&mut app, &ctx, "Reload saved");
+        }
         // The restarted application has storage: its first-visit choice is already answered.
         let answered = super::super::owndata::store::Saved {
             asked: true,
@@ -840,6 +917,8 @@ mod tests {
         assert_eq!(restored_study(&restored).len(), 2);
         restored.load_study_template(&app.chart.study_template_set());
         assert_eq!(restored_study(&restored), [saved_version]);
+        // A layout saved before those edits opens too.
+        assert!(restored.restore_layout("Before the edits".into(), layout, Ok(Vec::new())));
     }
 
     #[test]
@@ -1049,6 +1128,32 @@ mod tests {
     }
 
     #[test]
+    fn applying_a_script_keeps_a_feed_metric_shown_under_its_title() {
+        let ctx = egui::Context::default();
+        let mut app = editor_app(&ctx);
+        *app.chart = egui_charts::Chart::new(BarData::from_bars(minute_bars([100.0, 103.0])));
+        // A feed's metric is registered, and saved, under its own key, not its display name.
+        let metric = MetricSeries::new("open_interest", "Open interest", StudyFormat::Volume);
+        let mut factory = IndicatorFactory::new();
+        factory.register("Metric: open_interest", move || {
+            Box::new(MetricStudy::new(metric.clone()))
+        });
+        let study = factory.create("Metric: open_interest").unwrap();
+        app.chart.add_indicator(study);
+        app.sample_study
+            .editor
+            .open_document("Open interest", LOOKBACK);
+        click(&mut app, &ctx, "Apply");
+        calculated(&mut app, &ctx);
+        let keys: Vec<_> = (app.chart.indicators())
+            .map(|(_, study)| study.registered_name().to_owned())
+            .collect();
+        for key in ["Metric: open_interest", "Open interest"] {
+            assert!(keys.iter().any(|kept| kept == key), "{key} not in {keys:?}");
+        }
+    }
+
+    #[test]
     fn editor_completes_at_the_caret_and_keeps_the_study_on_errors() {
         let ctx = egui::Context::default();
         let mut app = editor_app(&ctx);
@@ -1098,16 +1203,18 @@ mod tests {
                 .any(|(text, _)| text.contains("line 1, column 11"))
         );
         assert_eq!(underlined(&mut app, &ctx, unknown), ["nope"]);
-        let mut text = unknown;
+        // The scripts below keep the applied script's input, as a saved study's inputs stay.
+        let input = LOOKBACK.lines().next().unwrap();
+        let mut text = unknown.to_owned();
         for (script, shown) in [
-            ("plot(\"x\", close[-1]);", "on bar 0"),
+            (format!("{input}\nplot(\"x\", close[-1]);"), "on bar 0"),
             (
-                "loop {}\nplot(\"x\", close);",
+                format!("{input}\nloop {{}}\nplot(\"x\", close);"),
                 "time limit of 500 ms for one bar reached",
             ),
         ] {
-            edit(&mut app, &ctx, text, script);
-            text = script;
+            edit(&mut app, &ctx, &text, &script);
+            text = script.clone();
             click(&mut app, &ctx, "Apply");
             calculated(&mut app, &ctx);
             assert!(
@@ -1121,8 +1228,9 @@ mod tests {
         }
 
         // An error of the applied script on a later bar is shown too.
-        let late = "plot(\"x\", if bar_index > 2 { close[-1] } else { close });";
-        edit(&mut app, &ctx, text, late);
+        let late =
+            format!("{input}\nplot(\"x\", if bar_index > 2 {{ close[-1] }} else {{ close }});");
+        edit(&mut app, &ctx, &text, &late);
         click(&mut app, &ctx, "Apply");
         calculated(&mut app, &ctx);
         assert_ne!(study_id(&app.chart, "Close difference"), id);

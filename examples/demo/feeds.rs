@@ -321,6 +321,17 @@ pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
     stories
 }
 
+/// The story or highlight `id` names among those published on the hours before `now`, and
+/// whether it is a highlight.
+pub(super) fn story(id: &str, now: DateTime<Utc>) -> Option<(bool, NewsStory)> {
+    [false, true].into_iter().find_map(|highlights| {
+        stories(&[], highlights, now)
+            .into_iter()
+            .find(|story| story.id == id)
+            .map(|story| (highlights, story))
+    })
+}
+
 /// The synthetic headlines, or highlights, of `symbols`, or of every catalog symbol when it is
 /// empty, published on the hour before `now`.
 fn stories(symbols: &[String], highlights: bool, now: DateTime<Utc>) -> Vec<NewsStory> {
@@ -350,8 +361,13 @@ fn stories(symbols: &[String], highlights: bool, now: DateTime<Utc>) -> Vec<News
                             .replace("{symbol}", spec.symbol)
                     };
                     let age = TimeDelta::hours(i as i64 * 7);
-                    let mut story =
-                        NewsStory::new(format!("{}-{i}", spec.symbol), hour - age, fill(headline));
+                    // Highlights keep their own ids, so one id names one story.
+                    let id = if highlights {
+                        format!("{}-highlight-{i}", spec.symbol)
+                    } else {
+                        format!("{}-{i}", spec.symbol)
+                    };
+                    let mut story = NewsStory::new(id, hour - age, fill(headline));
                     story.source = "Demo Wire".into();
                     story.body = fill(body);
                     story.symbols = vec![spec.symbol.into()];

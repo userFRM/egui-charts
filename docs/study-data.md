@@ -108,9 +108,29 @@ while older study history
 keeps paging. A new live bar, a stream reset or a renewed subscription clears that stream
 error; an outstanding history error takes precedence and keeps its existing retry policy.
 The fixed range and anchored volume profile drawings add the finer interval that
-[`Instrument::profile_resolutions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Instrument.html#structfield.profile_resolutions) suggests for their span to these requests. A connected feed
-loads it back to the first bar of the span. Profiles still estimate volume from those bars;
+[`Instrument::profile_resolutions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Instrument.html#structfield.profile_resolutions) suggests for their span and dates to these requests. A connected feed
+loads it back to the first bar of the span. A volume profile study asks for each interval its profiles read, each back to the first profile that reads it. Profiles still estimate volume from those bars;
 a chart bar without finer inputs keeps its own estimate.
+A feed that keeps its finer bars for recent dates only states that history with
+[`ProfileResolution::with_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ProfileResolution.html#method.with_history),
+so that older profiles read the next suggested interval instead of asking for bars it
+does not hold:
+
+```rust
+use chrono::{DateTime, TimeDelta, Utc};
+use egui_charts::model::{Instrument, ProfileResolution, Timeframe};
+
+fn with_profile_history(instrument: Instrument, minutes_kept_since: DateTime<Utc>) -> Instrument {
+    instrument.with_profile_resolutions([
+        // One-minute bars for profiles of up to a day, from the date they are kept.
+        ProfileResolution::new(Timeframe::Min1, Some(TimeDelta::days(1)))
+            .with_history(Some(minutes_kept_since), None),
+        // Hourly bars for every date and length.
+        ProfileResolution::new(Timeframe::Hour1, None),
+    ])
+}
+```
+
 Direct callers supply [`StudyData`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyData.html) to [`Indicator::update_data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.update_data) with sorted, unique bars;
 invalid prices, negative volume or unordered timestamps leave accepted values unchanged.
 Set `chart` to the calendar of the bars passed in, with the Wait for interval close setting, for
