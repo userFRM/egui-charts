@@ -4,11 +4,13 @@
 use crate::{
     EntryKind, Limits, Profile, Reference, Script, ScriptError, TokenClass, examples, tokens,
 };
+use ecolor::Color32;
 use egui_charts::model::{Bar, BarClock, PriceSource, Timeframe};
 use egui_charts::studies::{
-    Calculation, ConfiguredStudy, CustomIndicator, Indicator, IndicatorFactory, IndicatorValue,
-    InputKind, InputValue, MACD, RSI, Stochastic, StudyChart, StudyData, StudyDataRequest,
-    StudyInput, StudySource, StudyTemplate, helpers,
+    Calculation, ConfiguredStudy, CrossDirection, CustomIndicator, Indicator, IndicatorFactory,
+    IndicatorValue, InputKind, InputValue, LabelPlacement, MACD, PlotType, RSI, Stochastic,
+    StudyChart, StudyData, StudyDataRequest, StudyInput, StudyLabel, StudySegment, StudySource,
+    StudyTemplate, StudyZone, helpers,
 };
 use std::collections::HashSet;
 use std::time::Duration;
@@ -513,6 +515,24 @@ fn updates_equal_full_calculations() {
         40_000,
     ));
     for (title, source) in [
+        // Colours and drawings, which a bar may make for an earlier one.
+        (
+            "colours and drawings",
+            r##"display(overlay = true);
+            plot("x", close, color = if close > close[1] { rgb(0, 200, 0) } else { na });
+            plot("b", close, style = "bar_color", color = if close > open { "#2962FF" } else { na });
+            plot("m", na, color = "#FF6D00");
+            series hh = highest(high, 20);
+            series ll = lowest(low, 20);
+            if bar_index >= 20 && close > hh[1] {
+                label("m", bar_index - 1, high[1], "Break");
+                zone("m", bar_index - 5, bar_index, high, low);
+            }
+            if bar_index >= 20 && close < ll[1] {
+                segment("m", bar_index - 20, low[20], bar_index, low);
+                marker(bar_index, low, "down");
+            }"##,
+        ),
         ("study", r#"plot("x", study("RSI", period = 14));"#),
         (
             "chained study",
@@ -534,14 +554,31 @@ fn updates_equal_full_calculations() {
         let script = compile(source);
         let fresh = |bars: &[Bar]| calculated(&script, bars).values().columns().to_vec();
         let same_as_fresh = |study: &CustomIndicator, bars: &[Bar], step: &str| {
-            let expected = fresh(bars);
+            let fresh = calculated(&script, bars);
             assert_eq!(study.values().len(), bars.len(), "{title}: {step}");
-            for (line, expected) in expected.iter().enumerate() {
+            for (line, expected) in fresh.values().columns().iter().enumerate() {
                 assert!(
                     same(study.values().line(line), expected),
                     "{title}: {step}, plot {line}"
                 );
+                for bar in 0..bars.len() {
+                    assert_eq!(
+                        study.plot_color(line, bar),
+                        fresh.plot_color(line, bar),
+                        "{title}: {step}, plot {line}, bar {bar}"
+                    );
+                }
             }
+            assert_eq!(study.labels(), fresh.labels(), "{title}: {step}");
+            assert_eq!(
+                study.price_segments(),
+                fresh.price_segments(),
+                "{title}: {step}"
+            );
+            assert_eq!(study.zones(), fresh.zones(), "{title}: {step}");
+            // `IndicatorMarker` has no `PartialEq`.
+            let markers = |study: &CustomIndicator| format!("{:?}", study.markers());
+            assert_eq!(markers(study), markers(&fresh), "{title}: {step}");
         };
         assert!(
             fresh(&fixture)
@@ -840,6 +877,39 @@ fn scripts_are_refused_at_their_line_and_column() {
         (alerts.as_str(), 33, 7, "at most 32 alerts"),
         // An alert is no plot.
         ("alert(\"x\", true);", 1, 1, "needs at least one plot"),
+        // The `;` after the call: bar colours repaint the price bars.
+        (
+            "plot(\"x\", close, style = \"bar_color\");",
+            1,
+            38,
+            "display(overlay = true) comes before it",
+        ),
+        // The `;` after the declaration.
+        (
+            "input c = color(\"C\", \"red\");\nplot(\"x\", 1.0);",
+            1,
+            28,
+            "the default of a color input is \"#RRGGBB\" or \"#RRGGBBAA\"; got \"red\"",
+        ),
+        (
+            "input c = color(\"C\", \"#12345\");\nplot(\"x\", 1.0);",
+            1,
+            31,
+            "the default of a color input",
+        ),
+        // A drawing's plot is read when the script compiles: the token after the `(`.
+        (
+            "plot(\"x\", close);\nlabel(\"Nope\", bar_index, close, \"t\");",
+            2,
+            7,
+            "no plot \"Nope\" is declared",
+        ),
+        (
+            "plot(\"x\", close);\nlet t = \"x\";\nzone(t, 0, bar_index, high, low);",
+            3,
+            6,
+            "zone names its plot by a title in double quotes, without escapes",
+        ),
     ] {
         let error = Script::compile("Test", source, &factory).unwrap_err();
         assert_eq!(
@@ -1089,6 +1159,14 @@ fn reference_names_compile_as_listed() {
                         "profit" | "loss" => "1.0",
                         "message" => "\"m\"",
                         "condition" => "true",
+                        "r" | "g" => "10",
+                        "alpha" => "0.5",
+                        "plot" => "\"x\"",
+                        "bar" | "bar1" | "bar2" => "bar_index",
+                        "price" | "price1" | "price2" | "top" | "bottom" => "close",
+                        "text" => "\"t\"",
+                        "placement" => "\"below\"",
+                        "direction" => "\"up\"",
                         other => panic!("{}: no argument for {other}", entry.signature),
                     })
                     .collect();
@@ -1394,6 +1472,72 @@ fn run_errors_keep_the_bars_before_them() {
             20,
             "alert \"Up\" takes true or false; got series",
         ),
+        // A colour expression, which a string written in the call does not start.
+        (
+            "plot(\"x\", close, color = if bar_index < 20 { \"#FF0000\" } else { \"red\" });",
+            26,
+            20,
+            "the color of plot \"x\" is \"#RRGGBB\", \"#RRGGBBAA\", rgb(r, g, b), \
+             rgba(r, g, b, alpha) or na; got \"red\"",
+        ),
+        (
+            "plot(\"x\", close, color = if bar_index < 20 { na } else { 1.0 });",
+            26,
+            20,
+            "got number",
+        ),
+        // A drawing's bar, text and words; the call's name.
+        (
+            "plot(\"x\", close); if bar_index == 20 { label(\"x\", bar_index - 21, close, \"t\"); }",
+            40,
+            20,
+            "label bar -1 is before the first bar",
+        ),
+        (
+            "plot(\"x\", close); if bar_index == 20 { label(\"x\", bar_index + 0.5, close, \"t\"); }",
+            40,
+            20,
+            "label bar 20.5 is not a whole number",
+        ),
+        (
+            "plot(\"x\", close); if bar_index == 20 { label(\"x\", bar_index + 10001, close, \"t\"); }",
+            40,
+            20,
+            "label bar 10021 is more than 10000 bars after the bar calculated",
+        ),
+        (
+            "plot(\"x\", close); if bar_index == 20 { label(\"x\", bar_index, close, \"t\", \"left\"); }",
+            40,
+            20,
+            "label placement \"left\" is \"above\", \"below\", \"above_left\" or \"above_right\"",
+        ),
+        (
+            "plot(\"x\", close); if bar_index == 20 { label(\"x\", bar_index, close, 5); }",
+            40,
+            20,
+            "label text is a string; got int",
+        ),
+        (
+            "plot(\"x\", close); if bar_index == 20 { marker(bar_index, close, \"sideways\"); }",
+            40,
+            20,
+            "marker direction \"sideways\" is \"up\" or \"down\"",
+        ),
+        // Calls the compile check does not read as drawings: a method, and a call through a
+        // function pointer, whose title is checked when it runs.
+        (
+            "plot(\"x\", close); if bar_index == 20 { \"x\".label(bar_index, close, \"t\"); }",
+            0,
+            20,
+            "label draws only when called as label(...) in a script that defines no function label",
+        ),
+        (
+            "plot(\"x\", close); if bar_index == 20 { call(Fn(\"label\"), \"y\", bar_index, close, \"t\"); } \
+             if false { label(\"x\", 0, close, \"t\"); }",
+            0,
+            20,
+            "no plot \"y\" is declared",
+        ),
         // The dot, in a script whose history is missing.
         (
             "bars h = history(\"SPY\", \"1D\"); \
@@ -1477,6 +1621,205 @@ fn alert_conditions_follow_the_last_call_on_each_bar() {
         let study = calculated(&compile(source), &opens_closes(&prices));
         assert!(study.alert_conditions().is_empty(), "{source}");
         assert_eq!(study.values().line(0), plot, "{source}");
+    }
+}
+
+/// Items 1 and 2 of "Per-bar colours in scripts" on #3631: a plot's colour follows an expression
+/// on each bar, the plot's own colour standing where it gives na, and the bar and background
+/// colour styles paint nothing there.
+#[test]
+fn colours_follow_their_expressions_on_each_bar() {
+    let prices = [(100.0, 101.0), (101.0, 102.0), (102.0, 99.0), (99.0, 103.0)];
+    let script = compile(
+        "display(overlay = true);\n\
+         input up = color(\"Up\", \"#26A69A\");\n\
+         plot(\"Close\", close, color = if close > open { up } else if bar_index == 2 { rgb(300, -5, 12.6) } else { na });\n\
+         plot(\"Bars\", close, style = \"bar_color\", color = if close > open { \"#2962FF80\" } else { na });\n\
+         plot(\"Shade\", 1.0, style = \"background_color\", color = rgba(255, 0, 0, 0.5));\n\
+         plot(\"Fixed\", open, color = \"#FF9800\");",
+    );
+    let colors = |study: &CustomIndicator, line: usize| -> Vec<Option<Color32>> {
+        let bars = study.values().len();
+        (0..bars).map(|bar| study.plot_color(line, bar)).collect()
+    };
+    let up = Some(Color32::from_rgb(0x26, 0xA6, 0x9A));
+    // Bar 2 falls: 300 is held to 255, -5 to 0, and 12.6 rounds to 13.
+    let held = Some(Color32::from_rgb(255, 0, 13));
+    let blue = Some(Color32::from_rgba_unmultiplied(0x29, 0x62, 0xFF, 0x80));
+    let bars = opens_closes(&prices);
+    let mut study = calculated(&script, &bars);
+    assert_eq!(colors(&study, 0), [up, up, held, up]);
+    assert_eq!(colors(&study, 1), [blue, blue, None, blue]);
+    assert!(same(
+        study.values().line(1),
+        &[101.0, 102.0, f64::NAN, 103.0]
+    ));
+    // Half of 255 rounds to 128.
+    let shade = Some(Color32::from_rgba_unmultiplied(255, 0, 0, 128));
+    assert_eq!(colors(&study, 2), [shade; 4]);
+    assert_eq!(study.values().line(2), [1.0; 4]);
+    assert_eq!(colors(&study, 3), [None; 4]);
+    assert_eq!(
+        study.plot_style(3).color,
+        Color32::from_rgb(0xFF, 0x98, 0x00)
+    );
+    assert_eq!(study.plot_style(1).plot_type, PlotType::BarColor);
+    assert_eq!(study.plot_style(2).plot_type, PlotType::BackgroundColor);
+
+    let mine = Some(Color32::from_rgb(1, 2, 3));
+    (study.set_input("up", InputValue::Color(Color32::from_rgb(1, 2, 3)))).unwrap();
+    study.update(&bars, 0);
+    settle(&mut study, &bars);
+    assert_eq!(colors(&study, 0), [mine, mine, held, mine]);
+    // A falling bar after them has no colour, and no bar colour value.
+    let bars = opens_closes(&[prices.as_slice(), &[(103.0, 102.0)]].concat());
+    study.update(&bars, 4);
+    settle(&mut study, &bars);
+    assert_eq!(colors(&study, 0), [mine, mine, held, mine, None]);
+    assert_eq!(colors(&study, 1), [blue, blue, None, blue, None]);
+    assert!(study.values().line(1)[4].is_nan());
+}
+
+/// Labels, lines, bands and markers follow the calls that make them, on the bars they name: the
+/// labels in order of their bar, and the drawings of a forming bar made again with each change.
+#[test]
+fn drawings_follow_their_calls() {
+    let prices = [(100.0, 101.0), (101.0, 102.0), (102.0, 99.0), (99.0, 103.0)];
+    let script = compile(
+        "plot(\"Marks\", na, color = \"#FF6D00\");\n\
+         plot(\"Close\", close);\n\
+         if close < open { label(\"Marks\", bar_index - 1, high[1], \"Top\"); }\n\
+         if bar_index == 3 {\n\
+             label(\"Close\", bar_index, low, \"Low\", \"below\");\n\
+             label(\"Marks\", 0, open[3], \"First \" + rgb(255, 0, 13));\n\
+             segment(\"Marks\", 0, low[3], bar_index, high);\n\
+             zone(\"Marks\", bar_index, 1, low[2], high[1]);\n\
+             marker(bar_index, low, \"up\");\n\
+         }\n\
+         marker(bar_index, na, \"down\");\n\
+         label(\"Marks\", na, close, \"none\");",
+    );
+    let label = |bar, price, text: &str, placement, plot| StudyLabel {
+        bar,
+        price,
+        text: text.into(),
+        placement,
+        plot,
+    };
+    // Bar 2 falls from 102 to 99 and labels bar 1 at its high; bar 3 labels its low and bar 0's
+    // open, which comes first, made last, with a colour written as text.
+    let first = label(0, 100.0, "First #FF000DFF", LabelPlacement::Above, 0);
+    let top = label(1, 102.0, "Top", LabelPlacement::Above, 0);
+    let low = label(3, 99.0, "Low", LabelPlacement::Below, 1);
+    let markers = |study: &CustomIndicator| -> Vec<(usize, f64, CrossDirection)> {
+        let markers = study.markers().iter();
+        markers
+            .map(|marker| (marker.bar, marker.value, marker.direction))
+            .collect()
+    };
+    let mut study = calculated(&script, &opens_closes(&prices));
+    let made = vec![first, top, low];
+    assert_eq!(study.labels(), made);
+    // From bar 0's low to bar 3's high.
+    let segment = StudySegment {
+        start_bar: 0,
+        start_price: 100.0,
+        end_bar: 3,
+        end_price: 103.0,
+        plot: 0,
+    };
+    assert_eq!(study.price_segments(), [segment]);
+    // Bars 3 and 1 in order, between bar 1's low and bar 2's high.
+    let zone = StudyZone {
+        bars: 1..4,
+        top: 102.0,
+        bottom: 101.0,
+        plot: 0,
+    };
+    assert_eq!(study.zones(), std::slice::from_ref(&zone));
+    assert_eq!(markers(&study), [(3, 99.0, CrossDirection::Up)]);
+    // A new bar, then the same bar as it forms further: falling, it labels bar 3 at its high,
+    // after the label bar 3 made itself, and rising again it takes that label back.
+    let later = [
+        made.clone(),
+        vec![label(3, 103.0, "Top", LabelPlacement::Above, 0)],
+    ]
+    .concat();
+    for (bar, labels) in [
+        ((103.0, 104.0), &made),
+        ((103.0, 102.0), &later),
+        ((103.0, 104.0), &made),
+    ] {
+        let bars = opens_closes(&[prices.as_slice(), &[bar]].concat());
+        study.update(&bars, 4);
+        settle(&mut study, &bars);
+        assert_eq!(study.labels(), *labels, "{bar:?}");
+        assert_eq!(study.price_segments(), [segment], "{bar:?}");
+        assert_eq!(study.zones(), std::slice::from_ref(&zone), "{bar:?}");
+        assert_eq!(markers(&study), [(3, 99.0, CrossDirection::Up)], "{bar:?}");
+    }
+}
+
+/// A script that draws says so before it runs, so the chart offers no input that would leave its
+/// drawings behind: no Offset with any drawing, and no Symbol, Interval or Wait for interval close
+/// with labels or lines. A name that no call of a helper uses draws nothing.
+#[test]
+fn drawing_scripts_answer_the_chart_contracts() {
+    let bars = opens_closes(&[(100.0, 101.0), (101.0, 99.0)]);
+    for (source, only_plots, other_bars) in [
+        ("plot(\"x\", close);", true, true),
+        // Colours move with their plot.
+        (
+            "display(overlay = true);\n\
+             plot(\"b\", close, style = \"bar_color\", color = if close > open { \"#2962FF\" } else { na });",
+            true,
+            true,
+        ),
+        (
+            "plot(\"x\", close);\nzone(\"x\", bar_index, bar_index, high, low);",
+            false,
+            true,
+        ),
+        (
+            "plot(\"x\", close);\nmarker(bar_index, low, \"up\");",
+            false,
+            true,
+        ),
+        (
+            "plot(\"x\", close);\nlabel(\"x\", bar_index, high, \"t\");",
+            false,
+            false,
+        ),
+        (
+            "plot(\"x\", close);\nsegment(\"x\", 0, close, bar_index, close);",
+            false,
+            false,
+        ),
+        // The names stay free, and a script's own function is called.
+        ("let label = close; plot(\"x\", label);", true, true),
+        ("fn zone(a) { a * 2.0 } plot(\"x\", zone(1.0));", true, true),
+        (
+            "input marker = bool(\"M\", true); let m = #{ segment: 3.0 }; plot(\"x\", m.segment);",
+            true,
+            true,
+        ),
+        ("fn label(a) { a } plot(\"x\", label(close));", true, true),
+    ] {
+        let script = compile(source);
+        assert_eq!(script.check(&bars), Ok(()), "{source}");
+        let study = ConfiguredStudy::new(Box::new(script.study()));
+        let answers = (study.draws_only_plots(), study.draws_on_other_bars());
+        assert_eq!(answers, (only_plots, other_bars), "{source}");
+        let ids: Vec<_> = study.inputs().into_iter().map(|input| input.id).collect();
+        let offered = |id: &str| ids.iter().any(|offered| offered == id);
+        assert_eq!(offered("plot_offset"), only_plots, "{source}");
+        for id in [
+            "calculation_symbol",
+            "calculation_timeframe",
+            "wait_for_close",
+        ] {
+            assert_eq!(offered(id), other_bars, "{source}: {id}");
+        }
     }
 }
 
