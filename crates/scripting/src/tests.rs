@@ -1893,6 +1893,77 @@ fn script_strategies_continue_as_fresh_runs() {
     assert!(expected.report().unwrap().trades.len() > 10);
 }
 
+/// A decision that runs earlier bars again runs each with the readings it was last decided with,
+/// so a state that reads them is rebuilt as it was: after a fill on a forming bar decided on
+/// before, after a called study revised earlier bars, and for a declared history, which runs the
+/// previous bar again.
+#[test]
+fn bars_run_again_keep_the_readings_they_were_decided_with() {
+    let flat_count = "state flat = 0;
+        if position() == 0.0 { flat += 1; }
+        if after_fill() {
+            if position() > 0.0 { exit_order(\"Out\", #{ qty: flat }); }
+        } else if bar_index == 2 && position() == 0.0 {
+            entry(\"Long\", \"long\", #{ qty: 10 });
+        }";
+    let minute = |i: i64, close: f64| {
+        let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i);
+        Bar::new(time, 100.0, close.max(100.0), 100.0, close, 1.0)
+    };
+    let mut live = backtest();
+    live.settings.recalculate_on_every_update = true;
+    live.settings.recalculate_after_fills = true;
+    let mut strategy = compile(flat_count).strategy();
+    // Bars 0 and 1 are decided flat and bar 2 last with the position open, so every exit closes
+    // 2. The entry of bar 2 fills at the forming bar's open, 100, and each exit at the next price
+    // the forming bar reaches: 100, then 101 and 102 on the next updates.
+    let fills: Vec<Vec<_>> = [100.0, 101.0, 102.0]
+        .into_iter()
+        .map(|close| {
+            let bars: Vec<_> = (0..3)
+                .map(|i| minute(i, 100.0))
+                .chain([minute(3, close)])
+                .collect();
+            (live.update(&mut strategy, &bars, &[]).iter())
+                .map(|fill| (fill.order_id.clone(), fill.quantity, fill.price))
+                .collect()
+        })
+        .collect();
+    let out = |price| ("Out".to_owned(), 2.0, price);
+    assert_eq!(
+        fills,
+        [
+            vec![("Long".to_owned(), 10.0, 100.0), out(100.0)],
+            vec![out(101.0)],
+            vec![out(102.0)],
+        ]
+    );
+
+    // The entry of bar 30 fills at bar 31's open, so bars 0 to 30 are decided flat and the exit
+    // of bar 200 closes 31 of the 50, whatever the script declares and never reads.
+    let held = "state flat = 0;
+        if position() == 0.0 { flat += 1; }
+        if bar_index == 30 && position() == 0.0 { entry(\"Long\", \"long\", #{ qty: 50 }); }
+        if bar_index == 200 { exit_order(\"Out\", #{ qty: flat }); }";
+    let fixture = bars(260, 7);
+    for unread in [
+        "",
+        "let zz = study(\"ZigZag\");\n",
+        "bars day = history(\"\", \"1D\");\n",
+    ] {
+        let report = backtest().run(
+            &mut compile(&format!("{unread}{held}")).strategy(),
+            &fixture,
+            &[],
+        );
+        let closed: Vec<_> = (report.trades.iter())
+            .filter(|trade| trade.exit.is_some())
+            .map(|trade| trade.quantity)
+            .collect();
+        assert_eq!(closed, [31.0], "{unread}");
+    }
+}
+
 /// Orders and readings reach the backtester as the script calls them, checked by hand on six
 /// bars; an error or a limit ends the orders and withholds the report with its line and bar.
 #[test]
