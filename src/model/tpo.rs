@@ -402,6 +402,42 @@ impl TPOConfig {
     pub(crate) fn split_hours(&self) -> bool {
         self.split_sessions && self.profile_period == TPOProfilePeriod::Session
     }
+
+    /// The length of the periods on bars of `interval`: `period_minutes`, at least one minute, or
+    /// the interval when that is longer.
+    pub(crate) fn period_length(
+        &self,
+        interval: Option<crate::model::Timeframe>,
+    ) -> crate::model::Timeframe {
+        let interval = interval.map_or(0, |t| t.duration_ms() / 60_000);
+        let minutes = i64::from(self.period_minutes.max(1)).max(interval);
+        crate::model::Timeframe::Custom(
+            std::num::NonZeroU64::new(minutes.unsigned_abs() * 60)
+                .unwrap_or(std::num::NonZeroU64::MIN),
+        )
+    }
+
+    /// The parts of `bars[range]` that custom hours profile, with their periods on the period
+    /// grid ([`CustomProfileSessions`](crate::model::CustomProfileSessions)); none for other
+    /// hours.
+    pub(crate) fn custom_parts(
+        &self,
+        bars: &[Bar],
+        range: Range<usize>,
+        interval: Option<crate::model::Timeframe>,
+    ) -> Vec<crate::model::chart_type::CustomPart> {
+        let ProfileSession::Custom(custom) = &self.session else {
+            return Vec::new();
+        };
+        custom.parts(
+            bars,
+            range,
+            interval.unwrap_or_default(),
+            self.regular_hours.as_ref(),
+            true,
+            Some(self.period_length(interval)),
+        )
+    }
 }
 
 /// Session classification for splitting TPO profiles.
@@ -667,13 +703,7 @@ pub(crate) fn profile_parts(
     let mut parts = Vec::new();
     if let ProfileSession::Custom(custom) = &config.session {
         let shared = custom.overlap == crate::model::SessionOverlap::InBoth;
-        for part in custom.parts(
-            bars,
-            0..bars.len(),
-            interval.unwrap_or_default(),
-            config.regular_hours.as_ref(),
-            true,
-        ) {
+        for part in config.custom_parts(bars, 0..bars.len(), interval) {
             parts.push(ProfilePart {
                 bars: part.bars,
                 opens: true,
@@ -742,7 +772,11 @@ pub(crate) fn profile_parts(
 /// `config.period_minutes`, or of the clock's interval when longer, since its
 /// open: that of its trading day with intraday bars and trading hours, or of
 /// its stretch of regular, extended or overnight hours when split, whatever time its
-/// first bar has. Calendar days, daily and longer bars and bars split off
+/// first bar has. Custom hours keep whole periods on their grid instead: whole
+/// periods from midnight in the window's zone, or of the regular hours when
+/// clipped to them. A period that opens before the window's open is left out,
+/// and the last period, which opens before its close, keeps its bars past the
+/// close. Calendar days, daily and longer bars and bars split off
 /// outside the hours count from their first bar, since their open is not
 /// known. A gap leaves empty periods, and each period places one letter on
 /// every row its bars touched. The initial balance covers the bars that open
@@ -814,8 +848,7 @@ fn profiles_for_parts(
     // The open period: its index, first bar time and row-range endpoints
     let mut period_idx = 0;
     let mut period_ts = bars[0].time;
-    let interval_minutes = clock.timeframe().map_or(0, |t| t.duration_ms() / 60_000);
-    let period_minutes = i64::from(config.period_minutes.max(1)).max(interval_minutes);
+    let period_minutes = config.period_length(clock.timeframe()).duration_ms() / 60_000;
     let sessions = clock.sessions();
     let mut parts = parts.into_iter().peekable();
     let mut part_open = None;
