@@ -91,8 +91,8 @@ library's [`TimezoneId`](https://userfrm.github.io/egui-charts/docs/api/egui_cha
 window belongs to its closing day. Omitted days mean Monday through Friday.
 `session_extended` lists the pre-market and post-market windows and
 `session_overnight` the overnight windows in the same syntax; both need a
-regular `session` other than `24x7`, and the time axis then offers overnight
-hours. Unsupported
+regular `session` other than `24x7`. With `session_overnight`, the time axis
+offers overnight hours. Unsupported
 session syntax or unavailable time zones report invalid data rather than guessing;
 search leaves out a result it cannot read and lists the others.
 
