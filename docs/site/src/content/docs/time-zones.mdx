@@ -144,8 +144,10 @@ read in UTC when the display zone is behind UTC, unless they
 sit at its midnight, and in the display zone otherwise, which gives a 00:00 UTC
 stamp the same date. A bar stamped at 00:00 UTC on its trading date therefore
 keeps that date in the crosshair, the tooltip,
-[`Chart::format_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.format_time)
-and the time axis marks in every display zone.
+[`Chart::format_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.format_time),
+the time axis marks, the chart data table and
+[`Chart::export_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.export_csv)
+in every display zone.
 [`Chart::bar_clock`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.bar_clock)
 runs on the same dates, so
 bar replay completes such a bar when its date ends and forms the bar of the
