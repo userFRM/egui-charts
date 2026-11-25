@@ -1098,10 +1098,6 @@ mod tests {
                 Some("Funding rate".into())
             );
         }
-        assert!(
-            feed.0.lock().unwrap().is_empty(),
-            "the feed is not asked again"
-        );
         assert_eq!(dialog.metric_names, ["Metric: funding"]);
         use egui_kittest::{Harness, kittest::Queryable};
         for theme in [Theme::light(), Theme::dark()] {
@@ -1136,6 +1132,10 @@ mod tests {
                 assert!(added, "width {width}");
             }
         }
+        assert!(
+            feed.0.lock().unwrap().is_empty(),
+            "the feed is not asked again"
+        );
         dialog.set_metric_source(None, "CURRENT");
         dialog = dialog.with_factory(IndicatorFactory::new());
         assert!(dialog.add("Metric: funding").is_none());
