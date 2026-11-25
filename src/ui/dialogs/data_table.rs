@@ -1,6 +1,8 @@
 //! Chart data table dialog.
 //!
 //! Lists the loaded bars with their volume and the visible study plots, aligned by chart time.
+//! Prices read as the status line and the data window write them, in the chart's price format,
+//! while Export CSV writes plain numbers as [`Chart::export_csv`] does.
 //! It follows the chart it is shown with, including its replay cutoff, and loads nothing: only
 //! bars already loaded appear. The host opens it from
 //! [`ContextMenuAction::OpenDataTable`](crate::ui::context_menu::ContextMenuAction::OpenDataTable)
@@ -30,7 +32,8 @@ pub enum DataTableAction {
     None,
     /// The dialog was closed.
     Close,
-    /// CSV text of the displayed columns, for the host to save.
+    /// CSV text of the displayed columns with plain numbers, as
+    /// [`Chart::export_csv`](crate::widget::Chart::export_csv) writes them, for the host to save.
     Export(String),
     /// Open symbol search. An empty query requests the current symbol selected for replacement.
     /// Apply the chosen symbol to the chart passed to `show`, retaining its study ids.
@@ -48,6 +51,11 @@ struct Source {
     len: usize,
     replay: Option<DateTime<Utc>>,
     timezone: crate::scales::TimezoneMode,
+    format: (
+        Option<char>,
+        Vec<Option<crate::model::SeriesDisplayFormat>>,
+        Vec<usize>,
+    ),
 }
 
 impl Source {
@@ -60,6 +68,7 @@ impl Source {
             len: chart.bars(SeriesId::MAIN).len(),
             replay: chart.replay_time(),
             timezone: chart.chart_options().time_scale.timezone.clone(),
+            format: chart.data_table_format(),
         }
     }
 }
@@ -73,7 +82,8 @@ pub struct DataTableDialog {
     fixed_symbol: bool,
     /// The columns turned off on each chart, identified across study removal and restores.
     hidden: HashMap<u64, BTreeSet<ColumnId>>,
-    cached: Option<(Source, DataTable)>,
+    /// The table with the row of the longest cell of each column.
+    cached: Option<(Source, DataTable, Vec<usize>)>,
     column_ids: Vec<ColumnId>,
 }
 
@@ -120,7 +130,8 @@ impl DataTableDialog {
     }
 
     /// Show the dialog over `chart`, the chart the user is looking at, and return the host's
-    /// request. Copying puts the displayed columns on the clipboard as tab-separated text.
+    /// request. Copying puts the displayed columns on the clipboard as tab-separated text,
+    /// as the dialog writes them.
     pub fn show(&mut self, ctx: &Context, chart: &Chart) -> DataTableAction {
         if !self.is_open {
             return DataTableAction::None;
@@ -129,14 +140,23 @@ impl DataTableDialog {
         if self
             .cached
             .as_ref()
-            .is_none_or(|(cached, _)| *cached != source)
+            .is_none_or(|(cached, ..)| *cached != source)
         {
-            let (mut table, columns) = chart.data_table_with_columns();
+            let (mut table, columns) = chart.data_table_with_columns(true);
             self.column_ids = columns;
             table.rows.reverse();
-            self.cached = Some((source, table));
+            // shortcut: counts characters, which monospace digits share; measure every cell if
+            // hosts' formatters write wide glyphs.
+            let longest = (0..table.headers.len())
+                .map(|column| {
+                    (0..table.rows.len())
+                        .max_by_key(|&row| table.rows[row][column].chars().count())
+                        .unwrap_or_default()
+                })
+                .collect();
+            self.cached = Some((source, table, longest));
         }
-        let table = &self.cached.as_ref().expect("table was just built").1;
+        let (_, table, longest) = self.cached.as_ref().expect("table was just built");
         let hidden = self.hidden.entry(chart.data_table_identity()).or_default();
         let mut action = DataTableAction::None;
         let mut open = true;
@@ -176,7 +196,7 @@ impl DataTableDialog {
                     }
                 }
             });
-            let contents = Self::contents(ui, table, hidden, &self.column_ids);
+            let contents = Self::contents(ui, chart, table, longest, hidden, &self.column_ids);
             if contents != DataTableAction::None {
                 action = contents;
             }
@@ -218,7 +238,9 @@ impl DataTableDialog {
 
     fn contents(
         ui: &mut Ui,
+        chart: &Chart,
         table: &DataTable,
+        longest: &[usize],
         hidden: &mut BTreeSet<ColumnId>,
         columns: &[ColumnId],
     ) -> DataTableAction {
@@ -243,10 +265,13 @@ impl DataTableDialog {
             if Button::new("Copy").show(ui).clicked() {
                 ui.ctx().copy_text(table.tsv(&shown));
             }
-            if Button::new("Export CSV").show(ui).clicked()
-                && let Ok(csv) = table.csv(&shown)
-            {
-                action = DataTableAction::Export(csv);
+            if Button::new("Export CSV").show(ui).clicked() {
+                // The file keeps plain numbers, as `Chart::export_csv` writes them.
+                let mut plain = chart.data_table_with_columns(false).0;
+                plain.rows.reverse();
+                if let Ok(csv) = plain.csv(&shown) {
+                    action = DataTableAction::Export(csv);
+                }
             }
             ui.label(
                 egui::RichText::new(l10n::format_text(
@@ -258,14 +283,27 @@ impl DataTableDialog {
             );
         });
         ui.add_space(6.0);
+        // A column widens to its header and its longest cell, so no text is cut.
+        let font = FontId::monospace(12.0);
+        let width = |text: &str| {
+            ui.painter()
+                .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
+                .size()
+                .x
+        };
         let widths: Vec<f32> = shown
             .iter()
             .map(|&column| {
-                if column == 0 {
+                let cell = table
+                    .rows
+                    .get(longest[column])
+                    .map_or("", |row| row[column].as_str());
+                let least = if column == 0 {
                     TIME_WIDTH
                 } else {
                     COLUMN_WIDTH
-                }
+                };
+                least.max(width(cell).max(width(&table.headers[column])) + 12.0)
             })
             .collect();
         let total = widths.iter().sum::<f32>();
@@ -1108,5 +1146,202 @@ mod tests {
             .map(|(header, _)| header.as_str())
             .collect();
         assert_eq!(shown, ["Other"]);
+    }
+
+    /// The dialog and Copy write prices as the data window writes them, for the main series, an
+    /// added series on its scale and a price study: in thirty-seconds for an instrument quoted in
+    /// them, with the thousands separator and in a host formatter. The chart's table and the
+    /// dialog's CSV keep plain numbers.
+    #[test]
+    fn price_cells_read_as_the_data_window_and_exports_keep_plain_numbers() {
+        use crate::model::{Instrument, PriceFraction};
+        use egui::{Event, Modifiers, PointerButton, Pos2};
+        #[derive(Clone)]
+        struct Dollars;
+        impl crate::scales::PriceFormatter for Dollars {
+            fn format(&self, price: f64) -> String {
+                format!("${price}")
+            }
+            fn clone_box(&self) -> Box<dyn crate::scales::PriceFormatter> {
+                Box::new(self.clone())
+            }
+        }
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bond = Instrument::new("ZB")
+            .with_tick_size(1.0 / 32.0)
+            .with_price_fraction(PriceFraction::ThirtySeconds);
+        let coin = Instrument::new("BTC").with_tick_size(0.01);
+        let coin_prices = [41_234_567.5, 41_300_000.25, 41_200_000.0, 41_250_000.75];
+        let coin_plain = ["41234567.50", "41300000.25", "41200000.00", "41250000.75"];
+        // (instrument, host formatter, open high low close, plain cells, cells as the chart
+        // writes them, then Peer and the study, which repeat the close; a study takes no fraction)
+        for (instrument, dollars, prices, plain, written) in [
+            (
+                bond,
+                false,
+                [117.5, 117.75, 117.25, 117.5],
+                ["117.50000", "117.75000", "117.25000", "117.50000"],
+                [
+                    "117'16",
+                    "117'24",
+                    "117'08",
+                    "117'16",
+                    "117'16",
+                    "117.50000",
+                ],
+            ),
+            (
+                coin.clone(),
+                false,
+                coin_prices,
+                coin_plain,
+                [
+                    "41,234,567.50",
+                    "41,300,000.25",
+                    "41,200,000.00",
+                    "41,250,000.75",
+                    "41,250,000.75",
+                    "41,250,000.75",
+                ],
+            ),
+            (
+                coin,
+                true,
+                coin_prices,
+                coin_plain,
+                [
+                    "$41234567.5",
+                    "$41300000.25",
+                    "$41200000",
+                    "$41250000.75",
+                    "$41250000.75",
+                    "$41250000.75",
+                ],
+            ),
+        ] {
+            let [open, high, low, close] = prices;
+            let bar = |i| {
+                Bar::new(
+                    start + chrono::Duration::days(i),
+                    open,
+                    high,
+                    low,
+                    close,
+                    7.0,
+                )
+            };
+            let mut chart = Chart::new(BarData::from_bars((0..3).map(bar).collect()));
+            chart.set_instrument(Some(instrument));
+            let peer = chart.add_series(crate::widget::SeriesOptions {
+                name: "Peer".into(),
+                ..Default::default()
+            });
+            chart.set_data(peer, (0..3).map(bar).collect());
+            chart.add_indicator(Box::new(crate::studies::ConfiguredStudy::new(Box::new(
+                crate::studies::SMA::new(1),
+            ))));
+            crate::widget::test_frames::frame(&Context::default(), &mut chart, 1.0, vec![]);
+            // The cells of a row: open, high, low, close, then Peer and the study at the close.
+            let cells = |[open, high, low, close]: [&'static str; 4]| {
+                [open, high, low, close, close, close]
+            };
+            let ctx = Context::default();
+            let mut dialog = DataTableDialog::new();
+            dialog.open();
+            let mut frame = |chart: &Chart, events| {
+                let mut action = DataTableAction::None;
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| action = dialog.show(ui.ctx(), chart),
+                );
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            text.pos + text.galley.size() / 2.0,
+                            shape
+                                .clip_rect
+                                .contains_rect(Rect::from_min_size(text.pos, text.galley.size())),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                let commands = output.platform_output.commands.clone();
+                output.drop_without_applying_deltas();
+                (action, texts, commands)
+            };
+            frame(&chart, vec![]);
+            // A formatter set while the dialog is open replaces the cells it shows.
+            if dollars {
+                chart.set_price_formatter(Some(std::sync::Arc::new(Dollars)));
+            }
+            let info = crate::ui::widget_bar::DataWindowInfo::from_chart(&chart);
+            let mut expected = info.formatted_prices.clone().unwrap().to_vec();
+            expected.push(info.series[0].value.clone().unwrap());
+            expected.push(info.studies[0].formatted.clone().unwrap());
+            assert_eq!(expected, written);
+            frame(&chart, vec![]);
+            let (_, texts, _) = frame(&chart, vec![]);
+            let mut click = |label: &str| {
+                let at = texts.iter().find(|(text, ..)| text == label).unwrap().1;
+                frame(&chart, vec![Event::PointerMoved(at)]);
+                frame(
+                    &chart,
+                    [true, false]
+                        .map(|pressed| Event::PointerButton {
+                            pos: at,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        })
+                        .to_vec(),
+                )
+            };
+            // Newest row first: time, open, high, low, close, volume, Peer, the SMA, then the
+            // chart's volume study.
+            let row = |text: &str| {
+                let cells: Vec<String> = text
+                    .lines()
+                    .nth(1)
+                    .unwrap()
+                    .split('\t')
+                    .map(str::to_owned)
+                    .collect();
+                [&cells[1..5], &cells[6..8]].concat()
+            };
+            for cell in &expected {
+                assert!(
+                    texts.iter().any(|(text, ..)| text == cell),
+                    "{cell} in {texts:?}"
+                );
+            }
+            // Open, high and low sit in view, each whole in its column.
+            for cell in &expected[..3] {
+                assert!(
+                    texts.iter().all(|(text, _, whole)| text != cell || *whole),
+                    "{cell} is cut"
+                );
+            }
+            let (_, _, commands) = click("Copy");
+            let [egui::OutputCommand::CopyText(tsv)] = commands.as_slice() else {
+                panic!("expected the table's clipboard output: {commands:?}");
+            };
+            assert_eq!(row(tsv), expected);
+            let (action, _, _) = click("Export CSV");
+            let DataTableAction::Export(csv) = action else {
+                panic!("expected a CSV export: {action:?}");
+            };
+            assert_eq!(row(&csv.replace(',', "\t")), cells(plain));
+            assert_eq!(
+                row(&chart.data_table().tsv(&(0..8).collect::<Vec<_>>())),
+                cells(plain)
+            );
+        }
     }
 }
