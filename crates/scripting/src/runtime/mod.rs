@@ -73,7 +73,8 @@ pub(crate) struct Run {
     pub columns: Columns,
     /// The bar being calculated.
     pub bar: usize,
-    /// The plot values of the current bar, missing until a plot stores one.
+    /// The plot values of the current bar, then its alert conditions (1 for true, 0 for false),
+    /// each missing until the script stores one.
     pub row: Vec<f64>,
     /// The bytes each value kept between bars holds after the last bar, with where it is
     /// declared; the front end sets them after each bar.
@@ -316,8 +317,11 @@ pub(crate) struct Request {
 pub(crate) struct Outcome {
     /// The first bar of `rows`.
     pub start: usize,
-    /// The plot values of the bars from `start`, one row of every plot per bar.
+    /// The values of the bars from `start`, one row of every plot, then of every alert condition,
+    /// per bar.
     pub rows: Vec<f64>,
+    /// The bars the rows cover, from `start`.
+    pub bars: usize,
     /// How long the run took, or the limit that stopped it, whose rows are empty.
     pub result: Result<Duration, ScriptError>,
     /// The first runtime error, whose bar and later bars are missing.
@@ -375,7 +379,7 @@ impl<P: Program> RunState<P> {
                 aligned: vec![Vec::new(); spec.histories.len()],
                 ..Columns::default()
             },
-            row: vec![f64::NAN; spec.plots.len()],
+            row: vec![f64::NAN; spec.plots.len() + spec.alerts.len()],
             kept: Vec::new(),
             spec,
             bar: 0,
@@ -518,7 +522,7 @@ impl<P: Program> RunState<P> {
         let mut flight = self.flight.take()?;
         let began = Instant::now();
         let len = self.run.columns.bars.len();
-        let width = self.run.spec.plots.len();
+        let width = self.run.spec.plots.len() + self.run.spec.alerts.len();
         let fraction =
             |next: usize, start: usize| ((next - start) as f32 / (len - start) as f32).to_bits();
         let mut stop = self.run.stop.map(|limit| (limit, Span::default(), None));
@@ -611,6 +615,7 @@ impl<P: Program> RunState<P> {
             return Some(Outcome {
                 start: flight.start,
                 rows: Vec::new(),
+                bars: 0,
                 result: Err(ScriptError::at(self.run.clock.message(limit), span, bar)),
                 error: None,
                 profile: None,
@@ -632,6 +637,7 @@ impl<P: Program> RunState<P> {
         Some(Outcome {
             start: flight.start,
             rows: flight.rows,
+            bars: len - flight.start,
             result: Ok(flight.took),
             error: flight.error,
             profile: self.run.profile.as_ref().map(Lines::profile),
@@ -652,6 +658,7 @@ pub(crate) fn lost() -> Outcome {
     Outcome {
         start: 0,
         rows: Vec::new(),
+        bars: 0,
         result: Err(ScriptError::at(
             "the calculation ended unexpectedly".to_owned(),
             Span::default(),
@@ -692,9 +699,10 @@ impl Run {
     }
 
     /// The bytes the study holds once every bar of the run is calculated: the bars, the fed
-    /// column, the declared series, the plot columns, the studies called, the other histories with
-    /// the bars read of them, the helpers and the values kept between bars, the last two again for
-    /// the snapshot's copy.
+    /// column, the declared series, the plot and alert condition columns, the studies called, the
+    /// other histories with the bars read of them, the helpers and the values kept between bars,
+    /// the last two again for the snapshot's copy, and the readings each bar of a strategy was
+    /// decided with.
     fn bytes(&self) -> usize {
         self.holding(self.kept.iter().map(|(bytes, _)| bytes).sum())
     }
@@ -705,7 +713,8 @@ impl Run {
         let len = self.columns.bars.len();
         let columns = usize::from(self.columns.fed.is_some())
             + self.spec.series.len()
-            + self.spec.plots.len();
+            + self.spec.plots.len()
+            + self.spec.alerts.len();
         let helpers: usize = self
             .sites
             .values()

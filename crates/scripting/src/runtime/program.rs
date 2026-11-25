@@ -133,4 +133,6 @@ pub(crate) struct ScriptSpec {
     pub studies: Vec<StudyDecl>,
     pub plots: Vec<PlotDecl>,
     pub fills: Vec<FillDecl>,
+    /// The messages of the script's alert calls, in order of first appearance.
+    pub alerts: Vec<String>,
 }

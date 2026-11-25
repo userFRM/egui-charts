@@ -120,10 +120,10 @@ Enable [`show_session_breaks`](https://userfrm.github.io/egui-charts/docs/api/eg
 for a line at each new session on intraday intervals and
 [`show_extended_hours`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.show_extended_hours)
 for shading of supplied bars outside regular hours, with a separate overnight tint.
-New charts shade the pre-market orange and the post-market blue, each at 8%
-opacity. The Session backgrounds section of the Symbol tab switches highlighting
-and chooses the pre-market, post-market and overnight
-colours and opacity. Each phase can stay unshaded. Ok applies these edits; Cancel
+New charts shade the pre-market orange, the post-market blue and overnight bars
+purple (#D500F9), each at 8% opacity. The Session backgrounds section of the
+Symbol tab switches highlighting and chooses the pre-market, post-market and
+overnight colours and opacity. Each phase can stay unshaded. Ok applies these edits; Cancel
 keeps the chart's colours. Templates and Apply to all carry the highlights as well
 as the hours choice. Older saved settings without backgrounds keep the chart's
 values. Saved phase colours of `None` still use `extended_hours_color`, including
