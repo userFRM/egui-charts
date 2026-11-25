@@ -213,6 +213,7 @@ where
         };
         Some(Pos2::new(coords.idx_to_x(next), value_to_y(value)))
     };
+    let side = indicator.plot_shape_side(line_idx);
     for bar in start..end {
         let Some(value) = indicator.plot_value(line_idx, bar) else {
             continue;
@@ -260,11 +261,20 @@ where
                         (edge.min(baseline)..=edge.max(baseline)).contains(&click_pos.y)
                     })
             }
-            PlotType::Circles
-            | PlotType::Crosses
-            | PlotType::TriangleUp
-            | PlotType::TriangleDown
-            | PlotType::Character(_) => click_pos.distance(point) <= plot.width + HIT_TOLERANCE,
+            PlotType::Circles | PlotType::Crosses | PlotType::Character(_) => {
+                click_pos.distance(point) <= plot.width + HIT_TOLERANCE
+            }
+            // Around the triangle where the renderer draws it, beside its value or on it.
+            PlotType::TriangleUp | PlotType::TriangleDown => {
+                let centre = crate::chart::rendering::triangle_centre(
+                    point,
+                    value,
+                    plot.width,
+                    side,
+                    &value_to_y,
+                );
+                click_pos.distance(centre) <= plot.width + HIT_TOLERANCE
+            }
             PlotType::Line
             | PlotType::LineWithBreaks
             | PlotType::StepLine
