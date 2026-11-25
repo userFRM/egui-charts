@@ -431,6 +431,36 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
             assert_eq!(window.days, expected_days, "{hours}");
         }
     }
+    use crate::model::PriceFraction;
+    for (symbol, expected) in [
+        (
+            json!({"name":"ABC", "pricescale":32, "fractional":true}),
+            Some(PriceFraction::ThirtySeconds),
+        ),
+        (
+            json!({"name":"ABC", "minmov":2, "pricescale":8, "fractional":true}),
+            Some(PriceFraction::Eighths),
+        ),
+        (
+            json!({"name":"ABC", "pricescale":128, "minmove2":4, "fractional":true}),
+            Some(PriceFraction::QuarterThirtySeconds),
+        ),
+        (
+            json!({"name":"ABC", "pricescale":128, "fractional":true}),
+            Some(PriceFraction::OneTwentyEighths),
+        ),
+        (json!({"name":"ABC", "pricescale":32}), None),
+        (
+            json!({"name":"ABC", "pricescale":100, "fractional":true}),
+            None,
+        ),
+    ] {
+        let info = serde_json::from_value::<Symbol>(symbol.clone())
+            .unwrap()
+            .into_instrument()
+            .unwrap();
+        assert_eq!(info.price_fraction, expected, "{symbol}");
+    }
     for invalid in [
         json!({"name":"ABC", "pricescale":0}),
         json!({"name":"ABC", "minmov":-1, "pricescale":100}),

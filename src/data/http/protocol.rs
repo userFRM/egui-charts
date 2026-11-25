@@ -1,7 +1,7 @@
 use super::{FeedCapabilities, FeedError, HistoryPage, HistoryRequest};
 use crate::model::{
-    Bar, BarClock, DataStatus, Instrument, Session, SessionWindow, SymbolType, Timeframe,
-    TimezoneId,
+    Bar, BarClock, DataStatus, Instrument, PriceFraction, Session, SessionWindow, SymbolType,
+    Timeframe, TimezoneId,
 };
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeDelta, Utc, Weekday};
 use serde::Deserialize;
@@ -186,6 +186,8 @@ pub(super) struct Symbol {
     kind: Option<String>,
     minmov: Option<f64>,
     pricescale: Option<f64>,
+    minmove2: Option<f64>,
+    fractional: Option<bool>,
     volume_precision: Option<u8>,
     currency_code: Option<String>,
     unit: Option<String>,
@@ -220,6 +222,9 @@ impl Symbol {
                 return Err(invalid("minmov and pricescale must be positive and finite"));
             }
             instrument.tick_size = Some(tick);
+            if self.fractional == Some(true) {
+                instrument.price_fraction = price_fraction(scale, self.minmove2.unwrap_or(0.0));
+            }
         }
         instrument.volume_decimals = self.volume_precision;
         instrument.currency = self.currency_code;
@@ -257,6 +262,29 @@ fn symbol_type(text: &str) -> Option<SymbolType> {
     let mut text = text.to_ascii_lowercase();
     text.get_mut(..1)?.make_ascii_uppercase();
     serde_json::from_value(serde_json::Value::String(text)).ok()
+}
+
+/// The fraction a fractional symbol is quoted in: `scale` fractions per unit, or thirty-seconds
+/// divided in `parts` when `parts` is not zero. `None` for a combination the chart cannot
+/// write, which keeps decimals.
+fn price_fraction(scale: f64, parts: f64) -> Option<PriceFraction> {
+    use PriceFraction::*;
+    [
+        (2.0, 0.0, Halves),
+        (4.0, 0.0, Quarters),
+        (8.0, 0.0, Eighths),
+        (16.0, 0.0, Sixteenths),
+        (32.0, 0.0, ThirtySeconds),
+        (64.0, 2.0, HalfThirtySeconds),
+        (128.0, 4.0, QuarterThirtySeconds),
+        (256.0, 8.0, EighthThirtySeconds),
+        (64.0, 0.0, SixtyFourths),
+        (128.0, 0.0, OneTwentyEighths),
+        (256.0, 0.0, TwoFiftySixths),
+    ]
+    .into_iter()
+    .find(|(steps, divided, _)| *steps == scale && *divided == parts)
+    .map(|(_, _, fraction)| fraction)
 }
 
 fn session(text: &str) -> Result<Session, FeedError> {

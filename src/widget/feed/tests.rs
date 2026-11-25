@@ -664,6 +664,113 @@ fn chosen_precision_survives_interval_symbol_and_reload() {
     assert_eq!(shown(&chart), (Some(3), PrecisionMode::Default), "default");
 }
 
+/// An instrument quoted in thirty-seconds labels the price scale, the price tag and the legend
+/// in them, from a feed and from `set_instrument` alike, while decimals chosen in the chart
+/// settings win and "Default" follows the instrument again.
+#[test]
+fn instrument_price_fraction_labels_the_scale_and_legend() {
+    use crate::chart::rendering::axes::price_marks;
+    use crate::model::PriceFraction;
+    use crate::scales::PriceScaleMode;
+    use crate::widget::settings::{ChartSettingsState, PrecisionMode};
+    let start = "2024-03-15T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let minute = |index: i64| start + TimeDelta::minutes(index);
+    let bars = vec![
+        Bar::new(minute(0), 117.0, 117.0, 117.0, 117.0, 1.0),
+        Bar::new(minute(1), 117.0, 117.0, 117.0, 117.0, 1.0),
+        Bar::new(minute(2), 117.25, 117.75, 117.0, 117.5, 1.0),
+    ];
+    let instrument = Instrument::new("ZB")
+        .with_tick_size(1.0 / 32.0)
+        .with_price_fraction(PriceFraction::ThirtySeconds);
+    let texts = |chart: &mut Chart, frames: &mut Frames| -> Vec<String> {
+        frames.time += 1.0 / 60.0;
+        shapes(&frames.ctx, chart, frames.time, Vec::new())
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    };
+    let precision = |chart: &mut Chart, mode: PrecisionMode| {
+        let mut settings = ChartSettingsState::from_chart(chart);
+        settings.precision = mode;
+        settings.apply_to_chart(chart).unwrap();
+    };
+
+    let feed = Arc::new(Script::default());
+    let mut from_feed = fed(&feed, Some("ZB"));
+    let mut frames = Frames::new();
+    frames.run(&mut from_feed);
+    feed.resolve().send(Ok(instrument.clone()));
+    feed.page().send(page(bars.clone(), true));
+    frames.run(&mut from_feed);
+    frames.run(&mut from_feed);
+    let mut supplied = Chart::new(BarData::from_bars(bars));
+    supplied.set_instrument(Some(instrument));
+    let mut supplied_frames = Frames::new();
+    supplied_frames.run(&mut supplied);
+    supplied_frames.run(&mut supplied);
+
+    for (name, chart, frames) in [
+        ("feed", &mut from_feed, &mut frames),
+        ("set_instrument", &mut supplied, &mut supplied_frames),
+    ] {
+        let painted = texts(chart, frames);
+        assert!(
+            painted.iter().any(|text| text == "O 117'08"),
+            "{name}: {painted:?}"
+        );
+        assert!(
+            painted.iter().any(|text| text == "117'16"),
+            "{name}: {painted:?}"
+        );
+        let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+        let formatter = chart
+            .series_label_formatter(SeriesId::MAIN, PriceScaleMode::Normal)
+            .unwrap();
+        let marks = price_marks(&map, Some(formatter.as_ref()));
+        assert!(!marks.is_empty(), "{name}");
+        assert!(
+            marks
+                .iter()
+                .all(|mark| (mark.price * 32.0).fract() == 0.0 && mark.label.contains('\'')),
+            "{name}: {marks:?}"
+        );
+        assert!(
+            marks.iter().any(|mark| painted.contains(&mark.label)),
+            "{name}: {marks:?} {painted:?}"
+        );
+
+        precision(chart, PrecisionMode::Decimals3);
+        let painted = texts(chart, frames);
+        assert!(
+            painted.iter().any(|text| text == "O 117.250"),
+            "{name}: {painted:?}"
+        );
+        assert!(
+            painted.iter().any(|text| text == "117.500"),
+            "{name}: {painted:?}"
+        );
+        assert!(!painted.iter().any(|text| text == "O 117'08"), "{name}");
+
+        precision(chart, PrecisionMode::Default);
+        let painted = texts(chart, frames);
+        assert!(
+            painted.iter().any(|text| text == "O 117'08"),
+            "{name}: {painted:?}"
+        );
+    }
+
+    supplied.set_instrument(None);
+    let painted = texts(&mut supplied, &mut supplied_frames);
+    assert!(
+        !painted.iter().any(|text| text == "O 117'08"),
+        "{painted:?}"
+    );
+}
+
 /// `count` one-minute bars from 00:00 on 15 March 2024, closing at 100 plus their index.
 fn bars(count: usize) -> Vec<Bar> {
     let start = "2024-03-15T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
