@@ -308,7 +308,7 @@ impl Chart {
             }
             held.record_prepared_span(from, before, supplied);
         } else {
-            incoming.prepare_history(before, &link.trades, link.trades_from_start);
+            incoming.prepare_history(before, &link.trades, link.trades.from_start);
             incoming.record_prepared_span(from, before, supplied);
             incoming.live.rebuild_prepared(&link.trades);
             link.footprint = Some(incoming);
