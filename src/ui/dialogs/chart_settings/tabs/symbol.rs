@@ -336,20 +336,25 @@ impl SettingsDialog {
                     let shared = background.extended_hours_color;
                     let label_width = Self::label_width(ui, theme);
                     ui.add_enabled_ui(background.show_extended_hours, |ui| {
-                        for (index, label, mut color, mut shown) in [
+                        for (index, label, mut color, shown) in [
                             (
                                 0,
                                 "Pre-market",
                                 background.premarket_color.unwrap_or(shared),
-                                Some(&mut background.shade_premarket),
+                                &mut background.shade_premarket,
                             ),
                             (
                                 1,
                                 "Post-market",
                                 background.postmarket_color.unwrap_or(shared),
-                                Some(&mut background.shade_postmarket),
+                                &mut background.shade_postmarket,
                             ),
-                            (2, "Overnight", background.overnight_hours_color, None),
+                            (
+                                2,
+                                "Overnight",
+                                background.overnight_hours_color,
+                                &mut background.shade_overnight,
+                            ),
                         ] {
                             ui.horizontal(|ui| {
                                 let label = ui
@@ -362,11 +367,7 @@ impl SettingsDialog {
                                             let label = RichText::new(l10n::text(ui.ctx(), label))
                                                 .size(theme.text.title)
                                                 .color(theme.ui.text);
-                                            if let Some(shown) = shown.as_deref_mut() {
-                                                checkbox(ui, shown, label)
-                                            } else {
-                                                ui.label(label)
-                                            }
+                                            checkbox(ui, shown, label)
                                         },
                                     )
                                     .inner;
@@ -374,7 +375,7 @@ impl SettingsDialog {
                                     ui.spacing_mut().item_spacing.x = 8.0;
                                     ui.spacing_mut().interact_size.y =
                                         DESIGN_TOKENS.sizing.settings_dialog.button_height;
-                                    ui.add_enabled_ui(shown.is_none_or(|shown| *shown), |ui| {
+                                    ui.add_enabled_ui(*shown, |ui| {
                                         ui.label_inputs_by(label.id, |ui| {
                                             let picker = &mut self
                                                 .color_picker_states

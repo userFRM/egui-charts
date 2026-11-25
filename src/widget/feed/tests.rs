@@ -6927,17 +6927,20 @@ fn trading_hours_reload_history_paging_and_subscription_together() {
             );
         }
         let older = serde_json::from_value(older).unwrap();
-        for (snapshot, hours) in [(saved, (true, true)), (older, (true, false))] {
+        // A new chart shades overnight bars #D500F9 at 8% opacity, alpha 20, premultiplied; a
+        // config saved without the colour follows the theme.
+        let purple = egui::Color32::from_rgba_premultiplied(17, 0, 20, 20);
+        for (snapshot, hours, color) in [
+            (saved, (true, true), purple),
+            (older, (true, false), egui::Color32::PLACEHOLDER),
+        ] {
             let mut restored = fed(&Arc::new(Script::default()), Some("A"));
             restored.restore(&snapshot).unwrap();
             assert_eq!(
                 (restored.extended_hours(), restored.overnight_hours()),
                 hours
             );
-            assert_eq!(
-                restored.config().overnight_hours_color,
-                egui::Color32::PLACEHOLDER
-            );
+            assert_eq!(restored.config().overnight_hours_color, color);
         }
     }
 }

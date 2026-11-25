@@ -2908,6 +2908,8 @@ mod tests {
             harness.run();
             harness.get_by_label("Post-market").click();
             harness.run();
+            harness.get_by_label("Overnight").click();
+            harness.run();
             harness.get_by_label("Highlight extended sessions").click();
             harness.run();
             if !accept {
@@ -2926,6 +2928,7 @@ mod tests {
             let chosen = saved.session_background.as_ref().unwrap();
             assert!(!chosen.show_extended_hours);
             assert!(!chosen.shade_postmarket);
+            assert!(!chosen.shade_overnight);
             assert_eq!(
                 chosen.premarket_color,
                 Some(Color32::from_rgba_unmultiplied(49, 27, 146, 128))

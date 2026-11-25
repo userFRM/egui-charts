@@ -1770,7 +1770,9 @@ impl Chart {
                     self.config
                         .shade_postmarket
                         .then(|| shade(postmarket, 0.08)),
-                    shade(self.config.overnight_hours_color, 0.16),
+                    self.config
+                        .shade_overnight
+                        .then(|| shade(self.config.overnight_hours_color, 0.16)),
                 ),
             )
         } else {

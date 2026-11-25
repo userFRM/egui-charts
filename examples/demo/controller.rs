@@ -10412,6 +10412,62 @@ mod tests {
         assert_eq!(custom.sessions.len(), 2);
     }
 
+    /// The demo's chart settings offer the Overnight background switch, and Ok hides the
+    /// overnight background of its chart while the post-market stays shaded.
+    #[test]
+    fn chart_settings_overnight_switch_reaches_the_demo_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.open_chart_settings_dialog();
+        let size = egui::vec2(1440.0, 900.0);
+        let show = |app: &mut DemoApp, events| {
+            ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+        };
+        // The Session backgrounds sit below the fold of the Symbol tab; the footer is fixed.
+        let switch = (0..20)
+            .find_map(|_| {
+                for _ in 0..5 {
+                    show(&mut app, vec![]);
+                }
+                let found = show(&mut app, vec![]).into_iter().find(|(label, rect)| {
+                    label == "Overnight" && (180.0..720.0).contains(&rect.center().y)
+                });
+                if found.is_none() {
+                    show(
+                        &mut app,
+                        vec![
+                            egui::Event::PointerMoved(egui::pos2(900.0, 450.0)),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                source: egui::MouseWheelSource::Wheel,
+                                phase: egui::TouchPhase::Move,
+                                delta: egui::vec2(0.0, -100.0),
+                                modifiers: Default::default(),
+                            },
+                        ],
+                    );
+                }
+                found
+            })
+            .expect("the Overnight switch is offered")
+            .1
+            .center();
+        ui_click(&ctx, size, switch, |ui| app.show_dialogs(ui.ctx()));
+        let ok = show(&mut app, vec![])
+            .into_iter()
+            .find(|(text, _)| text == "Ok")
+            .unwrap()
+            .1
+            .center();
+        ui_click(&ctx, size, ok, |ui| app.show_dialogs(ui.ctx()));
+        let config = app.chart.config();
+        assert!(!config.shade_overnight && config.shade_postmarket);
+    }
+
     /// The settings offer the futures data choices on the demo's futures contracts only;
     /// a changed choice reloads the bars, while Ok without a change keeps them.
     #[test]
