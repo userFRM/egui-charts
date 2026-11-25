@@ -103,7 +103,8 @@ before showing the chart. It requests visible bars plus up to one viewport of pr
 the configured initial page size. With late candles or no layout it uses the viewport's
 bar-count estimate. The first request still asks for the **latest** rows: only the feed
 knows where live executions take over. A scrolled-back view can therefore need a second,
-time-bounded request. Candle and trade requests are unchanged.
+time-bounded request. Candle and trade requests are unchanged. The demo's INDEXFH2027
+charts opt in as well.
 
 A bounded request names `[since, before)`. Each reply answers one contiguous suffix ending
 at `before`: its first bar starts the answered span, or an empty page uses

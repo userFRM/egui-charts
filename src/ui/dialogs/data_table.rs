@@ -69,6 +69,8 @@ impl Source {
 pub struct DataTableDialog {
     /// Whether the dialog is currently visible.
     pub is_open: bool,
+    window_id: Option<egui::Id>,
+    fixed_symbol: bool,
     /// The columns turned off on each chart, identified across study removal and restores.
     hidden: HashMap<u64, BTreeSet<ColumnId>>,
     cached: Option<(Source, DataTable)>,
@@ -86,10 +88,24 @@ impl DataTableDialog {
     pub fn new() -> Self {
         Self {
             is_open: false,
+            window_id: None,
+            fixed_symbol: false,
             hidden: HashMap::new(),
             cached: None,
             column_ids: Vec::new(),
         }
+    }
+
+    /// Give this table its own movable window. Use a stable ID per table, not per symbol.
+    pub fn with_id(mut self, id: egui::Id) -> Self {
+        self.window_id = Some(id);
+        self
+    }
+
+    /// Show the chart's symbol as a label. Neither clicking it nor typing requests symbol search.
+    pub fn with_fixed_symbol(mut self) -> Self {
+        self.fixed_symbol = true;
+        self
     }
 
     /// Open the dialog.
@@ -124,7 +140,10 @@ impl DataTableDialog {
         let hidden = self.hidden.entry(chart.data_table_identity()).or_default();
         let mut action = DataTableAction::None;
         let mut open = true;
-        DialogFrame::new("Chart data", vec2(804.0, 472.0)).show(ctx, |ui| {
+        let mut layer = None;
+        let frame = DialogFrame::new("Chart data", vec2(804.0, 472.0));
+        frame.show_with_id(ctx, self.window_id, |ui| {
+            layer = Some(ui.layer_id());
             open = !dialog_header(ui, &l10n::text(ctx, "Chart data"));
             ui.horizontal(|ui| {
                 let symbol = if chart.symbol().is_empty() {
@@ -132,7 +151,9 @@ impl DataTableDialog {
                 } else {
                     chart.symbol().to_owned()
                 };
-                if Button::new(symbol)
+                if self.fixed_symbol {
+                    ui.label(symbol);
+                } else if Button::new(symbol)
                     .show(ui)
                     .on_hover_text(l10n::text(ctx, "Change symbol"))
                     .clicked()
@@ -164,26 +185,33 @@ impl DataTableDialog {
             self.close();
             return DataTableAction::Close;
         }
-        if !ctx.text_edit_focused()
+        if !self.fixed_symbol
+            && !ctx.text_edit_focused()
             && !egui::Popup::is_any_open(ctx)
-            && ctx.memory(|memory| memory.top_modal_layer().is_none())
-            && !ctx.input(|input| {
-                input.modifiers.command || input.modifiers.ctrl || input.modifiers.alt
-            })
-        {
-            let typed = ctx.input_mut(|input| {
-                let at = input.events.iter().position(|event| {
+            && let Some(at) = ctx.input(|input| {
+                if input.modifiers.command || input.modifiers.ctrl || input.modifiers.alt {
+                    return None;
+                }
+                input.events.iter().position(|event| {
                     matches!(event, egui::Event::Text(text)
                         if text.starts_with(|c: char| !c.is_control() && !c.is_whitespace()))
-                })?;
-                match input.events.remove(at) {
-                    egui::Event::Text(text) => Some(text),
-                    _ => None,
-                }
-            });
-            if let Some(query) = typed {
-                action = DataTableAction::SearchSymbol(query);
-            }
+                })
+            })
+            && ctx.memory(|m| {
+                // egui keeps closed areas in its z-order. They must not block the table below.
+                m.top_modal_layer().is_none()
+                    && m.layer_ids()
+                        .filter(|id| {
+                            id.order == egui::Order::Middle
+                                && m.areas().is_visible(id)
+                                && m.areas().parent_layer(*id).is_none()
+                        })
+                        .last()
+                        == layer
+            })
+            && let egui::Event::Text(query) = ctx.input_mut(|input| input.events.remove(at))
+        {
+            action = DataTableAction::SearchSymbol(query);
         }
         action
     }
@@ -308,6 +336,9 @@ impl DataTableDialog {
         }
     }
 }
+
+#[cfg(test)]
+mod independent_tests;
 
 #[cfg(test)]
 mod tests {
